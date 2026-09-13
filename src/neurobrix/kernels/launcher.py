@@ -884,7 +884,22 @@ class ScreenedOut(NamedTuple):
     tolerance: float
 
 
+class Unscreened(NamedTuple):
+    """One key where a configuration was seated WITHOUT an oracle.
+
+    Not a failure and not a refusal: the engine must run. It is a PROVENANCE.
+    "This configuration was validated" and "this configuration was the fastest
+    among candidates nobody verified" are different statements, and until this
+    record existed they were written the same way and read the same way.
+    """
+    kernel: str
+    key: tuple
+    candidates: int
+    reason: str
+
+
 _SCREENED: List[ScreenedOut] = []
+_UNSCREENED: List[Unscreened] = []
 _SCREEN_CACHE: Dict[int, set] = {}      # id(tuner) -> keys already screened
 
 
@@ -893,9 +908,57 @@ def screened_out() -> List[ScreenedOut]:
     return list(_SCREENED)
 
 
+#: Keys the screen adjudicated, with what adjudicated them — the converse of
+#: `_UNSCREENED`: a record that says only what was NOT verified lets a silent
+#: entry read as verified. `capture()` stamps these `screened: True` with the
+#: adjudicator's name.
+_ADJUDICATED: dict = {}
+
+
+def adjudicated() -> dict:
+    return dict(_ADJUDICATED)
+
+
+def unscreened() -> List[Unscreened]:
+    """Every key whose seated configuration no oracle adjudicated.
+
+    Read this wherever a chosen configuration is RECORDED, so the record
+    carries what it is. The certified directory is filled only by
+    `neurobrix autotune certify`, which runs its own fp64 oracle over every
+    candidate; nothing on this path may ever reach it.
+    """
+    return list(_UNSCREENED)
+
+
 def clear_screened() -> None:
     _SCREENED.clear()
+    _UNSCREENED.clear()
     _SCREEN_CACHE.clear()
+
+
+def _no_oracle_reason(oracle) -> str:
+    """Why no oracle adjudicated this key — the provider, or its answer."""
+    if _SCREEN_ORACLE is None:
+        return "no oracle provider is installed"
+    if oracle is None:
+        return ("the oracle provider covers no oracle for this kernel "
+                "(the GEMM class and, since 2026-09-13, the convolution family "
+                "are covered; anything else is decided by the bare vote)")
+    return "the oracle produced no reference"
+
+
+def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
+    """Return the configs, having said plainly that nothing verified them.
+
+    The bare screen may still rank by speed — the engine never refuses to run.
+    What it may no longer do is produce a line that reads as a validation.
+    """
+    _UNSCREENED.append(Unscreened(kernel, key, candidates, reason))
+    print(f"[AUTOTUNE_UNSCREENED] {kernel} at key {key}: {reason}. The "
+          f"configuration seated here is the FASTEST AMONG {candidates} "
+          f"CANDIDATES THAT NOTHING VERIFIED — it is not a validated setting "
+          f"and it is never written to the certified directory.", flush=True)
+    return configs
 
 
 def _screen_rtol(dtype_name: str):
@@ -1145,7 +1208,9 @@ def bench_would_swap(total_bytes: int):
     here: `memory_state` already names why it could not read.
     """
     try:
-        from neurobrix.core.host_memory import memory_state
+        from neurobrix.core.host_memory import host_shares_memory_with_device, memory_state
+        if not host_shares_memory_with_device():
+            return False, None                         # discrete memory: the host is not the bench
         avail_mb = memory_state().available_mb
     except Exception:                                  # noqa: BLE001
         return False, None
@@ -1154,8 +1219,50 @@ def bench_would_swap(total_bytes: int):
     return total_bytes > avail_mb * 2 ** 20, avail_mb
 
 
-def screen_configs(tuner, configs, key, meta=None):
+def autotune_shape_key(tuner, kwargs):
+    """The key Triton's Autotuner will store this call's choice under.
+
+    Built exactly as `Autotuner.run` builds it — the `keys` arguments' values
+    followed by every argument's dtype — from `tuner.nargs`, which holds the
+    real arguments by the time `prune_configs` runs. Triton computes this key
+    before calling `prune_configs` and does not pass it, so the screen rebuilt
+    a DIFFERENT key (the constexpr kwargs) and recorded its unscreened seats
+    under that one. The replay cache is written under Triton's key, so the
+    `screened: false` mention never landed on any entry — seen on 2026-09-13
+    by the production demonstration: 3 announcements, 0 stamped records. A
+    key in one space, a record in another — the same family as the weight
+    dict's two key spaces.
+    """
+    nargs = getattr(tuner, "nargs", None) or {}
+    all_args = {**nargs, **(kwargs or {})}
+    arg_names = getattr(tuner, "arg_names", None) or list(all_args)
+    _args = {k: v for (k, v) in all_args.items() if k in arg_names}
+    key = [_args[k] for k in (getattr(tuner, "keys", None) or []) if k in _args]
+    for _, arg in _args.items():
+        if hasattr(arg, "dtype"):
+            key.append(str(arg.dtype))
+    return tuple(key)
+
+
+def _call_screen_oracle(provider, tuner, key, buffers, meta):
+    """Call the provider with the launch kwargs when its signature takes them."""
+    import inspect
+    try:
+        n = len(inspect.signature(provider).parameters)
+    except (TypeError, ValueError):
+        n = 3
+    if n >= 4:
+        return provider(tuner, key, buffers, meta)
+    return provider(tuner, key, buffers)
+
+
+def screen_configs(tuner, configs, key, meta=None, record_key=None):
     """Run every candidate once and keep the ones that agree with each other.
+
+    `record_key` is the key the choice will be stored under (Triton's cache
+    key, see `autotune_shape_key`); `key` is the screen's own de-duplication
+    key. An unscreened seat is recorded under `record_key` so the replay cache
+    can carry the mention.
 
     Agreement is decided by CONSENSUS, not against a nominated reference.
     Anchoring on one config inverts the moment that config is the broken one:
@@ -1176,23 +1283,30 @@ def screen_configs(tuner, configs, key, meta=None):
     if len(configs) < 2:
         return configs
 
+    # De-duplicated by the SHAPE key, not the constexpr key: ten distinct
+    # conv shapes share one constexpr tuple, and keyed by it the screen ran
+    # on the first and silently skipped the other nine (2026-09-13, live).
+    _rk = record_key if record_key is not None else key
     seen = _SCREEN_CACHE.setdefault(id(tuner), set())
-    if key in seen:
+    if _rk in seen:
         return configs
-    seen.add(key)
+    seen.add(_rk)
 
+    kernel_name = getattr(tuner.base_fn, "__name__", str(tuner))
     named = dict(tuner.nargs or {})
     if not named:
-        return configs
+        return _seat_unscreened(kernel_name, _rk, configs, len(configs),
+                                "the tuner carries no named arguments, so the "
+                                "screen has nothing to compare")
     args = [named[name] for name in tuner.arg_names if name in named]
     buffers = _writable_buffers(args)
     if buffers is None:
-        print(f"[AUTOTUNE_SCREEN] "
-              f"{getattr(tuner.base_fn, '__name__', tuner)}: a strided view "
-              f"among the arguments; not screened at key {key}", flush=True)
-        return configs
+        return _seat_unscreened(kernel_name, _rk, configs, len(configs),
+                                "a strided view among the arguments, which the "
+                                "screen cannot snapshot")
     if not buffers:
-        return configs
+        return _seat_unscreened(kernel_name, _rk, configs, len(configs),
+                                "no writable buffer to compare")
 
     from neurobrix.kernels.ops._configs import active_vendor_profile
 
@@ -1204,18 +1318,16 @@ def screen_configs(tuner, configs, key, meta=None):
             "tuning step may cost")
     total = sum(nbytes for _a, nbytes, _d in buffers)
     if total > int(budget):
-        print(f"[AUTOTUNE_SCREEN] "
-              f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments total "
-              f"{total} bytes, over the profile's screening budget "
-              f"{int(budget)}; not screened at key {key}", flush=True)
-        # Beyond the SCREEN budget the compare is skipped -- but Triton would
-        # still time every candidate on these arguments. When they alone
-        # exceed the machine's available memory, that sweep measures the swap:
-        # observed live, a baddbmm key carrying 5.9 GB of arguments against
-        # 4.5 GB available. So the sweep is cut to the single first-declared
-        # config, the choice is SAID, and it is marked unmeasured so capture()
-        # never persists it -- recorded, it would outlive the pressure that
-        # forced it and keep deciding on days it knows nothing about.
+        # Two doors meet here and both stay. Beyond the SCREEN budget the compare
+        # is skipped (the Dell's ruling of 2026-09-12: the seat is announced as
+        # UNSCREENED, never written to the certified directory). And Triton
+        # would still time every candidate on these arguments; when they alone
+        # exceed the machine's available memory the sweep measures the swap
+        # (the Mac, 2026-09-13: a baddbmm key carrying 5.9 GB of arguments
+        # against 4.5 GB available), so the sweep is cut to the single
+        # first-declared config, the cut is SAID, and the choice is marked
+        # unmeasured so capture() never persists it — recorded, it would
+        # outlive the pressure that forced it.
         _swaps, _avail_mb = bench_would_swap(total)
         if _swaps:
             print(f"[AUTOTUNE_BENCH] "
@@ -1227,12 +1339,18 @@ def screen_configs(tuner, configs, key, meta=None):
                   flush=True)
             from neurobrix.triton import autotune_cache as _atc
             _atc.mark_unmeasured(tuner, key)
-            return configs[:1]
-        return configs
+            return _seat_unscreened(
+                kernel_name, _rk, configs[:1], 1,
+                f"arguments total {total} bytes, over the profile's screening "
+                f"budget {int(budget)} and over the {_avail_mb} MB available: "
+                f"the sweep was cut to the first declared config, unmeasured")
+        return _seat_unscreened(
+            kernel_name, _rk, configs, len(configs),
+            f"arguments total {total} bytes, over the profile's screening "
+            f"budget {int(budget)}")
 
     before = _snapshot(buffers)
     meta = dict(meta or {})
-    kernel_name = getattr(tuner.base_fn, "__name__", str(tuner))
 
     # -- run each candidate once, from the same starting state --------------
     results, unrun = [], []
@@ -1254,7 +1372,9 @@ def screen_configs(tuner, configs, key, meta=None):
               f"{len(configs)} configs could not be run for screening at key "
               f"{key}; they go to the timer unchecked", flush=True)
     if len(results) < 2:
-        return configs
+        return _seat_unscreened(kernel_name, _rk, configs, len(results),
+                                "fewer than two candidates ran, so there is "
+                                "nothing to compare them against")
 
     # -- an oracle, where one exists, OVERRULES the vote --------------------
     #
@@ -1273,7 +1393,14 @@ def screen_configs(tuner, configs, key, meta=None):
                            why="no oracle provider is installed at all")
     if _SCREEN_ORACLE is not None:
         try:
-            oracle = _SCREEN_ORACLE(tuner, key, buffers)
+            # The kernel's constexpr arguments (kernel_height, stride_*, padding_*,
+            # groups, fp16 …) travel as launch KWARGS, not in `tuner.nargs`; a
+            # provider that reads `nargs` alone never sees them. The GEMM oracles
+            # need none and worked; the convolution oracle needs all of them and
+            # returned None on every live key (2026-09-13, real-esrgan-x4 on
+            # card 0) while its own suite was green. So the launch kwargs go to
+            # the provider too, when it accepts them.
+            oracle = _call_screen_oracle(_SCREEN_ORACLE, tuner, key, buffers, meta)
         except Exception as exc:      # an oracle that fails is not a launch failure
             print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle provider raised "
                   f"({type(exc).__name__}: {exc}); falling back to the consensus "
@@ -1301,6 +1428,9 @@ def screen_configs(tuner, configs, key, meta=None):
                       f"seated are contradicted by the oracle. The majority was "
                       f"wrong in the same way. This is the failure mode the "
                       f"screen cannot see on its own.", flush=True)
+        # The oracle adjudicated this key: the record says so, with the name of
+        # what adjudicated it — the converse of the unscreened mention.
+        _ADJUDICATED[(kernel_name, repr(_rk))] = "fp64 oracle"
         return [c for c, _ in kept] + unrun
 
     # -- cluster by agreement ----------------------------------------------
@@ -1308,7 +1438,11 @@ def screen_configs(tuner, configs, key, meta=None):
     clusters = _cluster(results, agree)
 
     if len(clusters) == 1:
-        return [c for c, _ in results] + unrun
+        return _seat_unscreened(
+            kernel_name, _rk, [c for c, _ in results] + unrun, len(results),
+            _no_oracle_reason(oracle)
+            + ", and the candidates were unanimous — which is one of the two "
+              "failure modes consensus cannot see")
 
     clusters.sort(key=len, reverse=True)
     if len(clusters[0]) == len(clusters[1]):
@@ -1343,7 +1477,12 @@ def screen_configs(tuner, configs, key, meta=None):
               flush=True)
     _record_screen_exclusions(dropped)
 
-    return [c for c, _ in clusters[0]] + unrun
+    return _seat_unscreened(
+        kernel_name, _rk, [c for c, _ in clusters[0]] + unrun, len(results),
+        _no_oracle_reason(oracle)
+        + f", and the winner is a {len(clusters[0])}-config majority — which "
+          f"is the other failure mode consensus cannot see, a majority wrong "
+          f"in the same way")
 
 
 def _record_screen_exclusions(dropped) -> None:
@@ -1409,7 +1548,8 @@ def install(force: Optional[bool] = None) -> bool:
             key = tuple(sorted(
                 (k, str(v)) for k, v in (kwargs or {}).items()
                 if isinstance(v, (int, float, bool, str))))
-            return screen_configs(self, list(configs), key, kwargs)
+            return screen_configs(self, list(configs), key, kwargs,
+                                  record_key=autotune_shape_key(self, kwargs))
 
         prune_configs._nbx_screened = True
         prune_configs._nbx_upstream = _upstream_prune

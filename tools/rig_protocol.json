@@ -1,0 +1,12 @@
+{
+  "_": "The measurement protocol this machine's numbers are taken under. READ, never retyped: a value a harness hardcodes is a value that drifts from the one the reports cite. Harness protocol only -- this is not engine configuration and no kernel reads it.",
+
+  "clock": {
+    "application_graphics_mhz": 1290,
+    "application_memory_mhz": 877,
+    "why": "1290 is the reference regime, established by measurement and not by nomination: on 2026-08-24 a NOMINALLY HIGHER lock produced a LOWER throughput on the long row (21.43 tok/s at 1290 against 19.87 at 1380), suspected micro-throttling under the sampler's 2 s period. It is also the only frequency found tenable across every row -- 1380 was refused under an 8k prefill. Sources: docs/BENCHMARKS.md, docs/internal/_mandate_journal.md.",
+    "trap": "1290 happens to be the factory default of this rack's 32 GB V100s, and 1312 that of its 16 GB ones. A check that samples ONE card, or that reads a card the manufacturer already agrees with, goes green on a rig that is half wrong. Read every card. The two SKUs advertise byte-identical supported-clock lists, so nothing about the hardware's capability reveals the disagreement.",
+    "reverts_on_reboot": true,
+    "restore": "sudo nvidia-smi -i <N> -ac 877,1290"
+  }
+}

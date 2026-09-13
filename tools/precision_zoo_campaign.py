@@ -833,6 +833,28 @@ def _choices_ab(d: Path, src: Path) -> dict:
             "differ_uncertified": uncertified[:20], "differ_uncertified_count": len(uncertified)}
 
 
+def refuse_reused_replay(replay_dir, allow=None):
+    """A cold arm's replay directory must be EMPTY at the arm's start.
+
+    2026-09-13 13:28: a cell re-run into an --out directory that already held
+    a previous run's `B_replay_r*` caches REPLAYED that run's sweep as its own
+    control arm — arm B swept 0 keys, the cell read 0.85x, and it overwrote the
+    clean measurement taken 49 minutes earlier in the same directory. The
+    isolation this directory exists for (per repetition, per arm) is void when
+    the directory is inherited. Refused at entry, with the path, unless
+    `NBX_ALLOW_REUSED_REPLAY=1` says so on purpose.
+    """
+    import os as _os
+    if allow is None:
+        allow = _os.environ.get("NBX_ALLOW_REUSED_REPLAY") == "1"
+    rd = Path(replay_dir)
+    if rd.exists() and any(rd.glob("*.json")) and not allow:
+        raise SystemExit(
+            f"REFUSED: {rd} already holds a replay artifact from an earlier run; a cold "
+            f"arm that starts on it replays that run's sweep as its own control. Use a "
+            f"fresh --out directory, or NBX_ALLOW_REUSED_REPLAY=1 to say this is deliberate.")
+
+
 def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None,
            oracle_on_diff: bool = False, paired: int = 1) -> dict:
     """An engine lever behind an environment switch, measured on one model:
@@ -877,7 +899,9 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
                 # This never touches the machine's own cache
                 # (~/.neurobrix/replay_cache): the arm is given a directory of
                 # its own, so nothing is set aside and nothing is destroyed.
-                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay_r{rep}")}
+                _rd = d / f"{arm}_replay_r{rep}"
+                refuse_reused_replay(_rd)
+                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(_rd)}
             if src is not None:                          # the request runs the given tree's package
                 env = {**env, "PYTHONPATH": str(Path(src).resolve())}
                 cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
@@ -1104,6 +1128,20 @@ def verdict(r: dict) -> str:
             if bd:
                 mb = bd.get("psnr_db", bd.get("snr_db", bd.get("psnr_mean_db")))
                 tail += "; before the fix vs the oracle: " + ("IDENTICAL" if bd.get("identical") else (("PASS" if bd.get("pass") else "DIFFERENT") + (f" ({mb})" if mb is not None else "")))
+        # A DIFFERENCE IS NOT YET AN ATTRIBUTION. With one run per arm there is
+        # no repetition, so nothing here separates "the change moved the output"
+        # from "this model differs from itself". Both have now been met on the
+        # same day: CogVideoX-2b carries `nondeterministic: ["A", "B"]` at
+        # --paired 3, and Kokoro-82M produced two shas from two runs of the SAME
+        # tree on 2026-09-11 — after a --paired 1 gate had already printed
+        # DIFFERENT against a Prism-only commit that could not have moved it.
+        #
+        # The verdict says which question it answered. Running one side twice is
+        # what turns it into an attribution, and it costs one run.
+        if int(r.get("paired") or 1) < 2:
+            return ("DIFFERENT (" + ", ".join(diff) + "; UNADJUDICATED — one run "
+                    "per arm cannot separate the change from the model's own "
+                    "nondeterminism: run one side twice)" + tail)
         return "DIFFERENT (" + ", ".join(diff) + ")" + tail
     if r.get("lever", "").startswith("env:"):
         g = r.get("gate") or {}
@@ -1361,6 +1399,69 @@ ARM_LABELS = ("A", "B")
 FROZEN_POINTERS = (".nbx_registry", "forge")
 
 
+FLIGHTREC_OPT = "--allow-unrecorded"
+
+
+def flightrec_refusal(allow_unrecorded: bool = False):
+    """Why this campaign may not start, or None — it must be under the recorder.
+
+    This rack has no UPS and loses mains: twice in nine minutes on 2026-09-11,
+    and the doctrine calls that a known reality rather than an accident. The
+    flight recorder writes an fsync'ed record BEFORE the child starts, so a run
+    the power cuts leaves a record whose boot_id no longer matches — mechanical
+    proof of an outage mid-run — and the session hook prints the resume block.
+
+    The 2026-09-11 MEET pass ran WITHOUT it. The cut left no in_flight record,
+    therefore no resume block, therefore nothing that said what had been lost;
+    the campaign was reconstructed by hand from its own logs the next day. That
+    is a door to place, not a habit to acquire: remembering to wrap the command
+    is exactly the discipline a power cut is under no obligation to respect.
+
+    The recorder marks its child's environment, so a campaign can tell. One
+    deliberate opening, which the run then states in its own output.
+    """
+    if os.environ.get("NBX_FLIGHTREC"):
+        return None
+    if allow_unrecorded:
+        return None
+    return ("this campaign is not under the flight recorder, and this machine has "
+            "no UPS. A power cut would leave no record, no resume block, and "
+            "nothing saying what was lost — which is what happened to the "
+            "2026-09-11 MEET pass.\n\n  Run it as:\n"
+            "      python3 tools/flightrec.py run --label '<what this measures>' "
+            "--gpu <n> -- <the command>\n\n"
+            f"  To run it unrecorded deliberately, pass {FLIGHTREC_OPT}.")
+
+
+def add_flightrec_argument(parser) -> None:
+    """The one deliberate opening, spelled the same way everywhere."""
+    parser.add_argument(
+        FLIGHTREC_OPT, action="store_true",
+        help="run outside the flight recorder (a power cut then leaves no record "
+             "and no resume block)")
+
+
+def empty_selection_refusal(models, models_arg, family):
+    """Why a campaign that selected no model may not start, or None.
+
+    2026-09-13: the budget-unified gate's byte matrix passed neither `--models`
+    nor `--family`; the default selection (cached models of `--family`) was
+    empty; the tool printed an empty table and the gate read green. A gate
+    whose success is the absence of a bad row cannot tell an empty selection
+    from a clean one, so the empty one is refused at the door, with the flags
+    that select named (vacuous-gates register entry 52)."""
+    if models:
+        return None
+    if models_arg:
+        return f"REFUSED: --models {models_arg!r} names no model"
+    if family:
+        return (f"REFUSED: no cached model of family {family!r} — name the models "
+                f"with --models, or a family that has some with --family")
+    return ("REFUSED: nothing selected — the campaign runs the models named with "
+            "--models, or every cached model of the family named with --family; "
+            "without either it would measure nothing and print an empty table")
+
+
 def frozen_src_refusal(src, repo_root):
     """Why this `--src` may not be measured, or None if it may.
 
@@ -1481,8 +1582,43 @@ def vacuous_lever_reason(record: dict):
                f"own cache)" if (record.get("paired") or 1) > 1 else ""))
 
 
-def cell_cost_estimate(model_out: Path, timeout: int):
-    """(seconds, basis) this cell is expected to cost, or None if unmeasured.
+def cell_cost_estimate(model_out: Path, timeout: int, arms=None, narrowest=False):
+    """(seconds, basis) this work is expected to cost, or None if unmeasured.
+
+    `arms` says HOW MANY RUNS the caller is about to pay for. The default, None,
+    prices a whole paired CELL — every arm in `ARM_LABELS` — which is what a
+    precision campaign runs. A caller that runs the model ONCE passes `arms=1`
+    and is priced for one run.
+
+    That distinction is not cosmetic. The MEET phase of the catalogue is, in its
+    own words, "ONE run per model, not a paired A/B", and it was pricing its runs
+    with the cell default: every model with a recorded cell was charged to the
+    campaign budget at about twice what it was going to spend, so the budget
+    refused models it could in fact have afforded.
+
+    `narrowest` chooses WHICH arm answers, and the two settings answer two
+    different questions:
+
+      widest (default)   "how much must I RESERVE?" — do not under-reserve.
+      narrowest          "is this run DOOMED by its clock?" — a model that has
+                         already finished once under the clock is not doomed,
+                         whatever a slower arm did.
+
+    The measurement that separates them, from the 2026-09-11 MEET against the
+    2026-09-10 cells (arm A certified-on, arm B certified-off and sweeping):
+
+        Qwen3-VL-30B        A 211 s   B 3135 s   MEET  365 s
+        DeepSeek-Coder-V2   A  93 s   B 1430 s   MEET  140 s
+        Qwen3-Omni-30B      A  98 s   B 1294 s   MEET  257 s
+        CogVideoX-2b        A 548 s   B  951 s   MEET  614 s
+
+    A MEET run lands near the NARROWEST arm every time and never near the widest,
+    because by then the machine's replay cache is warm. Priced on the widest,
+    Qwen3-VL would be refused against a 2700 s clock — a model that met in 365 s.
+    That false refusal is why the doom test reads the narrowest.
+
+    Only arms that ENDED answer either question. A killed arm never reached its
+    own end, so its wall is a floor, not a cost.
 
     Read from the cell's own previous record — the only honest source. A model
     nobody has run has no estimate and must NOT be refused: the guard's job is
@@ -1501,7 +1637,7 @@ def cell_cost_estimate(model_out: Path, timeout: int):
         record = json.loads(p.read_text())
     except (OSError, ValueError):
         return None
-    walls, killed = [], []
+    walls, ended, killed, failed = [], [], [], []
     for label in ARM_LABELS:
         arm = record.get(label)
         if not isinstance(arm, dict):
@@ -1511,20 +1647,47 @@ def cell_cost_estimate(model_out: Path, timeout: int):
             continue
         walls.append(float(w))
         try:
-            if int(arm.get("rc", 0)) < 0:
-                killed.append(label)
+            rc = int(arm.get("rc", 0))
         except (TypeError, ValueError):
-            pass
+            ended.append(float(w))
+            continue
+        if rc < 0:
+            killed.append(label)          # a kill is a lower bound, not a wall
+        else:
+            ended.append(float(w))        # reached its own end, well or badly
+            if rc > 0:
+                failed.append(label)
     if not walls:
         return None
-    if killed:
-        est = float(timeout) * max(len(walls), len(ARM_LABELS))
-        return est, (f"arm(s) {', '.join(killed)} were killed at the wall "
-                     f"({max(walls):.0f} s, timeout {timeout} s) — the cost is a "
-                     f"lower bound, at least {est:.0f} s for the arms")
-    est = sum(walls)
-    return est, (f"{len(walls)} measured arm(s), "
-                 f"{', '.join(f'{w:.0f} s' for w in walls)} — {est:.0f} s")
+    # An arm that EXITED NON-ZERO measured the cost of failing, not the cost of
+    # succeeding. Its wall is real time really spent, so it still bounds a budget
+    # — but a reader must never take it for the price of a finished run. On
+    # 2026-09-11 a MEET planner accepted 6 962 s for Wan2.1-T2V-1.3B, summed from
+    # two arms that had both exited rc=1, and the number read as a measurement.
+    note = (f"; arm(s) {', '.join(failed)} EXITED NON-ZERO — this is the cost of "
+            f"failing, not of finishing" if failed else "")
+    n = len(ARM_LABELS) if arms is None else int(arms)
+    pick, word = ((min, "narrowest") if narrowest else (max, "widest"))
+    if arms is None:
+        if killed:
+            est = float(timeout) * max(len(walls), n)
+            return est, (f"arm(s) {', '.join(killed)} were killed at the wall "
+                         f"({max(walls):.0f} s, timeout {timeout} s) — the cost is "
+                         f"a lower bound, at least {est:.0f} s for the arms{note}")
+        est = sum(walls)
+        return est, (f"{len(walls)} measured arm(s), "
+                     f"{', '.join(f'{w:.0f} s' for w in walls)} — {est:.0f} s{note}")
+    # Per run. One run does the work of ONE arm, so the cell's SUM over-counts it.
+    # An arm that was KILLED never reached its own end, so its wall is a floor and
+    # not a cost; only the arms that ended can answer "how long does this take".
+    if not ended:
+        est = float(timeout) * n
+        return est, (f"every arm was killed at the wall ({max(walls):.0f} s, "
+                     f"timeout {timeout} s) — the cost is a lower bound, at "
+                     f"least {est:.0f} s for {n} run(s){note}")
+    est = pick(ended) * n
+    return est, (f"{n} run(s) at the {word} of {len(ended)} arm(s) that ended, "
+                 f"{', '.join(f'{w:.0f} s' for w in ended)} — {est:.0f} s{note}")
 
 
 def budget_refusal(model_out: Path, budget_s, timeout: int):
@@ -1602,6 +1765,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
+    import rig_clock as _rc
+    _rc.add_argument(r)
     r.add_argument("--family")
     r.add_argument("--models")
     r.add_argument("--gpu", default=None, help="one pinned card, or a comma list of cards (e.g. 2,3) Prism may spread over; "
@@ -1686,6 +1851,10 @@ def main():
     else:
         models = sorted(m.name for m in CACHE.iterdir() if (m / "manifest.json").exists()
                         and family_of(m.name) == args.family)
+    _why = empty_selection_refusal(models, args.models, args.family)
+    if _why:
+        print(_why, flush=True)
+        return 2
     import shlex
     extra = shlex.split(args.extra) if args.extra else []      # quotes honoured: --extra '--prompt "a red fox"'
     if not args.machine and args.gpu is None:
@@ -1699,6 +1868,18 @@ def main():
                else frozen_src_refusal(args.src, _root))
     if _frozen:
         ap.error(f"this campaign would not measure a frozen tree — {_frozen}")
+
+    # The second door, same class and same moment: a campaign measures at the
+    # protocol clock or it does not measure. Application clocks are lost at every
+    # reboot and this rack's two SKUs return to DIFFERENT factory defaults, so an
+    # outage can leave half the rig at the protocol value by coincidence. Every
+    # card is read — sampling one that already agrees is how this goes unseen.
+    from rig_clock import OffProtocol, require_protocol_clock
+    try:
+        require_protocol_clock(
+            allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
+    except OffProtocol as exc:
+        ap.error(str(exc))
 
     held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
     for m in models:

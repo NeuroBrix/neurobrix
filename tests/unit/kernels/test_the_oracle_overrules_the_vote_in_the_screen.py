@@ -136,7 +136,11 @@ def test_without_a_provider_the_consensus_decides_exactly_as_before(screen, caps
     assert {c.name for c in kept} == {"m0", "m1", "m2"}, (
         "with no oracle the screen must still keep the largest cluster; this "
         "test is what proves the wiring did not change the default path")
-    assert "AUTOTUNE_ORACLE" not in capsys.readouterr().out
+    # The CHOICE is unchanged; what changed on 2026-09-13 (merge of the other
+    # machine's branch) is that a vote-only decision now SAYS it had no oracle,
+    # which the ruling of 2026-09-12 requires. Silence here would be the defect.
+    out = capsys.readouterr().out
+    assert "CONSENSUS ALONE" in out and "no oracle provider is installed" in out
 
 
 def test_a_provider_that_raises_falls_back_loudly(screen, capsys, monkeypatch):

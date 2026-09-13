@@ -92,6 +92,13 @@ tbody tr:last-child td{border-bottom:0}
 tr.measured{background:var(--surface)}
 tr.measured td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
 tr.measured .model code{color:var(--ink);font-weight:500}
+/* a row whose measurement is a named defect: the debt IS the content */
+tr.debt td:first-child{box-shadow:inset 2px 0 0 var(--finding)}
+td.debtcell{text-align:left;color:var(--muted)}
+td.debtcell b{font-family:var(--sans);color:var(--finding);font-weight:700;
+  text-transform:uppercase;font-size:11px;letter-spacing:.06em;margin-right:8px}
+td.debtcell code{font-size:11.5px}
+ol.findings li.more{border-left-color:var(--muted);background:transparent}
 
 ol.findings{list-style:none;counter-reset:f;padding:0;margin:18px 0;display:grid;
   gap:10px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
@@ -167,6 +174,7 @@ ul.pop code{flex:1 1 210px;font-size:12px}
   <span><span class="sw sw-m"></span><b>measured</b> — carries a proof</span>
   <span><span class="sw sw-n"></span><b>—</b> not measured, deliberately empty</span>
   <span><span class="sw sw-f"></span><b>contradicted</b> — a finding, every time</span>
+  <span><span class="sw sw-f"></span><b>failed / blocked</b> — attempted, and the debt that explains it</span>
 </div>
 <div class="tablewrap">
 <table>

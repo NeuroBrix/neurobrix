@@ -37,6 +37,7 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
         source = "test"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     swaps, avail = L.bench_would_swap(101 * 2 ** 20)
     assert swaps is True and avail == 100
     swaps, _ = L.bench_would_swap(99 * 2 ** 20)
@@ -57,6 +58,7 @@ def test_an_unreadable_platform_gates_nothing(monkeypatch):
         source = "unreadable platform"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     swaps, avail = L.bench_would_swap(10 ** 12)
     assert swaps is False and avail is None
 
@@ -111,6 +113,7 @@ def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
             return swap["used"]
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     said = []
 
     class _At:
@@ -143,6 +146,7 @@ def test_a_quiet_sweep_is_not_marked(monkeypatch):
         swap_used_mb = 4000
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     R.begin_sweep()
     R.note_sweep_swap_baseline()
     assert R.sweep_grew_the_swap() == 0
@@ -159,7 +163,28 @@ def test_an_unreadable_swap_marks_nothing(monkeypatch):
         swap_used_mb = None
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
     R.begin_sweep()
     R.note_sweep_swap_baseline()
     assert R.sweep_grew_the_swap() == 0, (
         "an unreadable platform must not turn into a policy of its own")
+
+
+def test_on_discrete_memory_both_doors_are_inert(monkeypatch):
+    """A V100 rack, 251 GB of host RAM: the host is not the bench. Seen firing
+    on a 1 MB swap delta on 2026-09-13 before this condition existed."""
+    from neurobrix.kernels import autotune_refusals as R
+    from neurobrix.kernels.launcher import bench_would_swap
+    import neurobrix.core.host_memory as hm
+
+    class _M:
+        available_mb = 10           # would trip the pre-gate on a unified device
+        total_mb = 24576
+        source = "test"
+        swap_used_mb = 999999        # would trip the post-hoc door too
+    monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: False)
+    assert bench_would_swap(10 ** 12) == (False, None)
+    R.begin_sweep(); R.note_sweep_swap_baseline()
+    _M.swap_used_mb = 0              # a "delta" of -999999 either way: unread
+    assert R.sweep_grew_the_swap() == 0

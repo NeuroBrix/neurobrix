@@ -172,3 +172,32 @@ def memory_state() -> MemoryState:
     if sys.platform.startswith("linux"):
         return _linux_state()
     return MemoryState(source=f"no reader for platform {sys.platform!r}")
+
+
+_SHARED: dict = {}
+
+
+def host_shares_memory_with_device() -> bool:
+    """Does the machine's default device draw from the host's memory pool?
+
+    The swap doors (`bench_would_swap`, `sweep_grew_the_swap`) reason about the
+    HOST's available memory and swap, which is the bench's memory only on a
+    unified device. On a discrete card the arguments live in device memory the
+    host never pages, and a megabyte of host swap moving during a sweep is a
+    daemon, not the bench: measured 2026-09-13 on a V100 rack with 251 GB of
+    host RAM, the post-hoc door fired on a 1 MB swap delta and refused to
+    persist an honest sweep. So both doors ask this first, and answer from the
+    device's own declaration (Prism's profile, `has_unified_memory`), never
+    from the brand. Cached per process; an unreadable profile reads as NOT
+    shared, which leaves the doors inert rather than firing on a guess.
+    """
+    if "v" not in _SHARED:
+        try:
+            from neurobrix.core.prism.autodetect import get_or_create_default_profile
+            from neurobrix.core.prism.loader import load_profile
+            prof = load_profile(get_or_create_default_profile())
+            _SHARED["v"] = bool(prof.devices and prof.devices[0].has_unified_memory)
+        except Exception:                              # noqa: BLE001
+            _SHARED["v"] = False
+    return _SHARED["v"]
+

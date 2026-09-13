@@ -17,6 +17,7 @@ open-source models. Run `neurobrix run --help` for the full flag list.
 | `--output <path>` | Save destination. Auto-extension if extension omitted; strict mismatch error otherwise |
 | `--seed <int>` | Seeds the sampler and any random initialisation. **Greedy decoding (`--temperature 0`) is reproducible; seeded *sampling* is not yet reproducible on the Triton engine for models with a head dimension of 128** — see the note below |
 | `--triton` / `--triton-sequential` / `--sequential` | Execution backend (default: compiled native) |
+| `--explain-plan` | Print the placement plan — strategy, why it won and what it beat, every component with its device and memory — and exit without loading anything |
 
 > **Reproducibility, precisely.** `--temperature 0` (greedy decoding) is
 > reproducible run to run: measured stable over sixteen runs across five

@@ -139,3 +139,37 @@ def test_a_count_field_wins_over_a_capped_sample(tmp_path):
         "say so rather than let four read as one")
     assert "decomposition closes" in doc, (
         "139 + 4 + 0 + 8 = 151 = differ; the check must run and say so")
+
+
+def test_a_cell_that_ran_and_crashed_is_not_the_same_as_one_nobody_tried(tmp_path):
+    """Collapsing both into "not measured" erases the attempt AND the defect.
+
+    Two Wan video cells ran on 2026-09-11 and crashed — one on a broadcast that
+    cannot happen, one on a 6.4 GB allocation with 1.6 GB free. Each produced a
+    named debt. A row that reads "not measured" for them says the opposite of
+    what happened.
+    """
+    camps = tmp_path / "camps"
+    d = camps / "c" / "proof" / "Wan2.1-VACE-1.3B-diffusers"
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({
+        "model": "Wan2.1-VACE-1.3B-diffusers", "family": "video", "weight_gb": 18.2,
+        "A": {"rc": 1, "swept": 1, "certified_served": 36, "reps": [{"rc": 1}]},
+        "B": {"rc": 1, "swept": 37, "reps": [{"rc": 1}]},
+        "gate": {"identical": False, "ran": False},
+    }))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "hub_snapshot.txt").write_text(
+        "MODEL                          CATEGORY         SIZE          LICENSE     DL  STATUS\n"
+        "----------\n"
+        "Wan-AI/Wan2.1-VACE-1.3B        VIDEO         18.2 GB       apache-2.0      3  installed\n"
+        "Total: 1 model(s) on registry\n")
+    r = subprocess.run([sys.executable, str(TOOL), "--out", str(out),
+                        "--campaigns", str(camps)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    doc = (out / "CATALOGUE.md").read_text()
+    row = next(l for l in doc.splitlines() if l.startswith("|") and "Wan2.1-VACE" in l)
+    assert "**failed**" in row and "D-WAN-VACE-BROADCAST-AT-DIV" in row, (
+        "a crashed cell must name its debt, not vanish into 'not measured'")
+    assert "were attempted and FAILED" in doc

@@ -111,17 +111,26 @@ def test_a_non_apple_target_cannot_reach_the_new_branch():
     assert _budget_for("gfx-m4-pro") is None
 
 
-def test_only_the_apple_profile_declares_matches():
-    """If a second profile ever declares prefixes, the pins above stop
-    covering it and this test says so rather than letting it pass."""
+def test_only_apple_profiles_declare_matches_and_the_family_one_is_the_fallback():
+    """Written when one Apple profile existed. Since 2026-09-10 there is one
+    profile per reported variant (each claiming its exact name) and the family
+    profile keeps the broad `apple-m` prefix as the loud fallback; the merge of
+    2026-09-13 put both designs in one tree and the pins above kept passing.
+    So the guard is: only Apple profiles declare prefixes, every variant's
+    prefix is longer than the family's, and no two profiles claim one prefix."""
     import yaml
-    declaring = []
+    declaring = {}
     for path in sorted(_configs.Path(__file__).resolve().parents[3]
                        .glob("src/neurobrix/config/vendors/*/*.yml")):
         cfg = yaml.safe_load(path.read_text()) or {}
         if cfg.get("compute_capability_matches"):
-            declaring.append(f"{path.parent.name}/{path.stem}")
-    assert declaring == ["apple/apple_silicon"], declaring
+            declaring[f"{path.parent.name}/{path.stem}"] = [
+                str(m).strip().lower() for m in cfg["compute_capability_matches"]]
+    assert declaring and all(k.startswith("apple/") for k in declaring), declaring
+    assert declaring["apple/apple_silicon"] == ["apple-m"], "the family profile is the fallback"
+    claimed = [m for k, ms in declaring.items() if k != "apple/apple_silicon" for m in ms]
+    assert len(claimed) == len(set(claimed)), "two profiles claim one prefix"
+    assert all(m.startswith("apple-m") and len(m) > len("apple-m") for m in claimed), claimed
 
 
 # --- the config spaces themselves, by value ---------------------------------

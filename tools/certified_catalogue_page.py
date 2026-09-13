@@ -26,14 +26,40 @@ by_name = {n.lower(): c for n, c in cells.items()}
 for r in hub:
     slug = r["slug"].lower()
     r["cell"] = by_name.get(slug) or by_name.get(R.ALIASES.get(slug, ""))
-    r["known"] = r["cell"]["cost_s"] if r["cell"] else None
+    c = r["cell"]
+    r["known"] = c["cost_s"] if (c and not c.get("failed")) else None
 hub.sort(key=lambda r: (r["known"] is None, r["known"] or 0, r["gb"]))
 
 def nm(): return '<span class="nm" title="not measured — deliberately empty">—</span>'
+
+
+def _blocker(r):
+    """The debt that explains why this row has no measurement, if one is
+    written down. A cell that ran and crashed, and a model with a known blocker
+    from an earlier flight, both say so — "not measured" is true for them and
+    incomplete, and the incomplete half is the part someone acts on."""
+    slug = r["slug"].lower()
+    for name, debt in R.FAILED_CELLS.items():
+        if name.lower() in (slug, R.ALIASES.get(slug, "")):
+            return debt
+    return None
+
+
 rows = []
 for i, r in enumerate(hub, 1):
     c = r["cell"]
-    if c:
+    debt = _blocker(r)
+    if debt:
+        state = "failed" if (c and c.get("failed")) else "blocked"
+        rows.append(
+            f'<tr class="debt"><td class="num idx">{i}</td>'
+            f'<td class="model"><code>{html.escape(r["hub"])}</code></td>'
+            f'<td><span class="fam">{html.escape(r["family"].lower())}</span></td>'
+            f'<td class="num quiet">{r["gb"]:.1f}</td>'
+            f'<td class="debtcell" colspan="8"><b>{state}</b> '
+            f'<code>{html.escape(debt)}</code></td></tr>')
+        continue
+    if c and not c.get("failed"):
         n = c["choice_contradicted_n"] or 0
         cells_html = [
             f'<td class="num">{c["keys"]}</td>',
@@ -55,12 +81,25 @@ for i, r in enumerate(hub, 1):
         f'<td><span class="fam">{html.escape(r["family"].lower())}</span></td>'
         f'<td class="num quiet">{r["gb"]:.1f}</td>' + "".join(cells_html) + '</tr>')
 
-findings = []
+# The headline counts from the `*_count` fields; the cards below are the
+# record's SAMPLE, capped at twenty. Summing the samples reported 52 where the
+# counts say otherwise — the same defect this document was corrected for once
+# already, and it recurs because a list is the thing in front of you.
+findings, n_findings = [], 0
 for r in hub:
     c = r["cell"]
-    if not c or not c.get("choice_contradicted_n"):
+    if not c or c.get("failed") or not c.get("choice_contradicted_n"):
         continue
-    for f in (c["choice_contradicted"] or []):
+    n_findings += c["choice_contradicted_n"]
+    sample = c["choice_contradicted"] or []
+    if c["choice_contradicted_n"] > len(sample):
+        findings.append(
+            f'<li class="more"><div class="f-head"><code class="f-model">'
+            f'{html.escape(r["hub"])}</code><span class="f-margin">'
+            f'{c["choice_contradicted_n"]} keys</span></div>'
+            f'<div class="f-scale">the {len(sample)} cards beside this one are '
+            f'the record\'s sample, not the whole list</div></li>')
+    for f in sample:
         key = f.get("key", "")
         short = key.split("::", 1)[-1]
         kern = key.split("::", 1)[0].split(".")[-1]
@@ -71,7 +110,7 @@ for r in hub:
             f'<div class="f-scale">{f.get("delta_ms",0)*1000:.1f} µs on a '
             f'{f.get("best_ms",0)*1000:.1f} µs kernel</div></li>')
 
-measured = [r for r in hub if r["cell"]]
+measured = [r for r in hub if r["cell"] and not r["cell"].get("failed")]
 pop = "".join(f'<li><code>{html.escape(r["hub"])}</code>'
               f'<span class="pop-k">{r["cell"]["keys"]} keys</span>'
               f'<span class="pop-g">×{r["cell"]["gain"]:.2f}</span></li>' for r in measured)
@@ -89,5 +128,5 @@ OUT.write_text(TPL
     .replace("{{NMEAS}}", str(len(measured)))
     .replace("{{NROWS}}", str(len(hub)))
     .replace("{{NUNMEAS}}", str(len(hub) - len(measured)))
-    .replace("{{NFIND}}", str(len(findings))))
+    .replace("{{NFIND}}", str(n_findings)))
 print(f"wrote {OUT} — {len(rows)} rows, {len(findings)} findings")

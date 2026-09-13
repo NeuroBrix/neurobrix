@@ -28,6 +28,9 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
 
 ENCODING = "int4-g128-asym"
 GROUP = 128
+# The leaves an encoded `X.weight` is stored under, in fold order
+# (packed values, per-group scales, per-group minimums).
+STORAGE_LEAVES = ("qweight", "scales", "qmins")
 PACK = 8
 
 
@@ -128,13 +131,14 @@ def assemble_quantized(weights: dict) -> int:
     dict into QuantizedTensor entries under the graph key `<base>.weight`.
     Mutates the dict in place; returns the number of assembled weights.
     ZERO FALLBACK: an incomplete triplet raises."""
-    bases = [k[: -len(".qweight")] for k in weights
-             if k.endswith(".qweight")]
+    q_leaf, s_leaf, m_leaf = STORAGE_LEAVES
+    bases = [k[: -len("." + q_leaf)] for k in weights
+             if k.endswith("." + q_leaf)]
     for base in bases:
-        qw = weights.pop(base + ".qweight")
+        qw = weights.pop(f"{base}.{q_leaf}")
         try:
-            sc = weights.pop(base + ".scales")
-            mn = weights.pop(base + ".qmins")
+            sc = weights.pop(f"{base}.{s_leaf}")
+            mn = weights.pop(f"{base}.{m_leaf}")
         except KeyError as e:
             raise RuntimeError(
                 f"ZERO FALLBACK: incomplete quantized triplet for "

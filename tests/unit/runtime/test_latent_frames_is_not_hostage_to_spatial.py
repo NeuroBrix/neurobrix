@@ -24,14 +24,16 @@ from __future__ import annotations
 import types
 
 
-def _executor():
-    """The method under test reads only `self.pkg.topology`, so a stand-in
-    carrying that is enough — building a real executor needs a container."""
+def _executor(defaults=None):
+    """A stand-in carrying what the method reads: topology, manifest, and the
+    container's own runtime defaults — the VAE scale is looked for there before
+    the guess, so a stub without `defaults` no longer models the real object."""
     from neurobrix.core.runtime.executor import RuntimeExecutor
 
     ex = object.__new__(RuntimeExecutor)
     ex.pkg = types.SimpleNamespace(
-        topology={"flow": {"type": "iterative_process"}}, manifest={})
+        topology={"flow": {"type": "iterative_process"}}, manifest={},
+        defaults=dict(defaults or {}))
     return ex
 
 
@@ -73,6 +75,37 @@ def test_an_autoregressive_model_is_still_skipped_entirely():
 
     ex = object.__new__(RuntimeExecutor)
     ex.pkg = types.SimpleNamespace(
-        topology={"flow": {"type": "autoregressive_generation"}}, manifest={})
+        topology={"flow": {"type": "autoregressive_generation"}}, manifest={},
+        defaults={})
     out = ex._inject_dynamic_latent_dimensions(dict(OPEN_SORA), comp_configs={})
     assert "latent_frames" not in out
+
+
+# --------------------------------------------------------------------------
+# 2026-09-12 — the VAE scale is DECLARED, under two vendor spellings
+# --------------------------------------------------------------------------
+
+def test_the_vae_scale_is_read_from_the_container_not_guessed():
+    """Image containers say `vae_scale_factor`; video ones say
+    `spatial_compression_ratio`. Same quantity, two vendor spellings.
+
+    Reading only the first walked past Open-Sora-v2's own declaration and fell
+    into the guess below it — `state_channels >= 32 -> 32 else 8` — a constant
+    in code answering a question the container had already answered. The guess
+    happens to agree here; a container declaring 16 or 32 would have been
+    silently mis-scaled, and nothing would have said so.
+    """
+    ex = _executor(defaults={"spatial_compression_ratio": 8})
+    assert ex._get_vae_scale_factor({}) == 8
+
+    ex32 = _executor(defaults={"spatial_compression_ratio": 32})
+    # The declaration wins over the guess, which would answer 8 here: the
+    # transformer below carries 4 state_channels, under the guess's threshold.
+    assert ex32._get_vae_scale_factor(
+        {"transformer": {"attributes": {"state_extent_0": 64, "state_channels": 4}}}) == 32
+
+
+def test_a_container_declaring_nothing_still_falls_through():
+    """No declaration, no invention: the pre-existing derivation is untouched."""
+    ex = _executor(defaults={})
+    assert ex._get_vae_scale_factor({}) is None
