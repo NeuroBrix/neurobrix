@@ -232,6 +232,87 @@ def campaign_cells() -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# certified coverage per memory class (register 56): an entry serves only the
+# memory class it was proven on, so "certified" is a per-card-class answer on
+# this rack (16 GB cards 0 and 1, 32 GB cards 2 and 3). The model's census is
+# the MEET pass's own log — it ran with the directory OFF, so every shape the
+# run met is a `no certified setting for` line.
+# ---------------------------------------------------------------------------
+_CENSUS_LINE = re.compile(r"no certified setting for (\S+) (\S+) \((.*?)\) on ")
+
+
+def _key_from_description(text: str):
+    """`M=1024 N=3840 K=1280 IEEE_PRECISION=True PROMOTE_B=True fp32,fp16,fp16,fp32`
+    → (1024, 3840, 1280, True, True, 'fp32', 'fp16', 'fp16', 'fp32'): the inverse
+    of `autotune_certified.describe_key` — named fields in order, then the
+    dtype list."""
+    key = []
+    for tok in text.split():
+        if "=" in tok:
+            v = tok.split("=", 1)[1]
+            key.append(True if v == "True" else False if v == "False" else int(v) if v.lstrip("-").isdigit() else v)
+        else:
+            key.extend(tok.split(","))
+    return tuple(key)
+
+
+def memory_class_coverage(container: str):
+    """{total, by_class: {16: n, 32: n}, unknown: n, absent: n} for the shapes
+    this container's MEET run met, read against the live certified directory;
+    None when the run left no log."""
+    log = MEET.parent / f"{container}.log"
+    if not log.exists():
+        return None
+    sys.path.insert(0, str(REPO / "src"))
+    from neurobrix.kernels import autotune_certified as C
+    root = C.directory() / "nvidia" / "volta"
+    files: dict = {}
+    out = {"total": 0, "by_class": {}, "unknown": 0, "absent": 0}
+    seen = set()
+    for line in log.read_text(errors="replace").splitlines():
+        m = _CENSUS_LINE.search(line)
+        if not m:
+            continue
+        kernel, dtype, desc = m.groups()
+        ktext = C.key_repr(_key_from_description(desc))
+        if (kernel, dtype, ktext) in seen:
+            continue
+        seen.add((kernel, dtype, ktext))
+        out["total"] += 1
+        path = root / f"{kernel}.{dtype}.json"
+        if path not in files:
+            try:
+                files[path] = json.loads(path.read_text(encoding="utf-8")).get("entries") or {}
+            except (OSError, ValueError):
+                files[path] = {}
+        entry = files[path].get(ktext)
+        if entry is None:
+            out["absent"] += 1
+            continue
+        classes = C.covered_memory_classes(entry)
+        if not classes:
+            out["unknown"] += 1
+        for c in classes:
+            out["by_class"][c] = out["by_class"].get(c, 0) + 1
+    return out
+
+
+def coverage_cell(cov) -> str:
+    if cov is None:
+        return "n/m"
+    if not cov["total"]:
+        return "0 shapes met"
+    t = cov["total"]
+    c16, c32 = cov["by_class"].get(16, 0), cov["by_class"].get(32, 0)
+    extra = []
+    if cov["unknown"]:
+        extra.append(f"{cov['unknown']} proven on an unknown card")
+    if cov["absent"]:
+        extra.append(f"{cov['absent']} not in the directory")
+    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "")
+
+
 def per_shape_sweep_cost() -> dict:
     """{family: [row, ...]} for every campaign cell that measured a sweep."""
     sys.path.insert(0, str(REPO / "tools"))
@@ -385,8 +466,8 @@ def main() -> int:
           f"and every one of the nine failures was a VIDEO model.\n")
 
     print("| model | family | GB | on this rack | swept | screened | certified cost | "
-          "where a defect would be invisible | line |")
-    print("|---|---|---:|---|---:|---:|---|---|---|")
+          "certified for this card's memory | where a defect would be invisible | line |")
+    print("|---|---|---:|---|---:|---:|---|---|---|---|")
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
@@ -442,10 +523,11 @@ def main() -> int:
         screened = r.get("screened_out")
         if screened is not None and incomplete:
             screened = f"{screened}†"
+        coverage = coverage_cell(memory_class_coverage(container))
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{blind_cell} | {line} |")
+              f"{coverage} | {blind_cell} | {line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -457,6 +539,15 @@ def main() -> int:
         print(f"*Evidence:* {ov['evidence']}  ·  *line:* {ov['line']}\n")
 
     print("## How to read the columns\n")
+    print("**certified for this card's memory** — of the shapes this model's catalogue")
+    print("run met (its own log, directory off), how many the directory certifies for a")
+    print("16 GB card and how many for a 32 GB card, read on the day this document was")
+    print("rendered. Since 2026-09-13 an entry serves only the memory class it was")
+    print("proven on (register 56): a shape proven on a 16 GB card sweeps at runtime on a")
+    print("32 GB card until it is certified there, and a shape proven on the rig with the")
+    print("card unknown serves no card until re-proven. The two numbers are what a")
+    print("request on each SKU of this rack is served without a sweep — not what the")
+    print("directory holds.\n")
     print("**swept** — shape keys this model had to sweep AT RUNTIME because the")
     print("certified directory did not hold them. On a row that MET, `0` is the")
     print("per-model measure of certified coverage: it was served entirely from the")
