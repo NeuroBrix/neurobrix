@@ -57,7 +57,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
 | `Wan-AI/Wan2.1-T2V-1.3B` | video | 27.0 | FAILED rc=-9 — killed at 2700 s | 11† | 0† | 26 s, 0.01x, 6/36 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
-| `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line** | 0† | 0† | not measured | none found at the input | measured (topology) / inferred (unroll) |
+| `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line** | 0† | 0† | not measured | none found at the input | measured (topology) / inferred (unroll) |
 | `genmo/Mochi-1-preview` | video | 38.2 | FAILED rc=-9 — killed at 2700 s | 0† | 0† | not measured | transformer `seq_len`@256 (weight-extent); transformer `seq_len`@256 (weight-extent) | measured |
 | `hpcai-tech/Open-Sora-v2` | video | 42.5 | **DIAGNOSED — rebuild refused at entry, re-trace queued first** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | none found at the input | measured |
@@ -102,11 +102,11 @@ Its VAE encoder unrolls its temporal chunk loop: 517 ops per chunk, measured at 
 
 *Evidence:* validation_outputs/wan_class_e_20260912/VERDICT.md; docs/reference/temporal-unroll-census.md  ·  *line:* measured
 
-### `Wan2.2-I2V-A14B` — REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line
+### `Wan2.2-I2V-A14B` — RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line
 
 TWO lines, not one. The rebuild resolves its output size. Its VAE ENCODER stays unrolled over the temporal axis, which no rebuild changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without saying the second would be delivering a fix for the error we found and hiding the one underneath.
 
-*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all five components; upload through the internal entry point 22:22:46 -> rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five components in the cache; the proof needs the whole rig and runs after the bench queues drain; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on card 0: 1237 ops at T=9, 3305 at T=25 -> 517 ops per chunk (second line)  ·  *line:* measured (topology) / inferred (unroll)
+*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all five components; upload through the internal entry point 22:22:46 -> rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five components in the cache; the proof needs the whole rig and runs after proof 2026-09-13: compiled 9 frames 448x448, diff 3.91, PASSED; triton at cfg 1.0 renders (diff 1.01, byte-identical on both engines); at default CFG triton reaches 31 327 MB on the one 32 GB card Prism chose and OOMs at the first attention (1.77 GB scores), Prism refusing component_placement and weight_sharding on a 96 GB rig — DETTE D-PRISM-WAN22-TRITON-ONE-CARD; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on card 0: 1237 ops at T=9, 3305 at T=25 -> 517 ops per chunk (second line)  ·  *line:* measured (topology) / inferred (unroll)
 
 ## How to read the columns
 

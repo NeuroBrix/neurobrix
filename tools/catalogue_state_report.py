@@ -139,13 +139,13 @@ OVERLAY = {
              "filesystem rather than the export.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
-        now="REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line",
+        now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
         evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
                  "five components; upload through the internal entry point 22:22:46 -> "
                  "rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub "
                  "updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five "
                  "components in the cache; the proof needs the whole rig and runs after "
-                 "the bench queues drain; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on "
+                 "proof 2026-09-13: compiled 9 frames 448x448, diff 3.91, PASSED; triton at cfg 1.0 renders (diff 1.01, byte-identical on both engines); at default CFG triton reaches 31 327 MB on the one 32 GB card Prism chose and OOMs at the first attention (1.77 GB scores), Prism refusing component_placement and weight_sharding on a 96 GB rig — DETTE D-PRISM-WAN22-TRITON-ONE-CARD; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on "
                  "card 0: 1237 ops at T=9, 3305 at T=25 -> 517 ops per chunk (second line)",
         note="TWO lines, not one. The rebuild resolves its output size. Its VAE "
              "ENCODER stays unrolled over the temporal axis, which no rebuild "
