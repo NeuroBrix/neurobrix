@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-53 entries, of which five are placeholders and 48 carry a site. Two
+54 entries, of which five are placeholders and 49 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1054,4 +1054,29 @@ the same `only=` set, computed by the same function, and a test reads a
 shard through it. Gate:
 `tests/unit/core/test_compiled_loader_loads_what_the_plan_budgeted.py`,
 seen red on the old reader; the proof by run is the four native cells.
+
+### 54 — a set computed before the rewrite that adds its readers
+
+The consumed-weight filter reads the FINAL graph, "after any fusion pass",
+and for the llm family that is true: the MoE fusion runs at graph load. For
+a MoE LM packaged under another family the fusion waits for the flow's
+declaration at execute time — after the weights were loaded from the
+un-fused graph, in which no op consumes the experts the trace never routed
+to. The fused kernel then read them all, and Ming-Lite-Omni's first MoE
+block met `'NoneType' object has no attribute 'data_ptr'` under triton on a
+quiet rig, from a frozen tree, with the filter of entries 50 and 53 in
+place. Prism sized the same component on the same un-fused graph: 5.2 GB
+planned for Qwen3-Omni's thinker, 57 GB executed.
+
+**The shape**: a set that is exact for the graph it reads and stale for the
+graph the engine runs, because a declared rewrite comes later. **The
+rule**: a rewrite that adds readers loads what it now reads — the declared
+fusion recomputes the set and loads the difference through the engine's
+own loader, in both engines — and Prism sizes the fused copy of a routed
+component. (A first version moved the fusion into the factory; the review
+found it read a path no package has and would have applied the LM's norm
+to the talker's own router — the register's own class, caught before the
+commit.) Gate:
+`tests/unit/runtime/test_a_declared_fusion_loads_what_it_now_reads.py`,
+seen red before the fix; the proof by run is the Ming triton cell.
 

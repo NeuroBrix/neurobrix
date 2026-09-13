@@ -402,6 +402,12 @@ class GraphExecutor:
                 norm_topk_prob=norm_topk_prob,
                 declared=True,
             )
+            # A rewrite that adds readers loads what it now reads. The
+            # weights were chosen from the un-fused graph, in which no op
+            # consumes the experts the trace never routed to; the fused
+            # kernel reads them all (2026-09-13, Ming-Lite-Omni triton:
+            # `moe_fused::block.0` met None — register 54).
+            self._load_what_the_rewrite_added()
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
         #
@@ -415,6 +421,33 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     op.setdefault("attributes", {})["norm_topk_prob"] = norm_topk_prob
+
+    def _load_what_the_rewrite_added(self) -> None:
+        """After a DAG rewrite that adds consumers (the declared MoE fusion),
+        load the weights the graph now reads and did not before, through the
+        engine's own loader with the same filter. Nothing to do before the
+        first load (the load then reads the rewritten graph) or when the load
+        was unfiltered."""
+        args = getattr(self, "_load_args", None)
+        weights = getattr(self, "_weights", None)
+        if not args or not weights:
+            return
+        wanted = self._consumed_in_loader_space(
+            self.consumed_weight_names(), args["nbx_path"], args["component"])
+        if wanted is None:
+            return
+        missing = set(wanted) - set(weights.keys())
+        if not missing:
+            return
+        if self.mode in ("triton", "triton_sequential"):
+            self._load_weights_triton(args["nbx_path"], args["component"],
+                                      args["shard_map"], only=missing)
+        else:
+            self._load_weights_native(args["nbx_path"], args["component"],
+                                      args["shard_map"], only=missing)
+        print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] "
+              f"'{args['component']}': {len(missing)} more weights loaded — the "
+              f"declared MoE fusion reads them", flush=True)
 
     def set_runtime_resolution(self, height: int, width: int) -> None:
         """
@@ -1701,6 +1734,8 @@ class GraphExecutor:
             print(f"[WEIGHTS_LOAD] component={component} mode={self.mode}",
                   flush=True)
             _tb_wl.print_stack()
+        self._load_args = {"nbx_path": nbx_path, "component": component,
+                           "shard_map": shard_map}
         if self.mode in ("triton", "triton_sequential"):
             self._load_weights_triton(nbx_path, component, shard_map)
         else:
@@ -1742,7 +1777,7 @@ class GraphExecutor:
         # the whole component a second time.
         self._weights_loaded = True
 
-    def _load_weights_native(self, nbx_path, component, shard_map):
+    def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""
         # Capability gate (unsupported-path doctrine): encoded-weight
         # builds execute on the Triton engine only — the native path
@@ -1772,20 +1807,24 @@ class GraphExecutor:
         # the triton path below. Prism sizes a component on this set, and a
         # loader that read every key ran the plan under another memory model
         # (2026-09-13, four native MoE cells: planned 5-19 GB, loaded 30-57).
-        _only = self._consumed_in_loader_space(
+        _only = only if only is not None else self._consumed_in_loader_space(
             self.consumed_weight_names(), nbx_path, component)
         with WeightLoader(nbx_path) as loader:
             if shard_map:
-                self._weights = loader.load_component_with_shard_map(
+                loaded = loader.load_component_with_shard_map(
                     component, shard_map, torch_dtype, only=_only)
             else:
-                self._weights = loader.load_component(
+                loaded = loader.load_component(
                     component, self.device, torch_dtype, only=_only)
+        if only is not None:
+            self._weights.update(loaded)          # a rewrite added readers
+        else:
+            self._weights = loaded
         if _only is not None:
             print(f"   [Compiled] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
 
-    def _load_weights_triton(self, nbx_path, component, shard_map):
+    def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
         from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
@@ -1830,10 +1869,15 @@ class GraphExecutor:
         # aten.embedding::0, 2026-09-13, on a container whose compiled run
         # rendered. So the set is expanded into the loader's space here with
         # the reconcile's own rule before the loader sees it.
-        _only = self._consumed_in_loader_space(_only, nbx_path, component)
-        self._weights = load_component_weights(
+        _only = only if only is not None else \
+            self._consumed_in_loader_space(_only, nbx_path, component)
+        loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only)
+        if only is not None:
+            self._weights.update(loaded)          # a rewrite added readers
+        else:
+            self._weights = loaded
         if _only is not None:
             print(f"   [Triton] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
