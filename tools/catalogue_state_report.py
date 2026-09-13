@@ -180,7 +180,8 @@ def per_shape_sweep_cost() -> dict:
                 r = _row(json.loads(result.read_text()))
             except (OSError, ValueError):
                 continue
-            if r["model"] in perturbed or r["rc"] != (0, 0) or not r["keys"] or not r["sweep"]:
+            if (str(result.parent.relative_to(camp)) in perturbed or r["rc"] != (0, 0)
+                    or not r["keys"] or not r["sweep"]):
                 continue
             out.setdefault(r["family"], []).append(r)
     return out
@@ -210,9 +211,13 @@ def campaign_dir_cells(camp: Path) -> dict:
         except (OSError, ValueError):
             continue
         r = _row(cell)
-        if r["model"] in perturbed and not str(r["model"]).startswith("_"):
+        # Keyed by the cell's directory relative to the campaign, not by model:
+        # a re-run of the same model lands in another directory and must NOT
+        # inherit the mark. Later directories win in sorted order.
+        rel = str(result.parent.relative_to(camp))
+        if rel in perturbed:
             out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
-                                   bytes=r["bytes"], failed=f"PERTURBED ({perturbed[r['model']]})")
+                                   bytes=r["bytes"], failed=f"PERTURBED ({perturbed[rel]})")
             continue
         rc_a, rc_b = r["rc"]
         if rc_a not in (0, None) or rc_b not in (0, None):
