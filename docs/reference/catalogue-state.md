@@ -20,7 +20,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | 1172 s, 31.23x, 254/254 keys, base 39 s, bytes same; 46 certified choice(s) contradicted by the runtime sweep (186 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | 1212 s, 54.55x, 251/251 keys, base 23 s, bytes same; 42 certified choice(s) contradicted by the runtime sweep (185 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | 2082 s, 5.52x, 59/59 keys, base 460 s, bytes same; 2 certified choice(s) contradicted by the runtime sweep (22 near-ties within the timer's noise) — a finding, keys in the campaign record | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
-| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 329 s, 7.22x, 58/58 keys, base 53 s, bytes same | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
+| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 325 s, 6.95x, 58/58 keys, base 55 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (26 near-ties within the timer's noise) — a finding, keys in the campaign record | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent) → bound — spatial differential 2026-09-13 on PixArt-Sigma-XL-2-1024-MS, whose vae graph.json is byte-identical to this container's; vae `width`@128 (weight-extent) → bound — same run, same identical graph | measured |
 | `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (16 near-ties within the timer's noise) — a finding, keys in the campaign record | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
 | `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → fixed by the model — the stimulus did not move (differential 2026-09-12) (+2) | measured |
@@ -53,7 +53,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
 | `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | **met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost** | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
 | `THUDM/CogVideoX-2b` | video | 13.2 | met in 614 s | 5 | 0 | 403 s, 0.73x, 26/33 keys, bytes **ran, FAILED** | none found at the input | measured |
-| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | 227 s, 3.20x, 48/50 keys, base 103 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (18 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | -14 s, 0.85x, 48/0 keys, base 97 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (18 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
 | `Wan-AI/Wan2.1-T2V-1.3B` | video | 27.0 | FAILED rc=-9 — killed at 2700 s | 11† | 0† | 26 s, 0.01x, 6/36 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
@@ -144,13 +144,12 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 | family | cells | s per shape (min – max) | keys per cell (min – max) |
 |---|---:|---|---|
 | audio_llm | 3 | 5 – 5 | 251 – 264 |
-| image | 5 | 6 – 69 | 36 – 59 |
+| image | 6 | 6 – 69 | 36 – 59 |
 | llm | 2 | 6 – 6 | 6 – 8 |
 | multimodal | 2 | 6 – 8 | 25 – 287 |
 | stt | 3 | 3 – 5 | 10 – 17 |
 | tts | 2 | 6 – 6 | 38 – 54 |
 | upscaler | 8 | 3 – 45 | 10 – 18 |
-| video | 1 | 5 – 5 | 50 – 50 |
 | vlm | 1 | 5 – 5 | 523 – 523 |
 
 The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the
