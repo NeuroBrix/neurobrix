@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-13 16:06 UTC**.
+The *where a defect would be invisible* column is the census taken **2026-09-13 16:08 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
@@ -23,7 +23,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 325 s, 6.95x, 58/58 keys, base 55 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (26 near-ties within the timer's noise) — a finding, keys in the campaign record | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent) → bound — spatial differential 2026-09-13 on PixArt-Sigma-XL-2-1024-MS, whose vae graph.json is byte-identical to this container's; vae `width`@128 (weight-extent) → bound — same run, same identical graph | measured |
 | `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (16 near-ties within the timer's noise) — a finding, keys in the campaign record | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
-| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → fixed by the model — the stimulus did not move (differential 2026-09-12) (+2) | measured |
+| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → UNADJUDICATED — the differential's override has no seam on a transformer traced inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 (instrument defect named in the census; 'fixed by the model' on 2026-09-12 read the same silence as a fact) (+2) | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | 46 s, 1.43x, 8/8 keys, base 107 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (4 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |

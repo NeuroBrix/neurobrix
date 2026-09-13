@@ -74,7 +74,9 @@ ADJUDICATED_AXES = {
     },
     "Flex.1-alpha": {
         "text_encoder `seq_len`@77 (weight-extent)": "bound — differential 2026-09-12 (77 vs 71: 0 dims moved)",
-        "transformer `seq_len`@4096 (weight-extent)": "fixed by the model — the stimulus did not move (differential 2026-09-12)",
+        "transformer `seq_len`@4096 (weight-extent)": "UNADJUDICATED — the differential's override has no seam on a "
+            "transformer traced inside a pipeline: both arms recorded trace_value=4096 again on 2026-09-13 16:05 "
+            "(instrument defect named in the census; 'fixed by the model' on 2026-09-12 read the same silence as a fact)",
     },
 }
 
