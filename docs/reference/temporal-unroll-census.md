@@ -141,6 +141,7 @@ than a blind spot. Nothing to act on, and nothing claimed about a binding.
 | `MiniCPM-o-4_5/flow_dit` | `seq_len` | 3 | 7 | not measured — same |
 | `openaudio-s1-mini/codec.decoder` | `seq_len` | 1 | 7 | not measured — nested component (`codec.decoder`), unreachable by a single-component trace (2026-09-13, card 0: Phase B targeted 0 components) |
 | `Qwen3-Omni-30B-A3B-Instruct/talker.code_predictor.model.codec_embedding` | `seq_len` | 1 | 7 | not measured — same, nested |
+| `PixArt-XL-2-1024-MS/transformer` | `seq_len` | 120 | 113 | not measured — the single-component trace of this transformer fails at BOTH stimuli (default and 113) with a device mismatch inside `adaln_single`'s resolution embedder (`mat1` on cpu against cuda:0), on card 0 on 2026-09-13; the June trace of the same container ran the whole pipeline. Instrument defect, filed in the build toolchain's missing-capabilities register; the axis stays flagged, not adjudicated |
 
 The instrument (`nbx/campaigns/prepared/weight_extent_differential.py`) and the
 stimulus override it needed (`forge trace --trace-seq-len`) are the deliverable
