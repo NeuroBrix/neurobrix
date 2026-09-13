@@ -101,8 +101,8 @@ OVERLAY = {
                  "rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub "
                  "updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five "
                  "components in the cache; the proof needs the whole rig and runs after "
-                 "the bench queues drain; cached encoder carries the unroll signature "
-                 "(inferred line)",
+                 "the bench queues drain; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on "
+                 "card 0: 1237 ops at T=9, 3305 at T=25 -> 517 ops per chunk (second line)",
         note="TWO lines, not one. The rebuild resolves its output size. Its VAE "
              "ENCODER stays unrolled over the temporal axis, which no rebuild "
              "changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without "
