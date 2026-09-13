@@ -35,6 +35,12 @@ def test_the_rendering_names_the_choice_the_reason_the_field_and_the_refusals():
 def test_a_plan_without_a_reason_or_candidates_says_so_rather_than_reading_as_explained():
     text = explain_plan(_plan(selection_reason="", candidates=[], rejected=[]))
     assert "no reason recorded" in text and "candidates      none recorded" in text
+    assert "tiling          none planned" in text
+
+
+def test_a_planned_component_tiling_is_printed():
+    text = explain_plan(_plan(component_tiling={"vae": {"axis": "temporal", "tiles": 24, "tile_frames": 8}}))
+    assert "component tiling vae: {'axis': 'temporal', 'tiles': 24, 'tile_frames': 8}" in text
 
 
 def test_the_flag_is_on_the_run_command():
