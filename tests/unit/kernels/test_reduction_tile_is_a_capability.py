@@ -104,3 +104,32 @@ def test_l2_norm_with_the_clamped_tile_matches_aten():
     assert dev <= 1e-4, (
         f"the clamped-tile L2 norm differs from ATen by {dev:.3e}; a tile that "
         f"lowers but computes the wrong norm is the outcome this guards")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="the Metal clamp path")
+def test_weight_norm_with_the_clamped_tile_matches_aten():
+    """weight_norm's tile is 64x256 = 16384 (Kokoro's wall), a different
+    kernel and constant from l2_norm's 8192 -- same clamp helper. The norm it
+    produces must still match torch after BLOCK_N is shrunk 256 -> 16.
+    """
+    import numpy as np
+    torch = pytest.importorskip("torch")
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+
+    rng = np.random.default_rng(20260913)
+    v = (rng.standard_normal((32, 16384)) * 0.1).astype(np.float32)   # dim=0, N=16384
+    g = (rng.standard_normal((32, 1)) * 0.1 + 1.0).astype(np.float32)
+
+    out, _ = W.weight_norm_interface_wrapper(
+        NBXTensor.from_numpy(v), NBXTensor.from_numpy(g), dim=0)
+    got = np.asarray(out.to_cpu().numpy(), dtype=np.float64)
+
+    tv, tg = torch.from_numpy(v), torch.from_numpy(g)
+    tnorm = torch.linalg.vector_norm(tv, dim=1, keepdim=True)
+    want = (tv * (tg / tnorm)).to(torch.float64).numpy()
+
+    scale = float(np.abs(want).max()) or 1.0
+    dev = float(np.abs(got - want).max() / scale)
+    assert dev <= 1e-3, (
+        f"clamped-tile weight_norm differs from torch by {dev:.3e}")
