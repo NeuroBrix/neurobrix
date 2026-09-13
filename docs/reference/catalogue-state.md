@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-12 23:11 UTC** (rendered from its cache: the export was carrying one stream, and the rule is one at a time).
+The *where a defect would be invisible* column is the census taken **2026-09-13 15:21 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
