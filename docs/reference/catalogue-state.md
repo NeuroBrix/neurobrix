@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-13 16:08 UTC**.
+The *where a defect would be invisible* column is the census taken **2026-09-13 16:11 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
@@ -166,15 +166,20 @@ them apart. This is NOT a defect list. An axis here needs its rule asserted
 structurally or a re-trace outside the collision; a test at the flagged
 value is green for the reason that blinds it.
 
+## Verdicts that cut across the lines
+
+* **The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, PixArt-Sigma-XL-2-1024-MS on a 16 GB card, Flex.1-alpha on a 32 GB card — rendered byte-identical images on both arms, three cold repetitions each, triton. The sixth pair (mochi) is named, not run. The byte matrix over the models that do NOT change strategy ran zero cells that day (register 52) and is re-armed. `nbx/campaigns/prepared/budget_unified_gate_20260913_1535/VERDICT.md`.
+* **The engine suite on the trunk** (`pytest tests/unit tests/regression`, 2026-09-13 13:28-15:20, 1 h 52): 2100 passed, 21 failed. Ten of the 21 were one defect in the triton weight loader's consumed-weight filter (register 50, fixed the same afternoon, proven by run on three cells), one a GPU-less host planned on a GPU (register 51, fixed), eight out-of-memory against a foreign process on the cards, two Qwen3-Omni triton cells to re-read after the fix. The 21 are re-run from a worktree frozen at `8a92312` on a quiet rig; the verdict line is written here when it exists, not before. `nbx/logs/full_suite_night.log`, `nbx/logs/suite_rerun_21.log`.
+
 ## What this document does not say
 
 * **Whether a model is CORRECT.** The run column says it produced output
   without failing, on one request, at one moment. Numerical agreement
   against a vendor pipeline is a different instrument and covers five of
   nine families.
-* **What most models cost with the certified directory.** Eleven cells were
-  measured; the other thirty-six say *not measured* and that is the whole
-  point of the cell.
+* **What every model costs with the certified directory.** 39 of 47
+  rows carry a measured or stated cost; the other 8 say *not
+  measured* and that is the whole point of the cell.
 * **Whether the flagged axes are wrong.** They are places a defect could
   not be seen. Converting one into a verdict costs a second trace at a
   value outside the collision, and the instrument that does it refuses when
