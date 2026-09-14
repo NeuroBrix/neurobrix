@@ -1,0 +1,25 @@
+# The rig's application clocks are re-locked to the measurement protocol at
+# every boot BY THE SYSTEM, not by whoever wakes up after the cut.
+#
+# Three mains cuts in three days (2026-09-11, 09-12, 09-13) each returned
+# cards 0 and 1 to their factory 1312 MHz while 2 and 3 sat at 1290 by
+# coincidence; the door (tools/rig_clock.py) refused every timed run until a
+# person typed the restore. This unit types it. The value is READ from
+# tools/rig_protocol.json — nothing here names a frequency.
+#
+# Install (once, as root):
+#   cp tools/systemd/nbx-rig-clock.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now nbx-rig-clock.service
+# Check: systemctl status nbx-rig-clock; python3 tools/rig_clock.py
+[Unit]
+Description=NeuroBrix rig: lock application clocks to the measurement protocol (tools/rig_protocol.json)
+After=nvidia-persistenced.service
+Wants=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /home/mlops/NeuroBrix_System/tools/rig_clock.py --restore
+
+[Install]
+WantedBy=multi-user.target
