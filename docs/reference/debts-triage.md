@@ -88,8 +88,11 @@ defect no byte gate could see) · D-ALLEGRO-VERTICAL-SEAMS ·
 D-SANA-FP16-DRIFT-BOUND · D-PRECISION-DRIFT-SITE · D-FLEX-ROW-RECIPE (blob on
 both arms — the vendor recipe is owed first) · D-UPSCALER-SWIN2SR-X2-CONSERVATIVE-BLACK
 · D-KERNEL-REMAINDER-HALF-DISCONTINUITY · D-ZOO-AUDIO-GATE · D-VOLTA-FLASH-PREFILL-NONDET
-· D-RNG-31-BIT-SEED-SPACE · D-RNG-DRAW-UNARMED-IN-A-FLOW (fixed on the trunk;
-Kokoro measured deterministic per mode 09-13).
+· D-RNG-31-BIT-SEED-SPACE · D-RNG-DRAW-UNARMED-IN-A-FLOW — **closed 09-14 06:54**: the permanent guard
+(`3092fdb`) read 8/8 on card 1 — the four drawing containers, native and triton, two runs each, one
+hash; MiniCPM-o's triton speech leg needed its 428 shapes swept once (45 min) because no census had
+held them (the catalogue's multimodal request is text mode — a catalogue finding, its line measures
+one leg).
 
 **Build toolchain — fixed at the source, rebuilds pending or landed:**
 D-TRACE-SUBMODULE-PARENT-FORWARD · D-PARAKEET-SYMBOLIC-T (build-side fix
@@ -140,7 +143,7 @@ D-REPLAY-BLIND-TO-THE-ENGINE-LAUNCHER · D-SCHEDULER-EXCLUSIVITY-ONLY-AT-ENTRY
 | D-TEMPORAL-UNROLL | A | measured (Wan2.2 vae_encoder, 517 ops/chunk); the fix is on the build side, not started |
 | D-MOCHI-CUDA-700 | A | under compute-sanitizer, rig quiet, since 21:26 |
 | Allegro D2 | A (declared limit) | decided: cuDNN 9.1 refuses the large non-batch-splittable conv; 88 frames is a declared limit until cuDNN ≥ 9.3 or a per-tile bound |
-| Kokoro determinism per mode | C | measured TRUE on the trunk 09-13 01:23 — compiled, sequential, triton_sequential, two runs each, one sha per mode (`kokoro_per_mode/VERDICT.md`); the premise of "two shas, same tree" is contradicted by the measurement. The permanent guard the debt owes landed `3092fdb` (8 cells: the 4 drawing containers × native/triton, run twice each, read from `tools/rng_census.py`); its first run is queued on card 0 behind the certification |
+| Kokoro determinism per mode | closed | measured TRUE on the trunk 09-13 01:23 (three modes, one sha each) and CLOSED 09-14 06:54 by the permanent guard (`3092fdb`): 8/8 — the four drawing containers × native/triton, two runs each, one hash (`rng_guard_0914*/VERDICT.md`) |
 | the §4.2 screen cell (A40) | B | the production wiring is the live screen's oracle (register 45-47); the sm_86 cell itself is owed by whoever has the card |
 | `--explain-plan` | — | delivered (`d9ba351`, `06004e2`) |
 | `budget-unified` and its byte question | — | five pinned pairs byte-identical across a strategy change; the per-family matrix is armed behind the chain |
