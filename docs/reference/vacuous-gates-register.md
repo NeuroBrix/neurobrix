@@ -1229,3 +1229,43 @@ between two 16 GB drafts of identical conditions on 34 of 50 keys, between the
 about seven keys in ten and a near-tie the timer decides on the other three,
 which is what the catalogue's "certified choices contradicted by the runtime
 sweep (near-ties)" column has been counting.
+
+
+### 58 — a trace at a small shape, and an index that wraps at a large one
+
+`mochi-1-preview` died on CUDA error 700 at `aten.mm::1` of its VAE at every
+attempt since 2026-09-10 (D-MOCHI-CUDA-700-AT-MM). Two `compute-sanitizer`
+runs — 7 200 s on 09-13, 18 000 s on 09-14, cards 2+3 — ended on their
+budget with the run's log silent and no error summary: five hours of
+instrument, nothing measured. `--triton-sequential` with
+`CUDA_LAUNCH_BLOCKING=1` named the op in 19 minutes: the matmul at
+M=1 068 480 × N=2048, fp32 out — 2 188 247 040 elements, past 2^31. The
+kernel computed `stride_cm * offs_cm` with `offs_cm` an int32 arange; past
+row 1 048 576 the product wraps negative and the store leaves the
+allocation. The trace saw M=33 264. Upstream: triton-lang/triton#832
+("index computations are done in int32 even for large tensors" — intended
+C semantics, the maintainer's word), fixed the same week by three other
+projects (comfy-kitchen#172 on Triton 3.6.0, Triton-distributed#209,
+FlagGems#6083) with the same in-kernel `.to(tl.int64)`.
+
+**The shape**: a kernel proven correct at every shape a trace or a census
+ever presented, and wrong at the first shape whose element count crosses a
+power of two no test had reached — the register's "shape it runs at"
+class, at the scale of an integer type. **The rule**: an index computation
+that can exceed 2^31 is done in 64-bit at the site that can exceed it, and
+the gate is a shape chosen to cross the boundary
+(`tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py`:
+M=1 100 000 × N=2048, K=64, fp16 — 2 252 800 000 elements, C 4.5 GB, the
+rows before, at and past 1 048 576 checked against a host product; seen
+RED 05:37 UTC on the kernel as it was — the same error 700 — GREEN after).
+The cost was measured, not assumed (ptillet's register-spill warning is
+about matmul, and no Volta number existed upstream): the same 50 matmul
+keys certified on card 2 before and after, same card, same locked clock —
+best time after/before **median 0.996 (0.980–1.020)**, 38/50 same
+configuration (the noise level of two identical drafts, entry 56), every
+deviation within tolerance; and three models with the setting pinned
+(`NBX_DISABLE_AUTOTUNE=1`, card 3) — TinyLlama, Kokoro, Sana MultiLing at
+4 steps — **byte-identical** before and after. And the instrument lesson
+beside it: a memcheck that returns nothing in five hours is not "still
+running", and the engine's own op-by-op mode with launch blocking is the
+first instrument for a fault, not the last.
