@@ -211,7 +211,7 @@ def matmul_kernel(
     tl.assume(stride_am > 0); tl.assume(stride_ak > 0)
     tl.assume(stride_bk > 0); tl.assume(stride_bn > 0)
     tl.assume(stride_cm > 0); tl.assume(stride_cn > 0)
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     num_pid_in_group = GROUP_M * num_pid_n
@@ -310,7 +310,7 @@ def addmm_kernel(
     tl.assume(stride_am > 0); tl.assume(stride_ak > 0)
     tl.assume(stride_bk > 0); tl.assume(stride_bn > 0)
     tl.assume(stride_cm > 0); tl.assume(stride_cn > 0)
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     num_pid_in_group = GROUP_M * num_pid_n

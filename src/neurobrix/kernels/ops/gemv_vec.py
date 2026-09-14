@@ -49,7 +49,7 @@ def gemv_vec_kernel(
     BLOCK_N: tl.constexpr,   # output rows per program (small: 8-16)
     BLOCK_K: tl.constexpr,   # K-chunk width (wide: 128-512)
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offs_n = pid * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_n < N
 

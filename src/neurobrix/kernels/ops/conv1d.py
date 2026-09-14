@@ -41,9 +41,9 @@ def conv1d_forward_kernel(
     BLOCK_CO: tl.constexpr,
 ):
     """Conv1D forward: [N, C_in, L] * [C_out, C_in/g, K] -> [N, C_out, L_out]."""
-    pid_ni_lo = tl.program_id(0)
-    pid_co = tl.program_id(1)
-    pid_group = tl.program_id(2)
+    pid_ni_lo = tl.program_id(0).to(tl.int64)
+    pid_co = tl.program_id(1).to(tl.int64)
+    pid_group = tl.program_id(2).to(tl.int64)
 
     # Decompose flattened (N * L_out) index
     ni_lo_offset = pid_ni_lo * BLOCK_NI_LO + tl.arange(0, BLOCK_NI_LO)

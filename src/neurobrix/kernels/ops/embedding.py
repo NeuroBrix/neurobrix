@@ -50,7 +50,7 @@ def embedding_kernel(
     the interval before it arrives. On CUDA the assert halts the thread
     first, so this changes nothing there.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     output_ptr += pid * N
     indices_ptr += pid
 

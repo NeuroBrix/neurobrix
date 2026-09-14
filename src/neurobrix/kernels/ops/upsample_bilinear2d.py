@@ -33,9 +33,9 @@ def upsample_bilinear2d_kernel(
     Grid: (cdiv(OW, BLOCK_X), cdiv(OH, BLOCK_Y), N*C)
     Each program handles a BLOCK_Y x BLOCK_X tile of output pixels for one (n, c).
     """
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
-    pid_nc = tl.program_id(2)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
+    pid_nc = tl.program_id(2).to(tl.int64)
 
     ow = pid_x * BLOCK_X + tl.arange(0, BLOCK_X)  # [BLOCK_X]
     oh = pid_y * BLOCK_Y + tl.arange(0, BLOCK_Y)  # [BLOCK_Y]

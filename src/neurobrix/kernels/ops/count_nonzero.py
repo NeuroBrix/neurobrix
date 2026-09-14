@@ -22,7 +22,7 @@ def count_nonzero_kernel(
     Each program loads a block of elements, compares != 0, sums the
     boolean result, then atomically adds the count to the output scalar.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < numel
@@ -49,7 +49,7 @@ def count_nonzero_dim_kernel(
     x_ptr: flattened compressed input (M * N elements, reduction dim = N)
     out_ptr: output of shape (M,)
     """
-    pid_x = tl.program_id(0)
+    pid_x = tl.program_id(0).to(tl.int64)
 
     nonzero_count = tl.zeros((), dtype=tl.int64)
     for start_n in range(0, N, BLOCK_SIZE):

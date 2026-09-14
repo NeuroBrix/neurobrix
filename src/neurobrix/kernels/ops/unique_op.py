@@ -82,7 +82,7 @@ def output_counts_kernel(
 
     Grid: (ceil(num_unique / tile_size),)
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     r = tl.arange(0, tile_size)
     i0 = pid * tile_size + r
     mask = i0 < num_tasks

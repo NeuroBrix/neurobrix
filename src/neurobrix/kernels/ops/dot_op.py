@@ -19,7 +19,7 @@ def dot_kernel_small(
 
     Accumulates in fp32 for numerical stability.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N
@@ -41,7 +41,7 @@ def dot_kernel_partial(
 
     Each block computes sum(x[block] * y[block]) and stores to mid_ptr[pid].
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < N

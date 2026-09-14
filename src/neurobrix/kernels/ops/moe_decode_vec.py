@@ -83,8 +83,8 @@ def moe_gateup_vec_kernel(
     GROUP: tl.constexpr,
     PACK: tl.constexpr,       # 8 nibbles per int32
 ):
-    pid_e = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_e = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
     eid = tl.load(topk_ids_ptr + pid_e).to(tl.int64)
 
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -162,7 +162,7 @@ def moe_down_combine_vec_kernel(
     routing weight applied as the per-expert epilogue multiply — the
     cross-expert sum is deterministic by construction, and no
     intermediate per-slot output or separate reduction exists."""
-    pid_n = tl.program_id(0)
+    pid_n = tl.program_id(0).to(tl.int64)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_n < N
 
@@ -220,8 +220,8 @@ def moe_down_split_vec_kernel(
     fixed-order reduce completes the deterministic combine. Trades one
     launch + a [TOP_K, N] fp32 buffer for occupancy and a straight-line
     inner loop."""
-    pid_e = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_e = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_n < N
     eid = tl.load(topk_ids_ptr + pid_e).to(tl.int64)
@@ -261,7 +261,7 @@ def moe_part_reduce_kernel(
 ):
     """Fixed-order sum of the TOP_K weighted partials — deterministic
     (the same contract as flash_decode_reduce: order is a constant)."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offs_n = pid * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offs_n < N
     acc = tl.zeros((BLOCK_N,), dtype=tl.float32)

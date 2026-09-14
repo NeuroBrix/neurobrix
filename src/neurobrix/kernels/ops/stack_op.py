@@ -42,8 +42,8 @@ def stack_copy_kernel(
     The output index is computed from the input flat index by decomposing
     into (pre, in_dim, post) and inserting the stack dimension offset.
     """
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
 
     if pid_y == 0:
         in_ptr = in_ptr_a

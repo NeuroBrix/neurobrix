@@ -27,7 +27,7 @@ def all_kernel_mid(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Pass 1: check if all elements in this block are non-zero."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     inp_ptrs = inp + offset
     mask = offset < n_elements
@@ -65,7 +65,7 @@ def all_kernel_dim(
 
     inp: [M, N] (dim-compressed) → out: [M] (bool)
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     rows = pid * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     inp = inp + rows * N
     out = out + rows

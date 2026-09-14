@@ -28,8 +28,8 @@ def avg_pool2d_forward_kernel(
     BLOCK_H: tl.constexpr,
     BLOCK_W: tl.constexpr,
 ):
-    pid_nc = tl.program_id(0)
-    pid_hw = tl.program_id(1)
+    pid_nc = tl.program_id(0).to(tl.int64)
+    pid_hw = tl.program_id(1).to(tl.int64)
     num_w_blocks = tl.cdiv(out_w, BLOCK_W)
     h_block_idx = pid_hw // num_w_blocks
     w_block_idx = pid_hw % num_w_blocks

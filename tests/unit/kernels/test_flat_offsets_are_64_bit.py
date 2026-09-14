@@ -41,3 +41,22 @@ def test_the_gate_reads_the_form_it_claims_to(tmp_path):
     assert INT32_FORM.search("    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)  # x\n")
     assert INT32_FORM.search("    offset = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)\n"), "cast-after wraps too"
     assert not INT32_FORM.search("    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)\n")
+
+
+PROGRAM_ID_INT32 = re.compile(r"tl\.program_id\([^)]*\)(?!\.to\(tl\.int64\))")
+
+
+def test_every_program_id_is_widened_at_its_source():
+    """The tile forms (`pid_m * BLOCK_M`, `batch_idx * C * HW`, …) wrap in the
+    product with a stride or a dimension, not in the arange: group_norm at
+    Mochi's VAE (2026-09-14 07:33, `chan_start * HW` past 2^31) after the
+    flat forms were fixed. Widening at the program id (FlagGems #6083) makes
+    every derived offset 64-bit at once; this refuses an int32 program id
+    coming back. Injection: one `tl.program_id(0)` restored in
+    groupnorm.py made this RED; restored, green."""
+    hits = []
+    for f in sorted(OPS.glob("*.py")):
+        for m in PROGRAM_ID_INT32.finditer(f.read_text(encoding="utf-8")):
+            hits.append(f"{f.name}: {m.group(0)}")
+    assert not hits, ("program ids read in int32 — every offset derived from them wraps past 2^31; write "
+                      "`tl.program_id(k).to(tl.int64)`:\n  " + "\n  ".join(hits[:20]))

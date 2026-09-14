@@ -39,7 +39,7 @@ def var_kernel_1(
     BLOCK_N: tl.constexpr,
 ):
     """Pass 1: compute partial sum, sum-of-squares, and count per block."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid * BLOCK_N + tl.arange(0, BLOCK_N)
 
     X = X + offset
@@ -106,7 +106,7 @@ def var_welford_kernel(
 
     X: [M, N] (dim-compressed) → Var: [M]
     """
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Var = Var + pid
     row_mask = pid < M

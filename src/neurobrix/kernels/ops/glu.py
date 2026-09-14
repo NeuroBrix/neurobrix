@@ -21,7 +21,7 @@ def glu_forward_kernel(
     input1, input2: [size] (the two halves of the gated input)
     act_func: 'sigmoid' (standard GLU), 'silu' (SwiGLU), 'gelu', 'relu'
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < size
 

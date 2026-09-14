@@ -32,7 +32,7 @@ def im2col_kernel(
 ):
     # One program per (n, output-channel) = (n, c*KH*KW + kh*KW + kw); it
     # writes one full output row of L block-positions (looped in BLOCK_L tiles).
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     CKK = C * KH * KW
     n = pid // CKK
     oc = pid % CKK

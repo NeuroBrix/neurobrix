@@ -18,7 +18,7 @@ def argmax_kernel_1(
     M,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     inp_ptrs = inp + offset
     mask = offset < M
@@ -53,7 +53,7 @@ def argmax_kernel_inner(
     ONE_TILE_PER_CTA: tl.constexpr,
 ):
     """Argmax along the innermost (last) dimension."""
-    pid_m = tl.program_id(0)
+    pid_m = tl.program_id(0).to(tl.int64)
 
     min_value = float('-inf')
 

@@ -27,7 +27,7 @@ def l2_norm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """L2 norm per row: out[m] = sqrt(sum(x[m,:]^2))."""
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Out = Out + pid
     row_mask = pid < M
@@ -53,7 +53,7 @@ def l1_norm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """L1 norm per row: out[m] = sum(|x[m,:]|)."""
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Out = Out + pid
     row_mask = pid < M
@@ -79,7 +79,7 @@ def linf_norm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """L-infinity norm per row: out[m] = max(|x[m,:]|)."""
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Out = Out + pid
     row_mask = pid < M
@@ -105,7 +105,7 @@ def l0_norm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """L0 norm per row: out[m] = count(x[m,:] != 0)."""
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Out = Out + pid
     row_mask = pid < M
@@ -132,7 +132,7 @@ def lp_norm_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """General Lp norm per row: out[m] = sum(|x[m,:]|^p)^(1/p)."""
-    pid = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
+    pid = tl.program_id(0).to(tl.int64) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     X = X + pid * N
     Out = Out + pid
     row_mask = pid < M
@@ -161,7 +161,7 @@ def l2_norm_pass1_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """First pass of flat L2 norm: each block computes partial sum of squares."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < M
 
@@ -191,7 +191,7 @@ def linf_norm_pass1_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """First pass of flat Linf norm: each block computes partial max abs."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < M
 

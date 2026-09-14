@@ -85,8 +85,8 @@ def topk_stage1_kernel(
     CHUNK_SIZE: tl.constexpr,
     DESCENDING: tl.constexpr,
 ):
-    cur_batch = tl.program_id(0)
-    cur_chunk_idx = tl.program_id(1)
+    cur_batch = tl.program_id(0).to(tl.int64)
+    cur_chunk_idx = tl.program_id(1).to(tl.int64)
     chunk_num = tl.num_programs(1)
 
     y_ptr += cur_batch * chunk_num * k + cur_chunk_idx * k
@@ -243,7 +243,7 @@ def topk_stage2_kernel(
     BLOCK_SIZE: tl.constexpr,
     DESCENDING: tl.constexpr,
 ):
-    cur_batch = tl.program_id(0)
+    cur_batch = tl.program_id(0).to(tl.int64)
     chunk_x += cur_batch * N
     chunk_index += cur_batch * N
     y_ptr += cur_batch * k

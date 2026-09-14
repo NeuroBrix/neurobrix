@@ -24,8 +24,8 @@ def upsample_nearest2d_kernel(
 ):
     NC = N * C
     nc_stride = tl.num_programs(axis=1)
-    nc_iter = tl.program_id(axis=1)
-    pid = tl.program_id(axis=0)
+    nc_iter = tl.program_id(axis=1).to(tl.int64)
+    pid = tl.program_id(axis=0).to(tl.int64)
     idx = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     ow = idx % OW
     oh = idx // OW % OH

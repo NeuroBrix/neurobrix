@@ -41,7 +41,7 @@ def pixel_shuffle_kernel(
 
     Each thread handles one output element.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     idx = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = idx < n_elements
 
@@ -111,7 +111,7 @@ def pixel_shuffle_broadcast_aware_kernel(
     Read offset uses all 5D strides; with stride_v_b == 0, the `b` index
     contributes nothing and the load aliases naturally.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     # Cast to int64 to support tensors with >= 2^31 elements
     # (e.g. Sana 4Kpx VAE 1*128*4096*4096 = 2^31 — at INT32_MAX
     # boundary; signed int32 multiplication of strides overflows

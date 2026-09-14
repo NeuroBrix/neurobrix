@@ -75,8 +75,8 @@ def dequant_int4_kernel(
     contract shared with the fused kernel: same loads, same shifts,
     same pure-fp32 dtype path.
     """
-    pid_k = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_k = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
     offs_k = pid_k * BLOCK_K_C + tl.arange(0, BLOCK_K_C)
     offs_n = pid_n * BLOCK_N_C + tl.arange(0, BLOCK_N_C)
     mask_k = offs_k < K
@@ -123,7 +123,7 @@ def gemv_ref_kernel(
     packed loads they save; the fused kernel is ALU-issue-bound, not
     load-bound.)
     """
-    pid_n = tl.program_id(0)
+    pid_n = tl.program_id(0).to(tl.int64)
     offs_n = pid_n * BLOCK_N_C + tl.arange(0, BLOCK_N_C)
     mask_n = offs_n < N
     acc = tl.zeros((BLOCK_N_C,), dtype=tl.float32)
@@ -158,7 +158,7 @@ def dequant_gemv_int4_kernel(
     nibble-major single-load variant was MEASURED SLOWER (see the
     oracle kernel's docstring); the kernel is ALU-issue-bound.
     """
-    pid_n = tl.program_id(0)
+    pid_n = tl.program_id(0).to(tl.int64)
     offs_n = pid_n * BLOCK_N_C + tl.arange(0, BLOCK_N_C)
     mask_n = offs_n < N
     acc = tl.zeros((BLOCK_N_C,), dtype=tl.float32)

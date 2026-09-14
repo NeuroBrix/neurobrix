@@ -41,7 +41,7 @@ def nll_loss_forward_kernel(
         reduction: 0=none, 1=mean, 2=sum.
         BLOCK_N: Block size for batch dimension.
     """
-    pid_n = tl.program_id(0)
+    pid_n = tl.program_id(0).to(tl.int64)
     offsets_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offsets_n < N
 
@@ -97,7 +97,7 @@ def nll_loss_backward_kernel(
 
     Computes gradient w.r.t. input: grad_input[n, tgt[n]] = -w * grad_output / total_weight.
     """
-    pid_n = tl.program_id(0)
+    pid_n = tl.program_id(0).to(tl.int64)
     offsets_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask_n = offsets_n < N
 

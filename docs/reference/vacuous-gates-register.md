@@ -1291,3 +1291,40 @@ Kokoro, Sana MultiLing at 4 steps, whisper-large-v3-turbo, card 2), and
 their timings within 3 % over three warm runs of the after arm (the first
 after run pays the recompilation of every changed kernel and is not a
 measurement of the kernel).
+
+
+**The tile forms, 07:33-07:45.** Past `add::14`, the op-by-op run died at
+`aten.native_group_norm::26`: `chan_start * HW` and `batch_idx * C * HW`,
+products of program-id-derived scalars with dimensions — the same wrap, in
+the tile form no arange-regex could see. Rather than a third sweep for a
+third spelling, every `tl.program_id(...)` in the kernels now reads
+`.to(tl.int64)` at its source (293 sites in 157 files): every offset
+derived from a program id is 64-bit by construction, and the gate refuses
+an int32 program id. Beyond-2^31 tests: GEMM, the flat kernels,
+group_norm (N=1, C=64, HW=35.2e6).
+
+### 59 — an instrument that keeps measuring after its context died
+
+The certifier that re-certified the speech leg's keys on card 1 (07:09-07:38
+UTC) met, in the middle of its list, a matmul of 2 188 247 040 output
+elements on a tree whose kernel still wrapped (`suite_53012f7`, before
+90fefd4): CUDA error 700. The CUDA context is then dead — sticky — and
+every later launch and malloc in the process fails with the same code. The
+certifier counted the fault as one FAILED key and went on: **227 further
+keys were reported FAILED, each with "GPU malloc failed (error 700) for
+256 bytes"**, a fault that happened once written 228 times, and 227 shapes
+that were never measured recorded as if they had been tried. The 453 keys
+certified before the fault stand (their proofs re-read); nothing after it
+was a measurement.
+
+**The shape**: an instrument whose failure handling treats every failure
+as local, when one class of failure ends the instrument's ability to
+measure anything at all — the census after that point is a list of the same
+sentence. **The rule**: a failure that poisons the process stops the run at
+once, names the key it died at, and exits non-zero; what was measured
+before it stands, and the summary says where to resume. Gate:
+`tests/unit/kernels/test_the_certifier_stops_at_a_sticky_cuda_error.py`
+(three tests; `sticky_cuda_error` forced false seen RED 07:44 UTC). The
+lost 227 keys are re-certified on the fixed tree — the small ones on a 16 GB
+card for the class the guard needs, the Mochi-size ones on a 32 GB card, the
+only class that can hold them.

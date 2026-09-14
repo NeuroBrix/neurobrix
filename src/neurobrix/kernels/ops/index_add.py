@@ -54,7 +54,7 @@ def index_add_gather_kernel(
     (bit-exact vs torch deterministic index_add_).
     """
     n_inner_tiles = (inner_size + INNER_BLOCK - 1) // INNER_BLOCK
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     tile = pid % n_inner_tiles
     tmp = pid // n_inner_tiles
     d = tmp % inp_shape_dim
