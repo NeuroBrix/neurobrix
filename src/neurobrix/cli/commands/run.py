@@ -400,20 +400,6 @@ def cmd_run(args):
 
     solver = PrismSolver()
     execution_plan = solver.solve_smart(container, hw_profile, input_config)
-    if getattr(args, "explain_plan", False):
-        # The plan the user asked to see. Duck-typed: whatever solve_smart
-        # returns, if it can explain itself, it does -- and if it wraps
-        # per-stage plans, each explains itself. The run then continues; this
-        # is a window onto the decision, not a dry-run.
-        _plans = (execution_plan if isinstance(execution_plan, (list, tuple))
-                  else [execution_plan])
-        for _pl in _plans:
-            if hasattr(_pl, "explain"):
-                print(_pl.explain(), flush=True)
-            elif hasattr(_pl, "plans"):
-                for _sub in _pl.plans:
-                    if hasattr(_sub, "explain"):
-                        print(_sub.explain(), flush=True)
 
     # Apply CPU optimizations from hardware profile
     if hw_profile.cpu:

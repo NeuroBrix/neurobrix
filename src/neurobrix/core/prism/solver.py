@@ -373,37 +373,6 @@ class ExecutionPlan:
     def get_memory_breakdown(self, component_name: str) -> Optional[ComponentMemory]:
         return self.component_memory.get(component_name)
 
-    def explain(self) -> str:
-        """The plan in words: which strategy, why, and what it costs.
-
-        A user asked for this -- `--explain-plan`. Everything it prints already
-        travels with the plan (`strategy`, `selection_reason`,
-        `transient_components`, the per-component memory); this only surfaces
-        it. On a badly-decided plan the reason is what lets the user see the
-        badness, which is why the field exists and why it is printed rather
-        than kept.
-        """
-        lines = [f"Prism plan: strategy = {self.strategy}",
-                 f"  total on device : {self.total_memory_mb:.0f} MB"]
-        if self.selection_reason:
-            lines.append(f"  chosen because  : {self.selection_reason}")
-        if self.loading_mode:
-            lines.append(f"  loading         : {self.loading_mode}")
-        if self.transient_components:
-            lines.append("  transient (released after use, one at a time): "
-                         + ", ".join(self.transient_components))
-        if self.cpu_ram_mb:
-            lines.append(f"  cpu offload     : {self.cpu_ram_mb} MB")
-        heavy = sorted(self.component_memory.items(),
-                       key=lambda kv: -getattr(kv[1], "total_mb", 0))[:5]
-        if heavy:
-            lines.append("  heaviest components:")
-            for name, cm in heavy:
-                mb = getattr(cm, "total_mb", None)
-                lines.append(f"    {name}: {mb:.0f} MB" if mb is not None
-                             else f"    {name}")
-        return "\n".join(lines)
-
     def to_dict(self, hardware_profile: str = "unknown") -> Dict[str, Any]:
         return {
             "version": "0.1.0",
