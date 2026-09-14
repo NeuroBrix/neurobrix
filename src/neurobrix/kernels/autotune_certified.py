@@ -255,9 +255,23 @@ def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) 
     return None
 
 
-def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int]) -> bool:
-    """`--only-missing`'s question, asked per memory class."""
-    return entry_for_memory_class(entries.get(ktext), cls) is not None
+def proof_records_clock(proof: Optional[Dict[str, Any]]) -> bool:
+    """True when the proof says the clock every card ran at (`machine.clocks_mhz`).
+    5 628 proofs of 2026-09-07 do not: made before the clock door, at a frequency
+    nothing recorded — their timings read 1.176× those of a proof at the protocol
+    clock (2026-09-14, register 56, adjudicated paragraph)."""
+    return bool(((proof or {}).get("machine") or {}).get("clocks_mhz"))
+
+
+def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],
+                 need_clock: bool = False) -> bool:
+    """`--only-missing`'s question, asked per memory class; with `need_clock`
+    (`--reprove-unclocked`) a certification whose proof records no clock does
+    not count as coverage — it is re-proven at the protocol clock."""
+    cert = entry_for_memory_class(entries.get(ktext), cls)
+    if cert is None:
+        return False
+    return proof_records_clock(cert.get("proof")) if need_clock else True
 
 
 def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None:

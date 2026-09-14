@@ -842,7 +842,7 @@ def _read_file(path: Path) -> Dict[str, Dict]:
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
-            allow_off_protocol: bool = False) -> Dict[str, Any]:
+            allow_off_protocol: bool = False, reprove_unclocked: bool = False) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files."""
     if log is None:
         def log(*a):                      # a run of hours, read while it runs: never buffered
@@ -900,8 +900,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = per_dtype.setdefault(dtype, _read_file(path))
             ktext = C.key_repr(key)
-            if only_missing and C.entry_covers(entries, ktext, certifying_class):
-                continue                      # certified FOR THIS CARD's memory class already
+            if (only_missing or reprove_unclocked) and C.entry_covers(entries, ktext, certifying_class,
+                                                                       need_clock=reprove_unclocked):
+                continue                      # certified FOR THIS CARD's memory class already (and, with
+                                              # --reprove-unclocked, at a recorded clock)
             attempts += 1
             t0 = time.time()
             try:

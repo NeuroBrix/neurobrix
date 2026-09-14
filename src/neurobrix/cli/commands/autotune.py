@@ -29,6 +29,7 @@ def cmd_autotune(args) -> int:
         try:
             summary = certify(args.profile, vendor=args.vendor, census_path=args.census, out=args.out,
                               kernels=kernels, limit=args.limit, only_missing=args.only_missing,
+                              reprove_unclocked=getattr(args, "reprove_unclocked", False),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")
