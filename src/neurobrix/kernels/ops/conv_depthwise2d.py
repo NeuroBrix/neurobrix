@@ -41,9 +41,9 @@ def conv_depthwise2d_kernel(
     Grid: (cdiv(OW, BLOCK_X), cdiv(OH, BLOCK_Y), N * C_out)
     Each program computes a BLOCK_Y x BLOCK_X tile of one output channel.
     """
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
-    pid_nc = tl.program_id(2)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
+    pid_nc = tl.program_id(2).to(tl.int64)
 
     n = pid_nc // C_out
     c_out = pid_nc % C_out
@@ -108,9 +108,9 @@ def conv_depthwise2d_bias_kernel(
     BLOCK_Y: tl.constexpr,
 ):
     """Depthwise conv2d with bias, same structure as above."""
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
-    pid_nc = tl.program_id(2)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
+    pid_nc = tl.program_id(2).to(tl.int64)
 
     n = pid_nc // C_out
     c_out = pid_nc % C_out

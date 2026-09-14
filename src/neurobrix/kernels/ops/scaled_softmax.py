@@ -30,9 +30,9 @@ def scaled_softmax_kernel(
 
     Grid: (cdiv(query_seq_len, BLOCK_Q), num_heads, batch_size)
     """
-    query_tile_idx = tl.program_id(0)
-    head_idx = tl.program_id(1)
-    batch_idx = tl.program_id(2)
+    query_tile_idx = tl.program_id(0).to(tl.int64)
+    head_idx = tl.program_id(1).to(tl.int64)
+    batch_idx = tl.program_id(2).to(tl.int64)
 
     start_q = query_tile_idx * BLOCK_Q
     q_offsets = start_q + tl.arange(0, BLOCK_Q)

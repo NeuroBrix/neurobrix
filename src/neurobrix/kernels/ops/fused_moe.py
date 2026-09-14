@@ -45,7 +45,7 @@ def fused_moe_kernel(
     Each BLOCK_M block of sorted tokens shares one expert. The kernel loads
     that expert's absolute weight pointer from the table and uses it directly.
     """
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0).to(tl.int64)
     num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -161,7 +161,7 @@ def fused_moe_wna16_kernel(
     byte oracle is fused_moe_fp32b_kernel below — textually identical
     minus the unpack.
     """
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0).to(tl.int64)
     num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -267,7 +267,7 @@ def fused_moe_fp32b_kernel(
     fp32 dot and epilogue — textually the kernel above minus the
     unpack. Never used on a hot path; exists so the fused W4 kernel is
     provably byte-identical to dequantize-then-grouped-GEMM."""
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0).to(tl.int64)
     num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
@@ -346,8 +346,8 @@ def silu_and_mul_kernel(
     BLOCK_N: tl.constexpr,
 ):
     """Fused SwiGLU: output = silu(input[:, :N]) * input[:, N:2*N]."""
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_m = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
@@ -380,8 +380,8 @@ def silu_mul_split_kernel(
     Variant of silu_and_mul_kernel for the common case where gate and up
     are produced as two separate tensors (no concat needed).
     """
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_m = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)

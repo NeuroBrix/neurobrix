@@ -23,7 +23,7 @@ def bf16_to_fp16_kernel(
 
     The GPU handles fp32→fp16 truncation natively (with rounding).
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offs = pid.to(tl.int64) * BLOCK + tl.arange(0, BLOCK)   # 64-bit from the program id (register 58)
     mask = offs < N
 

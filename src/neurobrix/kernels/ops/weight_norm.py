@@ -30,7 +30,7 @@ def weight_norm_kernel_first(
     Each program handles BLOCK_M rows.
     """
     ty = tl.arange(0, BLOCK_M)[:, None]
-    by = tl.program_id(0) * BLOCK_M
+    by = tl.program_id(0).to(tl.int64) * BLOCK_M
     row_offset = by + ty
     row_mask = row_offset < M
 
@@ -77,7 +77,7 @@ def weight_norm_kernel_last(
     Each program handles BLOCK_N columns.
     """
     tx = tl.arange(0, BLOCK_N)[:, None]
-    bx = tl.program_id(0) * BLOCK_N
+    bx = tl.program_id(0).to(tl.int64) * BLOCK_N
     col_offset = bx + tx
     col_mask = col_offset < N
 

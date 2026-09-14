@@ -128,7 +128,7 @@ def radix_sort_histogram_kernel(
     arr_ptr: (m, n) — input data
     out_ptr: (m, num_passes, r) — histogram output, r = 2^num_bits_per_pass
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     pid_n = pid // m
     pid_m = pid % m
 
@@ -186,10 +186,10 @@ def radix_sort_sweep_kernel(
 
     Uses decoupled lookback for inter-CTA prefix sum communication.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     pid_m = pid % m
     pid_n = pid // m
-    pid_r = tl.program_id(1)
+    pid_r = tl.program_id(1).to(tl.int64)
 
     aggregate_mask: tl.constexpr = 1 << 30
     inclusive_prefix_mask: tl.constexpr = 1 << 31
@@ -215,7 +215,7 @@ def radix_sort_sweep_kernel(
 
         # Decoupled lookback
         exclusive_prefix = tl.zeros((), dtype=tl.uint32)
-        i_lookback = pid_n - 1
+        i_lookback = (pid_n - 1).to(tl.int32)      # a loop-carried counter keeps one type (the 64-bit pid is an address, this is a count)
         while i_lookback >= 0:
             flag_offset_i = pid_m * (r * OUT_N) + bin_index * OUT_N + i_lookback
             pack1 = tl.load(status_ptr + flag_offset_i, volatile=True)

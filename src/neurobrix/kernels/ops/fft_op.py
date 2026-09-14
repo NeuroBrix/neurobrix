@@ -28,7 +28,7 @@ def bit_reverse_kernel(
 
     Each thread handles one element. Grid size = N.
     """
-    tid = tl.program_id(0)
+    tid = tl.program_id(0).to(tl.int64)
     # A program beyond n contributes nothing: every access below is masked
     # (no early exit — unstructured control flow has no lowering on every
     # backend; the Metal census, 2026-09-05).
@@ -61,7 +61,7 @@ def fft_stage_kernel(
     Iterates log2(N) times for full FFT.
     """
     PI = math.pi
-    tid = tl.program_id(0)
+    tid = tl.program_id(0).to(tl.int64)
     half_block = 1 << (stage - 1)
 
     # Which butterfly group and position within group
@@ -114,7 +114,7 @@ def ifft_stage_kernel(
     Same as forward but with conjugate twiddle factor (positive angle).
     """
     PI = math.pi
-    tid = tl.program_id(0)
+    tid = tl.program_id(0).to(tl.int64)
     half_block = 1 << (stage - 1)
     butterfly_group = tid // half_block
     pos_in_group = tid % half_block
@@ -154,7 +154,7 @@ def scale_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Scale all elements by 1/N after inverse FFT."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 

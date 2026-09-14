@@ -18,7 +18,7 @@ def triu_kernel(
     M_BLOCK_SIZE: tl.constexpr,
     N_BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     row = pid * M_BLOCK_SIZE + tl.arange(0, M_BLOCK_SIZE)[:, None]
     m_mask = row < M
     X += row * N
@@ -45,8 +45,8 @@ def triu_batch_kernel(
     BATCH_BLOCK_SIZE: tl.constexpr,
     MN_BLOCK_SIZE: tl.constexpr,
 ):
-    batch_id = tl.program_id(0)
-    mn_id = tl.program_id(1)
+    batch_id = tl.program_id(0).to(tl.int64)
+    mn_id = tl.program_id(1).to(tl.int64)
     row = batch_id * BATCH_BLOCK_SIZE + tl.arange(0, BATCH_BLOCK_SIZE)[:, None]
     batch_mask = row < batch
     X += row * MN

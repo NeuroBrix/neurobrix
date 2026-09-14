@@ -35,6 +35,10 @@ def cmd_autotune(args) -> int:
             print(f"ERROR: {exc}")
             return 1
         print(json.dumps({k: v for k, v in summary.items() if k != "started"}, indent=1))
+        if summary.get("aborted"):
+            print(f"ABORTED: the CUDA context died at {summary['aborted']['key']} — {summary['aborted']['reason'][:160]}; "
+                  f"{summary['certified']} shape(s) certified before it stand, nothing after it was measured.")
+            return 1
         # The gate, on what was just written: a file whose proof does not re-read is not left behind.
         bad = 0
         for path in C.files(Path(summary["directory"])):

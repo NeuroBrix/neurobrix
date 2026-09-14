@@ -64,9 +64,9 @@ def depthwise_conv2d_kernel(
     BLOCK_HW: tl.constexpr = 64,
     BLOCK_C: tl.constexpr = 32,
 ):
-    pid_n = tl.program_id(0)
-    pid_c = tl.program_id(1)
-    pid_hw = tl.program_id(2)
+    pid_n = tl.program_id(0).to(tl.int64)
+    pid_c = tl.program_id(1).to(tl.int64)
+    pid_hw = tl.program_id(2).to(tl.int64)
 
     offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
     offs_hw = pid_hw * BLOCK_HW + tl.arange(0, BLOCK_HW)

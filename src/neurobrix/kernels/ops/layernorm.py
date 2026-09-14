@@ -33,7 +33,7 @@ def layer_norm_forward_kernel(
     output: [batch_dim, feat_dim]
     mean, inv_std: [batch_dim] (optional, for backward)
     """
-    batch_pid = tl.program_id(0)
+    batch_pid = tl.program_id(0).to(tl.int64)
 
     batch_offset = batch_pid * BLOCK_SIZE_BATCH + tl.arange(0, BLOCK_SIZE_BATCH)
     feat_offset = tl.arange(0, BLOCK_SIZE_FEAT)

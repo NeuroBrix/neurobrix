@@ -42,7 +42,7 @@ def scan_part_min_kernel(
     scan, stores results, and optionally writes the block-minimum for
     the fan-out phase.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
@@ -83,7 +83,7 @@ def add_base_min_kernel(
     For each block (except the first), loads the cumulative partial min
     from the previous block and merges with local results.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 

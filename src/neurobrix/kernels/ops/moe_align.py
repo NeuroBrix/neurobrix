@@ -82,7 +82,7 @@ def moe_align_stage2_kernel(
     each block's owning expert (offsets[e] <= block_start < offsets[e]
     + padded[e]); blocks past the true total get -1 and are skipped by
     the fused kernels' num_tokens_post_padded early-exit anyway."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     p = pid * BLK + tl.arange(0, BLK)
     in_p = p < max_total
     tl.store(sorted_ids_ptr + p, tl.zeros((BLK,), dtype=tl.int64) + n,
@@ -118,7 +118,7 @@ def moe_align_stage3_kernel(
     Order-preserving, no atomics — byte-identical to the host sort it
     replaces. MUST launch after stage 2 (stream-serialized): it
     overwrites sentinel positions."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     i = pid * BLKT + tl.arange(0, BLKT)
     in_i = i < n
     my = tl.load(topk_ids_ptr + i, mask=in_i, other=-1)

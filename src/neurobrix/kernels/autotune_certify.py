@@ -839,6 +839,34 @@ def _read_file(path: Path) -> Dict[str, Dict]:
     return dict(doc.get("entries") or {}) if isinstance(doc, dict) else {}
 
 
+_STICKY_MARKS = ("error 700", "rc=700", "illegal memory access", "STICKY")
+
+
+def sticky_cuda_error(exc: BaseException) -> bool:
+    """True when a key's failure says the CUDA context itself is dead. After an
+    illegal memory access every later launch and malloc in the process fails
+    with the same error, so nothing after it is a measurement: on 2026-09-14
+    07:38 a certifier met one such key (a 2.19e9-element matmul on a kernel
+    that still wrapped) and went on to report 227 further keys FAILED for
+    "GPU malloc failed (error 700) for 256 bytes" — 227 shapes lost to a
+    fault that happened once."""
+    text = str(exc)
+    return any(m in text for m in _STICKY_MARKS)
+
+
+def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
+    """Count a key's failure; return True when the run must STOP because the
+    context is poisoned (the summary then names the key and the reason)."""
+    summary["failed"] += 1
+    if sticky_cuda_error(exc):
+        summary["aborted"] = {"key": key_text, "reason": str(exc)[:300]}
+        log(f"[certify] ABORTED at {key_text}: the CUDA context is poisoned ({str(exc)[:160]}) — "
+            f"every launch after this would fail the same way; nothing after it is a measurement. "
+            f"Re-run from this key once the cause is fixed.")
+        return True
+    return False
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
@@ -916,8 +944,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: UNREACHABLE — {exc}")
                 continue
             except Exception as exc:
-                summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")
+                if after_key_failure(exc, summary, ktext, log):
+                    summary["seconds"] = round(time.time() - summary["started"], 1)
+                    return summary                    # a poisoned context: stop, say it, exit non-zero
                 continue
             try:
                 C.file_certification(entries, ktext, entry)   # by the class its proof names; refused without one

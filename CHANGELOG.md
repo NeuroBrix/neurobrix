@@ -86,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- `neurobrix autotune certify` stops at the first sticky CUDA error (an illegal memory access poisons the context; every later key would fail the same way) and names the key instead of reporting the fault once per remaining shape — 227 shapes were lost that way on 2026-09-14.
+- Every program id in the Triton kernels is read in 64-bit at its source (293 sites in 157 files), so every offset derived from it — a tile row times a stride, a batch times C×HW — stays exact past 2^31 elements (group_norm at Mochi's VAE decoder).
 - Every flat-indexed kernel (152 sites in 105 files: fill, the strided copy that materialises a view, the elementwise, reduction, index and upsample families) computes its element offsets from a 64-bit program id: a tensor past 2^31 elements (Mochi's VAE decoder, 2.25e9-element activations) was addressed through a wrapped int32 offset — `add` and `silu` had been fixed by hand in May, the other 103 files had not. Measured on V100: four models byte-identical with the setting pinned, timings within 3 % over three warm runs.
 - A GEMM whose output holds more than 2^31 elements (Mochi's VAE, 1 068 480 x 2048) no longer dies on an illegal memory access: the matmul, addmm and baddbmm kernels compute their pointer offsets in 64-bit (the int32 product of a row offset and a stride wrapped past 2 147 483 647 — upstream triton-lang/triton#832, the same fix as comfy-kitchen#172 on Triton 3.6.0). Measured on V100: same bytes on three models with the setting pinned, timings within 2 % on 50 shapes.
 - `--triton` runs of vision-language, audio-language and text-to-speech models, of int4

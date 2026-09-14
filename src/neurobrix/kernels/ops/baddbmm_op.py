@@ -81,7 +81,7 @@ def baddbmm_kernel(
     tl.assume(stride_om > 0); tl.assume(stride_on > 0)
 
     # 2D tile indexing with grouping for L2 locality
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     num_pid_in_group = GROUP_M * num_pid_n

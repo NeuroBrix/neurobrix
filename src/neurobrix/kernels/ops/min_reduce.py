@@ -24,7 +24,7 @@ def min_kernel_mid(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Pass 1: compute block-local min."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     inp_ptrs = inp + offset
     mask = offset < M
@@ -65,7 +65,7 @@ def min_kernel(
     Tracks both minimum value and its index (argmin).
     bf16 inputs are accumulated in fp32 to avoid precision issues.
     """
-    pid_m = tl.program_id(0)
+    pid_m = tl.program_id(0).to(tl.int64)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
     dtype = inp.type.element_ty

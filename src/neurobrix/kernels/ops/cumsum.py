@@ -40,7 +40,7 @@ def scan_part_sum_kernel(
     part_num,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
@@ -74,7 +74,7 @@ def add_base_sum_kernel(
     part_num,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
@@ -102,9 +102,9 @@ def scan_part_sum_abc_kernel(
     part_num,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid_a = tl.program_id(0)
-    pid_b = tl.program_id(1)
-    pid_c = tl.program_id(2)
+    pid_a = tl.program_id(0).to(tl.int64)
+    pid_b = tl.program_id(1).to(tl.int64)
+    pid_c = tl.program_id(2).to(tl.int64)
 
     a_idx = pid_a
     b_idx = pid_b.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id (register 58)
@@ -146,9 +146,9 @@ def add_base_sum_abc_kernel(
     part_num,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid_a = tl.program_id(0)
-    pid_b = tl.program_id(1)
-    pid_c = tl.program_id(2)
+    pid_a = tl.program_id(0).to(tl.int64)
+    pid_b = tl.program_id(1).to(tl.int64)
+    pid_c = tl.program_id(2).to(tl.int64)
 
     a_idx = pid_a
     b_idx = pid_b.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id (register 58)
