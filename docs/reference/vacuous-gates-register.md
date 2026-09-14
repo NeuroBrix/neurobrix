@@ -1144,3 +1144,39 @@ on 32 GB for the same shape — same GV100 die, same locked clock, only the
 HBM differs; expected identical, to be measured on a 32 GB card when one is
 free, and the coverage certified regardless because the rule is coverage,
 not expectation.
+
+### 57 — a measurement that exists only where it was made
+
+The certifier writes its directory entry by entry, atomically per file, and
+nothing carried those files anywhere until the pass ended and a person
+committed them. Three mains cuts in three days (2026-09-11, 09-12, 09-13
+23:45 UTC) each found hundreds of certified entries on disk and nowhere else
+— 971 on the Friday, 1 222 on the Saturday night, every one verified whole
+after the cut (`88c8af0`). They survived by the file system's journal. A
+truncated write at the wrong moment would have cost a file; a dead disk, the
+pass; and each cut cost the hours it took a person to come back, verify, and
+commit. The clock lock had the same shape: it was restored by the memory of
+whoever woke up after the cut, three times, and the door refused every timed
+run in between.
+
+**The shape**: a result whose only copy is on the machine that produced it,
+in a state a cut can reach at any moment, while the process that could have
+carried it elsewhere waits for the end of a pass that takes hours. Not a
+vacuous gate but its neighbour — a gate (`autotune check`, the door
+`rig_clock.py`) that was right and could not act, because the act was left
+to a person. **The rule**: what a long run produces is carried off the
+machine WHILE it runs, by a process that holds the producers and runs the
+gate before each carry — `tools/certified_checkpoint.py`, one per
+repository, an interval or the producers' death as its trigger, every
+remote pushed and READ BACK, a refused file named and left; a cut then costs
+one interval, not a pass. And a state the system must be in at every boot is
+put there BY THE SYSTEM at boot — `tools/systemd/nbx-rig-clock.service`
+runs `rig_clock.py --restore` after the driver, applies the protocol to
+every card, reads every card back, and refuses if one did not take. Gates:
+`tests/unit/tools/test_the_certified_directory_is_checkpointed_while_written.py`
+(7 tests; the gate-refusal and no-card-door injections seen RED 2026-09-14
+00:03-00:05 — the door test's first form was itself vacuous and is recorded
+in its docstring), `test_rig_clock_door.py` (restore: a driver that says
+"All done" and changes nothing is refused, seen RED with the read-back
+neutralised). Proof on the rig, 2026-09-14 00:04: card 1 set to 1312 by
+hand, `systemctl restart nbx-rig-clock`, all four cards read 1290.

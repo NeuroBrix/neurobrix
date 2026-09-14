@@ -161,6 +161,42 @@ def require_protocol_clock(allow_off_protocol: bool = False, say=print) -> dict:
                       f"{OPT_OUT} — the run then says so in its own output.")
 
 
+def restore_protocol_clock(say=print) -> dict:
+    """Apply the protocol clock to EVERY card the driver reports, then read
+    every card back and refuse if any still diverges.
+
+    This is the boot-time form of the door (2026-09-13: third mains cut in
+    three days, each returning cards 0 and 1 to 1312 MHz): the lock is
+    re-applied by the system at start (`tools/systemd/nbx-rig-clock.service`),
+    not by the memory of whoever wakes up. Needs root (`nvidia-smi -ac`). A
+    restore that did not take — a card that reads a different value after
+    the apply — is a refusal, not a warning: an `-ac` that printed "All done"
+    is not a clock that changed.
+    """
+    want_gfx, want_mem = protocol_clock()
+    cards = rig_clocks()
+    if not cards:
+        raise OffProtocol("REFUSED: the driver reported ZERO cards; nothing to restore and "
+                          "nothing to trust.")
+    applied = []
+    for c in cards:
+        r = subprocess.run(["nvidia-smi", "-i", str(c["index"]), "-ac", f"{want_mem},{want_gfx}"],
+                           capture_output=True, text=True)
+        applied.append({"index": c["index"], "rc": r.returncode,
+                        "said": (r.stdout or r.stderr).strip().splitlines()[-1:] or [""]})
+        say(f"[rig] card {c['index']} {c['name']}: {c['graphics_mhz']}/{c['memory_mhz']} -> "
+            f"-ac {want_mem},{want_gfx} (rc {r.returncode})")
+    after = rig_clocks()
+    off = [c for c in after if c["graphics_mhz"] != want_gfx or c["memory_mhz"] != want_mem]
+    if off:
+        raise OffProtocol("REFUSED: the restore did not take on " + ", ".join(
+            f"card {c['index']} ({c['graphics_mhz']}/{c['memory_mhz']} MHz)" for c in off)
+            + f"; protocol {want_gfx}/{want_mem}. Apply results: {applied}")
+    say(f"[rig] {len(after)} card(s) restored and read back at the protocol clock {want_gfx}/{want_mem} MHz")
+    return {"protocol_mhz": [want_gfx, want_mem], "cards": after, "cards_read": len(after),
+            "off_protocol": [], "applied": applied}
+
+
 def add_argument(parser) -> None:
     """Wire the one deliberate opening, spelled the same way everywhere."""
     parser.add_argument(
@@ -172,8 +208,11 @@ def add_argument(parser) -> None:
 if __name__ == "__main__":
     import sys
     try:
-        state = require_protocol_clock(
-            allow_off_protocol=OPT_OUT in sys.argv)
+        if "--restore" in sys.argv:
+            state = restore_protocol_clock()
+        else:
+            state = require_protocol_clock(
+                allow_off_protocol=OPT_OUT in sys.argv)
     except OffProtocol as exc:
         print(exc)
         sys.exit(1)
