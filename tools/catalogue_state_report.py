@@ -161,6 +161,26 @@ OVERLAY = {
              "shards beside the vendor's .bin) is rebuilt from declarations and documented beside "
              "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
         line="measured"),
+    "mochi-1-preview": dict(
+        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, fixed at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
+        evidence="two compute-sanitizer runs (7 200 s 09-13, 18 000 s 09-14) measured nothing; "
+                 "--triton-sequential + CUDA_LAUNCH_BLOCKING=1 named aten.mm::1 of the VAE in 19 min "
+                 "(M=1 068 480 x N=2048: 2.19e9 output elements, stride_cm * offs_cm wrapped in int32 — "
+                 "triton-lang/triton#832); then aten.add::14, then aten.native_group_norm::26, the same "
+                 "wrap in the flat and tile forms — every GEMM offset, every flat offset and every program "
+                 "id now 64-bit (90fefd4, 7ee3d7c, aa60c5c; register 58; beyond-2^31 tests red then green; "
+                 "four models byte-identical, timings within 3 %). With the wraps gone the op-by-op run "
+                 "reaches the decoder and OOMs at aten.silu::26: 8.75 GB asked, 25.97 GB live, 5.6 GB free "
+                 "on a 32 GB card, where --explain-plan says vae activations 3 209 MB, tiling none planned "
+                 "(D-PRISM-MOCHI-VAE-ACTIVATION-UNDERESTIMATED). Bounded proof by run 2026-09-14 09:11: "
+                 "--triton --steps 1 --num-frames 9, rc=0 in 118 s, 7 decoded frames at 480x848, range "
+                 "0-154, inter-frame difference 1.3-2.6, a warm field with a red centre (one step), "
+                 "nbx/campaigns/2026_09_12_night_catalogue/mochi_proof_9frames_aa60c5c/",
+        note="The 9-frame run does not cross 2^31 elements itself (114 480 x 2048 rows); the wraps are "
+             "proven by the three boundary tests and by the 84-frame op-by-op run that now passes "
+             "mm::1, add::14 and group_norm::26. The catalogue request (84 frames) waits on Prism's "
+             "estimate carrying the runtime frame count.",
+        line="measured"),
     "Wan2.2-I2V-A14B": dict(
         now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
         evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
