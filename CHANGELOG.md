@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- A GEMM whose output holds more than 2^31 elements (Mochi's VAE, 1 068 480 x 2048) no longer dies on an illegal memory access: the matmul, addmm and baddbmm kernels compute their pointer offsets in 64-bit (the int32 product of a row offset and a stride wrapped past 2 147 483 647 — upstream triton-lang/triton#832, the same fix as comfy-kitchen#172 on Triton 3.6.0). Measured on V100: same bytes on three models with the setting pinned, timings within 2 % on 50 shapes.
 - `--triton` runs of vision-language, audio-language and text-to-speech models, of int4
   builds, and warm serving of the same, failed at weight load with "requires embed_tokens
   weight" or a missing weight at the first matrix multiply. The loader had started loading

@@ -224,8 +224,11 @@ def matmul_kernel(
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    # Pointer offsets in int64: an int32 row offset times a stride wraps past
+    # 2^31 elements (Mochi's VAE mm, M=1 068 480 x N=2048 — CUDA 700 at every
+    # attempt since 2026-09-10; test_a_gemm_beyond_two_billion_elements).
+    a_ptrs = a_ptr + (offs_am[:, None].to(tl.int64) * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :].to(tl.int64) * stride_bn)
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
@@ -251,7 +254,7 @@ def matmul_kernel(
     c = accumulator.to(c_ptr.dtype.element_ty)
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None].to(tl.int64) + stride_cn * offs_cn[None, :].to(tl.int64)
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     if EPILOGUE != 0:
         # Per-stage rounding emulation: `c` already carries round 1 (the
@@ -320,8 +323,11 @@ def addmm_kernel(
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    # Pointer offsets in int64: an int32 row offset times a stride wraps past
+    # 2^31 elements (Mochi's VAE mm, M=1 068 480 x N=2048 — CUDA 700 at every
+    # attempt since 2026-09-10; test_a_gemm_beyond_two_billion_elements).
+    a_ptrs = a_ptr + (offs_am[:, None].to(tl.int64) * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :].to(tl.int64) * stride_bn)
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
     for k in range(0, tl.cdiv(K, BLOCK_K)):
@@ -350,7 +356,7 @@ def addmm_kernel(
     accumulator = alpha * accumulator + beta * bias[None, :]
 
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None].to(tl.int64) + stride_cn * offs_cn[None, :].to(tl.int64)
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
     if EPILOGUE != 0:
         # Per-stage rounding emulation (see matmul_kernel): the unfused
