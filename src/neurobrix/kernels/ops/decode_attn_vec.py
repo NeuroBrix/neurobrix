@@ -81,8 +81,8 @@ def decode_attn_vec_split_kernel(
     Q_TO: tl.constexpr = None,        # a dtype: Q is rounded to it on load (the cache's)
     Q_SATURATE: tl.constexpr = False, # the protected fp16 rounding of that cast
 ):
-    pid_q = tl.program_id(0)        # b * H_q + h_q
-    pid_s = tl.program_id(1)        # split index
+    pid_q = tl.program_id(0).to(tl.int64)        # b * H_q + h_q
+    pid_s = tl.program_id(1).to(tl.int64)        # split index
     pid_kv = pid_q // GQA_GROUPS    # owning KV head row
 
     offs_d = tl.arange(0, BLOCK_D)
@@ -171,8 +171,8 @@ def decode_attn_vec_grouped_kernel(
     the group's rows; per-row online-softmax state lives in (GROUPS,)
     vectors updated by a masked select (constexpr-unrolled, GROUPS is
     4 on the canonical row)."""
-    pid_kv = tl.program_id(0)       # b * H_kv + h_kv
-    pid_s = tl.program_id(1)
+    pid_kv = tl.program_id(0).to(tl.int64)       # b * H_kv + h_kv
+    pid_s = tl.program_id(1).to(tl.int64)
     offs_d = tl.arange(0, BLOCK_D)
     mask_d = offs_d < D
     mask_dv = offs_d < D_V

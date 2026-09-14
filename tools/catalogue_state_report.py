@@ -161,6 +161,26 @@ OVERLAY = {
              "shards beside the vendor's .bin) is rebuilt from declarations and documented beside "
              "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
         line="measured"),
+    "mochi-1-preview": dict(
+        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, fixed at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
+        evidence="two compute-sanitizer runs (7 200 s 09-13, 18 000 s 09-14) measured nothing; "
+                 "--triton-sequential + CUDA_LAUNCH_BLOCKING=1 named aten.mm::1 of the VAE in 19 min "
+                 "(M=1 068 480 x N=2048: 2.19e9 output elements, stride_cm * offs_cm wrapped in int32 — "
+                 "triton-lang/triton#832); then aten.add::14, then aten.native_group_norm::26, the same "
+                 "wrap in the flat and tile forms — every GEMM offset, every flat offset and every program "
+                 "id now 64-bit (90fefd4, 7ee3d7c, aa60c5c; register 58; beyond-2^31 tests red then green; "
+                 "four models byte-identical, timings within 3 %). With the wraps gone the op-by-op run "
+                 "reaches the decoder and OOMs at aten.silu::26: 8.75 GB asked, 25.97 GB live, 5.6 GB free "
+                 "on a 32 GB card, where --explain-plan says vae activations 3 209 MB, tiling none planned "
+                 "(D-PRISM-MOCHI-VAE-ACTIVATION-UNDERESTIMATED). Bounded proof by run 2026-09-14 09:11: "
+                 "--triton --steps 1 --num-frames 9, rc=0 in 118 s, 7 decoded frames at 480x848, range "
+                 "0-154, inter-frame difference 1.3-2.6, a warm field with a red centre (one step), "
+                 "nbx/campaigns/2026_09_12_night_catalogue/mochi_proof_9frames_aa60c5c/",
+        note="The 9-frame run does not cross 2^31 elements itself (114 480 x 2048 rows); the wraps are "
+             "proven by the three boundary tests and by the 84-frame op-by-op run that now passes "
+             "mm::1, add::14 and group_norm::26. The catalogue request (84 frames) waits on Prism's "
+             "estimate carrying the runtime frame count.",
+        line="measured"),
     "Wan2.2-I2V-A14B": dict(
         now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
         evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
@@ -230,6 +250,120 @@ def campaign_cells() -> dict:
         for name, row in campaign_dir_cells(camp).items():
             out.setdefault(name, row)
     return out
+
+
+# ---------------------------------------------------------------------------
+# certified coverage per memory class (register 56): an entry serves only the
+# memory class it was proven on, so "certified" is a per-card-class answer on
+# this rack (16 GB cards 0 and 1, 32 GB cards 2 and 3). The model's census is
+# the MEET pass's own log — it ran with the directory OFF, so every shape the
+# run met is a `no certified setting for` line.
+# ---------------------------------------------------------------------------
+_CENSUS_LINE = re.compile(r"no certified setting for (\S+) (\S+) \((.*?)\) on ")
+
+
+def _key_from_description(text: str):
+    """`M=1024 N=3840 K=1280 IEEE_PRECISION=True PROMOTE_B=True fp32,fp16,fp16,fp32`
+    → (1024, 3840, 1280, True, True, 'fp32', 'fp16', 'fp16', 'fp32'): the inverse
+    of `autotune_certified.describe_key` — named fields in order, then the
+    dtype list."""
+    key = []
+    for tok in text.split():
+        if "=" in tok:
+            v = tok.split("=", 1)[1]
+            key.append(True if v == "True" else False if v == "False" else int(v) if v.lstrip("-").isdigit() else v)
+        else:
+            key.extend(tok.split(","))
+    return tuple(key)
+
+
+def memory_class_coverage(container: str):
+    """{total, by_class: {16: n, 32: n}, unknown: n, absent: n} for the shapes
+    this container's MEET run met, read against the live certified directory;
+    None when the run left no log."""
+    log = MEET.parent / f"{container}.log"
+    if not log.exists():
+        return None
+    sys.path.insert(0, str(REPO / "src"))
+    from neurobrix.kernels import autotune_certified as C
+    root = C.directory() / "nvidia" / "volta"
+    files: dict = {}
+    out = {"total": 0, "by_class": {}, "unknown": 0, "absent": 0}
+    seen = set()
+    for line in log.read_text(errors="replace").splitlines():
+        m = _CENSUS_LINE.search(line)
+        if not m:
+            continue
+        kernel, dtype, desc = m.groups()
+        ktext = C.key_repr(_key_from_description(desc))
+        if (kernel, dtype, ktext) in seen:
+            continue
+        seen.add((kernel, dtype, ktext))
+        out["total"] += 1
+        path = root / f"{kernel}.{dtype}.json"
+        if path not in files:
+            try:
+                files[path] = json.loads(path.read_text(encoding="utf-8")).get("entries") or {}
+            except (OSError, ValueError):
+                files[path] = {}
+        entry = files[path].get(ktext)
+        if entry is None:
+            out["absent"] += 1
+            continue
+        classes = C.covered_memory_classes(entry)
+        if not classes:
+            out["unknown"] += 1
+        for c in classes:
+            out["by_class"][c] = out["by_class"].get(c, 0) + 1
+    return out
+
+
+def coverage_cell(cov) -> str:
+    if cov is None:
+        return "n/m"
+    if not cov["total"]:
+        return "0 shapes met"
+    t = cov["total"]
+    c16, c32 = cov["by_class"].get(16, 0), cov["by_class"].get(32, 0)
+    extra = []
+    if cov["unknown"]:
+        extra.append(f"{cov['unknown']} proven on an unknown card")
+    if cov["absent"]:
+        extra.append(f"{cov['absent']} not in the directory")
+    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "")
+
+
+# ---------------------------------------------------------------------------
+# the debts named beside the line they hold — the A rows of
+# docs/reference/debts-triage.md (a debt that blocks a catalogue line), keyed by
+# container. A line with none says "none named"; a debt named here and not in
+# DETTE.md is a defect of this table.
+# ---------------------------------------------------------------------------
+DEBTS_BY_CONTAINER = {
+    "Qwen3-VL-30B-A3B-Thinking": ["D-DEEPSTACK-ZERO-EXTENT", "D-QWEN3VL-MOE-RUNS-EVERY-EXPERT-ON-EVERY-TOKEN",
+                                  "D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "Qwen3-Omni-30B-A3B-Instruct": ["D-DEEPSTACK-ZERO-EXTENT", "D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "Ming-Lite-Omni-1.5": ["D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "mochi-1-preview": ["D-MOCHI-CUDA-700-AT-MM"],
+    "Wan2.1-VACE-1.3B-diffusers": ["D-TEMPORAL-UNROLL", "D-WAN-VACE-BROADCAST-AT-DIV",
+                                   "D-NEGATIVE-ALLOCATION-SIZE-WAN-VACE", "D-WAN-VACE-FRAME-TOKENS-FROZEN"],
+    "Wan2.1-I2V-14B-480P-Diffusers": ["D-TEMPORAL-UNROLL (inferred)"],
+    "Wan2.2-I2V-A14B-Diffusers": ["D-TEMPORAL-UNROLL", "D-PRISM-WAN22-TRITON-ONE-CARD"],
+    "Wan2.1-T2V-1.3B-Diffusers": ["D-WAN-T2V-OOM-AT-5D-PAD", "D-WAN-T2V-VAE-ACTIVATION-12GB"],
+    "Allegro-TI2V": ["D2 (88 frames: declared limit until cuDNN >= 9.3)", "D-ALLEGRO-TI2V-FRAME-TOKENS-FROZEN"],
+    "Allegro": ["D-ALLEGRO-TRITON-31H-PER-ARM", "D-VIDEO-CAMPAIGN-STIMULUS"],
+    "Sana_1600M_4Kpx_BF16": ["D-PRISM-SANA4K-COMPILED-16GB"],
+    "GLM-4.1V-9B-Thinking": ["D-PRISM-2x16-PIPELINE-OVERFILL"],
+    "deepseek-moe-16b-chat": ["D-DSMOE-XENGINE-SHA", "D-TRACE-DEEPSEEK-MOE-ILLEGAL-ACCESS"],
+    "granite-speech-3.3-8b": ["D-AUDIO-LLM-GRANITE-HOST-PLACEMENT"],
+    "Kokoro-82M": ["D-CPU-COMPLEX-HALF-EXP", "D-KOKORO-DECODER-PINNED-HOST-READ"],
+}
+DEBTS_BY_SLUG = {"Orpheus-3B": ["D-ORPHEUS-FT-VENDOR-CODEC", "D-ORPHEUS-SEED-NOT-PINNED"]}
+
+
+def debts_cell(container, slug) -> str:
+    names = DEBTS_BY_CONTAINER.get(container or "", []) + DEBTS_BY_SLUG.get(slug, [])
+    return ", ".join(f"`{n}`" for n in names) if names else "none named"
 
 
 def per_shape_sweep_cost() -> dict:
@@ -385,8 +519,8 @@ def main() -> int:
           f"and every one of the nine failures was a VIDEO model.\n")
 
     print("| model | family | GB | on this rack | swept | screened | certified cost | "
-          "where a defect would be invisible | line |")
-    print("|---|---|---:|---|---:|---:|---|---|---|")
+          "certified for this card's memory | where a defect would be invisible | debts named | line |")
+    print("|---|---|---:|---|---:|---:|---|---|---|---|---|")
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
@@ -442,10 +576,11 @@ def main() -> int:
         screened = r.get("screened_out")
         if screened is not None and incomplete:
             screened = f"{screened}†"
+        coverage = coverage_cell(memory_class_coverage(container))
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{blind_cell} | {line} |")
+              f"{coverage} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -457,6 +592,19 @@ def main() -> int:
         print(f"*Evidence:* {ov['evidence']}  ·  *line:* {ov['line']}\n")
 
     print("## How to read the columns\n")
+    print("**debts named** — the entries of `DETTE.md` that hold this line (the A rows of")
+    print("`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on")
+    print("without opening the debt file. A line that runs and measures may still name one:")
+    print("a debt that bounds it (frames, a card class) rather than blocks it.\n")
+    print("**certified for this card's memory** — of the shapes this model's catalogue")
+    print("run met (its own log, directory off), how many the directory certifies for a")
+    print("16 GB card and how many for a 32 GB card, read on the day this document was")
+    print("rendered. Since 2026-09-13 an entry serves only the memory class it was")
+    print("proven on (register 56): a shape proven on a 16 GB card sweeps at runtime on a")
+    print("32 GB card until it is certified there, and a shape proven on the rig with the")
+    print("card unknown serves no card until re-proven. The two numbers are what a")
+    print("request on each SKU of this rack is served without a sweep — not what the")
+    print("directory holds.\n")
     print("**swept** — shape keys this model had to sweep AT RUNTIME because the")
     print("certified directory did not hold them. On a row that MET, `0` is the")
     print("per-model measure of certified coverage: it was served entirely from the")

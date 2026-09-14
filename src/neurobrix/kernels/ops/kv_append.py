@@ -41,7 +41,7 @@ def kv_append_kernel(
     mask there. The counter advances in kv_pos_inc_kernel, launched
     AFTER on the same stream (serialized — no intra-grid race on the
     position load)."""
-    pid = tl.program_id(0)          # one program per KV head
+    pid = tl.program_id(0).to(tl.int64)          # one program per KV head
     pos = tl.load(pos_ptr)
 
     offs_k = tl.arange(0, BLOCK)

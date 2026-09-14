@@ -10,8 +10,8 @@ def mul_forward_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """out = x * y (tensor * tensor)"""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(x_ptr + offset, mask=mask)
@@ -26,8 +26,8 @@ def mul_scalar_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """out = x * scalar"""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(x_ptr + offset, mask=mask)
@@ -43,8 +43,8 @@ def mul_scalar_dev_kernel(
     """out = x * s where s is a 0-d DEVICE tensor. Bit-exact mirror
     of mul_scalar_kernel (host float(s) -> f32 arg == load -> f64 ->
     f32). Device-scalar increment 2026-08-15."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     s = tl.load(s_ptr).to(tl.float64).to(tl.float32)
     x = tl.load(x_ptr + offset, mask=mask)

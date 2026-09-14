@@ -37,7 +37,8 @@ def _entry(deviation=1.0e-5, tolerance=1.0e-4, **over):
          "proof": {"date": "2026-09-07T00:00:00+00:00", "engine_version": "0.5.3",
                    "backend": {"name": "cuda", "version": "triton 3.6.0"}, "shape": list(KEY),
                    "deviation": deviation, "tolerance": tolerance, "oracle": "fp64",
-                   "machine": {"hostname": "test", "device": "V100"},
+                   # the card the proof was made on — an entry serves only its memory class (register 56)
+                   "machine": {"hostname": "test", "device": {"ordinal": 0, "visible_devices": "0", "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384}},
                    # Required from format /2: the screen cannot say whether the
                    # kernel BUILT — a CPU fallback computes correctly, so its
                    # deviation against the oracle is excellent and an entry
@@ -48,6 +49,21 @@ def _entry(deviation=1.0e-5, tolerance=1.0e-4, **over):
                                   "num_warps": 8, "num_stages": 3}, "deviation": 0.5, "tolerance": tolerance}]}
     e.update(over)
     return e
+
+
+@pytest.fixture(autouse=True)
+def _one_16g_card():
+    """The profile in force for these tests: one 16 GB card, the class the
+    fixture entries were proven on. A heterogeneous rig would serve nothing to
+    a launch that does not name its card — that case has its own file
+    (`test_an_entry_serves_only_the_memory_class_it_covered.py`)."""
+    from neurobrix.kernels import wrappers as W
+    before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16)
+    dev = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384})()
+    prof = type("Prof", (), {"devices": [dev], "has_native_bf16": False, "id": "auto-v100-16gb-16g"})()
+    W.set_hardware_profile(prof)
+    yield
+    W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16 = before
 
 
 def _write(root: Path, entries, vendor="nvidia", profile="volta", dtype="fp32", kernel=KERNEL, fmt=C.FORMAT):

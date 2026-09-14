@@ -58,8 +58,8 @@ def flash_decode_split_kernel(
     D: tl.constexpr,
     HAS_BIAS: tl.constexpr,
 ):
-    pid_h = tl.program_id(0)        # b * H_kv + h_kv
-    pid_s = tl.program_id(1)        # split index
+    pid_h = tl.program_id(0).to(tl.int64)        # b * H_kv + h_kv
+    pid_s = tl.program_id(1).to(tl.int64)        # split index
 
     offs_g = tl.arange(0, BLOCK_G)
     offs_d = tl.arange(0, BLOCK_D)
@@ -147,7 +147,7 @@ def flash_decode_reduce_kernel(
     One program per (batch, kv-head); splits iterated in FIXED ascending
     order — the combination order is a constant, hence deterministic.
     """
-    pid_h = tl.program_id(0)
+    pid_h = tl.program_id(0).to(tl.int64)
     offs_g = tl.arange(0, BLOCK_G)
     offs_d = tl.arange(0, BLOCK_D)
     mask_g = offs_g < GROUPS

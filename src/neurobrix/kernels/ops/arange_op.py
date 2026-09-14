@@ -17,7 +17,7 @@ def arange_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Generate sequential values: output[i] = start + i * step."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     block_start = pid * BLOCK_SIZE
     offsets = tl.arange(0, BLOCK_SIZE)
     idx = block_start + offsets

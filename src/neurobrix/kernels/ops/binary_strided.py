@@ -28,8 +28,8 @@ def add_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x + alpha * y, x and y read by their strides, out contiguous."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)
@@ -59,8 +59,8 @@ def mul_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x * y, x and y read by their strides, out contiguous."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)
@@ -91,8 +91,8 @@ def sub_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x - alpha * y, x and y read by their strides, out contiguous."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)
@@ -122,8 +122,8 @@ def div_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x / y, x and y read by their strides, out contiguous."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)
@@ -153,8 +153,8 @@ def add_scalar_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x + scalar, x read by its strides, out contiguous (add_scalar_kernel's expression)."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)
@@ -180,8 +180,8 @@ def mul_scalar_strided_nd_kernel(
     NDIM: tl.constexpr,
 ):
     """out = x * scalar, x read by its strides, out contiguous (mul_scalar_kernel's expression)."""
-    pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
     remaining = offsets
     x_off = tl.zeros_like(offsets)

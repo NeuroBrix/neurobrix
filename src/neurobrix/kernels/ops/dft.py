@@ -27,8 +27,8 @@ def dft_rfft_matrix_kernel(
     cos[k,n] = cos(2π k n / N), nsin[k,n] = -sin(2π k n / N) so that
     X_real = x @ cos.T and X_imag = x @ nsin.T.
     """
-    pid = tl.program_id(0)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     total = N_bins * N
     mask = offs < total
     k = offs // N
@@ -54,8 +54,8 @@ def idft_c2r_matrix_kernel(
     weight_k = 1 for k=0 and (N even) k=N/2, else 2. So
     real_out = X_real @ cos + X_imag @ sin.
     """
-    pid = tl.program_id(0)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     total = N_bins * N
     mask = offs < total
     k = offs // N

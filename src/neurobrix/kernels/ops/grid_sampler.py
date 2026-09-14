@@ -54,9 +54,9 @@ def grid_sampler_2d_kernel(
     ALIGN: tl.constexpr,         # 0 / 1
     BLOCK_C: tl.constexpr,
 ):
-    pid_s = tl.program_id(0)     # output spatial location (oH*oW flattened)
-    pid_c = tl.program_id(1)     # channel block
-    pid_n = tl.program_id(2)     # batch
+    pid_s = tl.program_id(0).to(tl.int64)     # output spatial location (oH*oW flattened)
+    pid_c = tl.program_id(1).to(tl.int64)     # channel block
+    pid_n = tl.program_id(2).to(tl.int64)     # batch
 
     # A program beyond the output extent reads and writes nothing (masked,
     # no early exit — unstructured control flow has no lowering on every backend).

@@ -22,9 +22,9 @@ def unfold_backward_1d_kernel(
     MAX_OVERLAP: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid_b = tl.program_id(0)
-    pid_l = tl.program_id(1)
-    offs = pid_l * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # output positions
+    pid_b = tl.program_id(0).to(tl.int64)
+    pid_l = tl.program_id(1).to(tl.int64)
+    offs = pid_l.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id (register 58)
     mask = offs < L
     acc = tl.zeros((BLOCK_SIZE,), dtype=tl.float32)
     base = pid_b * (N_frames * size)

@@ -56,8 +56,8 @@ def flash_attention_forward_kernel(
     BLOCK_N: tl.constexpr,
     GQA_GROUPS: tl.constexpr,
 ):
-    start_m = tl.program_id(0)
-    off_hb = tl.program_id(1)
+    start_m = tl.program_id(0).to(tl.int64)
+    off_hb = tl.program_id(1).to(tl.int64)
     off_b = off_hb // nheads
     off_h = off_hb % nheads
     # GQA: each Q head maps to K/V head (off_h // GQA_GROUPS). For plain MHA
@@ -218,7 +218,7 @@ def flash_attention_forward_kernel(
     acc_o = acc_o * o_scale[:, None]
 
     # Store LSE and output
-    start_m = tl.program_id(0)
+    start_m = tl.program_id(0).to(tl.int64)
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     lse_ptrs = Lse + off_hb * seqlen_q_rounded + offs_m
     tl.store(lse_ptrs, lse_i)

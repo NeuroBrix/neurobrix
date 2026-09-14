@@ -67,7 +67,7 @@ def baddbmm_kernel(
     output pointer's dtype before store (matmul_kernel pattern).
     """
     # Batch offset
-    pid_b = tl.program_id(2)
+    pid_b = tl.program_id(2).to(tl.int64)      # a batch offset times a stride wraps past 2^31 elements in int32
     A_ptr += pid_b * stride_ab
     B_ptr += pid_b * stride_bb
     out_ptr += pid_b * stride_ob
@@ -81,7 +81,7 @@ def baddbmm_kernel(
     tl.assume(stride_om > 0); tl.assume(stride_on > 0)
 
     # 2D tile indexing with grouping for L2 locality
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     num_pid_in_group = GROUP_M * num_pid_n
@@ -94,8 +94,8 @@ def baddbmm_kernel(
     offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
-    a_ptrs = A_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = B_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+    a_ptrs = A_ptr + (offs_am[:, None].to(tl.int64) * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = B_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :].to(tl.int64) * stride_bn)
 
     # Accumulate matmul in fp32 — line-for-line matmul_kernel K loop.
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
@@ -121,12 +121,12 @@ def baddbmm_kernel(
 
     if HAS_BIAS:
         # Load bias and apply alpha/beta
-        bias_ptrs = (bias_ptr + offs_cm[:, None] * bias_m_stride
-                     + offs_cn[None, :] * bias_n_stride)
+        bias_ptrs = (bias_ptr + offs_cm[:, None].to(tl.int64) * bias_m_stride
+                     + offs_cn[None, :].to(tl.int64) * bias_n_stride)
         bi = tl.load(bias_ptrs, mask=out_mask, other=0.0)
         accumulator = accumulator * alpha + bi * beta
 
     # In-kernel cast accum → output dtype (matmul_kernel pattern).
     c = accumulator.to(out_ptr.dtype.element_ty)
-    o_ptrs = out_ptr + offs_cm[:, None] * stride_om + offs_cn[None, :] * stride_on
+    o_ptrs = out_ptr + offs_cm[:, None].to(tl.int64) * stride_om + offs_cn[None, :].to(tl.int64) * stride_on
     tl.store(o_ptrs, c, mask=out_mask)

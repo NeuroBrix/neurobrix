@@ -42,8 +42,8 @@ def conv_transpose2d_kernel(
     reduces exactly to the original full-sum behaviour.
     """
     # pid_0 = n * C_out + co
-    pid_nc = tl.program_id(0)
-    pid_spatial = tl.program_id(1)
+    pid_nc = tl.program_id(0).to(tl.int64)
+    pid_spatial = tl.program_id(1).to(tl.int64)
 
     n = pid_nc // C_out
     co = pid_nc % C_out

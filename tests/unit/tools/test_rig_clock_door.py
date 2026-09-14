@@ -115,3 +115,49 @@ def test_the_opening_is_deliberate_and_says_so(monkeypatch):
     assert len(state["off_protocol"]) == 2
     # A waiver that is quiet is a bypass. The run must state it in its own output.
     assert any("off protocol" in s for s in said)
+
+
+# ---------------------------------------------------------------------------
+# --restore: the boot-time form of the door (tools/systemd/nbx-rig-clock.service)
+# ---------------------------------------------------------------------------
+class _Driver:
+    """A fake nvidia-smi: `-ac` writes the card's clocks unless `stuck`; a query reads them."""
+    def __init__(self, rows, stuck=()):
+        self.state = {str(i): [n, g, m] for i, n, g, m in rows}
+        self.stuck = set(str(s) for s in stuck)
+        self.applied = []
+
+    def __call__(self, cmd, *a, **k):
+        if "-ac" in cmd:
+            idx = cmd[cmd.index("-i") + 1]; mem, gfx = cmd[cmd.index("-ac") + 1].split(",")
+            self.applied.append(idx)
+            if idx not in self.stuck:
+                self.state[idx][1], self.state[idx][2] = int(gfx), int(mem)
+            return _Result("All done.\n")
+        return _Result("".join(f"{i}, {n}, {g}, {m}\n" for i, (n, g, m) in self.state.items()))
+
+
+def test_restore_applies_the_protocol_to_every_card_and_reads_every_card_back(monkeypatch):
+    drv = _Driver(AS_FOUND_0911)
+    monkeypatch.setattr(subprocess, "run", drv)
+    state = RC.restore_protocol_clock(say=lambda *a: None)
+    assert drv.applied == ["0", "1", "2", "3"], "every card, including the two already at protocol by coincidence"
+    assert state["off_protocol"] == [] and state["cards_read"] == 4
+    assert all(c["graphics_mhz"] == 1290 for c in state["cards"])
+
+
+def test_a_restore_that_did_not_take_is_a_refusal(monkeypatch):
+    """Injection: card 1 ignores `-ac` (the driver said "All done" and changed nothing)."""
+    drv = _Driver(AS_FOUND_0911, stuck=(1,))
+    monkeypatch.setattr(subprocess, "run", drv)
+    with pytest.raises(RC.OffProtocol) as exc:
+        RC.restore_protocol_clock(say=lambda *a: None)
+    assert "card 1" in str(exc.value) and "1312" in str(exc.value)
+
+
+def test_the_unit_file_runs_the_restore_and_names_no_frequency():
+    unit = (Path(__file__).resolve().parents[3] / "tools/systemd/nbx-rig-clock.service").read_text()
+    assert "rig_clock.py --restore" in unit
+    assert "After=nvidia-persistenced.service" in unit
+    body = "\n".join(l for l in unit.splitlines() if not l.startswith("#"))
+    assert "1290" not in body and "877" not in body, "the value is read from the protocol, never typed in the unit"

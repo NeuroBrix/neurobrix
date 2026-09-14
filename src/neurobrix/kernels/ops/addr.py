@@ -34,8 +34,8 @@ def addr_kernel(
 
     Grid: (cdiv(M, BLOCK_M), cdiv(N, BLOCK_N))
     """
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
+    pid_m = tl.program_id(0).to(tl.int64)
+    pid_n = tl.program_id(1).to(tl.int64)
 
     offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)

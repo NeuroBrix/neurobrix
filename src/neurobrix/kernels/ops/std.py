@@ -15,7 +15,7 @@ import triton.language as tl
 @triton.jit
 def std_map_kernel(X, Tmp_sum, Tmp_sum_sq, N, BLOCK_N: tl.constexpr):
     """Pass 1: compute partial sum and sum-of-squares per block."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset = pid * BLOCK_N + tl.arange(0, BLOCK_N)
     mask = offset < N
     x = tl.load(X + offset, mask=mask, other=0.0).to(tl.float32)
@@ -72,7 +72,7 @@ def std_dim_kernel(
     X: [M, N] (dim-compressed, strided) → Out: [M]
     Two-pass: first compute mean, then sum of squared deviations.
     """
-    pid_group = tl.program_id(0)
+    pid_group = tl.program_id(0).to(tl.int64)
     start_row = pid_group * BLOCK_M
     row_offsets = start_row + tl.arange(0, BLOCK_M)
     row_mask = row_offsets < M

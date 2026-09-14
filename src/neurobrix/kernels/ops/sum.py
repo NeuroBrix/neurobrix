@@ -23,7 +23,7 @@ def sum_forward_kernel(
 
     input: [batch_dim, feat_dim] → output: [batch_dim]
     """
-    batch_pid = tl.program_id(0)
+    batch_pid = tl.program_id(0).to(tl.int64)
     batch_offset = batch_pid * BLOCK_SIZE_BATCH + tl.arange(0, BLOCK_SIZE_BATCH)
     feat_offset = tl.arange(0, BLOCK_SIZE_FEAT)
 
