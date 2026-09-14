@@ -75,6 +75,31 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+_TUNING_NOTICE = b"measuring kernel configurations"     # the engine's own sentence on a cold cell (test_all_models)
+
+
+def _run_once(cmd, timeout, env, cwd, runner=subprocess.run):
+    """One run; a timeout spent autotuning (the engine said so) is retried once
+    with the replay cache warm — the suite's rule (test_all_models). A second
+    timeout, or one without the notice, is a failure with the sentence: the
+    first form of this guard read two cold triton arms as failures (2026-09-14
+    02:03: chatterbox 674 keys, MiniCPM-o's speech leg) — a timeout is not a
+    verdict on determinism."""
+    try:
+        return runner(cmd, capture_output=True, timeout=timeout, env=env, cwd=cwd)
+    except subprocess.TimeoutExpired as e:
+        partial = (e.stdout or b"") + (e.stderr or b"")
+        if _TUNING_NOTICE not in partial:
+            pytest.fail(f"TIMEOUT after {timeout}s and the engine was NOT autotuning — slow or broken, not cold. "
+                        f"Partial stdout: {(e.stdout or b'')[-400:]!r}")
+        print(f"\n[cold] budget spent autotuning; retrying once with the cache warm", flush=True)
+        try:
+            return runner(cmd, capture_output=True, timeout=timeout, env=env, cwd=cwd)
+        except subprocess.TimeoutExpired as second:
+            pytest.fail(f"TIMEOUT after {timeout}s on a WARM retry (the first attempt was spent autotuning). "
+                        f"Partial stdout: {(second.stdout or b'')[-400:]!r}")
+
+
 @pytest.mark.parametrize("name,comps,mode", _cells())
 def test_a_container_with_an_rng_op_runs_twice_and_matches(name, comps, mode):
     cmd, out, unreached = _request(name, comps, mode)
@@ -87,9 +112,9 @@ def test_a_container_with_an_rng_op_runs_twice_and_matches(name, comps, mode):
     for rep in (1, 2):
         if out.exists():
             out.unlink()
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=str(REPO))
+        proc = _run_once(cmd, timeout, env, str(REPO))
         assert proc.returncode == 0, (f"{name} {mode} run {rep} rc={proc.returncode}\n"
-                                      f"stdout tail: {proc.stdout[-800:]}\nstderr tail: {proc.stderr[-800:]}")
+                                      f"stdout tail: {proc.stdout[-800:]!r}\nstderr tail: {proc.stderr[-800:]!r}")
         assert out.exists(), f"{name} {mode} run {rep}: no artefact at {out}"
         shas.append(_sha(out))
     assert shas[0] == shas[1], (f"{name} {mode}: two runs of one request and one seed gave two artefacts "
