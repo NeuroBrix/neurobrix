@@ -41,7 +41,7 @@ def scan_part_sum_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     inp_ptrs = inp + offset
@@ -75,7 +75,7 @@ def add_base_sum_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     out_ptrs = out + offset
@@ -107,7 +107,7 @@ def scan_part_sum_abc_kernel(
     pid_c = tl.program_id(2)
 
     a_idx = pid_a
-    b_idx = pid_b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    b_idx = pid_b.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id (register 58)
     c_idx = pid_c
 
     offset = a_idx * B * C + b_idx * C + c_idx
@@ -151,7 +151,7 @@ def add_base_sum_abc_kernel(
     pid_c = tl.program_id(2)
 
     a_idx = pid_a
-    b_idx = pid_b * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    b_idx = pid_b.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id (register 58)
     c_idx = pid_c
 
     base_offset = a_idx * B * C + c_idx

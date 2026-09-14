@@ -71,7 +71,7 @@ def strided_copy_kernel(
                      specialisation + kernel cache entry).
     """
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
 
     # Decompose the flat offset into multi-dim indices, walking dims
@@ -118,7 +118,7 @@ def strided_scatter_kernel(
         NDIM:        Rank of the tensors (constexpr).
     """
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
 
     remaining = offsets
@@ -156,7 +156,7 @@ def strided_copy_nd_kernel(
     is bit-identical to a cast through `copy_kernel` after `contiguous()`.
     """
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < n_elements
 
     remaining = offsets

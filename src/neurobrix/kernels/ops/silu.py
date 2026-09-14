@@ -18,7 +18,7 @@ def silu_forward_kernel(
     # int32 n_elements wraps to negative and the mask is all-False,
     # silently skipping every element and leaving output as
     # uninitialized memory (= garbage).
-    offset = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(input_ptr + offset, mask=mask)

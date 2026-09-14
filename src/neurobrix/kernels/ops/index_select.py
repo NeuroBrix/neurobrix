@@ -98,7 +98,7 @@ def index_select_mid_kernel(
     A guard written in good faith that does not cover the path added beside it
     is the same class as a guard that never fires."""
     pid = tl.program_id(axis=0)
-    e = pid * BLOCK + tl.arange(0, BLOCK)
+    e = pid.to(tl.int64) * BLOCK + tl.arange(0, BLOCK)   # 64-bit from the program id (register 58)
     total = outer * index_len * inner
     mask = e < total
     per_outer = index_len * inner

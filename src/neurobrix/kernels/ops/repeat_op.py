@@ -24,7 +24,7 @@ def repeat_1d_kernel(
 ):
     """Repeat kernel for 1D tensors."""
     pid = tl.program_id(0)
-    tid = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    tid = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = tid < num_tasks
 
     i0 = tid
@@ -49,7 +49,7 @@ def repeat_2d_kernel(
 ):
     """Repeat kernel for 2D tensors."""
     pid = tl.program_id(0)
-    tid = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    tid = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = tid < num_tasks
 
     # Decompose flat index into multi-index
@@ -76,7 +76,7 @@ def repeat_3d_kernel(
 ):
     """Repeat kernel for 3D tensors."""
     pid = tl.program_id(0)
-    tid = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    tid = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = tid < num_tasks
 
     i2 = tid % out_shape2
@@ -107,7 +107,7 @@ def repeat_4d_kernel(
 ):
     """Repeat kernel for 4D tensors."""
     pid = tl.program_id(0)
-    tid = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    tid = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = tid < num_tasks
 
     i3 = tid % out_shape3

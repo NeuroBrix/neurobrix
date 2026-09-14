@@ -162,7 +162,7 @@ def l2_norm_pass1_kernel(
 ):
     """First pass of flat L2 norm: each block computes partial sum of squares."""
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < M
 
     x = tl.load(X + offset, mask=mask, other=0.0).to(tl.float32)
@@ -192,7 +192,7 @@ def linf_norm_pass1_kernel(
 ):
     """First pass of flat Linf norm: each block computes partial max abs."""
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < M
 
     x = tl.load(X + offset, mask=mask, other=0.0).to(tl.float32)

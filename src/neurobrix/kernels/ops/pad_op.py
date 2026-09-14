@@ -24,7 +24,7 @@ def constant_pad_2d_kernel(
 ):
     """Constant pad for 4D tensors (N,C,H,W). Most common case."""
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < total
 
     # Decompose flat index into (n*c, h, w)
@@ -59,7 +59,7 @@ def constant_pad_1d_kernel(
 ):
     """Constant pad for 2D/3D tensors along last dim."""
     pid = tl.program_id(0)
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offsets < total
 
     out_idx = offsets % out_size
