@@ -1180,3 +1180,21 @@ in its docstring), `test_rig_clock_door.py` (restore: a driver that says
 "All done" and changes nothing is refused, seen RED with the read-back
 neutralised). Proof on the rig, 2026-09-14 00:04: card 1 set to 1312 by
 hand, `systemctl restart nbx-rig-clock`, all four cards read 1290.
+
+**Measured 2026-09-14 00:08-00:14 UTC, the measurement entry 56 said it did
+not contain** (`tools/memory_class_sample.py`, campaign
+`2026_09_13_certification_tail/sample_16_to_32`): the first 50 matmul census
+keys certified on card 2 (32 GB, pinned, tree d1def45, clocks 1290/877 read
+on every card, no throttle reason active) against the directory's 16 GB
+entries for the same keys (certified 2026-09-07 00:07-00:26, same engine
+0.5.3, same Triton 3.6.0): **37 keys choose the same configuration, 13 a
+different one, 0 without a counterpart** — and the 32 GB card's best time is
+**1.11x to 1.19x the 16 GB entry's on every one of the 50 keys (median
+1.175)**. The expectation "identical" is contradicted twice, and the rule
+(coverage per class, never expectation) was the right one for a reason the
+entry did not know. What this does NOT yet say: whether the 17 % is the card
+or the day — the 16 GB side was measured a week earlier under conditions this
+record does not hold. The control is queued behind the certification on card
+0 (`guard_after_card0.sh`: the same 50 keys on a 16 GB card today, against
+the same 09-07 entries); until it reads, the 17 % is UNADJUDICATED between
+"the 32 GB SKU is slower at the same clock" and "the rig was slower on 09-07".

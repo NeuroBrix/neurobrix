@@ -62,7 +62,7 @@ is not counted.
 | D-AUTOTUNE-SWEEP-DELIVERY | the measured sweeps reach a user only through a rebuilt container or a store the hub does not serve | the hub serves `/<org>/<name>/autotune/<arch>.json`; the installer places it | filed 09-05 — superseded in part by the certified directory (engine component, 09-06); what remains is the per-model artefact's delivery |
 | D-GATE-TIMEOUT-VS-COLD-AUTOTUNE | cells cut by a budget sized before the cold sweep was measured (chatterbox 674 keys, openaudio 693, SANA-Video 25 conv keys at 720p) | a per-cell timeout proportional to the keys the cell sweeps | filed 09-03; three catalogue cells read "no cost" because of it — owner's decision named 09-13 11:27 |
 | D-SMEM-PRUNE-GAIN-UNMEASURABLE-HERE | the flash-attention tile guard's benefit cannot be measured on this rig | a card whose SMEM the compiler exceeds (A40 class) | filed 09-10; owed by whoever has the card |
-| *(new, 09-13)* register 56 — memory-class coverage | every entry proven on one memory class is served to no other: the 32 GB cards sweep until covered; 1 530 rig-proven entries serve no card until re-proven | certification of the 16 GB-proven keys on a 32 GB card (cards 2/3, behind the chain), re-proof of the 1 530 on a 16 GB card | door written 09-13 22:55, review pending; certification queued |
+| *(new, 09-13)* register 56 — memory-class coverage | every entry proven on one memory class is served to no other: the 32 GB cards sweep until covered; 1 530 rig-proven entries serve no card until re-proven | certification of the 16 GB-proven keys on a 32 GB card (cards 2/3, behind the chain), re-proof of the 1 530 on a 16 GB card | door landed `d1def45`; re-proof on cards 0/1 in flight 09-14 with the checkpointer (`88c8af0`, `c7d6706`…); the 16→32 sample (50 keys) read 13/50 different configs and the 32 GB card 1.175× slower — UNADJUDICATED card-vs-day until the control on card 0 reads (register 56, measured paragraph) |
 
 ## C — declared limits and other chantiers' (61)
 
@@ -140,7 +140,7 @@ D-REPLAY-BLIND-TO-THE-ENGINE-LAUNCHER · D-SCHEDULER-EXCLUSIVITY-ONLY-AT-ENTRY
 | D-TEMPORAL-UNROLL | A | measured (Wan2.2 vae_encoder, 517 ops/chunk); the fix is on the build side, not started |
 | D-MOCHI-CUDA-700 | A | under compute-sanitizer, rig quiet, since 21:26 |
 | Allegro D2 | A (declared limit) | decided: cuDNN 9.1 refuses the large non-batch-splittable conv; 88 frames is a declared limit until cuDNN ≥ 9.3 or a per-tile bound |
-| Kokoro determinism per mode | C | measured TRUE on the trunk (six runs, one sha per mode) — the premise of "two shas, same tree" is contradicted by the measurement |
+| Kokoro determinism per mode | C | measured TRUE on the trunk 09-13 01:23 — compiled, sequential, triton_sequential, two runs each, one sha per mode (`kokoro_per_mode/VERDICT.md`); the premise of "two shas, same tree" is contradicted by the measurement. The permanent guard the debt owes landed `3092fdb` (8 cells: the 4 drawing containers × native/triton, run twice each, read from `tools/rng_census.py`); its first run is queued on card 0 behind the certification |
 | the §4.2 screen cell (A40) | B | the production wiring is the live screen's oracle (register 45-47); the sm_86 cell itself is owed by whoever has the card |
 | `--explain-plan` | — | delivered (`d9ba351`, `06004e2`) |
 | `budget-unified` and its byte question | — | five pinned pairs byte-identical across a strategy change; the per-family matrix is armed behind the chain |
