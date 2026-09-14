@@ -128,6 +128,9 @@ def request_args(model: str, family: str, extra: list) -> list:
     for i in range(0, len(bound), 2):           # a family stimulus value wins over the campaign bound
         if bound[i] not in args:
             args += bound[i:i + 2]
+    if family == "tts":
+        from artefact_voice import speaker_args          # the one brick (the regression cells use it too)
+        args += speaker_args(model, CACHE)
     if family == "multimodal":
         topo = json.loads((CACHE / model / "topology.json").read_text())
         gen = ((topo.get("flow") or {}).get("generation") or {}).get("type", "")
