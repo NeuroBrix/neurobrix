@@ -148,6 +148,18 @@ def test_a_remote_that_refuses_is_said_and_the_run_exits_three(repo):
     assert _remote_head(repo["tmp"], "origin") == _head(repo["path"])   # the one that answered holds it
 
 
+def test_a_tmp_file_of_a_write_in_flight_is_never_committed(repo):
+    """The certifier writes `<name>.json.tmp` then os.replace: a status read inside
+    that window sees an untracked tmp file. Injection: without the `.json` filter
+    the tmp file was committed (seen RED 2026-09-14 00:27 UTC)."""
+    _write(repo["dir"], "k.fp32.json", 3)
+    (repo["dir"] / "k.fp32.json.tmp").write_text("{half-written")
+    res = CP.checkpoint(repo["path"], "src/neurobrix/config/autotune", ["origin"], repo["gate"], [], say=lambda *a: None)
+    assert res["committed"] == ["src/neurobrix/config/autotune/v/p/k.fp32.json"]
+    tracked = _sh("git", "-C", repo["path"], "ls-tree", "-r", "--name-only", "HEAD")
+    assert ".tmp" not in tracked
+
+
 def test_nothing_changed_commits_nothing(repo):
     before = _head(repo["path"])
     res = CP.checkpoint(repo["path"], "src/neurobrix/config/autotune", ["origin"], repo["gate"], [], say=lambda *a: None)

@@ -68,7 +68,9 @@ def _git(repo: str, *args: str, check: bool = True) -> subprocess.CompletedProce
 
 
 def changed_files(repo: str, rel_dir: str) -> List[str]:
-    """Paths under `rel_dir` that differ from HEAD (modified, added, untracked)."""
+    """`.json` paths under `rel_dir` that differ from HEAD (modified, added, untracked).
+    Only `.json`: the certifier writes each file through `<name>.json.tmp` + `os.replace`,
+    and a status read inside that window would otherwise hand the tmp file to `git add`."""
     out = _git(repo, "status", "--porcelain", "--untracked-files=all", "--", rel_dir).stdout
     files = []
     for line in out.splitlines():
@@ -77,6 +79,8 @@ def changed_files(repo: str, rel_dir: str) -> List[str]:
         path = line[3:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
+        if not path.endswith(".json"):
+            continue        # the certifier's `.json.tmp` (atomic replace in flight) is never a file of the directory
         files.append(path)
     return sorted(set(files))
 
