@@ -623,8 +623,8 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
             res["oracle"]["corrected_identical"] = False
     res["gate"] = {"kind": "bytes", "against": first, "arms": comp,
                    "identical": ran and all(v["identical"] for v in comp.values()), "ran": ran}
-    res["A"] = res["arms"][first]
-    res["B"] = res["arms"][trees[1][0]] if len(trees) > 1 else res["arms"][first]
+    res["A"] = arm_record(res, first)
+    res["B"] = arm_record(res, trees[1][0]) if len(trees) > 1 else res["A"]
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
 
@@ -1582,6 +1582,19 @@ def vacuous_lever_reason(record: dict):
                f"own cache)" if (record.get("paired") or 1) > 1 else ""))
 
 
+def arm_record(res: dict, label: str) -> dict:
+    """The arm's record, or — when the arm was skipped because an earlier arm
+    produced no output — a placeholder that SAYS so. The row builder read
+    `res["arms"][label]` and raised `KeyError: 'after'` on 2026-09-14 for
+    GLM-4.1V (its before arm could not load the container on the older tree),
+    turning an unmeasurable pair into an ERROR row under a family exit of 0."""
+    rec = (res.get("arms") or {}).get(label)
+    if rec is not None:
+        return rec
+    return {"rc": None, "wall_s": None, "exec_s": None, "sha": None, "output": None,
+            "skipped": res.get("skip_reason") or f"arm {label} did not run"}
+
+
 def cell_cost_estimate(model_out: Path, timeout: int, arms=None, narrowest=False):
     """(seconds, basis) this work is expected to cost, or None if unmeasured.
 
@@ -1960,6 +1973,20 @@ def main():
         finally:
             lock.unlink(missing_ok=True)
     print(table(out))
+    # A cell without a verdict — an arm that did not run, a gate that did not
+    # — is not a green; the family says how many and exits 1 (register 52).
+    unmeasured = []
+    for m in models:
+        rj = out / m / "result.json"
+        try:
+            r = json.loads(rj.read_text())
+        except (OSError, ValueError):
+            unmeasured.append(f"{m}: no record"); continue
+        if r.get("error") or not (r.get("gate") or {}).get("ran", True):
+            unmeasured.append(f"{m}: {r.get('error') or r.get('skip_reason') or 'the gate did not run'}")
+    if unmeasured:
+        print(f"[zoo] {len(unmeasured)} cell(s) without a verdict — not a green:\n  " + "\n  ".join(unmeasured), flush=True)
+        return 1
     return 0
 
 
