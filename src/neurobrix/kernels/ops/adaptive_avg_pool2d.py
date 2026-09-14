@@ -47,8 +47,8 @@ def adaptive_avg_pool2d_kernel(
     Each thread computes one output element by averaging over the
     corresponding adaptive window in the input.
     """
-    pid = tl.program_id(0)
-    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    idx = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = idx < n_elements
 
     # Decompose flat index -> (n, c, oh, ow)
@@ -116,9 +116,9 @@ def adaptive_avg_pool2d_tiled_kernel(
 
     Grid: (cdiv(OW, BLOCK_X), cdiv(OH, BLOCK_Y), N*C)
     """
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
-    pid_nc = tl.program_id(2)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
+    pid_nc = tl.program_id(2).to(tl.int64)
 
     ow = pid_x * BLOCK_X + tl.arange(0, BLOCK_X)  # [BLOCK_X]
     oh = pid_y * BLOCK_Y + tl.arange(0, BLOCK_Y)  # [BLOCK_Y]

@@ -13,8 +13,8 @@ def zeros_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Fill output with zeros."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     zero = tl.zeros([BLOCK_SIZE], dtype=output_ptr.type.element_ty)
     tl.store(output_ptr + offset, zero, mask=mask)

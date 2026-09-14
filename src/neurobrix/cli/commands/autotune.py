@@ -29,11 +29,16 @@ def cmd_autotune(args) -> int:
         try:
             summary = certify(args.profile, vendor=args.vendor, census_path=args.census, out=args.out,
                               kernels=kernels, limit=args.limit, only_missing=args.only_missing,
+                              reprove_unclocked=getattr(args, "reprove_unclocked", False),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")
             return 1
         print(json.dumps({k: v for k, v in summary.items() if k != "started"}, indent=1))
+        if summary.get("aborted"):
+            print(f"ABORTED: the CUDA context died at {summary['aborted']['key']} — {summary['aborted']['reason'][:160]}; "
+                  f"{summary['certified']} shape(s) certified before it stand, nothing after it was measured.")
+            return 1
         # The gate, on what was just written: a file whose proof does not re-read is not left behind.
         bad = 0
         for path in C.files(Path(summary["directory"])):
@@ -62,6 +67,13 @@ def cmd_autotune(args) -> int:
         n = bad = 0
         for path in C.files(root):
             n += 1
+            if getattr(args, "restamp", False):
+                try:
+                    changed = C.restamp(path)
+                except (OSError, ValueError) as exc:
+                    changed = None; print(f"restamp {path}: unreadable ({exc})")
+                if changed:
+                    print(f"restamp {path}: format claim repaired to {changed} (entries untouched)")
             try:
                 doc = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
@@ -80,8 +92,24 @@ def cmd_autotune(args) -> int:
         root = C.directory() / prof[0] / prof[1] if prof else None
         files = list(C.files()) if root else []
         mine = [p for p in files if root and p.parent == root]
-        print(f"files for this profile: {len(mine)}; shapes: "
-              f"{sum(len((json.loads(p.read_text(encoding='utf-8')).get('entries') or {})) for p in mine)}")
+        docs = [json.loads(p.read_text(encoding='utf-8')).get('entries') or {} for p in mine]
+        total = sum(len(e) for e in docs)
+        here = C.executing_memory_class()
+        by_class = {}
+        unknown = 0
+        for entries in docs:
+            for entry in entries.values():
+                classes = C.covered_memory_classes(entry)
+                if not classes:
+                    unknown += 1
+                for c in classes:
+                    by_class[c] = by_class.get(c, 0) + 1
+        print(f"files for this profile: {len(mine)}; shapes: {total}")
+        print("served by memory class (an entry serves only the class it was proven on): "
+              + (", ".join(f"{c} GB: {n}" for c, n in sorted(by_class.items())) or "none")
+              + f"; proven on an unknown card (served to no card until re-proven): {unknown}")
+        print(f"this process's card class: {f'{here} GB' if here is not None else 'unknown (several classes visible, or no profile)'}"
+              + (f" — {by_class.get(here, 0)} shape(s) would be served" if here is not None else ""))
         return 0
     print("usage: neurobrix autotune {certify,check,status} …")
     return 2

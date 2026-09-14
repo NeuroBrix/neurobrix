@@ -6,6 +6,7 @@ ZERO HARDCODE: All values from hardware profile YAML
 VENDORLESS: nvidia/amd/intel → cuda/hip/xpu device strings
 """
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Dict, Optional, Set, TYPE_CHECKING
@@ -214,6 +215,46 @@ _ARCHITECTURE_IS_UNIFIED = {
     "apple_silicon": True,
 }
 
+# ---------------------------------------------------------------------------
+# A card's memory class, and the auto-profile name that carries it. ONE place:
+# the builder (autodetect) and every parser (the certified directory reading a
+# legacy proof) call these, so the name's grammar cannot drift from its reading.
+# ---------------------------------------------------------------------------
+def memory_class_gb(memory_mb) -> Optional[int]:
+    """Memory in MB → its class in GB, `round(mb / 1024)`; None when unknown."""
+    try:
+        mb = float(memory_mb)
+    except (TypeError, ValueError):
+        return None
+    return int(round(mb / 1024)) if mb > 0 else None
+
+
+def single_card_profile_id(model_short: str, memory_mb) -> str:
+    """`auto-<model>-<N>g` — one visible card, N its memory class."""
+    return f"auto-{model_short}-{memory_class_gb(memory_mb)}g"
+
+
+def rig_profile_id(num_gpus: int, model_short: str, total_vram_gb) -> str:
+    """`auto-<n>x<model>-<total>g` — several cards; names a SUM and the first
+    card's model, not the card a kernel ran on."""
+    return f"auto-{num_gpus}x{model_short}-{total_vram_gb}g"
+
+
+_RIG_PROFILE_ID = re.compile(r"^auto-\d+x")
+_SINGLE_PROFILE_ID = re.compile(r"^auto-.*-(\d+)g$")
+
+
+def memory_class_from_profile_id(profile_id) -> Optional[int]:
+    """The memory class a profile NAME says, or None: a single-card name says
+    its card's class by its suffix; a rig name says a sum and the card is
+    unknown; anything else is unknown."""
+    name = str(profile_id or "")
+    if not name or _RIG_PROFILE_ID.match(name):
+        return None
+    m = _SINGLE_PROFILE_ID.match(name)
+    return int(m.group(1)) if m else None
+
+
 @dataclass
 class DeviceSpec:
     """
@@ -230,6 +271,13 @@ class DeviceSpec:
     brand: DeviceBrand = DeviceBrand.NVIDIA
     # None = the profile did not say; fall back to the architecture mapping.
     unified_memory: Optional[bool] = None
+
+    @property
+    def memory_class_gb(self) -> Optional[int]:
+        """The card's memory class — the ONE rounding every reader of a
+        card's memory shares (the auto-profile name, the certified autotune
+        directory's coverage)."""
+        return memory_class_gb(self.memory_mb)
 
     @property
     def has_unified_memory(self) -> bool:

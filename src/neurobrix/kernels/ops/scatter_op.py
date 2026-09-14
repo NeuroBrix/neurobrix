@@ -23,8 +23,8 @@ def scatter_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Scatter: out[outer][index_val][inner] = src[outer][dim][inner]."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < N
 
     inner_idx = offset % inner_size
@@ -56,8 +56,8 @@ def scatter_add_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Scatter add: out[outer][index_val][inner] += src[outer][dim][inner]."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < N
 
     inner_idx = offset % inner_size
@@ -90,8 +90,8 @@ def scatter_reduce_amax_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """scatter_reduce with reduce='amax': atomic max."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < N
 
     inner_idx = offset % inner_size
@@ -120,8 +120,8 @@ def scatter_reduce_amin_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """scatter_reduce with reduce='amin': atomic min."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < N
 
     inner_idx = offset % inner_size

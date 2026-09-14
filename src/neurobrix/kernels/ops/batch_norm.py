@@ -48,7 +48,7 @@ def batch_norm_forward_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):
-    feat_pid = tl.program_id(0)
+    feat_pid = tl.program_id(0).to(tl.int64)
 
     # Training mode: compute mean/var online
     if is_train:

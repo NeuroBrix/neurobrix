@@ -32,7 +32,7 @@ def cross_entropy_loss_forward_kernel(
         weight_pointer: optional [feat_dim] class weights
         output_pointer: [batch_dim/BLOCK_SIZE_BATCH] partial losses
     """
-    batch_pid = tl.program_id(axis=0)
+    batch_pid = tl.program_id(axis=0).to(tl.int64)
 
     batch_offset = batch_pid * BLOCK_SIZE_BATCH + tl.arange(0, BLOCK_SIZE_BATCH)
     feat_offset = tl.arange(0, BLOCK_SIZE_FEAT)

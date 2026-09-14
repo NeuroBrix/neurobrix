@@ -37,8 +37,8 @@ def index_select_kernel(
     `check_device_faults` raises on at the next host observation; the
     wrapper passes 0 where the assert is honoured, and then not one
     instruction of it is emitted."""
-    pid_x = tl.program_id(axis=0)
-    pid_y = tl.program_id(axis=1)
+    pid_x = tl.program_id(axis=0).to(tl.int64)
+    pid_y = tl.program_id(axis=1).to(tl.int64)
     rows_offsets = pid_x * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
     rows_mask = rows_offsets < M
     cols_offsets = pid_y * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -97,8 +97,8 @@ def index_select_mid_kernel(
 
     A guard written in good faith that does not cover the path added beside it
     is the same class as a guard that never fires."""
-    pid = tl.program_id(axis=0)
-    e = pid * BLOCK + tl.arange(0, BLOCK)
+    pid = tl.program_id(axis=0).to(tl.int64)
+    e = pid.to(tl.int64) * BLOCK + tl.arange(0, BLOCK)   # 64-bit from the program id (register 58)
     total = outer * index_len * inner
     mask = e < total
     per_outer = index_len * inner

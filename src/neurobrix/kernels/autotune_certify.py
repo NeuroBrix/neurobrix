@@ -368,8 +368,46 @@ def _machine() -> Dict[str, Any]:
                 info[name] = fn()
     except Exception:
         pass
+    info["device"] = _certifying_device()
     info["clocks_mhz"] = _clocks_mhz()
     return info
+
+
+_CERTIFYING_DEVICE: list = []          # read once per run, like the clocks
+
+
+def _certifying_device() -> Optional[Dict[str, Any]]:
+    """Read ONCE for the run (a query per key is the anti-pattern `_clocks_mhz` names)."""
+    if not _CERTIFYING_DEVICE:
+        _CERTIFYING_DEVICE.append(_read_certifying_device())
+    return _CERTIFYING_DEVICE[0]
+
+
+def _read_certifying_device() -> Optional[Dict[str, Any]]:
+    """The card the certifying run executes on — the device `from_numpy`
+    places the synthesized inputs on (`DeviceAllocator.get_device()`), read in
+    the Prism hardware profile in force: index, name, memory. The proof says
+    which card's memory it was made on, and an entry is served only to that
+    memory class (register 56). None when the card is not in the profile —
+    the certifier then REFUSES to write the entry (`file_certification`)."""
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        idx = int(DeviceAllocator.get_device())
+    except Exception:
+        return None
+    try:
+        from neurobrix.kernels import wrappers as W
+        prof = W.get_hardware_profile()
+        devices = getattr(prof, "devices", None) if prof is not None else None
+    except Exception:
+        devices = None
+    dev = next((d for d in (devices or []) if getattr(d, "index", None) == idx), None)
+    if dev is None:
+        return None
+    # `ordinal` is the CUDA ordinal in the visible set (0 under a pin to any physical card),
+    # not the physical card; the visible set is recorded beside it so the pair says which.
+    return {"ordinal": idx, "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+            "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0)}
 
 
 def _clocks_mhz():
@@ -784,8 +822,8 @@ def _tolerance(vendor: str, profile: str, dtype: str) -> float:
 
 def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, entries: Dict[str, Dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"format": C.FORMAT, "vendor": vendor, "profile": profile, "kernel": qual, "dtype": dtype,
-           "entries": dict(sorted(entries.items()))}
+    doc = {"format": C.format_for(entries), "vendor": vendor, "profile": profile, "kernel": qual, "dtype": dtype,
+           "entries": dict(sorted(entries.items()))}     # the stamp is what every entry satisfies, never the writer's era
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
     os.replace(tmp, path)
@@ -801,10 +839,38 @@ def _read_file(path: Path) -> Dict[str, Dict]:
     return dict(doc.get("entries") or {}) if isinstance(doc, dict) else {}
 
 
+_STICKY_MARKS = ("error 700", "rc=700", "illegal memory access", "STICKY")
+
+
+def sticky_cuda_error(exc: BaseException) -> bool:
+    """True when a key's failure says the CUDA context itself is dead. After an
+    illegal memory access every later launch and malloc in the process fails
+    with the same error, so nothing after it is a measurement: on 2026-09-14
+    07:38 a certifier met one such key (a 2.19e9-element matmul on a kernel
+    that still wrapped) and went on to report 227 further keys FAILED for
+    "GPU malloc failed (error 700) for 256 bytes" — 227 shapes lost to a
+    fault that happened once."""
+    text = str(exc)
+    return any(m in text for m in _STICKY_MARKS)
+
+
+def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
+    """Count a key's failure; return True when the run must STOP because the
+    context is poisoned (the summary then names the key and the reason)."""
+    summary["failed"] += 1
+    if sticky_cuda_error(exc):
+        summary["aborted"] = {"key": key_text, "reason": str(exc)[:300]}
+        log(f"[certify] ABORTED at {key_text}: the CUDA context is poisoned ({str(exc)[:160]}) — "
+            f"every launch after this would fail the same way; nothing after it is a measurement. "
+            f"Re-run from this key once the cause is fixed.")
+        return True
+    return False
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
-            allow_off_protocol: bool = False) -> Dict[str, Any]:
+            allow_off_protocol: bool = False, reprove_unclocked: bool = False) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files."""
     if log is None:
         def log(*a):                      # a run of hours, read while it runs: never buffered
@@ -826,6 +892,18 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     log(f"[certify] hardware profile {hw_id}: has_native_bf16={_has_native_bf16()} — the wrappers' dtype policy in force")
     from neurobrix.triton import autotune_cache as atc
     tuners = {qual: t for qual, t in atc._autotuners()}
+    # The card this run certifies on, read once (register 56): every proof
+    # names it, `--only-missing` asks per its memory class, and a card the
+    # profile in force does not describe is refused at entry — an entry made
+    # on it could never say its class and would be served to no card.
+    certifying_device = _certifying_device()
+    certifying_class = C.memory_class_gb((certifying_device or {}).get("memory_mb"))
+    if certifying_class is None:
+        raise RuntimeError("the certifying card is not described by the hardware profile in force "
+                           f"(device {certifying_device}): refused — a proof must say which card's memory it was made on")
+    log(f"[certify] certifying on {certifying_device['name']} ordinal {certifying_device['ordinal']} "
+        f"(CUDA_VISIBLE_DEVICES={certifying_device['visible_devices']}), "
+        f"{certifying_device['memory_mb']} MB = memory class {certifying_class} GB; entries serve that class only")
     shapes = census(census_path)
     if kernels:
         want = set(kernels)
@@ -850,8 +928,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = per_dtype.setdefault(dtype, _read_file(path))
             ktext = C.key_repr(key)
-            if only_missing and ktext in entries:
-                continue
+            if (only_missing or reprove_unclocked) and C.entry_covers(entries, ktext, certifying_class,
+                                                                       need_clock=reprove_unclocked):
+                continue                      # certified FOR THIS CARD's memory class already (and, with
+                                              # --reprove-unclocked, at a recorded clock)
             attempts += 1
             t0 = time.time()
             try:
@@ -864,10 +944,17 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: UNREACHABLE — {exc}")
                 continue
             except Exception as exc:
-                summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")
+                if after_key_failure(exc, summary, ktext, log):
+                    summary["seconds"] = round(time.time() - summary["started"], 1)
+                    return summary                    # a poisoned context: stop, say it, exit non-zero
                 continue
-            entries[ktext] = {"config": entry["config"], "proof": entry["proof"], "excluded": entry["excluded"]}
+            try:
+                C.file_certification(entries, ktext, entry)   # by the class its proof names; refused without one
+            except ValueError as exc:
+                summary["failed"] += 1
+                log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: REFUSED — {exc}")
+                continue
             _write_file(path, vendor, profile, qual, dtype, entries)
             done += 1
             summary["certified"] += 1

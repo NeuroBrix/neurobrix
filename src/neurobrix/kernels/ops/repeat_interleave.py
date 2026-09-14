@@ -28,7 +28,7 @@ def repeat_interleave_tensor_kernel(
     Each program writes its index `pid` into repeats[pid] consecutive
     positions starting at cumsum[pid] - repeats[pid].
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     mask = pid < size
     cumsum = tl.load(cumsum_ptr + pid, mask, other=0)
     # The loop bound below must be 32-bit: the Metal induction lowering does

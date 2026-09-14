@@ -27,8 +27,8 @@ def mse_loss_partial_kernel(
     For reduction==1 (mean): each block stores sum((inp-target)^2) / M.
     For reduction==2 (sum):  each block stores sum((inp-target)^2).
     """
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < M
 
     inp_val = tl.load(inp + offset, mask=mask, other=0).to(tl.float32)
@@ -67,8 +67,8 @@ def mse_loss_none_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Pointwise (no reduction): output[i] = (input[i] - target[i])^2."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(inp_ptr + offset, mask=mask, other=0).to(tl.float32)

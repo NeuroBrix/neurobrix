@@ -151,14 +151,22 @@ def _announce_first_sweep(tuned):
             from neurobrix.kernels import autotune_certified as _cert
             qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
             try:
-                applied = _cert.apply(qual, tuned, key)
+                # the card this launch executes on: its tensor's device, read in
+                # the Prism profile — an entry serves only the memory class it
+                # covered (register 56)
+                mcls = _cert.executing_memory_class(args)
+                applied = _cert.apply(qual, tuned, key, memory_class=mcls)
                 if not applied:
                     # an operand widened on load is keyed by the dtype it is computed in
                     twin = _cert.computed_key(tuned, key, kwargs)
-                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin)
+                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_class=mcls)
             except Exception as exc:            # the directory is an optimisation, never a failure source
                 print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
                 applied = False
+            if applied:
+                _cert.served_evicted(qual, key)  # a seed evicted at seed time, now served certified for this card
+            elif _cert.reseed_evicted(qual, tuned, key):
+                applied = True                  # the machine's own earlier sweep, put back for this card
             if not applied:
                 _cert.announce_missing(qual, tuned, key)
         before = len(cache)

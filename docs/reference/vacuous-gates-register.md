@@ -1080,3 +1080,251 @@ commit.) Gate:
 `tests/unit/runtime/test_a_declared_fusion_loads_what_it_now_reads.py`,
 seen red before the fix; the proof by run is the Ming triton cell.
 
+
+### 55 — a waiter that watches the result and never the producer
+
+A follow-on chain polled the campaign record for the line `== rejeu 2
+termine` before taking the rig. The producer of that line — the rerun-2
+chain — was killed by PID at 17:12 on 2026-09-13, a few seconds AFTER its
+pytest had finished and written its complete output, and before the chain's
+own closing echo. The waiter kept polling for a line no process would ever
+write: four V100s idle from 17:12 to 21:25, found by the session that
+resumed after a connection cut. The record itself was complete (8 failed, 1
+passed, in `suite_rerun2.log`); only the marker was missing.
+
+**The shape**: a waiter whose only test is "is the result here yet?" cannot
+distinguish *not yet* from *never*. It has no liveness on what it waits for,
+so a producer that dies after succeeding — or before starting — starves it
+silently and for ever. Entry 4-of-the-chain-rules ("a DONE marker is written
+only on success") is right and does not cover this: the job succeeded, the
+marker-writer was what died. **The rule**: a waiter checks that what it waits
+for is still producing, not only that the result is absent — it holds the
+producer's PID (or a heartbeat the producer refreshes) and turns into a
+refusal, with the producer's name and last sign of life, the moment the
+producer is gone without its marker. Gate: `tools/wait_for.py` (shared
+brick, seen refusing on an injected kill of the producer), and every chain
+armed from this entry on waits through it rather than through a bare
+`until grep -q` (the chain already running at 21:26 keeps its bare loops;
+the first user of the brick is the post-certification waiter of the same
+night). Written 21:25 by the resumed session; the brick and its injection
+land with the commit that carries this entry.
+
+### 56 — a directory keyed by a profile two memory classes share
+
+The certified autotune directory is keyed by `(vendor, profile, kernel,
+dtype, shape)`, and the profile is the vendor profile FILE in force —
+`nvidia/volta.yml`, one file for this rack's two V100 SKUs (16 GB cards 0
+and 1, 32 GB cards 2 and 3). The lookup read nothing about the executing
+card (`kernels/autotune_certified.py:lookup`, before this entry), so an
+entry proven on one memory class was served as-is to the other. The proof
+recorded only `machine.hardware_profile`, a name that says the memory for a
+pinned card (`auto-v100-16gb-16g`) and, for a rig-wide run, the SUM and the
+first card's model (`auto-4xv100-16gb-96.0g`) — the card that ran is
+unknown there. Counted on the 7 191 entries at 21:45: 5 644 proven on a
+16 GB card, 17 on a 32 GB card, 1 530 on the rig with the card unknown.
+
+**The shape**: an instrument whose key omits an axis on which its claim is
+made, so two different claims read as one entry and the record cannot say
+which was proven. **The rule**: a proof says which card's memory it was made
+on (`proof.machine.device = {ordinal, visible_devices, name, memory_mb}`, read
+from the card the certifier's inputs were placed on — the ordinal is the CUDA
+ordinal in the visible set, the visible set is written beside it, and the
+memory is what the class reads), an entry carries one certification
+per memory class (`variants` by `<N>g`), the lookup receives the executing
+card's class (its tensor's device, read in the Prism profile) and serves only
+what covers it; an unknown class — the proof's or the card's — is served
+nothing and said in clear (`certified for 16 GB, this card is 32 GB, not
+served`). Legacy proofs are read by their profile name where it is a single
+card and stay `?` where it is the rig: those 1 530 serve no card until
+re-proven. Gate:
+`tests/unit/kernels/test_an_entry_serves_only_the_memory_class_it_covered.py`
+(12 tests, seen red before the code existed). The measurement this entry
+does NOT contain: whether a config proven on 16 GB differs from one proven
+on 32 GB for the same shape — same GV100 die, same locked clock, only the
+HBM differs; expected identical, to be measured on a 32 GB card when one is
+free, and the coverage certified regardless because the rule is coverage,
+not expectation.
+
+### 57 — a measurement that exists only where it was made
+
+The certifier writes its directory entry by entry, atomically per file, and
+nothing carried those files anywhere until the pass ended and a person
+committed them. Three mains cuts in three days (2026-09-11, 09-12, 09-13
+23:45 UTC) each found hundreds of certified entries on disk and nowhere else
+— 971 on the Friday, 1 222 on the Saturday night, every one verified whole
+after the cut (`88c8af0`). They survived by the file system's journal. A
+truncated write at the wrong moment would have cost a file; a dead disk, the
+pass; and each cut cost the hours it took a person to come back, verify, and
+commit. The clock lock had the same shape: it was restored by the memory of
+whoever woke up after the cut, three times, and the door refused every timed
+run in between.
+
+**The shape**: a result whose only copy is on the machine that produced it,
+in a state a cut can reach at any moment, while the process that could have
+carried it elsewhere waits for the end of a pass that takes hours. Not a
+vacuous gate but its neighbour — a gate (`autotune check`, the door
+`rig_clock.py`) that was right and could not act, because the act was left
+to a person. **The rule**: what a long run produces is carried off the
+machine WHILE it runs, by a process that holds the producers and runs the
+gate before each carry — `tools/certified_checkpoint.py`, one per
+repository, an interval or the producers' death as its trigger, every
+remote pushed and READ BACK, a refused file named and left; a cut then costs
+one interval, not a pass. And a state the system must be in at every boot is
+put there BY THE SYSTEM at boot — `tools/systemd/nbx-rig-clock.service`
+runs `rig_clock.py --restore` after the driver, applies the protocol to
+every card, reads every card back, and refuses if one did not take. Gates:
+`tests/unit/tools/test_the_certified_directory_is_checkpointed_while_written.py`
+(7 tests; the gate-refusal and no-card-door injections seen RED 2026-09-14
+00:03-00:05 — the door test's first form was itself vacuous and is recorded
+in its docstring), `test_rig_clock_door.py` (restore: a driver that says
+"All done" and changes nothing is refused, seen RED with the read-back
+neutralised). Proof on the rig, 2026-09-14 00:04: card 1 set to 1312 by
+hand, `systemctl restart nbx-rig-clock`, all four cards read 1290.
+
+**Measured 2026-09-14 00:08-00:14 UTC, the measurement entry 56 said it did
+not contain** (`tools/memory_class_sample.py`, campaign
+`2026_09_13_certification_tail/sample_16_to_32`): the first 50 matmul census
+keys certified on card 2 (32 GB, pinned, tree d1def45, clocks 1290/877 read
+on every card, no throttle reason active) against the directory's 16 GB
+entries for the same keys (certified 2026-09-07 00:07-00:26, same engine
+0.5.3, same Triton 3.6.0): **37 keys choose the same configuration, 13 a
+different one, 0 without a counterpart** — and the 32 GB card's best time is
+**1.11x to 1.19x the 16 GB entry's on every one of the 50 keys (median
+1.175)**. The expectation "identical" is contradicted twice, and the rule
+(coverage per class, never expectation) was the right one for a reason the
+entry did not know. What this does NOT yet say: whether the 17 % is the card
+or the day — the 16 GB side was measured a week earlier under conditions this
+record does not hold. The control is queued behind the certification on card
+0 (`guard_after_card0.sh`: the same 50 keys on a 16 GB card today, against
+the same 09-07 entries); until it reads, the 17 % is UNADJUDICATED between
+"the 32 GB SKU is slower at the same clock" and "the rig was slower on 09-07".
+
+**Adjudicated 2026-09-14 01:47 UTC — it was the day, not the card.** The
+control (`sample_16_control_card0`: the same 50 keys certified on card 0,
+16 GB, idle, at 1290/877): against the directory's 09-07 entries for the same
+class the 16 GB card today reads **median 1.176× (1.113–1.194)** — the same
+figure the 32 GB card read at 00:13. And the 32 GB draft against the 16 GB
+draft of the same night: **median 0.998 (0.976–1.008), 39/50 same
+configuration** — the two SKUs agree at the same locked clock, as the die
+says, and the 11 configurations that differ are near-ties inside the timer's
+noise (the 32 GB draft differed from the 09-07 entries on 13, the same
+level). What differs is the 09-07 measurement itself: **5 628 of the
+directory's 8 515 proofs are of 2026-09-07 and record no clock** — they were
+made five days before the clock door (`71a0e7c`, 09-12) and the certifier of
+that day did not write `clocks_mhz`. The ratio 1.176 is within 1 % of
+1530/1290 = 1.186, the V100's boost over the protocol lock; that the rig was
+unlocked on 09-07 is the likely reading and is NOT proven (nothing recorded
+it). Their deviations stand (numerics do not depend on the clock); their
+timings are not comparable with any proof made behind the door, and the
+configuration each chose was chosen at an unknown frequency. The rule that
+follows: a proof without a recorded clock is re-proven at the protocol clock
+when a card of its class is idle — the two 16 GB cards are, tonight.
+
+Second control, card 1 (16 GB, 02:03-02:09 UTC, same 50 keys): 1.174×
+(1.110-1.187) against the 09-07 entries; 0.998 against card 0 the same
+night; 1.000 against the 32 GB card. Three cards in one night agree to 1 %;
+the 09-07 proofs alone read 17 % faster. And the configuration chosen agrees
+between two 16 GB drafts of identical conditions on 34 of 50 keys, between the
+32 GB and either 16 GB draft on 37-39 — so a certified choice is stable on
+about seven keys in ten and a near-tie the timer decides on the other three,
+which is what the catalogue's "certified choices contradicted by the runtime
+sweep (near-ties)" column has been counting.
+
+
+### 58 — a trace at a small shape, and an index that wraps at a large one
+
+`mochi-1-preview` died on CUDA error 700 at `aten.mm::1` of its VAE at every
+attempt since 2026-09-10 (D-MOCHI-CUDA-700-AT-MM). Two `compute-sanitizer`
+runs — 7 200 s on 09-13, 18 000 s on 09-14, cards 2+3 — ended on their
+budget with the run's log silent and no error summary: five hours of
+instrument, nothing measured. `--triton-sequential` with
+`CUDA_LAUNCH_BLOCKING=1` named the op in 19 minutes: the matmul at
+M=1 068 480 × N=2048, fp32 out — 2 188 247 040 elements, past 2^31. The
+kernel computed `stride_cm * offs_cm` with `offs_cm` an int32 arange; past
+row 1 048 576 the product wraps negative and the store leaves the
+allocation. The trace saw M=33 264. Upstream: triton-lang/triton#832
+("index computations are done in int32 even for large tensors" — intended
+C semantics, the maintainer's word), fixed the same week by three other
+projects (comfy-kitchen#172 on Triton 3.6.0, Triton-distributed#209,
+FlagGems#6083) with the same in-kernel `.to(tl.int64)`.
+
+**The shape**: a kernel proven correct at every shape a trace or a census
+ever presented, and wrong at the first shape whose element count crosses a
+power of two no test had reached — the register's "shape it runs at"
+class, at the scale of an integer type. **The rule**: an index computation
+that can exceed 2^31 is done in 64-bit at the site that can exceed it, and
+the gate is a shape chosen to cross the boundary
+(`tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py`:
+M=1 100 000 × N=2048, K=64, fp16 — 2 252 800 000 elements, C 4.5 GB, the
+rows before, at and past 1 048 576 checked against a host product; seen
+RED 05:37 UTC on the kernel as it was — the same error 700 — GREEN after).
+The cost was measured, not assumed (ptillet's register-spill warning is
+about matmul, and no Volta number existed upstream): the same 50 matmul
+keys certified on card 2 before and after, same card, same locked clock —
+best time after/before **median 0.996 (0.980–1.020)**, 38/50 same
+configuration (the noise level of two identical drafts, entry 56), every
+deviation within tolerance; and three models with the setting pinned
+(`NBX_DISABLE_AUTOTUNE=1`, card 3) — TinyLlama, Kokoro, Sana MultiLing at
+4 steps — **byte-identical** before and after. And the instrument lesson
+beside it: a memcheck that returns nothing in five hours is not "still
+running", and the engine's own op-by-op mode with launch blocking is the
+first instrument for a fault, not the last.
+
+
+**The class, the same night (06:08-07:10 UTC).** With the GEMM fixed, the
+op-by-op run went past `mm::1` and died at `aten.add::14` — the broadcast
+variant of `add`, whose sibling had been widened by hand in May (Sana 4K
+VAE) while it had not: the same bug written twice is a missing brick. An
+audit found the int32 form `pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)` at
+**152 sites in 105 kernels**; all were widened at once, at the program id
+(`pid.to(tl.int64) * BLOCK_SIZE + …`, FlagGems #6083's form). The first form
+tried — casting AFTER the product — was wrong, and its source-reading gate
+was green over it: the product `pid * BLOCK_SIZE` had already wrapped
+before the cast, and the 2.25e9-element fill still faulted on card 2
+(06:31). A gate that reads text proves the text; the GPU test beside it
+(`test_a_flat_kernel_beyond_two_billion_elements.py`: ones, a transposed
+materialisation, an add over 2 252 800 000 elements, the elements before,
+at and past 2^31 read back — RED on the tree of 90fefd4, GREEN after)
+proves the arithmetic, and the gate now refuses both forms. Measured: four
+models byte-identical before and after with the setting pinned (TinyLlama,
+Kokoro, Sana MultiLing at 4 steps, whisper-large-v3-turbo, card 2), and
+their timings within 3 % over three warm runs of the after arm (the first
+after run pays the recompilation of every changed kernel and is not a
+measurement of the kernel).
+
+
+**The tile forms, 07:33-07:45.** Past `add::14`, the op-by-op run died at
+`aten.native_group_norm::26`: `chan_start * HW` and `batch_idx * C * HW`,
+products of program-id-derived scalars with dimensions — the same wrap, in
+the tile form no arange-regex could see. Rather than a third sweep for a
+third spelling, every `tl.program_id(...)` in the kernels now reads
+`.to(tl.int64)` at its source (293 sites in 157 files): every offset
+derived from a program id is 64-bit by construction, and the gate refuses
+an int32 program id. Beyond-2^31 tests: GEMM, the flat kernels,
+group_norm (N=1, C=64, HW=35.2e6).
+
+### 59 — an instrument that keeps measuring after its context died
+
+The certifier that re-certified the speech leg's keys on card 1 (07:09-07:38
+UTC) met, in the middle of its list, a matmul of 2 188 247 040 output
+elements on a tree whose kernel still wrapped (`suite_53012f7`, before
+90fefd4): CUDA error 700. The CUDA context is then dead — sticky — and
+every later launch and malloc in the process fails with the same code. The
+certifier counted the fault as one FAILED key and went on: **227 further
+keys were reported FAILED, each with "GPU malloc failed (error 700) for
+256 bytes"**, a fault that happened once written 228 times, and 227 shapes
+that were never measured recorded as if they had been tried. The 453 keys
+certified before the fault stand (their proofs re-read); nothing after it
+was a measurement.
+
+**The shape**: an instrument whose failure handling treats every failure
+as local, when one class of failure ends the instrument's ability to
+measure anything at all — the census after that point is a list of the same
+sentence. **The rule**: a failure that poisons the process stops the run at
+once, names the key it died at, and exits non-zero; what was measured
+before it stands, and the summary says where to resume. Gate:
+`tests/unit/kernels/test_the_certifier_stops_at_a_sticky_cuda_error.py`
+(three tests; `sticky_cuda_error` forced false seen RED 07:44 UTC). The
+lost 227 keys are re-certified on the fixed tree — the small ones on a 16 GB
+card for the class the guard needs, the Mochi-size ones on a 32 GB card, the
+only class that can hold them.

@@ -78,9 +78,9 @@ def conv2d_forward_kernel(
     BLOCK_SIZE_INF: tl.constexpr = 32,
     BLOCK_SIZE_OUTF: tl.constexpr = 64,
 ):
-    bhw_pid = tl.program_id(0)
-    outf_pid = tl.program_id(1)
-    group_pid = tl.program_id(2)
+    bhw_pid = tl.program_id(0).to(tl.int64)
+    outf_pid = tl.program_id(1).to(tl.int64)
+    group_pid = tl.program_id(2).to(tl.int64)
 
     in_group_dim = in_feat_dim // groups
     out_group_dim = out_feat_dim // groups

@@ -44,8 +44,8 @@ def scan_part_max_kernel(
     scan, stores results, and optionally writes the block-maximum for
     the fan-out phase.
     """
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     # Load input, use -inf for masked positions
@@ -87,8 +87,8 @@ def add_base_max_kernel(
     For each block (except the first), loads the cumulative partial max
     from the previous block and merges with local results.
     """
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     out_vals = tl.load(out + offset, mask=mask)

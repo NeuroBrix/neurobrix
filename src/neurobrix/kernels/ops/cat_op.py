@@ -41,8 +41,8 @@ def cat_copy_kernel_4(
     by splitting into (pre_dim, cat_dim, post_dim) components and applying
     the cat dimension offset.
     """
-    pid_x = tl.program_id(0)
-    pid_y = tl.program_id(1)
+    pid_x = tl.program_id(0).to(tl.int64)
+    pid_y = tl.program_id(1).to(tl.int64)
 
     # Select the correct input tensor and its metadata
     if pid_y == 0:

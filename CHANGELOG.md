@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `neurobrix autotune certify --reprove-unclocked` re-proves, at the protocol clock, every certified setting whose proof does not record the clock it was measured at; a proof made at an unrecorded frequency is not coverage under this flag (the directory's 2026-09-07 proofs read 1.176x a proof at the lock).
+- A certified kernel setting is served only to cards of the memory class it was proven on.
+  The proof now records the certifying card (index, name, memory); an entry can carry one
+  certification per memory class; a card of another class sweeps at runtime and the log says
+  why (`certified for 16 GB, this card is 32 GB, not served`). `neurobrix autotune certify
+  --only-missing` asks per memory class, and refuses at entry a card the hardware profile
+  does not describe.
+- `neurobrix autotune check --restamp` repairs a directory file whose format claim its
+  entries do not satisfy, entries untouched — a file's stamp now follows its entries when
+  it is written.
 - `neurobrix run --explain-plan` prints the placement decision and exits without loading anything: the strategy, why it won and every strategy it beat with their scores, the ones refused (and why), each component's device and memory split, the KV-cache budget.
 - The registry a machine talks to can be declared with `NEUROBRIX_REGISTRY`. The public
   name stays the default, because a user anywhere reaches the hub through it; a machine that
@@ -76,6 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- `neurobrix autotune certify` stops at the first sticky CUDA error (an illegal memory access poisons the context; every later key would fail the same way) and names the key instead of reporting the fault once per remaining shape — 227 shapes were lost that way on 2026-09-14.
+- Every program id in the Triton kernels is read in 64-bit at its source (293 sites in 157 files), so every offset derived from it — a tile row times a stride, a batch times C×HW — stays exact past 2^31 elements (group_norm at Mochi's VAE decoder).
+- Every flat-indexed kernel (152 sites in 105 files: fill, the strided copy that materialises a view, the elementwise, reduction, index and upsample families) computes its element offsets from a 64-bit program id: a tensor past 2^31 elements (Mochi's VAE decoder, 2.25e9-element activations) was addressed through a wrapped int32 offset — `add` and `silu` had been fixed by hand in May, the other 103 files had not. Measured on V100: four models byte-identical with the setting pinned, timings within 3 % over three warm runs.
+- A GEMM whose output holds more than 2^31 elements (Mochi's VAE, 1 068 480 x 2048) no longer dies on an illegal memory access: the matmul, addmm and baddbmm kernels compute their pointer offsets in 64-bit (the int32 product of a row offset and a stride wrapped past 2 147 483 647 — upstream triton-lang/triton#832, the same fix as comfy-kitchen#172 on Triton 3.6.0). Measured on V100: same bytes on three models with the setting pinned, timings within 2 % on 50 shapes.
 - `--triton` runs of vision-language, audio-language and text-to-speech models, of int4
   builds, and warm serving of the same, failed at weight load with "requires embed_tokens
   weight" or a missing weight at the first matrix multiply. The loader had started loading

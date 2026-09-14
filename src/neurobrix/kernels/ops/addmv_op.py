@@ -30,7 +30,7 @@ def addmv_kernel(
     Each program handles BLOCK_N rows of A, iterating over M in BLOCK_M tiles.
     Accumulates in fp32 for stability.
     """
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     offset_n = pid * BLOCK_N + tl.arange(0, BLOCK_N)[:, None]
     offset_m = tl.arange(0, BLOCK_M)[None, :]
     n_mask = offset_n < N

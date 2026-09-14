@@ -25,8 +25,8 @@ def prod_kernel_mid(
     BLOCK_SIZE: tl.constexpr,
 ):
     """Pass 1: each program computes a partial product over its BLOCK_SIZE chunk."""
-    pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     inp_ptrs = inp + offset
     mask = offset < M
     inp_val = tl.load(inp_ptrs, mask=mask, other=1.0).to(tl.float32)
@@ -63,7 +63,7 @@ def prod_kernel(
 
     inp: [M, N] (dim-compressed) → out: [M]
     """
-    pid_m = tl.program_id(0)
+    pid_m = tl.program_id(0).to(tl.int64)
     m_offset = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
 
     acc = tl.full((BLOCK_M, BLOCK_N), value=1.0, dtype=tl.float32)

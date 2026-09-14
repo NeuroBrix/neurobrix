@@ -23,8 +23,8 @@ def bucketize_kernel(
     RIGHT: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    pid = tl.program_id(0).to(tl.int64)
+    offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     in_range = offs < n_elements
     x = tl.load(x_ptr + offs, mask=in_range, other=0)
     acc = tl.zeros((BLOCK_SIZE,), dtype=tl.int64)

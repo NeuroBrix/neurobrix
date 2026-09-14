@@ -43,7 +43,7 @@ def group_norm_forward_kernel(
     """One program handles one (batch, group) pair. Spatial dimension is
     walked in BLOCK_SIZE chunks so the per-program tile stays bounded
     regardless of input HW."""
-    pid = tl.program_id(0)
+    pid = tl.program_id(0).to(tl.int64)
     batch_idx = pid // num_groups
     group_idx = pid % num_groups
 
