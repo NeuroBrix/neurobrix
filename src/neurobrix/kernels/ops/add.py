@@ -12,7 +12,7 @@ def add_forward_kernel(
 ):
     """out = x + alpha * y (tensor + tensor)"""
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(x_ptr + offset, mask=mask)
@@ -28,7 +28,7 @@ def add_scalar_kernel(
 ):
     """out = x + scalar"""
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     x = tl.load(x_ptr + offset, mask=mask)
@@ -58,7 +58,7 @@ def add_scalar_dev_kernel(
     (exact); a non-representable alpha would need an f64-carried arg.
     """
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     s = (tl.load(s_ptr).to(tl.float64) * alpha).to(tl.float32)
     x = tl.load(x_ptr + offset, mask=mask)
@@ -87,7 +87,7 @@ def add_bias_broadcast_kernel(
     # add::88 input 1x4096x4096x128 = 2^31) overflow int32 offset
     # arithmetic silently and corrupt `offset % feat_dim`, producing
     # garbage output. P-SANA-4KPX-RUNTIME 2026-05-07.
-    offset = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
 
     c = offset % feat_dim

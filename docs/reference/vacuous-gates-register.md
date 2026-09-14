@@ -1269,3 +1269,25 @@ deviation within tolerance; and three models with the setting pinned
 beside it: a memcheck that returns nothing in five hours is not "still
 running", and the engine's own op-by-op mode with launch blocking is the
 first instrument for a fault, not the last.
+
+
+**The class, the same night (06:08-07:10 UTC).** With the GEMM fixed, the
+op-by-op run went past `mm::1` and died at `aten.add::14` — the broadcast
+variant of `add`, whose sibling had been widened by hand in May (Sana 4K
+VAE) while it had not: the same bug written twice is a missing brick. An
+audit found the int32 form `pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)` at
+**152 sites in 105 kernels**; all were widened at once, at the program id
+(`pid.to(tl.int64) * BLOCK_SIZE + …`, FlagGems #6083's form). The first form
+tried — casting AFTER the product — was wrong, and its source-reading gate
+was green over it: the product `pid * BLOCK_SIZE` had already wrapped
+before the cast, and the 2.25e9-element fill still faulted on card 2
+(06:31). A gate that reads text proves the text; the GPU test beside it
+(`test_a_flat_kernel_beyond_two_billion_elements.py`: ones, a transposed
+materialisation, an add over 2 252 800 000 elements, the elements before,
+at and past 2^31 read back — RED on the tree of 90fefd4, GREEN after)
+proves the arithmetic, and the gate now refuses both forms. Measured: four
+models byte-identical before and after with the setting pinned (TinyLlama,
+Kokoro, Sana MultiLing at 4 steps, whisper-large-v3-turbo, card 2), and
+their timings within 3 % over three warm runs of the after arm (the first
+after run pays the recompilation of every changed kernel and is not a
+measurement of the kernel).

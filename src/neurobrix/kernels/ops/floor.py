@@ -12,7 +12,7 @@ import triton.language as tl
 @triton.jit
 def floor_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     x = tl.load(input_ptr + offset, mask=mask)
     tl.store(output_ptr + offset, tl.math.floor(x.to(tl.float32)).to(x.dtype), mask=mask)
@@ -21,7 +21,7 @@ def floor_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.const
 @triton.jit
 def ceil_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     x = tl.load(input_ptr + offset, mask=mask)
     tl.store(output_ptr + offset, tl.math.ceil(x.to(tl.float32)).to(x.dtype), mask=mask)
@@ -30,7 +30,7 @@ def ceil_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.conste
 @triton.jit
 def round_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     x = tl.load(input_ptr + offset, mask=mask)
     # tl.math.nearbyint does not exist in Triton 3.6; libdevice.nearbyint is the
@@ -43,7 +43,7 @@ def round_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.const
 @triton.jit
 def trunc_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = offset < n_elements
     x = tl.load(input_ptr + offset, mask=mask)
     # No trunc in Triton's math: toward zero = floor of the positives, ceil of

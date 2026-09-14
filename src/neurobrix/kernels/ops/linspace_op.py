@@ -33,7 +33,7 @@ def linspace_kernel(
     drift for large step counts — the endpoints are always exact.
     """
     pid = tl.program_id(0)
-    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    idx = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
     mask = idx < steps
 
     # Forward: start + step * idx (accurate near start)
