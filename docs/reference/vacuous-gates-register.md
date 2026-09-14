@@ -1219,3 +1219,13 @@ timings are not comparable with any proof made behind the door, and the
 configuration each chose was chosen at an unknown frequency. The rule that
 follows: a proof without a recorded clock is re-proven at the protocol clock
 when a card of its class is idle — the two 16 GB cards are, tonight.
+
+Second control, card 1 (16 GB, 02:03-02:09 UTC, same 50 keys): 1.174×
+(1.110-1.187) against the 09-07 entries; 0.998 against card 0 the same
+night; 1.000 against the 32 GB card. Three cards in one night agree to 1 %;
+the 09-07 proofs alone read 17 % faster. And the configuration chosen agrees
+between two 16 GB drafts of identical conditions on 34 of 50 keys, between the
+32 GB and either 16 GB draft on 37-39 — so a certified choice is stable on
+about seven keys in ten and a near-tie the timer decides on the other three,
+which is what the catalogue's "certified choices contradicted by the runtime
+sweep (near-ties)" column has been counting.
