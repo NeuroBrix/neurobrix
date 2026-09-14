@@ -213,6 +213,9 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    certify_p.add_argument('--reprove-unclocked', action='store_true',
+                           help='skip only the shapes certified for this card\'s class AT A RECORDED CLOCK; a proof that '
+                                'does not say its clock is re-proven at the protocol clock')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')

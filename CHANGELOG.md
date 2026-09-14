@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `neurobrix autotune certify --reprove-unclocked` re-proves, at the protocol clock, every certified setting whose proof does not record the clock it was measured at; a proof made at an unrecorded frequency is not coverage under this flag (the directory's 2026-09-07 proofs read 1.176x a proof at the lock).
 - A certified kernel setting is served only to cards of the memory class it was proven on.
   The proof now records the certifying card (index, name, memory); an entry can carry one
   certification per memory class; a card of another class sweeps at runtime and the log says

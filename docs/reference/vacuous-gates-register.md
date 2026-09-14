@@ -1198,3 +1198,24 @@ record does not hold. The control is queued behind the certification on card
 0 (`guard_after_card0.sh`: the same 50 keys on a 16 GB card today, against
 the same 09-07 entries); until it reads, the 17 % is UNADJUDICATED between
 "the 32 GB SKU is slower at the same clock" and "the rig was slower on 09-07".
+
+**Adjudicated 2026-09-14 01:47 UTC — it was the day, not the card.** The
+control (`sample_16_control_card0`: the same 50 keys certified on card 0,
+16 GB, idle, at 1290/877): against the directory's 09-07 entries for the same
+class the 16 GB card today reads **median 1.176× (1.113–1.194)** — the same
+figure the 32 GB card read at 00:13. And the 32 GB draft against the 16 GB
+draft of the same night: **median 0.998 (0.976–1.008), 39/50 same
+configuration** — the two SKUs agree at the same locked clock, as the die
+says, and the 11 configurations that differ are near-ties inside the timer's
+noise (the 32 GB draft differed from the 09-07 entries on 13, the same
+level). What differs is the 09-07 measurement itself: **5 628 of the
+directory's 8 515 proofs are of 2026-09-07 and record no clock** — they were
+made five days before the clock door (`71a0e7c`, 09-12) and the certifier of
+that day did not write `clocks_mhz`. The ratio 1.176 is within 1 % of
+1530/1290 = 1.186, the V100's boost over the protocol lock; that the rig was
+unlocked on 09-07 is the likely reading and is NOT proven (nothing recorded
+it). Their deviations stand (numerics do not depend on the clock); their
+timings are not comparable with any proof made behind the door, and the
+configuration each chose was chosen at an unknown frequency. The rule that
+follows: a proof without a recorded clock is re-proven at the protocol clock
+when a card of its class is idle — the two 16 GB cards are, tonight.
