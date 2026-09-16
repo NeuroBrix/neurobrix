@@ -1,0 +1,14 @@
+{
+  "_backend": "metal",
+  "_": "The measurement protocol for Apple Silicon (Metal). Apple GPU clocks are OS-managed and NOT user-lockable (there is no `nvidia-smi -ac` equivalent), so the stability of a sweep cannot be ASSERTED by a clock lock. It is PROVEN by a witness instead: a fixed reference kernel timed at the start and end of every sweep. If the witness time drifts beyond the tolerance below, the regime moved while candidates were being compared and the sweep is invalid. READ, never retyped.",
+  "regime": "witness",
+  "witness": {
+    "kernel": "matmul",
+    "M": 512, "N": 512, "K": 512,
+    "dtype": "fp16",
+    "reps": 50,
+    "drift_tolerance": 0.08,
+    "why_tolerance": "0.08 = 8%: the witness brackets a sweep of many candidate launches, and a same-shape matmul re-timed after that span must land within 8% of its opening time or the OS moved the GPU regime under us. Calibrated to be looser than same-run jitter (measured ~2-4% on M4 Pro across a conv sweep) and tighter than the throttle step that made the 1.175x on the NVIDIA side. It reads from HERE, not a constant in code.",
+    "why_shape": "512^3 fp16: large enough that its time is GPU-bound (not launch-bound, which would track CPU noise not the GPU regime), small enough to be a negligible fraction of a sweep. The SAME shape every time, so its two timings are comparable by construction."
+  }
+}

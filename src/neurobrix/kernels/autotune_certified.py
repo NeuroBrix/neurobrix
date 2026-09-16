@@ -255,12 +255,24 @@ def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) 
     return None
 
 
-def proof_records_clock(proof: Optional[Dict[str, Any]]) -> bool:
-    """True when the proof says the clock every card ran at (`machine.clocks_mhz`).
-    5 628 proofs of 2026-09-07 do not: made before the clock door, at a frequency
-    nothing recorded — their timings read 1.176× those of a proof at the protocol
-    clock (2026-09-14, register 56, adjudicated paragraph)."""
-    return bool(((proof or {}).get("machine") or {}).get("clocks_mhz"))
+def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool:
+    """True when the proof records the stability regime its timings were measured
+    under — EITHER the clock every card was held to (`machine.clocks_mhz`, an
+    NVIDIA lock) OR the witness that proved the GPU held still across the sweep
+    (`stability_witness`, Apple, where the clock cannot be locked).
+
+    5 628 proofs of 2026-09-07 record neither: made before the door, at a regime
+    nothing recorded — their timings read 1.176× those of a proof taken under a
+    known one (2026-09-14, register 56). A witness and a lock are two proofs of
+    the same fact — the sweep was comparable — so either satisfies this.
+    """
+    p = proof or {}
+    return bool((p.get("machine") or {}).get("clocks_mhz") or p.get("stability_witness"))
+
+
+# Back-compat alias: the check used to ask only about the clock, before the
+# regime became clock-or-witness. Callers that named the clock keep working.
+proof_records_clock = proof_records_regime
 
 
 def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],
