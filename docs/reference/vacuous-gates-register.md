@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-62 entries, of which five are placeholders and 57 carry a site. Two
+63 entries, of which five are placeholders and 58 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1407,3 +1407,43 @@ backend-capability table; the certification screen executes every setting
 against the fp64 oracle; a candidate configuration is timed by running it.
 No compile-only probe found here; the one that fit the shape sits in the
 Metal driver's standard selection and is being converted where it lives.
+
+### 63 — four days of "proven by execution" that no one had looked at
+
+Between 2026-09-12 and 2026-09-16 this project wrote *proven by run* on model
+after model. Every one of those proofs was a NUMBER: a byte gate between the
+Triton arm and the PyTorch arm, a PSNR against another arm, a pixel-dynamics
+range, a wall clock. Not one artefact had been opened — no image looked at, no
+text read, no sound heard. And a byte gate cannot see a defect present on both
+sides: one broken graph upstream breaks both arms identically and the matrix
+prints **IDENTICAL**, which reads exactly like success. The register already
+held that shape under *the contaminated oracle*; what was missing was the
+positive rule that would have forced the look.
+
+The owner's form, and it is R29 hardened rather than a new rule: **a line is
+PROVEN only when an artefact of a REAL request — never a trace stimulus — has
+been judged by an instrument OUTSIDE the engine, and the verdict is written
+beside the file.** Outside means: a text is read, and code it contains is
+EXECUTED; a transcription is compared with a text known in advance and with a
+third-party ASR; a synthesised voice is read back by that ASR and the words
+compared; an image is looked at for the thing the request asked for, with the
+degeneracy facts beside the look; a sequence of frames is watched as a
+sequence. Agreement between two arms of this engine is an AGREEMENT — a
+measurement, named as such in the document, never a proof. And the consequence
+that was not being drawn: **a degenerate artefact is an open defect, ahead of
+everything else in the queue**, not a table line.
+
+The first application (`nbx/campaigns/2026_09_16_vitrine`) paid for itself in
+nine seconds: the standing belief that `real-esrgan` had been "rendering white
+on both arms for four days" was false. On a real photograph it returns the
+input's scene at four times the size, correlation 0.998 with the bicubic
+reference, 199 358 distinct colours. What the record actually held was a
+different, closed defect on `swin2SR-x2`; the upscaler's byte-matrix cells had
+been run on a 64×64, 138-byte fixture and reported *identical* — an agreement
+between two arms about a toy. Nobody had opened the file.
+
+**The rule's own trap, seen in the same hour**: the degeneracy facts for that
+photograph read *417 uniform rows of 1792* — 23 % — because a studio photograph
+has a white background, and the input carries the same 23 %. A threshold alone
+would have called a correct artefact degenerate. The numbers bound the look;
+they do not replace it, in either direction.
