@@ -4356,6 +4356,7 @@ class PrismSolver:
 
         return result
 
+
     def _try_fp32_fallback(self, container: "NBXContainer", profile: PrismProfile) -> bool:
         """Check if FP32 fallback should be tried for BF16 models."""
         for comp in container.get_neural_components():
@@ -4579,6 +4580,33 @@ class PrismImportPlanner:
 def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None) -> ExecutionPlan:
     """Convenience wrapper for PrismSolver.solve()"""
     return PrismSolver().solve(container, profile, input_config)
+
+
+def plan_record(plan: "ExecutionPlan") -> dict:
+    """The plan as a client reads it — the same fields `explain_plan` prints,
+    read from the plan and never recomputed, so the record is what will run."""
+    comps = []
+    for name, alloc in plan.components.items():
+        mem = plan.component_memory.get(name)
+        entry = {"name": name, "devices": list(getattr(alloc, "devices", None) or [str(getattr(alloc, "device", ""))]),
+                 "dtype": getattr(alloc, "dtype", None), "sharded": bool(getattr(alloc, "sharded", False))}
+        if mem is not None:
+            entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
+                          "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,
+                          "activation_profiled": bool(mem.activation_profiled)})
+        comps.append(entry)
+    rec = {"strategy": plan.strategy, "loading_mode": plan.loading_mode, "dtype": plan.target_dtype,
+           "why": plan.selection_reason or None,
+           "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
+           "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
+           "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
+           "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
+           "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
+                                for k, v in (plan.component_tiling or {}).items()}}
+    if plan.kv_cache_plan is not None:
+        kv = plan.kv_cache_plan
+        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype}
+    return rec
 
 
 def explain_plan(plan: "ExecutionPlan") -> str:

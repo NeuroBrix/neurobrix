@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--json` on every read command — `info`, `list`, `hub`, `inspect`, `coverage`, `doctor`, `autotune status`, `autotune check`, `run --explain-plan`: exactly one JSON record on stdout (`schema` `neurobrix.<command>/<version>` + `engine`), every human line on stderr; the contract in `docs/reference/json-output.md`, gated by a test that parses each command's output.
 - `neurobrix autotune certify --reprove-unclocked` re-proves, at the protocol clock, every certified setting whose proof does not record the clock it was measured at; a proof made at an unrecorded frequency is not coverage under this flag (the directory's 2026-09-07 proofs read 1.176x a proof at the lock).
 - A certified kernel setting is served only to cards of the memory class it was proven on.
   The proof now records the certifying card (index, name, memory); an entry can carry one

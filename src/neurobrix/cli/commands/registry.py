@@ -483,7 +483,38 @@ def _strip_build_stamp(stem: str) -> str:
     return re.sub(r"\.\d{8}T\d{6}$", "", stem)
 
 
+def list_record(args) -> dict:
+    """The installed models and the store, as one record (the same walk `list` prints)."""
+    store_files = {}
+    if STORE_DIR.exists():
+        for nbx_file in STORE_DIR.glob("*.nbx"):
+            store_files[nbx_file.stem] = nbx_file.stat().st_size
+    models = []
+    if CACHE_DIR.exists():
+        for model_dir in sorted(CACHE_DIR.iterdir()):
+            if not model_dir.is_dir() or not (model_dir / "manifest.json").exists():
+                continue
+            try:
+                manifest = json.loads((model_dir / "manifest.json").read_text())
+            except (json.JSONDecodeError, OSError):
+                manifest = {}
+            models.append({"name": model_dir.name, "family": manifest.get("family", "?"),
+                           "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()),
+                           "license": manifest.get("license", "") or "",
+                           "in_store": any(model_dir.name in stem for stem in store_files)})
+    installed = {m["name"] for m in models}
+    store_only = [{"name": stem, "size_bytes": size} for stem, size in sorted(store_files.items())
+                  if not any(name in stem for name in installed)]
+    return {"models": models, "store_only": store_only,
+            "store": {"path": str(STORE_DIR), "files": [{"name": k + ".nbx", "size_bytes": v} for k, v in sorted(store_files.items())],
+                      "bytes": sum(store_files.values())}}
+
+
 def cmd_list(args):
+    from neurobrix.cli.json_out import wants_json, emit
+    if wants_json(args):
+        emit("list", list_record(args))
+        return
     """List installed models (cache) and downloaded archives (store)."""
 
     # --store: show store contents only
@@ -742,6 +773,13 @@ def cmd_clean(args):
 
 def cmd_hub(args):
     """Browse models available on the NeuroBrix registry."""
+    from neurobrix.cli.json_out import wants_json as _wj, human_lines_to_stderr
+    with human_lines_to_stderr(_wj(args)):
+        return _cmd_hub(args)
+
+
+def _cmd_hub(args):
+    """Browse models available on the NeuroBrix registry."""
     import urllib.request
     import urllib.error
     import urllib.parse
@@ -804,7 +842,22 @@ def cmd_hub(args):
 
     remote_models = data.get("models", [])
     total_count = data.get("total", len(remote_models))
-
+    from neurobrix.cli.json_out import wants_json as _wj, emit as _emit
+    if _wj(args):
+        installed_now = set()
+        if CACHE_DIR.exists():
+            installed_now = {d.name for d in CACHE_DIR.iterdir() if d.is_dir() and (d / "manifest.json").exists()}
+        rows = []
+        for rm in remote_models:
+            slug = rm.get("slug", f"{rm.get('org', '?')}/{rm.get('name', '?')}")
+            name = rm.get("name", slug.split("/")[-1])
+            rows.append({"slug": slug, "name": name, "category": rm.get("category", "?"),
+                         "size_bytes": int(rm.get("fileSize", 0) or 0), "license": rm.get("license") or None,
+                         "downloads": rm.get("downloadCount", 0), "visibility": (rm.get("visibility") or "PUBLIC").upper(),
+                         "installed": name in installed_now})
+        _emit("hub", {"registry": registry, "query": {"category": args.category, "search": args.search},
+                      "total": total_count, "models": rows})
+        return
     if not remote_models:
         print("\nNo models found.")
         if args.category or args.search:

@@ -135,6 +135,14 @@ def _try_warm_path(args) -> bool:
 
 
 def cmd_run(args):
+    """Under `--explain-plan --json` the plan is the only thing on stdout: every
+    human line of the run's preamble goes to stderr (`json_out`)."""
+    from neurobrix.cli.json_out import human_lines_to_stderr
+    with human_lines_to_stderr(bool(getattr(args, "json", False) and getattr(args, "explain_plan", False))):
+        return _cmd_run(args)
+
+
+def _cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
@@ -432,9 +440,13 @@ def cmd_run(args):
         # The plan, and nothing after it: no weights load, no card is touched
         # beyond what the hardware profile read. What is printed is the plan
         # object the runtime would have received.
-        from neurobrix.core.prism.solver import explain_plan
+        from neurobrix.core.prism.solver import explain_plan, plan_record
         print("\n[plan] --explain-plan: the placement decision, read from the plan the runtime would receive\n")
-        print(explain_plan(execution_plan))
+        if getattr(args, "json", False):
+            from neurobrix.cli.json_out import emit
+            emit("explain-plan", {"model": getattr(args, "model", None), **plan_record(execution_plan)})
+        else:
+            print(explain_plan(execution_plan))
         return 0
 
     # 3. Load RuntimePackage
