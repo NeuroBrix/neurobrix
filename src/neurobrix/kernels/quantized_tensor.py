@@ -111,6 +111,42 @@ class QuantizedTensor:
         return QuantizedTensor(self.qweight.pin_host(), self.scales.pin_host(), self.qmins.pin_host(),
                                self.logical_shape, self.transposed)
 
+    # ── the movers: a weight is moved by ASKING THE WEIGHT ──
+    #
+    # Every placement path in the engine moves a weight by calling a mover on
+    # the tensor itself (`strategies/base.py`, `strategies/zero3.py`,
+    # `strategies/triton/base.py`): dense weights answer, and an encoded one
+    # that cannot answer breaks the first time a plan streams or offloads.
+    # Measured 2026-09-16 on the vitrine's first LLM request:
+    # Qwen3-Coder-30B-A3B-Instruct-int4g128 died at
+    # `'QuantizedTensor' object has no attribute 'to_cuda_async'` — the plan
+    # was right, the encoding was right, the handle was missing three methods.
+    # The triplet moves as a triplet; the metadata (logical shape, view flag)
+    # is not a property of where the bytes live, so it rides unchanged.
+
+    def to_cuda(self, device_idx: int = 0) -> "QuantizedTensor":
+        """The three parts on the given card, the triplet rebuilt."""
+        return QuantizedTensor(self.qweight.to_cuda(device_idx),
+                               self.scales.to_cuda(device_idx),
+                               self.qmins.to_cuda(device_idx),
+                               self.logical_shape, self.transposed)
+
+    def to_cuda_async(self, device_idx: int = 0, stream: int = 0) -> "QuantizedTensor":
+        """The three parts enqueued on `stream` (the streaming strategies'
+        mover). Sequencing is the caller's, exactly as for a dense weight:
+        the returned triplet is readable once the stream is waited on."""
+        return QuantizedTensor(self.qweight.to_cuda_async(device_idx, stream=stream),
+                               self.scales.to_cuda_async(device_idx, stream=stream),
+                               self.qmins.to_cuda_async(device_idx, stream=stream),
+                               self.logical_shape, self.transposed)
+
+    def to_cpu(self, pinned: bool = False) -> "QuantizedTensor":
+        """The three parts back on the host (offload), pinned if asked."""
+        return QuantizedTensor(self.qweight.to_cpu(pinned=pinned),
+                               self.scales.to_cpu(pinned=pinned),
+                               self.qmins.to_cpu(pinned=pinned),
+                               self.logical_shape, self.transposed)
+
     @property
     def _pinned(self) -> bool:
         return bool(getattr(self.qweight, "_pinned", False))
