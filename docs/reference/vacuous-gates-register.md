@@ -1475,3 +1475,40 @@ function and inside a class body, seen red against the old scan.
 `D-SKIPS-THAT-HIDE-A-RED-TWENTY-GUARDS`: each is a named import inside a
 catch-all, and the fix is scope, not removal — guard the package import, import
 the names inside the test where a missing one fails.
+
+### 65 — a door that copied its authority's list, and refused what the authority accepts
+
+The re-trace door asks "is there a COMPLETE snapshot here?" before it spends a
+card. Its format test listed four layouts: a diffusers pipeline, a transformers
+model, a NeMo archive, a NeMo directory. The build toolchain's own detector
+(`tracer/format_detector.py`) accepts a fifth — BARE_WEIGHTS, a `.pth`/`.pt`/
+`.safetensors`/`.ckpt` with no config of any kind — which is how every upscaler
+in the catalogue ships. So on 2026-09-16 the re-trace of `real-esrgan-x2`
+stopped with **"no COMPLETE snapshot on the export or in the download
+directory"** while the checkpoint sat in the directory it had just been handed,
+and the same refusal had been waiting for every upscaler since the door was
+written.
+
+This is the mirror of the usual entry and belongs in the same register: a gate
+whose green is empty here has a red that is empty, and a false refusal costs
+what a false pass costs — a card idle, a repair postponed, and a message that
+reads like a fact about the disk. What makes it the same class is not the
+direction, it is the cause: **the door held a COPY of a rule whose authority
+lives elsewhere.** Four of the five layouts were transcribed correctly. The
+fifth had never existed at transcription time, and nothing re-reads a copy.
+
+**The rule**: a door that reproduces another component's decision names that
+component and re-reads its input, never its conclusion. Where the authority
+cannot be imported (this one lives in the separate build toolchain), read the
+DECLARATION the authority reads — here the registry entry, which names the
+checkpoint file for exactly the models that ship as one, because several
+variants share one upstream repository and only the entry says which is which.
+
+The fix admits bare weights **only** when the registry names the checkpoint and
+it is present, which is also what keeps the guard the door was built for: a
+stopped diffusers download (Sana 4K, 6 GB of shards, no `model_index.json`,
+2026-09-07) is bare weights too and declares no checkpoint, so it stays refused.
+Landed with both injections seen red —
+`tests/unit/tools/test_snapshot_bare_weights_is_a_format.py`: the old four-layout
+form fails the upscaler case, and a naive "accept any bare weights" fails the
+stopped-download case and the wrong-variant case.
