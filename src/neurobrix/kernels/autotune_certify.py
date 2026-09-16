@@ -870,7 +870,8 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
-            allow_off_protocol: bool = False, reprove_unclocked: bool = False) -> Dict[str, Any]:
+            allow_off_protocol: bool = False, reprove_unclocked: bool = False,
+            reprove_generator: bool = False) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files."""
     if log is None:
         def log(*a):                      # a run of hours, read while it runs: never buffered
@@ -928,10 +929,12 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = per_dtype.setdefault(dtype, _read_file(path))
             ktext = C.key_repr(key)
-            if (only_missing or reprove_unclocked) and C.entry_covers(entries, ktext, certifying_class,
-                                                                       need_clock=reprove_unclocked):
+            if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
+                    entries, ktext, certifying_class, need_clock=reprove_unclocked,
+                    need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):
                 continue                      # certified FOR THIS CARD's memory class already (and, with
-                                              # --reprove-unclocked, at a recorded clock)
+                                              # --reprove-unclocked, at a recorded clock; with
+                                              # --reprove-generator, under the running code generator)
             attempts += 1
             t0 = time.time()
             try:

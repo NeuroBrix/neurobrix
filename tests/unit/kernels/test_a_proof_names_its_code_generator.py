@@ -28,3 +28,15 @@ def test_the_live_directory_s_proofs_are_all_labelled():
             for lab in (C.proof_backends(entry) or {"unknown"}):
                 labels[lab] = labels.get(lab, 0) + 1
     assert labels and "unknown" not in labels, labels
+
+
+def test_a_proof_under_another_generator_does_not_cover_when_the_running_one_is_asked():
+    """`--reprove-generator`: an entry proven under triton 3.6.0 is not coverage
+    for a certifier running triton 3.8.0; the same entry covers when the label
+    matches or when no generator is asked. Injection: `need_generator` ignored
+    in `entry_covers` → the first assertion held True — RED."""
+    entries = {"k": {"config": {}, "proof": {"backend": {"triton": "3.6.0", "name": "cuda"},
+                                              "machine": {"device": {"memory_mb": 32768}}}}}
+    assert C.entry_covers(entries, "k", 32, need_generator="triton 3.8.0") is False
+    assert C.entry_covers(entries, "k", 32, need_generator="triton 3.6.0") is True
+    assert C.entry_covers(entries, "k", 32) is True
