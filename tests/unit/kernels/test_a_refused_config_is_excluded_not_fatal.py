@@ -51,11 +51,8 @@ def _forget_announcements():
     """The "say it once per process" is product behaviour and also makes the
     module order-dependent: the second test to use a reason would see nothing
     and could not tell that from a bug."""
-    try:
-        from neurobrix.kernels import autotune_refusals as R
-        R.reset_announcements()
-    except Exception:
-        pass
+    R = pytest.importorskip("neurobrix.kernels.autotune_refusals")
+    R.reset_announcements()   # absent or renamed: the fixture fails, and it should
     yield
 
 

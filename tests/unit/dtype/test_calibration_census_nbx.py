@@ -17,9 +17,10 @@ from neurobrix.core.dtype import calibration as cal
 
 
 def _gpu():
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
     try:
-        from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
-        NBXTensor.empty((1,), NBXDtype.float32, "cuda:0")
+        empty((1,), f32, "cuda:0")
         return True
     except Exception:
         return False

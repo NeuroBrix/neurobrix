@@ -26,11 +26,17 @@ from neurobrix.triton.launcher_contract import (ArgSlot, verify_driver_contract)
 
 def _metal_driver():
     """The Metal driver, or None where there is no Apple GPU."""
+    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
-        from neurobrix.kernels import nbx_tensor
-        if nbx_tensor._detect_gpu_backend() != "metal":
+        if detect() != "metal":
             return None
-        from neurobrix.triton.metal_driver import driver
+    except Exception:
+        return None
+    # Past this point the backend SAYS metal, so its driver module must exist:
+    # an absent one is a broken install, not "no Apple GPU", and says so.
+    from neurobrix.triton.metal_driver import driver
+    try:
         return driver()
     except Exception:
         return None
@@ -43,11 +49,17 @@ def _cuda_driver():
     file runs against CUDA with no other change — which is the property the
     contract is for.
     """
+    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
-        from neurobrix.kernels import nbx_tensor
-        if nbx_tensor._detect_gpu_backend() != "cuda":
+        if detect() != "cuda":
             return None
-        from neurobrix.kernels.launcher import driver
+    except Exception:
+        return None
+    # Past this point the backend SAYS cuda; `driver` is the symbol this whole
+    # file is a contract for, so its absence is the finding, never a quiet None.
+    from neurobrix.kernels.launcher import driver
+    try:
         return driver()
     except Exception:
         return None

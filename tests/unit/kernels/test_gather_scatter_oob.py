@@ -171,6 +171,20 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
         "and nothing frees it")
 
 
+# A capability probe ALLOCATES. This test and the two at the end of the file open a
+# real device; the file used to declare the probe below them, so this one ran
+# unguarded and failed with `cudaErrorNoDevice` where its siblings skipped.
+def _no_device() -> bool:
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
+    try:
+        empty((1,), f32, "cuda:0")
+        return False
+    except Exception:
+        return True
+
+
+@pytest.mark.skipif(_no_device(), reason="needs a GPU")
 def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
     # Arm the channel by its CAPABILITY, not by pretending the backend is Metal:
     # the buffer is a real device allocation, and on a CUDA machine a swapped
@@ -248,15 +262,6 @@ def _run(kind: str, mode: str):
     env = dict(os.environ, PYTHONPATH=str(_REPO / "src"))   # absolute: runnable from any cwd
     return subprocess.run([sys.executable, "-c", _SUBPROCESS, kind, mode],
                           capture_output=True, text=True, env=env, timeout=300)
-
-
-def _no_device() -> bool:
-    try:
-        from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
-        NBXTensor.empty((1,), NBXDtype.float32, "cuda:0")
-        return False
-    except Exception:
-        return True
 
 
 @pytest.mark.skipif(_no_device(), reason="needs a GPU")

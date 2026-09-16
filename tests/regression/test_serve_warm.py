@@ -174,10 +174,12 @@ def test_family_serve_warm(model: str, gen_kwargs: dict, verify: str,
                     "antireg_2026_08_26_rope_fix verdict); unskip with "
                     "its fix")
 
+    from neurobrix.cli.utils import find_model   # absent or renamed: the file fails, loudly
     try:
-        from neurobrix.cli.utils import find_model
         find_model(model)
-    except Exception:
+    except FileNotFoundError:
+        # The ONLY reason this cell may skip. A catch-all here swallowed a renamed
+        # `find_model` and every cell of the file read as "not in the local cache".
         pytest.skip(f"{model} not in the local cache")
 
     family_id = request.node.callspec.id.split("-")[0]
@@ -227,10 +229,10 @@ def test_upscaler_serve_warm_unaligned_exact_size(mode: str,
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
 
+    from neurobrix.cli.utils import find_model   # absent or renamed: the test fails, loudly
     try:
-        from neurobrix.cli.utils import find_model
         find_model(UPSCALER_MODEL)
-    except Exception:
+    except FileNotFoundError:
         pytest.skip(f"{UPSCALER_MODEL} not in the local cache")
 
     w, h = 100, 60  # 100 % 8 != 0 — forces a real pad
@@ -263,10 +265,10 @@ def test_upscaler_serve_warm_output_shape(mode: str, tmp_path: Path) -> None:
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.serving.engine import InferenceEngine
 
+    from neurobrix.cli.utils import find_model   # absent or renamed: the test fails, loudly
     try:
-        from neurobrix.cli.utils import find_model
         find_model(UPSCALER_MODEL)
-    except Exception:
+    except FileNotFoundError:
         pytest.skip(f"{UPSCALER_MODEL} not in the local cache")
 
     engine = InferenceEngine(UPSCALER_MODEL,

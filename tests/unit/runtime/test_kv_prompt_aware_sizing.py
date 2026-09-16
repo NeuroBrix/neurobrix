@@ -122,9 +122,10 @@ def test_run_mode_initial_zero_keeps_the_plan_size() -> None:
 
 
 def _gpu() -> bool:
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        DeviceAllocator.set_device(0)
+        set_device(0)
         return True
     except Exception:
         return False
