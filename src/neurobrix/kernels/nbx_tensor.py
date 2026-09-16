@@ -628,10 +628,38 @@ def _get_tl_dtype(nbx_dtype: NBXDtype):
 # GPU RUNTIME — hardware-agnostic via ctypes (CUDA/ROCm)
 # ============================================================================
 
+def _environment_runtime_libs(package: str, names) -> list:
+    """The runtime libraries the ENVIRONMENT ships, ahead of the system's.
+    torch's CUDA wheels carry their own `nvidia/cuda_runtime/lib/libcudart.so.12`
+    and bind against it; a `libcudart.so.12` resolved by ldconfig is the
+    machine's toolkit (12.2 on this rack), and when the engine's ctypes loader
+    opened THAT one first, torch 2.14's `libc10_cuda.so` found an older runtime
+    than it was built on — `undefined symbol: cudaGetDriverEntryPointByVersion`
+    (2026-09-16, the stack alignment). One process, one runtime: the wheel's
+    own when it exists, the system's otherwise. Read from the package's
+    location, never a typed path."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec(package)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not spec.submodule_search_locations:
+        return []
+    import os
+    root = list(spec.submodule_search_locations)[0]
+    out = []
+    for n in names:
+        cand = os.path.join(root, "lib", n)
+        if os.path.exists(cand):
+            out.append(cand)
+    return out
+
+
 # Runtime API mapping per backend
 _GPU_BACKENDS = {
     "cuda": {
-        "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
+                   + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice",
