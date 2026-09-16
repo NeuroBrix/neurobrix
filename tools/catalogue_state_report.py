@@ -99,6 +99,10 @@ VITRINE = {
         artefact="whisper/transcript.txt",
         instrument="the text known in advance (jfk_11s.expected.txt) and faster-whisper 1.2.1, a third-party ASR",
         answer="word error rate 0.0 against the expected text (22 words, 0 edits); the third-party ASR returns the identical sentence"),
+    "Qwen3-Coder-30B-A3B-Instruct": dict(
+        artefact="qwen3_coder/answer.txt",
+        instrument="the function it wrote was extracted and EXECUTED against eight cases it never saw",
+        answer="8 of 8 — overlapping, touching, contained, empty, single, unsorted, disjoint and degenerate inputs all return exactly what they must (execution.json); 3591 s for 160 tokens, the model streaming per token on one 32 GB card"),
     "Wan2.1-T2V-1.3B-Diffusers": dict(
         artefact="wan_t2v/sailboat.mp4",
         instrument="the frames assembled and watched as a sequence (contact_sheet.png), beside the per-frame facts",
