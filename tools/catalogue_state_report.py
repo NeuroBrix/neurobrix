@@ -329,6 +329,8 @@ def memory_class_coverage(container: str):
             out["unknown"] += 1
         for c in classes:
             out["by_class"][c] = out["by_class"].get(c, 0) + 1
+        for lab in (C.proof_backends(entry) or {"unknown"}):
+            out.setdefault("by_backend", {})[lab] = out.get("by_backend", {}).get(lab, 0) + 1
     return out
 
 
@@ -379,7 +381,9 @@ def coverage_cell(cov) -> str:
         extra.append(f"{cov['unknown']} proven on an unknown card")
     if cov["absent"]:
         extra.append(f"{cov['absent']} not in the directory")
-    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "")
+    gens = cov.get("by_backend") or {}
+    gen = (" · proven under " + ", ".join(k if len(gens) == 1 else f"{k} ×{n}" for k, n in sorted(gens.items()))) if gens else ""
+    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "") + gen
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +657,10 @@ def main() -> int:
     print("32 GB card until it is certified there, and a shape proven on the rig with the")
     print("card unknown serves no card until re-proven. The two numbers are what a")
     print("request on each SKU of this rack is served without a sweep — not what the")
-    print("directory holds.\n")
+    print("directory holds. *Proven under* names the code generator (the Triton version)")
+    print("each served proof was made with: a setting is proven for one generator, and a")
+    print("Triton upgrade re-proves the directory in a frozen tree before it is switched")
+    print("(owner, 2026-09-16) — the old proofs serve until the new ones are complete.\n")
     apple = apple_directory_summary()
     print("**Apple M4 Pro** — every cell says *not measured here*, and that is the")
     print("whole truth of this rack: it has no Apple device, and a Mac's shape keys are")
