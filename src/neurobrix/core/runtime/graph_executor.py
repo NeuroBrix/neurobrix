@@ -1875,7 +1875,15 @@ class GraphExecutor:
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only)
         if only is not None:
-            self._weights.update(loaded)          # a rewrite added readers
+            # A rewrite added readers: the new weights join the dict. Their
+            # arenas JOIN too — `update` used to replace `_arenas` (the
+            # first load's device blocks, which every earlier weight points
+            # INTO) with the second load's, dropping the first arenas' last
+            # reference: freed under the live weights, and the next kernel
+            # met a freed address (Ming-Lite-Omni triton, 2026-09-16: the
+            # malloc trace names this line as the freer, through
+            # set_moe_config → _load_what_the_rewrite_added).
+            self._weights.update(self._join_arenas(self._weights, loaded))
         else:
             self._weights = loaded
         if _only is not None:
@@ -1982,6 +1990,29 @@ class GraphExecutor:
         self._fp32_constants_bound = True
         if n:
             print(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32", flush=True)
+
+    @staticmethod
+    def _join_arenas(held: dict, loaded: dict) -> dict:
+        """`loaded` with its `_arenas` merged into `held`'s: every arena of
+        both loads stays referenced (the memory manager frees them by their
+        `device_idx`, never by the key, so a second arena on a device takes
+        a distinct key). Returns the dict to `update` with."""
+        if "_arenas" not in loaded:
+            return loaded
+        # An EMPTY `_arenas` from a load that put nothing on a device (the
+        # fusion's few added weights) replaced the first load's dict all the
+        # same — the second hole, found by the same trace (12:45).
+        merged = dict(held.get("_arenas") or {})
+        for dev, arena in (loaded.get("_arenas") or {}).items():
+            key = dev
+            n = 1
+            while key in merged and merged[key] is not arena:
+                key = f"{dev}#{n}"
+                n += 1
+            merged[key] = arena
+        out = dict(loaded)
+        out["_arenas"] = merged
+        return out
 
     def _reconcile_weight_keys(self) -> None:
         """Reconcile weight dict keys with graph param names.
