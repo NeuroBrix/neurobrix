@@ -268,7 +268,23 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     # runtime (R34); the embedded lexicon retains espeak's license.
     _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
-    from neurobrix.core.module.audio.g2p import g2p_phonemes
+    from neurobrix.core.module.audio.g2p import g2p_phonemes, refusal_for_language
+    # The voice and the lexicon must speak the same language. Read the voice the
+    # request asks for in the same order the voicepack loader will, and refuse
+    # here — before a single phoneme — when it speaks a language the embedded
+    # lexicon does not: the model would otherwise say other words, fluently
+    # (2026-09-16, `ff_siwis` on the American lexicon).
+    _voice = None
+    for _key in ("global.speaker", "speaker", "global.voice", "voice"):
+        _v = engine.ctx.variable_resolver.resolved.get(_key)
+        if isinstance(_v, str) and _v:
+            _voice = _v
+            break
+    if _voice is None:
+        _voice = engine.ctx.pkg.defaults.get("voice")
+    _refusal = refusal_for_language(_voice, klang)
+    if _refusal:
+        raise RuntimeError(_refusal)
     phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str,
                             _lang_map.get(klang, "en-us"), klang)
 
@@ -290,7 +306,11 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     input_ids = torch.tensor([ids], dtype=torch.long, device=device)
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
-    print(f"   [Phonemizer] '{prompt[:60]}' -> {len(phonemes)} phonemes "
+    # The log says when it is quoting only the head of the prompt: without the
+    # ellipsis a 60-character cut reads as a TRUNCATION OF THE DATA, and one hour
+    # of 2026-09-16 was spent looking for a text the engine had never dropped.
+    _shown = prompt if len(prompt) <= 60 else prompt[:60] + "…"
+    print(f"   [Phonemizer] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
           f"-> {actual_len} IDs (dynamic seq_len)")
 
     # Bind text length and mask for downstream stages (text_encoder, predictor)
