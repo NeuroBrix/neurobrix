@@ -258,6 +258,70 @@ def exclude_slow_candidates(bench, say=None):
     return _run
 
 
+# ── the per-config memory footprint door ───────────────────────────────────
+#
+# `bench_would_swap` (launcher) refuses to bench a KEY whose ARGUMENTS alone
+# exceed available memory. But a sweep tries CONFIGS, and a config allocates
+# more than the arguments: Triton's L2-flush bench scratch (a 256 MiB torch
+# buffer per never-seen key) plus the compiled kernel's own global/profile
+# scratch. A config whose full footprint exceeds what remains is caught only
+# AFTER it has run and grown the swap. This door estimates the footprint and
+# excludes such a config BEFORE the spend -- the threadgroup-budget door
+# (codegen refuses an over-budget tile) transposed to unified memory.
+#
+# The limit is read from `core.host_memory` -- the SAME source Prism plans
+# against, never `Pages free` -- and live, because pressure is a state of the
+# moment. The estimate is a LOWER bound made honest by a margin: undercounting
+# would let a swapping config through, so unknown scratch is treated as its
+# declared size and a safety margin is added, never subtracted.
+
+#: Triton's L2-flush bench buffer, allocated once per never-seen key.
+_BENCH_SCRATCH_BYTES = 256 * 1024 * 1024
+#: A fraction of available kept free so the estimate's own slack cannot tip
+#: the machine over. Not a tuned magic number -- a headroom, stated.
+_FOOTPRINT_MARGIN = 0.10
+
+
+def config_footprint_fits(arg_bytes: int, config_scratch_bytes: int = 0,
+                          available_mb: "float | None" = None):
+    """(fits, available_mb, footprint_mb) for one candidate config.
+
+    footprint = arguments + the kernel's own scratch + the bench L2 buffer.
+    Compared to available memory less a margin. `available_mb` defaults to the
+    live `core.host_memory` reading (Prism's source). An unreadable platform
+    (None) fits everything and says nothing -- it adds no policy of its own.
+    """
+    if available_mb is None:
+        try:
+            from neurobrix.core.host_memory import memory_state
+            available_mb = memory_state().available_mb
+        except Exception:                              # noqa: BLE001
+            available_mb = None
+    if available_mb is None:
+        return True, None, None
+    footprint = int(arg_bytes) + int(config_scratch_bytes) + _BENCH_SCRATCH_BYTES
+    usable = available_mb * (1.0 - _FOOTPRINT_MARGIN) * 2 ** 20
+    return footprint <= usable, available_mb, footprint / 2 ** 20
+
+
+def exclude_over_footprint(bench, arg_bytes, config_scratch_bytes=0, say=None):
+    """Wrap a per-config bench so an over-footprint config scores `inf` without
+    running -- excluded BEFORE the spend, and SAID with its numbers."""
+    def _say(line):
+        (say or (lambda l: print(l, flush=True)))(line)
+
+    def _run(*args, **kwargs):
+        fits, avail, fp_mb = config_footprint_fits(arg_bytes, config_scratch_bytes)
+        if not fits:
+            _say(f"[AUTOTUNE_FOOTPRINT] a candidate config needs ~{fp_mb:.0f} MB "
+                 f"(args + scratch + bench buffer) against {avail:.0f} MB "
+                 f"available; excluded BEFORE running it, so the sweep neither "
+                 f"swaps nor measures the swap. The sweep continues.")
+            return list(_INF)
+        return bench(*args, **kwargs)
+    return _run
+
+
 def install() -> bool:
     """Wrap `Autotuner._bench` so a refused config is excluded, once.
 
