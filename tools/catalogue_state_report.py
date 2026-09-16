@@ -128,16 +128,45 @@ VITRINE = {
 
 def vitrine_cell(container: str) -> str:
     """The line's verdict: `proven` with its artefact and verdict file when one
-    exists, else the row's own (measured / inferred / not measured)."""
+    exists, else the row's own (measured / inferred / not measured).
+
+    An entry may name its own `dir` and `verdict`: a proof made in another
+    campaign than the vitrine's is still a proof, and pointing at the campaign
+    that produced it beats copying the artefact to where this function expects
+    it (real-esrgan-x2 and -x8, proven in the re-trace campaign, 2026-09-16)."""
     v = VITRINE.get(container)
     if not v:
         return ""
-    return (f"**proven** — [{v['artefact'].split('/')[-1]}]({VITRINE_DIR}/{v['artefact']}), "
+    root = v.get("dir", VITRINE_DIR)
+    verdict = v.get("verdict", f"{v['artefact'].rsplit('/', 1)[0]}/VERDICT.md")
+    return (f"**proven** — [{v['artefact'].split('/')[-1]}]({root}/{v['artefact']}), "
             f"judged by {v['instrument']}: {v['answer']} "
-            f"([verdict]({VITRINE_DIR}/{v['artefact'].rsplit('/', 1)[0]}/VERDICT.md))")
+            f"([verdict]({root}/{verdict}))")
 
 
 CROSS_CUTTING = [
+    "**A white image was a trace stimulus, not a model limit** (real-esrgan, 2026-09-16). "
+    "`real-esrgan-x2` answered a 448x448 request with a WHITE 128x128 square. Cause measured, "
+    "not inferred: it was traced at 64x64, where the image height, the image width and the "
+    "first convolution's 64 channels are ONE NUMBER, so no rule could attribute a 64 to an "
+    "axis and the pixel-unshuffle view recorded `[1, 3, 32, 2, 32, 2]` instead of "
+    "`[s0, 3, s1//2, 2, s2//2, 2]`. `real-esrgan-x8` carries the identical loss at its first "
+    "`upsample_nearest2d` and renders correctly anyway, because that operator records "
+    "`scales_h`/`scales_w` BESIDE the frozen size and both engines recompute from the scale "
+    "(`sequential_dispatcher.py:356`, `compiled_ops.py:748`) — a run-time repair of a "
+    "build-time loss, which is why the same defect is invisible in one and fatal in the "
+    "other. Repair: a RE-TRACE at the collision-free upscaler stimulus (112x80), which the "
+    "tracer has shipped since 2026-08-29 and the four other upscalers carry; the tracer "
+    "gained nothing, its window-split branch was correct the whole time. Proven by artefact "
+    "at three sizes that are not the trace size, two of them non-square — x2: 96x96 -> "
+    "192x192, 160x112 -> 320x224, 208x144 -> 416x288, correlations 0.997/0.998/0.999 against "
+    "the bicubic and looked at; x8 the same three at eight times. The weights were verified "
+    "first, 702/702 and 704/704 tensors bit-identical to the snapshot the containers were "
+    "built from. The net returns under the repair: a graph that DECLARES a spatial dimension "
+    "no operation references is refused at the disk boundary, seen red on the real "
+    "pre-repair container and refusing 0 of the 181 cached ones. "
+    "`nbx/campaigns/2026_09_16_root_pngs/THREE_SIZES_VERDICT.md`, "
+    "`nbx/campaigns/2026_09_16_symbol_chains/REPORT.md`.",
     "**The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, "
     "after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy "
     "changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, "
