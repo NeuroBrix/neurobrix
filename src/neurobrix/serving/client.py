@@ -140,7 +140,9 @@ class DaemonClient:
         """Send generate with stream=true; yield events as they arrive.
 
         Yields ("token", event) per decoded token — event carries
-        {step, n, token, done} — then ("result", result) once, and returns.
+        {step, n, token, done} and, for a text family, {text, rewind}: the
+        text to append after taking back `rewind` characters, decoded by the
+        engine's tokenizer — then ("result", result) once, and returns.
         The per-token events arrive live from the daemon's decode loop, so
         the wall-clock of the first ("token", ...) yield IS the real TTFT.
         """
