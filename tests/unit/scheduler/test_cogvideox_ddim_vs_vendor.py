@@ -48,6 +48,22 @@ COG_CONFIG = {
 
 
 def _load_vendor():
+    # The REFERENCE arm is Dell-only: the vendored diffusers 0.30.1 source tree
+    # and `transformers` both live on the cert rig, not on the Apple Silicon
+    # dev machine. The scheduler UNDER test imports neither (R34) and runs
+    # everywhere; only this comparison against the vendor needs them, so when
+    # they are absent the honest result is a skip, not an error — the vendor
+    # cannot be consulted here, which is a fact about the machine, not a defect
+    # in the scheduler.
+    import importlib.util as _ilu
+    import os as _os
+    if _ilu.find_spec("transformers") is None:
+        import pytest
+        pytest.skip("transformers absent (vendor reference is Dell-only)")
+    if not _os.path.isdir(VENDOR_ROOT):
+        import pytest
+        pytest.skip(f"vendored diffusers 0.30.1 absent at {VENDOR_ROOT} "
+                    "(Dell-only reference)")
     # Import the scheduler from the VENDORED diffusers 0.30.1 (prepended to
     # sys.path so it shadows any installed diffusers). The FLAX shim covers
     # 0.30.1's unconditional `from transformers.utils import FLAX_WEIGHTS_NAME`

@@ -33,7 +33,7 @@ def upsample_nearest3d_kernel(
     """
     NC = N * C
     nc_stride = tl.num_programs(axis=1)
-    nc_iter = tl.program_id(axis=1).to(tl.int64)
+    nc_iter = (tl.program_id(axis=1).to(tl.int64)).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
     pid = tl.program_id(axis=0).to(tl.int64)
     idx = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
 

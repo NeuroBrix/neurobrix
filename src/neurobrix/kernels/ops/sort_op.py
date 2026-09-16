@@ -135,8 +135,8 @@ def radix_sort_histogram_kernel(
     r: tl.constexpr = 2 ** num_bits_per_pass
     bfe_mask: tl.constexpr = (1 << num_bits_per_pass) - 1
     CTA_TILE_N: tl.constexpr = TILE_N * tiles_n_per_cta
-    cta_n_start = CTA_TILE_N * pid_n
-    cta_n_end = tl.minimum(cta_n_start + CTA_TILE_N, n)
+    cta_n_start = (CTA_TILE_N * pid_n).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    cta_n_end = (tl.minimum(cta_n_start + CTA_TILE_N, n)).to(tl.int32)
 
     for p in range(0, num_passes):
         bit_offset = p * num_bits_per_pass
@@ -197,8 +197,8 @@ def radix_sort_sweep_kernel(
     bfe_mask: tl.constexpr = (1 << k_bits) - 1
 
     r: tl.constexpr = 2 ** k_bits
-    cta_r_start = pid_r * TILE_R
-    cta_r_end = tl.minimum(cta_r_start + TILE_R, r)
+    cta_r_start = (pid_r * TILE_R).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    cta_r_end = (tl.minimum(cta_r_start + TILE_R, r)).to(tl.int32)
 
     n_offsets = pid_n * TILE_N + tl.arange(0, TILE_N)
     mask = n_offsets < N

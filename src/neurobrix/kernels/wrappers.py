@@ -15,6 +15,7 @@ import triton
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
 from .nbx_tensor import fa_min_tile as _fa_min_tile
+from .nbx_tensor import reduce_tile_max as _reduce_tile_max
 from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_channel
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
@@ -443,6 +444,28 @@ def _batch_block(batch_dim, feat_dim):
 _MM_BM, _MM_BN, _MM_BK = 64, 64, 32      # matmul / addmm / baddbmm
 _MM_GROUP = 8                              # matmul GROUP_M
 _RED_BM, _RED_BN = 8, 1024                 # reduction kernels (prod, min, max, std, var, norm, all, any)
+
+
+def _clamp_reduce_tile(bm, bn):
+    """(block_m, block_n) clamped so a 2-D reduce tile fits the backend's cap.
+
+    A 2-D axis reduce stages BLOCK_M*BLOCK_N one element per thread; above the
+    cap (Metal 1024, cuda/hip far higher, so inert there) the lowering refuses
+    -- l2_norm on swin2SR at 8192, weight_norm on Kokoro at 16384. Shrinking
+    BLOCK_N adds loop iterations and changes no result; BLOCK_M is kept because
+    a caller may use it for its grid. THE clamp, one place: std/var/norm and
+    weight_norm all call it, a twin copy being a fix that lands in only one.
+    """
+    cap = _reduce_tile_max()
+    if bm * bn > cap:
+        bn = max(1, cap // bm)
+    return bm, bn
+
+
+def _reduction_tile(M):
+    """(grid, block_m, block_n) for a full-row reduction gridded on M."""
+    bm, bn = _clamp_reduce_tile(_RED_BM, _RED_BN)
+    return (triton.cdiv(M, bm),), bm, bn
 _MV_BN, _MV_BM = 64, 256                  # mv / addmv  (BLOCK_N rows, BLOCK_M reduction tile)
                                           # the default; `block_sizes.mv` in the
                                           # hardware profile overrides it — see
@@ -5159,13 +5182,13 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous()
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        grid, _bm, _bn = _reduction_tile(M)
         _set_device(x_2d)
         std_dim_kernel[grid](
             x_2d, out_flat,
             x_2d.stride(0), x_2d.stride(1),
             M, N, float(correction),
-            BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
+            BLOCK_M=_bm, BLOCK_N=_bn,
             num_warps=4,
         )
         shape = list(x.shape)
@@ -5208,10 +5231,10 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous()
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        grid, _bm, _bn = _reduction_tile(M)
         _set_device(x_2d)
         var_welford_kernel[grid](x_2d, out_flat, M, N, float(correction),
-                                 BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
+                                 BLOCK_M=_bm, BLOCK_N=_bn,
                                  num_warps=4)
         shape = list(x.shape)
         if keepdim:
@@ -6302,23 +6325,23 @@ def vector_norm_wrapper(x, ord: float = 2.0, dim=None, keepdim=False) :
         out_shape[d] = 1
     out = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
 
-    grid = (triton.cdiv(M, _RED_BM),)
+    grid, _bm, _bn = _reduction_tile(M)
 
     if ord == 2 or ord == 2.0:
         _set_device(x_2d)
-        l2_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
+        l2_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == float('inf'):
         _set_device(x_2d)
-        linf_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
+        linf_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == 0 or ord == 0.0:
         _set_device(x_2d)
-        l0_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
+        l0_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     elif ord == 1 or ord == 1.0:
         _set_device(x_2d)
-        l1_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
+        l1_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
     else:
         _set_device(x_2d)
-        lp_norm_kernel[grid](x_2d, out, M, N, ord, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
+        lp_norm_kernel[grid](x_2d, out, M, N, ord, BLOCK_M=_bm, BLOCK_N=_bn, num_warps=4)
 
     result = out.to(x.dtype).view(out_shape)
     if not keepdim:
@@ -6546,18 +6569,20 @@ def weight_norm_interface_wrapper(
     if dim == 0:
         M = v.shape[0]
         N = math.prod(v.shape[1:])
-        grid = (triton.cdiv(M, _WNORM_BM),)
+        _wbm, _wbn = _clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
+        grid = (triton.cdiv(M, _wbm),)
         _set_device(output)
         weight_norm_kernel_first[grid](output, norm, v, g, M, N, eps,
-                                       BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
+                                       BLOCK_M=_wbm, BLOCK_N=_wbn,
                                        num_warps=4)
     elif dim == v.ndim - 1:
         M = math.prod(v.shape[:-1])
         N = v.shape[dim]
-        grid = (triton.cdiv(N, _WNORM_BN),)
+        _wbm, _wbn = _clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
+        grid = (triton.cdiv(N, _wbn),)
         _set_device(output)
         weight_norm_kernel_last[grid](output, norm, v, g, M, N, eps,
-                                      BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
+                                      BLOCK_M=_wbm, BLOCK_N=_wbn,
                                       num_warps=4)
     else:
         raise ValueError(f"weight_norm only supports dim=0 or dim={v.ndim - 1}, got {dim}")
