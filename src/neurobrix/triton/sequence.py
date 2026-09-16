@@ -2973,6 +2973,24 @@ class TritonSequence:
                     print("[LazyBind] late-bind fired (replay declined "
                           "after would_replay said yes)", flush=True)
                 self.bind_weights(_parked)
+                # `bind_weights` rebinds EVERY weight slot to its full-size
+                # tensor and clears `_seq_constant_originals` (it must: the
+                # cached originals are views into the previous bind's arena).
+                # The executor already ran `update_seq_dependent_constants()`
+                # before `run()`, so a late bind silently UNDOES that narrowing
+                # and the ops execute against full-size seq-dependent
+                # constants. On the eager path `bind_weights` runs BEFORE the
+                # narrowing and the order is right; only the late bind inverts
+                # it. Re-narrow here so the skip stays unobservable, which is
+                # the whole contract of the lazy bind.
+                #
+                # Measured 2026-09-16, swin2SR-classical-sr-x2-64 on Apple:
+                #   NBX_LAZY_BIND=1  image washed to the model's own mean,
+                #                    std 9.20 against the input's 104.18
+                #   NBX_LAZY_BIND=0  correct, std 103.12
+                # Identical kernels, identical launch order (2408 launches each,
+                # same counts) — only the constants differed.
+                self.update_seq_dependent_constants()
             if self._is_multi_device:
                 self._run_multi_device(skip_kills, pre_op_callback)
             else:
