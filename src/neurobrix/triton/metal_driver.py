@@ -152,16 +152,23 @@ class _MSLOnly:
     _MARKER = b"NBX-MSL-ONLY"
 
     def __enter__(self):
-        from triton_msl.backend.compiler import MetalBackend
+        # The engine targets Triton; WHICH Metal backend runs is a selection the
+        # profile makes, and only `triton.metal_backend` names either. Asking the
+        # seam here keeps this driver ignorant of the vendor — and makes it refuse
+        # BY NAME when the selected backend has no class to patch, instead of
+        # patching nothing and reporting success.
+        from neurobrix.triton.metal_backend import backend_compiler_class
 
-        self._backend = MetalBackend
-        self._original = MetalBackend.add_stages
+        backend_cls = backend_compiler_class()
+
+        self._backend = backend_cls
+        self._original = backend_cls.add_stages
 
         def patched(backend_self, stages, options, language=None):
             self._original(backend_self, stages, options, language)
             stages["metallib"] = lambda src, metadata: _MSLOnly._MARKER
 
-        MetalBackend.add_stages = patched
+        backend_cls.add_stages = patched
         return self
 
     def __exit__(self, *exc):
