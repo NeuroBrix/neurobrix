@@ -172,6 +172,19 @@ class TritonExtDriver(Driver):
         _native().synchronize()
 
 
+#: Binding census, printed at exit under NBX_EXT_STATS=1. An interior binding
+#: takes its LENGTH from the allocator's range table rather than from an exact
+#: pointer hit, which is the one place a stale entry could hand back a buffer
+#: shorter than the tensor.
+_STATS = {"exact": 0, "interior": 0}
+
+import os as _os_stats
+if _os_stats.environ.get("NBX_EXT_STATS"):
+    import atexit as _atexit
+    _atexit.register(lambda: print(
+        f"[ext-stats] pointer bindings: exact={_STATS['exact']} "
+        f"interior={_STATS['interior']}", flush=True))
+
 #: Metal's zero-copy wrap requires page-aligned memory; Apple Silicon pages
 #: are 16 KiB.
 _PAGE = 16384
@@ -218,6 +231,9 @@ def _buffer_for(addr: int, ty: str):
     base = addr
     if size is None:
         base, size = _containing_allocation(addr)
+        _STATS["interior"] += 1
+    else:
+        _STATS["exact"] += 1
     # An interior pointer — a view, or a tensor packed inside a larger buffer —
     # binds by starting the Metal buffer AT that address and running to the end
     # of the allocation. Binding the allocation's base instead would read the
