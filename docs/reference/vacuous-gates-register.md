@@ -392,9 +392,15 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-64 entries, of which five are placeholders and 59 carry a site. Two
-machines, two weeks of concentrated looking. Every one of them produced silence
-or a green rather than an error.
+67 entries, of which five are placeholders and 62 carry a site. Two
+machines, two weeks of concentrated looking. Almost every one produced silence
+or a green rather than an error — and two do the opposite, which is why they are
+here rather than elsewhere: **65** (a door that held a COPY of its authority's
+format list and refused every upscaler) and **67** (a gate whose classifier
+assumed both graphs shared a stimulus, so it scored a correct repair FAIL and
+could not see the transition it is named for). A false refusal costs what a
+false pass costs — a card idle, a repair postponed — and its cause is the same:
+an instrument whose model of the world excludes the case in front of it.
 
 **"Not one was found by a test" was true until 2026-09-12 and is no longer.**
 They are still overwhelmingly found by users, by contradictions between two
