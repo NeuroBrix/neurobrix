@@ -27,6 +27,53 @@ these, it reports the capability unavailable with a reason.
 | 7 | **A compatibility handshake** — Studio refuses an incompatible engine before work starts | Nothing negotiates; a mismatch surfaces as a failed method | A protocol version in item 1's record and in every envelope; the daemon refuses a client outside the range it declares | Release Alignment Doctrine: the protocol version is versioned with the engine, one number everywhere. **Landed 2026-09-16 (first half):** `PROTOCOL_VERSION` in `serving/protocol.py`, in every envelope and in the identity record; the daemon does not yet refuse a client outside a declared range (no request carries a client version) — owed with the dispatcher work of items 3-4. |
 | 8 | **Windows instance isolation** — the Windows loopback port is fixed; `NBX_SOCKET_PATH` isolates only the Unix socket | `serving/protocol.py`: Unix socket on macOS/Linux, a fixed loopback TCP port on Windows | A per-instance port (or named pipe) chosen and reported through item 1, so two Studios or a Studio and a CLI daemon do not collide | R23 (hardware universality) applied to the host OS: no platform is the exception. **Landed 2026-09-16:** `NBX_SOCKET_PATH` names an instance on every platform; on Windows a named instance binds port 0, records the port the OS handed it in `<stem>.port`, its clients read it there and `endpoint()` (item 1's record, `info --json`) reports it with the file; the default instance keeps the fixed port; a named instance without a port file is refused by name (`serving/protocol.py::Instance`). Tested by configuring the protocol for `win32` on Linux — not yet run on a Windows host. |
 
+## Requests 3, 4 and 7 (second half): the dispatcher's shape — said before it is touched
+
+Written 2026-09-16 before any code, because the three touch an architecture
+rule (the serving dispatcher's shape, and the decode loops of both engines).
+Nothing below is built until the owner has read it.
+
+**What changes.** `serving/server.py` serves connections one at a time on the
+accept loop, so a `status` or a `cancel` sent during a generation is read only
+after it ends — request 4 names this the governing item. The proposal:
+
+1. **One thread per connection, one inference at a time.** The accept loop
+   hands each connection to a thread; the inference methods (`generate`,
+   `chat`, `complete`) take a single inference lock, the control methods
+   (`status`, `cancel`, `template`, `new_chat`, `shutdown`) never do — they are
+   answered while a generation runs. A second inference request waits for the
+   lock (or is refused with "busy", the owner's call; waiting is proposed).
+   Threads read the driver for `status` and allocate nothing: the allocator's
+   class-level counters are read, never written, off the inference thread.
+2. **An operation identity.** A request may carry `id`; every response and
+   every stream event of that request echoes it; the daemon keeps the current
+   operation's id and step count. Adding the optional field changes no
+   response shape: `PROTOCOL_VERSION` stays 1.
+3. **Acknowledged cancellation.** `cancel {id}` sets a stop flag on the current
+   operation. Both engines' decode loops read it at the site where they emit
+   the per-token event (`neurobrix/decode_progress.py` already sits there, in
+   the compiled generator, the triton generator and the three vlm loops —
+   R30's seam, stdlib-only, so R33 holds); the loop returns what it has, the
+   flow finishes as if the length were reached, the daemon syncs the devices
+   the plan holds (Memory Manager's `device_sync`, never a hand-rolled sync)
+   and only then answers `{"cancelled": id, "steps": n}`. A disconnect or a
+   timeout is never an acknowledgement.
+4. **The protocol range (request 7).** A request may carry `protocol` (the
+   client's); the daemon refuses one outside `[PROTOCOL_MIN, PROTOCOL_VERSION]`
+   with an error naming both numbers and the engine version. A request without
+   the field is a client from before the handshake and is accepted as protocol 1
+   — said here so no one reads the absence as a guess.
+
+**Rules touched.** R30 — the flag is read in every loop of both engines, tested
+on each; R33 — the control module imports nothing but the standard library;
+the serving architecture — the three open debts on this surface
+(D-SERVE-WARM-REFREEZE, D-SERVE-WARM-KV-GROWTH-ASYMMETRY, P-SERVE-UNLOAD-LIVE-SET)
+are read first and the redesign must not close over them by accident: the
+warm path's refreeze and unload happen under the same inference lock.
+
+**What it does not do.** No preemption inside a step (a step is the unit); no
+second concurrent generation; no change to the wire format's framing.
+
 ## What this list is not
 
 * Not a promise of order or date. The tracker says "the next version that
