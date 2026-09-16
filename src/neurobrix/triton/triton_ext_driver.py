@@ -164,11 +164,28 @@ class TritonExtDriver(Driver):
                   f"packed={(args[-1].hex() if scalar_types else None)} "
                   f"threads={[gx*lx, gy*ly, gz*lz]} group_size={[lx, ly, lz]} "
                   f"grid={grid} block={block} shared={shared}", flush=True)
+        # Two queues, one device, shared buffers. Metal orders command buffers
+        # within a queue; ACROSS queues nothing is ordered without an explicit
+        # event (Apple: a fence cannot synchronize untracked resources accessed
+        # from separate queues; MTLEvent/MTLSharedEvent is the mechanism).
+        #
+        # NeuroBrix enqueues its device-to-device copies as blits on ITS queue
+        # and returns to the host immediately — correct while the kernels shared
+        # that queue, which is what `metal_device._blit` says in as many words:
+        # "a blit on the same queue as the kernels is ordered by the GPU and
+        # waits for nothing". triton-ext breaks that premise: its kernels run on
+        # its own queue, so a blit that has not landed is invisible to them.
+        #
+        # Measured on swin2SR (M4 Pro, 2026-09-17): without this drain, the conv
+        # at (1,180,448,448)->64 read 63181 NaN / 356 Inf / absmax 3.39e+38 from
+        # an input that is `absmax 1.492` and finite in every ordered run, and
+        # the fp64 screen refused all 18 candidates. A host round trip inserted
+        # before the launch made the same run clean, which is what identified
+        # the ordering rather than the arithmetic.
+        _nbx_queue_drain()
         function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
-        # triton-ext dispatches on ITS OWN command queue, not the one NeuroBrix's
-        # allocator orders its copies against, so nothing makes a host read see
-        # these writes. Measured: without this the kernel computes correctly and
-        # the reader still sees the buffer's initial zeros.
+        # And the other direction: the host (and NeuroBrix's own blits) must see
+        # what this kernel wrote.
         _native().synchronize()
 
 
@@ -275,3 +292,12 @@ def _containing_allocation(addr: int) -> Tuple[int, int]:
 
 def driver() -> TritonExtDriver:
     return TritonExtDriver.instance()
+
+
+def _nbx_queue_drain():
+    """Wait for NeuroBrix's own Metal queue before a foreign queue reads its
+    buffers. Coarse — a host wait — but correct; an MTLSharedEvent between the
+    two queues is the finer instrument and is owed if this costs measurably."""
+    from neurobrix.kernels.metal_device import runtime
+    runtime().sync()
+
