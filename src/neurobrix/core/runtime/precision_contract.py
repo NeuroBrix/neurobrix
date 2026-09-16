@@ -210,6 +210,40 @@ def load_calibration(cache_path: Optional[str], component_name: str,
     return record
 
 
+def contract_taken(cache_path: Optional[str], component_name: str, dag: Optional[Dict[str, Any]],
+                   *, compute_dtype, arch: Optional[str] = None) -> bool:
+    """The decision `resolve` makes, without its side effects: True when the
+    component's activations run at fp16 under a calibration record it can take,
+    False on the conservative path (no record, a record whose measured
+    preference on this arch is "conservative", or the env force off). Prism's
+    memory estimate asks THIS before sizing a component: an uncalibrated
+    component stores its matmul results in fp32 and every consumer computes
+    in fp32, so an estimate at fp16 counts half of what runs (Mochi's VAE
+    decoder, 2026-09-14: 3.2 GB planned, 26 GB held — one of its two causes).
+    One authority for one decision; a second reading of the same record in
+    the solver would be a second thing to keep true."""
+    compute_dtype = str(compute_dtype).replace("torch.", "")
+    if compute_dtype != "float16":
+        return False
+    forced = _env_force()
+    if forced is False:
+        return False
+    if forced is True:
+        return True
+    record = load_calibration(cache_path, component_name, dag)
+    if record is None:
+        return False
+    if arch is None:
+        try:
+            from neurobrix.triton.autotune_cache import _arch_fingerprint as _arch
+            arch = _arch()
+        except Exception:
+            arch = None
+    if arch and record.prefer.get(arch) == "conservative":
+        return False
+    return True
+
+
 def resolve(cache_path: Optional[str], component_name: str,
             dag: Optional[Dict[str, Any]], *, compute_dtype,
             supports_op_pins: bool = True) -> Tuple[bool, FrozenSet[str], FrozenSet[str]]:

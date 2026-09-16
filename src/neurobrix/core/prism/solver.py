@@ -1743,7 +1743,8 @@ class PrismSolver:
             if comp.graph is not None:
                 try:
                     profiler = ActivationProfiler(comp.graph)
-                    dtype_bytes = get_dtype_bytes_per_element(comp_dtype_str)
+                    dtype_bytes = get_dtype_bytes_per_element(
+                        self._activation_dtype_under_the_contract(comp_dtype_str, comp, container))
                     # Tiling-aware budget: smallest GPU in the profile.
                     # When profile is None (legacy callers), this stays 0
                     # and the two-pass logic short-circuits to worst-case.
@@ -4355,6 +4356,30 @@ class PrismSolver:
             result[comp.name] = resolved
 
         return result
+
+    @staticmethod
+    def _activation_dtype_under_the_contract(resolved: str, comp, container) -> str:
+        """The dtype a component's ACTIVATIONS are sized at. The weights keep
+        the component dtype (`_resolve_component_dtypes`, the executor's own
+        map): the conservative precision path (no calibration record for this
+        graph, or a record measured "conservative" on this arch) stores the
+        matmul results in fp32 and their consumers compute in fp32, but loads
+        the weights as they are. Sized at the precision contract's own decision,
+        read from one place (`precision_contract.contract_taken`). The first
+        wiring fed this into the component map itself: the 56-container
+        explain-plan sweep of 2026-09-16 doubled thirty weight bills and moved
+        nine strategies — a measurement, not a re-reading, found it."""
+        if resolved != "float16" or container is None or not getattr(container, "cache_path", None):
+            return resolved
+        from neurobrix.core.runtime import precision_contract
+        try:
+            taken = precision_contract.contract_taken(str(container.cache_path), comp.name,
+                                                      getattr(comp, "graph", None), compute_dtype="float16")
+        except Exception as exc:
+            print(f"[Prism] {comp.name}: the calibration record could not be read ({exc}); "
+                  f"estimated at float32, the conservative path's dtype")
+            return "float32"
+        return "float16" if taken else "float32"
 
 
     def _try_fp32_fallback(self, container: "NBXContainer", profile: PrismProfile) -> bool:
