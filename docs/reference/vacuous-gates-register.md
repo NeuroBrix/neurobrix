@@ -1334,3 +1334,29 @@ before it stands, and the summary says where to resume. Gate:
 lost 227 keys are re-certified on the fixed tree — the small ones on a 16 GB
 card for the class the guard needs, the Mochi-size ones on a 32 GB card, the
 only class that can hold them.
+
+### 60 — four green tests beside a rule wired into the wrong map
+
+The rule "an uncalibrated component's activations are estimated in fp32,
+the conservative path's dtype" shipped on 2026-09-16 with four green tests
+and one injection seen red. Every test called the helper that decides the
+dtype; none called the solver that consumed it. The helper was wired into
+`_resolve_component_dtypes` — the per-component map that sizes the WEIGHTS
+and that the executor takes as the component's dtype — not into the
+activation estimate. The 56-container `--explain-plan` sweep, run before the
+commit because the owner's rule says a plan is budgeted under the model
+that executes it, read **thirty weight bills doubled and nine strategies
+moved** (Qwen3-30B's 57 GB of fp16 weights planned at 115 GB; Ming and
+Qwen3-Omni pushed from block_scatter to lazy_sequential by weights that do
+not exist). Rewired to the activation estimate alone; a fifth test now calls
+the map and asserts the weights' dtype is untouched — it was RED on the
+first wiring.
+
+**The shape**: a helper tested in isolation is proven correct; where it is
+CALLED FROM is a second claim nothing tested — the same class as entry 17
+(a helper whose every test passes can still have no seam), from the other
+side: the seam existed and led to the wrong consumer. **The rule**: a change
+that adds a decision to a computation tests the computation's OUTPUT (here:
+weights unchanged, activations moved), not only the decision. And the
+measurement that caught it — the sweep — is not optional when the change
+moves a plan: it is the gate the owner named.
