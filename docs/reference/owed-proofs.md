@@ -438,6 +438,14 @@ and answered on this rack:
   rather than a coincidence: all 725 of the matmul ones are PRESENT in the 32 GB side tree, and
   **0** are re-proven there, while **1 374 of 3 920** known-card keys in that same tree are. At
   that rate roughly 254 of them would be done if they were reachable.
+* **a comparison that is NOT evidence, said so it is not read as one.** Register 56 counted
+  **1 530** of these on **7 191** entries; today there are **1 168** on **9 729**. That is not
+  progress and it is not regression: the directories are different sizes, so the two counts
+  cannot be subtracted. Only the control above says anything about reachability.
+* **why the six-minute reading is not thin either.** In those six minutes the 16 GB class gained
+  72 entries. If the unknown ones were drawn at the same rate as the rest of what remains, about
+  a third of that — two dozen — would have been unknown-card keys, and the bucket would have
+  fallen to roughly 1 144. It did not move at all.
 * **what it means, said plainly.** When the pass finishes, "the directory is re-proven under
   3.8.0" will be true of every key the pass can reach and false of 1 168 entries that will still
   carry a 3.6.0 proof serving no card. A completion notice that does not say so reads as more
