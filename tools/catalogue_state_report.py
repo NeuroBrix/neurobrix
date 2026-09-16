@@ -99,6 +99,14 @@ VITRINE = {
         artefact="whisper/transcript.txt",
         instrument="the text known in advance (jfk_11s.expected.txt) and faster-whisper 1.2.1, a third-party ASR",
         answer="word error rate 0.0 against the expected text (22 words, 0 edits); the third-party ASR returns the identical sentence"),
+    "Kokoro-82M": dict(
+        artefact="kokoro_en/lighthouse.wav",
+        instrument="faster-whisper 1.2.1 (a third-party ASR) reading the synthesised WAV back",
+        answer="word error rate 0.0 against the sentence asked for (14 words, 0 edits) IN ENGLISH — the container's only lexicon; the French voice on the same lexicon said other words (WER 1.42) and is now refused by name, D-KOKORO-G2P-ONE-LANGUAGE"),
+    "PixArt-XL-2-1024-MS": dict(
+        artefact="pixart/bench.png",
+        instrument="looked at, beside the degeneracy facts",
+        answer="the request's own scene — a red wooden bench under a blossoming cherry tree, petals on the ground, afternoon light; std 75.28, 525 544 distinct colours, 0 uniform rows"),
     "real-esrgan-x4": dict(
         artefact="real_esrgan/apple_x4.png",
         instrument="looked at, beside the degeneracy facts and the correlation with the input's bicubic upscale",
