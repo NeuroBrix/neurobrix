@@ -1569,3 +1569,33 @@ elsewhere: **the first count that looks like an answer is the moment to open one
 row against the source.** Both errors of this census — axis indices read as lost
 expressions, then aliases read as lost dimensions — inflated the number and left
 the ranking intact, which is exactly the shape that survives a sanity check.
+
+### 67 — the gate that could not see the repair it exists to recognise
+
+The re-trace gate's whole vocabulary — `witnessed`, `symbolized`, `re-expressed`,
+`slice-end-symbolized` — reads one transition: a shape argument that was a
+literal is now an expression. It reads it by checking that **the expression's
+trace value equals the old literal**, which is exact and correct as long as both
+graphs were traced at the same stimulus.
+
+On 2026-09-16 the repair WAS the stimulus. `real-esrgan-x2`'s pixel-unshuffle
+went from the literal `32` (64//2 at a 64x64 trace) to `floordiv(s1, 2)` of trace
+`56` (112//2 at 112x80). 32 ≠ 56, so the classifier scored the transition it is
+named for **zero symbolized**, counted every recorded shape in the graph as a
+change it could not classify — **2193 beyond annotation** — and the gate answered
+**FAIL** on a repair that is correct and proven by artefact at three sizes.
+
+The sibling case makes the shape of the blindness plain: `real-esrgan-x8`, the
+same re-trace, came back **byte-identical on both arms** — the strongest evidence
+a gate can be handed — and was also refused, by the same count.
+
+**The rule**: an instrument that compares two artefacts states the invariant its
+comparison assumes, and detects when that invariant does not hold instead of
+reporting a number computed under it. A count taken under a broken assumption is
+not evidence of anything, and it may not read as a refusal. The gate now detects
+a stimulus change, names which dimensions moved and what the bytes did, and
+leaves the verdict to the artefacts. What refused before still refuses: a
+corrupted dim, a routing field removed or changed, a run that failed.
+
+This is the mirror of 65 in the same way 65 is the mirror of the rest — a false
+refusal costs what a false pass costs, and here it would have cost the repair.
