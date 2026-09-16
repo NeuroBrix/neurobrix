@@ -189,7 +189,10 @@ def metal_target():
 
     from ..kernels.metal_device import runtime
 
-    return GPUTarget("metal", runtime().arch_name, 32)
+    # The target NAME belongs to the selected backend (the fork answers to
+    # "metal", triton-ext's AppleGPU to "mps"); the seam owns which.
+    from neurobrix.triton.metal_backend import backend_target_name
+    return GPUTarget(backend_target_name(), runtime().arch_name, 32)
 
 
 def _attrs_from_specialization(jit_fn, specialization):
@@ -869,7 +872,8 @@ class MetalDriver:
     through a driver handle.
     """
 
-    backend = "metal"
+    from neurobrix.triton.metal_backend import backend_target_name
+    backend = backend_target_name()
 
     # Not a subclass of `launcher.Driver`: the launcher resolves its driver
     # from THIS module, so inheriting would be an import cycle, and it
