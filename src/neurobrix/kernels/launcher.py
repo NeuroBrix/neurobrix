@@ -1521,7 +1521,15 @@ def install(force: Optional[bool] = None) -> bool:
         return True
     if force is None and os.environ.get("NBX_LAUNCHER", "nbx").lower() == "triton":
         return False
-    from triton.runtime.jit import JITFunction
+    try:
+        from triton.runtime.jit import JITFunction
+    except ModuleNotFoundError:
+        # A compiled-only install (no Triton wheel: a Mac without it, a CPU
+        # box) has no kernel launcher to route; the package import that
+        # installs the seam must not be the import that ends the engine.
+        # `tests/unit/cli/test_compiled_mode_needs_no_triton.py` was red on
+        # this line from c8ed017 to 2026-09-16.
+        return False
 
     def __getitem__(self, grid):
         return lambda *args, **kwargs: launch(self, grid, *args, **kwargs)
