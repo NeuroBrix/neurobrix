@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-16 15:42 UTC**.
+The *where a defect would be invisible* column is the census taken **2026-09-16 15:57 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
@@ -130,9 +130,12 @@ proven on (register 56): a shape proven on a 16 GB card sweeps at runtime on a
 card unknown serves no card until re-proven. The two numbers are what a
 request on each SKU of this rack is served without a sweep — not what the
 directory holds. *Proven under* names the code generator (the Triton version)
-each served proof was made with: a setting is proven for one generator, and a
-Triton upgrade re-proves the directory in a frozen tree before it is switched
-(owner, 2026-09-16) — the old proofs serve until the new ones are complete.
+each served proof was made with, so a rank reads with its date: a setting stays
+correct under any generator — the fp64 oracle proved the SOURCE, not the
+compiler — and what a Triton upgrade may age is its rank as the fastest, by a few
+percent. A re-proof under a new generator is an optimisation pass on this rack,
+incremental, checkpointed, invisible to a request; the old proofs serve meanwhile
+(owner, 2026-09-16).
 
 **Apple M4 Pro** — every cell says *not measured here*, and that is the
 whole truth of this rack: it has no Apple device, and a Mac's shape keys are

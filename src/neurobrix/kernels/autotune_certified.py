@@ -229,9 +229,11 @@ def _variant_slot(cls: int) -> str:
 def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
     """The code generator a proof was made with, as one label: `triton <version>`
     plus the backend name when it is not cuda (e.g. `triton 3.7.0 metal`). A
-    setting is proven for ONE generator: a Triton upgrade changes the code it
-    emits, so the directory's proofs are re-made under the new one and the
-    document says which version each line's proofs carry (owner, 2026-09-16)."""
+    setting stays correct under any generator — the oracle proved the source,
+    not the compiler; what a newer generator may age is its rank as the
+    fastest, by a few percent — so the directory is re-proven under a new one
+    as an optimisation pass and the document reads each rank with its
+    generator's date (owner, 2026-09-16)."""
     if not proof:
         return None
     b = proof.get("backend") or {}
