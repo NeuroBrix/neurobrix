@@ -150,7 +150,10 @@ def triton_metal_available() -> bool:
     Accepts either the standalone package or a backend registered into
     Triton's plugin system, because the plugin path (Triton 3.7+) is how a
     third-party target is expected to arrive and the package name is not
-    guaranteed to be the import name.
+    guaranteed to be the import name. Recognises BOTH selectable Metal backends:
+    the bledden fork (`triton_msl`) and the triton-ext AppleGPU plugin
+    (registered as the `apple` backend). No engine file names a vendor; this one
+    seam does.
     """
     for module in ("triton_msl", "triton.backends.metal"):
         try:
@@ -158,10 +161,52 @@ def triton_metal_available() -> bool:
                 return True
         except (ImportError, ValueError):
             continue
+    # triton-ext's AppleGPU backend registers into Triton's plugin registry
+    # under the name `apple` rather than as an importable `triton.backends.metal`.
+    try:
+        from triton.backends import backends as _tb
+        if "apple" in (_tb.keys() if hasattr(_tb, "keys") else _tb):
+            return True
+    except Exception:
+        pass
     # A plugin can also be pointed at by the upstream env var.
     plugins = os.environ.get("TRITON_PLUGIN_PATHS", "")
-    return any("metal" in p.lower() or "msl" in p.lower()
+    return any("metal" in p.lower() or "msl" in p.lower() or "apple" in p.lower()
                for p in plugins.split(os.pathsep) if p)
+
+
+def backend_refusal_types() -> tuple:
+    """The exception types a Metal backend raises to say 'I cannot compile this
+    config correctly' — collected here so the SHARED refusal module
+    (`autotune_refusals.py`, which the Dell also runs) names no vendor.
+
+    Both selectable backends contribute their type if present: the bledden fork
+    (`triton_msl.errors.MetalNonRecoverableError`) and, when triton-ext exposes a
+    named refusal type, that too. Empty off Apple / when no Metal backend is
+    installed — so on CUDA the shared check is exactly as inert as before this
+    seam existed. A backend absent contributes nothing rather than raising.
+    """
+    types: list = []
+    try:
+        from triton_msl.errors import MetalNonRecoverableError
+        types.append(MetalNonRecoverableError)
+    except Exception:
+        pass
+    # triton-ext (AppleGPU) refusal type, if/when it exposes one by name.
+    try:
+        from triton_apple_backend.errors import AppleGPUNonRecoverableError  # type: ignore
+        types.append(AppleGPUNonRecoverableError)
+    except Exception:
+        pass
+    return tuple(types)
+
+
+def is_backend_refusal(exc: BaseException) -> bool:
+    """True when `exc` is a Metal backend saying it cannot compile this config —
+    asked by class against whichever backend(s) are present, naming none in the
+    caller. False (never raising) when no Metal backend is installed."""
+    rt = backend_refusal_types()
+    return bool(rt) and isinstance(exc, rt)
 
 
 def metal_shader_compiler_available() -> bool:
