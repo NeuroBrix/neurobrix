@@ -399,6 +399,34 @@ def png_save_kwargs(family: str, output_path: str) -> Dict[str, Any]:
     return {"compress_level": int(level)} if level is not None else {}
 
 
+def say_frames_delivered(pkg, executor, delivered: int) -> None:
+    """Say it out loud when a video carries a different number of frames than
+    the request asked for.
+
+    A video model's temporal grid is not the integers: a VAE with temporal
+    stride `r` represents `r*k + 1` frames, so a request for 8 on a stride-4
+    model becomes 2 latent frames and comes back as 5. Nothing lied — the
+    container's own shape contract did the arithmetic — but nothing said it
+    either, and a file with five frames answers a question about eight
+    (measured 2026-09-16, vitrine: `--num-frames 8` on Wan2.1-T2V-1.3B wrote
+    five, in silence). The engine delivers what the grid allows and NAMES the
+    difference; it never rewrites the request.
+    """
+    try:
+        asked = (executor.variable_resolver.resolved.get("global.num_frames")
+                 if getattr(executor, "variable_resolver", None) is not None else None)
+        if asked is None:
+            asked = pkg.defaults.get("num_frames")
+        asked = int(asked) if asked is not None else None
+    except (TypeError, ValueError, AttributeError):
+        asked = None
+    if asked is not None and delivered != asked:
+        print(f"   [Output] {delivered} frames written, {asked} asked for: this model's VAE "
+              f"represents frames on a temporal grid, and {asked} is not on it. The nearest "
+              f"counts below and above are what it can hold; ask for one of those to get "
+              f"exactly what you asked for.", flush=True)
+
+
 def save_video(
     outputs: Dict[str, Any],
     output_path: str,
@@ -437,6 +465,7 @@ def save_video(
         frames = tensor.transpose(1, 2, 3, 0)
 
     frames_uint8 = (frames * np.float32(255)).astype(np.uint8)
+    say_frames_delivered(pkg, executor, int(frames_uint8.shape[0]))
     _dump_decoded_frames(frames_uint8, output_path)
     _write_video_h264(output_path, frames_uint8, fps)
     return output_path
