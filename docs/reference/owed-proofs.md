@@ -289,3 +289,62 @@ Volta profile would extend it at the price of an fp64 numpy convolution per
 candidate over hundreds of megabytes — a measurement to make before moving the
 number, not a number to move. Certification has no such budget and covers the
 family entirely (every conv entry in the directory carries the fp64 proof).
+
+---
+
+## 4 — the engine stack both machines align on, 2026-09-16: torch 2.14.0 (cu126 on the rack) + Triton 3.8.0, Python 3.10
+
+* **owed by** the Dell (this rack) · **to** the Mac: align the engine environment on it;
+  the Mac's only divergence is the Triton version triton-ext pins for Metal, dictated upstream.
+* **what was measured here.** The CUDA door (`tools/stack_door.py`): `torch==2.14.0+cu126`
+  from `https://download.pytorch.org/whl/cu126` embeds CUDA 12.6 with archs
+  sm_50…sm_90 (sm_70 present) and sees the four V100s with their capabilities —
+  ACCEPTED. The PyPI `torch==2.14.0` wheel is the cu130 build (no sm_70) and
+  cu130/cu132 carry sm_75+: refused by the door. cu126 is the only cu12x of 2.14,
+  and 2.14 is the last PyTorch release with any CUDA 12.x wheel and the last with
+  Python 3.10 (2.15, 2026-10-28, drops both) — this rack's stack is terminal on
+  both axes at 2.14; what comes after is a source build against a 12.x toolkit,
+  or another rack. torch 2.14 requires `triton~=3.8.0` and installs `triton==3.8.0`.
+* **Triton 3.8.0, retained as the wheel torch pins — not 3.8.0 + cherry-picks, not
+  "3.8.1".** Facts: issue triton-lang#11735 names eleven correctness fixes on
+  `main` absent from `release/3.8.x` (the branch is 25 ahead / 551 behind main since
+  2026-06-23); the six PRs the reporter opened against the branch are all open with
+  no maintainer reply; no `[v3.8.1] Release Tracker` exists and Triton's RELEASE.md
+  says patch releases are optional — the 2026-10-21 date is PyTorch 2.15's GA minus
+  one week, stated nowhere as a 3.8.1 commitment. The cost of the picks: a source
+  build of Triton (LLVM prebuilt fetched, wall time unmeasured by any primary
+  source), thirteen upstream commits carried as a local fork (R25), and a stack the
+  other machine cannot reproduce from an index. The house kernels use none of the
+  constructs nine of the eleven fixes touch (`tl.softmax`, block pointers,
+  `tl.range(flatten=True)`, `tl.histogram`, `tl.gather`, `dot_scaled`, constexpr
+  list comprehensions with `if`, `tl.full(-0.0)`, TMA); the two that could reach
+  them silently — #11186 (`OptimizeThreadLocality` reordering reductions) and
+  #10353's `tl.dot` out-dtype change — are exactly what the kernel suite (928 tests
+  against torch), the certification screen (every setting against the fp64 oracle)
+  and the full battery measure. **So the wheel is the stack; the gates are its proof;
+  a source build with the picks is taken only if a gate reads a wrong result of
+  that class, and then said by name.**
+* **what 3.8 brings that we consume.** `knobs.autotuning.listener` (#10125): chosen
+  config, per-config timings, duration, disk-cache hit for every `@triton.autotune`
+  — our four autotuned kernels (mm, bmm, addmm, conv2d) get it as the observability
+  seam of certification instead of a rewrite. Deterministic JIT cache keys (#10494):
+  the on-disk Triton cache is invalidated once. `kernel_unload_hook` (#9444):
+  harmless for the NeuroBrix launcher, which loads its own modules through
+  `cuModuleLoadData`. Under 3.7+ the CUDA driver probe is native when torch is
+  absent (#9578/#10935): the R33 proof (`sys.modules` without torch after a
+  `--triton` run) is re-run on the new stack.
+* **the order, unchanged**: door ✓ → the stack in `venvs/nbx_t214` beside the current
+  one ✓ (engine installed; first fix already needed and landed: the engine's
+  `libcudart` loader opens the environment's own runtime first — the system's 12.2
+  broke torch 2.14's import) → the full battery on it (kernel suite first) → the
+  re-proof of the certified directory in a frozen tree (the old directory served
+  until the new is complete; each proof names its generator — `autotune status`,
+  the catalogue's *proven under* column) → the switch. Nothing is erased before the
+  new is proven.
+* **first measurements on the candidate stack**: launcher, source gates, tensor
+  suites 19 passed; TinyLlama bytes IDENTICAL on old and new stack on both engines
+  (sha `c70888b8e01d`, 0 sweeps — the certified directory serves at the same keys
+  under 3.8.0); the triton cold run 21.7 s vs 8.1 s on the old stack (a fresh JIT
+  cache, to re-measure warm).
+* **returned by** the Mac when its engine environment carries torch 2.14.0 + the
+  Triton triton-ext pins — say the versions here.
