@@ -287,6 +287,23 @@ def arch_smem_budget() -> Optional[int]:
     leave the config space alone rather than guess a budget: filtering on an
     invented number would silently delete working configs.
     """
+    # yaml FIRST, before anything touches the launcher. Measured 2026-09-16 on
+    # M4 Pro: resolving the target imports the Metal backend's compiler, which is
+    # re-entrant with Triton's backend discovery ("Found 0 concrete subclasses of
+    # BaseBackend in triton_msl.backend.compiler") and leaves partially
+    # initialised modules behind; a LATER `import yaml` then dies inside the
+    # libyaml C extension with "partially initialized module 'yaml' has no
+    # attribute 'error'". That exception is not an ImportError, so it escaped the
+    # guard below, `arch_smem_budget` returned nothing and `_ACTIVE_PROFILE` was
+    # CACHED EMPTY — the Apple profile's `metal_backend`,
+    # `autotune_screen_max_bytes` and smem budget silently unread, and
+    # `selected_metal_backend()` inferring the backend instead of reading the
+    # declaration. Importing yaml first removes the order dependency outright.
+    try:
+        import yaml
+    except ImportError:                                   # pragma: no cover
+        return None
+
     try:
         from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
         arch = _nbx_target().arch
@@ -299,10 +316,6 @@ def arch_smem_budget() -> Optional[int]:
               else str(arch).strip().lower())
 
     vendors = Path(__file__).resolve().parents[2] / "config" / "vendors"
-    try:
-        import yaml
-    except ImportError:                                   # pragma: no cover
-        return None
 
     exact, same_family = None, None
     for path in sorted(vendors.glob("*/*.yml")):
