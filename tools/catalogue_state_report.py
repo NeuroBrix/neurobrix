@@ -99,6 +99,10 @@ VITRINE = {
         artefact="whisper/transcript.txt",
         instrument="the text known in advance (jfk_11s.expected.txt) and faster-whisper 1.2.1, a third-party ASR",
         answer="word error rate 0.0 against the expected text (22 words, 0 edits); the third-party ASR returns the identical sentence"),
+    "Wan2.1-T2V-1.3B-Diffusers": dict(
+        artefact="wan_t2v/sailboat.mp4",
+        instrument="the frames assembled and watched as a sequence (contact_sheet.png), beside the per-frame facts",
+        answer="a wooden boat on a calm bay at sunrise, coherent and moving (frame-to-frame change 9.3, 12.9, 3.6, 4.1); two things named — the model drew a rowing boat where the request said sailboat, and five frames came back for eight asked (the VAE's temporal grid; the engine now says so)"),
     "Kokoro-82M": dict(
         artefact="kokoro_en/lighthouse.wav",
         instrument="faster-whisper 1.2.1 (a third-party ASR) reading the synthesised WAV back",
