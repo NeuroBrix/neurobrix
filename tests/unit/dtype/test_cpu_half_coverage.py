@@ -12,9 +12,13 @@ cards it picks `single_gpu` and the op stays on CUDA, which is why the full-zoo
 battery — pinned to 0,1,3 — has never seen it. Path coverage, not model
 coverage.
 
-The second test is the one that matters over time: it RE-MEASURES every entry,
-so the set shrinks by construction when upstream implements a kernel and can
-never fill up with ops that were once broken.
+The second test is the one that matters over time: it RE-MEASURES every entry
+against THIS torch and ties the engine's own decision (`cpu_lacks_half_kernel`)
+to what the op actually does here. On a fleet of two torches — the cert rig's
+2.5.1 (both ops raise) and Apple's 2.14 (both implemented) — the same entry is
+needed on one machine and free on the other, so the set does not shrink; it is
+measured. An entry that no torch lacks any more is dead weight to delete, but an
+entry one machine still needs is not stale just because another implemented it.
 """
 
 from __future__ import annotations
@@ -51,13 +55,39 @@ def test_the_set_is_not_empty_by_accident():
 
 
 @pytest.mark.parametrize("op_name", sorted(CPU_NO_HALF_OPS))
-def test_every_entry_still_lacks_a_cpu_half_kernel(op_name):
-    """The list shrinks by construction.
+def test_the_engine_agrees_with_this_torch(op_name):
+    """A candidate, not a verdict — and the engine measures it, per torch.
 
-    An entry PyTorch has since implemented is costing an upcast for nothing.
-    Delete it — do not leave it because it was once true."""
-    with pytest.raises(RuntimeError, match="not implemented for 'Half'"):
+    `CPU_NO_HALF_OPS` names ops that SOME supported torch lacks a CPU half
+    kernel for. Whether THIS torch lacks it is a property of this torch: the
+    cert rig's 2.5.1 still raises for both; Apple's 2.14 implemented both. A
+    static "still lacks" assertion is therefore right on one machine and wrong
+    on the other — the exact defect the engine's own comment calls out, which
+    is why the engine does not trust the list but probes with
+    `cpu_lacks_half_kernel`.
+
+    This test pins that probe to observed reality: the engine's decision must
+    equal what the raw op actually does here. True where it raises (the wrapper
+    is needed), False where a newer build implemented it (the wrapper is not
+    applied, and the entry simply stops costing anything). Either way the entry
+    is safe to keep, so the set does not have to shrink to stay honest — it has
+    to be measured, which is what this asserts."""
+    from neurobrix.core.dtype.engine import (
+        cpu_lacks_half_kernel, _CPU_HALF_MEASURED,
+    )
+    _CPU_HALF_MEASURED.pop(op_name, None)   # force a fresh, uncached measurement
+    try:
         _probe(op_name, "cpu", torch.float16)
+        raw_raises = False
+    except RuntimeError as exc:
+        assert "not implemented for 'Half'" in str(exc)
+        raw_raises = True
+    assert cpu_lacks_half_kernel(op_name) == raw_raises, (
+        f"the engine's CPU-half decision for {op_name} disagrees with what "
+        f"torch {torch.__version__} actually does: the fp32 wrapper would be "
+        + ("missing where the op needs it" if raw_raises
+           else "applied to an op this torch runs natively")
+    )
 
 
 @pytest.mark.parametrize("op_name", sorted(CPU_NO_HALF_OPS))

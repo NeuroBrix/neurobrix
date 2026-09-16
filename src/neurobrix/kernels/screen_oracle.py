@@ -212,8 +212,26 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
     out: List[bytes] = []
     for addr, nbytes, dtype_name in buffers:
         if int(addr) == out_addr:                      # the output, BY ADDRESS
-            want = np.ascontiguousarray(
-                reference.astype(_NP.get(dtype_name, np.float32)))
+            if dtype_name in ("bf16", "bfloat16"):
+                # bfloat16 is not a numpy dtype, so `_NP.get` fell through to
+                # fp32 -- and the reference then measured 4 bytes/element while
+                # the bf16 output buffer is 2, so `want.nbytes` was exactly
+                # double and the oracle was DISCARDED on every bf16 output.
+                # Measured 2026-09-14: conv2d at (1,180,448,448) bf16 --
+                # reference 144506880 vs buffer 72253440 -- so the whole conv
+                # family (and any bf16-output kernel) sat on the bare vote while
+                # the fp64 oracle was wired and computing. The output holds the
+                # top 16 bits of fp32; round the reference to bf16 the same way
+                # (`f32_to_bf16_bits`, round-to-nearest-even) so it compares in
+                # the buffer's own width. `_deviation` decodes bf16 bytes, so
+                # the tolerance comparison is unchanged. A dtype fix, not a
+                # backend one.
+                from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
+                want = np.ascontiguousarray(
+                    f32_to_bf16_bits(np.ascontiguousarray(reference, dtype=np.float32)))
+            else:
+                want = np.ascontiguousarray(
+                    reference.astype(_NP.get(dtype_name, np.float32)))
             if want.nbytes != int(nbytes):
                 announce_no_oracle(
                     name, key,
