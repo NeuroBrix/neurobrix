@@ -1,5 +1,11 @@
 # Register of vacuous gates — instrumentation that lies by construction
 
+> **Each of the week's errors was seen by a measurement, none by rereading.**
+> (Volta certificate roadmap, 2026-09-14: five errors, five measurements —
+> the owner's line, kept at the head of this register on 2026-09-16. The
+> latest instance the same day: a dtype rule wired into the wrong map,
+> caught by a 56-container sweep, not by the eyes that wrote it.)
+
 > **A helper whose every test passes can still have no seam.**
 >
 > Entry 17, and the whole class fits in it. `configs_agreeing_with_oracle`
