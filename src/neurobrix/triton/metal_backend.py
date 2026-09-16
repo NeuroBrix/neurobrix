@@ -218,16 +218,19 @@ METAL_BACKENDS = {
     "triton_msl": {
         "probe": "triton_msl",
         "compiler": ("triton_msl.backend.compiler", "MetalBackend"),
+        "target": "metal",
         "what": "the bledden triton-msl fork (text MSL emitter)",
     },
     "triton_ext": {
         "probe": "triton_apple_backend",
-        "compiler": ("triton_apple_backend.compiler", "AppleGPUBackend"),
+        "compiler": ("triton_apple_backend.compiler", "MetalBackend"),
+        "target": "mps",
         "what": "triton-lang/triton-ext AppleGPU (C++ MLIR -> MSL)",
     },
 }
 
 _PROFILE_KEY = "metal_backend"
+_ENV_KEY = "NEUROBRIX_METAL_BACKEND"
 
 
 def _installed(name: str) -> bool:
@@ -251,12 +254,18 @@ def selected_metal_backend() -> str:
     used; if both are installed and none is declared, that ambiguity is refused
     too — a machine that can run either must say which.
     """
-    declared = None
-    try:
-        from neurobrix.kernels.ops._configs import active_vendor_profile
-        declared = (active_vendor_profile() or {}).get(_PROFILE_KEY)
-    except Exception:
-        declared = None
+    # An explicit operator override, above the profile and named in the run's
+    # own environment. It exists for one real case: evaluating a SECOND backend
+    # from a different virtualenv that shares this source tree, so the profile
+    # file cannot hold both answers at once. It is still a SELECTION — declared,
+    # refused by name when absent — never a silent fallback.
+    declared = os.environ.get(_ENV_KEY)
+    if not declared:
+        try:
+            from neurobrix.kernels.ops._configs import active_vendor_profile
+            declared = (active_vendor_profile() or {}).get(_PROFILE_KEY)
+        except Exception:
+            declared = None
 
     if declared:
         if declared not in METAL_BACKENDS:
@@ -286,6 +295,19 @@ def selected_metal_backend() -> str:
             f"must say which, or its measurements cannot name the backend that "
             f"produced them.")
     return present[0]
+
+
+def backend_target_name() -> str:
+    """The Triton GPUTarget backend NAME the selected implementation answers to.
+
+    Triton resolves a backend by asking each registered one `supports_target`,
+    which compares this string. The two Metal backends do not use the same one —
+    the fork answers to `metal`, triton-ext's AppleGPU to `mps` — so a driver
+    that hardcodes either can only ever reach one of them ("0 compatible
+    backends for target (metal)"). The name is a property of the selected
+    backend, so it lives in the table with it.
+    """
+    return METAL_BACKENDS[selected_metal_backend()]["target"]
 
 
 def backend_compiler_class():
