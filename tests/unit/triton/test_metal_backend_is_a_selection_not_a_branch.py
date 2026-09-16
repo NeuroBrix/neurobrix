@@ -110,24 +110,40 @@ def test_no_metal_backend_means_no_refusal_type(monkeypatch):
 def test_a_backend_without_our_launch_abi_is_refused_not_launched(monkeypatch, profile):
     """The silent-wrong this refusal replaces, measured 2026-09-16.
 
-    A driver implements ONE backend's launch ABI: ours derives its argument
-    binding from the fork's MSL conventions (a scalar the emitter passes through
-    a pointer is named `<param>_buf`). Handed a kernel triton-ext compiled, it
-    binds the wrong things and does NOT fail: scalars after the first arrive as
-    0, so every mask is false, every load takes its `other`, and the store is
-    masked out — the buffer keeps the zeros it was allocated with.
+    A driver implements ONE backend's launch ABI. Ours derived its argument
+    binding from the fork's MSL conventions; triton-ext packs every scalar into
+    a single buffer instead. Launched through the wrong one, the first scalar
+    lands and the rest arrive as 0 — every mask false, every `tl.load` taking
+    its `other`, the `tl.store` fully masked — so the buffer keeps the zeros it
+    was allocated with. The SAME bare kernel that passes on torch/mps tensors
+    gave max rel err 1.000e+00, all exactly zero, with nothing raised.
 
-    Measured with the SAME bare kernel that passes on torch/mps tensors:
-    NBXTensor + triton-ext gave exact zeros, max rel err 1.000e+00. So the
-    driver must refuse by name until an adapter exists.
+    Both backends now have a driver, so the guarantee is tested where it lives:
+    a backend whose table row carries no driver must be refused BY NAME rather
+    than launched through someone else's.
     """
     _installed(monkeypatch, triton_msl=True, triton_ext=True)
+    monkeypatch.setitem(MB.METAL_BACKENDS, "triton_ext",
+                        dict(MB.METAL_BACKENDS["triton_ext"], nbx_driver=None))
     profile({"metal_backend": "triton_ext"})
     with pytest.raises(RuntimeError) as exc:
         MB.nbx_driver_module()
     msg = str(exc.value)
     assert "triton_ext" in msg and "launch ABI" in msg
     assert "zeros" in msg          # the failure mode is named, not just refused
+
+
+def test_every_declared_backend_names_a_driver_or_is_refused(monkeypatch, profile):
+    """Both rows carry a driver today; if one ever does not, the refusal above
+    is what must happen — never a fallback to the other backend's."""
+    _installed(monkeypatch, triton_msl=True, triton_ext=True)
+    for name, spec in MB.METAL_BACKENDS.items():
+        profile({"metal_backend": name})
+        if spec.get("nbx_driver"):
+            assert MB.nbx_driver_module() == spec["nbx_driver"]
+        else:
+            with pytest.raises(RuntimeError, match="launch ABI"):
+                MB.nbx_driver_module()
 
 
 def test_the_fork_keeps_its_driver(monkeypatch, profile):

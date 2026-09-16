@@ -911,7 +911,7 @@ class MetalDriver:
         return kernel_from_msl(msl, _Metadata(name, shared))
 
     def launch(self, function, grid, block, shared: int, stream: int,
-               params, names=None) -> None:
+               params, names=None, types=None) -> None:
         """Dispatch a loaded kernel. `params` is the launcher's list of
         `(kind, value)` pairs, in the compiled signature's order.
 

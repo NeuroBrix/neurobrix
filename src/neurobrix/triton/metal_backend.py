@@ -236,7 +236,7 @@ METAL_BACKENDS = {
         # arrive as 0, so every mask is false and the output keeps its zeros).
         # Until an adapter exists, selecting this backend REFUSES at the driver
         # rather than launching through an ABI that is not its own.
-        "nbx_driver": None,
+        "nbx_driver": "neurobrix.triton.triton_ext_driver",
         "what": "triton-lang/triton-ext AppleGPU (C++ MLIR -> MSL)",
     },
 }
