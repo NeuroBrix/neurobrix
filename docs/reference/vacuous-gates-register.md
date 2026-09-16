@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-60 entries, of which five are placeholders and 55 carry a site. Two
+62 entries, of which five are placeholders and 57 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1360,3 +1360,50 @@ that adds a decision to a computation tests the computation's OUTPUT (here:
 weights unchanged, activations moved), not only the decision. And the
 measurement that caught it — the sweep — is not optional when the change
 moves a plan: it is the gate the owner named.
+
+### 61 — a comparison of two absent keys, read as "identical"
+
+The CogVideoX-2b fingerprint walk (2026-09-16) compared the two runs' op
+records on a key named `sha256`. The instrument writes `sha`. Every record's
+`sha256` was None on both sides, None equalled None 39 116 times, and the
+walk printed **"IDENTICAL op by op"** for two runs whose videos differed in
+99 % of their pixels. Read on the right key an hour later: the first
+differing op is `aten.view::2` [26, 16, 60, 90] — the initial latent — and
+32 412 of 39 116 ops differ after it. The cause (a seedless request's Triton
+stream ran unseeded: a present-None slot shadowed the default, and the
+default was read from the container instead of the merged defaults) was
+within reach of the first walk; the absent key hid it behind the most
+reassuring word the walk could print.
+
+**The shape**: entry 17's family from yet another side — an absent key is
+silence, and silence compares equal to silence. **The rule**: a comparison
+REFUSES when the field it compares is absent on either side (the re-read
+script does; the walk did not), and a verdict of "identical" over N records
+states what it compared — `hashed elements per op` beside the count. The
+memory that names the key (`sha`) was written in April; the script was
+written from the head in September.
+
+### 62 — a capability probe that compiles is not a probe that executes
+
+Found on the Mac (2026-09-16): the Metal fork chose `-std=metal4.1` because a
+probe COMPILED under it — and the GPU runtime rejected the metallib it
+produced. A probe that compiles proves the toolchain accepts the syntax; it
+proves nothing about the device running the artefact. The same day this rack
+measured Triton 3.8.0's bundled `ptxas` the other way round — compiled a
+`.target sm_70` PTX, then EXECUTED the kernel suite (943 passed) and TinyLlama
+on the V100s with bytes compared to the old stack — and that is why that
+reading holds. The stack door (`tools/stack_door.py`) was extended in the same
+spirit: the wheel's arch list says what it was built for; a cuDNN convolution
+and a cuBLAS matmul RUN on every card say what serves it.
+
+**The rule, general**: a capability probe — architecture, shared memory, a
+dtype's native support, tf32, bf16, anything that decides a code path —
+EXECUTES the path it decides and VERIFIES its result against a reference;
+compiling, linking or loading are not evidence. **Census on the CUDA side of
+this trunk (2026-09-16)**: the launcher reads compute capability and shared
+memory from the DRIVER (attributes, not probes); native bf16 is a hardware
+profile flag (`config/vendors`), not a probe; the reduction tile is a
+backend-capability table; the certification screen executes every setting
+against the fp64 oracle; a candidate configuration is timed by running it.
+No compile-only probe found here; the one that fit the shape sits in the
+Metal driver's standard selection and is being converted where it lives.
