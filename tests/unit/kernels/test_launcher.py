@@ -200,11 +200,18 @@ def test_a_refused_address_is_named_by_its_parameter():
     import ctypes
     import pytest
     from neurobrix.kernels.launcher import CudaDriver
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
     drv = CudaDriver.__new__(CudaDriver)
     drv._param_counts = {}
     fn = ctypes.c_void_p(1)
+    # An address no allocation can cover: the first page. (The real address
+    # of the Ming refusal was used here first, and inside the full suite a
+    # live allocation happened to cover it — the door let it through and
+    # the stub driver fell over one line later, 2026-09-16.)
+    foreign = 0x1000
+    assert not DeviceAllocator.holds(foreign)
     with pytest.raises(ValueError, match=r"parameter 'weight_ptr'"):
-        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", 0x7fba35100000), ("i32", 4)],
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", foreign), ("i32", 4)],
                    names=["weight_ptr", "n"])
     with pytest.raises(ValueError, match=r"parameter #0"):
-        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", 0x7fba35100000)])
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", foreign)])
