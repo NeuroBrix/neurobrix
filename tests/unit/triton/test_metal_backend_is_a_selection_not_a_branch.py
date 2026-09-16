@@ -105,3 +105,32 @@ def test_no_metal_backend_means_no_refusal_type(monkeypatch):
     False exactly as it did when it imported one vendor by name."""
     monkeypatch.setattr(MB, "backend_refusal_types", lambda: ())
     assert MB.is_backend_refusal(ValueError("x")) is False
+
+
+def test_a_backend_without_our_launch_abi_is_refused_not_launched(monkeypatch, profile):
+    """The silent-wrong this refusal replaces, measured 2026-09-16.
+
+    A driver implements ONE backend's launch ABI: ours derives its argument
+    binding from the fork's MSL conventions (a scalar the emitter passes through
+    a pointer is named `<param>_buf`). Handed a kernel triton-ext compiled, it
+    binds the wrong things and does NOT fail: scalars after the first arrive as
+    0, so every mask is false, every load takes its `other`, and the store is
+    masked out — the buffer keeps the zeros it was allocated with.
+
+    Measured with the SAME bare kernel that passes on torch/mps tensors:
+    NBXTensor + triton-ext gave exact zeros, max rel err 1.000e+00. So the
+    driver must refuse by name until an adapter exists.
+    """
+    _installed(monkeypatch, triton_msl=True, triton_ext=True)
+    profile({"metal_backend": "triton_ext"})
+    with pytest.raises(RuntimeError) as exc:
+        MB.nbx_driver_module()
+    msg = str(exc.value)
+    assert "triton_ext" in msg and "launch ABI" in msg
+    assert "zeros" in msg          # the failure mode is named, not just refused
+
+
+def test_the_fork_keeps_its_driver(monkeypatch, profile):
+    _installed(monkeypatch, triton_msl=True, triton_ext=True)
+    profile({"metal_backend": "triton_msl"})
+    assert MB.nbx_driver_module() == "neurobrix.triton.metal_driver"
