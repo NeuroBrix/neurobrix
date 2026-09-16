@@ -320,6 +320,9 @@ Examples:
     import_parser.add_argument('--accept-license', action='store_true', dest='accept_license',
                                help='Record acceptance of the model license non-interactively '
                                     '(for scripts/CI; equivalent: NBX_ACCEPT_LICENSE=1)')
+    import_parser.add_argument('--json', action='store_true',
+                               help='One NDJSON event per phase on stdout (info, license, download with byte '
+                                    'counts, downloaded, extracting, installed, done | error); human lines on stderr')
 
     # ========================================
     # LIST command
@@ -353,6 +356,7 @@ Examples:
                                help='Remove from store only (keep cache)')
     remove_parser.add_argument('--all', action='store_true',
                                help='Remove from both cache and store')
+    remove_parser.add_argument('--json', action='store_true', help='One JSON record of what was removed on stdout; human lines on stderr')
 
     # ========================================
     # CLEAN command

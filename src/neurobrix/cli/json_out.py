@@ -21,6 +21,7 @@ from typing import Any, Dict
 SCHEMAS: Dict[str, int] = {
     "info": 1, "list": 1, "hub": 1, "inspect": 1, "coverage": 1, "doctor": 1,
     "autotune.status": 1, "autotune.check": 1, "explain-plan": 1, "validate": 1,
+    "import": 1, "remove": 1,
 }
 
 
@@ -57,3 +58,48 @@ def human_lines_to_stderr(enabled: bool):
             yield
     finally:
         _RECORD_STREAM = None
+
+
+def event(command: str, name: str, record: Dict[str, Any] | None = None) -> None:
+    """One NDJSON line on stdout — a long-running command's progress
+    (Studio request 5): `{"schema": "neurobrix.<command>/<v>", "event": name, ...}`,
+    compact, one object per line, flushed at once so a client reads it as
+    it happens. The record's other keys are the event's own; the terminal
+    events are `done` and `error` (with `message`), one of the two always
+    last, so a stream that ends without either was cut."""
+    from neurobrix import __version__
+    doc = {"schema": f"neurobrix.{command}/{SCHEMAS[command]}", "engine": __version__, "event": name}
+    doc.update(record or {})
+    out = _RECORD_STREAM or sys.stdout
+    out.write(json.dumps(doc, default=str, separators=(",", ":")) + "\n")
+    out.flush()
+
+
+class NdjsonProgress:
+    """A progress bar that speaks NDJSON — the `tqdm` interface the download
+    brick drives (`total`, `initial`, `update`, `close`), emitting a
+    `download` event with the real byte counts at most once per `every`
+    seconds and always at close. `clock` is injected for tests."""
+
+    def __init__(self, total=None, initial=0, desc="", command="import", every=1.0, clock=None, **_ignored):
+        import time
+        self.n = int(initial or 0)
+        self.total = int(total) if total else None
+        self.desc = desc
+        self._command = command
+        self._every = float(every)
+        self._clock = clock or time.monotonic
+        self._last = float("-inf")
+        self._emit()
+
+    def _emit(self) -> None:
+        self._last = self._clock()
+        event(self._command, "download", {"file": self.desc, "bytes": self.n, "total": self.total})
+
+    def update(self, n: int) -> None:
+        self.n += int(n)
+        if self._clock() - self._last >= self._every:
+            self._emit()
+
+    def close(self) -> None:
+        self._emit()
