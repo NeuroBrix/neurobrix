@@ -88,15 +88,14 @@ def cmd_stop(args):
     import signal
     import time
     from neurobrix.serving.client import DaemonClient
-    from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH, IS_WINDOWS
+    from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH, IS_WINDOWS, INSTANCE
 
     if not DaemonClient.is_running():
         print("[Stop] No daemon running.")
-        # Clean up stale files
-        if SOCKET_PATH is not None and SOCKET_PATH.exists():
-            SOCKET_PATH.unlink()
-        if PID_PATH.exists():
-            PID_PATH.unlink()
+        # Clean up stale files (socket, pid, and a named Windows instance's port)
+        for f in INSTANCE.instance_files():
+            if f.exists():
+                f.unlink()
         sys.exit(0)
 
     pid = DaemonClient.get_pid()
@@ -178,8 +177,10 @@ def cmd_stop(args):
 
 
 def _cleanup_daemon_files(socket_path, pid_path):
-    """Remove daemon socket and PID files."""
-    for p in (socket_path, pid_path):
+    """Remove the instance's files: socket and pid, and a named Windows
+    instance's port file (Studio request 8)."""
+    from neurobrix.serving.protocol import INSTANCE
+    for p in set((socket_path, pid_path)) | set(INSTANCE.instance_files()):
         try:
             if p is not None and p.exists():
                 p.unlink()

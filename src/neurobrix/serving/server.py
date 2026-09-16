@@ -25,7 +25,7 @@ from neurobrix import decode_progress
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
-    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS,
+    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS, INSTANCE,
     send_message, recv_message,
     make_response,
 )
@@ -279,9 +279,10 @@ class ServingDaemon:
             if IS_WINDOWS:
                 # Allow port reuse on Windows (prevents "address already in use" after crash)
                 self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self._server_socket.bind(IPC_ADDRESS)
-            else:
-                self._server_socket.bind(str(SOCKET_PATH))
+            self._server_socket.bind(INSTANCE.bind_address())
+            # A named Windows instance took the port the OS handed out: record
+            # it where its clients read it (Studio request 8).
+            INSTANCE.record_bound_port(self._server_socket)
             self._server_socket.listen(1)
             self._server_socket.settimeout(self._idle_timeout)
 
@@ -293,8 +294,7 @@ class ServingDaemon:
             )
             self._signal_ready(ready_msg)
 
-            listen_addr = IPC_ADDRESS if IS_WINDOWS else SOCKET_PATH
-            print(f"\n[Daemon] Listening on {listen_addr}")
+            print(f"\n[Daemon] Listening on {INSTANCE.endpoint()}")
             print(f"[Daemon] Idle timeout: {self._idle_timeout}s")
 
             self._running = True
@@ -463,17 +463,12 @@ class ServingDaemon:
             except Exception:
                 pass
 
-        # Unix socket file cleanup (TCP has no file to unlink)
-        if SOCKET_PATH is not None and SOCKET_PATH.exists():
-            try:
-                SOCKET_PATH.unlink()
-            except Exception:
-                pass
-
-        if PID_PATH.exists():
-            try:
-                PID_PATH.unlink()
-            except Exception:
-                pass
+        # The instance's files: socket (Unix), pid, port (named Windows instance)
+        for f in INSTANCE.instance_files():
+            if f.exists():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
         print("[Daemon] Cleaned up")
