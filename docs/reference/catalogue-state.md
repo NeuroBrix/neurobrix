@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-16 13:12 UTC**.
+The *where a defect would be invisible* column is the census taken **2026-09-16 15:41 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
@@ -33,7 +33,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `deepseek-ai/janus-pro-7b` | multimodal | 13.8 | met in 100 s | 3 | 0 | 193 s, 3.31x, 25/25 keys, base 84 s, bytes same | 16 GB 3/3 · 32 GB 3/3 | not measured here | gen_embed `seq_len`@1 (arithmetic) | none named | measured |
 | `inclusionai/ming-lite-omni-1.5` | multimodal | 53.0 | met in 175 s | 8 | 0 | 1072 s, 9.82x, 195/203 keys, bytes passed | 16 GB 8/8 · 32 GB 8/8 | not measured here | image_vae `seq_len`@3 (weight-extent) | `D-DECLARED-MOE-AS-EXECUTED-VIEW` | measured |
 | `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | 1624 s, 26.98x, 286/287 keys, base 63 s, bytes same; 13 certified choice(s) contradicted by the runtime sweep (224 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 81/81 · 32 GB 81/81 | not measured here | flow_dit `seq_len`@3 (weight-extent) | none named | measured |
-| `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | 16 GB 36/36 · 32 GB 36/36 | not measured here | talker.code_predictor.model.codec_embedding `seq_len`@1 (arithmetic) | `D-DEEPSTACK-ZERO-EXTENT`, `D-DECLARED-MOE-AS-EXECUTED-VIEW` | measured |
+| `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | 16 GB 36/36 · 32 GB 36/36 | not measured here | none found at the input | `D-DEEPSTACK-ZERO-EXTENT`, `D-DECLARED-MOE-AS-EXECUTED-VIEW` | measured |
 | `qwen/qwen3-vl-30b-a3b-thinking` | multimodal | 57.9 | met in 365 s | 36 | 0 | 2924 s, 13.87x, 515/585 keys, bytes passed | 16 GB 36/36 · 32 GB 36/36 | not measured here | none found at the input | `D-DEEPSTACK-ZERO-EXTENT`, `D-QWEN3VL-MOE-RUNS-EVERY-EXPERT-ON-EVERY-TOKEN`, `D-DECLARED-MOE-AS-EXECUTED-VIEW` | measured |
 | `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | 78 s, 8.04x, 17/17 keys, base 11 s, bytes same | 16 GB 4/4 · 32 GB 4/4 | not measured here | joint `seq_len`@1024 (weight-extent) | none named | measured |
 | `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | 0 shapes met | not measured here | none found at the input | none named | measured |
