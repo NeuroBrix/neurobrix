@@ -423,3 +423,27 @@ and answered on this rack:
   graph (expected: still 0 and 0), and the same three non-trace sizes judged again, so the line
   moves from *correct* to *correct for a reason*. Neither container is published, so nothing on
   the hub waits on it.
+
+## 7 — the 1 168 entries the Triton 3.8 re-proof will never reach, 2026-09-16
+
+* **owed by** the Dell (this rack) · **when** after the 3.8 pass completes, because it is the
+  pass's completion that makes this visible rather than theoretical.
+* **what was measured, with a control.** 1 168 entries of the volta directory carry a PRIMARY
+  proof that names this rack's hostname and **no device memory size** — the legacy unknown-card
+  class, which serves no card until re-proven (register 56). They are spread over six files, 725
+  of them in `matmul_kernel.fp32.json`, the file the pass is 72 % through.
+
+  They are not draining. Two readings six minutes apart: the 16 GB class went 6 159 → 6 231 done
+  while the unknown bucket stayed at exactly 1 168. And the control that makes it an attribution
+  rather than a coincidence: all 725 of the matmul ones are PRESENT in the 32 GB side tree, and
+  **0** are re-proven there, while **1 374 of 3 920** known-card keys in that same tree are. At
+  that rate roughly 254 of them would be done if they were reachable.
+* **what it means, said plainly.** When the pass finishes, "the directory is re-proven under
+  3.8.0" will be true of every key the pass can reach and false of 1 168 entries that will still
+  carry a 3.6.0 proof serving no card. A completion notice that does not say so reads as more
+  than it is.
+* **the proof this rack returns.** Either the shapes are re-entered into the pass (they came from
+  requests the zoo no longer makes, which is why `certify --reprove-generator` never visits them)
+  and the 1 168 drain to 0; or they are removed as records of a machine-state the directory can
+  no longer attribute, with the removal counted and said. Not both, and not silence.
+  `tools/reproof_coverage.py` is the instrument: its `?` row is this number.
