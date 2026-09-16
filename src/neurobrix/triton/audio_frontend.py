@@ -196,7 +196,23 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
     lang = _lang_map.get(klang, "en-us")
-    from neurobrix.core.module.audio.g2p import g2p_phonemes
+    from neurobrix.core.module.audio.g2p import g2p_phonemes, refusal_for_language
+    # R30 mirror of the compiled path's language gate (stages/kokoro.py): the
+    # voice and the embedded lexicon must speak one language, or the model says
+    # other words, fluently. Landed on the compiled path first and measured NOT
+    # to fire here (vitrine 2026-09-16, 17:47: the French request went straight
+    # through this mirror) — a gate in one mode only is no gate.
+    _voice = None
+    for _key in ("global.speaker", "speaker", "global.voice", "voice"):
+        _v = engine.ctx.variable_resolver.resolved.get(_key)
+        if isinstance(_v, str) and _v:
+            _voice = _v
+            break
+    if _voice is None:
+        _voice = engine.ctx.pkg.defaults.get("voice")
+    _refusal = refusal_for_language(_voice, klang)
+    if _refusal:
+        raise RuntimeError(_refusal)
     phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str, lang, klang)
     ids = [0]
     for ch in phonemes:
@@ -208,7 +224,8 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     input_ids = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
-    print(f"   [Phonemizer·np] '{prompt[:60]}' -> {len(phonemes)} phonemes "
+    _shown = prompt if len(prompt) <= 60 else prompt[:60] + "…"
+    print(f"   [Phonemizer·np] '{_shown}' ({len(prompt)} chars) -> {len(phonemes)} phonemes "
           f"-> {actual_len} IDs")
     text_lengths = NBXTensor.from_numpy(np.array([actual_len], dtype=np.int64))
     for k in ["global.text_lengths", "text_lengths", "input_lengths"]:

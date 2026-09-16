@@ -41,3 +41,18 @@ def test_an_absent_voice_gates_nothing_and_an_unknown_letter_still_refuses():
     assert refusal_for_language(None, "a") is None and refusal_for_language("", "a") is None
     assert "does not" in (refusal_for_language("qq_x", "a") or "")
     assert language_of("f") == "French" and language_of("") is None
+
+
+def test_both_engines_ask_the_gate_before_phonemising():
+    """R30: the gate exists on the compiled path AND on the Triton mirror. It
+    was written on the compiled path alone, and the vitrine's Triton run walked
+    past it (2026-09-16 17:47, `[Phonemizer·np]`) — a gate in one mode is no
+    gate. Read from the sources, which is what a mode asymmetry hides in."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+    for rel in ("core/flow/stages/kokoro.py", "triton/audio_frontend.py"):
+        src = (root / rel).read_text()
+        i_gate = src.find("refusal_for_language(")
+        i_g2p = src.find("g2p_phonemes(prompt")
+        assert i_gate > 0, f"{rel} does not ask the language gate"
+        assert i_gate < i_g2p, f"{rel} phonemises before asking the gate"
