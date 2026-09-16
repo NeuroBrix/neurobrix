@@ -113,9 +113,44 @@ def _fields_of(container: Path, key: str):
     return hits
 
 
+def coverage_record(args, root, containers) -> dict:
+    """The answer `coverage` prints, as one record, per mode (symbol / --rarest /
+    --unreached / --field / the index summary)."""
+    if args.field:
+        rows = []
+        for c in containers:
+            hits = _fields_of(c, args.field)
+            if hits:
+                rows.append({"container": c.name, "values": sorted({json.dumps(h, sort_keys=True) for h in hits})})
+        return {"mode": "field", "field": args.field, "declared_by": rows, "containers": len(containers)}
+    index, names = _index(root)
+    if args.unreached:
+        claimed = _claimed_ops()
+        missing = sorted(op for op in claimed if not index.get(f"aten::{op}"))
+        return {"mode": "unreached", "claimed": len(claimed), "unreached": [f"aten::{op}" for op in missing],
+                "containers": len(names)}
+    if args.rarest:
+        counts = Counter({op: len(who) for op, who in index.items()})
+        rows = [{"op": op, "containers": n, "carried_by": sorted(index[op])}
+                for op, n in sorted(counts.items(), key=lambda kv: (kv[1], kv[0]))[:args.rarest]]
+        return {"mode": "rarest", "n": args.rarest, "ops": rows, "containers": len(names)}
+    if not args.symbol:
+        return {"mode": "index", "distinct_ops": len(index), "containers": len(names), "root": str(root)}
+    symbol = args.symbol if "::" in args.symbol else f"aten::{args.symbol}"
+    who = sorted(index.get(symbol, ()))
+    return {"mode": "symbol", "symbol": symbol, "carried_by": who, "containers": len(names)}
+
+
 def cmd_coverage(args) -> int:
     root = _cache_root()
     containers = _containers(root)
+    from neurobrix.cli.json_out import wants_json, emit
+    if wants_json(args):
+        if not containers:
+            emit("coverage", {"mode": "empty", "root": str(root), "containers": 0})
+            return 1
+        emit("coverage", coverage_record(args, root, containers))
+        return 0
     if not containers:
         print(f"No installed container under {root}.", file=sys.stderr)
         print("This command measures what THIS machine holds; an empty cache "
