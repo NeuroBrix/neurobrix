@@ -404,3 +404,22 @@ and answered on this rack:
   A refusal path that changes shape is not inert, whatever the tests say: the
   entry will name what the refusal module answers on a CUDA compilation error
   before and after.
+
+## 6 — real-esrgan-x2 re-traced at the stimulus its own extents clear, 2026-09-16
+
+* **owed by** the Dell (this rack) · **when** a card frees between campaigns; not urgent and not
+  a class proof either way.
+* **what was measured.** The stimulus-collision guard (`cad67f7`) reads a model's architecture
+  extents off the model. Over the ten cached upscalers at the family default 112x80, nine clear
+  and `real-esrgan-x2` does not: its width times its own scale, **80 x 2 = 160**, is the RDB
+  dense-concat width (64 + 3x32) carried by 69 of its convolution weights. The guard would trace
+  it at **112x144** instead; the nine others are returned unchanged and re-trace byte-identically.
+* **what it does NOT mean.** The container on disk was proven the same evening at four sizes —
+  96x96, 160x112, 208x144 and the 448x448 that first exposed the white square — and the symbol
+  census reads 0 breaks and 0 never-carried on it. The collision is a LATENT ambiguity, not a
+  live defect: nothing in that graph is frozen today. What is wrong is the epistemic status —
+  the render is correct by luck rather than by construction.
+* **the proof this rack returns.** A re-trace at 112x144, the symbol census re-read on the new
+  graph (expected: still 0 and 0), and the same three non-trace sizes judged again, so the line
+  moves from *correct* to *correct for a reason*. Neither container is published, so nothing on
+  the hub waits on it.

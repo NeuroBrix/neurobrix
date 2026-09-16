@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-67 entries, of which five are placeholders and 62 carry a site. Two
+68 entries, of which five are placeholders and 63 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1646,3 +1646,39 @@ refusal names the install command; three ask whether a FILE is present.
 **The rule, sharpened**: "a capability probe executes" is satisfied PER BACKEND,
 not per call site. A shared probe that executes on one backend and reads a name on
 another must say so where it is defined, because no caller can see it.
+
+### 68 — a guard whose constants were a written list, and the eleventh model it knew nothing about
+
+The trace stimulus for the upscaler family was moved to 112x80 on 2026-08-29 to clear the
+collisions that had frozen `real-esrgan`'s spatial dims. The choice was correct and the reasoning
+was written out in full: window areas (49, 64, 144, 256, 576, 1024), relative-position table
+sizes (225, 529, 961), "the usual embed/feature widths (48, 60, 64, 96, 180)", and the scale
+multiples of each.
+
+**Every one of those numbers is a constant in code answering a live question.** The list was
+right for the ten upscalers that existed when it was written, and it says nothing about the
+eleventh. Worse, it was not even complete for the ten: reading the constants OFF THE MODELS
+instead, on 2026-09-16, found that nine clear 112x80 and **`real-esrgan-x2` does not** — its
+width times its own scale, 80 x 2 = 160, is the RDB dense-concat width (64 + 3x32) carried by 69
+of its convolution weights. The container whose renders were proven correct at four sizes that
+same evening sits on a stimulus the rule refuses. Its correctness there is luck, not a property,
+and that is the whole distinction this entry exists for.
+
+**The rule**: a guard that must avoid a model's constants READS THEM FROM THE MODEL. Parameters
+and buffers for what the graph's literals are made of; the configuration's own integers, and
+their squares, for what a view computes from a side and never stores (a window area). And it
+holds over the scale multiples, because the collision that cost HAT on 2026-08-27 was with the
+trace OUTPUT size, 64 x 4 = 256 — a number the old list had to be told and the new rule finds,
+because `hat-l-x4` carries 256 as a parameter extent.
+
+Landed in the build toolchain as `stimulus_collision.py` (`cad67f7`), where the stimulus is
+corrected at the source rather than left to a default's luck: clean models are returned unchanged
+so they re-trace byte-identically (R27), and `real-esrgan-x2` moves to 112x144. Seen RED on the
+real 64x64 case against that model's measured extents, with both of its reasons — the square and
+the 64 — and on three injections: the scale multiples ignored, the extents taken from a written
+list, the square rule dropped.
+
+**Why it is not the spatial net (b69e51c) again.** The net catches a graph where a dimension ends
+up named NOWHERE, which is the loudest outcome and not the only one: a collision can freeze ONE
+expression in a graph that carries the dimension elsewhere, and the net sees nothing at all. The
+net is downstream and after the fact; this is upstream and before it.
