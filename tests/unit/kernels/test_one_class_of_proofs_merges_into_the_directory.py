@@ -77,3 +77,52 @@ def test_without_apply_nothing_is_written(tmp_path):
     before = (dst / "k.fp32.json").read_text()
     _run(src, dst, 32, apply=False)
     assert (dst / "k.fp32.json").read_text() == before
+
+
+def _run_expecting_refusal(src, dst, cls):
+    cmd = [sys.executable, str(TOOL), "--from", str(src), "--into", str(dst), "--class", str(cls)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r
+
+
+def test_a_destination_one_level_above_the_kernel_files_is_refused(tmp_path):
+    """The silently wrong invocation, made loud.
+
+    The certified directory is `autotune/<vendor>/<profile>/<kernel>.<dtype>.json` and a side
+    tree written by `certify --out` is FLAT, so `--into .../config/autotune` is a plausible
+    thing to type. Without this door every key reads as absent, the summary says
+    `moved: 0, added: 4641` — which looks like a successful FIRST merge — and the tool writes
+    flat files at the autotune root that serve no card while the real directory is untouched.
+    Caught by a dry run against the live trees on 2026-09-16, before the real merge.
+
+    Injection: the refusal removed → this returns 0 and writes `k.fp32.json` at the root.
+    """
+    src, root = tmp_path / "src", tmp_path / "autotune"
+    _file(src / "k.fp32.json", {"key1": _entry(32, "3.8.0", "NEW32")})
+    _file(root / "nvidia" / "volta" / "k.fp32.json", {"key1": _entry(16, "3.8.0", "OLD16")})
+    r = _run_expecting_refusal(src, root, 32)
+    assert r.returncode != 0, f"the wrong destination was accepted: {r.stdout[:300]}"
+    said = r.stdout + r.stderr
+    assert "holds no kernel file" in said
+    assert str(root / "nvidia" / "volta") in said, "the refusal must name what was meant"
+    assert not (root / "k.fp32.json").exists(), "nothing may be written at the wrong level"
+    assert json.loads((root / "nvidia" / "volta" / "k.fp32.json").read_text()
+                      )["entries"]["key1"]["config"]["BLOCK_M"] == "OLD16"
+
+
+def test_the_right_destination_still_merges(tmp_path):
+    """The half that keeps the door from being a wall: the nested path works."""
+    src, root = tmp_path / "src", tmp_path / "autotune"
+    _file(src / "k.fp32.json", {"key1": _entry(32, "3.8.0", "NEW32")})
+    _file(root / "nvidia" / "volta" / "k.fp32.json", {"key1": _entry(16, "3.8.0", "OLD16")})
+    rec = _run(src, root / "nvidia" / "volta", 32)
+    assert rec["files"][0]["moved"] == 1 and rec["files"][0]["added"] == 0
+
+
+def test_a_destination_with_nothing_under_it_says_so_rather_than_guessing(tmp_path):
+    src, empty = tmp_path / "src", tmp_path / "empty"
+    _file(src / "k.fp32.json", {"key1": _entry(32, "3.8.0", "NEW32")})
+    empty.mkdir()
+    r = _run_expecting_refusal(src, empty, 32)
+    assert r.returncode != 0
+    assert "Nothing below it holds kernel files" in (r.stdout + r.stderr)

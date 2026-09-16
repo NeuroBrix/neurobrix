@@ -68,6 +68,34 @@ def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
             "source_without_that_class": skipped, "entries_after": len(d_entries)}
 
 
+def refuse_a_destination_that_holds_no_kernel_files(src: Path, dst: Path) -> None:
+    """Refuse `--into` pointed at the directory ABOVE the kernel files.
+
+    The certified directory is `autotune/<vendor>/<profile>/<kernel>.<dtype>.json` and a side
+    tree written by `certify --out` is FLAT. So `--into .../config/autotune` is a plausible
+    thing to type and a silently wrong thing to do: every key reads as absent, the summary says
+    `moved: 0, added: 4641` — which looks like a successful first merge — and the tool writes a
+    flat `matmul_kernel.fp32.json` at the autotune ROOT that serves no card, while the real
+    directory is left untouched. No error, a plausible report, and a directory that looks fuller
+    than it is (2026-09-16, caught by a dry run before the real merge).
+
+    The discriminant is what the destination HOLDS: kernel files, or directories of them.
+    """
+    if any(dst.glob("*.json")):
+        return
+    nested = sorted(d for d in dst.glob("*/*") if d.is_dir() and any(d.glob("*.json")))
+    names = sorted(p.name for p in src.glob("*.json"))
+    raise SystemExit(
+        f"[merge] --into {dst} holds no kernel file. The certified directory is\n"
+        f"   autotune/<vendor>/<profile>/<kernel>.<dtype>.json\n"
+        f"and a side tree is flat, so pointing --into one level too high writes new flat files\n"
+        f"that serve no card and reports them as a successful first merge.\n"
+        + (f"   Meant one of: {', '.join(str(d) for d in nested)}\n" if nested else
+           f"   Nothing below it holds kernel files either — check the path.\n")
+        + f"   The source carries {len(names)} kernel file(s): {', '.join(names[:4])}"
+        + (" ..." if len(names) > 4 else ""))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--from", dest="src", required=True)
@@ -76,6 +104,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     src, dst = Path(a.src), Path(a.dst)
+    refuse_a_destination_that_holds_no_kernel_files(src, dst)
     rows = [merge_file(p, dst / p.name, a.cls, a.apply) for p in sorted(src.glob("*.json"))]
     print(json.dumps({"class_gb": a.cls, "applied": a.apply, "files": rows}, indent=1))
     return 0
