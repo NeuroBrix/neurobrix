@@ -314,6 +314,25 @@ def equivalent_modulo_unit_factors(a, b) -> bool:
 INT64_MAX = 9223372036854775807
 
 
+def stimulus_change(old_ctx, new_ctx) -> dict | None:
+    """The trace values that moved between two graphs' symbolic contexts, or None.
+
+    A re-trace normally runs the SAME stimulus through corrected tracer rules, and every
+    instrument downstream compares against that assumption. A re-trace whose POINT is a
+    different stimulus — the collision-free upscaler size, 2026-08-29 — moves every recorded
+    shape in the graph, and a diff that assumes a common stimulus can classify none of them.
+    Reported by dimension name so the verdict can say what moved."""
+    o = ((old_ctx or {}).get("symbols") or {})
+    n = ((new_ctx or {}).get("symbols") or {})
+    moved = {}
+    for name in {str(m.get("name")) for m in o.values()} & {str(m.get("name")) for m in n.values()}:
+        ov = sorted({m.get("trace_value") for m in o.values() if str(m.get("name")) == name})
+        nv = sorted({m.get("trace_value") for m in n.values() if str(m.get("name")) == name})
+        if ov != nv:
+            moved[name] = {"old": ov, "new": nv}
+    return moved or None
+
+
 def symbol_remap(old_ctx: dict, new_ctx: dict) -> dict:
     """old symbol id → new symbol id, matched by (name, trace value) in registration
     order — two traces number their symbols independently (canary's perception:
@@ -1367,7 +1386,7 @@ class Model:
         dtype, another attribute — is a difference the gate refuses."""
         old_root = Path(self.args.backup) / self.name / "components"
         new_root = CACHE / self.new_name / "components"
-        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "arg_witnessed": 0, "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0}
+        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "arg_witnessed": 0, "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0, "stimulus_change": {}}
         for comp_dir in sorted(new_root.glob("*")):
             og, ng = old_root / comp_dir.name / "graph.json", comp_dir / "graph.json"
             if not og.exists() or not ng.exists():
@@ -1392,6 +1411,15 @@ class Model:
             # and no graph output named, is a DEAD op the corrected tracer prunes (R19: the DAG
             # holds compute only — canary's `arange` and five `empty`, 2026-09-07): admitted and
             # counted. An op only the new graph carries, or an old op with a consumer, is beyond.
+            # The whole vocabulary below — witnessed, symbolized, re-expressed — compares a shape
+            # argument against the SAME trace. It reads a literal becoming an expression by checking
+            # that the expression's trace value equals the old literal. When the repair IS the
+            # stimulus, that equality never holds: real-esrgan-x2's unshuffle went from the literal
+            # 32 (64//2) to `floordiv(s1, 2)` of trace 56 (112//2), and the classifier scored it
+            # zero symbolized and 2193 changes "beyond annotation" (2026-09-16). Every recorded
+            # shape moves when the stimulus moves, so the count means nothing and must not read as
+            # a refusal. It is detected here and named in the verdict.
+            rec["stimulus_change"] = stimulus_change(o.get("symbolic_context"), n.get("symbolic_context"))
             remap = symbol_remap(o.get("symbolic_context"), n.get("symbolic_context"))
             if remap and any(k != v for k, v in remap.items()):
                 ops_o = [rewrite_symbols(x, remap) for x in ops_o]
@@ -1460,6 +1488,8 @@ class Model:
             report["arg_witnessed"] += rec["arg_witnessed"]
             report["pruned_dead_ops"] += rec["pruned_dead_ops"]
             report["corrupted_before"] += rec["corrupted_before"]; report["corrupted_after"] += rec["corrupted_after"]
+            if rec.get("stimulus_change"):
+                report["stimulus_change"][comp_dir.name] = rec["stimulus_change"]
         # The topology is part of the container the gate compares: its flow (type, stages, order,
         # direction, sample rate), its connections, its synthesis rules and its component set.
         # A retrace changes shape annotations, never the runtime's routing — VibeVoice's retraced
@@ -1564,7 +1594,18 @@ class Model:
         removed = [t for t in gd.get("topology") or [] if t.get("kind") in ("removed", "changed")]
         if vendor and "error" not in vendor and not gd["corrupted_after"] and not removed:
             verdict = vendor_verdict(vendor)
-        elif failed or gd["beyond_annotation"] or gd["corrupted_after"]:
+        elif failed or gd["corrupted_after"]:
+            verdict = "FAIL"
+        elif gd["beyond_annotation"] and gd.get("stimulus_change"):
+            # Every recorded shape moves when the stimulus moves, so the count is not evidence of
+            # anything and must not be read as a refusal. What the gate can still say is what the
+            # BYTES did, and it says it here rather than hiding behind a number it cannot interpret.
+            moved = "; ".join(f"{c}: " + ", ".join(f"{k} {v['old']} -> {v['new']}" for k, v in m.items())
+                              for c, m in gd["stimulus_change"].items())
+            verdict = (f"NEEDS_EXPLANATION (the two graphs were traced at DIFFERENT stimuli — {moved} — so "
+                       f"{gd['beyond_annotation']} shape changes cannot be classified by a diff that assumes "
+                       f"a common trace; the bytes are the evidence here: {bytes_verdict}. Judge the artefacts.)")
+        elif gd["beyond_annotation"]:
             verdict = "FAIL"
         elif gd.get("topology_additions") and not identical:
             verdict = "NEEDS_EXPLANATION"       # bytes differ and the topology gained fields: the additions may be the cause
