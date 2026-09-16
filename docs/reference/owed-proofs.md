@@ -325,3 +325,38 @@ Not verifiable on the Mac yet: matmul does not compile on Metal (a codegen bug,
 was lifted), so the witness — a matmul — cannot yet run there and the Apple
 certification stays blocked on that fork codegen chantier. The contract is in
 place for when it compiles.
+
+---
+
+## OWED TO THE DELL — the Metal backend seam de-vendors the shared refusal module (2026-09-16)
+
+The engine no longer names a backend vendor. This is a trunk architecture
+correction (R33/doctrine: the engine targets Triton; the backend is a
+selection, not a branch), and its first increment touches a module the Dell
+runs — so you must see it before a red does.
+
+WHAT CHANGED:
+- `kernels/autotune_refusals.py::_is_backend_refusal` no longer imports
+  `triton_msl.errors.MetalNonRecoverableError`. It asks the Metal seam,
+  `triton.metal_backend.is_backend_refusal(exc)`, which collects the refusal
+  types of whichever Metal backend is present (the bledden fork, and triton-ext
+  when it names one) — so the shared module names no vendor.
+
+WHY IT IS INERT ON CUDA:
+- `backend_refusal_types()` imports each backend's type in a try/except; on the
+  Dell no Metal backend is installed, so it returns `()`, and
+  `is_backend_refusal` returns False — EXACTLY what the old code returned when
+  the `triton_msl` import failed. Verified here: fork type -> True, ValueError
+  -> False; on a machine with no Metal backend, always False.
+
+WHAT YOU MUST PROVE:
+- Inert on CUDA: `_is_backend_refusal` on a cuda run behaves byte-identically —
+  no config that was excluded is now kept, none that was kept is now excluded.
+  Your autotune/certify kernel suite must be byte-identical (no proof diff).
+- The import path adds no cycle on your tree (autotune_refusals ->
+  triton.metal_backend is one-way; metal_backend does not import
+  autotune_refusals).
+
+STILL TO COME (same seam, later increments): backend chosen by PROFILE (fork vs
+triton-ext), `metal_driver.py` selecting the compiler through the seam rather
+than importing `MetalBackend` by name. Each lands with its own owed-proof.

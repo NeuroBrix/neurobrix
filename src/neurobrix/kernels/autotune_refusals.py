@@ -53,12 +53,19 @@ def _is_backend_refusal(exc: BaseException) -> bool:
 
     Asked by class, not by message: matching on the text would make every
     reworded refusal a run-ending error again, silently.
+
+    This SHARED module names NO backend vendor: it asks the Metal seam
+    (`triton.metal_backend.is_backend_refusal`), which knows the selectable
+    backends (the bledden fork, triton-ext). On a machine with no Metal backend
+    — the Dell on CUDA — the seam returns False, exactly as this did when it
+    imported one vendor by name. One seam decides which backend runs; the engine
+    does not branch to a vendor, here or anywhere else.
     """
     try:
-        from triton_msl.errors import MetalNonRecoverableError
-    except Exception:                      # the backend is not installed
+        from neurobrix.triton.metal_backend import is_backend_refusal
+    except Exception:                      # the seam is not importable here
         return False
-    return isinstance(exc, MetalNonRecoverableError)
+    return is_backend_refusal(exc)
 
 
 def exclude_refused_configs(bench: Callable, say: Callable[[str], None] | None = None):
