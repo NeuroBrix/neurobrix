@@ -120,17 +120,37 @@ def analyse(graph_path: Path) -> list:
                     param_extents.add(d)
     ordered = ops_in_order(g)
     facts = {uid: arg_facts(op.get("attributes")) for uid, op in ordered}
+    # A DIMENSION, not a symbol id, is what can be lost. The tracer declares one
+    # symbol per INPUT that carries the dimension, so a decoder that takes both
+    # `input_ids` and `position_ids` declares `seq_len` twice — and binds its
+    # expressions to one of the two. Following the other finds no operation that
+    # names it and reports every consumer as a break: TinyLlama's flatten records
+    # `s0*s1` in full, and the first run of this census called it a lost symbol
+    # twenty times over because it was following `s3`. Aliases are grouped by
+    # name AND trace value, and a carrier of any member carries the dimension.
+    aliases = {}
+    for sid, meta in syms.items():
+        aliases.setdefault((meta.get("name"), meta.get("trace_value")), []).append(sid)
+    alias_of = {sid: set(group) for group in aliases.values() for sid in group}
     rows = []
+    seen_dims = set()
     for sid, meta in syms.items():
         src = str(meta.get("source") or "")
         v = meta.get("trace_value")
         if not isinstance(v, int) or v <= 1:
             continue                      # a trace value of 0 or 1 explains nothing
+        dim_key = (meta.get("name"), v)
+        if dim_key in seen_dims:
+            continue                      # one row per DIMENSION, not per declaration
+        seen_dims.add(dim_key)
+        group = alias_of.get(sid, {sid})
         tainted = set()
-        if "::" in src:
-            tid = src.split("::dim_")[0]
-            if tid in tensors:
-                tainted.add(tid)
+        for member in group:
+            msrc = str((syms.get(member) or {}).get("source") or "")
+            if "::" in msrc:
+                tid = msrc.split("::dim_")[0]
+                if tid in tensors:
+                    tainted.add(tid)
         if not tainted:                   # no input tensor to start from
             tainted = {t for t, d in tensors.items() if t.startswith("input::")}
         rel = derived(int(v))
@@ -143,7 +163,7 @@ def analyse(graph_path: Path) -> list:
             if not (ins & tainted):
                 continue
             s_here, lits = facts.get(uid, (set(), []))
-            if sid in s_here:
+            if s_here & group:
                 carriers += 1
                 last_carrier = uid
             elif first_break is None:
@@ -158,7 +178,7 @@ def analyse(graph_path: Path) -> list:
                                    "output_shapes": op.get("output_shapes")}
             tainted.update(outs)
         rows.append({"graph": str(graph_path), "symbol": sid, "name": meta.get("name"),
-                     "trace_value": v, "source": src, "carriers": carriers,
+                     "trace_value": v, "source": src, "aliases": sorted(group), "carriers": carriers,
                      "last_carrier": last_carrier, "first_break": first_break,
                      "never_carried": carriers == 0})
     return rows

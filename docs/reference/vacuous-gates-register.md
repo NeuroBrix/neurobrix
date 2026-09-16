@@ -1512,3 +1512,37 @@ Landed with both injections seen red —
 `tests/unit/tools/test_snapshot_bare_weights_is_a_format.py`: the old four-layout
 form fails the upscaler case, and a naive "accept any bare weights" fails the
 stopped-download case and the wrong-variant case.
+
+### 66 — a census that followed symbol ids where the thing that can be lost is a dimension
+
+`tools/where_the_symbol_chain_breaks.py` follows each declared input symbol
+through a graph and names the operator where its expression became a literal.
+Its second run reported **167 breaks and 82 symbols never carried**, with
+`aten::view` at 78 — and among the twenty cleanest of those breaks stood
+TinyLlama, DeepSeek, Voxtral, VibeVoice, canary-qwen, granite-speech and every
+T5 text encoder in the catalogue, all with the same `[1, S, C] -> [S, C]`
+flatten said to have frozen `seq_len` at 23.
+
+Those models run at seq_len ≠ 23 every day. Opening ONE of the twenty against
+its graph took a minute and dissolved all twenty: the view's arguments record
+`{"type": "mul", "left": s0, "right": s1}` in full. The census was following
+`s3` — `seq_len` declared a SECOND time, on `position_ids` instead of
+`input_ids` — which no operation names, because the tracer bound the expression
+to `s1`.
+
+**The rule**: what can be lost is a DIMENSION, not a declaration. A tracer
+declares one symbol per input that carries the dimension, so any instrument that
+iterates over declarations counts a model's `seq_len` once per input and reports
+the unreferenced copies as losses. Group by the dimension (name and trace value),
+and a carrier of any member carries it. **102 of the 447 declarations are
+duplicates** — and every gate that reads the declaration has been counting them.
+
+Corrected: 345 dimensions, **111 breaks** (not 167), **48 never carried** (not
+82), `aten::view` **36 in 20 components** (not 78 in 38). The ranking survived;
+the magnitudes did not, and a report had already been written with them.
+
+The general form, and the reason this entry sits beside 64 rather than
+elsewhere: **the first count that looks like an answer is the moment to open one
+row against the source.** Both errors of this census — axis indices read as lost
+expressions, then aliases read as lost dimensions — inflated the number and left
+the ranking intact, which is exactly the shape that survives a sanity check.
