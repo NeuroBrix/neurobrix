@@ -322,6 +322,24 @@ class RuntimeExecutor:
                         "Install torch with MKL for 2-4x faster CPU inference."
                     )
 
+    @staticmethod
+    def run_seed(inputs: Dict[str, Any], merged_defaults: Dict[str, Any]):
+        """The seed a request runs under: the request's `global.seed` when it
+        carries one, else the merged defaults' (family, generation type, then
+        the container — the same source the ATen branch's sampling generator
+        reads, R30). Two holes this closes, found by the CogVideoX-2b
+        fingerprint walk (2026-09-16: the first differing op between two
+        runs was the initial latent's view): the CLI puts `global.seed` in the
+        request as None when no --seed is given, and `dict.get(key, default)`
+        returns that None instead of the default; and the default read was
+        the container's alone, which declares no seed, while the family
+        declares 42 — so the Triton stream ran unseeded on every seedless
+        request and the ATen branch did not."""
+        seed = inputs.get("global.seed")
+        if seed is None:
+            seed = merged_defaults.get("seed")
+        return seed
+
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Main execution entry point.
@@ -381,7 +399,7 @@ class RuntimeExecutor:
         # unseeded fallback, as before.
         if self.mode in ("triton", "triton_sequential"):
             from neurobrix.kernels import rng_stream
-            rng_stream.set_run_seed(inputs.get("global.seed", self.pkg.defaults.get("seed")))
+            rng_stream.set_run_seed(self.run_seed(inputs, merged_defaults))
             # The kernel sweep is never run inside a request: the model's
             # certified autotune directory (an engine component) serves every
             # shape it holds for the profile in force; a shape it lacks sweeps
