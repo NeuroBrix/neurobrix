@@ -381,3 +381,26 @@ and answered on this rack:
   Triton 3.8.0** unless the owner, reading this, holds 2.10 for a reason the door
   does not measure — the switch itself waits on the full battery and the
   re-proof, as ordered, so nothing is committed by this choice yet.
+
+---
+
+## 5 — the Metal seam fold: proof of inertness owed to the Mac by this rack, 2026-09-16
+
+* **owed by** the Dell (this rack) · **when** the fold lands on `main` by merge.
+* **what the Mac is folding.** Three trunk files name the Metal fork today —
+  `kernels/autotune_refusals.py:58` imports `MetalNonRecoverableError` into the
+  shared refusal module, `triton/metal_driver.py` imports `MetalBackend` by
+  name, `triton/metal_backend.py` iterates two possible providers. The fold:
+  the engine targets Triton, the backend is chosen by the profile, and the
+  provider's exceptions are translated into our own refusal type before they
+  reach `autotune_refusals.py`, which then names no vendor.
+* **the proof this rack returns.** The fold is declared INERT on CUDA, so it is
+  proven where it is declared: from a frozen worktree at the merge commit, on
+  this rack's V100s — (1) the kernel suite (`tests/unit/kernels`,
+  `tests/unit/nbx_tensor`, `tests/unit/runtime`) before and after, same count;
+  (2) a byte pair on four models across the merge, cold, `--triton`, outputs
+  compared byte for byte; (3) `neurobrix autotune check` on the certified
+  directory, 0 refused. The three numbers go in this entry with the commit.
+  A refusal path that changes shape is not inert, whatever the tests say: the
+  entry will name what the refusal module answers on a CUDA compilation error
+  before and after.
