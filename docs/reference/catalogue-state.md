@@ -5,7 +5,7 @@ machine, and every cell says how it was obtained. A cell that says *not
 measured* is not an omission: a blank and a zero read the same, and only one
 of them is honest.
 
-The *where a defect would be invisible* column is the census taken **2026-09-16 17:42 UTC**.
+The *where a defect would be invisible* column is the census taken **2026-09-16 17:49 UTC**.
 
 The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`
 unless a later line overrides it, in which case the override names the
@@ -40,7 +40,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | 16 GB 5/5 · 32 GB 5/5 · proven under triton 3.6.0 | not measured here | none found at the input | none named | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | n/m | not measured here | none found at the input | `D-ORPHEUS-FT-VENDOR-CODEC`, `D-ORPHEUS-SEED-NOT-PINNED` | not measured |
 | `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | 16 GB 238/238 · 32 GB 238/238 · proven under triton 3.6.0 | not measured here | codec.decoder `seq_len`@1 (arithmetic) | none named | measured |
-| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 6/6 · 32 GB 6/6 · proven under triton 3.6.0 | not measured here | none found at the input | `D-CPU-COMPLEX-HALF-EXP`, `D-KOKORO-DECODER-PINNED-HOST-READ` | measured |
+| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 6/6 · 32 GB 6/6 · proven under triton 3.6.0 | not measured here | none found at the input | `D-CPU-COMPLEX-HALF-EXP`, `D-KOKORO-DECODER-PINNED-HOST-READ` | **proven** — [lighthouse.wav](nbx/campaigns/2026_09_16_vitrine/kokoro_en/lighthouse.wav), judged by faster-whisper 1.2.1 (a third-party ASR) reading the synthesised WAV back: word error rate 0.0 against the sentence asked for (14 words, 0 edits) IN ENGLISH — the container's only lexicon; the French voice on the same lexicon said other words (WER 1.42) and is now refused by name, D-KOKORO-G2P-ONE-LANGUAGE ([verdict](nbx/campaigns/2026_09_16_vitrine/kokoro_en/VERDICT.md)) |
 | `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | 245 s, 8.28x, 38/38 keys, base 34 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (21 near-ties within the timer's noise) — a finding, keys in the campaign record | 16 GB 15/15 · 32 GB 15/15 · proven under triton 3.6.0 | not measured here | none found at the input | none named | measured |
 | `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | 0 shapes met | not measured here | none found at the input | none named | measured |
 | `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | 37 s, 8.86x, 11/11 keys, base 5 s, bytes same | 0 shapes met | not measured here | none found at the input | none named | measured |
