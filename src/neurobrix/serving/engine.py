@@ -468,6 +468,13 @@ class InferenceEngine:
     def family(self) -> Optional[str]:
         return self._family
 
+    @property
+    def tokenizer(self):
+        """The loaded container's tokenizer module, or None before a load."""
+        if self._executor is None:
+            return None
+        return self._executor.modules.get("tokenizer")
+
     def save_output(self, outputs: Dict[str, Any], output_path: str,
                     mode: Optional[str] = None, orig_hw=None) -> str:
         """

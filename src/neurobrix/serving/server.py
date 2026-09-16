@@ -31,6 +31,38 @@ from neurobrix.serving.protocol import (
 )
 
 
+def stream_listener(conn: socket.socket, engine) -> "decode_progress.TokenListener":
+    """The per-token listener of one streaming request. Every event carries
+    `step`, `n`, `token`, `done`; for a family whose answer is text, it also
+    carries the decoded delta (`text`, `rewind`) from the engine's own
+    tokenizer (Studio request 2; `serving/text_stream.py`). Both engines emit
+    at the same site, so one listener serves both (R30)."""
+    decoder = None
+    if _answers_in_text(engine):
+        tokenizer = engine.tokenizer
+        if tokenizer is not None:
+            from neurobrix.serving.text_stream import TextDeltaDecoder
+            decoder = TextDeltaDecoder(tokenizer)
+
+    def _on_token(step: int, n: int, token_id: int, done: bool) -> None:
+        event = {"step": step, "n": n, "token": token_id, "done": done}
+        if decoder is not None:
+            event.update(decoder.push(token_id))
+        send_message(conn, {"stream": event})
+
+    return _on_token
+
+
+def _answers_in_text(engine) -> bool:
+    """Whether the loaded family's answer is text — read from the family's
+    own declaration (output dispatch), never from a name."""
+    from neurobrix.core.runtime.output_dispatch import get_output_format
+    try:
+        return get_output_format(engine.family or "") in ("txt", "mode_dependent")
+    except RuntimeError:
+        return False
+
+
 class ServingDaemon:
     """
     Long-running process that holds InferenceEngine with weights in VRAM.
@@ -335,12 +367,8 @@ class ServingDaemon:
                     # at the generator sample site). A send failure (client
                     # gone) propagates and aborts the request — no silent
                     # decode into the void.
-                    def _on_token(step: int, n: int, token_id: int,
-                                  done: bool) -> None:
-                        send_message(conn, {"stream": {
-                            "step": step, "n": n,
-                            "token": token_id, "done": done}})
-                    decode_progress.set_listener(_on_token)
+                    decode_progress.set_listener(
+                        stream_listener(conn, self._engine))
                     try:
                         result = self._engine.generate(**params)
                     finally:
