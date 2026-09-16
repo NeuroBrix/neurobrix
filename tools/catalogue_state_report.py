@@ -103,6 +103,10 @@ VITRINE = {
         artefact="kokoro_en/lighthouse.wav",
         instrument="faster-whisper 1.2.1 (a third-party ASR) reading the synthesised WAV back",
         answer="word error rate 0.0 against the sentence asked for (14 words, 0 edits) IN ENGLISH — the container's only lexicon; the French voice on the same lexicon said other words (WER 1.42) and is now refused by name, D-KOKORO-G2P-ONE-LANGUAGE"),
+    "PixArt-XL-1024": dict(
+        artefact="pixart_xl_1024/bench.png",
+        instrument="looked at, beside the degeneracy facts",
+        answer="the request's own scene — a red wooden bench under a blossoming cherry tree, petals drifted on the path, park behind, afternoon light; not flat, not banded (image_facts.json)"),
     "PixArt-XL-2-1024-MS": dict(
         artefact="pixart/bench.png",
         instrument="looked at, beside the degeneracy facts",
