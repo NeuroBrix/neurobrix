@@ -184,14 +184,65 @@ def metal_shader_compiler_available() -> bool:
         return False
     if shutil.which("xcrun") is None:
         return False
+    # EXECUTE `metal --version`, not just `--find`: the Xcode default-toolchain
+    # shim is FOUND even when it cannot run (Xcode 26/27 delegation defect), so
+    # `--find` said yes on a machine where nothing compiled. `_metal_runs`
+    # answers the question the compile pipeline actually asks. (Callers that
+    # need the delegation fix applied first call `ensure_metal_toolchain_selected`.)
+    return _metal_runs()
+
+
+_DELEGATION_ANNOUNCED = False
+
+
+def _metal_runs(env_extra: "dict | None" = None) -> bool:
+    """True when `xcrun metal` can actually EXECUTE (not merely be found).
+
+    `xcrun --find metal` resolves the Xcode default-toolchain SHIM, which is
+    present even when it cannot run — so the find-probe says yes on a machine
+    where nothing compiles. This runs `metal --version`, which is what the
+    compile pipeline needs."""
+    import os as _os
+    env = dict(_os.environ, **(env_extra or {}))
     try:
-        return subprocess.run(
-            ["xcrun", "--find", "metal"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=20,
-        ).returncode == 0
+        return subprocess.run(["xcrun", "metal", "--version"], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=20).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def ensure_metal_toolchain_selected() -> None:
+    """Work around Xcode 26/27's broken default-toolchain delegation, once.
+
+    macOS 26 / Xcode 26+ ship the Metal compiler as a separate on-demand
+    toolchain (`com.apple.dt.toolchain.Metal`). Once downloaded it is mounted
+    and its `metal` binary runs — but Xcode's DEFAULT-toolchain shim does not
+    delegate to it, so a bare `xcrun metal` fails with "missing Metal Toolchain"
+    even though the toolchain is installed. Selecting it explicitly
+    (`TOOLCHAINS=Metal`) resolves it. This is a recognised Apple defect since
+    Xcode 26; every user on 26 or 27 meets it, so the backend detects and fixes
+    it here rather than leaving each user to discover `TOOLCHAINS` alone.
+
+    A no-op off Apple Silicon, when a TOOLCHAINS is already set, or when the
+    bare compiler already runs. Announced ONCE per process — a fix repeated on
+    every kernel is noise nobody reads."""
+    global _DELEGATION_ANNOUNCED
+    if not is_apple_silicon():
+        return
+    import os as _os
+    if _os.environ.get("TOOLCHAINS"):
+        return                                        # the caller already chose
+    if _metal_runs():
+        return                                        # delegation is fine here
+    if _metal_runs({"TOOLCHAINS": "Metal"}):
+        _os.environ["TOOLCHAINS"] = "Metal"
+        if not _DELEGATION_ANNOUNCED:
+            _DELEGATION_ANNOUNCED = True
+            print("[metal] Xcode's default toolchain does not delegate to the "
+                  "installed Metal compiler (a known Apple defect since Xcode "
+                  "26); selecting it with TOOLCHAINS=Metal for this process.",
+                  flush=True)
 
 
 def ensure_triton_metal_or_raise() -> None:
@@ -220,6 +271,10 @@ def ensure_triton_metal_or_raise() -> None:
     """
     if not is_apple_silicon():
         return
+
+    # Fix Xcode 26/27's broken toolchain delegation BEFORE probing the compiler,
+    # so the probe sees the compiler that will actually run.
+    ensure_metal_toolchain_selected()
 
     if not triton_metal_available():
         raise TritonMetalNotInstalledError(
