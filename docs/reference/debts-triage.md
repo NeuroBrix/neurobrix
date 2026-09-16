@@ -145,7 +145,7 @@ D-REPLAY-BLIND-TO-THE-ENGINE-LAUNCHER · D-SCHEDULER-EXCLUSIVITY-ONLY-AT-ENTRY
 | D-MOCHI-CUDA-700 | A | under compute-sanitizer, rig quiet, since 21:26 |
 | Allegro D2 | A (declared limit) | decided: cuDNN 9.1 refuses the large non-batch-splittable conv; 88 frames is a declared limit until cuDNN ≥ 9.3 or a per-tile bound |
 | Kokoro determinism per mode | closed | measured TRUE on the trunk 09-13 01:23 (three modes, one sha each) and CLOSED 09-14 06:54 by the permanent guard (`3092fdb`): 8/8 — the four drawing containers × native/triton, two runs each, one hash (`rng_guard_0914*/VERDICT.md`) |
-| the §4.2 screen cell (A40) | B | the production wiring is the live screen's oracle (register 45-47); the sm_86 cell itself is owed by whoever has the card |
+| the §4.2 screen cell (A40) | B | the production wiring is the live screen's oracle (register 45-47); the sm_86 cell itself is owed by whoever has the card — **2026-09-16: no A40 on this rack (four V100s), the cell is not run here; it stays owed to the machine that carries the card, said rather than masked** |
 | `--explain-plan` | — | delivered (`d9ba351`, `06004e2`) |
 | `budget-unified` and its byte question | — | five pinned pairs byte-identical across a strategy change; the per-family matrix ran 09-14 09:11-15:12: 30 cells IDENTICAL (Kokoro re-run with the voice it requires), 2 UNADJUDICATED on the two models whose nondeterminism is on record (orpheus-ft, CogVideoX-2b), 0 adjudicated differences, 16 UNMEASURABLE on this pair (the before tree 5ca23b1 cannot load today's containers) — `budget_unified_gate_20260913_1535/RUN.md` |
 | D-IMPORT-RESUMABLE-DOWNLOAD | — | closed `8da8d1b` |
