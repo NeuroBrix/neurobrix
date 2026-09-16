@@ -61505,10 +61505,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:02+00:00",
+    "date": "2026-09-16T23:09:35+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -61521,7 +61521,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.6164384610126764e-06,
+    "deviation": 1.3538747205591983e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -61531,6 +61531,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -61550,16 +61556,16 @@
       }
      }
     },
-    "best_ms": 0.958963517735644,
-    "second_ms": 1.0165094795979952,
+    "best_ms": 0.9487984398516213,
+    "second_ms": 1.0187183116611682,
     "candidates": 17,
     "accepted": 17,
-    "benched": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.644,
-     "runs": 0.738,
-     "bench": 0.937
+     "oracle": 0.652,
+     "runs": 0.542,
+     "bench": 0.865
     },
     "built": {
      "gpu": true,
@@ -82099,10 +82105,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:13+00:00",
+    "date": "2026-09-16T23:09:49+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -82115,7 +82121,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.341485323903528e-06,
+    "deviation": 1.349588521929641e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -82125,6 +82131,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -82144,16 +82156,16 @@
       }
      }
     },
-    "best_ms": 0.958562343585782,
-    "second_ms": 1.019095590240077,
+    "best_ms": 0.9490481891283175,
+    "second_ms": 1.0188538965425993,
     "candidates": 17,
     "accepted": 17,
-    "benched": 12,
+    "benched": 15,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.644,
-     "runs": 0.819,
-     "bench": 0.804
+     "oracle": 0.649,
+     "runs": 0.591,
+     "bench": 0.999
     },
     "built": {
      "gpu": true,
@@ -83113,10 +83125,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:08+00:00",
+    "date": "2026-09-16T23:09:42+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -83129,7 +83141,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.0377776848124206e-06,
+    "deviation": 1.139326621784957e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -83139,6 +83151,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -83158,16 +83176,16 @@
       }
      }
     },
-    "best_ms": 0.07943941496278598,
-    "second_ms": 0.0804540369624518,
+    "best_ms": 0.07879297179387551,
+    "second_ms": 0.08009607329415286,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.014,
-     "runs": 0.016,
-     "bench": 2.356
+     "oracle": 0.007,
+     "runs": 0.017,
+     "bench": 2.299
     },
     "built": {
      "gpu": true,
@@ -83607,20 +83625,20 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 32,
-     "BLOCK_N": 64,
+     "BLOCK_N": 32,
      "BLOCK_K": 64,
      "GROUP_M": 8
     },
-    "num_warps": 4,
-    "num_stages": 3,
+    "num_warps": 2,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:05+00:00",
+    "date": "2026-09-16T23:09:39+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -83633,7 +83651,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1916537388142113e-06,
+    "deviation": 1.17792759345465e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -83643,6 +83661,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -83662,16 +83686,16 @@
       }
      }
     },
-    "best_ms": 0.07880599073827539,
-    "second_ms": 0.08291715549490464,
+    "best_ms": 0.0829219323057699,
+    "second_ms": 0.08320494076690159,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.017,
+     "oracle": 0.01,
      "runs": 0.022,
-     "bench": 2.295
+     "bench": 2.29
     },
     "built": {
      "gpu": true,
@@ -92063,10 +92087,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:24+00:00",
+    "date": "2026-09-16T23:10:03+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -92079,7 +92103,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.3381519223147575e-06,
+    "deviation": 1.4583448610378794e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -92089,6 +92113,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -92108,16 +92138,16 @@
       }
      }
     },
-    "best_ms": 0.9584390244832853,
-    "second_ms": 1.0161583266760175,
+    "best_ms": 0.9542181419163216,
+    "second_ms": 1.0221945235603733,
     "candidates": 17,
     "accepted": 17,
-    "benched": 12,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.644,
-     "runs": 0.804,
-     "bench": 0.808
+     "oracle": 0.654,
+     "runs": 0.934,
+     "bench": 0.672
     },
     "built": {
      "gpu": true,
@@ -92567,10 +92597,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:19+00:00",
+    "date": "2026-09-16T23:09:56+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -92583,7 +92613,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5822013755244937e-06,
+    "deviation": 1.1444710248332252e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -92593,6 +92623,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -92612,16 +92648,16 @@
       }
      }
     },
-    "best_ms": 0.07838819824141531,
-    "second_ms": 0.08012555475795159,
+    "best_ms": 0.07996509071343984,
+    "second_ms": 0.12798883967446262,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 15,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.01,
-     "runs": 0.02,
-     "bench": 2.174
+     "oracle": 0.017,
+     "runs": 0.018,
+     "bench": 1.958
     },
     "built": {
      "gpu": true,
@@ -92901,10 +92937,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:16+00:00",
+    "date": "2026-09-16T23:09:53+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -92917,7 +92953,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.0822068055261167e-06,
+    "deviation": 1.308314533738295e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -92927,6 +92963,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -92946,16 +92988,16 @@
       }
      }
     },
-    "best_ms": 0.08079280522793741,
-    "second_ms": 0.08364060814232391,
+    "best_ms": 0.0792872723895353,
+    "second_ms": 0.08327940322699086,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.016,
-     "runs": 0.018,
-     "bench": 2.303
+     "oracle": 0.01,
+     "runs": 0.023,
+     "bench": 2.264
     },
     "built": {
      "gpu": true,
@@ -101007,10 +101049,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:35+00:00",
+    "date": "2026-09-16T23:10:17+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -101023,7 +101065,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.6232689390169691e-06,
+    "deviation": 1.2232434263440156e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -101033,6 +101075,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -101052,16 +101100,16 @@
       }
      }
     },
-    "best_ms": 0.959238242812273,
-    "second_ms": 1.0167242163106014,
+    "best_ms": 0.9511211674387862,
+    "second_ms": 1.0174248500874168,
     "candidates": 17,
     "accepted": 17,
-    "benched": 13,
+    "benched": 15,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.648,
-     "runs": 0.866,
-     "bench": 0.87
+     "oracle": 0.705,
+     "runs": 0.967,
+     "bench": 0.999
     },
     "built": {
      "gpu": true,
@@ -101341,10 +101389,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:30+00:00",
+    "date": "2026-09-16T23:10:10+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -101357,7 +101405,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 9.295222196494252e-07,
+    "deviation": 1.2573025693655194e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -101367,6 +101415,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -101386,16 +101440,16 @@
       }
      }
     },
-    "best_ms": 0.07949397717858409,
-    "second_ms": 0.07979021350384302,
+    "best_ms": 0.07811265459114855,
+    "second_ms": 0.08068841966069115,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.113,
+     "oracle": 0.019,
      "runs": 0.02,
-     "bench": 2.333
+     "bench": 2.29
     },
     "built": {
      "gpu": true,
@@ -101675,10 +101729,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:27+00:00",
+    "date": "2026-09-16T23:10:06+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -101691,7 +101745,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2329294825034335e-06,
+    "deviation": 1.5056275737575882e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -101701,6 +101755,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -101720,16 +101780,16 @@
       }
      }
     },
-    "best_ms": 0.08125354786737514,
-    "second_ms": 0.08367984770108058,
+    "best_ms": 0.07844856712553236,
+    "second_ms": 0.0825012545618746,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.013,
-     "runs": 0.022,
-     "bench": 2.29
+     "oracle": 0.018,
+     "runs": 0.026,
+     "bench": 2.26
     },
     "built": {
      "gpu": true,
@@ -110461,10 +110521,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:44+00:00",
+    "date": "2026-09-16T23:10:28+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -110477,7 +110537,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5067828310265973e-06,
+    "deviation": 1.563300013280603e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -110487,6 +110547,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -110506,16 +110572,16 @@
       }
      }
     },
-    "best_ms": 0.9581824034452439,
-    "second_ms": 1.0184488390621387,
+    "best_ms": 0.950222043002524,
+    "second_ms": 1.0185027310722752,
     "candidates": 17,
     "accepted": 17,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.647,
-     "runs": 0.913,
-     "bench": 0.808
+     "oracle": 0.653,
+     "runs": 1.007,
+     "bench": 0.802
     },
     "built": {
      "gpu": true,
@@ -111985,10 +112051,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:38+00:00",
+    "date": "2026-09-16T23:10:21+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -112001,7 +112067,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1449388640308358e-06,
+    "deviation": 1.0413646081844095e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -112011,6 +112077,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -112030,16 +112102,16 @@
       }
      }
     },
-    "best_ms": 0.08089357715339289,
-    "second_ms": 0.08347306586802006,
+    "best_ms": 0.07857478701470826,
+    "second_ms": 0.08248207978601378,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.014,
-     "runs": 0.122,
-     "bench": 2.287
+     "oracle": 0.011,
+     "runs": 0.026,
+     "bench": 2.253
     },
     "built": {
      "gpu": true,
@@ -120455,10 +120527,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:48+00:00",
+    "date": "2026-09-16T23:10:35+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -120471,7 +120543,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5398226727398421e-06,
+    "deviation": 1.8373625373782205e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -120481,6 +120553,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -120500,16 +120578,16 @@
       }
      }
     },
-    "best_ms": 0.14282060902059815,
-    "second_ms": 0.1439589927041972,
+    "best_ms": 0.13756732049129777,
+    "second_ms": 0.14448246193619874,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.005,
-     "runs": 0.015,
-     "bench": 1.758
+     "runs": 0.016,
+     "bench": 1.746
     },
     "built": {
      "gpu": true,
@@ -120610,7 +120688,7 @@
     "kwargs": {
      "BLOCK_M": 32,
      "BLOCK_N": 32,
-     "BLOCK_K": 64,
+     "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 2,
@@ -120619,10 +120697,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:53+00:00",
+    "date": "2026-09-16T23:10:41+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -120635,7 +120713,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.894373740682378e-06,
+    "deviation": 2.1630086061900496e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -120645,6 +120723,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -120664,16 +120748,16 @@
       }
      }
     },
-    "best_ms": 0.2098831809069737,
-    "second_ms": 0.2106160000921824,
+    "best_ms": 0.19874082805489648,
+    "second_ms": 0.21166459323815356,
     "candidates": 17,
     "accepted": 17,
     "benched": 13,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.008,
-     "runs": 0.017,
-     "bench": 1.179
+     "runs": 0.018,
+     "bench": 1.173
     },
     "built": {
      "gpu": true,
@@ -121779,10 +121863,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:58+00:00",
+    "date": "2026-09-16T23:10:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -121795,7 +121879,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1820374604898997e-06,
+    "deviation": 1.4767202881853866e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -121805,6 +121889,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -121824,16 +121914,16 @@
       }
      }
     },
-    "best_ms": 0.9578645825386047,
-    "second_ms": 1.017882946290468,
+    "best_ms": 0.9507465304397955,
+    "second_ms": 1.020011792057439,
     "candidates": 17,
     "accepted": 17,
-    "benched": 13,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.648,
-     "runs": 0.983,
-     "bench": 0.874
+     "oracle": 0.652,
+     "runs": 1.068,
+     "bench": 0.669
     },
     "built": {
      "gpu": true,
@@ -121943,10 +122033,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:51+00:00",
+    "date": "2026-09-16T23:10:38+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -121959,7 +122049,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2904443400131433e-06,
+    "deviation": 1.0942513501999916e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -121969,6 +122059,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -121988,16 +122084,16 @@
       }
      }
     },
-    "best_ms": 0.0799261419594973,
-    "second_ms": 0.08078258334601347,
+    "best_ms": 0.07888298844897394,
+    "second_ms": 0.08073667862083551,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.012,
-     "runs": 0.021,
-     "bench": 2.338
+     "oracle": 0.009,
+     "runs": 0.022,
+     "bench": 2.302
     },
     "built": {
      "gpu": true,
@@ -122107,10 +122203,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:14:46+00:00",
+    "date": "2026-09-16T23:10:32+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -122123,7 +122219,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2696920912021805e-06,
+    "deviation": 1.1576819527331768e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -122133,6 +122229,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -122152,16 +122254,16 @@
       }
      }
     },
-    "best_ms": 0.0788250915056107,
-    "second_ms": 0.08269767534165155,
+    "best_ms": 0.08126463948024644,
+    "second_ms": 0.08187565189881588,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.01,
-     "runs": 0.023,
-     "bench": 2.304
+     "oracle": 0.012,
+     "runs": 0.026,
+     "bench": 2.267
     },
     "built": {
      "gpu": true,
@@ -131563,8 +131665,8 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 32,
-     "BLOCK_N": 64,
-     "BLOCK_K": 64,
+     "BLOCK_N": 128,
+     "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 4,
@@ -131573,10 +131675,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:10+00:00",
+    "date": "2026-09-16T23:11:02+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -131589,7 +131691,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5824011534702108e-06,
+    "deviation": 1.433743873090681e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -131599,6 +131701,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -131618,16 +131726,16 @@
       }
      }
     },
-    "best_ms": 1.0196345323010494,
-    "second_ms": 1.0204534661479112,
+    "best_ms": 0.9517455638908758,
+    "second_ms": 1.0169128367775364,
     "candidates": 17,
     "accepted": 17,
-    "benched": 12,
+    "benched": 14,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.648,
-     "runs": 1.047,
-     "bench": 0.809
+     "oracle": 0.673,
+     "runs": 1.062,
+     "bench": 0.934
     },
     "built": {
      "gpu": true,
@@ -133249,10 +133357,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:04+00:00",
+    "date": "2026-09-16T23:10:55+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -133265,7 +133373,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.3269956525890249e-06,
+    "deviation": 1.072666146809355e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -133275,6 +133383,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -133294,16 +133408,16 @@
       }
      }
     },
-    "best_ms": 0.07999943044450548,
-    "second_ms": 0.08061856900369388,
+    "best_ms": 0.0783691110468849,
+    "second_ms": 0.0806800779503058,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.007,
-     "runs": 0.022,
-     "bench": 2.332
+     "runs": 0.025,
+     "bench": 2.29
     },
     "built": {
      "gpu": true,
@@ -133923,10 +134037,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:01+00:00",
+    "date": "2026-09-16T23:10:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -133939,7 +134053,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1201341045488565e-06,
+    "deviation": 1.2510870417328695e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -133949,6 +134063,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -133968,16 +134088,16 @@
       }
      }
     },
-    "best_ms": 0.07846138591797935,
-    "second_ms": 0.08496574255136344,
+    "best_ms": 0.07909702728374289,
+    "second_ms": 0.08335809304237958,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.017,
-     "runs": 0.024,
-     "bench": 2.304
+     "oracle": 0.01,
+     "runs": 0.028,
+     "bench": 2.252
     },
     "built": {
      "gpu": true,
@@ -142533,10 +142653,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:21+00:00",
+    "date": "2026-09-16T23:11:17+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -142549,7 +142669,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.4849987702176857e-06,
+    "deviation": 1.4012207619708993e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -142559,6 +142679,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -142578,16 +142704,16 @@
       }
      }
     },
-    "best_ms": 0.9605369785936867,
-    "second_ms": 1.0183679994783903,
+    "best_ms": 0.9523200000204691,
+    "second_ms": 1.0219519953978689,
     "candidates": 17,
     "accepted": 17,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.648,
-     "runs": 1.112,
-     "bench": 0.807
+     "oracle": 0.655,
+     "runs": 1.093,
+     "bench": 0.8
     },
     "built": {
      "gpu": true,
@@ -143037,10 +143163,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:15+00:00",
+    "date": "2026-09-16T23:11:09+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -143053,7 +143179,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1000140780266742e-06,
+    "deviation": 1.0507635151638948e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -143063,6 +143189,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -143082,16 +143214,16 @@
       }
      }
     },
-    "best_ms": 0.07972871036993133,
-    "second_ms": 0.08034875482526792,
+    "best_ms": 0.07818637661585191,
+    "second_ms": 0.08316766119129221,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.011,
-     "runs": 0.022,
-     "bench": 2.343
+     "oracle": 0.007,
+     "runs": 0.023,
+     "bench": 2.243
     },
     "built": {
      "gpu": true,
@@ -143371,10 +143503,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:12+00:00",
+    "date": "2026-09-16T23:11:06+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -143387,7 +143519,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2209018657383407e-06,
+    "deviation": 9.499499753966196e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -143397,6 +143529,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -143416,16 +143554,16 @@
       }
      }
     },
-    "best_ms": 0.07930101308336455,
-    "second_ms": 0.08333566724773377,
+    "best_ms": 0.07872302289451322,
+    "second_ms": 0.08331690646912392,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.01,
-     "runs": 0.025,
-     "bench": 2.316
+     "oracle": 0.019,
+     "runs": 0.028,
+     "bench": 2.247
     },
     "built": {
      "gpu": true,
@@ -151247,10 +151385,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:32+00:00",
+    "date": "2026-09-16T23:11:31+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -151263,7 +151401,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.3467682314264028e-06,
+    "deviation": 1.2430934519551187e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -151273,6 +151411,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -151292,16 +151436,16 @@
       }
      }
     },
-    "best_ms": 0.9596128783574919,
-    "second_ms": 1.017451785112682,
+    "best_ms": 0.9518204854755867,
+    "second_ms": 1.022060635842775,
     "candidates": 17,
     "accepted": 17,
-    "benched": 11,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.649,
-     "runs": 1.169,
-     "bench": 0.735
+     "oracle": 0.64,
+     "runs": 1.144,
+     "bench": 0.866
     },
     "built": {
      "gpu": true,
@@ -152595,10 +152739,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:26+00:00",
+    "date": "2026-09-16T23:11:24+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -152611,7 +152755,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1211396610647658e-06,
+    "deviation": 1.289293790251529e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -152621,6 +152765,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -152640,16 +152790,16 @@
       }
      }
     },
-    "best_ms": 0.07838483795168855,
-    "second_ms": 0.08066981238289683,
+    "best_ms": 0.07966222182019717,
+    "second_ms": 0.08147653557674181,
     "candidates": 17,
     "accepted": 17,
-    "benched": 15,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.007,
-     "runs": 0.024,
-     "bench": 2.113
+     "oracle": 0.008,
+     "runs": 0.025,
+     "bench": 2.204
     },
     "built": {
      "gpu": true,
@@ -152929,10 +153079,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:24+00:00",
+    "date": "2026-09-16T23:11:20+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -152945,7 +153095,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.048246813234938e-06,
+    "deviation": 1.0671474540517204e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -152955,6 +153105,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -152974,16 +153130,16 @@
       }
      }
     },
-    "best_ms": 0.07961541075130989,
-    "second_ms": 0.08366495379755776,
+    "best_ms": 0.08020443555797446,
+    "second_ms": 0.08348183014306677,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.01,
-     "runs": 0.026,
-     "bench": 2.306
+     "oracle": 0.012,
+     "runs": 0.029,
+     "bench": 2.272
     },
     "built": {
      "gpu": true,
@@ -160015,10 +160171,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:43+00:00",
+    "date": "2026-09-16T23:11:46+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -160031,7 +160187,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7208294560988143e-06,
+    "deviation": 1.705940327394725e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -160041,6 +160197,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -160060,16 +160222,16 @@
       }
      }
     },
-    "best_ms": 0.9605619514860758,
-    "second_ms": 1.0201465330625836,
+    "best_ms": 0.9530435088204174,
+    "second_ms": 1.0185835800672833,
     "candidates": 17,
     "accepted": 17,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.655,
-     "runs": 1.523,
-     "bench": 0.74
+     "oracle": 0.664,
+     "runs": 1.213,
+     "bench": 0.8
     },
     "built": {
      "gpu": true,
@@ -161793,10 +161955,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:37+00:00",
+    "date": "2026-09-16T23:11:39+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -161809,7 +161971,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1053063789946558e-06,
+    "deviation": 1.2682140320580769e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -161819,6 +161981,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -161838,16 +162006,16 @@
       }
      }
     },
-    "best_ms": 0.07867569193387261,
-    "second_ms": 0.07981348525555361,
+    "best_ms": 0.0802525401216101,
+    "second_ms": 0.08035396050442667,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.007,
-     "runs": 0.025,
-     "bench": 2.178
+     "runs": 0.026,
+     "bench": 2.305
     },
     "built": {
      "gpu": true,
@@ -162467,10 +162635,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:35+00:00",
+    "date": "2026-09-16T23:11:35+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -162483,7 +162651,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.130867742268787e-06,
+    "deviation": 1.2835003158121638e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -162493,6 +162661,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -162512,16 +162686,16 @@
       }
      }
     },
-    "best_ms": 0.07955163399174334,
-    "second_ms": 0.08407883034545169,
+    "best_ms": 0.08035729675133482,
+    "second_ms": 0.08380651396208738,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.01,
-     "runs": 0.027,
-     "bench": 2.292
+     "runs": 0.03,
+     "bench": 2.304
     },
     "built": {
      "gpu": true,
@@ -188021,10 +188195,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:21+00:00",
+    "date": "2026-09-16T23:12:33+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -188037,7 +188211,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.0374618514194992e-06,
+    "deviation": 1.2650416289298308e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -188047,6 +188221,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -188066,16 +188246,16 @@
       }
      }
     },
-    "best_ms": 0.07579786545229128,
-    "second_ms": 0.07784924040014825,
+    "best_ms": 0.07327524756175885,
+    "second_ms": 0.07979941816831176,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.003,
-     "runs": 0.013,
-     "bench": 2.449
+     "runs": 0.015,
+     "bench": 2.122
     },
     "built": {
      "gpu": true,
@@ -189691,10 +189871,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:55+00:00",
+    "date": "2026-09-16T23:12:00+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -189707,7 +189887,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2452884315301294e-06,
+    "deviation": 1.6627399779886148e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -189717,6 +189897,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -189736,16 +189922,16 @@
       }
      }
     },
-    "best_ms": 0.9592632186122056,
-    "second_ms": 1.0213861057632847,
+    "best_ms": 0.9518954085140694,
+    "second_ms": 1.0197145280085111,
     "candidates": 17,
     "accepted": 17,
     "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.672,
-     "runs": 1.551,
-     "bench": 0.873
+     "oracle": 0.658,
+     "runs": 1.288,
+     "bench": 0.866
     },
     "built": {
      "gpu": true,
@@ -191129,10 +191315,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:49+00:00",
+    "date": "2026-09-16T23:11:53+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -191145,7 +191331,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.0851150201804594e-06,
+    "deviation": 1.2241699529706662e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -191155,6 +191341,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -191174,16 +191366,16 @@
       }
      }
     },
-    "best_ms": 0.07872445461299192,
-    "second_ms": 0.08064657266401007,
+    "best_ms": 0.08075492494396916,
+    "second_ms": 0.08093199028688318,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.008,
-     "runs": 0.023,
-     "bench": 2.312
+     "runs": 0.026,
+     "bench": 2.306
     },
     "built": {
      "gpu": true,
@@ -191633,10 +191825,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:46+00:00",
+    "date": "2026-09-16T23:11:49+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -191649,7 +191841,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7230044122650425e-06,
+    "deviation": 1.4379036291444648e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -191659,6 +191851,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -191678,16 +191876,16 @@
       }
      }
     },
-    "best_ms": 0.07978423403967046,
-    "second_ms": 0.08288060850685551,
+    "best_ms": 0.07915454603855514,
+    "second_ms": 0.08304159868331183,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.015,
-     "runs": 0.028,
-     "bench": 2.31
+     "oracle": 0.01,
+     "runs": 0.03,
+     "bench": 2.255
     },
     "built": {
      "gpu": true,
@@ -222087,10 +222285,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:07+00:00",
+    "date": "2026-09-16T23:12:15+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -222103,7 +222301,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5088471501894372e-06,
+    "deviation": 1.3233494337594425e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -222113,6 +222311,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -222132,16 +222336,16 @@
       }
      }
     },
-    "best_ms": 0.9601873159408569,
-    "second_ms": 1.0209010588495355,
+    "best_ms": 0.9514965865670181,
+    "second_ms": 1.0263444153886092,
     "candidates": 17,
     "accepted": 17,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.652,
-     "runs": 1.637,
-     "bench": 0.809
+     "oracle": 0.648,
+     "runs": 1.329,
+     "bench": 0.801
     },
     "built": {
      "gpu": true,
@@ -224097,10 +224301,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:00+00:00",
+    "date": "2026-09-16T23:12:08+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -224113,7 +224317,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1105790205839891e-06,
+    "deviation": 1.1579130873503001e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -224123,6 +224327,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -224142,16 +224352,16 @@
       }
      }
     },
-    "best_ms": 0.07923453556490945,
-    "second_ms": 0.0803455087303553,
+    "best_ms": 0.07972223378785022,
+    "second_ms": 0.08170758934526075,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.023,
-     "bench": 2.303
+     "oracle": 0.009,
+     "runs": 0.027,
+     "bench": 2.295
     },
     "built": {
      "gpu": true,
@@ -224601,10 +224811,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:15:58+00:00",
+    "date": "2026-09-16T23:12:04+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -224617,7 +224827,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2408787057243927e-06,
+    "deviation": 1.5004260678921164e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -224627,6 +224837,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -224646,16 +224862,16 @@
       }
      }
     },
-    "best_ms": 0.07886918589644049,
-    "second_ms": 0.08374864912679043,
+    "best_ms": 0.07908825498235525,
+    "second_ms": 0.08394039104528286,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.016,
-     "runs": 0.029,
-     "bench": 2.289
+     "oracle": 0.01,
+     "runs": 0.031,
+     "bench": 2.292
     },
     "built": {
      "gpu": true,
@@ -251931,10 +252147,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:19+00:00",
+    "date": "2026-09-16T23:12:30+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -251947,7 +252163,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.114244086235416e-06,
+    "deviation": 1.7335827901537816e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -251957,6 +252173,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -251976,16 +252198,16 @@
       }
      }
     },
-    "best_ms": 0.9588386314671214,
-    "second_ms": 1.0220867395401,
+    "best_ms": 0.9534189264948775,
+    "second_ms": 1.0207663178443909,
     "candidates": 17,
     "accepted": 17,
     "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.652,
-     "runs": 1.715,
-     "bench": 0.738
+     "oracle": 0.668,
+     "runs": 1.487,
+     "bench": 0.798
     },
     "built": {
      "gpu": true,
@@ -253789,10 +254011,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:12+00:00",
+    "date": "2026-09-16T23:12:22+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -253805,7 +254027,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.1042283332917767e-06,
+    "deviation": 1.0383878334815244e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -253815,6 +254037,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -253834,16 +254062,16 @@
       }
      }
     },
-    "best_ms": 0.07864694042156821,
-    "second_ms": 0.08199796686271597,
+    "best_ms": 0.07973438563167781,
+    "second_ms": 0.08182354786816766,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.024,
-     "bench": 2.319
+     "oracle": 0.01,
+     "runs": 0.027,
+     "bench": 2.302
     },
     "built": {
      "gpu": true,
@@ -254293,10 +254521,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:09+00:00",
+    "date": "2026-09-16T23:12:19+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -254309,7 +254537,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.2698314992307692e-06,
+    "deviation": 1.1912112873322187e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -254319,6 +254547,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -254338,16 +254572,16 @@
       }
      }
     },
-    "best_ms": 0.07859389502597561,
-    "second_ms": 0.08333894850977933,
+    "best_ms": 0.07995632900911219,
+    "second_ms": 0.08380521094482957,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.016,
-     "runs": 0.031,
-     "bench": 2.156
+     "oracle": 0.01,
+     "runs": 0.03,
+     "bench": 2.258
     },
     "built": {
      "gpu": true,
@@ -509147,20 +509381,20 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 64,
-     "BLOCK_N": 128,
+     "BLOCK_N": 64,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:25+00:00",
+    "date": "2026-09-16T23:12:40+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -509173,7 +509407,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 5.151633799559071e-07,
+    "deviation": 6.047675002158776e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -509183,6 +509417,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -509202,16 +509442,16 @@
       }
      }
     },
-    "best_ms": 0.09697586994323809,
-    "second_ms": 0.09745985334976537,
+    "best_ms": 0.05941504503447396,
+    "second_ms": 0.059961002617056114,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.003,
-     "runs": 0.341,
-     "bench": 2.589
+     "oracle": 0.018,
+     "runs": 0.221,
+     "bench": 3.524
     },
     "built": {
      "gpu": true,
@@ -509311,7 +509551,7 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 64,
-     "BLOCK_N": 128,
+     "BLOCK_N": 64,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
@@ -509321,10 +509561,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:27+00:00",
+    "date": "2026-09-16T23:12:44+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -509337,7 +509577,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 5.439579058186108e-07,
+    "deviation": 7.292850584869565e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -509347,6 +509587,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -509366,16 +509612,16 @@
       }
      }
     },
-    "best_ms": 0.16019959261609337,
-    "second_ms": 0.16060035359279246,
+    "best_ms": 0.0887501298026605,
+    "second_ms": 0.08880482189459343,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.005,
+     "oracle": 0.004,
      "runs": 0.434,
-     "bench": 1.856
+     "bench": 2.7
     },
     "built": {
      "gpu": true,
@@ -564603,10 +564849,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:39+00:00",
+    "date": "2026-09-16T23:13:04+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -564619,7 +564865,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5438601314569324e-06,
+    "deviation": 2.039012979787185e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -564629,6 +564875,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -564648,16 +564900,16 @@
       }
      }
     },
-    "best_ms": 0.22623045306179404,
-    "second_ms": 0.2599131424512182,
+    "best_ms": 0.21476772281131304,
+    "second_ms": 0.2623645537174665,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.012,
-     "runs": 0.109,
-     "bench": 1.584
+     "oracle": 0.011,
+     "runs": 0.122,
+     "bench": 1.601
     },
     "built": {
      "gpu": true,
@@ -565107,10 +565359,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:31+00:00",
+    "date": "2026-09-16T23:14:07+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -565123,7 +565375,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.166558000067406e-06,
+    "deviation": 2.2351466609984382e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -565133,6 +565385,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -565152,16 +565410,16 @@
       }
      }
     },
-    "best_ms": 23.022592544555664,
-    "second_ms": 23.028736114501953,
+    "best_ms": 23.46291160583496,
+    "second_ms": 23.468032836914062,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 2.992,
-     "runs": 32.148,
-     "bench": 3.662
+     "oracle": 3.714,
+     "runs": 37.844,
+     "bench": 3.743
     },
     "built": {
      "gpu": true,
@@ -565271,10 +565529,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:41+00:00",
+    "date": "2026-09-16T23:13:07+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -565287,7 +565545,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.807304446190014e-06,
+    "deviation": 1.8374276138975554e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -565297,6 +565555,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -565316,16 +565580,16 @@
       }
      }
     },
-    "best_ms": 0.37149328427407347,
-    "second_ms": 0.3720400793459809,
+    "best_ms": 0.3699987702644788,
+    "second_ms": 0.37080730194026984,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.03,
-     "runs": 0.225,
-     "bench": 1.363
+     "oracle": 0.034,
+     "runs": 0.28,
+     "bench": 1.375
     },
     "built": {
      "gpu": true,
@@ -565430,15 +565694,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:37+00:00",
+    "date": "2026-09-16T23:13:01+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -565451,7 +565715,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.136653256686502e-06,
+    "deviation": 1.8777008368907114e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -565461,6 +565725,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -565480,16 +565750,16 @@
       }
      }
     },
-    "best_ms": 0.36125188703848937,
-    "second_ms": 0.36140500997828545,
+    "best_ms": 0.3646424621916734,
+    "second_ms": 0.36522369287334955,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.04,
-     "runs": 0.261,
-     "bench": 1.374
+     "oracle": 0.028,
+     "runs": 0.264,
+     "bench": 1.364
     },
     "built": {
      "gpu": true,
@@ -565599,10 +565869,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:46+00:00",
+    "date": "2026-09-16T23:13:14+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -565615,7 +565885,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.3310973079458603e-06,
+    "deviation": 3.216969661305657e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -565625,6 +565895,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -565644,16 +565920,16 @@
       }
      }
     },
-    "best_ms": 1.0423233603176318,
-    "second_ms": 1.0427364239821564,
+    "best_ms": 1.052588962219857,
+    "second_ms": 1.0528934130797516,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.083,
-     "runs": 0.251,
-     "bench": 1.137
+     "oracle": 0.087,
+     "runs": 0.279,
+     "bench": 1.134
     },
     "built": {
      "gpu": true,
@@ -566273,10 +566549,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:44+00:00",
+    "date": "2026-09-16T23:13:11+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -566289,7 +566565,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7929432632682686e-06,
+    "deviation": 2.1025972420983316e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -566299,6 +566575,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -566318,16 +566600,16 @@
       }
      }
     },
-    "best_ms": 1.1901052178758564,
-    "second_ms": 1.1957760006189346,
+    "best_ms": 1.2127999998629093,
+    "second_ms": 1.2334245174161849,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.067,
-     "runs": 0.963,
-     "bench": 1.133
+     "oracle": 0.077,
+     "runs": 1.152,
+     "bench": 1.122
     },
     "built": {
      "gpu": true,
@@ -566607,10 +566889,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:35+00:00",
+    "date": "2026-09-16T23:14:14+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -566623,7 +566905,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.6517211564998643e-06,
+    "deviation": 1.960037788847545e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -566633,6 +566915,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -566652,16 +566940,16 @@
       }
      }
     },
-    "best_ms": 0.21015029157815354,
-    "second_ms": 0.2577554291912488,
+    "best_ms": 0.21486130132373557,
+    "second_ms": 0.2629618600819462,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.011,
-     "runs": 0.107,
-     "bench": 1.576
+     "oracle": 0.224,
+     "runs": 0.151,
+     "bench": 1.543
     },
     "built": {
      "gpu": true,
@@ -567106,15 +567394,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:29+00:00",
+    "date": "2026-09-16T23:15:33+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -567127,7 +567415,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.1451131007508537e-06,
+    "deviation": 2.0407040117416032e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -567137,6 +567425,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -567156,16 +567450,16 @@
       }
      }
     },
-    "best_ms": 23.029760360717773,
-    "second_ms": 23.047168731689453,
+    "best_ms": 23.29497528076172,
+    "second_ms": 23.30828857421875,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 3.262,
-     "runs": 33.728,
-     "bench": 3.678
+     "oracle": 4.023,
+     "runs": 52.981,
+     "bench": 3.756
     },
     "built": {
      "gpu": true,
@@ -567275,10 +567569,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:37+00:00",
+    "date": "2026-09-16T23:14:17+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -567291,7 +567585,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.826255428377763e-06,
+    "deviation": 1.7678689770728633e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -567301,6 +567595,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -567320,16 +567620,16 @@
       }
      }
     },
-    "best_ms": 0.3712351070445718,
-    "second_ms": 0.372378097865188,
+    "best_ms": 0.36855984688962545,
+    "second_ms": 0.3692443433262053,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.049,
-     "runs": 0.225,
-     "bench": 1.285
+     "oracle": 0.293,
+     "runs": 0.295,
+     "bench": 1.366
     },
     "built": {
      "gpu": true,
@@ -567434,15 +567734,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:33+00:00",
+    "date": "2026-09-16T23:14:10+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -567455,7 +567755,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.6805245711062835e-06,
+    "deviation": 1.5468470263020586e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -567465,6 +567765,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -567484,16 +567790,16 @@
       }
      }
     },
-    "best_ms": 0.3604865798326296,
-    "second_ms": 0.3613954384193242,
+    "best_ms": 0.36421272300538565,
+    "second_ms": 0.3644562295504979,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.036,
-     "runs": 0.339,
-     "bench": 1.367
+     "oracle": 0.049,
+     "runs": 0.241,
+     "bench": 1.36
     },
     "built": {
      "gpu": true,
@@ -567598,15 +567904,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:41+00:00",
+    "date": "2026-09-16T23:14:24+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -567619,7 +567925,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.5249254548829083e-06,
+    "deviation": 3.153717477533052e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -567629,6 +567935,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -567648,16 +567960,16 @@
       }
      }
     },
-    "best_ms": 1.0434836729152783,
-    "second_ms": 1.043980972186939,
+    "best_ms": 1.0527273480956618,
+    "second_ms": 1.0528380484194368,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.103,
-     "runs": 0.242,
-     "bench": 1.136
+     "oracle": 0.086,
+     "runs": 0.278,
+     "bench": 1.14
     },
     "built": {
      "gpu": true,
@@ -568277,10 +568589,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:17:39+00:00",
+    "date": "2026-09-16T23:14:21+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -568293,7 +568605,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.8783590059050004e-06,
+    "deviation": 1.958586897452266e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -568303,6 +568615,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -568322,16 +568640,16 @@
       }
      }
     },
-    "best_ms": 1.1829439960420132,
-    "second_ms": 1.2003210075199604,
+    "best_ms": 1.2126079872250557,
+    "second_ms": 1.2386436193220076,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.068,
-     "runs": 0.977,
-     "bench": 1.137
+     "oracle": 0.075,
+     "runs": 1.162,
+     "bench": 1.132
     },
     "built": {
      "gpu": true,
@@ -568611,10 +568929,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:32+00:00",
+    "date": "2026-09-16T23:15:40+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -568627,7 +568945,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.5162400012348343e-06,
+    "deviation": 1.8827833986153228e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -568637,6 +568955,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -568656,16 +568980,16 @@
       }
      }
     },
-    "best_ms": 0.21067379808492875,
-    "second_ms": 0.2610884923201341,
+    "best_ms": 0.21552290979095481,
+    "second_ms": 0.2668882869988037,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.012,
-     "runs": 0.12,
-     "bench": 1.566
+     "oracle": 0.015,
+     "runs": 0.15,
+     "bench": 1.577
     },
     "built": {
      "gpu": true,
@@ -569115,10 +569439,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:25+00:00",
+    "date": "2026-09-16T23:16:42+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -569131,7 +569455,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.0309984533850636e-06,
+    "deviation": 2.121974621924104e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -569141,6 +569465,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -569160,16 +569490,16 @@
       }
      }
     },
-    "best_ms": 23.014400482177734,
-    "second_ms": 23.040000915527344,
+    "best_ms": 23.430143356323242,
+    "second_ms": 23.46393585205078,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 3.123,
-     "runs": 32.552,
-     "bench": 3.668
+     "oracle": 4.231,
+     "runs": 34.71,
+     "bench": 3.744
     },
     "built": {
      "gpu": true,
@@ -569274,15 +569604,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:34+00:00",
+    "date": "2026-09-16T23:15:43+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -569295,7 +569625,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.006005786443583e-06,
+    "deviation": 2.090064413860431e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -569305,6 +569635,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -569324,16 +569660,16 @@
       }
      }
     },
-    "best_ms": 0.3716116085940716,
-    "second_ms": 0.3722883115694361,
+    "best_ms": 0.3724603088429341,
+    "second_ms": 0.37369203908102855,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.048,
-     "runs": 0.234,
-     "bench": 1.282
+     "oracle": 0.028,
+     "runs": 0.306,
+     "bench": 1.374
     },
     "built": {
      "gpu": true,
@@ -569438,15 +569774,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:30+00:00",
+    "date": "2026-09-16T23:15:37+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -569459,7 +569795,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7476643759713177e-06,
+    "deviation": 1.8355348697377977e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -569469,6 +569805,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -569488,16 +569830,16 @@
       }
      }
     },
-    "best_ms": 0.36110490560531616,
-    "second_ms": 0.3620432930834153,
+    "best_ms": 0.36795370989632836,
+    "second_ms": 0.3691568769159771,
     "candidates": 17,
     "accepted": 17,
-    "benched": 17,
+    "benched": 15,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.031,
-     "runs": 0.247,
-     "bench": 1.319
+     "oracle": 0.028,
+     "runs": 0.306,
+     "bench": 1.211
     },
     "built": {
      "gpu": true,
@@ -569607,10 +569949,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:39+00:00",
+    "date": "2026-09-16T23:15:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -569623,7 +569965,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.6863749690730656e-06,
+    "deviation": 3.2271911225301672e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -569633,6 +569975,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -569652,16 +570000,16 @@
       }
      }
     },
-    "best_ms": 1.042072215595761,
-    "second_ms": 1.043954162984281,
+    "best_ms": 1.0549967611158215,
+    "second_ms": 1.0554395752984125,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.106,
-     "runs": 0.267,
-     "bench": 1.14
+     "oracle": 0.089,
+     "runs": 0.279,
+     "bench": 1.139
     },
     "built": {
      "gpu": true,
@@ -570281,10 +570629,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:18:37+00:00",
+    "date": "2026-09-16T23:15:47+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -570297,7 +570645,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.679082199284485e-06,
+    "deviation": 2.1955249578692707e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -570307,6 +570655,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -570326,16 +570680,16 @@
       }
      }
     },
-    "best_ms": 1.1904155088193489,
-    "second_ms": 1.1992000043392181,
+    "best_ms": 1.209343995898962,
+    "second_ms": 1.234877928610771,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.07,
-     "runs": 0.998,
-     "bench": 1.126
+     "oracle": 0.072,
+     "runs": 1.212,
+     "bench": 1.129
     },
     "built": {
      "gpu": true,
@@ -570615,10 +570969,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:29+00:00",
+    "date": "2026-09-16T23:16:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -570631,7 +570985,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.8482790721672626e-06,
+    "deviation": 1.8908044100680526e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -570641,6 +570995,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -570660,16 +571020,16 @@
       }
      }
     },
-    "best_ms": 0.20963217971030246,
-    "second_ms": 0.25985266150330466,
+    "best_ms": 0.21538909126750447,
+    "second_ms": 0.26229133665990484,
     "candidates": 17,
     "accepted": 17,
-    "benched": 16,
+    "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.013,
-     "runs": 0.135,
-     "bench": 1.485
+     "oracle": 0.014,
+     "runs": 0.148,
+     "bench": 1.564
     },
     "built": {
      "gpu": true,
@@ -571119,10 +571479,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:21+00:00",
+    "date": "2026-09-16T23:17:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -571135,7 +571495,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.4161586495541405e-06,
+    "deviation": 1.9608275845123457e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -571145,6 +571505,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -571164,16 +571530,16 @@
       }
      }
     },
-    "best_ms": 23.010303497314453,
-    "second_ms": 23.030784606933594,
+    "best_ms": 23.439359664916992,
+    "second_ms": 23.45574378967285,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 3.186,
-     "runs": 32.702,
-     "bench": 3.677
+     "oracle": 2.023,
+     "runs": 35.657,
+     "bench": 3.754
     },
     "built": {
      "gpu": true,
@@ -571278,15 +571644,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:31+00:00",
+    "date": "2026-09-16T23:16:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -571299,7 +571665,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.2505025935383837e-06,
+    "deviation": 2.126295007841536e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -571309,6 +571675,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -571328,16 +571700,16 @@
       }
      }
     },
-    "best_ms": 0.3708970899720794,
-    "second_ms": 0.37224407932337594,
+    "best_ms": 0.37278523267461705,
+    "second_ms": 0.3731582699362765,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.027,
-     "runs": 0.236,
-     "bench": 1.363
+     "oracle": 0.029,
+     "runs": 0.268,
+     "bench": 1.337
     },
     "built": {
      "gpu": true,
@@ -571442,15 +571814,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:27+00:00",
+    "date": "2026-09-16T23:16:45+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -571463,7 +571835,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7987180408021515e-06,
+    "deviation": 1.6908694776519762e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -571473,6 +571845,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -571492,16 +571870,16 @@
       }
      }
     },
-    "best_ms": 0.3623894323717873,
-    "second_ms": 0.3628692323359374,
+    "best_ms": 0.3649378467637759,
+    "second_ms": 0.364967077683944,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.034,
-     "runs": 0.277,
-     "bench": 1.374
+     "oracle": 0.026,
+     "runs": 0.309,
+     "bench": 1.36
     },
     "built": {
      "gpu": true,
@@ -571611,10 +571989,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:35+00:00",
+    "date": "2026-09-16T23:16:58+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -571627,7 +572005,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.776711816739854e-06,
+    "deviation": 4.31267680367416e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -571637,6 +572015,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -571656,16 +572040,16 @@
       }
      }
     },
-    "best_ms": 1.0423781024782282,
-    "second_ms": 1.0431247498538043,
+    "best_ms": 1.0570447509353225,
+    "second_ms": 1.0580410796242792,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.092,
-     "runs": 0.258,
-     "bench": 1.134
+     "oracle": 0.088,
+     "runs": 0.302,
+     "bench": 1.137
     },
     "built": {
      "gpu": true,
@@ -572285,10 +572669,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:19:33+00:00",
+    "date": "2026-09-16T23:16:55+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -572301,7 +572685,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.1552269451578644e-06,
+    "deviation": 1.933543647107221e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -572311,6 +572695,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -572330,16 +572720,16 @@
       }
      }
     },
-    "best_ms": 1.1836800016462803,
-    "second_ms": 1.194207988679409,
+    "best_ms": 1.2194249890744686,
+    "second_ms": 1.2393703229965702,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.072,
-     "runs": 0.999,
-     "bench": 1.129
+     "oracle": 0.077,
+     "runs": 1.168,
+     "bench": 1.127
     },
     "built": {
      "gpu": true,
@@ -572619,10 +573009,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:25+00:00",
+    "date": "2026-09-16T23:17:54+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -572635,7 +573025,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.8251228883909243e-06,
+    "deviation": 1.8574602584125637e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -572645,6 +573035,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -572664,16 +573060,16 @@
       }
      }
     },
-    "best_ms": 0.20938923430663567,
-    "second_ms": 0.26007212469210994,
+    "best_ms": 0.2117253181045455,
+    "second_ms": 0.2620912941501421,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.012,
-     "runs": 0.121,
-     "bench": 1.54
+     "runs": 0.113,
+     "bench": 1.56
     },
     "built": {
      "gpu": true,
@@ -573118,15 +573514,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:19+00:00",
+    "date": "2026-09-16T23:19:02+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -573139,7 +573535,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.1906874840527866e-06,
+    "deviation": 2.411727247542183e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -573149,6 +573545,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -573168,16 +573570,16 @@
       }
      }
     },
-    "best_ms": 23.028736114501953,
-    "second_ms": 23.033855438232422,
+    "best_ms": 23.44550323486328,
+    "second_ms": 23.467008590698242,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 3.228,
-     "runs": 33.005,
-     "bench": 3.665
+     "oracle": 3.116,
+     "runs": 42.402,
+     "bench": 3.743
     },
     "built": {
      "gpu": true,
@@ -573282,15 +573684,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:28+00:00",
+    "date": "2026-09-16T23:17:57+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -573303,7 +573705,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.7527000610288913e-06,
+    "deviation": 2.0219963676467113e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -573313,6 +573715,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -573332,16 +573740,16 @@
       }
      }
     },
-    "best_ms": 0.37202982676839363,
-    "second_ms": 0.3724603082698125,
+    "best_ms": 0.3691323095789322,
+    "second_ms": 0.3691815401499088,
     "candidates": 17,
     "accepted": 17,
-    "benched": 17,
+    "benched": 16,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.038,
-     "runs": 0.24,
-     "bench": 1.366
+     "oracle": 0.033,
+     "runs": 0.232,
+     "bench": 1.289
     },
     "built": {
      "gpu": true,
@@ -573446,15 +573854,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:24+00:00",
+    "date": "2026-09-16T23:17:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -573467,7 +573875,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.9545769030920967e-06,
+    "deviation": 1.7800549753519263e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -573477,6 +573885,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -573496,16 +573910,16 @@
       }
      }
     },
-    "best_ms": 0.362583245871202,
-    "second_ms": 0.36336603957527086,
+    "best_ms": 0.3649870781944348,
+    "second_ms": 0.36502186769530887,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.031,
-     "runs": 0.249,
-     "bench": 1.373
+     "oracle": 0.03,
+     "runs": 0.235,
+     "bench": 1.362
     },
     "built": {
      "gpu": true,
@@ -573610,15 +574024,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:32+00:00",
+    "date": "2026-09-16T23:18:05+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -573631,7 +574045,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.553147350589491e-06,
+    "deviation": 4.0726441008741525e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -573641,6 +574055,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -573660,16 +574080,16 @@
       }
      }
     },
-    "best_ms": 1.043732762336731,
-    "second_ms": 1.0446737199216276,
+    "best_ms": 1.0572393391583417,
+    "second_ms": 1.0575705895552765,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.097,
-     "runs": 0.252,
-     "bench": 1.131
+     "oracle": 0.083,
+     "runs": 0.319,
+     "bench": 1.138
     },
     "built": {
      "gpu": true,
@@ -574289,10 +574709,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:20:30+00:00",
+    "date": "2026-09-16T23:18:01+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -574305,7 +574725,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.851841858049112e-06,
+    "deviation": 2.053193782425632e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -574315,6 +574735,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -574334,16 +574760,16 @@
       }
      }
     },
-    "best_ms": 1.1749003728230794,
-    "second_ms": 1.1997119970619678,
+    "best_ms": 1.2151360027492046,
+    "second_ms": 1.2390730342557352,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.07,
-     "runs": 0.978,
-     "bench": 1.136
+     "oracle": 0.078,
+     "runs": 1.269,
+     "bench": 1.127
     },
     "built": {
      "gpu": true,
@@ -574623,10 +575049,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:23+00:00",
+    "date": "2026-09-16T23:19:09+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -574639,7 +575065,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.206289686906193e-06,
+    "deviation": 2.6274108059683142e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -574649,6 +575075,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -574668,15 +575100,15 @@
       }
      }
     },
-    "best_ms": 0.21005399982360276,
-    "second_ms": 0.259587580299044,
+    "best_ms": 0.21561673583312965,
+    "second_ms": 0.26677394062280657,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.013,
-     "runs": 0.13,
+     "oracle": 0.014,
+     "runs": 0.136,
      "bench": 1.577
     },
     "built": {
@@ -574951,10 +575383,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:25+00:00",
+    "date": "2026-09-16T23:19:12+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -574967,7 +575399,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.0951624814877394e-06,
+    "deviation": 1.7072051963365312e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -574977,6 +575409,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -574996,16 +575434,16 @@
       }
      }
     },
-    "best_ms": 0.37229427636838425,
-    "second_ms": 0.37294477774101553,
+    "best_ms": 0.36908738155966825,
+    "second_ms": 0.3703002721360586,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.047,
-     "runs": 0.257,
-     "bench": 1.356
+     "oracle": 0.042,
+     "runs": 0.279,
+     "bench": 1.365
     },
     "built": {
      "gpu": true,
@@ -575110,15 +575548,15 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:21+00:00",
+    "date": "2026-09-16T23:19:06+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -575131,7 +575569,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.96034426161691e-06,
+    "deviation": 1.6942263274985688e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -575141,6 +575579,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -575160,16 +575604,16 @@
       }
      }
     },
-    "best_ms": 0.3610136384055728,
-    "second_ms": 0.3618197736312758,
+    "best_ms": 0.3692009228353317,
+    "second_ms": 0.36957569191089046,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.058,
-     "runs": 0.251,
-     "bench": 1.369
+     "oracle": 0.028,
+     "runs": 0.296,
+     "bench": 1.379
     },
     "built": {
      "gpu": true,
@@ -575279,10 +575723,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:29+00:00",
+    "date": "2026-09-16T23:19:19+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -575295,7 +575739,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 3.109549825070915e-06,
+    "deviation": 3.4921001001046072e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -575305,6 +575749,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -575324,16 +575774,16 @@
       }
      }
     },
-    "best_ms": 1.0425150330002244,
-    "second_ms": 1.0432622690458555,
+    "best_ms": 1.0561314595712197,
+    "second_ms": 1.056601943196477,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.101,
-     "runs": 0.279,
-     "bench": 1.134
+     "oracle": 0.087,
+     "runs": 0.282,
+     "bench": 1.138
     },
     "built": {
      "gpu": true,
@@ -575443,10 +575893,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:21:27+00:00",
+    "date": "2026-09-16T23:19:16+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -575459,7 +575909,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 2.3538166241354634e-06,
+    "deviation": 2.090213090759002e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -575469,6 +575919,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -575488,16 +575944,16 @@
       }
      }
     },
-    "best_ms": 1.1912533297683254,
-    "second_ms": 1.197831760753285,
+    "best_ms": 1.2152960039675236,
+    "second_ms": 1.2357698102151193,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.076,
-     "runs": 1.057,
-     "bench": 1.13
+     "oracle": 0.071,
+     "runs": 1.643,
+     "bench": 1.128
     },
     "built": {
      "gpu": true,
@@ -703121,20 +703577,20 @@
    "config": {
     "kwargs": {
      "BLOCK_M": 32,
-     "BLOCK_N": 32,
+     "BLOCK_N": 64,
      "BLOCK_K": 64,
      "GROUP_M": 8
     },
-    "num_warps": 2,
-    "num_stages": 4,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:29+00:00",
+    "date": "2026-09-16T23:12:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -703147,7 +703603,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.4316044935405954e-06,
+    "deviation": 1.7643207179536052e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -703157,6 +703613,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -703176,16 +703638,16 @@
       }
      }
     },
-    "best_ms": 0.1470103708130342,
-    "second_ms": 0.1496117908341682,
+    "best_ms": 0.14819099768704058,
+    "second_ms": 0.15007289002339044,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.026,
-     "runs": 0.017,
-     "bench": 1.666
+     "oracle": 0.018,
+     "runs": 0.018,
+     "bench": 1.672
     },
     "built": {
      "gpu": true,
@@ -703635,10 +704097,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:34+00:00",
+    "date": "2026-09-16T23:12:55+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -703651,7 +704113,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 8.005563323345124e-07,
+    "deviation": 6.208765476943175e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -703661,6 +704123,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -703680,16 +704148,16 @@
       }
      }
     },
-    "best_ms": 0.04635172612225152,
-    "second_ms": 0.049756500423730664,
+    "best_ms": 0.046148433970390056,
+    "second_ms": 0.05025834962725639,
     "candidates": 17,
     "accepted": 17,
     "benched": 17,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.007,
-     "runs": 0.014,
-     "bench": 3.247
+     "oracle": 0.006,
+     "runs": 0.016,
+     "bench": 3.175
     },
     "built": {
      "gpu": true,
@@ -703799,10 +704267,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:31+00:00",
+    "date": "2026-09-16T23:12:50+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -703815,7 +704283,7 @@
      "fp16",
      "fp32"
     ],
-    "deviation": 1.4720531821724973e-06,
+    "deviation": 1.4556829498062813e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -703825,6 +704293,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -703844,16 +704318,16 @@
       }
      }
     },
-    "best_ms": 0.14112639923890433,
-    "second_ms": 0.14303274352975937,
+    "best_ms": 0.13606855289561906,
+    "second_ms": 0.14495987573172897,
     "candidates": 17,
     "accepted": 17,
     "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.004,
-     "runs": 0.01,
-     "bench": 1.456
+     "oracle": 0.003,
+     "runs": 0.011,
+     "bench": 1.448
     },
     "built": {
      "gpu": true,
@@ -703954,7 +704428,7 @@
     "kwargs": {
      "BLOCK_M": 32,
      "BLOCK_N": 32,
-     "BLOCK_K": 64,
+     "BLOCK_K": 32,
      "GROUP_M": 8
     },
     "num_warps": 2,
@@ -703963,10 +704437,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-13T22:16:35+00:00",
+    "date": "2026-09-16T23:12:58+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -703979,7 +704453,7 @@
      "fp32",
      "fp32"
     ],
-    "deviation": 9.721665905766813e-07,
+    "deviation": 1.481281315695468e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -703989,6 +704463,12 @@
      "hardware_profile": "auto-v100-16gb-16g",
      "has_native_bf16": false,
      "target": "cuda-70",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": "0",
+      "name": "Tesla V100-SXM2-16GB",
+      "memory_mb": 16384
+     },
      "clocks_mhz": {
       "0": {
        "graphics": 1290,
@@ -704008,16 +704488,16 @@
       }
      }
     },
-    "best_ms": 0.14326115873099293,
-    "second_ms": 0.2753949678496809,
+    "best_ms": 0.1419546476212041,
+    "second_ms": 0.1445772075428153,
     "candidates": 17,
     "accepted": 17,
-    "benched": 2,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.0,
-     "runs": 0.14,
-     "bench": 0.24
+     "oracle": 0.001,
+     "runs": 0.009,
+     "bench": 1.441
     },
     "built": {
      "gpu": true,
