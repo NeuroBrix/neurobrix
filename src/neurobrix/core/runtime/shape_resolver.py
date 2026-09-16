@@ -88,6 +88,7 @@ class SymbolicShapeResolver:
         """
         self._context = symbolic_context or {}
         self._symbols = self._context.get("symbols", {})
+        self._fallbacks_said = set()
         self._expressions = self._context.get("expressions", {})
         self._strict = strict
 
@@ -359,9 +360,26 @@ class SymbolicShapeResolver:
                         f"Ensure all dynamic dimensions are resolved from actual inputs."
                     )
 
-                # Non-strict: Use trace value as fallback (with warning)
+                # Non-strict: the trace value stands in — said OUT LOUD, once per
+                # symbol, on stdout: a `logger.warning` reached no run log, and a
+                # symbol resolved to its trace extent is exactly the frozen-dim
+                # class the doctrine forbids (Qwen3-Omni's fresh container,
+                # 2026-09-16: `view [-1, 1, 23]` on 639 elements — s1 fell back to
+                # 23 and nothing said so). `NBX_STRICT_SYMBOLS=1` refuses instead.
                 trace_val = self._symbols[value].get("trace_value")
                 if trace_val is not None:
+                    import os
+                    if os.environ.get("NBX_STRICT_SYMBOLS") == "1":
+                        raise ShapeResolutionError(
+                            f"ZERO FALLBACK: Symbol '{value}' ({self._symbols[value].get('name')}, "
+                            f"binds from {self._symbols[value].get('source')}) is not bound at runtime "
+                            f"and NBX_STRICT_SYMBOLS=1 refuses its trace value {trace_val}")
+                    if value not in self._fallbacks_said:
+                        self._fallbacks_said.add(value)
+                        print(f"[SymShape] FALLBACK: symbol {value} ({self._symbols[value].get('name')}, binds from "
+                              f"{self._symbols[value].get('source')}) is not bound by any fed input — its TRACE "
+                              f"value {trace_val} stands in. A dimension frozen at the trace is a defect, not a "
+                              f"limit; NBX_STRICT_SYMBOLS=1 refuses it.", flush=True)
                     logger.warning(
                         f"Symbol {value} not bound, using trace_value={trace_val}"
                     )
