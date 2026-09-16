@@ -477,10 +477,6 @@ class CudaDriver(Driver):
 
 _DRIVER: Optional[Driver] = None
 
-#: backend name (as the allocator seam resolves it) -> module exposing
-#: `driver()`. CUDA is absent because it is the built-in default, which is
-#: what keeps the CUDA path byte-identical to before this registry existed.
-_DRIVER_MODULES = {"metal": "neurobrix.triton.metal_driver"}
 
 
 def register_driver(driver: Optional[Driver]) -> None:
@@ -504,11 +500,20 @@ def _resolve_driver() -> Driver:
         name = _detect_gpu_backend()
     except Exception:
         return CudaDriver.instance()
-    path = _DRIVER_MODULES.get(name)
-    if path is None:
-        return CudaDriver.instance()
-    from importlib import import_module
-    return import_module(path).driver()
+    if name == "metal":
+        # WHICH Metal backend is a profile selection, and a driver implements ONE
+        # backend's launch ABI (ours reads the fork's MSL conventions for scalar
+        # binding). So the SEAM answers which module launches, or refuses by
+        # name. A static {"metal": <the fork's driver>} table was the previous
+        # answer, and it is what launched triton-ext-compiled kernels through the
+        # fork's ABI: scalars after the first arrived as 0, every mask went
+        # false, and the kernel returned exact zeros without failing.
+        from neurobrix.triton.metal_backend import nbx_driver_module
+        from importlib import import_module
+        return import_module(nbx_driver_module()).driver()
+    # CUDA is the built-in default, which keeps the Dell's path byte-identical
+    # to before this seam existed.
+    return CudaDriver.instance()
 
 
 def _unsupported(kind):

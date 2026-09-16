@@ -219,12 +219,24 @@ METAL_BACKENDS = {
         "probe": "triton_msl",
         "compiler": ("triton_msl.backend.compiler", "MetalBackend"),
         "target": "metal",
+        # The NeuroBrix launcher driver that implements THIS backend's launch
+        # ABI. Our Metal driver derives its argument binding from the emitted
+        # MSL's own conventions (a scalar the emitter passes through a pointer
+        # is named `<param>_buf`), so it is specific to this emitter.
+        "nbx_driver": "neurobrix.triton.metal_driver",
         "what": "the bledden triton-msl fork (text MSL emitter)",
     },
     "triton_ext": {
         "probe": "triton_apple_backend",
         "compiler": ("triton_apple_backend.compiler", "MetalBackend"),
         "target": "mps",
+        # NONE YET. triton-ext emits MSL from C++ MLIR passes with its own
+        # argument conventions and ships its own driver; our fork-shaped driver
+        # mis-binds its kernels (measured 2026-09-16: scalars after the first
+        # arrive as 0, so every mask is false and the output keeps its zeros).
+        # Until an adapter exists, selecting this backend REFUSES at the driver
+        # rather than launching through an ABI that is not its own.
+        "nbx_driver": None,
         "what": "triton-lang/triton-ext AppleGPU (C++ MLIR -> MSL)",
     },
 }
@@ -505,3 +517,29 @@ def ensure_triton_metal_or_raise() -> None:
             "\n"
             "Status and known gaps: docs/internal/metal_adoption_plan_2026_09_03.md"
         )
+
+
+def nbx_driver_module() -> str:
+    """The NeuroBrix launcher driver module implementing the SELECTED backend's
+    launch ABI, or a refusal naming why there is none.
+
+    A driver is not interchangeable between Metal backends: ours reads the
+    fork's MSL emission conventions to decide how each scalar is bound. Handing
+    it a kernel another emitter produced binds the wrong things silently —
+    measured, and the failure is not loud: scalars after the first arrive as 0,
+    every mask is false, and the kernel writes nothing, so the output keeps the
+    zeros it was allocated with.
+    """
+    name = selected_metal_backend()
+    mod = METAL_BACKENDS[name].get("nbx_driver")
+    if mod:
+        return mod
+    raise RuntimeError(
+        f"the Metal backend in force is {name!r} ({METAL_BACKENDS[name]['what']}), "
+        f"and NeuroBrix has no launcher driver implementing its launch ABI. "
+        f"Refusing to launch through another backend's driver: ours derives its "
+        f"argument binding from the fork's MSL conventions, and on a kernel this "
+        f"backend compiled that binds scalars to the wrong places WITHOUT failing "
+        f"— the kernel reads zeros and writes nothing. Correct-or-refuse: an "
+        f"adapter for {name!r} is owed before it can be launched."
+    )
