@@ -182,7 +182,7 @@ class Driver:
         raise NotImplementedError
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
-               names=None) -> None:  # pragma: no cover
+               names=None, types=None) -> None:  # pragma: no cover
         raise NotImplementedError
 
     def block_for(self, metadata):
@@ -332,7 +332,10 @@ class CudaDriver(Driver):
         return function
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
-               names=None) -> None:
+               names=None, types=None) -> None:
+        # `types` is for a backend that packs its scalars into one buffer and
+        # needs the field offsets; CUDA binds each parameter to its own slot and
+        # has no use for it.
         # Two refusals BEFORE anything reaches the device (the launcher
         # contract's ownership rules, checked by `verify_driver_contract`):
         # the argument list must be exactly what the cubin declares, and
@@ -848,8 +851,12 @@ def launch(kernel, grid, *args, **kwargs):
         params.append(("ptr", 0))    # profile scratch
     if _RECORDER is not None:
         _RECORDER(prep, grid, params)
+    # The Triton TYPE of every runtime parameter, in the same order. A backend
+    # that packs its scalars into one buffer computes the field offsets from
+    # these; our `(kind, value)` pairs have already lost the distinction between
+    # an i16 and a bf16, and packing to the wrong offset is silent.
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
-               names=names)
+               names=names, types=[ty for _name, ty in runtime])
 
 
 def _stream() -> int:
