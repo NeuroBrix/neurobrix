@@ -87,10 +87,16 @@ CROSS_CUTTING = [
     "after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy "
     "changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, "
     "PixArt-Sigma-XL-2-1024-MS on a 16 GB card, Flex.1-alpha on a 32 GB card — rendered "
-    "byte-identical images on both arms, three cold repetitions each, triton. The sixth "
-    "pair (mochi) is named, not run. The byte matrix over the models that do NOT change "
-    "strategy ran zero cells that day (register 52) and is re-armed. "
-    "`nbx/campaigns/prepared/budget_unified_gate_20260913_1535/VERDICT.md`.",
+    "byte-identical images on both arms, three cold repetitions each, triton. The byte "
+    "matrix over the whole catalogue ran 2026-09-14 09:11-15:12 (register 52's re-arm): "
+    "30 cells identical, 0 adjudicated differences, 2 unadjudicated on the two models "
+    "whose own nondeterminism is on record — orpheus-3b-0.1-ft (its sampler draws off the "
+    "executor's RNG stream, D-ORPHEUS-SEED-NOT-PINNED) and CogVideoX-2b (differs run to "
+    "run on both engines with no RNG op in its graph; cause not yet named, "
+    "D-COGVIDEOX-2B-NONDETERMINISTIC-PER-RUN) — and 16 cells unmeasurable on this pair "
+    "because its before tree (5ca23b1) cannot load today's containers. Determinism per "
+    "mode is a public claim: those two are its named exceptions until their causes are. "
+    "`nbx/campaigns/prepared/budget_unified_gate_20260913_1535/RUN.md`.",
     "**The engine suite on the trunk** (`pytest tests/unit tests/regression`, 2026-09-13 "
     "13:28-15:20, 1 h 52): 2100 passed, 21 failed. Ten of the 21 were one defect in the "
     "triton weight loader's consumed-weight filter (register 50, fixed the same afternoon, "
@@ -162,7 +168,7 @@ OVERLAY = {
              "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
         line="measured"),
     "mochi-1-preview": dict(
-        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, fixed at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
+        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, a defect of EVERY kernel for ANY model whose tensor exceeds two billion elements (the next family to meet it will not be called Mochi), fixed for the class at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
         evidence="two compute-sanitizer runs (7 200 s 09-13, 18 000 s 09-14) measured nothing; "
                  "--triton-sequential + CUDA_LAUNCH_BLOCKING=1 named aten.mm::1 of the VAE in 19 min "
                  "(M=1 068 480 x N=2048: 2.19e9 output elements, stride_cm * offs_cm wrapped in int32 — "
