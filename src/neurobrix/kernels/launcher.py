@@ -956,7 +956,12 @@ def _no_oracle_reason(oracle) -> str:
         return ("the oracle provider covers no oracle for this kernel "
                 "(the GEMM class and, since 2026-09-13, the convolution family "
                 "are covered; anything else is decided by the bare vote)")
-    return "the oracle produced no reference"
+    try:
+        from neurobrix.kernels.screen_oracle import last_refusal
+        why = last_refusal()
+    except Exception:                                  # noqa: BLE001
+        why = None
+    return why or "the oracle produced no reference"
 
 
 def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
