@@ -1599,3 +1599,44 @@ corrupted dim, a routing field removed or changed, a run that failed.
 
 This is the mirror of 65 in the same way 65 is the mirror of the rest — a false
 refusal costs what a false pass costs, and here it would have cost the repair.
+
+### 62 (addendum, 2026-09-16 evening) — the census that answered "none" had a scope, and the instrument now says it
+
+Entry 62's census read the ENGINE and answered "no compile-only probe found
+here". It was right about what it read and it did not read the probes that decide
+whether a TEST runs — which is where the next one was, the same day:
+`test_autotune_correctness_screen.py` gated five tests on
+`_detect_gpu_backend() is not None`.
+
+**The finding underneath it is worth more than the instance.** That call OPENS THE
+DEVICE on Metal — `metal_device_available`: *"it opens the real device rather than
+checking for the import, because a machine with the bindings and no usable GPU
+must not be reported as ready"* — and on CUDA and ROCm it succeeds when the
+vendor's runtime LIBRARY loads. So **the same call is an executing probe on one
+backend and a naming one on the others**, and nothing at the call site shows which
+one you got. Measured in one line under the device door: the probe answers `cuda`
+while `DeviceAllocator.device_count()` answers `0`.
+
+Three things landed rather than a reading:
+
+* the function now says at its own definition what it does NOT answer, and names
+  `DeviceAllocator.device_count()` — which asks the driver — for callers who mean
+  "can I run here";
+* `tests/unit/kernels/test_naming_a_backend_is_not_finding_a_device.py` pins the
+  asymmetry by asking both questions in a child process with no device visible, on
+  a host that has one, and skips where the premise does not hold. Seen red against
+  a `device_count` that answers from the install instead of the driver;
+* `tools/probes_that_compile_without_executing.py` makes the census repeatable —
+  it classifies every function whose name announces a capability decision as
+  EXECUTES / DETECTS ONLY / DELEGATES / UNCLEAR, excludes the vendored reference
+  tree, and exits 0 because it is a census and an exit code would turn eight
+  benign candidates into an alarm.
+
+Re-run over the trunk after the conversions: **8 DETECTS ONLY, all read, none a
+device-capability probe** — three ask about a tokenizer, a cache and a DAG; two
+are honest pre-filters (`_triton_cpu_available`, `triton_metal_available`) whose
+refusal names the install command; three ask whether a FILE is present.
+
+**The rule, sharpened**: "a capability probe executes" is satisfied PER BACKEND,
+not per call site. A shared probe that executes on one backend and reads a name on
+another must say so where it is defined, because no caller can see it.
