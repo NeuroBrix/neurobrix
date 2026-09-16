@@ -293,14 +293,22 @@ def proof_records_clock(proof: Optional[Dict[str, Any]]) -> bool:
 
 
 def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],
-                 need_clock: bool = False) -> bool:
+                 need_clock: bool = False, need_generator: Optional[str] = None) -> bool:
     """`--only-missing`'s question, asked per memory class; with `need_clock`
     (`--reprove-unclocked`) a certification whose proof records no clock does
-    not count as coverage — it is re-proven at the protocol clock."""
+    not count as coverage — it is re-proven at the protocol clock; with
+    `need_generator` (`--reprove-generator`, the running code generator's label,
+    e.g. `triton 3.8.0`) a certification proven under another generator does
+    not count either — a Triton upgrade changes the code it emits, so every
+    setting is re-proven under the new one (owner, 2026-09-16)."""
     cert = entry_for_memory_class(entries.get(ktext), cls)
     if cert is None:
         return False
-    return proof_records_clock(cert.get("proof")) if need_clock else True
+    if need_clock and not proof_records_clock(cert.get("proof")):
+        return False
+    if need_generator is not None and proof_backend(cert.get("proof")) != need_generator:
+        return False
+    return True
 
 
 def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None:

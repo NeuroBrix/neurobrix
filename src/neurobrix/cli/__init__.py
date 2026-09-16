@@ -217,6 +217,10 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--reprove-unclocked', action='store_true',
                            help='skip only the shapes certified for this card\'s class AT A RECORDED CLOCK; a proof that '
                                 'does not say its clock is re-proven at the protocol clock')
+    certify_p.add_argument('--reprove-generator', action='store_true',
+                           help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
+                                '(the Triton version); a proof made under another one is re-proven — a Triton upgrade '
+                                'changes the code it emits')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
