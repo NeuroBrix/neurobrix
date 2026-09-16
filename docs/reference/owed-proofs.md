@@ -348,3 +348,36 @@ family entirely (every conv entry in the directory carries the fp64 proof).
   cache, to re-measure warm).
 * **returned by** the Mac when its engine environment carries torch 2.14.0 + the
   Triton triton-ext pins — say the versions here.
+
+### Addendum 2026-09-16 15:5x — the owner's correction, and what the door measured
+
+The correction said: CUDA 13 begins at Turing; PyTorch 2.11 removed Volta from
+its cu128/cu129 binaries (cuDNN 9.15.1 no longer serves a V100); **the last torch
+that sees a V100 is 2.10 in cu126**; measure the bundled ptxas before Triton 3.8.
+The door was extended with the half the arch list cannot see — one cuDNN
+convolution and one cuBLAS matmul RUN on every card, read against the CPU's —
+and answered on this rack:
+
+* `torch 2.14.0+cu126`: archs sm_50…sm_90 (sm_70 present), cuDNN **9.10.2**
+  (`91002`), convolution and matmul run on all four V100s with results equal to
+  the CPU's (max |diff| 1.3e-5 / 0.019 fp16) — ACCEPTED. The correction's facts
+  hold for the cu128/cu129 builds and not for the cu126 wheel, whose metadata pins
+  `nvidia-cudnn-cu12==9.10.2.21` through 2.14 (the build table on `release/2.14`
+  keeps sm_70 for 12.6). So on THIS rack the last torch that sees a V100 is
+  2.14.0+cu126, not 2.10 — 2.15 ships no cu126 wheel at all. The 2.10.0+cu126
+  wheel is installed beside it and put through the same door, so both numbers
+  stand in the record.
+* Triton 3.8.0's bundled `ptxas` is CUDA **12.9** (`V12.9.86`), not 13; it compiles a
+  `.target sm_70` PTX; the kernel suites and TinyLlama already ran through it on
+  the V100s. Volta is not out of Triton at 3.8.
+* Reformulation taken: the 3.6.0 proofs are **not invalid** under 3.8 — the oracle
+  proved the source, not the compiler; only the rank as the fastest may age by a
+  few percent. The re-proof is an optimisation pass on this rack, incremental
+  (`--reprove-generator` skips what the running generator already ranked),
+  checkpointed, invisible to a request; the document reads each rank with its
+  generator. The wording in the CHANGELOG, the tool and the document was changed
+  to say so.
+* Measurement over directive, said: the target stays **torch 2.14.0+cu126 +
+  Triton 3.8.0** unless the owner, reading this, holds 2.10 for a reason the door
+  does not measure — the switch itself waits on the full battery and the
+  re-proof, as ordered, so nothing is committed by this choice yet.
