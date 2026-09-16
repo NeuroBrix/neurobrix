@@ -172,6 +172,10 @@ class TritonExtDriver(Driver):
         _native().synchronize()
 
 
+#: Metal's zero-copy wrap requires page-aligned memory; Apple Silicon pages
+#: are 16 KiB.
+_PAGE = 16384
+
 #: Triton pointer type -> numpy dtype. `wrap` reads the element type off the
 #: object it is given; a bare memoryview arrives as dtype None, which is not a
 #: buffer triton-ext can bind.
@@ -214,16 +218,32 @@ def _buffer_for(addr: int, ty: str):
     base = addr
     if size is None:
         base, size = _containing_allocation(addr)
-    raw = (ctypes.c_byte * size).from_address(base)
+    # An interior pointer — a view, or a tensor packed inside a larger buffer —
+    # binds by starting the Metal buffer AT that address and running to the end
+    # of the allocation. Binding the allocation's base instead would read the
+    # wrong elements silently, and `metal_native` has no offset binding
+    # (`metal_native.m`: every argument goes in with `setBuffer:...offset:0`).
+    #
+    # Metal decides whether a given address can be wrapped with no copy. The
+    # documented requirement is page alignment, but MEASURED on M4 Pro a
+    # non-page-aligned interior address inside an already-mapped region is
+    # accepted (repro_ext_no_offset_binding.py, case 3: offset 0x300, wrapped,
+    # 64768 bytes). So we do not pre-judge it: we ask, and turn Metal's own
+    # refusal into a named one. Guessing a binding is what this driver exists
+    # to stop; refusing a binding that would have worked is merely wrong.
+    offset = addr - base
+    raw = (ctypes.c_byte * (size - offset)).from_address(addr)
     view = np.frombuffer(memoryview(raw), dtype=np_dtype)
-    buf = _native().wrap(view)
-    if base != addr:                       # a view: offset inside the buffer
+    try:
+        return _native().wrap(view)
+    except Exception as exc:
         raise RuntimeError(
-            f"the triton-ext driver was handed an interior pointer "
-            f"(0x{addr:x} is 0x{addr - base:x} into an allocation at "
-            f"0x{base:x}); binding the base would silently read the wrong "
-            f"elements. An offset binding is owed before views can launch.")
-    return buf
+            f"the triton-ext driver could not bind pointer 0x{addr:x} "
+            f"(0x{offset:x} into an allocation at 0x{base:x}, {size - offset} "
+            f"bytes): Metal declined a zero-copy view of it. `metal_native` "
+            f"binds every buffer at offset 0, so there is no other correct "
+            f"binding here — binding the allocation base would read the wrong "
+            f"elements WITHOUT failing. Metal said: {exc}") from exc
 
 
 def _containing_allocation(addr: int) -> Tuple[int, int]:
