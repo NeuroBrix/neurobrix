@@ -29,6 +29,17 @@ from neurobrix.serving.session import ConversationSession
 # No manual strategy set needed — Prism is the single source of truth.
 
 
+def daemon_identity() -> Dict[str, Any]:
+    """What a client needs to know before it sends a request: the engine's
+    version, the protocol's, where the daemon listens, and the operations the
+    dispatcher answers — read from the engine's own sources (Studio request 1),
+    the same record `neurobrix info --json` carries."""
+    from neurobrix import __version__
+    from neurobrix.serving.protocol import PROTOCOL_VERSION, endpoint
+    return {"engine": __version__, "protocol": PROTOCOL_VERSION, "endpoint": endpoint(),
+            "operations": ["generate", "chat", "complete", "template", "new_chat", "status", "shutdown"]}
+
+
 class InferenceEngine:
     """
     Persistent inference engine — load once, serve many.
@@ -433,6 +444,7 @@ class InferenceEngine:
             "loaded": self._is_loaded,
             "mode": self.mode,
             "warm_serving": self._warm_serving,
+            **daemon_identity(),
         }
 
         if self._plan is not None:

@@ -26,6 +26,11 @@ def info_record(args) -> dict:
     if hw_dir.exists():
         rec["hardware_profiles"] = [f.stem for f in sorted(hw_dir.glob("*.yml"))]
     try:
+        from neurobrix.serving.engine import daemon_identity
+        rec.update({k: v for k, v in daemon_identity().items() if k != "engine"})
+    except Exception as exc:          # the serving module may not import on a minimal install: said, not hidden
+        rec["daemon"] = f"unavailable ({exc})"
+    try:
         import torch
         rec["torch"] = torch.__version__
         rec["cuda_available"] = bool(torch.cuda.is_available())
