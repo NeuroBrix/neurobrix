@@ -350,4 +350,12 @@ autotune_screen_rtol:
 # inference. `bench_would_swap` remains the real OOM guard (it checks actual
 # available memory per key), so this ceiling cannot force a swap — it only
 # stops the screen from refusing to run on a conv it can well afford.
+# WHICH Metal backend this machine runs. The engine targets Triton; this is a
+# SELECTION, not a branch — `triton/metal_backend.py` is the only module that
+# names either implementation. `triton_msl` is the bledden fork (text MSL
+# emitter); `triton_ext` is triton-lang/triton-ext's AppleGPU backend (C++ MLIR
+# -> MSL). A declared backend that is not installed is REFUSED BY NAME rather
+# than silently swapped, so a measurement can always name what produced it.
+metal_backend: triton_msl
+
 autotune_screen_max_bytes: 268435456

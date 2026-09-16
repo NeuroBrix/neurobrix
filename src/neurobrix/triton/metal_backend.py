@@ -209,6 +209,107 @@ def is_backend_refusal(exc: BaseException) -> bool:
     return bool(rt) and isinstance(exc, rt)
 
 
+#: The Metal backends NeuroBrix can target. The engine targets Triton; WHICH
+#: Metal backend runs is a selection, not a branch, and this table is the only
+#: place either is named. `probe` is the import that proves it is installed;
+#: `compiler` is the dotted path to its Triton backend class (the thing a driver
+#: needs to patch a stage).
+METAL_BACKENDS = {
+    "triton_msl": {
+        "probe": "triton_msl",
+        "compiler": ("triton_msl.backend.compiler", "MetalBackend"),
+        "what": "the bledden triton-msl fork (text MSL emitter)",
+    },
+    "triton_ext": {
+        "probe": "triton_apple_backend",
+        "compiler": ("triton_apple_backend.compiler", "AppleGPUBackend"),
+        "what": "triton-lang/triton-ext AppleGPU (C++ MLIR -> MSL)",
+    },
+}
+
+_PROFILE_KEY = "metal_backend"
+
+
+def _installed(name: str) -> bool:
+    spec = METAL_BACKENDS.get(name)
+    if not spec:
+        return False
+    try:
+        return importlib.util.find_spec(spec["probe"]) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def selected_metal_backend() -> str:
+    """WHICH Metal backend this machine runs, decided by the PROFILE.
+
+    The profile may declare `metal_backend: triton_msl | triton_ext`. A declared
+    backend that is not installed is REFUSED BY NAME — silently falling back to
+    the other one would make a measurement attribute itself to the wrong
+    implementation, which is the whole reason this is a selection and not a
+    branch. When the profile declares nothing, the single installed backend is
+    used; if both are installed and none is declared, that ambiguity is refused
+    too — a machine that can run either must say which.
+    """
+    declared = None
+    try:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        declared = (active_vendor_profile() or {}).get(_PROFILE_KEY)
+    except Exception:
+        declared = None
+
+    if declared:
+        if declared not in METAL_BACKENDS:
+            raise RuntimeError(
+                f"the hardware profile declares `{_PROFILE_KEY}: {declared}`, which is "
+                f"not a Metal backend this engine knows. Known: "
+                f"{', '.join(sorted(METAL_BACKENDS))}.")
+        if not _installed(declared):
+            raise RuntimeError(
+                f"the hardware profile declares `{_PROFILE_KEY}: {declared}` "
+                f"({METAL_BACKENDS[declared]['what']}) and it is NOT installed "
+                f"(no module {METAL_BACKENDS[declared]['probe']!r}). Refusing rather "
+                f"than running on the other backend and attributing the numbers to "
+                f"the declared one. Install it, or change the profile.")
+        return declared
+
+    present = [n for n in METAL_BACKENDS if _installed(n)]
+    if not present:
+        raise RuntimeError(
+            "no Metal backend is installed (looked for "
+            + ", ".join(f"{n} ({METAL_BACKENDS[n]['probe']})" for n in METAL_BACKENDS)
+            + "), and the profile declares none.")
+    if len(present) > 1:
+        raise RuntimeError(
+            f"both Metal backends are installed ({', '.join(present)}) and the "
+            f"profile declares no `{_PROFILE_KEY}`. A machine that can run either "
+            f"must say which, or its measurements cannot name the backend that "
+            f"produced them.")
+    return present[0]
+
+
+def backend_compiler_class():
+    """The selected backend's Triton backend class — the object a driver patches.
+
+    Raises with the backend NAMED when it is selected but its compiler cannot be
+    imported, so a driver never silently does nothing.
+    """
+    name = selected_metal_backend()
+    mod_name, attr = METAL_BACKENDS[name]["compiler"]
+    try:
+        mod = importlib.import_module(mod_name)
+    except Exception as exc:                            # noqa: BLE001
+        raise RuntimeError(
+            f"the Metal backend in force is {name!r} ({METAL_BACKENDS[name]['what']}) "
+            f"but its compiler module {mod_name!r} could not be imported ({exc}).")
+    cls = getattr(mod, attr, None)
+    if cls is None:
+        raise RuntimeError(
+            f"the Metal backend in force is {name!r} but {mod_name}.{attr} does not "
+            f"exist — this engine cannot patch a stage it cannot name.")
+    return cls
+
+
 def metal_shader_compiler_available() -> bool:
     """True when Apple's offline shader compiler (`xcrun metal`) can be run.
 

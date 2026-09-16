@@ -360,3 +360,100 @@ WHAT YOU MUST PROVE:
 STILL TO COME (same seam, later increments): backend chosen by PROFILE (fork vs
 triton-ext), `metal_driver.py` selecting the compiler through the seam rather
 than importing `MetalBackend` by name. Each lands with its own owed-proof.
+
+---
+
+## OWED TO THE DELL (Forge / graph capture) — real-esrgan-x2 declares spatial symbols and never uses them
+
+The defect is in the CAPTURE, so it is Forge's, so it is yours. Here is the
+discriminant and the three measurements that settle it, so you do not have to
+rediscover them.
+
+WHAT THE GRAPH SAYS. `components/model/graph.json` → `symbolic_context.symbols`:
+    s0 = batch  (trace 1)
+    s1 = height (trace_value 64, source input::pixel_values::dim_2)
+    s2 = width  (trace_value 64, source dim_3)
+and NO op references s1 or s2. Every spatial dim is frozen at its trace value.
+The first op (the pixel-unshuffle decomposition) carries a literal target shape:
+
+    aten.view::0   input_shapes [[1,3,64,64]]
+                   attributes.shape [ {symbol s0}, 3, 32, 2, 32, 2 ]
+
+Only the batch is symbolic; `32, 2, 32, 2` are trace literals, so the graph
+demands exactly 64×64 (32×2) while declaring it accepts any size.
+
+THE THREE MEASUREMENTS (run here, M4 Pro, compiled/MPS arm — no Metal backend
+involved, so this is not a backend matter):
+1. **64×64 → 128×128, std 105.3** — a correct upscale. It matches the trace.
+2. **224×224 → RuntimeError at `aten.convolution::0`**: "weight of size
+   [64,12,3,3], expected input[1,147,32,32] to have 12 channels, but got 147".
+   147 = 3×7²: the resolver held the literal 32 spatial and floated the
+   unshuffle factor to 224/32 = 7, where the model's factor is 2 (12 = 3×2²).
+3. **448×448 → a blank white 128×128, SILENTLY** (432-byte PNG, std 0.061, 7
+   distinct values, 122/128 constant rows). No exception. This is the
+   silent-wrong; it was classed "tiling or request" for four days on a statistic.
+
+THE DISCRIMINANT (mechanical, and it proves it is the capture):
+for each model, {declared symbols} vs {symbols referenced in op shapes} —
+
+| model | declared | USED in ops |
+|---|---|---|
+| **real-esrgan-x2** | batch, height, width | **batch only** |
+| swin2SR-classical-sr-x2-64 | batch, height, width | height, width |
+| hat-s-x4 | batch, height, width | height, width |
+| swinir-classical-x2 | batch, height, width | height, width |
+
+real-esrgan is the ONLY one whose capture failed to substitute the spatial
+symbols, and the ONLY one that fails. The other three are PROVEN at 448×448
+(artefacts judged by eye: correct apple, correct geometry).
+
+WHAT WE DID NOT DO: no runtime patch. Papering over this in the resolver would
+hide a graph that lies about its contract. The fix belongs where the lie is
+written — the capture must substitute s1/s2 into op shapes as it already does
+for the other three.
+
+GENERAL FORM (register, 2026-09-16): a declared symbol that is never consumed is
+worse than an absent one, because it makes the check PASS — every gate reads the
+declaration. The emptiness of {declared} − {used} is mechanically checkable and
+is worth a capture-time assertion.
+
+---
+
+## OWED TO THE DELL — the Metal seam, increment 2: the backend is chosen by the PROFILE (2026-09-16)
+
+Completes the de-vendoring told in increment 1. Same rule: you must see it
+before a red does.
+
+WHAT CHANGED:
+- `triton/metal_backend.py` gains `METAL_BACKENDS` (the ONLY place either
+  implementation is named: the bledden fork `triton_msl`, and triton-ext's
+  `triton_apple_backend`), `selected_metal_backend()` and
+  `backend_compiler_class()`.
+- The hardware profile may declare `metal_backend: triton_msl | triton_ext`.
+  `apple/apple_m4_pro.yml` now declares `triton_msl`. **No CUDA profile declares
+  anything**, and nothing reads the key off Apple.
+- `triton/metal_driver.py` no longer imports `MetalBackend` from the fork by
+  name; it asks the seam for the compiler class.
+- `kernels/autotune_refusals.py` (SHARED, you run it) no longer names a vendor
+  ANYWHERE — including its docstring, which used to name the fork's refusal type
+  in prose. It asks the seam.
+
+REFUSALS, so a measurement can always name what produced it:
+- a declared backend that is NOT installed is refused BY NAME (never silently
+  swapped for the other one);
+- an unknown backend name is refused;
+- both installed and none declared is refused ("must say which");
+- none installed is refused.
+
+WHY IT IS INERT ON CUDA:
+- `metal_driver.py` is the Metal driver; it is not imported on a CUDA run.
+- `selected_metal_backend()` is only reached from the Metal path.
+- The shared module's `_is_backend_refusal` asks the seam, which returns `()`
+  refusal types when no Metal backend is installed → False, exactly the old
+  import-failure answer.
+
+WHAT YOU MUST PROVE: byte-identical autotune/certify behaviour on CUDA (no
+config newly excluded or newly kept), and that no CUDA profile needs the new
+key. Tests here: `tests/unit/triton/test_metal_backend_is_a_selection_not_a_branch.py`
+(9 cases, no GPU, probes monkeypatched) — including one that greps the shared
+refusal module for vendor names and fails if any returns.

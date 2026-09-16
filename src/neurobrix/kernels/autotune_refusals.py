@@ -3,9 +3,14 @@
 Triton's autotuner already has this semantics: `_bench` catches
 `OutOfResources`, `CompileTimeAssertionFailure` and `PTXASError`, scores that
 config `inf`, and carries on. A backend refusal says the same thing -- this
-config cannot be compiled here -- but `MetalNonRecoverableError` descends from
+config cannot be compiled here -- but a backend's refusal type descends from
 `RuntimeError` rather than `TritonError`, so nothing catches it and it ends
 the run.
+
+This module names NO backend and NO vendor: it asks the Metal seam
+(`triton.metal_backend`) whether an exception is a backend refusal. The seam is
+the only place an implementation is named, because this file is shared -- the
+CUDA rack runs it too, where the answer is simply False.
 
 Measured 2026-09-12: hat-s-x4 and real-esrgan-x2 both died inside the sweep on
 
