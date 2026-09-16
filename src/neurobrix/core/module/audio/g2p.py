@@ -274,6 +274,59 @@ def load_runner(nbx_path_str: str) -> G2P:
     return runner
 
 
+#: Kokoro names a voice `<language><gender>_<name>`: the FIRST letter is the
+#: language the voicepack was trained to speak (a American English, b British
+#: English, e Spanish, f French, h Hindi, i Italian, j Japanese, p Brazilian
+#: Portuguese, z Mandarin). The embedded lexicon speaks ONE of them — the
+#: container's `phoneme_lang` — and a request that pairs a voice of another
+#: language with it is not a small divergence: the text is read by the wrong
+#: language's rules, so the model says other words. Measured 2026-09-16: the
+#: French voice `ff_siwis` on the American lexicon synthesised 4.97 s of fluent
+#: French-sounding speech in which a third-party ASR heard none of the sentence
+#: asked for (word error rate 1.42). Nothing in the engine could see it — the
+#: audio has a normal level, a normal duration and no silence.
+VOICE_LANGUAGE = {"a": "American English", "b": "British English", "e": "Spanish",
+                  "f": "French", "h": "Hindi", "i": "Italian", "j": "Japanese",
+                  "p": "Brazilian Portuguese", "z": "Mandarin"}
+
+#: Two voice letters that share a language: an accent apart, not a language apart.
+_SAME_LANGUAGE = {("a", "b"), ("b", "a")}
+
+
+def language_of(letter: str) -> Optional[str]:
+    """The language a Kokoro voice letter (or a `phoneme_lang`) declares."""
+    return VOICE_LANGUAGE.get((letter or "")[:1].lower())
+
+
+def refusal_for_language(voice: Optional[str], phoneme_lang: str) -> Optional[str]:
+    """The sentence to refuse with when the requested VOICE speaks a language the
+    embedded lexicon does not — or None when the pair is coherent.
+
+    A capability gate, not a fallback: the engine cannot pronounce a language it
+    has no lexicon for, and reading the text with another language's rules
+    answers a different question (the doctrine's "unsupported path = capability
+    gate"). The accent pair (American/British English) passes: same language.
+    """
+    if not voice:
+        return None
+    v, l = (voice or "")[:1].lower(), (phoneme_lang or "")[:1].lower()
+    if not v or not l or v == l or (v, l) in _SAME_LANGUAGE:
+        return None
+    spoken, have = language_of(v), language_of(l)
+    if spoken is None:
+        return (f"ZERO FALLBACK: voice '{voice}' declares a language this engine does not "
+                f"know how to name (first letter '{v}'). The container's phoneme lexicon "
+                f"speaks {have or l}. Ask for a voice of that language.")
+    return (f"ZERO FALLBACK: voice '{voice}' speaks {spoken}, and this container's embedded "
+            f"phoneme lexicon speaks {have or l} only (`phoneme_lang: {l}`, "
+            f"modules/g2p/en_lexicon.txt.gz). Phonemising {spoken} text with "
+            f"{have or l} rules produces fluent-sounding speech that says other words — "
+            f"measured, not feared. Either ask for a {have or l} voice "
+            f"(--speaker <{l}...>), or rebuild this container with a {spoken} lexicon "
+            f"embedded (the build toolchain's g2p embed step, one lexicon per language "
+            f"the voicepacks cover).")
+
+
 def g2p_phonemes(prompt: str, nbx_path_str: str,
                  lang: str = "en-us", kokoro_lang: str = "a") -> str:
     """Embedded-lexicon mirror of the old _g2p_phonemes(): text -> IPA string.
