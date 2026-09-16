@@ -38,8 +38,8 @@ from typing import Dict, List, Optional, Tuple
 #   NBX_MALLOC_TRACE=/tmp/run.tsv  neurobrix run --model ... --triton
 #
 # Row format (tab-separated):
-#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (M rows only;
-#                                                           F leaves empty)
+#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (an F row carries the
+#                                                           engine frames that freed it, innermost first)
 #
 # Recipes:
 #   - Total allocation volume by site:
@@ -103,10 +103,28 @@ def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
     _MALLOC_TRACE_EVENTS.append((eid, "M", ptr, nbytes, site))
 
 
+def _extract_neurobrix_chain(max_frames: int = 40, keep: int = 8) -> str:
+    """The engine frames of the caller, innermost first, ' < '-joined — for
+    a FREE row. A block freed by a finalizer names `free()` as its site,
+    which says nothing; the frames above it name what dropped the last
+    reference (Ming's arenas freed under live weights, 2026-09-16)."""
+    f = sys._getframe(2)
+    n = 0
+    out = []
+    while f is not None and n < max_frames and len(out) < keep:
+        fname = f.f_code.co_filename
+        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
+            rel = fname.split("neurobrix/")[-1]
+            out.append(f"{rel}:{f.f_lineno} {f.f_code.co_name}")
+        f = f.f_back
+        n += 1
+    return " < ".join(out) or "<unknown>"
+
+
 def _record_free_site(ptr: int, nbytes: int) -> None:
     eid = _MALLOC_TRACE_COUNTER[0]
     _MALLOC_TRACE_COUNTER[0] = eid + 1
-    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, ""))
+    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, _extract_neurobrix_chain()))
 
 
 def _flush_malloc_trace() -> None:
