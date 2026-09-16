@@ -339,4 +339,15 @@ autotune_screen_rtol:
 # MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
 # six unrelated tests in the same process. A skipped screen is announced, not
 # silent.
-autotune_screen_max_bytes: 33554432
+#
+# RAISED 2026-09-14 (M4 Pro, this file only): the upscaler catalogue's
+# convolutions carry 73–145 MB of arguments (swin2SR 180→180 @ 448², e.g.),
+# all above the 32 MB the other Apple profiles keep — so every upscaler conv
+# was seated UNSCREENED, a silent-wrong-in-waiting on a public path, WHILE the
+# conv fp64 oracle (oracles/conv2d_fp64.py) was already wired into the screen
+# provider. The screen's cost at this size is bounded and paid once per
+# uncertified key; serving a never-verified conv is unbounded risk on every
+# inference. `bench_would_swap` remains the real OOM guard (it checks actual
+# available memory per key), so this ceiling cannot force a swap — it only
+# stops the screen from refusing to run on a conv it can well afford.
+autotune_screen_max_bytes: 268435456

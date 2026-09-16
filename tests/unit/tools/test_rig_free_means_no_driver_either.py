@@ -17,8 +17,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import certify_the_catalogue as C
+
+
+@pytest.fixture(autouse=True)
+def _pretend_nvidia_smi_is_installed(monkeypatch):
+    """These tests drive `_rig_busy` through fully-controlled nvidia-smi/ps
+    output. On a host WITHOUT nvidia-smi — the Apple Silicon dev machine — the
+    real `shutil.which` returns None and `_rig_busy` short-circuits to -1
+    before the monkeypatched `subprocess.run` is ever reached, so the busy/free
+    logic under test never runs and every case reads -1. Stub only the presence
+    check; each test still supplies the smi/ps output that decides busy vs free.
+    The -1-when-absent path is a separate concern (main() treats it as 'cannot
+    establish the rig free') and is not what these cases measure."""
+    monkeypatch.setattr(C.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
 
 
 class _Result:
