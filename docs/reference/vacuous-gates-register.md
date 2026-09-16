@@ -1476,6 +1476,29 @@ function and inside a class body, seen red against the old scan.
 catch-all, and the fix is scope, not removal — guard the package import, import
 the names inside the test where a missing one fails.
 
+**CLOSED the same day.** All twenty scoped, the scan reads zero, and the unit
+suite under the device door went from 56 failures to 50 — none new, six gone.
+Two of the twenty were more than a scope fault and are recorded here because
+they were found by doing the work, not by reading it:
+
+* `test_autotune_correctness_screen.py` guarded five tests behind
+  `_detect_gpu_backend() is not None`, which answers **which backend this build
+  can address** — a fact about the install. It answered "cuda" on a machine with
+  no visible device and the five tests failed at their first allocation with
+  `cudaErrorNoDevice` instead of skipping. That is entry 62's class exactly, a
+  probe that compiles standing in for a probe that executes; the probe now
+  allocates one element and frees it.
+* `test_gather_scatter_oob.py` declared its device probe BELOW one of the tests
+  that opens a device, so that one ran unguarded while its two siblings skipped.
+  Order of declaration decided which tests were protected.
+
+And the detector itself was one entry short of correct: it walked the whole
+`ast.Try` node, so an import in a HANDLER — `except Exception as exc: from x
+import E; assert isinstance(exc, E)`, which NARROWS a broad catch — counted as
+a swallowing guard. It walks `node.body` now; a nested handler inside that body
+is still counted, because an exception there does reach the outer catch-all.
+Both directions land with their injection.
+
 ### 65 — a door that copied its authority's list, and refused what the authority accepts
 
 The re-trace door asks "is there a COMPLETE snapshot here?" before it spends a
