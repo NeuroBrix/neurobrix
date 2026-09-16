@@ -154,6 +154,15 @@ def analyse(graph_path: Path) -> list:
         if not tainted:                   # no input tensor to start from
             tainted = {t for t, d in tensors.items() if t.startswith("input::")}
         rel = derived(int(v))
+        # "Never carried" is judged over the WHOLE graph, not along the taint.
+        # An operation can carry a dimension without consuming any tensor that
+        # holds it: `arange(s3)`, `full`, `new_zeros`, `expand` of a scalar all
+        # take the extent as an ARGUMENT. Following only the tensor flow reported
+        # GLM-4.1V's four `grid_thw` dimensions as never carried while 87 of that
+        # graph's operations reference them by id (2026-09-16). The taint still
+        # locates the BREAK — for that, the question is which consumer dropped
+        # the expression — but it may not decide whether the dimension lives.
+        references_anywhere = sum(1 for uid, _ in ordered if facts.get(uid, (set(), []))[0] & group)
         carriers = 0
         last_carrier = None
         first_break = None
@@ -169,7 +178,19 @@ def analyse(graph_path: Path) -> list:
             elif first_break is None:
                 out_dims = {d for shp in (op.get("output_shapes") or [])
                             if isinstance(shp, list) for d in shp if isinstance(d, int)}
-                hit = [(l, rel[l]) for l in lits if l in rel and l >= 4 and l in out_dims]
+                # A literal that was ALREADY an extent of the input is not an
+                # expression this operator computed — it preserved a dimension
+                # that was there. `view [140,33,32] -> [2,70,33,32]` records 33
+                # because 33 is the input's own second axis, and reading it as
+                # "height+1" because height traced at 32 is an arithmetic
+                # coincidence; the same shape removes mochi's `time+2` (12 is in
+                # the input) and orpheus's identity view. Conservative in one
+                # direction, and it is named: a genuine break whose literal
+                # happens to equal an input extent is hidden by this condition.
+                in_dims = {d for shp in (op.get("input_shapes") or [])
+                           if isinstance(shp, list) for d in shp if isinstance(d, int)}
+                hit = [(l, rel[l]) for l in lits
+                       if l in rel and l >= 4 and l in out_dims and l not in in_dims]
                 if hit:
                     first_break = {"op_uid": uid, "op_type": op.get("op_type"),
                                    "literal": hit[0][0], "relation": hit[0][1],
@@ -180,7 +201,8 @@ def analyse(graph_path: Path) -> list:
         rows.append({"graph": str(graph_path), "symbol": sid, "name": meta.get("name"),
                      "trace_value": v, "source": src, "aliases": sorted(group), "carriers": carriers,
                      "last_carrier": last_carrier, "first_break": first_break,
-                     "never_carried": carriers == 0})
+                     "references_anywhere": references_anywhere,
+                     "never_carried": references_anywhere == 0})
     return rows
 
 
