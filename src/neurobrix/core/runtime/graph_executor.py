@@ -2022,7 +2022,20 @@ class GraphExecutor:
         binding = self.bind_weight_keys(graph_params, weight_keys)
         if binding is None:
             return
-        self._weights = {name: self._weights[wk] for name, wk in binding.items()}
+        new = {name: self._weights[wk] for name, wk in binding.items()}
+        # A key the binding does not name keeps its own name — the same rule
+        # as the filtered branch above. The bookkeeping entry `_arenas`
+        # (the Triton loader's device blocks, which every weight tensor of
+        # the component points INTO) was dropped here: the rebuilt dict was
+        # the arenas' last reference, the blocks were freed, and the first
+        # kernel to read a weight met a freed address — refused by the
+        # launcher's ownership door (Ming-Lite-Omni triton, 2026-09-16,
+        # `embedding_kernel` weight_ptr inside a 14 GB block freed at malloc
+        # event 295 of 426; D-MING-UNTRACKED-ADDRESS-AT-EMBEDDING).
+        for wk, t in self._weights.items():
+            if wk not in binding.values() and wk not in new:
+                new[wk] = t
+        self._weights = new
 
     @staticmethod
     def bind_weight_keys(graph_params, weight_keys):
