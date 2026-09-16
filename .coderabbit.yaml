@@ -9,6 +9,11 @@ language: en-GB
 reviews:
   profile: assertive
   request_changes_workflow: false
+
+  # Biome owns lint here; CodeRabbit must not duplicate it.
+  tools:
+    biome:
+      enabled: false
   high_level_summary: true
   review_status: false
   poem: false
@@ -59,3 +64,12 @@ reviews:
 
 chat:
   auto_reply: true
+
+# No docstring or style gate: this is disabled at its own switch, not implied.
+pre_merge_checks:
+  docstrings:
+    mode: "off"
+  title:
+    mode: "off"
+  description:
+    mode: "off"
