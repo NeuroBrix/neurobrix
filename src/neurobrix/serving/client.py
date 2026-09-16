@@ -6,7 +6,7 @@ Used by CLI commands (chat, run warm-path) to communicate with daemon.
 
 IPC transport:
   - Unix/macOS: AF_UNIX domain socket
-  - Windows: AF_INET TCP on localhost:19384
+  - Windows: AF_INET TCP on localhost (the instance's port, see protocol.py)
 """
 
 import os
@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH,
-    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS,
+    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS, INSTANCE,
     send_message, recv_message,
     make_request,
 )
@@ -78,14 +78,15 @@ class DaemonClient:
         """Connect to daemon socket."""
         if IS_WINDOWS:
             # TCP: try connecting to localhost port
+            address = INSTANCE.connect_address()   # refuses by name when a named instance has no port file
             self._sock = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
             try:
-                self._sock.connect(IPC_ADDRESS)
+                self._sock.connect(address)
             except (ConnectionRefusedError, OSError):
                 self._sock.close()
                 self._sock = None
                 raise RuntimeError(
-                    "ZERO FALLBACK: Cannot connect to daemon on localhost:19384. "
+                    f"ZERO FALLBACK: Cannot connect to daemon on {address[0]}:{address[1]}. "
                     "Start daemon first: neurobrix serve --model <name>"
                 )
         else:
