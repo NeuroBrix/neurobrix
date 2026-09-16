@@ -17,9 +17,14 @@ SRC = Path(__file__).resolve().parents[3] / "src"
 
 
 def _cuda():
+    # The module may legitimately be absent (another backend, a partial install);
+    # a NAME inside it may not. Splitting the two is the whole point: an absent
+    # module skips, a renamed symbol raises where the suite can see it, and the
+    # guarded call stays guarded because "no device here" is a real answer.
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    set_device = nbx.DeviceAllocator.set_device
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        DeviceAllocator.set_device(0)
+        set_device(0)
         return True
     except Exception:
         return False

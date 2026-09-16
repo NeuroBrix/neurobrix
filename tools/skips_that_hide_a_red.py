@@ -56,11 +56,20 @@ def _swallowed_names(node: ast.Try) -> list[str]:
     gone -- and `a` is usually the function under test, so its absence reads
     as the absence of the machine.
     """
+    # Only the GUARDED region — `node.body`. An import in a handler, in `else`
+    # or in `finally` is not protected by this try's handlers: it raises where
+    # the suite can see it. Walking the whole node counted one of those and the
+    # scan reported a site that could not swallow anything
+    # (`test_staged_dot_computes_not_merely_compiles.py`, whose handler imports
+    # the exception class it then asserts on). Nested handlers INSIDE the body
+    # stay counted, and correctly: an exception there does reach the outer
+    # catch-all.
     out = []
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.ImportFrom):
-            for a in sub.names:
-                out.append(f"{sub.module or ''}.{a.name}")
+    for stmt in node.body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.ImportFrom):
+                for a in sub.names:
+                    out.append(f"{sub.module or ''}.{a.name}")
     return out
 
 

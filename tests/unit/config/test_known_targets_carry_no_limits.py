@@ -105,9 +105,10 @@ def test_it_does_not_contradict_this_machine_s_driver():
     """The property the file claims for itself, checked where it can be: any
     capability this machine reports must appear, and the file must not offer a
     ceiling for it that differs from what the driver says."""
+    launcher = pytest.importorskip("neurobrix.kernels.launcher")
+    arch, max_shared = launcher.arch, launcher.max_shared_memory_per_block  # renamed: loud
     try:
-        from neurobrix.kernels.launcher import arch, max_shared_memory_per_block
-        cap, limit = arch(), max_shared_memory_per_block()
+        cap, limit = arch(), max_shared()
     except Exception:
         pytest.skip("no CUDA driver here")
     if limit is None:

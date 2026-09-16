@@ -31,9 +31,19 @@ from neurobrix.kernels import launcher
 
 
 def _has_gpu():
+    """A probe that EXECUTES. `_detect_gpu_backend()` answers which backend this
+    build can address, which is a fact about the install, not about the machine:
+    it returned "cuda" with no device visible and the five tests behind it then
+    failed at their first allocation with `cudaErrorNoDevice` instead of skipping.
+    A capability probe allocates, frees, and reports what happened.
+
+    The module may legitimately be absent; a NAME inside it may not — hence the
+    split between importorskip and the attribute read."""
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    empty, f32 = nbx.NBXTensor.empty, nbx.NBXDtype.float32   # renamed symbols raise here
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
-        return _detect_gpu_backend() is not None
+        empty((1,), f32, "cuda:0")
+        return True
     except Exception:
         return False
 
@@ -69,7 +79,11 @@ def test_the_tolerance_comes_from_the_profile_not_the_code():
     """A number written here would be a hardware fact in the wrong place."""
     from neurobrix.kernels.ops._configs import active_vendor_profile
 
-    table = active_vendor_profile().get("autotune_screen_rtol")
+    profile = active_vendor_profile()
+    if not profile:
+        pytest.skip("no hardware profile resolves here — the premise of this test "
+                    "is what the profile says, and there is no profile to read")
+    table = profile.get("autotune_screen_rtol")
     assert table, "the hardware profile declares no autotune_screen_rtol"
     assert launcher._screen_rtol("float16") == table["float16"]
     # and the engine's own spelling resolves to the same entry
