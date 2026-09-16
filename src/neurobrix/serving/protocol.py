@@ -103,6 +103,20 @@ def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
     return bytes(data)
 
 
+#: The wire protocol's version. It changes when a method's request or response
+#: shape changes; adding a method does not change it. Every response envelope
+#: carries it beside the engine's version so a client refuses what it does not
+#: know instead of guessing (Studio requests 1 and 7). One number, read here.
+PROTOCOL_VERSION = 1
+
+
+def endpoint() -> Dict[str, Any]:
+    """Where this machine's daemon listens, as a record (Studio request 1)."""
+    if SOCKET_PATH is None:
+        return {"kind": "tcp", "address": IPC_ADDRESS[0], "port": IPC_ADDRESS[1]}
+    return {"kind": "unix", "path": str(SOCKET_PATH)}
+
+
 def make_request(method: str, **params) -> Dict[str, Any]:
     """Build a JSON-RPC request."""
     return {
@@ -112,7 +126,10 @@ def make_request(method: str, **params) -> Dict[str, Any]:
 
 
 def make_response(result: Any = None, error: Optional[str] = None) -> Dict[str, Any]:
-    """Build a JSON-RPC response."""
+    """Build a JSON-RPC response. Every envelope names the protocol and the
+    engine that produced it."""
+    from neurobrix import __version__
+    head = {"protocol": PROTOCOL_VERSION, "engine": __version__}
     if error is not None:
-        return {"error": error}
-    return {"result": result}
+        return {**head, "error": error}
+    return {**head, "result": result}
