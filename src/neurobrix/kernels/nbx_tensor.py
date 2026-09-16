@@ -2144,7 +2144,21 @@ def _pin_triton_backend(name: str) -> str:
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
     """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
-    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's driver
+    the process can load, or `NBX_GPU_BACKEND`.
+
+    **What this does NOT answer: whether a device is there.** On CUDA and ROCm
+    it succeeds when the vendor's runtime LIBRARY loads, which it does on a host
+    with the toolkit and no visible card — it answered "cuda" under
+    `CUDA_VISIBLE_DEVICES=` and five tests that had gated on it went on to fail
+    at their first allocation with `cudaErrorNoDevice` instead of skipping
+    (2026-09-16, register 62). On Metal the two questions coincide, because
+    there is no library to dlopen and the probe opens the device itself — which
+    is why the same call is an executing probe on one backend and a naming one
+    on the others. A caller asking "can I run here" wants
+    `DeviceAllocator.device_count() > 0`, which asks the driver, or an
+    allocation, which answers for the memory too.
+
+    Never through Triton's driver
     probe: `triton.runtime.driver.active` asks every backend `is_active()`,
     and those probes import torch (R33, universal since 2026-09-05 — this
     call was the first torch import of the launch path).
