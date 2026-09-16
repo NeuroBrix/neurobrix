@@ -112,6 +112,10 @@ MODEL_TIMEOUT_S: Dict[str, int] = {
     "TinyLlama-1.1B-Chat-v1.0":     60,
     "orpheus-3b-0.1-ft":            180,
     "Qwen3-30B-A3B-Thinking-2507":  420,
+    # A 57 GB compiled load at the llm family's 180 s: measured 166-171 s on
+    # two trees, twice each, rig quiet (2026-09-16) — the cell passed or
+    # timed out on pytest's overhead alone. Twice the measured load.
+    "Qwen3-Coder-30B-A3B-Instruct": 360,
     "deepseek-moe-16b-chat":        420,
     "Sana_1600M_4Kpx_BF16":         900,
     "SANA-Video_2B_720p_diffusers": 1200,
