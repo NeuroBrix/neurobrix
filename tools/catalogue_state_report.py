@@ -324,6 +324,41 @@ def memory_class_coverage(container: str):
     return out
 
 
+def apple_directory_summary() -> dict:
+    """What the certified directory holds for Apple silicon — read from the
+    live tree (`config/autotune/apple/<profile>/`), the Mac branch's own
+    proofs. No model run is measured on this rack for it: there is no Apple
+    device here, and the Volta census's shape keys are not the keys a Mac
+    meets (its dtype policy differs), so nothing is inferred either."""
+    root = REPO / "src" / "neurobrix" / "config" / "autotune" / "apple"
+    out = {"profiles": {}}
+    if not root.exists():
+        return out
+    for prof in sorted(p for p in root.iterdir() if p.is_dir()):
+        files = {}
+        dates = set()
+        machine = None
+        for f in sorted(prof.glob("*.json")):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            ents = d.get("entries") or {}
+            files[f.stem] = len(ents)
+            for e in ents.values():
+                pr = e.get("proof") or {}
+                if pr.get("date"):
+                    dates.add(str(pr["date"])[:10])
+                if machine is None and pr.get("machine"):
+                    machine = pr["machine"].get("platform")
+        out["profiles"][prof.name] = {"files": files, "shapes": sum(files.values()),
+                                      "dates": sorted(dates), "platform": machine}
+    return out
+
+
+APPLE_CELL = "not measured here"
+
+
 def coverage_cell(cov) -> str:
     if cov is None:
         return "n/m"
@@ -525,8 +560,8 @@ def main() -> int:
           f"and every one of the nine failures was a VIDEO model.\n")
 
     print("| model | family | GB | on this rack | swept | screened | certified cost | "
-          "certified for this card's memory | where a defect would be invisible | debts named | line |")
-    print("|---|---|---:|---|---:|---:|---|---|---|---|---|")
+          "certified for this card's memory | Apple M4 Pro | where a defect would be invisible | debts named | line |")
+    print("|---|---|---:|---|---:|---:|---|---|---|---|---|---|")
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
@@ -586,7 +621,7 @@ def main() -> int:
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{coverage} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
+              f"{coverage} | {APPLE_CELL} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -611,6 +646,22 @@ def main() -> int:
     print("card unknown serves no card until re-proven. The two numbers are what a")
     print("request on each SKU of this rack is served without a sweep — not what the")
     print("directory holds.\n")
+    apple = apple_directory_summary()
+    print("**Apple M4 Pro** — every cell says *not measured here*, and that is the")
+    print("whole truth of this rack: it has no Apple device, and a Mac's shape keys are")
+    print("not this rack's (the dtype policy differs), so nothing is inferred from the")
+    print("Volta census either. What the trunk carries for Apple since the Mac branch")
+    print("merged is the certified directory the Mac itself wrote, read from the live tree:")
+    if apple["profiles"]:
+        for name, prof in apple["profiles"].items():
+            files = ", ".join(f"{k} {v}" for k, v in prof["files"].items())
+            dates = f"{prof['dates'][0]}..{prof['dates'][-1]}" if prof["dates"] else "no dated proof"
+            print(f"`{name}`: **{prof['shapes']} shapes** ({files}), proofs {dates}, "
+                  f"platform `{prof['platform']}`. A model's Apple line is measured on the machine")
+            print("that carries the card, by its own matrix runner (`tools/apple_matrix*.py`), and")
+            print("lands here as a row when it does.\n")
+    else:
+        print("nothing — the live tree carries no `config/autotune/apple/` directory.\n")
     print("**swept** — shape keys this model had to sweep AT RUNTIME because the")
     print("certified directory did not hold them. On a row that MET, `0` is the")
     print("per-model measure of certified coverage: it was served entirely from the")
