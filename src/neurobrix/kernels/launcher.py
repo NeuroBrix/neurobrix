@@ -344,10 +344,16 @@ class CudaDriver(Driver):
             raise TypeError(f"NeuroBrix launcher: the kernel declares {expected} parameters, "
                             f"{len(params)} given — refused, not launched")
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        for kind, value in params:
+        for i, (kind, value) in enumerate(params):
             if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
-                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} was not handed out "
-                                 f"by the allocator — refused, not launched")
+                # The refusal names the parameter: "which buffer" is the
+                # whole question the caller then has to answer (Ming's
+                # embedding, 2026-09-14, refused an address nobody could
+                # attribute from the address alone).
+                what = (f"parameter '{names[i]}'" if names and i < len(names)
+                        else f"parameter #{i}")
+                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} ({what}) was not "
+                                 f"handed out by the allocator — refused, not launched")
         # A caller may give one or two extents (the contract's checker does); CUDA wants three.
         gx, gy, gz = (tuple(int(g) for g in grid) + (1, 1, 1))[:3]
         bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]

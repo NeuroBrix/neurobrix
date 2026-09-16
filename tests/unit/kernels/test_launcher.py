@@ -189,3 +189,22 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     seen.clear()
     launch(scale_kernel, grid, a_r, a_i, n, 0.5, BLOCK_SIZE=1024)
     assert seen == [], "the recorder still fires after it was cleared"
+
+
+def test_a_refused_address_is_named_by_its_parameter():
+    """The ownership door refuses a pointer the allocator never handed out;
+    the refusal names WHICH parameter carried it, because the address alone
+    attributes nothing (Ming's embedding, 2026-09-14). No device is touched:
+    the refusal fires before anything reaches the driver. Injection: with the
+    name dropped from the message this test failed on 'weight_ptr'."""
+    import ctypes
+    import pytest
+    from neurobrix.kernels.launcher import CudaDriver
+    drv = CudaDriver.__new__(CudaDriver)
+    drv._param_counts = {}
+    fn = ctypes.c_void_p(1)
+    with pytest.raises(ValueError, match=r"parameter 'weight_ptr'"):
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", 0x7fba35100000), ("i32", 4)],
+                   names=["weight_ptr", "n"])
+    with pytest.raises(ValueError, match=r"parameter #0"):
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", 0x7fba35100000)])
