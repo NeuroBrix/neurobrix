@@ -102,18 +102,20 @@ def cmd_autotune(args) -> int:
             files = list(C.files()) if root else []
             mine = [p for p in files if root and p.parent == root]
             docs = [json.loads(p.read_text(encoding='utf-8')).get('entries') or {} for p in mine]
-            by_class = {}; unknown = 0
+            by_class = {}; unknown = 0; by_backend = {}
             for entries in docs:
                 for entry in entries.values():
                     classes = C.covered_memory_classes(entry)
                     if not classes: unknown += 1
                     for c in classes: by_class[c] = by_class.get(c, 0) + 1
+                    for lab in (C.proof_backends(entry) or {"unknown"}): by_backend[lab] = by_backend.get(lab, 0) + 1
             here = C.executing_memory_class()
             from neurobrix.cli.json_out import emit
             emit("autotune.status", {"profile": f"{prof[0]}/{prof[1]}" if prof else None, "directory": str(C.directory()),
                                      "enabled": bool(C.enabled()), "files": len(mine), "shapes": sum(len(e) for e in docs),
                                      "served_by_memory_class_gb": {str(k): v for k, v in sorted(by_class.items())},
                                      "proven_on_unknown_card": unknown, "this_card_class_gb": here,
+                                     "proofs_by_backend": dict(sorted(by_backend.items())),
                                      "would_be_served_here": by_class.get(here, 0) if here is not None else None})
             return 0
         print(f"profile in force: {prof[0] + '/' + prof[1] if prof else 'none resolved'}")
@@ -126,6 +128,7 @@ def cmd_autotune(args) -> int:
         here = C.executing_memory_class()
         by_class = {}
         unknown = 0
+        by_backend = {}
         for entries in docs:
             for entry in entries.values():
                 classes = C.covered_memory_classes(entry)
@@ -133,7 +136,11 @@ def cmd_autotune(args) -> int:
                     unknown += 1
                 for c in classes:
                     by_class[c] = by_class.get(c, 0) + 1
+                for lab in (C.proof_backends(entry) or {"unknown"}):
+                    by_backend[lab] = by_backend.get(lab, 0) + 1
         print(f"files for this profile: {len(mine)}; shapes: {total}")
+        print("proven under (a setting is proven for one code generator; a Triton upgrade re-proves): "
+              + (", ".join(f"{k}: {n}" for k, n in sorted(by_backend.items())) or "none"))
         print("served by memory class (an entry serves only the class it was proven on): "
               + (", ".join(f"{c} GB: {n}" for c, n in sorted(by_class.items())) or "none")
               + f"; proven on an unknown card (served to no card until re-proven): {unknown}")

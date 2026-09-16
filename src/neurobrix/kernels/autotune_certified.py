@@ -226,6 +226,35 @@ def _variant_slot(cls: int) -> str:
     return f"{int(cls)}g"
 
 
+def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The code generator a proof was made with, as one label: `triton <version>`
+    plus the backend name when it is not cuda (e.g. `triton 3.7.0 metal`). A
+    setting is proven for ONE generator: a Triton upgrade changes the code it
+    emits, so the directory's proofs are re-made under the new one and the
+    document says which version each line's proofs carry (owner, 2026-09-16)."""
+    if not proof:
+        return None
+    b = proof.get("backend") or {}
+    ver = b.get("triton")
+    if not ver:
+        return None
+    name = b.get("name")
+    return f"triton {ver}" + (f" {name}" if name and name != "cuda" else "")
+
+
+def proof_backends(entry: Dict[str, Any]) -> set:
+    """Every generator label this entry carries a proof from (primary and variants)."""
+    out = set()
+    lab = proof_backend(entry.get("proof"))
+    if lab:
+        out.add(lab)
+    for slot, var in (entry.get("variants") or {}).items():
+        lab = proof_backend((var or {}).get("proof"))
+        if lab:
+            out.add(lab)
+    return out
+
+
 def covered_memory_classes(entry: Dict[str, Any]) -> set:
     """Every memory class this entry carries a proof for: its primary proof's
     class and each variant's."""
