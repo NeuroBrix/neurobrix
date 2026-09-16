@@ -792,13 +792,48 @@ def last_download_event(progress: Path, short: str):
     return last
 
 
-def snapshot_has_a_format(p: Path) -> bool:
+def registry_checkpoint_file(name: str) -> str | None:
+    """The checkpoint the build toolchain's registry names for this model, or None.
+
+    A family whose vendor ships a bare checkpoint (the upscalers: one `.pth`, no
+    config of any kind) declares the file in its registry entry, because several
+    variants live in one upstream repository and only the entry says which one is
+    this model. Read there, never listed here — the entry is the authority and a
+    second copy of it would drift the day a variant is added."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return None
+    try:
+        import yaml
+        doc = yaml.safe_load(reg.read_text()) or {}
+    except Exception:
+        return None
+    for section in doc.values():
+        if isinstance(section, dict) and isinstance(section.get(name), dict):
+            v = section[name].get("checkpoint_file")
+            return v if isinstance(v, str) else None
+    return None
+
+
+def snapshot_has_a_format(p: Path, name: str | None = None) -> bool:
     """The layouts the toolchain's format detector accepts: a diffusers pipeline
-    (model_index.json), a transformers model (config.json), a NeMo archive (*.nemo)
-    or a NeMo directory (model_config.yaml + model_weights.ckpt)."""
-    return ((p / "model_index.json").exists() or (p / "config.json").exists()
+    (model_index.json), a transformers model (config.json), a NeMo archive (*.nemo),
+    a NeMo directory (model_config.yaml + model_weights.ckpt) — or bare weights,
+    which the detector also accepts (`tracer/format_detector.py`: BARE_WEIGHTS on
+    a `.pth`/`.pt`/`.safetensors`/`.ckpt`) and this test did not, so every upscaler
+    re-trace was refused with "no COMPLETE snapshot" while its checkpoint sat in
+    the directory (real-esrgan-x2, 2026-09-16).
+
+    Bare weights are admitted ONLY when the registry names the checkpoint and it is
+    there. That condition is what keeps the guard this test exists for: a stopped
+    diffusers download (Sana 4K, 6 GB of shards, no model_index.json, 2026-09-07)
+    is bare weights too, and declares no `checkpoint_file` — so it stays refused."""
+    if ((p / "model_index.json").exists() or (p / "config.json").exists()
             or any(p.glob("*.nemo"))
-            or ((p / "model_config.yaml").exists() and (p / "model_weights.ckpt").exists()))
+            or ((p / "model_config.yaml").exists() and (p / "model_weights.ckpt").exists())):
+        return True
+    ckpt = registry_checkpoint_file(name) if name else None
+    return bool(ckpt) and (p / ckpt).exists()
 
 
 def snapshot_weight_gb(snap) -> float:
@@ -1202,7 +1237,7 @@ class Model:
                 p = root / nm
                 if not (p.is_dir() and any(p.iterdir())):
                     continue
-                if not snapshot_has_a_format(p):
+                if not snapshot_has_a_format(p, nm):
                     continue
                 if any(p.rglob("*.incomplete")):
                     continue
