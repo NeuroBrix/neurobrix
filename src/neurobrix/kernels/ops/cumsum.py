@@ -186,8 +186,8 @@ def reduce_then_scan_block_sum_kernel_row(
     pid_n = tl.program_id(1).to(tl.int64)
     pid_m = tl.program_id(0).to(tl.int64)
     num_programs_n = tl.num_programs(1)
-    block_offset = pid_n * (tiles_per_cta * TILE_SIZE)
-    block_end = min(block_offset + tiles_per_cta * TILE_SIZE, N)
+    block_offset = (pid_n * (tiles_per_cta * TILE_SIZE)).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    block_end = min(block_offset + tiles_per_cta * TILE_SIZE, N).to(tl.int32)
 
     acc_dtype: tl.constexpr = get_scan_accum_type(in_ptr.type.element_ty)
     acc = tl.zeros((TILE_SIZE,), dtype=acc_dtype)
@@ -226,8 +226,8 @@ def reduce_then_scan_block_scan_kernel_row(
     """Final block scan: apply prefix from previous blocks, then local cumsum."""
     pid_m = tl.program_id(0).to(tl.int64)
     pid_n = tl.program_id(1).to(tl.int64)
-    block_offset = pid_n * (tiles_per_cta * TILE_SIZE)
-    block_end = min(block_offset + tiles_per_cta * TILE_SIZE, N)
+    block_offset = (pid_n * (tiles_per_cta * TILE_SIZE)).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    block_end = min(block_offset + tiles_per_cta * TILE_SIZE, N).to(tl.int32)
     acc_dtype: tl.constexpr = get_scan_accum_type(in_ptr.type.element_ty)
 
     prefix = tl.load(

@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- Loop bounds derived from a program id stay 32-bit counts at twelve kernel sites (cumsum, the decode attention segments, the sort tiles, the upsample counters): the Metal induction lowering refuses a 64-bit loop bound, and every program id is 64-bit for addressing since the 2^31 fix; a source gate refuses a 64-bit loop bound coming back.
 - `neurobrix autotune certify` stops at the first sticky CUDA error (an illegal memory access poisons the context; every later key would fail the same way) and names the key instead of reporting the fault once per remaining shape — 227 shapes were lost that way on 2026-09-14.
 - Every program id in the Triton kernels is read in 64-bit at its source (293 sites in 157 files), so every offset derived from it — a tile row times a stride, a batch times C×HW — stays exact past 2^31 elements (group_norm at Mochi's VAE decoder).
 - Every flat-indexed kernel (152 sites in 105 files: fill, the strided copy that materialises a view, the elementwise, reduction, index and upsample families) computes its element offsets from a 64-bit program id: a tensor past 2^31 elements (Mochi's VAE decoder, 2.25e9-element activations) was addressed through a wrapped int32 offset — `add` and `silu` had been fixed by hand in May, the other 103 files had not. Measured on V100: four models byte-identical with the setting pinned, timings within 3 % over three warm runs.

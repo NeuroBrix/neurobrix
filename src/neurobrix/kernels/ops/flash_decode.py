@@ -82,7 +82,8 @@ def flash_decode_split_kernel(
     q = (q * sm_scale).to(q.dtype)
 
     seg_start = pid_s * seg_len
-    seg_end = tl.minimum(seg_start + seg_len, T_k)
+    seg_start = seg_start.to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    seg_end = tl.minimum(seg_start + seg_len, T_k).to(tl.int32)
 
     m_i = tl.full([BLOCK_G], float("-inf"), dtype=tl.float32)
     l_i = tl.zeros([BLOCK_G], dtype=tl.float32)
