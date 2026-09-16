@@ -4,7 +4,14 @@
 Every number is READ from the artefact that produced it. Nothing is retyped, and
 every cell carries how it was obtained:
 
-    measured      an artefact on this machine holds it, and the line names which
+    proven        an ARTEFACT of a real request was judged by an instrument
+                  OUTSIDE this engine, and the line links the file and the
+                  written verdict (R29, hardened by the owner 2026-09-16)
+    measured      an artefact on this machine holds a number, and the line names
+                  which — including every AGREEMENT between two arms of this
+                  engine (bytes identical, PSNR, pixel dynamics): two arms
+                  agreeing says they agree, never that either is right, because
+                  one broken graph upstream breaks both the same way
     inferred      derived from a measured line by a stated structural identity
     not measured  said in clear, because a blank cell and a zero read the same
 
@@ -82,6 +89,34 @@ ADJUDICATED_AXES = {
 
 # Verdicts that belong to no single line. Each names its artefact; a number here
 # was read from it after the run, never before.
+# ---------------------------------------------------------------------------
+# The artefacts a human has judged with an instrument outside the engine. A line
+# is PROVEN only here; everything else is measured, however many numbers it has.
+# Campaign: nbx/campaigns/2026_09_16_vitrine (its README names the instruments).
+VITRINE_DIR = "nbx/campaigns/2026_09_16_vitrine"
+VITRINE = {
+    "whisper-large": dict(
+        artefact="whisper/transcript.txt",
+        instrument="the text known in advance (jfk_11s.expected.txt) and faster-whisper 1.2.1, a third-party ASR",
+        answer="word error rate 0.0 against the expected text (22 words, 0 edits); the third-party ASR returns the identical sentence"),
+    "real-esrgan-x4": dict(
+        artefact="real_esrgan/apple_x4.png",
+        instrument="looked at, beside the degeneracy facts and the correlation with the input's bicubic upscale",
+        answer="the input's scene at 1792x1792, sharp: correlation 0.998, std 104.65, 199 358 distinct colours — not white, not flat"),
+}
+
+
+def vitrine_cell(container: str) -> str:
+    """The line's verdict: `proven` with its artefact and verdict file when one
+    exists, else the row's own (measured / inferred / not measured)."""
+    v = VITRINE.get(container)
+    if not v:
+        return ""
+    return (f"**proven** — [{v['artefact'].split('/')[-1]}]({VITRINE_DIR}/{v['artefact']}), "
+            f"judged by {v['instrument']}: {v['answer']} "
+            f"([verdict]({VITRINE_DIR}/{v['artefact'].rsplit('/', 1)[0]}/VERDICT.md))")
+
+
 CROSS_CUTTING = [
     "**The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, "
     "after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy "
@@ -108,7 +143,7 @@ CROSS_CUTTING = [
     "**The engine suite on the trunk** (`pytest tests/unit tests/regression`, 2026-09-13 "
     "13:28-15:20, 1 h 52): 2100 passed, 21 failed. Ten of the 21 were one defect in the "
     "triton weight loader's consumed-weight filter (register 50, fixed the same afternoon, "
-    "proven by run on three cells), one a GPU-less host planned on a GPU (register 51, "
+    "measured by run on three cells), one a GPU-less host planned on a GPU (register 51, "
     "fixed), eight out-of-memory against a foreign process on the cards, two Qwen3-Omni "
     "triton cells to re-read after the fix. The 21 are re-run from a worktree frozen at "
     "`8a92312` on a quiet rig; the verdict line is written here when it exists, not before. "
@@ -144,7 +179,7 @@ OVERLAY = {
              "on this stack until cuDNN >= 9.3 or a per-tile conv bound lands (DETTE D2).",
         line="measured"),
     "CogVideoX-5b-I2V": dict(
-        now="RUNS — corrected at the source, published, installed, PROVEN by run",
+        now="RUNS — corrected at the source, published, installed; run to completion (MEASURED: no artefact judged outside the engine, R29 hardened 2026-09-16)",
         evidence="hub record THUDM/CogVideoX-5b-I2V fileSize 23126413914, updatedAt "
                  "2026-09-12T22:09:39Z (replace through the internal entry point, "
                  "2498 s); installed manifest 22:10:26 UTC; the installed "
@@ -161,7 +196,7 @@ OVERLAY = {
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, PROVEN BY RUN (triton, 9 frames, 2026-09-13 15:33)",
+        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)",
         evidence="re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
                  "vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops "
                  "at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the "
@@ -196,7 +231,7 @@ OVERLAY = {
              "estimate carrying the runtime frame count.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
-        now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
+        now="RUNS — compiled ran to completion at the default guidance (MEASURED, R29 hardened 2026-09-16); triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
         evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
                  "five components; upload through the internal entry point 22:22:46 -> "
                  "rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub "
@@ -633,7 +668,7 @@ def main() -> int:
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{coverage} | {APPLE_CELL} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
+              f"{coverage} | {APPLE_CELL} | {blind_cell} | {debts_cell(container, slug)} | {vitrine_cell(container) or line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -645,6 +680,21 @@ def main() -> int:
         print(f"*Evidence:* {ov['evidence']}  ·  *line:* {ov['line']}\n")
 
     print("## How to read the columns\n")
+    print("**line** — the last column is the verdict on the line itself, and since")
+    print("2026-09-16 it distinguishes two things that were being written as one.")
+    print("*proven* means an ARTEFACT of a real request — not a trace stimulus — was")
+    print("judged by an instrument OUTSIDE this engine, and the cell links the file and")
+    print("the written verdict: a transcription against a text known in advance and a")
+    print("third-party ASR, a synthesised voice read back by that ASR, code that was")
+    print("executed, an image or a sequence of frames looked at. *measured* is")
+    print("everything else that rests on an artefact of this machine: a wall clock, a")
+    print("shape count, a PSNR — and every AGREEMENT between two arms of this engine.")
+    print("Bytes identical between the Triton and the PyTorch path say the two paths")
+    print("agree; a graph broken upstream breaks both the same way and the matrix still")
+    print("reads *identical*. Lines that said \"proven by run\" before that date and rest")
+    print("on a run or an agreement were demoted here to *measured* and keep their")
+    print("evidence; each returns to *proven* when its artefact is produced and judged")
+    print("(`nbx/campaigns/2026_09_16_vitrine`).\n")
     print("**debts named** — the entries of `DETTE.md` that hold this line (the A rows of")
     print("`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on")
     print("without opening the debt file. A line that runs and measures may still name one:")
