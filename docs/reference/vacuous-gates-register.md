@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-63 entries, of which five are placeholders and 58 carry a site. Two
+64 entries, of which five are placeholders and 59 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1447,3 +1447,31 @@ photograph read *417 uniform rows of 1792* — 23 % — because a studio photogr
 has a white background, and the input carries the same 23 %. A threshold alone
 would have called a correct artefact degenerate. The numbers bound the look;
 they do not replace it, in either direction.
+
+### 64 — a guard that scanned the wrong level, and had therefore never seen anything
+
+`tools/skips_that_hide_a_red.py` exists to find the form where a red becomes a
+skip: a catch-all `try` around `from x import a`, so the absence of `a` — the
+function under test — reads as the absence of a machine. It scanned
+`tree.body`, with the comment `# MODULE level only`. The form it hunts is
+almost always written INSIDE a test or a fixture, so on 2026-09-16 the scan
+reported **0 findings across 274 test files**, and a walk of the whole tree
+reported **20, in 17 files** — every one of them invisible to it since the day
+it was written. A clean report from a guard looking at the wrong level is
+indistinguishable from a clean tree.
+
+Found by applying, to our own tools, a rule the repository's new second reader
+carries in its configuration: *any guard or predicate that inspects only
+top-level structures when the thing it guards can be nested*. The same class as
+entry 17 — a helper correct in isolation, wired where nothing reaches it —
+except here the helper was reached, ran on every file, and answered zero.
+
+**The rule**: a guard states the DEPTH it inspects, and the test that lands with
+it injects the thing it guards at a depth greater than one. The detector now
+walks (`risky_guards`, any depth), and its test injects the nested form inside a
+function and inside a class body, seen red against the old scan.
+
+**The twenty it now sees are a finding of their own**, filed as
+`D-SKIPS-THAT-HIDE-A-RED-TWENTY-GUARDS`: each is a named import inside a
+catch-all, and the fix is scope, not removal — guard the package import, import
+the names inside the test where a missing one fails.
