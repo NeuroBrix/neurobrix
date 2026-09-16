@@ -289,3 +289,39 @@ Volta profile would extend it at the price of an fp64 numpy convolution per
 candidate over hundreds of megabytes — a measurement to make before moving the
 number, not a number to move. Certification has no such budget and covers the
 family entirely (every conv entry in the directory carries the fp64 proof).
+
+---
+
+## OWED TO THE DELL — the certifier's stability contract now has two regimes (2026-09-16)
+
+The common certifier changed, minimally, and your suite must see it before a red
+does. What changed:
+
+1. **Protocol file scoped by backend.** `tools/rig_protocol.json` →
+   `tools/rig_protocol.cuda.json` (your V100 clock lock, unchanged in content).
+   The engine (`autotune_certify._protocol_file`) and the workshop
+   (`tools/rig_clock.py`) now read `rig_protocol.<backend>.json`. This was a bug
+   regardless: the un-suffixed file leaked the V100 protocol to a Mac, which
+   refused certification on clocks it cannot read. **Your cuda path is
+   unchanged** — same clock, same `nvidia-smi -ac`, same door.
+2. **The regime field is clock-OR-witness.** `rig_protocol_refusal` dispatches
+   on `regime`: `clock_lock` (yours, the exact prior check) or `witness` (Apple,
+   `rig_protocol.metal.json`). Under `clock_lock` the new witness code is INERT
+   (`certify_key`'s witness bracket runs only when `_regime()` is `witness`), so
+   your timings and proofs are byte-identical to before.
+3. **`proof_records_clock` → `proof_records_regime`** (alias kept). It now
+   returns true for a recorded clock OR a recorded `stability_witness`. Your
+   proofs record `machine.clocks_mhz`, so `entry_covers(..., need_clock=True)`
+   answers exactly as before.
+
+Tests: `test_autotune_certify_clock_door.py` now forces the cuda protocol in its
+fixture (the default on a Mac is metal), `test_witness_regime.py` is new, and
+`test_the_protocol_authority_...` asserts the backend-scoped name. Run your
+suite on the cuda path and confirm the clock door is unmoved. See
+`docs/reference/what-certified-means.md` for the contract.
+
+Not verifiable on the Mac yet: matmul does not compile on Metal (a codegen bug,
+`r_55` used out of its declared scope, exposed once the `llvm.intr.assume` refusal
+was lifted), so the witness — a matmul — cannot yet run there and the Apple
+certification stays blocked on that fork codegen chantier. The contract is in
+place for when it compiles.
