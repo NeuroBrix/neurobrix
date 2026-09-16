@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-54 entries, of which five are placeholders and 49 carry a site. Two
+60 entries, of which five are placeholders and 55 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
