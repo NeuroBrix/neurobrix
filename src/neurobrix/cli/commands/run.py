@@ -134,15 +134,17 @@ def _try_warm_path(args) -> bool:
     return True
 
 
-def cmd_run(args):
-    """Under `--explain-plan --json` the plan is the only thing on stdout: every
-    human line of the run's preamble goes to stderr (`json_out`)."""
+def run_entry(args):
+    """The dispatcher's entry: under `--explain-plan --json` the plan is the only
+    thing on stdout, every human line of the run's preamble goes to stderr
+    (`json_out`). `cmd_run` below is the run itself, unchanged and read as such
+    by the tests that inspect its source."""
     from neurobrix.cli.json_out import human_lines_to_stderr
     with human_lines_to_stderr(bool(getattr(args, "json", False) and getattr(args, "explain_plan", False))):
-        return _cmd_run(args)
+        return cmd_run(args)
 
 
-def _cmd_run(args):
+def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
