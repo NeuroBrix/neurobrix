@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-72 entries, of which five are placeholders and 67 carry a site. Two
+73 entries, of which five are placeholders and 68 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1826,3 +1826,35 @@ an unmasked process reads) is the load-bearing one and the two cannot both hold.
 also learned to state its host: it compared against the real rig's card count, so it would have
 passed or failed by how many GPUs the developer's box happened to have. Seen red on the injection
 that restores `tag != "cpu"`.
+
+### 73 — a chain that finished its work and could not say so
+
+`tools/certified_checkpoint.py` holds its producers and exits when the last is gone — its own
+header says "so a chain can wait on IT". `reproof_t38_v2.sh` passed `--producer-pid $$`: the chain
+named ITSELF as the producer, then ran `wait` over its job table, which contained the checkpointer.
+The chain waited for the checkpointer; the checkpointer waited for the chain.
+
+All four certifiers succeeded — card 3 rc=0 at 02:53 and card 1 rc=0 at 02:57, card 2 rc=0 at
+04:13, 4172 and 5942 shapes proven — and `== reproof t38 done` was **never written**. The pair sat
+there for the eight hours after the work was complete, logging `nothing to commit` every ten
+minutes.
+
+This is register **55** from the other side. 55 was a waiter starving because its producer had
+DIED without writing the marker; this is a waiter starving because its producer had SUCCEEDED and
+could not write it. From outside the two are one symptom — the marker is absent — and the contract
+is the marker, so a chain that cannot write its own is indistinguishable from one that failed.
+
+Two further costs, both paid today: the watcher on those two pids fired `== TRUE END of the triton
+3.8.0 re-proof 11:47:00` the moment I stopped them, dating the pass seven hours after it ended (a
+correction is written beside it, and the pass ended at **04:13**); and the deadlocked pair was
+still polling git every ten minutes with a battery chained to start on a quiet rig.
+
+**The rule**: the producers are the processes doing the WORK, never the shell that schedules them.
+`refuse_a_producer_that_will_wait_for_us()` refuses at entry when `--producer-pid` names the
+checkpointer's own parent, prints the command that satisfies it, and leaves one opening that reads
+as deliberate — `--allow-parent-as-producer`, for a shell that launches it and exits without
+waiting, which is a legitimate caller.
+
+Seen red on two injections: unwiring the door from `main()` turns **only** the cell that runs the
+tool for real from a shell naming itself (register 17 — a helper whose every unit test passes can
+still have no seam), and blinding the helper turns five.
