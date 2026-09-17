@@ -97,8 +97,17 @@ def _arm_timeout(backend: str | None) -> int:
     would put the test's subject at risk to save wall-clock, which is the wrong
     trade — and the vacuity guard failing loudly is not a reason to walk toward
     it deliberately.
+
+    7200 s and not 3600, because the arms were then run to completion and
+    measured instead of estimated: the file passed in 6340.56 s, about 3170 s
+    per arm, so 3600 left only 13% of headroom and a slightly busier machine
+    would fail again — and fail in the way that reads as a hang. An arm costs
+    ~8.5x its no-replay equivalent (365.39 s for the same model, prompt and
+    token count), which is the price of a first RECORDING run; the replay this
+    records is what makes later runs fast. The number below is meant as a bound
+    a healthy arm cannot reach, not as an estimate of one.
     """
-    return 1200 if backend == "cuda" else 3600
+    return 1200 if backend == "cuda" else 7200
 
 
 def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
