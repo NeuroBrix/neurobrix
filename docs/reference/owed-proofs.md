@@ -333,6 +333,17 @@ family entirely (every conv entry in the directory carries the fp64 proof).
   `cuModuleLoadData`. Under 3.7+ the CUDA driver probe is native when torch is
   absent (#9578/#10935): the R33 proof (`sys.modules` without torch after a
   `--triton` run) is re-run on the new stack.
+* **THE BATTERY'S VERDICT, 2026-09-17 05:21 — RED, and the switch waits.** 5 failed, 79 passed
+  in 1 h 04, from the frozen worktree at `dd120774` whose directory had just been re-proven to
+  100 % on both memory classes. Two of the five are `D-DEEPSTACK-ZERO-EXTENT` (Qwen3-VL, the
+  two 57 GB re-traces still queued) and are not the stack. **Three are one defect and it IS the
+  stack**: the warm serving path of vlm, multimodal and image refuses `aten.bmm::0` a device
+  address the allocator never handed out. Same tree, same cell, only the interpreter changing,
+  three repetitions per arm alternating: 2.14.0+cu126 / 3.8.0 fails 3/3, 2.5.1+cu121 / 3.6.0
+  passes 3/3. Cold passes and warm fails on the same models. The allocator's segment mode is
+  refuted as the cause. Filed `D-WARM-COMPILED-BMM-ADDRESS-REFUSED-UNDER-TORCH-2.14`; the
+  current stack stays in force and the candidate stays beside it, which is what this order is
+  for. Verdict: `nbx/campaigns/2026_09_16_converge/BATTERY_T38_VERDICT.md`.
 * **the order, unchanged**: door ✓ → the stack in `venvs/nbx_t214` beside the current
   one ✓ (engine installed; first fix already needed and landed: the engine's
   `libcudart` loader opens the environment's own runtime first — the system's 12.2
