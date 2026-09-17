@@ -265,7 +265,21 @@ def _buffer_for(addr: int, ty: str):
     # refusal into a named one. Guessing a binding is what this driver exists
     # to stop; refusing a binding that would have worked is merely wrong.
     offset = addr - base
-    raw = (ctypes.c_byte * (size - offset)).from_address(addr)
+    # Floor the span to a whole number of elements. The allocation runs to the
+    # end of its block, which need not be a multiple of this tensor's element
+    # size — and `np.frombuffer` refuses a remainder with "buffer size must be a
+    # multiple of element size". Measured on Kokoro-82M, aten.upsample_linear1d
+    # at (1, 9, 76800). Flooring is safe: the kernel addresses its own tensor,
+    # which ends at or before the block's end, so no element it reads or writes
+    # is cut off.
+    itemsize = np.dtype(np_dtype).itemsize
+    span = ((size - offset) // itemsize) * itemsize
+    if span <= 0:
+        raise RuntimeError(
+            f"the triton-ext driver cannot bind pointer 0x{addr:x}: the "
+            f"allocation leaves {size - offset} bytes from it, less than one "
+            f"{np_dtype} element")
+    raw = (ctypes.c_byte * span).from_address(addr)
     view = np.frombuffer(memoryview(raw), dtype=np_dtype)
     try:
         return _native().wrap(view)
