@@ -90,7 +90,7 @@ class TritonExtDriver(Driver):
         # The same target the fork's driver builds: the seam owns the NAME
         # ("metal" for the fork, "mps" for triton-ext) and the device owns the
         # arch. Building it here again would be a second answer to one question.
-        from neurobrix.triton.metal_driver import metal_target
+        from neurobrix.triton.metal_backend import metal_target
         return metal_target()
 
     def max_shared_memory_per_block(self) -> int:
@@ -190,6 +190,20 @@ class TritonExtDriver(Driver):
                 "offsets come from those types. Launching without them would "
                 "pack to the wrong offsets WITHOUT failing, which is the exact "
                 "silent-zero this driver exists to end.")
+
+        # The argument list must be exactly what the kernel declares. `zip`
+        # below stops at the shorter of the two, so a short list would bind
+        # what it could and launch — silently, with the tail unbound. CUDA has
+        # refused this since the launcher existed (`CudaDriver.launch` compares
+        # against the cubin's own count); this driver did not, and the
+        # launcher contract caught it the first time it was run against a
+        # driver that is not the archived fork's (2026-09-17).
+        if len(params) != len(types):
+            raise RuntimeError(
+                f"NeuroBrix triton-ext driver: {len(params)} launch parameters "
+                f"against {len(types)} declared types — refused, not launched. "
+                f"Binding the shorter of the two leaves the rest unbound and "
+                f"says nothing.")
 
         D = _ext()
         ptr_args: List[Any] = []

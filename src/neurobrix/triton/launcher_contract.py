@@ -324,8 +324,17 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
         types = [ty for _name, ty in ordered]
         trailing = driver.trailing_buffers(metadata)
 
+        # THREE extents, because that is what the launcher hands a driver:
+        # `launch()` pads with `+ (1,) * (3 - len(grid))` before the call. This
+        # checker passed the caller's grid through unpadded, and a driver that
+        # unpacks `gx, gy, gz = grid` — as triton-ext's does — raised
+        # ValueError on an ordinary one-dimensional launch. The archived fork's
+        # driver tolerated a short tuple, so the gap sat here unseen until the
+        # backend changed.
+        padded = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
+
         def _launch(p):
-            driver.launch(function, grid, block, metadata.shared, 0, p,
+            driver.launch(function, padded, block, metadata.shared, 0, p,
                           names=names, types=types, trailing=trailing)
 
         _launch(params)
@@ -364,6 +373,31 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
             free_buffer(address)
 
     # -- events --------------------------------------------------------------
+    # A DIFFERENT PROTOCOL, and not every backend puts it on the driver. The
+    # launcher calls none of these — it uses `load`, `launch`, `block_for`,
+    # `target`, `artifact_kind`, `wants_scratch_params`, `trailing_buffers` and
+    # `max_shared_memory_per_block`, and nothing else. On Apple the streams and
+    # events belong to the ALLOCATOR (`kernels/metal_device.py`), so
+    # `TritonExtDriver` implements the launch half only. Measured 2026-09-17,
+    # when archiving the fork replaced a driver that carried both halves on one
+    # object and hid the distinction.
+    #
+    # A driver that does not claim this half is NOT failed here: certifying it
+    # against an API the engine never calls would be this checker inventing a
+    # contract, which is the fault it exists to prevent. It is SAID instead, so
+    # the gap stays visible.
+    _ordering_api = ("create_event", "record_event", "synchronize_event",
+                     "create_stream", "wait_event", "synchronize_stream",
+                     "destroy_event", "destroy_stream", "elapsed_ms")
+    _absent = [m for m in _ordering_api if not hasattr(driver, m)]
+    if _absent:
+        print(f"  note: {driver.__class__.__name__} implements the LAUNCH half "
+              f"of this contract and not the ordering half "
+              f"({', '.join(_absent)}); on this backend streams and events "
+              f"belong to the allocator. Not certified here, not a failure.",
+              flush=True)
+        return failures
+
     ordering = driver.create_event(timing=False)
     timing_a = driver.create_event(timing=True)
     timing_b = driver.create_event(timing=True)

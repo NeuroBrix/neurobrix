@@ -102,11 +102,14 @@ def _torch_importers(root: Path = KERNELS) -> dict[str, list[int]]:
 # listed here would be a file the owner's 2026-09-05 rule forbids outright.
 TRITON_ALLOWED: dict[str, str] = {}
 # The Metal port's own files, each pinned by name so that moving or renaming
-# one is a test failure rather than a silent hole in the gate. `metal_driver`
+# one is a test failure rather than a silent hole in the gate. The Metal
+# driver named here is `triton_ext_driver` since the fork's was archived
+# on 2026-09-17; the rule is the same and it is the driver in force.
+# `triton_ext_driver`
 # is the compile-and-dispatch path this machine actually runs; `metal_device`
 # lives under kernels/ and is covered by the kernels scan, and is named in
 # METAL_ALLOCATOR_FILES below for the same reason.
-METAL_FILES = ("metal_backend.py", "metal_driver.py", "launcher_contract.py")
+METAL_FILES = ("metal_backend.py", "triton_ext_driver.py", "launcher_contract.py")
 METAL_ALLOCATOR_FILES = ("metal_device.py",)
 
 
@@ -182,7 +185,7 @@ def test_the_gate_covers_the_dispatch_layer():
     scanned = {q.resolve() for root in (KERNELS, TRITON) for q in root.rglob("*.py")}
     for required in (KERNELS / "dispatch.py", KERNELS / "wrappers.py",
                      KERNELS / "nbx_tensor.py", KERNELS / "launcher.py",
-                     KERNELS / "metal_device.py", TRITON / "metal_driver.py"):
+                     KERNELS / "metal_device.py", TRITON / "triton_ext_driver.py"):
         assert required.resolve() in scanned, (
             f"{required.name} is not inside the R33 scan perimeter")
 

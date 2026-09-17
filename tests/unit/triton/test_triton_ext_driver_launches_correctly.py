@@ -58,6 +58,17 @@ def test_scalars_arrive_whole_and_the_host_sees_the_writes():
 
     assert isinstance(active_driver(), TritonExtDriver)
 
+    # The file's title says "through NeuroBrix's launcher", so make that true
+    # here rather than inherit it. `_kernel()[grid](...)` is Triton's own
+    # `JITFunction.run`, which reaches our driver ONLY because `install()`
+    # patches it; without that, Triton hands NBXTensors straight to the backend
+    # and the failure reads as a driver fault ("expected MetalBuffer ... got
+    # NBXTensor") when it is an uninstalled launcher. It passed before
+    # 2026-09-17 because something else in the process had installed it — an
+    # ambient dependency, which is the kind this file exists to remove.
+    from neurobrix.kernels import launcher
+    assert launcher.install() is True
+
     n, BLOCK, alpha = 4096, 256, 2.5
     rng = np.random.default_rng(0)
     xh = rng.standard_normal(n).astype(np.float32)
