@@ -37,12 +37,30 @@ def class_proof(entry: dict, cls: int):
     return {k: v for k, v in cert.items() if k in ("config", "proof", "excluded")}
 
 
+def generator_of(proof: dict) -> tuple:
+    """The code generator a proof was made under, as a comparable tuple. () when absent."""
+    v = (((proof or {}).get("backend") or {}).get("triton"))
+    if not isinstance(v, str):
+        return ()
+    out = []
+    for part in v.split("."):
+        out.append(int(part) if part.isdigit() else 0)
+    return tuple(out)
+
+
+def destination_proof_for(d_entry: dict, cls: int, slot: str):
+    """What the destination already holds for this class, or None."""
+    if C.proof_memory_class((d_entry.get("proof") or {})) == cls:
+        return d_entry.get("proof")
+    return ((d_entry.get("variants") or {}).get(slot) or {}).get("proof")
+
+
 def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
     s = json.loads(src.read_text(encoding="utf-8"))
     d = json.loads(dst.read_text(encoding="utf-8")) if dst.exists() else dict(s, entries={})
     s_entries, d_entries = s.get("entries") or {}, d.get("entries") or {}
     slot = C._variant_slot(cls)
-    moved = added = skipped = 0
+    moved = added = skipped = kept_newer = 0
     for key, s_entry in s_entries.items():
         cert = class_proof(s_entry, cls)
         if cert is None:
@@ -53,6 +71,15 @@ def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
             added += 1
             continue
         d_entry = d_entries[key]
+        # A source tree SEEDED from a live one carries a snapshot of it, so a key the live tree
+        # re-proved after the seed is OLDER here. Writing it back would regress a proof and count
+        # as a success: `moved` cannot tell a fresher proof from a staler one, and nothing else
+        # looks. So the generators are compared, and a move that would go BACKWARDS is refused
+        # and counted under its own name (2026-09-17, before the two 32 GB trees were merged).
+        have = destination_proof_for(d_entry, cls, slot)
+        if have is not None and generator_of(have) > generator_of(cert.get("proof")):
+            kept_newer += 1
+            continue
         d_cls = C.proof_memory_class((d_entry.get("proof") or {}))
         if d_cls == cls:                       # the destination's PRIMARY is this class
             d_entry.update(cert)
@@ -65,6 +92,7 @@ def merge_file(src: Path, dst: Path, cls: int, apply: bool) -> dict:
         tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
         tmp.replace(dst)
     return {"file": dst.name, "moved": moved, "added": added,
+            "kept_newer_in_destination": kept_newer,
             "source_without_that_class": skipped, "entries_after": len(d_entries)}
 
 
