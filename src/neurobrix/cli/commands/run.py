@@ -372,9 +372,35 @@ def cmd_run(args):
     # defaults.json -> family config -> 1024.
     from neurobrix.core.config import get_family_defaults as _get_family_defaults
     _fam_defaults = _get_family_defaults(family) if family else {}
-    height = (getattr(args, 'height', None) or cached_defaults.get("height")
+    # An image request's size is the IMAGE's size. Without this the cascade
+    # fell through to a cached or family default and Prism planned the SAME
+    # memory whatever was asked of it — measured 2026-09-17 on hat-s-x4:
+    #     --input-image apple_448.png      planned 278 MB
+    #     --input-image apple_160x112.png  planned 278 MB
+    # a 22.4x difference in pixels and not one byte of difference in the plan.
+    # The consequence is not academic: the per-cell memory gate is fed that
+    # number, so it could not refuse a cell that went on to hold 8408 MB live
+    # and take the machine to 127 MB before the OS killed it.
+    _img_hw = None
+    _img_path = getattr(args, 'input_image', None)
+    if _img_path and not getattr(args, 'height', None) and not getattr(args, 'width', None):
+        try:
+            from PIL import Image as _PILImage
+            with _PILImage.open(_img_path) as _im:
+                _img_hw = (_im.size[1], _im.size[0])       # PIL gives (W, H)
+        except Exception as _e:                            # noqa: BLE001
+            # Say so rather than silently planning for a size nobody asked for.
+            print(f"   [plan] could not read {_img_path} for its size "
+                  f"({type(_e).__name__}); falling back to the declared default",
+                  flush=True)
+
+    height = (getattr(args, 'height', None)
+              or (_img_hw[0] if _img_hw else None)
+              or cached_defaults.get("height")
               or _fam_defaults.get("height") or 1024)
-    width = (getattr(args, 'width', None) or cached_defaults.get("width")
+    width = (getattr(args, 'width', None)
+             or (_img_hw[1] if _img_hw else None)
+             or cached_defaults.get("width")
              or _fam_defaults.get("width") or 1024)
     vae_scale = cached_defaults.get("vae_scale_factor", 8)
     # Video (5D) runtime dims — None/absent for image/LLM models, where the
