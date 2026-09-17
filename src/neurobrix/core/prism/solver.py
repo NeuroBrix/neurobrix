@@ -2005,6 +2005,19 @@ class PrismSolver:
         "frames": "num_frames",
     }
 
+    #: The UNIT a declared symbol counts in, as an `input_config` field holding
+    #: the conversion from the request's unit to the symbol's. A symbol's NAME
+    #: does not carry its unit: `height` in Sana's transformer counts LATENT
+    #: rows and `height` in the request counts PIXELS, and dividing one by the
+    #: other compares two different quantities. Read from the container (the
+    #: VAE's own compression), never per model.
+    _SYMBOL_UNIT = {
+        "height": "vae_scale",
+        "width": "vae_scale",
+        "num_frames": "temporal_compression",
+        "frames": "temporal_compression",
+    }
+
     def _scale_activations_to_request(self, comp, activation_bytes, input_config):
         """Scale a trace-sized activation estimate to the request actually made.
 
@@ -2033,6 +2046,14 @@ class PrismSolver:
 
         ratio = 1.0
         followed = []
+        # One DIMENSION contributes once, however many times it is declared.
+        # PixArt-XL-1024's transformer declares `seq_len` at two symbol ids, and
+        # the product over declarations made a request of 300 against a trace of
+        # 120 read as x6.25 instead of x2.5 — a dimension counted twice, which is
+        # how an over-estimate becomes a refusal of a model that runs. Height and
+        # width are DIFFERENT dimensions and still contribute one factor each,
+        # which is why hat-s-x4 reads x22.4 = (448/112)x(448/80).
+        seen_dims = set()
         for sym_id, spec in syms.items():
             if not isinstance(spec, dict):
                 raise MissingRuntimeValue(
@@ -2049,11 +2070,40 @@ class PrismSolver:
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
                 continue
-            ratio *= float(actual) / float(trace)
-            followed.append(f"{name} {trace}->{actual}")
+            # Put the request into the SYMBOL's unit before dividing. A model
+            # with a VAE declares its spatial symbols in latent rows/columns:
+            # measured 2026-09-17, Sana-1600M declares height/width with a trace
+            # value of 32 and a `trace_resolution` of 1024 — the symbol counts
+            # latents, the request counts pixels, and 1024/32 is the VAE's own
+            # compression, not a change of size. Taken raw it multiplied the
+            # estimate by 32 per axis and Prism then refused a model that runs:
+            # "This model cannot run on this machine" for a Sana-1600M that had
+            # rendered on a 16 GB card that morning. The upscalers declare no
+            # vae_scale, their symbols are already pixels, and the factor is 1.
+            unit_attr = self._SYMBOL_UNIT.get(name)
+            unit = getattr(input_config, unit_attr, None) if unit_attr else None
+            if unit in (None, 0):
+                unit = 1
+            comparable = float(actual) / float(unit)
+            if comparable <= 0:
+                continue
+            if attr in seen_dims:
+                continue                               # already counted this dimension
+            seen_dims.add(attr)
+            ratio *= comparable / float(trace)
+            followed.append(f"{name} {trace}->{comparable:g}"
+                            + (f" (request {actual} / unit {unit})" if unit != 1 else ""))
 
         if ratio <= 1.0:
             return activation_bytes                    # never promise LESS than measured
+        # SAY IT. This multiplies the estimate the per-cell memory gate consults —
+        # x22.4 on hat-s-x4 at 448x448 — and `followed` was built and thrown away,
+        # so the decision changed the plan and left no line behind. An unflushed
+        # list is the silence-by-construction family: indistinguishable from not
+        # having run at all.
+        logging.getLogger(__name__).info(
+            "Prism: %s activations x%.3g to the request (%s)",
+            getattr(comp, "name", "?"), ratio, ", ".join(followed))
         return int(activation_bytes * ratio)
 
 
