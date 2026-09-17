@@ -1225,6 +1225,11 @@ def _largest_agreement(results, buffers):
     return max(clusters, key=len)
 
 
+#: what `do_bench` allocates on top of the arguments, once per call —
+#: an L2-sized scratch flushed before every timed launch.
+_BENCH_FLUSH_BYTES = 256 * 1024 * 1024
+
+
 def bench_would_swap(total_bytes: int):
     """(True, available_mb) when timing candidates would measure the swap.
 
@@ -1247,7 +1252,29 @@ def bench_would_swap(total_bytes: int):
         return False, None
     if avail_mb is None:
         return False, None
-    return total_bytes > avail_mb * 2 ** 20, avail_mb
+    # The sweep does not only hold the arguments: `do_bench` allocates a
+    # 256 MiB L2 flush buffer per call, and Triton times one candidate after
+    # another. Comparing the arguments alone therefore UNDERSTATES what the
+    # sweep needs, which is how hat-s-x4 reached SIGKILL with the door open
+    # (2026-09-17: a baddbmm key carrying 5.92 GB of arguments, the door
+    # answering False, and the machine dying).
+    need = total_bytes + _BENCH_FLUSH_BYTES
+    import os as _os_bws
+    if _os_bws.environ.get("NBX_BENCH_DOOR_DIAG"):
+        _acct = ""
+        try:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+            _live = _DA.memory_allocated() / 1e6
+            _cached = sum(_DA._pool_cached_bytes.values()) / 1e6
+            _n = len(_DA._cuda_ptr_size)
+            _acct = (f" | allocator: live {_live:.0f} MB, pooled {_cached:.0f} MB, "
+                     f"{_n} live pointers")
+        except Exception as _e:
+            _acct = f" | allocator accounting unavailable: {type(_e).__name__}"
+        print(f"[BENCH_DOOR] args {total_bytes} + flush {_BENCH_FLUSH_BYTES} "
+              f"= {need} bytes vs {avail_mb} MB available -> "
+              f"{'REFUSE' if need > avail_mb * 2 ** 20 else 'allow'}{_acct}", flush=True)
+    return need > avail_mb * 2 ** 20, avail_mb
 
 
 def autotune_shape_key(tuner, kwargs):
@@ -1288,6 +1315,41 @@ def _call_screen_oracle(provider, tuner, key, buffers, meta):
 
 
 def screen_configs(tuner, configs, key, meta=None, record_key=None):
+    """Screen a key's candidates, then RELEASE what the sweep cached.
+
+    A sweep allocates: the candidates' own buffers, and a 256 MiB L2 flush
+    buffer per `do_bench` call. The allocator pool retains freed blocks by
+    design, and its release path is flush-on-OOM — which never runs on unified
+    memory, because the OS KILLS the process instead of returning an allocation
+    failure. So one key's sweep leaves its blocks resident and the next key
+    starts poorer.
+
+    Measured on hat-s-x4 (M4 Pro, triton-ext, 2026-09-17), sampling available
+    memory once a second while the run proceeded:
+
+        18133 MB -> 15557 -> 15882 -> 9340 -> 3478 -> ... -> 210 MB, then SIGKILL
+
+    and the per-key door was RIGHT at each decision, because it looks at one key
+    at a time:
+
+        args 5.92 GB + flush 0.27 GB vs 12695 MB available -> allow
+        args 3.27 GB + flush 0.27 GB vs  8080 MB available -> allow
+
+    The door is not wrong; it is blind to accumulation. Releasing the pool when
+    a key's sweep finishes is what makes each door's view of "available" true.
+    """
+    try:
+        return _screen_configs(tuner, configs, key, meta=meta,
+                               record_key=record_key)
+    finally:
+        try:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            DeviceAllocator.empty_cache_pool()
+        except Exception:                              # noqa: BLE001
+            pass                                       # a sweep must not fail on cleanup
+
+
+def _screen_configs(tuner, configs, key, meta=None, record_key=None):
     """Run every candidate once and keep the ones that agree with each other.
 
     `record_key` is the key the choice will be stored under (Triton's cache
