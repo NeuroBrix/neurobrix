@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-68 entries, of which five are placeholders and 63 carry a site. Two
+70 entries, of which five are placeholders and 65 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1682,3 +1682,68 @@ list, the square rule dropped.
 up named NOWHERE, which is the loudest outcome and not the only one: a collision can freeze ONE
 expression in a graph that carries the dimension elsewhere, and the net sees nothing at all. The
 net is downstream and after the fact; this is upstream and before it.
+
+### 69 — a negative control that upstream switched off, and a table that kept printing verdicts
+
+`tools/r33_execution_proof.py` runs each step of the engine's Triton startup in a fresh
+process with a cold cache and asks whether `torch` is in `sys.modules` at the end. A table
+where every line reads `False` and nothing CAN read `True` measures nothing, so the file
+carried a negative control, and the control was Triton's own `kernel[grid]` — whose C++
+argument binder imported torch on every backend. That was true, and it was the reason the
+NeuroBrix launcher exists.
+
+Upstream made the CUDA driver probe native in Triton 3.7 (triton#9578, #10935). On the
+candidate stack's 3.8.0 the control reads `False`. **Nothing announced it.** The table went
+on printing a verdict every run, having lost the ability to detect torch at all — every
+`False` above it now unfalsifiable, and read by anyone opening the file as thirteen proofs.
+
+The control was chosen from the world outside the repository, and the world moved. The
+replacement cannot: it is a bare `import torch`, whose reading is a property of the harness
+and of nothing else. The old row is kept one line above as an OBSERVATION — it is still
+interesting that upstream no longer pulls torch in — but it is no longer load-bearing.
+
+**The rule**: a control's job is to prove the instrument can still fire. Build it out of
+something YOU own. A control that depends on an external implementation detail is a gate
+whose off-switch is in someone else's repository, and it will be thrown without a message.
+
+Seen red on the injection that restores the old control (`test_the_last_case_is_a_control_that_cannot_go_inert`).
+
+### 70 — "could not run here" read as "torch was here", on every CUDA box, for weeks
+
+The same file, same day. Its verdict was one line:
+
+```python
+clean = all(not t and not e for _, t, e in owned)
+```
+
+`t` is "torch was present". `e` is "this step did not run". Two Metal steps in the table
+compile to MSL through our own driver, and a CUDA box has no Metal device, so those two rows
+error **every single time they are run here**. Folding `e` into `t` meant the table printed
+`*** R33 VIOLATION ***` on every CUDA run since the Metal rows landed.
+
+Measured 2026-09-17 on both stacks, one variable apart, while verifying an unrelated launcher
+change: candidate stack `*** R33 VIOLATION ***`, old stack `*** R33 VIOLATION ***`, and
+**torch appeared in zero owned rows on either**. The alarm had no relationship to its subject.
+A verdict that is red whatever happens carries exactly as much information as one that is
+green whatever happens, and costs more, because it trains its reader to scroll past it.
+
+The fix is NOT "an error is benign". That swaps this failure for the register's most expensive
+family — a step that quietly stops being measured would then read exactly like a step that
+passed, and silence and success would again be one reading. Three outcomes are now kept apart,
+and each names itself: torch seen in an owned step is a VIOLATION; a step that should run here
+and did not is a BROKEN HARNESS; a silent detector control is UNPROVEN. Which steps may be
+excused is not a judgement made at verdict time but a declaration each case carries — the two
+Metal rows say `"darwin"`, and are excused on `linux` and **nowhere else**, so the same unrun
+row read on a Mac turns the table red.
+
+The exit code had the identical defect and was fixed with it: `failures` counted the unrun
+Metal rows, so the tool returned 1 on every CUDA box no matter what it found. It now returns
+the verdict.
+
+**The rule**: when an instrument can report "yes", "no" and "I could not look", never let two
+of those three share a branch. And the excuse for not looking belongs to the CASE, declared
+in advance, never to the verdict that would rather be green.
+
+Both defects survived because the verdict lived inside `main()`, below eight subprocess
+launches — nothing could reach it without fifteen minutes of card time, so nothing ever did.
+It is now `build_report(rows, platform)`, pure, and the injections above run in 0.03 s.
