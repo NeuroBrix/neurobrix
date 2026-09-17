@@ -16,30 +16,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
 
-
-def _require_max_tokens(defaults, override=None):
-    """`max_tokens` from the request, then the container — never a literal.
-
-    `defaults.get("max_tokens", 512)` and `... , 2048)` stood at nine sites. A
-    decode bound nobody declared is not a default, it is a claim: it silently
-    truncates a long generation or reserves a cache nobody asked for, and the
-    two literals disagreed with each other across the same engine.
-
-    Every container on this rack that generates declares it — Kokoro 4096,
-    whisper 448, TinyLlama via its lm_config — so the value exists; it was
-    simply not being read as required.
-    """
-    if override is not None:
-        return override
-    v = (defaults or {}).get("max_tokens")
-    if v is None:
-        from neurobrix.core.runtime_values import MissingRuntimeValue
-        raise MissingRuntimeValue(
-            "'max_tokens' is required to bound this generation and the "
-            "container declares none. Looked in: the request, then the "
-            "container's runtime/defaults.json['max_tokens']. Declare it there "
-            "— the engine will not invent a decode bound.")
-    return v
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
 
 
 # Shared default sampler seed (R27/R28) — MUST equal the triton dual_ar literal
@@ -141,7 +119,7 @@ class DualAREngine(FlowHandler):
         # defaults, mirroring the autoregressive flow — --temperature 0 ⇒ greedy.
         _ov = self.ctx.variable_resolver.resolved
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(_ov.get("global.max_tokens", _require_max_tokens(defaults)))
+        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
 

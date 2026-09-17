@@ -79,3 +79,20 @@ def resolve(name: str,
         + " Declare it in the container's runtime/defaults.json or the family "
           "config, or pass it with the request — the engine will not invent a "
           "value for it.")
+
+
+def require_max_tokens(defaults, override=None):
+    """`max_tokens` from the request, then the container — never a literal.
+
+    `defaults.get("max_tokens", 512)` stood at five sites and `..., 2048)` at
+    four others: two literals disagreeing with each other inside one engine. A
+    decode bound nobody declared is not a default, it is a claim — it silently
+    truncates a long generation, or reserves a cache nobody asked for.
+
+    Every container on this rack that generates declares it (Kokoro 4096,
+    whisper 448, TinyLlama through its lm_config), so the value exists; it was
+    simply not read as required.
+    """
+    return resolve("max_tokens", container=(defaults or {}),
+                   extra=[("the request", override)],
+                   why="It bounds this generation.")
