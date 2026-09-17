@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-71 entries, of which five are placeholders and 66 carry a site. Two
+72 entries, of which five are placeholders and 67 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1780,3 +1780,49 @@ for what THIS PROCESS may touch.
 Seen red on the injection that restores the `nvidia-smi` helper: six of the seven new cells
 turn, and the original `test_32g_pow2_window_keeps_prefix_route_on_device` failure reproduces
 under the pin.
+
+### 72 — the machine's own profile, written by a process that could see a third of it
+
+`config/hardware/default.yml` is the MACHINE's hardware profile. It is not decoration: a process
+with no `CUDA_VISIBLE_DEVICES` reads it as its profile, and it is the fallback when detection is
+unavailable. The battery is such a process.
+
+On 2026-09-17 it read:
+
+    # Hardware Profile: 2 x Tesla V100-SXM2-16GB
+    total_gpus: 2
+    total_vram_gb: 32.0
+
+on a rack of two 16 GB and two 32 GB cards — 96 GB, of which 64 GB and both large cards were
+absent. Written 09-16 12:37 by a run pinned to `CUDA_VISIBLE_DEVICES=0,1`. Every unmasked run
+since had been planning against a machine two thirds smaller than the one under it, and the
+battery re-run this block is working toward would have done the same.
+
+The branch that writes the shared file is only reached by a process that HAS a mask set. Its only
+writers are, by construction, the ones most likely to be partial. The guard was:
+
+```python
+if tag != "cpu":
+```
+
+— which is the 2026-09-13 incident, fixed by name: a process seeing NO card had turned the rack
+into a CPU host for every reader of the shared file. **The instance was named, the class was
+not**, so every partial view that was not zero-card kept the pen, and the same failure returned
+three days later one step up: not zero of four, but two of four.
+
+**The rule**: a file that describes the machine may only be written by a process that can see the
+machine. `_describes_the_whole_machine()` compares the detection against NVML's count — and
+"unknowable" counts as "no", because the shared file is read by processes that cannot check it,
+so a writer proves the right rather than assuming it.
+
+This is the converse of **71**, and the two make one rule: **NVML is the authority for what the
+RACK has; the CUDA runtime is the authority for what THIS PROCESS may touch.** 71 was code asking
+NVML a process-scoped question. 72 is code letting a process-scoped answer overwrite a rack-scoped
+file. Both were found in one morning, both by asking what a green or a red actually stood on.
+
+An existing test pinned the old behaviour — `the human-facing default.yml mirrors the latest
+detection` — and it was rewritten rather than deleted, because the file's OTHER role (the profile
+an unmasked process reads) is the load-bearing one and the two cannot both hold. The same test
+also learned to state its host: it compared against the real rig's card count, so it would have
+passed or failed by how many GPUs the developer's box happened to have. Seen red on the injection
+that restores `tag != "cpu"`.
