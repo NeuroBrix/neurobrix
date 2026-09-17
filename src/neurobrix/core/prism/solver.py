@@ -1892,6 +1892,23 @@ class PrismSolver:
                         f"weights is a guess wearing a measurement's clothes.")
                 # llm/image_vq without graph: no activation estimate (KV cache added below)
 
+            # The graph records TRACE literals, not symbols: measured 2026-09-17,
+            # all four image models on this rack declare height/width symbols in
+            # `symbolic_context` and ZERO of their tensors use them
+            #   real-esrgan-x2 0/1800   hat-s-x4 0/4660
+            #   swin2SR        0/5163   swinir   0/4175
+            # so the profiler sizes every activation at the trace, whatever was
+            # asked. hat-s-x4 planned the SAME 278 MB for a 448x448 request and a
+            # 160x112 one — 22.4x the pixels, not one byte of difference — and the
+            # per-cell gate was fed that number.
+            #
+            # The runtime executes at the REQUEST size regardless (real-esrgan
+            # renders 320x224 correctly from a 112x80 trace), so the estimate is
+            # scaled by the pixel ratio the two sizes imply. Derived from the
+            # graph's own declared trace_value and the request; no per-model data.
+            activation_bytes = self._scale_activations_to_request(
+                comp, activation_bytes, input_config)
+
             # Add KV cache to activation budget for the LM component
             if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
                 kv_estimate = self._estimate_kv_cache_bytes(container, target_dtype_str)
