@@ -285,6 +285,30 @@ _TORCH_SHARES_DEVICE_HEAP = {"cuda": True, "hip": True, "metal": False}
 # This is a capability, not a vendor test — adding a backend is adding a row.
 _BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
 
+# Whether a kernel can load a device ADDRESS out of a tensor and then read
+# through it — the [E] int64 pointer table that lets one launch reach every
+# expert's weights instead of one launch per expert.
+#
+# Measured 2026-09-17 on triton-ext (M4 Pro, Toolchain 27) with a control that
+# differs by the one variable — whether the address arrives AS a pointer or as
+# an integer to be converted — and in BOTH Triton spellings, because they are
+# different constructs and cannot be assumed to share a fate:
+#
+#     control  (pointer as a pointer)       : nonzero 256/256   correct
+#     subject  (.to(pointer_type))          : nonzero   0/256   ALL ZEROS
+#     subject  (tl.cast bitcast=True)       : nonzero   0/256   ALL ZEROS
+#
+# The second subject is the spelling our own kernels use, which is what makes
+# the engine's zeros attributable to this and not to us. Nothing is raised: the
+# kernel compiles, launches and writes zeros. The reproducer contains none of
+# our code (`repro_ext_pointer_from_table.py`) and is drafted for upstream.
+#
+# It is recorded HERE because the engine cannot catch what is never raised: a
+# band that cannot address its experts has to refuse by name, and a refusal
+# needs a fact to stand on. This is a capability, not a vendor test — adding a
+# backend is adding a row.
+_BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "metal": False}
+
 # Whether this backend's device memory is directly readable at its own
 # `data_ptr()` from the host. The fault channel below reads its status word
 # that way — after a flush that has already happened, so no copy and no
@@ -344,6 +368,13 @@ def _backend_capability(table, name: str, what: str) -> bool:
             f"({name}, rows: {sorted(table)}). Adding a backend is adding a "
             f"row, not guessing.")
     return value
+
+
+def backend_loads_pointers_from_memory() -> bool:
+    """True where a kernel may dereference an address it LOADED from a tensor."""
+    return _backend_capability(
+        _BACKEND_LOADS_POINTERS_FROM_MEMORY, "_BACKEND_LOADS_POINTERS_FROM_MEMORY",
+        "whether a kernel can read through a pointer loaded from memory")
 
 
 def backend_traps_on_device_assert() -> bool:

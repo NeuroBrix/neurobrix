@@ -55,6 +55,27 @@ import numpy as np
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.kernels.quantized_tensor import QuantizedTensor
 from neurobrix.triton import moe as MOE
+from neurobrix.kernels.nbx_tensor import backend_loads_pointers_from_memory
+
+
+# Every test below asserts ARITHMETIC — a float64 oracle, a router-weight
+# contract, agreement with the grouped band. All of it reaches its experts
+# through the [E] int64 pointer table, and a backend that cannot read through a
+# pointer loaded from memory produces zeros there with nothing raised (measured
+# on triton-ext 2026-09-17; reproducer in plain Triton, no NeuroBrix). The
+# engine now REFUSES on such a backend rather than answering, so these tests
+# cannot run and must not pretend to.
+#
+# Two of them used to PASS here, and that is the reason this gate is a skip and
+# not a tolerance change: `test_moe_vec_is_deterministic` compared three runs of
+# an all-zero output and found them identical, and the dsplit three-state test
+# counted launches without reading their results. A vacuous pass is worse than a
+# failure, because it reports a band as proven on a machine where it returns
+# nothing.
+_CANNOT_ADDRESS_EXPERTS = not backend_loads_pointers_from_memory()
+_WHY = ("this backend cannot read through a pointer loaded from a tensor, so "
+        "the MoE band cannot address its experts and the engine refuses; "
+        "see _BACKEND_LOADS_POINTERS_FROM_MEMORY")
 
 # fp16 scales/activations, fp32 accumulation, K<=2048 sums + SwiGLU +
 # 8-expert combine: a correct chain sits ~1e-3 relative (the SwiGLU
@@ -161,6 +182,7 @@ def _ref_routing(logits, top_k):
     return ids, w
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_matches_float64_from_packed_bytes() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
@@ -173,6 +195,7 @@ def test_moe_vec_matches_float64_from_packed_bytes() -> None:
         f"band rel err {err:.3e} exceeds {BOUND:.0e} by {err/BOUND:.0f}x")
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_is_deterministic() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
@@ -183,6 +206,7 @@ def test_moe_vec_is_deterministic() -> None:
         "combine failed its one job")
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_router_weight_contract() -> None:
     """Doubling one expert's routing weight (pre-normalization scaling
     via its logit is nonlinear — instead compare two runs whose only
@@ -200,6 +224,7 @@ def test_moe_vec_router_weight_contract() -> None:
         assert err <= BOUND, f"routing-weight variant rel err {err:.3e}"
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_route_activation_and_guards() -> None:
     """COUNTED: "1" reaches the vec pass; unset does NOT (under
     judgment); M>1 does NOT (prefill guard). The fp16-expert zoo guard
@@ -239,6 +264,7 @@ def test_moe_vec_route_activation_and_guards() -> None:
         MOE._moe_decode_vec_pass = orig
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_dsplit_three_state() -> None:
     """COUNTED sub-path contract: unset (ADOPTED default) and "1"
     launch the split pair (down_split + part_reduce); "0" launches the
@@ -287,6 +313,7 @@ def test_moe_vec_dsplit_three_state() -> None:
          KOPS.moe_down_combine_vec_kernel) = origs
 
 
+@pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
 def test_moe_vec_agrees_with_grouped_path() -> None:
     """Cross-implementation: the vec band vs the proven grouped band on
     the same inputs — both within the float64 bound, and within a tight
@@ -316,3 +343,28 @@ if __name__ == "__main__":
     test_moe_vec_agrees_with_grouped_path()
     print("  OK vec agrees with the grouped path")
     print("PASS: moe_decode_vec oracle complete")
+
+
+@pytest.mark.skipif(not _CANNOT_ADDRESS_EXPERTS,
+                    reason="this backend CAN address its experts, so there is "
+                           "nothing to refuse")
+def test_the_band_refuses_where_it_cannot_address_its_experts() -> None:
+    """The refusal is the whole point, so it is asserted, not assumed.
+
+    Silent zeros are the failure this guards against: the vec band wrote an
+    entirely zero answer and the two stages after it faithfully combined
+    nothing. A stop that names its reason is the difference between a wrong
+    answer and no answer.
+    """
+    weights, _, xn, logits = _build_band(seed=17)
+    try:
+        _run_band(weights, xn, logits)
+    except RuntimeError as exc:
+        msg = str(exc)
+        assert "pointer" in msg and "experts" in msg, (
+            f"the refusal must say WHY, got: {msg}")
+        return
+    raise AssertionError(
+        "execute_moe_fused returned instead of refusing on a backend that "
+        "cannot dereference a pointer loaded from memory — the answer it "
+        "returned would be silently zero")
