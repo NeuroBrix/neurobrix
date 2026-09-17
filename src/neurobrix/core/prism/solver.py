@@ -26,6 +26,21 @@ from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, Prism
 from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.host_memory import MemoryState, memory_state
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.core.runtime_values import MissingRuntimeValue
+
+
+class PlanNotComputable(RuntimeError):
+    """A plan that cannot be computed refuses by name.
+
+    Prism's numbers are consulted by the per-cell memory gate as if
+    they had been measured. A coefficient standing in for a failed
+    measurement (`weight_bytes * 0.5`), an empty string standing in for
+    an unreadable topology, or `None` standing in for an unreadable
+    graph all produce a plan that LOOKS computed. See
+    `core.runtime_values` for the same rule on request values.
+    """
+
+
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
 from neurobrix.core.config.system import PRISM_DEFAULTS
@@ -673,12 +688,19 @@ class PrismSolver:
             pass
 
         # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
-        gen_type = ""
         try:
             topology = container.get_topology() or {}
-            gen_type = topology.get("flow", {}).get("generation", {}).get("type", "") or ""
-        except Exception:
-            gen_type = ""
+        except Exception as exc:
+            # `gen_type = ""` stood here, and an empty generation type reads as
+            # "not an image-VQ model" — a container whose topology cannot be
+            # read was silently planned as something else.
+            raise PlanNotComputable(
+                f"the container's topology could not be read "
+                f"({type(exc).__name__}: {exc}), so the generation type is "
+                f"unknown and the plan cannot tell which flow this model runs."
+            ) from exc
+        gen_type = (topology.get("flow", {})
+                            .get("generation", {}).get("type", "") or "")
         is_image_vq = (gen_type == "autoregressive_image") and has_lm_config
 
         if is_image_vq:
@@ -1846,11 +1868,28 @@ class PrismSolver:
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     activation_profiled = True
-                except Exception:
-                    activation_bytes = int(weight_bytes * 0.5)
+                except MissingRuntimeValue:
+                    raise
+                except Exception as exc:
+                    # `int(weight_bytes * 0.5)` stood here. A coefficient is not
+                    # a measurement: this is the very estimate the per-cell
+                    # memory gate consults, and it is what let hat-s-x4 through
+                    # to hold 8408 MB live and take the machine to 127 MB. A
+                    # plan that cannot be computed refuses by name.
+                    raise PlanNotComputable(
+                        f"activation profiling failed for component "
+                        f"{comp.name!r} ({type(exc).__name__}: {exc}). The plan "
+                        f"will not substitute a coefficient for a measurement — "
+                        f"the number would then be consulted by the memory gate "
+                        f"as if it had been measured."
+                    ) from exc
             else:
                 if category == "diffusion":
-                    activation_bytes = int(weight_bytes * 0.5)
+                    raise PlanNotComputable(
+                        f"component {comp.name!r} is a diffusion component with "
+                        f"no graph to profile, so its activation footprint is "
+                        f"unknown. `weight_bytes * 0.5` stood here; half the "
+                        f"weights is a guess wearing a measurement's clothes.")
                 # llm/image_vq without graph: no activation estimate (KV cache added below)
 
             # Add KV cache to activation budget for the LM component
@@ -2953,10 +2992,19 @@ class PrismSolver:
         if not gpath.exists() or not ppath.exists():
             return None
         try:
-            graph = json.load(open(gpath))
-            profile_j = json.load(open(ppath))
-        except Exception:
-            return None
+            with open(gpath) as _gf:
+                graph = json.load(_gf)
+            with open(ppath) as _pf:
+                profile_j = json.load(_pf)
+        except Exception as exc:
+            # `return None` stood here: an unreadable or malformed graph.json
+            # became "no tiling needed", which is a decision, not an absence.
+            raise PlanNotComputable(
+                f"the component's graph or profile could not be read "
+                f"({gpath.name} / {ppath.name}: {type(exc).__name__}: {exc}), so "
+                f"its trace size is unknown and no tiling decision can be taken "
+                f"for it."
+            ) from exc
 
         # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
         tensors = graph.get("tensors", {})
