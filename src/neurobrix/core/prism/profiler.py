@@ -22,19 +22,31 @@ from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 
 @dataclass
 class InputConfig:
-    """Runtime input configuration for activation profiling."""
-    batch_size: int = 2
-    height: int = 1024
-    width: int = 1024
+    """Runtime input configuration for activation profiling.
+
+    NO FIELD CARRIES A LITERAL DEFAULT. `batch_size = 2`, `height = 1024`,
+    `width = 1024`, `dtype = "float16"` and `vae_scale = 8` stood here and every
+    one of them is a claim about a request nobody made: a config built without
+    them planned a 1024x1024 float16 batch of two for an upscaler handed a
+    448x448 image. Values come from `core.runtime_values.resolve` — the request,
+    then the container's runtime/defaults.json, then the family config — and the
+    engine refuses by name when none of them provides one.
+
+    `None` here means ABSENT, and absent is legitimate only for a dimension the
+    model does not have: no VAE, no vae_scale; no temporal axis, no compression.
+    """
+    batch_size: Optional[int] = None
+    height: Optional[int] = None
+    width: Optional[int] = None
     seq_len: Optional[int] = None
-    dtype: str = "float16"
-    vae_scale: int = 8
+    dtype: Optional[str] = None
+    vae_scale: Optional[int] = None
     # Video (5D) runtime dims — None for image/LLM models. latent_T is
     # derived as (num_frames - 1) // temporal_compression + 1 (causal video
     # VAE convention); temporal_compression comes from the model's
     # defaults.json (`temporal_compression_ratio`), data-driven.
     num_frames: Optional[int] = None
-    temporal_compression: int = 4
+    temporal_compression: Optional[int] = None
 
     def positional_symbol_map(self) -> Dict[str, int]:
         """The POSITIONAL base, which GUESSES what each symbol id means.
@@ -55,27 +67,27 @@ class InputConfig:
         batch_size = self.batch_size
         vae_scale = self.vae_scale
 
-        latent_h = height // vae_scale
-        latent_w = width // vae_scale
+        # A model without a VAE has no latent grid. Dividing by a literal 8
+        # invented one, and the symbols it produced were then matched against
+        # graphs that never had them.
+        latent_h = height // vae_scale if (height and vae_scale) else None
+        latent_w = width // vae_scale if (width and vae_scale) else None
 
-        symbol_map = {
-            # Direct mappings
-            "batch_size": batch_size,
-            "height": height,
-            "width": width,
-            # Common symbolic names
-            "s0": batch_size,
-            "s1": latent_h,
-            "s2": latent_w,
-            "s3": latent_h * latent_w,  # Flattened spatial
-            # LLM specific — seq_len must be provided, not hardcoded
-            "seq_len": self.seq_len or 128,
-            "sequence_length": self.seq_len or 128,
-            # Latent dimensions
-            "latent_h": latent_h,
-            "latent_w": latent_w,
-            "latent_hw": latent_h * latent_w,
-        }
+        # Every entry is OMITTED when its value does not exist, rather than
+        # filled with a literal. `seq_len or 128` stood here, and a map that
+        # answers 128 for a sequence nobody declared is a guess wearing an
+        # answer's clothes.
+        symbol_map = {}
+        for k, v in (("batch_size", batch_size), ("height", height),
+                     ("width", width), ("s0", batch_size),
+                     ("s1", latent_h), ("s2", latent_w),
+                     ("latent_h", latent_h), ("latent_w", latent_w),
+                     ("seq_len", self.seq_len), ("sequence_length", self.seq_len)):
+            if v is not None:
+                symbol_map[k] = v
+        if latent_h is not None and latent_w is not None:
+            symbol_map["s3"] = latent_h * latent_w          # flattened spatial
+            symbol_map["latent_hw"] = latent_h * latent_w
 
         return symbol_map
 
@@ -423,12 +435,21 @@ class ActivationProfiler:
         syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
         if not isinstance(syms, dict) or not syms:
             return symbol_map
-        vae_scale = input_config.vae_scale or 8
-        latent_h = input_config.height // vae_scale
-        latent_w = input_config.width // vae_scale
+        vae_scale = input_config.vae_scale
+        latent_h = (input_config.height // vae_scale
+                    if (input_config.height and vae_scale) else None)
+        latent_w = (input_config.width // vae_scale
+                    if (input_config.width and vae_scale) else None)
         latent_t = None
         if input_config.num_frames:
-            tc = input_config.temporal_compression or 4
+            tc = input_config.temporal_compression
+            if not tc:
+                from neurobrix.core.runtime_values import MissingRuntimeValue
+                raise MissingRuntimeValue(
+                    "this request carries num_frames, so a temporal axis exists, "
+                    "but 'temporal_compression_ratio' is declared nowhere. The "
+                    "latent frame count cannot be derived without it and the "
+                    "engine will not assume one.")
             latent_t = (input_config.num_frames - 1) // tc + 1
         # D2-ENCODER: a linear-downscale graph (VAE encoder class) consumes
         # PIXEL-space video — its time/height/width symbols must bind to the
