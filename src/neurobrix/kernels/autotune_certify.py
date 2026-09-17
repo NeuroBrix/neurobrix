@@ -319,6 +319,35 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
     return None
 
 
+def host_values(t) -> np.ndarray:
+    """A kernel's output as NUMBERS, whatever dtype the tensor carries.
+
+    `NBXTensor.numpy()` hands bf16 back as a 2-byte VOID array (`|V2`): numpy
+    has no bfloat16, so the bits are correct and nothing can read them as
+    numbers. `np.asarray(that, dtype=np.float64)` raises "setting an array
+    element with a sequence", and that is how EVERY bf16 shape failed
+    certification — reported as "no config could run (10 of 10)" on kernels
+    that had in fact run correctly and produced the right answer. Measured
+    2026-09-17: `mm` on a (22,2048)x(2048,2048) bf16 pair returns a bf16
+    tensor of the right shape, and only the READING of it failed.
+
+    The input half of this defect was found and fixed earlier (`_NP` mapped
+    bf16 to fp32, so a bf16 census key was handed an fp32 tensor and the
+    wrapper recomputed an fp32 key). This is the output half of the same
+    thing, and on Apple it is the more expensive half: 58 of the 84 shapes the
+    seven proven cells demand are bf16, conv2d alone accounting for 53.
+
+    Decoded through `bf16_bits_to_f32`, which is exact — a bf16 value is
+    exactly representable in fp32 — so the comparison against the fp64 oracle
+    loses nothing here.
+    """
+    host = t.numpy()
+    dt = getattr(host, "dtype", None)
+    if dt is not None and dt.kind == "V" and dt.itemsize == 2:
+        return bf16_bits_to_f32(np.ascontiguousarray(host).view(np.uint16))
+    return host
+
+
 def oracle_deviation(out: np.ndarray, oracle) -> float:
     """max |out - oracle| relative to the oracle's own magnitude; inf when one
     side is not finite where the other is. A windowed oracle is measured on
@@ -499,11 +528,33 @@ def _current_backend() -> Optional[str]:
     """The backend this machine targets (`cuda`, `metal`, `hip`), or None.
 
     A protocol is scoped to a backend, so selecting the file needs the backend
-    name. Read from the launcher's target, the same source `_machine()` records.
+    name — and it must be the ENGINE's name for the backend, not the Triton
+    target's.
+
+    This used to read `launcher.target().backend`. Those two agree on NVIDIA
+    (both say `cuda`), which is why the difference stayed invisible, and they
+    diverge on Apple: `_detect_gpu_backend()` says `metal` while the Triton
+    target says whatever the installed Triton backend calls itself — `metal`
+    under the archived fork, `mps` under triton-ext.
+
+    So swapping the Triton backend silently renamed the thing the protocol is
+    scoped by, `rig_protocol.metal.json` stopped being found, and certify ran on
+    2026-09-17 reporting "this machine declares no measurement protocol for
+    backend 'mps' — the regime is RECORDED in every proof but checked against
+    nothing". Six shapes were certified that way. **The witness is the whole
+    reason Apple certification is trustworthy** (the clocks cannot be locked, so
+    stability is proven by re-timing a reference kernel), and it was not being
+    checked.
+
+    A measurement regime is a property of the MACHINE AND ITS GPU — "Apple GPU
+    clocks are OS-managed" is true whatever Triton calls the target — so it is
+    scoped by the engine's own vendor name, which is stable across Triton
+    backend swaps. The old proofs agree: they record `backend.name = "metal"`
+    and `target = "metal-apple-m4-pro"`.
     """
     try:
-        from neurobrix.kernels.launcher import target
-        return target().backend
+        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        return _detect_gpu_backend()
     except Exception:
         return None
 
@@ -832,7 +883,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
                 run_s = time.time() - t_one                # the run every config makes anyway, timed
-                dev = oracle_deviation(out_tensor.numpy(), oracle)
+                dev = oracle_deviation(host_values(out_tensor), oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
                 continue
@@ -859,12 +910,39 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         # just after this sweep, and if it drifts past the profile's tolerance
         # the regime moved while we compared and the sweep is refused.
         _regime_kind, _proto = _regime()
-        _w_open = _witness_time_ms(_proto) if _regime_kind == "witness" else None
+
+        def _witness_ms():
+            """Time the witness on the UNPATCHED path.
+
+            `certifying_run` IS the sweep, and it is installed AS `tuner.run`.
+            The witness is itself a matmul (`W.mm`), so on a matmul
+            certification it re-enters this very function: the nested call
+            computes the witness's own key and compares it to the candidate's.
+
+            Measured 2026-09-17, the first run after the protocol became
+            findable at all: every fp16 matmul shape came back "UNREACHABLE —
+            the wrapper computed key (512, 512, 512)", which is the witness's
+            shape and not the census's, and the (512,512,512) shape itself
+            FAILED with all ten configs "diverging from the fp64 oracle"
+            because the witness's own launches were being taken for candidate
+            runs. 0 certified where the unwitnessed run had certified 6.
+
+            Suspending the patch keeps the witness on the real path — it must
+            measure the same machine the candidates are measured on — while
+            stopping it from being mistaken for one of them.
+            """
+            tuner.run = saved_run
+            try:
+                return _witness_time_ms(_proto)
+            finally:
+                tuner.run = certifying_run
+
+        _w_open = _witness_ms() if _regime_kind == "witness" else None
         for cfg, dev, _run_s in contenders:
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
         if _regime_kind == "witness":
-            _w_close = _witness_time_ms(_proto)
+            _w_close = _witness_ms()
             _tol = float(_proto["witness"]["drift_tolerance"])
             _drift = abs(_w_close - _w_open) / max(_w_open, 1e-9)
             if _drift > _tol:
