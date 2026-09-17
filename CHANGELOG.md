@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `DeviceAllocator.visible_device_memory()` answers which GPUs THIS PROCESS can see and how much memory each has, as `[(ordinal, total_bytes)]` walked through the GPU runtime — so `CUDA_VISIBLE_DEVICES` applies to the answer exactly as it applies to the allocation made from it. `nvidia-smi` reports the whole board whatever the mask says, and an index taken from it and handed to an allocator names a different card; code that picks a device now decides in the namespace it will act in.
 - The serving daemon names its protocol: every response envelope carries `protocol` (the wire protocol's version, `serving/protocol.py::PROTOCOL_VERSION`) and `engine`; `status` and `neurobrix info --json` share one identity record — engine, protocol, endpoint, operations — so a client refuses what it does not know instead of guessing.
 - `--json` on every read command — `info`, `list`, `hub`, `inspect`, `coverage`, `doctor`, `autotune status`, `autotune check`, `run --explain-plan`: exactly one JSON record on stdout (`schema` `neurobrix.<command>/<version>` + `engine`), every human line on stderr; the contract in `docs/reference/json-output.md`, gated by a test that parses each command's output.
 - The kernel launcher's refusal of a device address the allocator never handed out now names the kernel parameter that carried it (`parameter 'weight_ptr'`), so the buffer's origin can be traced from the message.

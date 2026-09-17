@@ -985,6 +985,57 @@ class DeviceAllocator:
         return best_idx
 
     @staticmethod
+    def visible_device_memory() -> list[tuple[int, int]]:
+        """`[(ordinal, total_bytes)]` for every device THIS PROCESS can see.
+
+        The ordinals come back usable as-is in `cuda:<i>`, because the whole
+        walk goes through the GPU RUNTIME — so `CUDA_VISIBLE_DEVICES` applies
+        to it, exactly as it applies to every allocation made afterwards.
+
+        That is the entire point of the method. `nvidia-smi` answers the same
+        question from NVML, which sits OUTSIDE the mask and always reports the
+        whole board: a caller that picks an index from `nvidia-smi` and then
+        allocates on it is reading one namespace and writing another, and the
+        two agree only on an unpinned host. `tests/unit/kernels/
+        test_prefill_determinism.py` did exactly that and asked for `cuda:2`
+        under `CUDA_VISIBLE_DEVICES=0` (2026-09-17) — a red that had nothing
+        to do with its subject, on a card that was simply not there.
+
+        Pure runtime API through ctypes — cudaGetDeviceCount + cudaSetDevice +
+        cudaMemGetInfo, no torch (R33). The previously-current device is
+        restored and the fast-path cache invalidated, as in
+        `most_free_device`, whose inline copy of this loop this replaces.
+        Returns `[]` when there is no runtime or no device.
+        """
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+        except Exception:
+            return []
+        ndev = DeviceAllocator.device_count()
+        if ndev <= 0:
+            return []
+        prev = DeviceAllocator.get_device()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        set_fn = backend["set_device"]
+        out: list[tuple[int, int]] = []
+        for i in range(ndev):
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(i))
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+                out.append((i, total_b.value))
+            except Exception:
+                continue
+        try:
+            getattr(rt, set_fn)(ctypes.c_int(prev))
+        except Exception:
+            pass
+        invalidate_current_device_cache()
+        return out
+
+    @staticmethod
     def _maybe_init_pool() -> None:
         """One-shot read of the NBX_ALLOC_POOL env var (default on;
         `0` disables the pool). Cached on the class."""
