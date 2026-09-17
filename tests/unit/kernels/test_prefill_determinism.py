@@ -310,8 +310,25 @@ def _gpu_classes():
     The ordinals below come from the same runtime that will serve the
     allocation, so the answer cannot disagree with it.
     """
+    # SMALL and BIG here are the RIG's card classes — a V100-16G against a
+    # V100-32G — and the routing rules below are calibrated for them. They are
+    # not a property every backend has.
+    #
+    # Measured 2026-09-17 on an M4 Pro: `visible_device_memory()` reports a
+    # steady 18186 MiB (Metal's recommended working set on a 26 GB unified
+    # machine; it does NOT move with load, sampled across a 2 GiB allocation).
+    # 18186 is under the 20000 threshold, so this Mac was classed "small" and
+    # the 16 GB-card window test ran against it, asserting `chunked` and getting
+    # `math`. That is not a routing defect: the decision consults the real
+    # device while the profile is faked, and a 26 GB unified machine is not a
+    # 16 GB card. Reporting the true 26 GB instead would be worse — the
+    # recommended working set IS the honest "how much can I use" figure here.
+    #
+    # So the classes are refused on a backend that does not have them, by name.
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator, _detect_gpu_backend
+        if _detect_gpu_backend() != "cuda":
+            return None, None
         devs = DeviceAllocator.visible_device_memory()
     except Exception:
         return None, None
