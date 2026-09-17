@@ -905,13 +905,56 @@ class MetalDriver:
                    or getattr(metadata, "num_warps", 4) * 32)
         return (size, 1, 1)
 
+    def max_shared_memory_per_block(self) -> int:
+        """The device's threadgroup-memory ceiling, asked of the device.
+
+        Absent entirely until 2026-09-17, so the launcher's
+        `max_shared_memory_per_block()` caught an AttributeError and read it as
+        "this backend has no such query" — which is indistinguishable from
+        "somebody forgot to write it", and it was the second. Metal does answer:
+        `MTLDevice.maxThreadgroupMemoryLength` is 32768 on this M4 Pro,
+        measured, and it is the same 32768 triton-ext declares as its own
+        budget.
+
+        A machine that cannot be asked RAISES, by name. The launcher turns that
+        into None and leaves every proposal unpruned, which is the safe answer;
+        an invented ceiling deletes configurations that work.
+        """
+        from ..kernels.metal_device import runtime
+        device = runtime()._device
+        limit = device.maxThreadgroupMemoryLength()
+        if not limit:
+            raise RuntimeError(
+                "MTLDevice.maxThreadgroupMemoryLength() answered "
+                f"{limit!r}; this driver will not substitute a number for it")
+        return int(limit)
+
+    def trailing_buffers(self, metadata):
+        """Nothing: this fork's emitter appends no buffer of its own.
+
+        True on the tree we run (triton-msl 0.2.0 + our probe fix), where the
+        compile metadata carries no print or assert descriptor to read. It is
+        NOT a standing property of the fork: 0.3.0 ships a device-assert status
+        buffer (`backend/_device_assert.py`), so whoever moves this driver to
+        0.3.0 must implement this method for it — and until then a detector
+        written against a field that does not exist here would be unmeasured
+        code pretending to be a guard.
+
+        Spelled out rather than inherited because this class is duck-typed
+        against `kernels/launcher.Driver` instead of subclassing it, so nothing
+        on the base reaches it. That is exactly how this method was missed when
+        the seam landed: `test_launcher_contract` caught it,
+        `'MetalDriver' object has no attribute 'trailing_buffers'`.
+        """
+        return None
+
     def load(self, binary, name: str, shared: int):
         """Compile the MSL to a pipeline and return the launchable handle."""
         msl = binary.decode("utf-8") if isinstance(binary, bytes) else binary
         return kernel_from_msl(msl, _Metadata(name, shared))
 
     def launch(self, function, grid, block, shared: int, stream: int,
-               params, names=None, types=None) -> None:
+               params, names=None, types=None, trailing=None) -> None:
         """Dispatch a loaded kernel. `params` is the launcher's list of
         `(kind, value)` pairs, in the compiled signature's order.
 
@@ -922,6 +965,15 @@ class MetalDriver:
         signature gave (`"ptr"` versus a scalar kind) and the slot the
         emitter declared, never from the value.
         """
+        # Unreachable while `trailing_buffers` below answers None, which is the
+        # truth on this fork tree. Written anyway, so that a tree where it is
+        # NOT the truth refuses instead of binding short.
+        if trailing is not None:
+            raise RuntimeError(
+                "NeuroBrix launcher: this kernel declares trailing buffers "
+                f"({trailing!r}) and the triton-msl driver cannot bind them. "
+                "Launching would leave those slots unbound and lose whatever "
+                "the kernel writes there, silently.")
         function.launch_params(grid, block, params, stream, names)
 
     def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,

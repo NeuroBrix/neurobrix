@@ -529,9 +529,14 @@ class _NBXLaunch:
         # The stream is the CALLER's: the graph capture hands its own capture stream
         # because the recorded one may be the uncapturable legacy stream.
         from neurobrix.kernels.launcher import active_driver
+        # `trailing` travels with the PREPARATION, not with the recorded tuple:
+        # it is what the compiled kernel declares beyond the call, so dropping
+        # it here would replay a launch that binds fewer buffers than the kernel
+        # has — the silent class this seam exists to end.
         active_driver().launch(self.prep.function, (g0, g1, g2), self.prep.block,
                                self.prep.shared, stream,
-                               list(zip(self.kinds, vals)))
+                               list(zip(self.kinds, vals)),
+                               trailing=self.prep.trailing)
 
 
 _NBX_ADAPTERS: Dict[int, "_NBXLaunch"] = {}

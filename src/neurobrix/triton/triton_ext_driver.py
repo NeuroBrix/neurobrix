@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import ctypes
 import struct
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Any, List, NamedTuple, Optional, Sequence, Tuple
 
 from neurobrix.kernels.launcher import Driver
 
@@ -94,8 +94,39 @@ class TritonExtDriver(Driver):
         return metal_target()
 
     def max_shared_memory_per_block(self) -> int:
+        """triton-ext's own threadgroup budget, by the name it actually uses.
+
+        This read `getattr(hw_constants, "MAX_THREADGROUP_MEMORY", 32768)` until
+        2026-09-17. **That name does not exist in triton-ext** — the module
+        declares `TG_BUDGET_BYTES`, `WARP_SIZE`, `SG_FRAG_DIM`, `TARGET`,
+        `target_arch` and nothing else — so every call took the literal, and the
+        launcher pruned configurations against a number no backend had said.
+        The same class as a literal standing in for a runtime value, in the one
+        shape that hides best: a `getattr` default that is never not taken.
+
+        It was right by luck. Measured the day it was found, M4 Pro:
+
+            hw_constants.TG_BUDGET_BYTES          32768
+            MTLDevice.maxThreadgroupMemoryLength  32768
+
+        so the number does not move; only the authority for it does. The
+        backend binds the same constant into its own launch metadata
+        (`driver.py:238`, `"max_shared_mem": _TG_BUDGET_BYTES`), which is what
+        makes it the right thing to ask.
+
+        A backend that stops declaring it refuses here, and
+        `max_shared_memory_per_block()` in the launcher turns that into None —
+        "do not prune" — which is the safe answer. Inventing one is not.
+        """
         from triton_apple_backend import hw_constants
-        return int(getattr(hw_constants, "MAX_THREADGROUP_MEMORY", 32768))
+        budget = getattr(hw_constants, "TG_BUDGET_BYTES", None)
+        if budget is None:
+            raise RuntimeError(
+                "triton_apple_backend.hw_constants declares no TG_BUDGET_BYTES; "
+                "the threadgroup-memory ceiling is the backend's to state and "
+                "this driver will not invent one. Declared names: "
+                f"{sorted(n for n in dir(hw_constants) if not n.startswith('_'))}")
+        return int(budget)
 
     def block_for(self, metadata):
         """Threads per threadgroup, as their launcher computes it: `lx` is
@@ -115,8 +146,43 @@ class TritonExtDriver(Driver):
         return fn
 
     # -- launch ------------------------------------------------------------
+    def trailing_buffers(self, metadata):
+        """What triton-ext's emitter appends to a kernel's own parameters.
+
+        Its compiler writes two descriptor blocks into the emitted MSL and
+        carries them in the metadata (`compiler.py`: `metadata["print_layout"]`,
+        `metadata["assert_layout"]`, from `AGPU-PRINT-LAYOUT` / `AGPU-ASSERT-LAYOUT`).
+        When a block is present the kernel has ONE MORE buffer parameter than
+        its Triton signature declares, and triton-ext's own driver binds it
+        last, print before assert.
+
+        We bound neither until 2026-09-17, and `metal_native.packArguments`
+        binds the tuple it is handed at indices 0..n-1 without ever comparing
+        the count to what the kernel declares — so the slot simply stayed
+        unbound. Measured that day (`probe_ki19_driver_protections.py`): a
+        `tl.device_assert` that FAILS on every lane ran to completion and raised
+        nothing, while the same kernel's ordinary output was correct. A lost
+        assert is the worst shape of that: the guard is paid for and not
+        delivered, which is the same fault class as the conv-1x1 zeros.
+
+        Four of NeuroBrix's own kernels are compiled `@triton.jit(debug=True)`
+        precisely to keep such an assert (`embedding`, `index_select` x2,
+        `index_put`), so this is not a hypothetical parameter.
+
+        Returns None when the kernel declares neither block — the common case,
+        and then `launch` does exactly what it did before.
+        """
+        from triton_apple_backend.device_assert import parse_assert_layout
+        from triton_apple_backend.device_print import parse_print_layout
+        pl = parse_print_layout(getattr(metadata, "print_layout", None))
+        al = parse_assert_layout(getattr(metadata, "assert_layout", None))
+        if pl is None and al is None:
+            return None
+        return _Trailing(pl, al)
+
     def launch(self, function, grid, block, shared: int, stream: int,
-               params: Sequence[Tuple[str, Any]], names=None, types=None) -> None:
+               params: Sequence[Tuple[str, Any]], names=None, types=None,
+               trailing=None) -> None:
         if types is None:
             raise RuntimeError(
                 "the triton-ext driver needs the Triton type of every launch "
@@ -164,6 +230,20 @@ class TritonExtDriver(Driver):
                   f"packed={(args[-1].hex() if scalar_types else None)} "
                   f"threads={[gx*lx, gy*ly, gz*lz]} group_size={[lx, ly, lz]} "
                   f"grid={grid} block={block} shared={shared}", flush=True)
+        # The emitter's own trailing parameters, bound LAST and in its order
+        # (print, then assert), which is what `planKernelAbi` fixed. Both must
+        # start zeroed: each block's head word is a running count the kernel
+        # bumps.
+        print_buf = assert_buf = None
+        if trailing is not None:
+            rt = D._runtime()      # D is the pinned torch-free runtime's module
+            if trailing.print_layout is not None:
+                print_buf = rt.zeros_i32(trailing.print_layout.nbytes // 4)
+                args = args + (print_buf,)
+            if trailing.assert_layout is not None:
+                assert_buf = rt.zeros_i32(trailing.assert_layout.nbytes // 4)
+                args = args + (assert_buf,)
+
         # Two queues, one device, shared buffers. Metal orders command buffers
         # within a queue; ACROSS queues nothing is ordered without an explicit
         # event (Apple: a fence cannot synchronize untracked resources accessed
@@ -187,6 +267,30 @@ class TritonExtDriver(Driver):
         # And the other direction: the host (and NeuroBrix's own blits) must see
         # what this kernel wrote.
         _native().synchronize()
+
+        # Read what the kernel recorded. Prints first, so anything it printed is
+        # already out when a failed assert raises.
+        if print_buf is not None:
+            from triton_apple_backend.device_print import format_records
+            rt = D._runtime()
+            for line in format_records(trailing.print_layout, rt.as_u32(print_buf)):
+                print(line, flush=True)
+        if assert_buf is not None:
+            from triton_apple_backend.device_assert import check as _check_asserts
+            rt = D._runtime()
+            _check_asserts(trailing.assert_layout, rt.as_u32(assert_buf))
+
+
+class _Trailing(NamedTuple):
+    """The emitter-declared buffers that follow a kernel's own parameters.
+
+    Held as the PARSED layouts rather than the raw text: parsing is a regex
+    walk over the whole emitted module, and it is a property of the
+    compilation, so it happens once in `trailing_buffers` and never on the
+    launch path.
+    """
+    print_layout: Any
+    assert_layout: Any
 
 
 #: Binding census, printed at exit under NBX_EXT_STATS=1. An interior binding
