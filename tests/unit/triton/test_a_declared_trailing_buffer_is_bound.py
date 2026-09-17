@@ -42,13 +42,14 @@ def test_the_base_driver_declares_no_trailing_buffers():
 def _selectable_drivers():
     """Every driver the engine can select, base included.
 
-    `MetalDriver` is DUCK-TYPED against `Driver` rather than subclassing it, so
-    nothing added to the base reaches it. Listing the classes here instead of
-    walking `Driver.__subclasses__()` is the point: a subclass walk would have
-    silently omitted the one driver that was actually broken."""
-    from neurobrix.triton import metal_driver, triton_ext_driver
-    return (L.Driver, L.CudaDriver, metal_driver.MetalDriver,
-            triton_ext_driver.TritonExtDriver)
+    Listed rather than walked from `Driver.__subclasses__()`, and that is the
+    point: the archived fork's `MetalDriver` was DUCK-TYPED against `Driver`
+    rather than subclassing it, so a subclass walk would have silently omitted
+    the one driver that was actually broken when this seam landed. The next
+    duck-typed driver must be added to this list by hand, which is a visible
+    act."""
+    from neurobrix.triton import triton_ext_driver
+    return (L.Driver, L.CudaDriver, triton_ext_driver.TritonExtDriver)
 
 
 def test_every_driver_answers_the_whole_launcher_protocol():
@@ -104,16 +105,14 @@ def test_every_driver_declares_nothing_by_default():
 
 
 def test_a_driver_that_cannot_bind_a_declared_buffer_refuses():
-    """The failure that must never be silent. Both drivers that cannot bind a
-    trailing buffer are asked to launch one, and both must refuse BY NAME."""
-    from neurobrix.triton import metal_driver
+    """The failure that must never be silent. A driver that cannot bind a
+    trailing buffer is asked to launch one, and must refuse BY NAME."""
 
     class _Declared:
         def __repr__(self):
             return "<assert status buffer>"
 
-    for drv in (L.CudaDriver.__new__(L.CudaDriver),
-                metal_driver.MetalDriver.__new__(metal_driver.MetalDriver)):
+    for drv in (L.CudaDriver.__new__(L.CudaDriver),):
         with pytest.raises(RuntimeError) as e:
             drv.launch(object(), (1, 1, 1), (32, 1, 1), 0, 0, [],
                        trailing=_Declared())

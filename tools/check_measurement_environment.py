@@ -340,14 +340,20 @@ def check_branch_is_recoverable(path: Path) -> list[str]:
 #: all, and read exactly like a repair that had not worked. A guard over some
 #: of the caches is a guard over none of them, because the one it misses is
 #: the one that answers.
-_CACHE_VARS = ("TRITON_CACHE_DIR", "TRITON_MSL_CACHE_DIR",
-               "NEUROBRIX_REPLAY_CACHE")
+#: `TRITON_MSL_CACHE_DIR` was the third layer until 2026-09-17, when the fork
+#: that read it was archived. triton-ext replaces it and has NO cache layer of
+#: its own — checked that day in the installed package: it reads no *CACHE_DIR
+#: variable anywhere. So there are two layers now, not three, and the rule
+#: above ("a guard over some of the caches is a guard over none") is why this
+#: list is edited rather than left with a variable nothing reads: a layer that
+#: does not exist cannot be the one that answers, and pretending it is there
+#: would make the guard report on an environment nobody has.
+_CACHE_VARS = ("TRITON_CACHE_DIR", "NEUROBRIX_REPLAY_CACHE")
 
 #: The shared defaults. Pointing a measurement at these is the same as not
 #: setting them.
 _SHARED_DEFAULTS = (
     Path.home() / ".triton" / "cache",
-    Path.home() / ".cache" / "triton_msl",
     Path.home() / ".neurobrix" / "replay_cache",
 )
 
@@ -392,7 +398,6 @@ def owned_cache_env(root) -> dict:
     """
     root = Path(root)
     return {"TRITON_CACHE_DIR": str(root / "triton"),
-            "TRITON_MSL_CACHE_DIR": str(root / "triton_msl"),
             "NEUROBRIX_REPLAY_CACHE": str(root / "replay")}
 
 

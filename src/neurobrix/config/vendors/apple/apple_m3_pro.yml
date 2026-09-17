@@ -35,7 +35,7 @@ gpu_family: "apple9"   # provenance: hérité, 2026-09-10
 # What the Triton target actually reports, which is NOT the family above.
 # MEASURED 2026-09-05 on an M4 Pro: the Metal backend builds its arch string
 # from the Metal DEVICE NAME, lowercased and hyphenated
-# (`triton_msl/backend/driver.py::_detect_metal_arch`), so it says
+# (`kernels/metal_device.py::MetalRuntime.arch_name`), so it says
 # "apple-m4-pro" where this file says "apple9". Matching on the family alone,
 # the smem budget below resolved to NOTHING on a real Mac and the 32 KB
 # filter silently did not apply — all 17 Volta tiles were offered, including

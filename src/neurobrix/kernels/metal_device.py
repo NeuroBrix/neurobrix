@@ -1126,8 +1126,10 @@ def reset_runtime_for_tests() -> None:
     # perfectly good address with "which the Metal allocator did not hand
     # out". Measured 2026-09-05 as an order-dependent failure of
     # `test_cumsum_is_correct[128]` in the full kernels suite.
-    from ..triton import metal_driver
-    metal_driver.clear_cache()
+    # The fork's driver held a kernel/library cache that pinned the device;
+    # it was archived 2026-09-17 and the cache went with it. triton-ext
+    # holds its compiled functions in Triton's own cache, which this
+    # function's callers already clear.
 
     # The launcher caches a driver-produced handle per specialisation — a
     # Metal pipeline here — so it holds the runtime as surely as the driver
