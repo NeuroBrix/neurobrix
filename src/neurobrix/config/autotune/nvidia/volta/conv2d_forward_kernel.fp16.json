@@ -1736,20 +1736,20 @@
   "(1, 1024, 1, 38, 1536, 1, 32, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:41+00:00",
+    "date": "2026-09-17T01:04:18+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -1774,7 +1774,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002659855013134603,
+    "deviation": 0.0002734968729449059,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -1809,16 +1809,16 @@
       }
      }
     },
-    "best_ms": 0.813034667323033,
-    "second_ms": 0.9165531439440591,
+    "best_ms": 0.6806725629589014,
+    "second_ms": 0.6810697157468114,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.501,
-     "runs": 0.429,
-     "bench": 0.739
+     "oracle": 1.66,
+     "runs": 0.181,
+     "bench": 0.423
     },
     "built": {
      "gpu": true,
@@ -2120,20 +2120,20 @@
   "(1, 1024, 1, 70, 1536, 1, 64, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:24+00:00",
+    "date": "2026-09-17T01:05:05+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -2158,7 +2158,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00027512645576319297,
+    "deviation": 0.00026576811545228634,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -2193,16 +2193,16 @@
       }
      }
     },
-    "best_ms": 0.9261104762554169,
-    "second_ms": 0.9709824040532112,
+    "best_ms": 0.6851108553154128,
+    "second_ms": 0.6860982786331858,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 3.048,
-     "runs": 0.292,
-     "bench": 0.738
+     "oracle": 3.32,
+     "runs": 0.188,
+     "bench": 0.486
     },
     "built": {
      "gpu": true,
@@ -3646,18 +3646,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:49+00:00",
+    "date": "2026-09-17T01:06:17+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -3682,7 +3682,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00028821517829261654,
+    "deviation": 0.0003036460889300533,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -3717,16 +3717,16 @@
       }
      }
     },
-    "best_ms": 0.18235903941094875,
-    "second_ms": 0.20003576409370505,
+    "best_ms": 0.13186799985123798,
+    "second_ms": 0.1322214698838622,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.263,
-     "runs": 0.083,
-     "bench": 1.08
+     "oracle": 0.285,
+     "runs": 0.069,
+     "bench": 0.998
     },
     "built": {
      "gpu": true,
@@ -3838,18 +3838,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:50+00:00",
+    "date": "2026-09-17T01:06:19+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -3874,7 +3874,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002923760048385441,
+    "deviation": 0.0002909179203247143,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -3909,16 +3909,16 @@
       }
      }
     },
-    "best_ms": 0.18274653597575863,
-    "second_ms": 0.19996229063820195,
+    "best_ms": 0.1325610991538936,
+    "second_ms": 0.13276611690354698,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.275,
-     "runs": 0.084,
-     "bench": 1.086
+     "oracle": 0.359,
+     "runs": 0.069,
+     "bench": 1.095
     },
     "built": {
      "gpu": true,
@@ -4030,18 +4030,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:47+00:00",
+    "date": "2026-09-17T01:06:15+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -4066,7 +4066,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030167383454012225,
+    "deviation": 0.0002982837022476242,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -4101,16 +4101,16 @@
       }
      }
     },
-    "best_ms": 0.1823073095582389,
-    "second_ms": 0.20049366403270413,
+    "best_ms": 0.131588029724951,
+    "second_ms": 0.13270449356452838,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.261,
-     "runs": 0.089,
-     "bench": 1.082
+     "oracle": 0.286,
+     "runs": 0.069,
+     "bench": 1.089
     },
     "built": {
      "gpu": true,
@@ -4222,18 +4222,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:41+00:00",
+    "date": "2026-09-17T01:06:09+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -4258,7 +4258,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002738038620142649,
+    "deviation": 0.00026740769195521654,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -4293,16 +4293,16 @@
       }
      }
     },
-    "best_ms": 0.05802473512453002,
-    "second_ms": 0.06240894431036205,
+    "best_ms": 0.047524923258102855,
+    "second_ms": 0.04789598273977735,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.052,
-     "runs": 0.046,
-     "bench": 1.962
+     "oracle": 0.054,
+     "runs": 0.043,
+     "bench": 2.097
     },
     "built": {
      "gpu": true,
@@ -4414,18 +4414,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:44+00:00",
+    "date": "2026-09-17T01:06:11+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -4450,7 +4450,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00023353368057270566,
+    "deviation": 0.0002704338500692276,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -4485,16 +4485,16 @@
       }
      }
     },
-    "best_ms": 0.05613135739490868,
-    "second_ms": 0.062019780331315916,
+    "best_ms": 0.04896486251475385,
+    "second_ms": 0.04928593767544953,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.051,
-     "runs": 0.046,
-     "bench": 2.062
+     "oracle": 0.054,
+     "runs": 0.044,
+     "bench": 2.138
     },
     "built": {
      "gpu": true,
@@ -4604,7 +4604,7 @@
   "(1, 128, 1, 1040, 128, 1, 1040, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
@@ -4614,10 +4614,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:46+00:00",
+    "date": "2026-09-17T01:06:14+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -4642,7 +4642,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002590981147911343,
+    "deviation": 0.0002823383543859799,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -4677,16 +4677,16 @@
       }
      }
     },
-    "best_ms": 0.05612321539411267,
-    "second_ms": 0.06216142248776224,
+    "best_ms": 0.047170461889786214,
+    "second_ms": 0.04763210003347506,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.051,
-     "runs": 0.046,
-     "bench": 2.051
+     "oracle": 0.053,
+     "runs": 0.044,
+     "bench": 2.128
     },
     "built": {
      "gpu": true,
@@ -4798,18 +4798,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:39+00:00",
+    "date": "2026-09-17T01:06:06+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -4834,7 +4834,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00033089331942333275,
+    "deviation": 0.0003676279756434077,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -4869,16 +4869,16 @@
       }
      }
     },
-    "best_ms": 0.11619989319729644,
-    "second_ms": 0.12887824824365385,
+    "best_ms": 0.0923228191677481,
+    "second_ms": 0.09254500386636821,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.119,
-     "runs": 0.064,
-     "bench": 1.359
+     "oracle": 0.132,
+     "runs": 0.055,
+     "bench": 1.568
     },
     "built": {
      "gpu": true,
@@ -4990,18 +4990,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:36+00:00",
+    "date": "2026-09-17T01:06:02+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -5026,7 +5026,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00033546377511193556,
+    "deviation": 0.0003342431317276606,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -5061,16 +5061,16 @@
       }
      }
     },
-    "best_ms": 0.11626216336279302,
-    "second_ms": 0.12863290171731603,
+    "best_ms": 0.09178137916977666,
+    "second_ms": 0.09189476287879404,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.118,
-     "runs": 0.064,
-     "bench": 1.35
+     "oracle": 0.136,
+     "runs": 0.057,
+     "bench": 1.549
     },
     "built": {
      "gpu": true,
@@ -5182,18 +5182,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:38+00:00",
+    "date": "2026-09-17T01:06:04+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -5218,7 +5218,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00037436834854803405,
+    "deviation": 0.0003725975941946689,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -5253,16 +5253,16 @@
       }
      }
     },
-    "best_ms": 0.11618988203587911,
-    "second_ms": 0.12847662551836533,
+    "best_ms": 0.09253726406358286,
+    "second_ms": 0.092660070326976,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 12,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.117,
-     "runs": 0.064,
-     "bench": 1.355
+     "oracle": 0.138,
+     "runs": 0.056,
+     "bench": 1.564
     },
     "built": {
      "gpu": true,
@@ -21674,20 +21674,20 @@
   "(1, 18, 1, 3121, 128, 1, 1040, 1, 6, 1, 3, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:35+00:00",
+    "date": "2026-09-17T01:06:00+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -21712,7 +21712,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002590585638064186,
+    "deviation": 0.00024309904895146537,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -21747,16 +21747,16 @@
       }
      }
     },
-    "best_ms": 0.035146627444567716,
-    "second_ms": 0.0361566811202207,
+    "best_ms": 0.029281875144079095,
+    "second_ms": 0.03603576480493169,
     "candidates": 18,
     "accepted": 18,
-    "benched": 17,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.013,
-     "runs": 0.129,
-     "bench": 2.67
+     "oracle": 0.014,
+     "runs": 0.053,
+     "bench": 0.414
     },
     "built": {
      "gpu": true,
@@ -21867,19 +21867,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
-     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_OUTF": 64,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:16+00:00",
+    "date": "2026-09-17T01:05:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -21904,7 +21904,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002847946840284072,
+    "deviation": 0.0002377657056784914,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -21939,16 +21939,16 @@
       }
      }
     },
-    "best_ms": 0.105581180830984,
-    "second_ms": 0.12909139976614997,
+    "best_ms": 0.10126172751188278,
+    "second_ms": 0.10599593272303591,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 3,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.026,
-     "runs": 0.151,
-     "bench": 1.335
+     "runs": 0.044,
+     "bench": 0.44
     },
     "built": {
      "gpu": true,
@@ -22060,18 +22060,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:54+00:00",
+    "date": "2026-09-17T01:06:20+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -22096,7 +22096,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00026608748905745103,
+    "deviation": 0.00027144626424357147,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -22131,16 +22131,16 @@
       }
      }
     },
-    "best_ms": 0.019062548265974717,
-    "second_ms": 0.019524497024142762,
+    "best_ms": 0.032985397001048404,
+    "second_ms": 0.033943049973626245,
     "candidates": 18,
     "accepted": 18,
-    "benched": 17,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.002,
-     "runs": 0.142,
-     "bench": 2.994
+     "runs": 0.059,
+     "bench": 1.192
     },
     "built": {
      "gpu": true,
@@ -27312,10 +27312,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:40+00:00",
+    "date": "2026-09-17T01:05:22+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -27340,7 +27340,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00033814256658057606,
+    "deviation": 0.00032931769822170537,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -27375,16 +27375,16 @@
       }
      }
     },
-    "best_ms": 0.26103466749191284,
-    "second_ms": 0.27363223250765,
+    "best_ms": 0.2618367987019675,
+    "second_ms": 0.2751146661061229,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.092,
-     "runs": 0.997,
-     "bench": 0.999
+     "oracle": 0.102,
+     "runs": 1.092,
+     "bench": 1.063
     },
     "built": {
      "gpu": true,
@@ -27495,19 +27495,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:37+00:00",
+    "date": "2026-09-17T01:05:19+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -27532,7 +27532,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00032918123957460116,
+    "deviation": 0.00035458306890296987,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
     "machine": {
@@ -27567,16 +27567,16 @@
       }
      }
     },
-    "best_ms": 1.7449425567280163,
-    "second_ms": 1.8418834266208468,
+    "best_ms": 1.3322239990892082,
+    "second_ms": 1.339215451273425,
     "candidates": 18,
     "accepted": 18,
-    "benched": 8,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.093,
-     "runs": 0.647,
-     "bench": 0.553
+     "oracle": 0.084,
+     "runs": 0.47,
+     "bench": 0.606
     },
     "built": {
      "gpu": true,
@@ -27696,10 +27696,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:41+00:00",
+    "date": "2026-09-17T01:05:23+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -27724,7 +27724,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003265588333091152,
+    "deviation": 0.00037364192401853017,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
     "machine": {
@@ -27759,16 +27759,16 @@
       }
      }
     },
-    "best_ms": 1.74475636807355,
-    "second_ms": 1.8386163938613165,
+    "best_ms": 1.3295757112831905,
+    "second_ms": 1.3303878636195743,
     "candidates": 18,
     "accepted": 18,
-    "benched": 8,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.084,
-     "runs": 0.645,
-     "bench": 0.554
+     "oracle": 0.085,
+     "runs": 0.472,
+     "bench": 0.605
     },
     "built": {
      "gpu": true,
@@ -27888,10 +27888,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:42+00:00",
+    "date": "2026-09-17T01:05:24+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -27916,7 +27916,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00032497594542016964,
+    "deviation": 0.00036503610959600545,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
     "machine": {
@@ -27951,16 +27951,16 @@
       }
      }
     },
-    "best_ms": 1.748433454470201,
-    "second_ms": 1.8391527732213337,
+    "best_ms": 1.3201125695787628,
+    "second_ms": 1.3294355745973259,
     "candidates": 18,
     "accepted": 18,
-    "benched": 8,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.083,
-     "runs": 0.648,
-     "bench": 0.565
+     "oracle": 0.084,
+     "runs": 0.468,
+     "bench": 0.465
     },
     "built": {
      "gpu": true,
@@ -29592,10 +29592,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:03+00:00",
+    "date": "2026-09-17T01:04:43+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -29620,7 +29620,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00031751490881159024,
+    "deviation": 0.000341495378545558,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -29655,16 +29655,16 @@
       }
      }
     },
-    "best_ms": 0.15910871386794107,
-    "second_ms": 0.1632000003675265,
+    "best_ms": 0.16206986386312078,
+    "second_ms": 0.16547273765511228,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.043,
-     "runs": 0.476,
-     "bench": 1.263
+     "oracle": 0.025,
+     "runs": 0.535,
+     "bench": 1.332
     },
     "built": {
      "gpu": true,
@@ -29775,19 +29775,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:01+00:00",
+    "date": "2026-09-17T01:04:41+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -29812,7 +29812,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003528278558218239,
+    "deviation": 0.00034207236629753973,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
     "machine": {
@@ -29847,16 +29847,16 @@
       }
      }
     },
-    "best_ms": 1.0501803095276292,
-    "second_ms": 1.0990153176443918,
+    "best_ms": 0.7890860414018437,
+    "second_ms": 0.7920326505388532,
     "candidates": 18,
     "accepted": 18,
-    "benched": 10,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.118,
-     "runs": 0.31,
-     "bench": 0.66
+     "oracle": 0.085,
+     "runs": 0.222,
+     "bench": 0.613
     },
     "built": {
      "gpu": true,
@@ -29967,19 +29967,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:04+00:00",
+    "date": "2026-09-17T01:04:44+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -30004,7 +30004,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003482288106340769,
+    "deviation": 0.0003525556206984798,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
     "machine": {
@@ -30039,16 +30039,16 @@
       }
      }
     },
-    "best_ms": 1.048437611476795,
-    "second_ms": 1.0981376000813075,
+    "best_ms": 0.7878530572871772,
+    "second_ms": 0.7897338769873794,
     "candidates": 18,
     "accepted": 18,
-    "benched": 10,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.083,
-     "runs": 0.309,
-     "bench": 0.665
+     "oracle": 0.091,
+     "runs": 0.222,
+     "bench": 0.61
     },
     "built": {
      "gpu": true,
@@ -30159,19 +30159,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:06+00:00",
+    "date": "2026-09-17T01:04:46+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -30196,7 +30196,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00034626793518137704,
+    "deviation": 0.0003442857074438691,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
     "machine": {
@@ -30231,16 +30231,16 @@
       }
      }
     },
-    "best_ms": 1.0493232398419767,
-    "second_ms": 1.097640231677464,
+    "best_ms": 0.7886262888811073,
+    "second_ms": 0.7909041630978487,
     "candidates": 18,
     "accepted": 18,
-    "benched": 10,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.083,
-     "runs": 0.308,
-     "bench": 0.665
+     "oracle": 0.343,
+     "runs": 0.306,
+     "bench": 0.739
     },
     "built": {
      "gpu": true,
@@ -36436,7 +36436,7 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 16
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -36444,10 +36444,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:30+00:00",
+    "date": "2026-09-17T01:05:59+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -36472,7 +36472,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003227395943805807,
+    "deviation": 0.0004188236843924344,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -36507,16 +36507,16 @@
       }
      }
     },
-    "best_ms": 0.34412036685768616,
-    "second_ms": 0.36808784481357126,
+    "best_ms": 0.2432265988998599,
+    "second_ms": 0.2567822223322259,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.39,
-     "runs": 0.241,
-     "bench": 0.947
+     "oracle": 0.402,
+     "runs": 0.073,
+     "bench": 0.615
     },
     "built": {
      "gpu": true,
@@ -36626,20 +36626,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:32+00:00",
+    "date": "2026-09-17T01:06:00+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -36664,7 +36664,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00041145427936427597,
+    "deviation": 0.0003953773460338842,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -36699,16 +36699,16 @@
       }
      }
     },
-    "best_ms": 0.3433006546714089,
-    "second_ms": 0.3699003105553297,
+    "best_ms": 0.25625077559023485,
+    "second_ms": 0.2579279455645331,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 4,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.387,
-     "runs": 0.23,
-     "bench": 0.877
+     "oracle": 0.397,
+     "runs": 0.071,
+     "bench": 0.362
     },
     "built": {
      "gpu": true,
@@ -36818,20 +36818,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:28+00:00",
+    "date": "2026-09-17T01:05:57+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -36856,7 +36856,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00035615581401572004,
+    "deviation": 0.0004688404384302289,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -36891,16 +36891,16 @@
       }
      }
     },
-    "best_ms": 0.3430493100122972,
-    "second_ms": 0.36843122527437305,
+    "best_ms": 0.25636977867947686,
+    "second_ms": 0.2567017636932693,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 3,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.39,
-     "runs": 0.232,
-     "bench": 0.873
+     "oracle": 0.405,
+     "runs": 0.072,
+     "bench": 0.286
     },
     "built": {
      "gpu": true,
@@ -37010,20 +37010,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:23+00:00",
+    "date": "2026-09-17T01:05:55+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -37048,7 +37048,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00037849484015200103,
+    "deviation": 0.00036424653020049373,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -37083,16 +37083,16 @@
       }
      }
     },
-    "best_ms": 0.08243216000346824,
-    "second_ms": 0.10323134047143599,
+    "best_ms": 0.08363679075304838,
+    "second_ms": 0.12315331052100531,
     "candidates": 18,
     "accepted": 18,
-    "benched": 15,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.043,
-     "runs": 0.137,
-     "bench": 1.84
+     "oracle": 0.048,
+     "runs": 0.038,
+     "bench": 0.308
     },
     "built": {
      "gpu": true,
@@ -37202,20 +37202,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:25+00:00",
+    "date": "2026-09-17T01:05:56+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -37240,7 +37240,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00038522263586086256,
+    "deviation": 0.0003439429629027308,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -37275,16 +37275,16 @@
       }
      }
     },
-    "best_ms": 0.08294906767804434,
-    "second_ms": 0.10109754357683032,
+    "best_ms": 0.08373116629059334,
+    "second_ms": 0.16426910431612105,
     "candidates": 18,
     "accepted": 18,
-    "benched": 13,
+    "benched": 3,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.043,
-     "runs": 0.162,
-     "bench": 1.71
+     "oracle": 0.047,
+     "runs": 0.036,
+     "bench": 0.408
     },
     "built": {
      "gpu": true,
@@ -37394,20 +37394,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:27+00:00",
+    "date": "2026-09-17T01:05:56+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -37432,7 +37432,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00037968348499797306,
+    "deviation": 0.00040601217798515805,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -37467,16 +37467,16 @@
       }
      }
     },
-    "best_ms": 0.08243586725416953,
-    "second_ms": 0.10266072923938434,
+    "best_ms": 0.08403705608659458,
+    "second_ms": 0.17371532815222693,
     "candidates": 18,
     "accepted": 18,
-    "benched": 14,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.042,
-     "runs": 0.158,
-     "bench": 1.766
+     "oracle": 0.048,
+     "runs": 0.036,
+     "bench": 0.287
     },
     "built": {
      "gpu": true,
@@ -37586,20 +37586,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:21+00:00",
+    "date": "2026-09-17T01:05:55+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -37624,7 +37624,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002445413407942216,
+    "deviation": 0.0002497704016514527,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -37659,16 +37659,16 @@
       }
      }
     },
-    "best_ms": 0.19887422888331074,
-    "second_ms": 0.22965869782892473,
+    "best_ms": 0.1746343031889055,
+    "second_ms": 0.19383346369510057,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 3,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.203,
-     "runs": 0.187,
-     "bench": 1.104
+     "oracle": 0.204,
+     "runs": 0.054,
+     "bench": 0.334
     },
     "built": {
      "gpu": true,
@@ -37778,20 +37778,20 @@
   "(1, 256, 1, 208, 256, 1, 208, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:18+00:00",
+    "date": "2026-09-17T01:05:52+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -37816,7 +37816,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00023502249276470582,
+    "deviation": 0.00026363026075103214,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -37851,16 +37851,16 @@
       }
      }
     },
-    "best_ms": 0.19926817326442056,
-    "second_ms": 0.22903704377496317,
+    "best_ms": 0.1745541685173664,
+    "second_ms": 0.17515444432573365,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.203,
-     "runs": 0.198,
-     "bench": 1.103
+     "oracle": 0.207,
+     "runs": 0.056,
+     "bench": 0.896
     },
     "built": {
      "gpu": true,
@@ -37972,7 +37972,7 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 16
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -37980,10 +37980,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:19+00:00",
+    "date": "2026-09-17T01:05:54+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -38008,7 +38008,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00026954585843906007,
+    "deviation": 0.00028250721241238714,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -38043,16 +38043,16 @@
       }
      }
     },
-    "best_ms": 0.1979772165093733,
-    "second_ms": 0.22947140223121051,
+    "best_ms": 0.15483059701428079,
+    "second_ms": 0.17558384582328335,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.203,
-     "runs": 0.2,
-     "bench": 1.104
+     "oracle": 0.205,
+     "runs": 0.053,
+     "bench": 0.81
     },
     "built": {
      "gpu": true,
@@ -54001,10 +54001,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:58+00:00",
+    "date": "2026-09-17T01:04:38+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -54029,7 +54029,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002398390316453768,
+    "deviation": 0.00039711712130235754,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -54064,16 +54064,16 @@
       }
      }
     },
-    "best_ms": 0.17276987420009063,
-    "second_ms": 0.18040543594999175,
+    "best_ms": 0.17379259882129242,
+    "second_ms": 0.1835557365326712,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.013,
-     "runs": 0.248,
-     "bench": 1.216
+     "runs": 0.261,
+     "bench": 1.285
     },
     "built": {
      "gpu": true,
@@ -54185,18 +54185,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:56+00:00",
+    "date": "2026-09-17T01:04:36+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -54221,7 +54221,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003701191652791802,
+    "deviation": 0.0004066299875756276,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
     "machine": {
@@ -54256,16 +54256,16 @@
       }
      }
     },
-    "best_ms": 1.255589162149737,
-    "second_ms": 1.2579684835491758,
+    "best_ms": 0.9594879999756813,
+    "second_ms": 0.959590396285057,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.17,
-     "runs": 0.274,
-     "bench": 0.74
+     "oracle": 0.173,
+     "runs": 0.181,
+     "bench": 0.601
     },
     "built": {
      "gpu": true,
@@ -54376,19 +54376,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:59+00:00",
+    "date": "2026-09-17T01:04:39+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -54413,7 +54413,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00031032617365528187,
+    "deviation": 0.0004357535427000585,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
     "machine": {
@@ -54448,16 +54448,16 @@
       }
      }
     },
-    "best_ms": 1.2233622074127197,
-    "second_ms": 1.2548799961805344,
+    "best_ms": 0.9888075746987995,
+    "second_ms": 1.0008943646382062,
     "candidates": 18,
     "accepted": 18,
-    "benched": 9,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.167,
-     "runs": 0.273,
-     "bench": 0.6
+     "oracle": 0.173,
+     "runs": 0.184,
+     "bench": 0.669
     },
     "built": {
      "gpu": true,
@@ -54577,10 +54577,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:00+00:00",
+    "date": "2026-09-17T01:04:40+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -54605,7 +54605,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0004427984264342509,
+    "deviation": 0.0003968202421923609,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
     "machine": {
@@ -54640,16 +54640,16 @@
       }
      }
     },
-    "best_ms": 1.2206719852983952,
-    "second_ms": 1.2712618668874105,
+    "best_ms": 0.9976724245046314,
+    "second_ms": 1.0095562150603847,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.168,
-     "runs": 0.276,
-     "bench": 0.739
+     "oracle": 0.172,
+     "runs": 0.19,
+     "bench": 0.606
     },
     "built": {
      "gpu": true,
@@ -56305,10 +56305,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:33+00:00",
+    "date": "2026-09-17T01:05:15+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -56333,7 +56333,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002391772625054845,
+    "deviation": 0.0002474957900034457,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -56368,16 +56368,16 @@
       }
      }
     },
-    "best_ms": 0.2976504254973296,
-    "second_ms": 0.3117004347448589,
+    "best_ms": 0.30564072818467114,
+    "second_ms": 0.31744867815809735,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.029,
-     "runs": 0.546,
-     "bench": 0.991
+     "oracle": 0.053,
+     "runs": 0.535,
+     "bench": 1.063
     },
     "built": {
      "gpu": true,
@@ -56488,19 +56488,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:31+00:00",
+    "date": "2026-09-17T01:05:13+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -56525,7 +56525,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00041159212761373464,
+    "deviation": 0.00025117798959830835,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
     "machine": {
@@ -56560,16 +56560,16 @@
       }
      }
     },
-    "best_ms": 2.084001666621158,
-    "second_ms": 2.1798684332105847,
+    "best_ms": 1.5502950429916382,
+    "second_ms": 1.5562355279922486,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.169,
-     "runs": 0.513,
-     "bench": 0.774
+     "oracle": 0.173,
+     "runs": 0.351,
+     "bench": 0.61
     },
     "built": {
      "gpu": true,
@@ -56680,19 +56680,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:34+00:00",
+    "date": "2026-09-17T01:05:16+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -56717,7 +56717,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00025006628524979347,
+    "deviation": 0.00036097819349352494,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
     "machine": {
@@ -56752,16 +56752,16 @@
       }
      }
     },
-    "best_ms": 2.0833010297072563,
-    "second_ms": 2.1781049039628773,
+    "best_ms": 1.5491891241073608,
+    "second_ms": 1.558036494255066,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.169,
-     "runs": 0.514,
-     "bench": 0.775
+     "oracle": 0.172,
+     "runs": 0.349,
+     "bench": 0.607
     },
     "built": {
      "gpu": true,
@@ -56872,19 +56872,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:36+00:00",
+    "date": "2026-09-17T01:05:18+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -56909,7 +56909,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002571511610560346,
+    "deviation": 0.0002495203549160417,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
     "machine": {
@@ -56944,16 +56944,16 @@
       }
      }
     },
-    "best_ms": 2.0840016540728117,
-    "second_ms": 2.178728871875339,
+    "best_ms": 1.54775550365448,
+    "second_ms": 1.5584051179885865,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.168,
-     "runs": 0.512,
-     "bench": 0.773
+     "oracle": 0.175,
+     "runs": 0.349,
+     "bench": 0.611
     },
     "built": {
      "gpu": true,
@@ -60461,18 +60461,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:52+00:00",
+    "date": "2026-09-17T01:05:34+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -60497,7 +60497,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00027135939580683044,
+    "deviation": 0.00026443998795110677,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -60532,16 +60532,16 @@
       }
      }
     },
-    "best_ms": 0.1926792428681725,
-    "second_ms": 0.20317432791977139,
+    "best_ms": 0.1945211199182336,
+    "second_ms": 0.19479122749900304,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.152,
-     "runs": 0.204,
-     "bench": 1.129
+     "oracle": 0.17,
+     "runs": 0.066,
+     "bench": 0.615
     },
     "built": {
      "gpu": true,
@@ -60651,7 +60651,7 @@
   "(1, 512, 1, 176, 512, 1, 173, 1, 4, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
@@ -60661,10 +60661,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:50+00:00",
+    "date": "2026-09-17T01:05:33+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -60689,7 +60689,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00023510972699415563,
+    "deviation": 0.0002602136035973928,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -60724,16 +60724,16 @@
       }
      }
     },
-    "best_ms": 0.2514056537548701,
-    "second_ms": 0.2663995437588252,
+    "best_ms": 0.23755431704615293,
+    "second_ms": 0.2595335215749875,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.234,
-     "runs": 0.23,
-     "bench": 1.08
+     "oracle": 0.261,
+     "runs": 0.077,
+     "bench": 0.724
     },
     "built": {
      "gpu": true,
@@ -63624,7 +63624,7 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 32
+     "BLOCK_SIZE_INF": 16
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -63632,10 +63632,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:12+00:00",
+    "date": "2026-09-17T01:05:49+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -63660,7 +63660,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030895681125414707,
+    "deviation": 0.0002692929541088697,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -63695,16 +63695,16 @@
       }
      }
     },
-    "best_ms": 0.14820154481812528,
-    "second_ms": 0.15832303400183545,
+    "best_ms": 0.14985695411550237,
+    "second_ms": 0.159559047366554,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.023,
-     "runs": 0.054,
-     "bench": 1.172
+     "oracle": 0.025,
+     "runs": 0.043,
+     "bench": 0.802
     },
     "built": {
      "gpu": true,
@@ -64400,10 +64400,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:54+00:00",
+    "date": "2026-09-17T01:05:36+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -64428,7 +64428,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003823008333782013,
+    "deviation": 0.00040026642733782445,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -64463,16 +64463,16 @@
       }
      }
     },
-    "best_ms": 0.4050297260284424,
-    "second_ms": 0.4204476501915481,
+    "best_ms": 0.43908413765074195,
+    "second_ms": 0.4883035902793591,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.69,
-     "runs": 0.329,
-     "bench": 0.843
+     "oracle": 0.752,
+     "runs": 0.149,
+     "bench": 0.532
     },
     "built": {
      "gpu": true,
@@ -76423,7 +76423,7 @@
   "(1, 64, 1, 3121, 18, 1, 3121, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
@@ -76433,10 +76433,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:16+00:00",
+    "date": "2026-09-17T01:06:30+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -76461,7 +76461,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002455746317518147,
+    "deviation": 0.00023966951338898603,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -76496,16 +76496,16 @@
       }
      }
     },
-    "best_ms": 0.06196816798994626,
-    "second_ms": 0.06669940400393941,
+    "best_ms": 0.06310539830078199,
+    "second_ms": 0.06958050666184261,
     "candidates": 18,
     "accepted": 18,
-    "benched": 13,
+    "benched": 5,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.023,
-     "runs": 0.205,
-     "bench": 1.796
+     "oracle": 0.025,
+     "runs": 0.037,
+     "bench": 0.838
     },
     "built": {
      "gpu": true,
@@ -76615,20 +76615,20 @@
   "(1, 64, 1, 3121, 64, 1, 3121, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:57+00:00",
+    "date": "2026-09-17T01:06:22+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -76653,7 +76653,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003645192818605865,
+    "deviation": 0.00041712452008028976,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -76688,16 +76688,16 @@
       }
      }
     },
-    "best_ms": 0.1210528229656693,
-    "second_ms": 0.12858844976533543,
+    "best_ms": 0.1595374259030875,
+    "second_ms": 0.1677876642652761,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 5,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.134,
-     "runs": 0.192,
-     "bench": 1.411
+     "oracle": 0.136,
+     "runs": 0.09,
+     "bench": 0.537
     },
     "built": {
      "gpu": true,
@@ -76807,20 +76807,20 @@
   "(1, 64, 1, 3121, 64, 1, 3121, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:59+00:00",
+    "date": "2026-09-17T01:06:23+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -76845,7 +76845,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00041600448982125705,
+    "deviation": 0.0003752971139049423,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -76880,16 +76880,16 @@
       }
      }
     },
-    "best_ms": 0.12128622606142389,
-    "second_ms": 0.12726738616606614,
+    "best_ms": 0.13478858840180583,
+    "second_ms": 0.1485346148411433,
     "candidates": 18,
     "accepted": 18,
-    "benched": 13,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.133,
-     "runs": 0.222,
-     "bench": 1.486
+     "oracle": 0.157,
+     "runs": 0.089,
+     "bench": 0.778
     },
     "built": {
      "gpu": true,
@@ -77009,10 +77009,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:56+00:00",
+    "date": "2026-09-17T01:06:21+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77037,7 +77037,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003982750341250756,
+    "deviation": 0.00039051056648472854,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -77072,16 +77072,16 @@
       }
      }
     },
-    "best_ms": 0.12142962550445628,
-    "second_ms": 0.12648099630852758,
+    "best_ms": 0.14841116132105098,
+    "second_ms": 0.16844800100303614,
     "candidates": 18,
     "accepted": 18,
-    "benched": 15,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.129,
-     "runs": 0.207,
-     "bench": 1.619
+     "oracle": 0.135,
+     "runs": 0.09,
+     "bench": 0.242
     },
     "built": {
      "gpu": true,
@@ -77191,20 +77191,20 @@
   "(1, 64, 1, 3121, 64, 1, 3121, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:02+00:00",
+    "date": "2026-09-17T01:06:25+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77229,7 +77229,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030135725399044725,
+    "deviation": 0.00036077785335193854,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -77264,16 +77264,16 @@
       }
      }
     },
-    "best_ms": 0.04304157371525882,
-    "second_ms": 0.04505988597813322,
+    "best_ms": 0.05406971439009621,
+    "second_ms": 0.061021503792023264,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.036,
-     "runs": 0.055,
-     "bench": 2.14
+     "oracle": 0.039,
+     "runs": 0.058,
+     "bench": 1.367
     },
     "built": {
      "gpu": true,
@@ -77384,19 +77384,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:04+00:00",
+    "date": "2026-09-17T01:06:25+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77421,7 +77421,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003792407530475121,
+    "deviation": 0.0003840003274395027,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -77456,16 +77456,16 @@
       }
      }
     },
-    "best_ms": 0.04441431899315645,
-    "second_ms": 0.04467354198715773,
+    "best_ms": 0.0631015387088726,
+    "second_ms": 0.10566645180185635,
     "candidates": 18,
     "accepted": 18,
-    "benched": 16,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.037,
-     "runs": 0.183,
-     "bench": 2.455
+     "oracle": 0.04,
+     "runs": 0.068,
+     "bench": 0.315
     },
     "built": {
      "gpu": true,
@@ -77576,8 +77576,8 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
     "num_stages": 2,
@@ -77585,10 +77585,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:07+00:00",
+    "date": "2026-09-17T01:06:26+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77613,7 +77613,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003583785234785421,
+    "deviation": 0.00039069816805828157,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -77648,16 +77648,16 @@
       }
      }
     },
-    "best_ms": 0.04373501871321281,
-    "second_ms": 0.04503803491069559,
+    "best_ms": 0.06230357641284302,
+    "second_ms": 0.0628549094057896,
     "candidates": 18,
     "accepted": 18,
-    "benched": 17,
+    "benched": 3,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.036,
-     "runs": 0.195,
-     "bench": 2.551
+     "oracle": 0.037,
+     "runs": 0.066,
+     "bench": 0.528
     },
     "built": {
      "gpu": true,
@@ -77768,19 +77768,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:14+00:00",
+    "date": "2026-09-17T01:06:29+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77805,7 +77805,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002346186331012042,
+    "deviation": 0.00022409383562246556,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -77840,16 +77840,16 @@
       }
      }
     },
-    "best_ms": 0.08283634143164222,
-    "second_ms": 0.08693804021696655,
+    "best_ms": 0.11306144302191377,
+    "second_ms": 0.19129295323891615,
     "candidates": 18,
     "accepted": 18,
-    "benched": 13,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.085,
-     "runs": 0.171,
-     "bench": 1.804
+     "oracle": 0.087,
+     "runs": 0.079,
+     "bench": 0.254
     },
     "built": {
      "gpu": true,
@@ -77959,20 +77959,20 @@
   "(1, 64, 1, 3121, 64, 1, 3121, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:09+00:00",
+    "date": "2026-09-17T01:06:27+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -77997,7 +77997,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00021385049535459094,
+    "deviation": 0.0002778595219148021,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -78032,16 +78032,16 @@
       }
      }
     },
-    "best_ms": 0.08168081638296736,
-    "second_ms": 0.08637241881979091,
+    "best_ms": 0.09497366668967853,
+    "second_ms": 0.10674078866934321,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.085,
-     "runs": 0.07,
-     "bench": 1.683
+     "oracle": 0.086,
+     "runs": 0.069,
+     "bench": 1.114
     },
     "built": {
      "gpu": true,
@@ -78152,19 +78152,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:11+00:00",
+    "date": "2026-09-17T01:06:28+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -78189,7 +78189,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00023869167058311377,
+    "deviation": 0.00024628700656716417,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -78224,16 +78224,16 @@
       }
      }
     },
-    "best_ms": 0.08166461892552294,
-    "second_ms": 0.08596223922446371,
+    "best_ms": 0.11334991029330663,
+    "second_ms": 0.11928908184573457,
     "candidates": 18,
     "accepted": 18,
-    "benched": 16,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.085,
-     "runs": 0.21,
-     "bench": 2.0
+     "oracle": 0.086,
+     "runs": 0.078,
+     "bench": 0.29
     },
     "built": {
      "gpu": true,
@@ -94409,10 +94409,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:47+00:00",
+    "date": "2026-09-17T01:04:24+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -94437,7 +94437,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00039058649355356846,
+    "deviation": 0.00032631482159666653,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -94472,16 +94472,16 @@
       }
      }
     },
-    "best_ms": 0.12726168129323184,
-    "second_ms": 0.131495350083277,
+    "best_ms": 0.1260075671900911,
+    "second_ms": 0.14341545671359446,
     "candidates": 18,
     "accepted": 18,
-    "benched": 14,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.005,
-     "runs": 0.178,
-     "bench": 1.631
+     "runs": 0.085,
+     "bench": 0.855
     },
     "built": {
      "gpu": true,
@@ -94593,18 +94593,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:45+00:00",
+    "date": "2026-09-17T01:04:23+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -94629,7 +94629,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002743903730555019,
+    "deviation": 0.0002991194431402456,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -94664,16 +94664,16 @@
       }
      }
     },
-    "best_ms": 0.8771250925280831,
-    "second_ms": 0.9165775265012469,
+    "best_ms": 0.651906170077243,
+    "second_ms": 0.6877808823423871,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 2.863,
-     "runs": 0.265,
-     "bench": 0.735
+     "oracle": 3.54,
+     "runs": 0.189,
+     "bench": 0.686
     },
     "built": {
      "gpu": true,
@@ -94785,18 +94785,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:51+00:00",
+    "date": "2026-09-17T01:04:29+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -94821,7 +94821,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002837442407177759,
+    "deviation": 0.00030074318606541174,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -94856,16 +94856,16 @@
       }
      }
     },
-    "best_ms": 0.8759156411344354,
-    "second_ms": 0.9161386716933477,
+    "best_ms": 0.6694983819074798,
+    "second_ms": 0.6701804880510297,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 2.907,
-     "runs": 0.362,
-     "bench": 0.734
+     "oracle": 4.08,
+     "runs": 0.196,
+     "bench": 0.689
     },
     "built": {
      "gpu": true,
@@ -95745,18 +95745,18 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:55+00:00",
+    "date": "2026-09-17T01:04:35+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -95781,7 +95781,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002877074056484018,
+    "deviation": 0.00028021371697380863,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -95816,16 +95816,16 @@
       }
      }
     },
-    "best_ms": 0.8781963640993292,
-    "second_ms": 0.9161630471547445,
+    "best_ms": 0.6836114323564938,
+    "second_ms": 0.6844342808638301,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 2.905,
-     "runs": 0.391,
-     "bench": 0.734
+     "oracle": 4.44,
+     "runs": 0.193,
+     "bench": 0.689
     },
     "built": {
      "gpu": true,
@@ -96713,10 +96713,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:27+00:00",
+    "date": "2026-09-17T01:05:08+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -96741,7 +96741,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003524187225389211,
+    "deviation": 0.00037564936222435737,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -96776,16 +96776,16 @@
       }
      }
     },
-    "best_ms": 0.1695761903061121,
-    "second_ms": 0.2019172166676625,
+    "best_ms": 0.17030762346848002,
+    "second_ms": 0.20566779568707202,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.008,
-     "runs": 0.156,
-     "bench": 1.208
+     "oracle": 0.009,
+     "runs": 0.157,
+     "bench": 1.26
     },
     "built": {
      "gpu": true,
@@ -96905,10 +96905,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:25+00:00",
+    "date": "2026-09-17T01:05:06+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -96933,7 +96933,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00034670842075111964,
+    "deviation": 0.0003595746315490459,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
     "machine": {
@@ -96968,16 +96968,16 @@
       }
      }
     },
-    "best_ms": 1.1553202325647527,
-    "second_ms": 1.3984914464609963,
+    "best_ms": 0.858498850133684,
+    "second_ms": 1.045531662734779,
     "candidates": 18,
     "accepted": 18,
-    "benched": 7,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.435,
-     "runs": 0.324,
-     "bench": 0.463
+     "oracle": 0.663,
+     "runs": 0.218,
+     "bench": 0.669
     },
     "built": {
      "gpu": true,
@@ -97097,10 +97097,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:28+00:00",
+    "date": "2026-09-17T01:05:10+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -97125,7 +97125,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003493443898021111,
+    "deviation": 0.00031509096610226445,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
     "machine": {
@@ -97160,16 +97160,16 @@
       }
      }
     },
-    "best_ms": 1.1569091712727266,
-    "second_ms": 1.3981988728046417,
+    "best_ms": 0.8568604429562886,
+    "second_ms": 1.0464449573207546,
     "candidates": 18,
     "accepted": 18,
-    "benched": 7,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.434,
-     "runs": 0.323,
-     "bench": 0.465
+     "oracle": 0.653,
+     "runs": 0.219,
+     "bench": 0.667
     },
     "built": {
      "gpu": true,
@@ -97289,10 +97289,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:30+00:00",
+    "date": "2026-09-17T01:05:12+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -97317,7 +97317,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003450006903384141,
+    "deviation": 0.00035978647652264465,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
     "machine": {
@@ -97352,16 +97352,16 @@
       }
      }
     },
-    "best_ms": 1.1550418594304253,
-    "second_ms": 1.4029165846960885,
+    "best_ms": 0.8539477348327636,
+    "second_ms": 1.045642363058554,
     "candidates": 18,
     "accepted": 18,
-    "benched": 8,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.431,
-     "runs": 0.326,
-     "bench": 0.532
+     "oracle": 0.549,
+     "runs": 0.217,
+     "bench": 0.67
     },
     "built": {
      "gpu": true,
@@ -98978,19 +98978,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:20+00:00",
+    "date": "2026-09-17T01:05:00+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -99015,7 +99015,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002966951609405733,
+    "deviation": 0.00022258165030476608,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -99050,16 +99050,16 @@
       }
      }
     },
-    "best_ms": 0.014282933726227028,
-    "second_ms": 0.014594372178278041,
+    "best_ms": 0.01396844594314279,
+    "second_ms": 0.014463431028028328,
     "candidates": 18,
     "accepted": 18,
-    "benched": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 0.18,
-     "bench": 2.829
+     "runs": 0.015,
+     "bench": 2.43
     },
     "built": {
      "gpu": true,
@@ -100874,19 +100874,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:40:38+00:00",
+    "date": "2026-09-17T01:04:15+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -100911,7 +100911,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00043193110688122765,
+    "deviation": 0.00026074692836829957,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -100946,16 +100946,16 @@
       }
      }
     },
-    "best_ms": 0.01449068270347945,
-    "second_ms": 0.014920961941427351,
+    "best_ms": 0.020556133832491684,
+    "second_ms": 0.038710362950347105,
     "candidates": 18,
     "accepted": 18,
-    "benched": 16,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.001,
-     "runs": 0.152,
-     "bench": 3.127
+     "oracle": 0.0,
+     "runs": 0.016,
+     "bench": 0.413
     },
     "built": {
      "gpu": true,
@@ -102793,20 +102793,20 @@
   "(1, 80, 1, 26, 512, 1, 26, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_BHW": 64,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
-    "num_warps": 2,
-    "num_stages": 2,
+    "num_warps": 4,
+    "num_stages": 3,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:11+00:00",
+    "date": "2026-09-17T01:05:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -102831,7 +102831,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00038575226909210353,
+    "deviation": 0.00037153642175056,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -102866,16 +102866,16 @@
       }
      }
     },
-    "best_ms": 0.03206192543968002,
-    "second_ms": 0.03568549439451604,
+    "best_ms": 0.04486845043913418,
+    "second_ms": 0.049005714394561535,
     "candidates": 18,
     "accepted": 18,
-    "benched": 16,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.003,
-     "runs": 0.16,
-     "bench": 2.539
+     "oracle": 0.004,
+     "runs": 0.023,
+     "bench": 0.378
     },
     "built": {
      "gpu": true,
@@ -102987,7 +102987,7 @@
     "kwargs": {
      "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -102995,10 +102995,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:14+00:00",
+    "date": "2026-09-17T01:05:50+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -103023,7 +103023,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00026314487865932226,
+    "deviation": 0.00026291240804042384,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -103058,16 +103058,16 @@
       }
      }
     },
-    "best_ms": 0.0583348611918275,
-    "second_ms": 0.0684049471354942,
+    "best_ms": 0.07337769901562749,
+    "second_ms": 0.07617946633476816,
     "candidates": 18,
     "accepted": 18,
-    "benched": 15,
+    "benched": 5,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.016,
-     "runs": 0.175,
-     "bench": 1.993
+     "oracle": 0.017,
+     "runs": 0.026,
+     "bench": 0.796
     },
     "built": {
      "gpu": true,
@@ -105202,10 +105202,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:10+00:00",
+    "date": "2026-09-17T01:04:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -105230,7 +105230,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00041827498516889205,
+    "deviation": 0.0002582809033708326,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -105265,16 +105265,16 @@
       }
      }
     },
-    "best_ms": 0.0849564434937489,
-    "second_ms": 0.10170622799228712,
+    "best_ms": 0.0853034487910687,
+    "second_ms": 0.102806296536038,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.059,
-     "runs": 0.47,
-     "bench": 1.649
+     "oracle": 0.032,
+     "runs": 0.544,
+     "bench": 1.703
     },
     "built": {
      "gpu": true,
@@ -105394,10 +105394,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:17+00:00",
+    "date": "2026-09-17T01:04:58+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -105422,7 +105422,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0004306391862952901,
+    "deviation": 0.00023477743559324334,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -105457,16 +105457,16 @@
       }
      }
     },
-    "best_ms": 0.18850268794115257,
-    "second_ms": 0.28015546411720677,
+    "best_ms": 0.11687437965962533,
+    "second_ms": 0.1223333812852347,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.011,
-     "runs": 0.214,
-     "bench": 1.029
+     "oracle": 0.008,
+     "runs": 0.084,
+     "bench": 0.769
     },
     "built": {
      "gpu": true,
@@ -105586,10 +105586,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:08+00:00",
+    "date": "2026-09-17T01:04:49+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -105614,7 +105614,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00035036927720908534,
+    "deviation": 0.0003906220042967089,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -105649,16 +105649,16 @@
       }
      }
     },
-    "best_ms": 0.5533305501592332,
-    "second_ms": 0.6890782830970628,
+    "best_ms": 0.3488331862069942,
+    "second_ms": 0.37914623916149137,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.038,
-     "runs": 0.582,
-     "bench": 0.758
+     "oracle": 1.101,
+     "runs": 0.621,
+     "bench": 0.565
     },
     "built": {
      "gpu": true,
@@ -105778,10 +105778,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:13+00:00",
+    "date": "2026-09-17T01:04:54+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -105806,7 +105806,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003413637953157445,
+    "deviation": 0.0003533229054243332,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -105841,16 +105841,16 @@
       }
      }
     },
-    "best_ms": 0.553731710150622,
-    "second_ms": 0.6914194236908641,
+    "best_ms": 0.3467689074997632,
+    "second_ms": 0.3848989389988841,
     "candidates": 18,
     "accepted": 18,
-    "benched": 10,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.047,
-     "runs": 0.595,
-     "bench": 0.688
+     "oracle": 1.089,
+     "runs": 0.611,
+     "bench": 0.56
     },
     "built": {
      "gpu": true,
@@ -105970,10 +105970,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:15+00:00",
+    "date": "2026-09-17T01:04:56+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -105998,7 +105998,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003688038593792996,
+    "deviation": 0.0003858117479109861,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -106033,16 +106033,16 @@
       }
      }
     },
-    "best_ms": 0.5538207534430684,
-    "second_ms": 0.6907422851238932,
+    "best_ms": 0.34669037135662856,
+    "second_ms": 0.3967730519018675,
     "candidates": 18,
     "accepted": 18,
-    "benched": 9,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.046,
-     "runs": 0.668,
-     "bench": 0.618
+     "oracle": 1.086,
+     "runs": 0.626,
+     "bench": 0.765
     },
     "built": {
      "gpu": true,
@@ -108082,10 +108082,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:46+00:00",
+    "date": "2026-09-17T01:05:28+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -108110,7 +108110,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003715204114046181,
+    "deviation": 0.00023926182301544768,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -108145,16 +108145,16 @@
       }
      }
     },
-    "best_ms": 0.14428030413414356,
-    "second_ms": 0.18558933259919286,
+    "best_ms": 0.1480225573797695,
+    "second_ms": 0.184937401607479,
     "candidates": 18,
     "accepted": 18,
-    "benched": 12,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.124,
-     "runs": 0.969,
-     "bench": 1.215
+     "oracle": 0.173,
+     "runs": 0.992,
+     "bench": 1.29
     },
     "built": {
      "gpu": true,
@@ -108264,7 +108264,7 @@
   "(1, 96, 1, 32774, 1, 1, 32768, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
@@ -108274,10 +108274,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:49+00:00",
+    "date": "2026-09-17T01:05:32+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -108302,7 +108302,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00025775875988977,
+    "deviation": 0.0003670313028718614,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -108337,16 +108337,16 @@
       }
      }
     },
-    "best_ms": 0.36101233402145244,
-    "second_ms": 0.5778569525747157,
+    "best_ms": 0.17527364913243146,
+    "second_ms": 0.1995282961446562,
     "candidates": 18,
     "accepted": 18,
-    "benched": 9,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.02,
-     "runs": 0.248,
-     "bench": 0.667
+     "oracle": 0.031,
+     "runs": 0.188,
+     "bench": 0.769
     },
     "built": {
      "gpu": true,
@@ -108466,10 +108466,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:43+00:00",
+    "date": "2026-09-17T01:05:25+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -108494,7 +108494,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00028368706497022855,
+    "deviation": 0.0003994748411116858,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
     "machine": {
@@ -108529,16 +108529,16 @@
       }
      }
     },
-    "best_ms": 0.923622856537501,
-    "second_ms": 1.1984959952533245,
+    "best_ms": 0.5828887260321415,
+    "second_ms": 0.731116680604107,
     "candidates": 18,
     "accepted": 18,
-    "benched": 6,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.019,
-     "runs": 0.425,
-     "bench": 0.399
+     "oracle": 0.021,
+     "runs": 0.327,
+     "bench": 0.492
     },
     "built": {
      "gpu": true,
@@ -108658,10 +108658,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:47+00:00",
+    "date": "2026-09-17T01:05:29+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -108686,7 +108686,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00024616206448537913,
+    "deviation": 0.0004353865543579502,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
     "machine": {
@@ -108721,16 +108721,16 @@
       }
      }
     },
-    "best_ms": 0.924111239966892,
-    "second_ms": 1.2004159986972809,
+    "best_ms": 0.5815544218728037,
+    "second_ms": 0.7412190827039572,
     "candidates": 18,
     "accepted": 18,
-    "benched": 6,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.019,
-     "runs": 0.418,
-     "bench": 0.4
+     "oracle": 0.021,
+     "runs": 0.321,
+     "bench": 0.49
     },
     "built": {
      "gpu": true,
@@ -108850,10 +108850,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:48+00:00",
+    "date": "2026-09-17T01:05:30+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -108878,7 +108878,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00024741210886999036,
+    "deviation": 0.0004440404320438132,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
     "machine": {
@@ -108913,16 +108913,16 @@
       }
      }
     },
-    "best_ms": 0.923233524674461,
-    "second_ms": 1.2006554757395098,
+    "best_ms": 0.5816940629121029,
+    "second_ms": 0.7426172334414262,
     "candidates": 18,
     "accepted": 18,
-    "benched": 6,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.02,
-     "runs": 0.418,
-     "bench": 0.4
+     "runs": 0.312,
+     "bench": 0.487
     },
     "built": {
      "gpu": true,
@@ -112419,19 +112419,19 @@
    "config": {
     "kwargs": {
      "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_OUTF": 64,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 2,
+    "num_warps": 4,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:44:07+00:00",
+    "date": "2026-09-17T01:07:32+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -112456,7 +112456,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0004345327492556525,
+    "deviation": 0.00037032205038233526,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -112491,16 +112491,16 @@
       }
      }
     },
-    "best_ms": 0.6129208926170592,
-    "second_ms": 0.6375594685475031,
+    "best_ms": 5.207771437508719,
+    "second_ms": 5.37234285899571,
     "candidates": 18,
     "accepted": 18,
-    "benched": 10,
+    "benched": 11,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.017,
-     "runs": 34.585,
-     "bench": 0.684
+     "oracle": 1.072,
+     "runs": 37.698,
+     "bench": 0.906
     },
     "built": {
      "gpu": true,
@@ -112620,10 +112620,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:45:29+00:00",
+    "date": "2026-09-17T01:08:54+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -112648,7 +112648,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002885702093256625,
+    "deviation": 0.0002751830371250627,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-11 cols 0-11; batch 7 rows 24-35 cols 47-58; batch 13 rows 49-60 cols 95-106) of 14x60x106",
     "machine": {
@@ -112683,16 +112683,16 @@
       }
      }
     },
-    "best_ms": 187.55174255371094,
-    "second_ms": 195.67001342773438,
+    "best_ms": 168.19815063476562,
+    "second_ms": 199.52024841308594,
     "candidates": 18,
     "accepted": 18,
-    "benched": 8,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 7.625,
-     "runs": 52.259,
-     "bench": 19.887
+     "oracle": 9.442,
+     "runs": 56.071,
+     "bench": 14.565
     },
     "built": {
      "gpu": true,
@@ -113570,9 +113570,9 @@
   "(2, 256, 1, 340, 256, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
-     "BLOCK_SIZE_INF": 16
+     "BLOCK_SIZE_INF": 32
     },
     "num_warps": 2,
     "num_stages": 2,
@@ -113580,10 +113580,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:02+00:00",
+    "date": "2026-09-17T01:05:41+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -113608,7 +113608,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003113187260677734,
+    "deviation": 0.0003147286962954981,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -113643,16 +113643,16 @@
       }
      }
     },
-    "best_ms": 0.05417317458001985,
-    "second_ms": 0.055417253228136336,
+    "best_ms": 0.0757708747880262,
+    "second_ms": 0.07653708141800519,
     "candidates": 18,
     "accepted": 18,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.003,
-     "runs": 0.068,
-     "bench": 2.258
+     "runs": 0.073,
+     "bench": 1.896
     },
     "built": {
      "gpu": true,
@@ -113772,10 +113772,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:08+00:00",
+    "date": "2026-09-17T01:05:48+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -113800,7 +113800,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003441917511137384,
+    "deviation": 0.0003237825731858705,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -113835,16 +113835,16 @@
       }
      }
     },
-    "best_ms": 0.03387298438573659,
-    "second_ms": 0.03738737799641159,
+    "best_ms": 0.044829084991051295,
+    "second_ms": 0.053222793902342136,
     "candidates": 18,
     "accepted": 18,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.002,
-     "runs": 0.024,
-     "bench": 2.368
+     "runs": 0.027,
+     "bench": 2.159
     },
     "built": {
      "gpu": true,
@@ -113954,20 +113954,20 @@
   "(2, 256, 1, 342, 256, 1, 340, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:57+00:00",
+    "date": "2026-09-17T01:05:38+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -113992,7 +113992,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00032901712072411183,
+    "deviation": 0.00035161294950040783,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -114027,16 +114027,16 @@
       }
      }
     },
-    "best_ms": 0.1304544123462202,
-    "second_ms": 0.13310454672507008,
+    "best_ms": 0.14353493340313433,
+    "second_ms": 0.15835395495816054,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 10,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.137,
-     "runs": 0.07,
-     "bench": 1.322
+     "oracle": 0.151,
+     "runs": 0.072,
+     "bench": 1.114
     },
     "built": {
      "gpu": true,
@@ -116735,7 +116735,7 @@
   "(2, 320, 1, 340, 256, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_BHW": 32,
      "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
@@ -116745,10 +116745,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:00+00:00",
+    "date": "2026-09-17T01:05:39+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -116773,7 +116773,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002699100675012139,
+    "deviation": 0.00028235990473554526,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -116808,16 +116808,16 @@
       }
      }
     },
-    "best_ms": 0.06432244053398602,
-    "second_ms": 0.06570249032902431,
+    "best_ms": 0.08986566082205412,
+    "second_ms": 0.09090723489668776,
     "candidates": 18,
     "accepted": 18,
-    "benched": 15,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.003,
-     "runs": 0.159,
-     "bench": 2.42
+     "oracle": 0.004,
+     "runs": 0.084,
+     "bench": 0.842
     },
     "built": {
      "gpu": true,
@@ -116937,10 +116937,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:41:56+00:00",
+    "date": "2026-09-17T01:05:37+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -116965,7 +116965,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00034600482275967925,
+    "deviation": 0.0003319633070147089,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -117000,16 +117000,16 @@
       }
      }
     },
-    "best_ms": 0.1604394933468179,
-    "second_ms": 0.1626216289759786,
+    "best_ms": 0.1904154073782068,
+    "second_ms": 0.19519911648818802,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.172,
-     "runs": 0.216,
-     "bench": 1.204
+     "oracle": 0.191,
+     "runs": 0.088,
+     "bench": 0.603
     },
     "built": {
      "gpu": true,
@@ -118855,10 +118855,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:06+00:00",
+    "date": "2026-09-17T01:05:45+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -118883,7 +118883,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002334482204010211,
+    "deviation": 0.00024754156786143956,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -118918,16 +118918,16 @@
       }
      }
     },
-    "best_ms": 0.09313869131261972,
-    "second_ms": 0.09551228291409856,
+    "best_ms": 0.12349583247637415,
+    "second_ms": 0.12520951232344835,
     "candidates": 18,
     "accepted": 18,
     "benched": 12,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.005,
-     "runs": 0.066,
-     "bench": 1.751
+     "runs": 0.078,
+     "bench": 1.526
     },
     "built": {
      "gpu": true,
@@ -119037,20 +119037,20 @@
   "(2, 512, 1, 342, 256, 1, 340, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
-     "BLOCK_SIZE_BHW": 64,
-     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
      "BLOCK_SIZE_INF": 16
     },
-    "num_warps": 4,
+    "num_warps": 2,
     "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:42:04+00:00",
+    "date": "2026-09-17T01:05:43+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -119075,7 +119075,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0002755512269518384,
+    "deviation": 0.0002787332763613267,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -119110,16 +119110,16 @@
       }
      }
     },
-    "best_ms": 0.24606159485243503,
-    "second_ms": 0.252233879378178,
+    "best_ms": 0.26327449560165406,
+    "second_ms": 0.2773447102970547,
     "candidates": 18,
     "accepted": 18,
-    "benched": 11,
+    "benched": 6,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.278,
-     "runs": 0.1,
-     "bench": 0.993
+     "oracle": 0.909,
+     "runs": 0.219,
+     "bench": 0.536
     },
     "built": {
      "gpu": true,
@@ -122113,10 +122113,10 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-14T00:43:31+00:00",
+    "date": "2026-09-17T01:06:52+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.6.0",
+     "triton": "3.8.0",
      "name": "cuda"
     },
     "shape": [
@@ -122141,7 +122141,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003129425366254843,
+    "deviation": 0.0003048977289739286,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-30 cols 0-53; batch 14 rows 0-30 cols 0-53; batch 27 rows 0-30 cols 0-53) of 28x30x53",
     "machine": {
@@ -122176,16 +122176,16 @@
       }
      }
     },
-    "best_ms": 3.779481554031372,
-    "second_ms": 3.8014976739883424,
+    "best_ms": 12.71944522857666,
+    "second_ms": 14.047743797302246,
     "candidates": 18,
     "accepted": 18,
-    "benched": 2,
+    "benched": 7,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 1.742,
-     "runs": 13.286,
-     "bench": 0.145
+     "oracle": 1.996,
+     "runs": 18.977,
+     "bench": 1.066
     },
     "built": {
      "gpu": true,
