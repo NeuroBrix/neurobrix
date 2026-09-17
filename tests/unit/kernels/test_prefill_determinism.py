@@ -310,25 +310,8 @@ def _gpu_classes():
     The ordinals below come from the same runtime that will serve the
     allocation, so the answer cannot disagree with it.
     """
-    # SMALL and BIG here are the RIG's card classes — a V100-16G against a
-    # V100-32G — and the routing rules below are calibrated for them. They are
-    # not a property every backend has.
-    #
-    # Measured 2026-09-17 on an M4 Pro: `visible_device_memory()` reports a
-    # steady 18186 MiB (Metal's recommended working set on a 26 GB unified
-    # machine; it does NOT move with load, sampled across a 2 GiB allocation).
-    # 18186 is under the 20000 threshold, so this Mac was classed "small" and
-    # the 16 GB-card window test ran against it, asserting `chunked` and getting
-    # `math`. That is not a routing defect: the decision consults the real
-    # device while the profile is faked, and a 26 GB unified machine is not a
-    # 16 GB card. Reporting the true 26 GB instead would be worse — the
-    # recommended working set IS the honest "how much can I use" figure here.
-    #
-    # So the classes are refused on a backend that does not have them, by name.
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator, _detect_gpu_backend
-        if _detect_gpu_backend() != "cuda":
-            return None, None
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
         devs = DeviceAllocator.visible_device_memory()
     except Exception:
         return None, None
@@ -357,6 +340,43 @@ def _stash_real_profile():
         W._NBX_HAS_NATIVE_BF16 = prev_flag
 
     return _restore
+
+
+
+def _rig_cards_or_skip():
+    """The rig's card classes, or a skip that names why they are not here.
+
+    SMALL and BIG below are a V100-16G against a V100-32G, and the routing rules
+    they feed are calibrated for those cards. That is a property of THIS RACK,
+    not of every backend.
+
+    Measured 2026-09-17 on an M4 Pro: `visible_device_memory()` reports a steady
+    18186 MiB — Metal's recommended working set on a 26 GB unified machine, and
+    it does NOT move with load (sampled across a 2 GiB allocation). 18186 is
+    under the 20000 threshold, so this Mac classed as "small" and the 16 GB-card
+    window test ran against it, asserting `chunked` and getting `math`. That is
+    not a routing defect: the decision consults the REAL device while the profile
+    is faked, and a 26 GB unified machine is not a 16 GB card. Reporting the true
+    26 GB instead would be worse — the recommended working set is the honest
+    "how much can I use" figure on Metal.
+
+    The check lives HERE and not in `_gpu_classes`, because that function is the
+    ordinal MAPPING and `test_the_device_classes_come_from_the_visible_mask`
+    pins it with a mocked device list — a backend guard inside it would defeat
+    that mock and did (2026-09-17, caught the same day).
+    """
+    import pytest
+
+    from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+
+    try:
+        backend = _detect_gpu_backend()
+    except Exception:
+        backend = None
+    if backend != "cuda":
+        pytest.skip(f"the 16G/32G card classes are this rack's; backend here is "
+                    f"{backend!r}, which has no such split")
+    return _gpu_classes()
 
 
 def _route_spy(q_shape, kv_shape, device_idx):
@@ -409,7 +429,7 @@ def test_16g_nonpow2_window_routes_chunked_on_device() -> None:
     math (OOM class); the un-capped non-pow2 fallthrough was silent
     flash (band-risk class). Both are wrong answers here."""
     import pytest
-    small, _ = _gpu_classes()
+    small, _ = _rig_cards_or_skip()
     if small is None:
         pytest.skip("no <20GB GPU on this host")
     restore = _stash_real_profile()
@@ -429,7 +449,7 @@ def test_32g_pow2_window_keeps_prefix_route_on_device() -> None:
     byte-identical to the pre-fix decision. THE 32G no-change proof by
     activation, not arithmetic."""
     import pytest
-    _, big = _gpu_classes()
+    _, big = _rig_cards_or_skip()
     if big is None:
         pytest.skip("no >=20GB GPU on this host")
     restore = _stash_real_profile()
