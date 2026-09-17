@@ -73,6 +73,34 @@ def _backend() -> str | None:
         return None
 
 
+def _arm_timeout(backend: str | None) -> int:
+    """How long ONE arm may take, by backend — an environment fact, not this
+    test's subject.
+
+    The flat 1200 s was written for "~2-3 min on a free V100". It expired
+    mid-arm on an M4 Pro, the subprocess was killed, and the last line it had
+    printed was `[3/4] Loading runtime...`, which reads as a hang during load.
+    It is not one. Measured 2026-09-17, same model, same prompt, no replay
+    environment:
+
+        --max-tokens 1      4.50 s    load + prefill, autotune misses 0
+        --max-tokens 120  365.39 s    engine rc=0
+
+    so 3.03 s/token, and the load the traceback appeared to blame costs 4.5 s
+    of it. `[3/4]` is simply the last line printed before generation begins.
+    An arm is therefore ~6 minutes here BEFORE the replay environment these
+    arms add, against the 2-3 minutes the number was chosen for.
+
+    Raising it rather than generating fewer tokens: the token count is what
+    makes the crossing certain, and `frozen >= 2` below is what would catch it
+    if it stopped crossing. Trading a guaranteed crossing for a shorter run
+    would put the test's subject at risk to save wall-clock, which is the wrong
+    trade — and the vacuity guard failing loudly is not a reason to walk toward
+    it deliberately.
+    """
+    return 1200 if backend == "cuda" else 3600
+
+
 def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
     backend = _backend()
     env = dict(os.environ)
@@ -102,7 +130,7 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
          "--prompt", _PROMPT, "--max-tokens", "120",
          "--temperature", "0", "--triton", "--output", str(out)],
         env=env, cwd=str(REPO), capture_output=True, text=True,
-        timeout=1200)
+        timeout=_arm_timeout(backend))
     assert r.returncode == 0, (
         f"{tag} failed rc={r.returncode}:\n{r.stdout[-800:]}\n{r.stderr[-400:]}")
     sha = hashlib.sha256(out.read_bytes()).hexdigest()
