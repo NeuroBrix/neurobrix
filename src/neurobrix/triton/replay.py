@@ -515,7 +515,8 @@ _ACTIVE_SLABS: List["SlabAllocator"] = []
 class _NBXLaunch:
     """One prepared kernel, called the way `CompiledKernel.run` is called."""
 
-    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata")
+    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata",
+                 "names", "types")
 
     def __init__(self, prep, kinds):
         self.prep = prep
@@ -523,6 +524,20 @@ class _NBXLaunch:
         self.name = prep.name
         self.function = prep.function
         self.packed_metadata = None
+        # The launcher hands a driver the parameter NAMES and TYPES beside the
+        # values, and a backend that packs its scalars into one buffer computes
+        # the field offsets FROM THOSE TYPES. The recorded tuple carries only
+        # `(kind, value)`, so replay used to drop both — which on triton-ext is
+        # a refusal by name ("Launching without them would pack to the wrong
+        # offsets WITHOUT failing"), and the replay path simply could not drive
+        # that backend. The fork's driver did not need them, so nothing said so.
+        #
+        # They do not belong in the RECORD: they are a property of the
+        # compilation, identical for every launch of this specialisation, and
+        # `prep.signature` already holds them. Derived here, once per adapter.
+        runtime = [(n, t) for n, t in prep.signature.items() if t != "constexpr"]
+        self.names = [n for n, _t in runtime]
+        self.types = [t for _n, t in runtime]
 
     def run(self, g0, g1, g2, stream, function, packed_metadata,
             launch_md, enter_hook, exit_hook, *vals):
@@ -536,6 +551,7 @@ class _NBXLaunch:
         active_driver().launch(self.prep.function, (g0, g1, g2), self.prep.block,
                                self.prep.shared, stream,
                                list(zip(self.kinds, vals)),
+                               names=self.names, types=self.types,
                                trailing=self.prep.trailing)
 
 

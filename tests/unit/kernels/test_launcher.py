@@ -13,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from tests.unit.child_env import child_env
+
 SRC = Path(__file__).resolve().parents[3] / "src"
 
 
@@ -77,8 +79,9 @@ assert buf.view(np.float32)[5] == 10.0, buf.view(np.float32)[:8]
 print("torch" in sys.modules)
 """
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600,
-                         env={"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin", "CUDA_VISIBLE_DEVICES": "0",
-                              "HOME": str(Path.home())})
+                         env=child_env({"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin",
+                                        "CUDA_VISIBLE_DEVICES": "0",
+                                        "HOME": str(Path.home())}))
     assert out.returncode == 0, out.stderr[-1500:]
     assert out.stdout.strip() == "False", f"the launch path pulled torch:\n{out.stderr[-800:]}"
 
@@ -142,8 +145,10 @@ assert np.isfinite(buf.view(np.float16).astype(np.float32)).all()
 print("torch" in sys.modules)
 """
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=1200,
-                         env={"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin", "CUDA_VISIBLE_DEVICES": "0",
-                              "HOME": str(Path.home()), "NBX_DISABLE_AUTOTUNE": "0"})
+                         env=child_env({"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin",
+                                        "CUDA_VISIBLE_DEVICES": "0",
+                                        "HOME": str(Path.home()),
+                                        "NBX_DISABLE_AUTOTUNE": "0"}))
     assert out.returncode == 0, out.stderr[-1500:]
     assert out.stdout.strip() == "False", f"the autotuned launch path pulled torch:\n{out.stderr[-800:]}"
 
@@ -186,9 +191,23 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     assert any(kind == "ptr" for kind, _v in params), "no pointer in the record"
     once = _host(a_r, np.float32).copy()
 
-    # The record alone launches the same kernel again, through the driver the replay
-    # uses: the halving applies a second time.
-    active_driver().launch(prep.function, rec_grid, prep.block, prep.shared, 0, params)
+    # The record PLUS THE PREPARATION launches the same kernel again, through the
+    # driver the replay uses: the halving applies a second time.
+    #
+    # It said "the record alone" until 2026-09-17, and made the call without
+    # `names`/`types`. That stopped being true when the Metal backend became
+    # triton-ext, which packs every scalar into ONE buffer and computes the
+    # field offsets from the Triton types — so it refuses a launch without them
+    # BY NAME, rather than packing to the wrong offsets silently. The types are
+    # not in the record and should not be: they are a property of the
+    # compilation, identical for every launch of this specialisation, and
+    # `prep.signature` already holds them. `replay._NBXLaunch` derives them the
+    # same way, which is what makes the replay path work on that backend at all.
+    runtime = [(n, t) for n, t in prep.signature.items() if t != "constexpr"]
+    active_driver().launch(prep.function, rec_grid, prep.block, prep.shared, 0, params,
+                           names=[n for n, _t in runtime],
+                           types=[t for _n, t in runtime],
+                           trailing=prep.trailing)
     assert np.array_equal(_host(a_r, np.float32), once * 0.5)
 
     seen.clear()

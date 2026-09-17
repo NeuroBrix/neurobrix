@@ -249,7 +249,10 @@ from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
 from .ops.index_add import index_add_gather_kernel
 from .ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
-from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
+from .ops.sort_op import (radix_sort_histogram_kernel,
+                          radix_sort_scatter_kernel,
+                          radix_sort_tile_counts_kernel,
+                          radix_sort_tile_prefix_kernel)
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
 
@@ -5980,7 +5983,9 @@ def sort_wrapper(x, dim: int = -1,
     from .ops.sort_op import (
         convert_to_uint_preserve_order,
         radix_sort_histogram_kernel,
-        radix_sort_sweep_kernel,
+        radix_sort_tile_counts_kernel,
+        radix_sort_tile_prefix_kernel,
+        radix_sort_scatter_kernel,
     )
     import math as _math
 
@@ -6042,7 +6047,11 @@ def sort_wrapper(x, dim: int = -1,
     grid_r = triton.cdiv(num_bins, TILE_R)
     SWEEP_TILE = 2048
     sweep_grid_n = triton.cdiv(n, SWEEP_TILE)
+    # `status` holds each tile's per-bin COUNT; `tile_prefix` the exclusive scan
+    # of those counts along the tile axis. Two buffers of the same shape, and
+    # the second is what the scatter reads instead of spinning on the first.
     status = NBXTensor.empty((m, num_bins, sweep_grid_n), device=x.device, dtype=NBXDtype.int32)
+    tile_prefix = NBXTensor.empty((m, num_bins, sweep_grid_n), device=x.device, dtype=NBXDtype.int32)
 
     # Stage 2: sweep per radix pass. OUT_N is the STATUS row stride the
     # kernel indexes with pid_n ∈ [0, sweep_grid_n) — it must be the CTA
@@ -6051,9 +6060,21 @@ def sort_wrapper(x, dim: int = -1,
     for i in range(n_passes):
         status.fill_(0)
         _set_device(arr_in)
-        radix_sort_sweep_kernel[(m * sweep_grid_n, grid_r)](
+        # THREE launches, not one. The single-kernel form carried a decoupled
+        # lookback — a cross-CTA spin — which Triton does not order and Metal
+        # does not make co-resident: measured wrong from n=2049 (the first size
+        # past one 2048 tile), losing elements. `cumsum_wrapper` in this file
+        # already does its cross-tile scan as separate launches and is correct
+        # at eight tiles; this follows it.
+        radix_sort_tile_counts_kernel[(m * sweep_grid_n, grid_r)](
+            arr_in, status, m, n, sweep_grid_n,
+            SWEEP_TILE, TILE_R, k_bits, i * k_bits, descending)
+        radix_sort_tile_prefix_kernel[(m * num_bins,)](
+            status, tile_prefix, sweep_grid_n, sweep_grid_n,
+            TILES_POW2=triton.next_power_of_2(sweep_grid_n))
+        radix_sort_scatter_kernel[(m * sweep_grid_n, grid_r)](
             arr_in, indices_in, arr_out, indices_out,
-            ex_cumsum, status,
+            ex_cumsum, tile_prefix,
             n_passes, i, i * k_bits, m, n, sweep_grid_n,
             SWEEP_TILE, TILE_R, k_bits, descending)
         arr_in, arr_out = arr_out, arr_in
