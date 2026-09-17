@@ -2121,6 +2121,13 @@ def _set_device(t):
         DeviceAllocator.ensure_triton_device(t._device_idx)
 
 
+#: This engine names its backends for the vendor RUNTIME it loads (`cuda`, `hip`,
+#: `metal`); Triton names its own for the vendor's COMPILER target, which is the
+#: directory under `triton/backends/`. The two vocabularies are not the same and
+#: the mapping between them belongs here, once.
+_TRITON_BACKEND_BY_RUNTIME = {"cuda": "nvidia", "hip": "amd", "metal": "metal"}
+
+
 def _pin_triton_backend(name: str) -> str:
     """Tell Triton which backend is here, then return the name.
 
@@ -2136,8 +2143,30 @@ def _pin_triton_backend(name: str) -> str:
     directly and probe nothing else. We already know the answer here — this
     function found it without importing anything — so we say so. `setdefault`,
     because an explicit choice by the user or a test outranks ours.
+
+    **The name has to be TRITON'S, and ours is not.** This engine's backends are
+    called `cuda`, `hip` and `metal`; Triton's registry keys are the directory
+    names under `triton/backends/` — `nvidia` and `amd` — and `_create_driver`
+    raises `Unknown backend device '<name>'` on anything else. Pinning `cuda` was
+    therefore always wrong and never showed, because this engine's launcher does
+    every launch itself and never asks Triton for a driver. It showed the moment
+    a launch went down Triton's own path: torch 2.14 ships in-tree Triton ops and
+    the seam now hands those back to Triton, which then read the pin (2026-09-17).
+
+    A name Triton does not have is worse than no pin at all, so the mapped name is
+    checked against Triton's own registry when that can be read without probing —
+    `triton.backends` is a dict built at import and `is_active()` runs only inside
+    `_create_driver` — and the pin is skipped rather than set to something that
+    raises.
     """
-    os.environ.setdefault("TRITON_DEFAULT_BACKEND", name)
+    triton_name = _TRITON_BACKEND_BY_RUNTIME.get(name, name)
+    try:
+        from triton.backends import backends as _triton_backends
+        if triton_name not in _triton_backends:
+            return name                       # do not pin a name Triton would refuse
+    except Exception:                         # noqa: BLE001 — no Triton, or a shape we do not know
+        pass
+    os.environ.setdefault("TRITON_DEFAULT_BACKEND", triton_name)
     return name
 
 
