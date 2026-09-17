@@ -218,6 +218,40 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
         time.sleep(poll)
 
 
+def refuse_a_producer_that_will_wait_for_us(producer_pids, parent_pid) -> str:
+    """The message refusing a producer that is our own parent shell, or "".
+
+    The contract in this file's header is that the checkpointer holds its
+    PRODUCERS and exits when the last is gone, "so a chain can wait on IT".
+    Naming the chain itself as the producer inverts that into a mutual wait:
+    the chain waits for this process, this process waits for the chain, and
+    neither moves again.
+
+    That is not hypothetical. `reproof_t38_v2.sh` passed `--producer-pid $$`
+    and then ran `wait` over its own job table. All four certifiers finished
+    (card 3 at 02:53, card 1 at 02:57, card 2 at 04:13 — 4172 and 5942 shapes
+    proven) and the chain never wrote `== reproof t38 done`. It sat there for
+    the eight hours after its work was complete, and a waiter on that marker
+    would have starved behind a chain that had already succeeded — register 55
+    exactly, from the other side.
+
+    The producers are the processes doing the WORK — the certifiers — not the
+    shell that schedules them. When those are launched later and their pids are
+    not known up front, the shell should `wait` for them itself and let this
+    process go when it exits, passing `--allow-parent-as-producer` to say that
+    is what it means.
+    """
+    if parent_pid in set(producer_pids):
+        return ("REFUSED: --producer-pid %d is the shell that launched this checkpointer.\n"
+                "  It holds that shell, so if that shell also waits on this process neither ever\n"
+                "  moves (reproof_t38_v2.sh, 2026-09-17: all work done by 04:13, marker never\n"
+                "  written, eight hours stuck).\n"
+                "  Pass the pids of the processes doing the WORK instead, or\n"
+                "  --allow-parent-as-producer if that shell will not wait on this one."
+                % parent_pid)
+    return ""
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Commit and push the certified directory while it is written.")
     p.add_argument("--repo", required=True)
@@ -234,7 +268,14 @@ def main(argv=None) -> int:
                         "(default: the engine's `autotune check --dir`)")
     p.add_argument("--label", default="", help="a short name for the pass, in each commit's subject")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--allow-parent-as-producer", action="store_true",
+                   help="permit --producer-pid to name the shell that launched this "
+                        "checkpointer; only correct if that shell will NOT wait on it")
     a = p.parse_args(argv)
+    deadlock = refuse_a_producer_that_will_wait_for_us(a.producer_pid, os.getppid())
+    if deadlock and not a.allow_parent_as_producer:
+        print(deadlock, file=sys.stderr)
+        return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
     return run(a.repo, a.dir, a.producer_pid, a.interval, [r for r in a.remotes.split(",") if r], gate,
                a.trailer, a.record, once=a.once, poll=a.poll, label=a.label)
