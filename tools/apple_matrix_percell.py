@@ -16,6 +16,29 @@ def available_mb():
     from neurobrix.core.host_memory import memory_state
     return memory_state().available_mb
 
+def measured_peak_mb(model):
+    """The largest DEVICE-LIVE footprint actually seen for this model here.
+
+    Prism's plan is an estimate and has been measured wrong by an order of
+    magnitude: hat-s-x4 planned 278 MB and held 8408 MB live at autotune time on
+    an M4 Pro, taking the machine from 18133 MB available to 127 MB and then a
+    SIGKILL. A gate fed the estimate alone cannot refuse that cell, because 278
+    x 1.25 fits anything.
+    """
+    import json
+    f = Path(__file__).resolve().parent / "measured_peaks.json"
+    try:
+        rec = json.loads(f.read_text()).get(model)
+    except Exception:
+        return None
+    if not rec:
+        return None
+    # peak CONSUMPTION over the whole attempt, not the instantaneous live
+    # figure at one autotune door — that understated it by 2.1x here
+    return int(rec.get("measured_peak_consumption_mb")
+               or rec["measured_live_mb"])
+
+
 def prism_need_mb(model, in_flag, in_val):
     """Prism's planned memory for this model, MB — the cell's estimated need."""
     env = dict(os.environ); env["PYTHONPATH"] = "src"
@@ -46,11 +69,18 @@ def main():
     rows = []
     for model, flag, val, kind in MODELS:
         avail = available_mb()
-        need = prism_need_mb(model, flag, val)
+        planned = prism_need_mb(model, flag, val)
+        measured = measured_peak_mb(model)
+        # the gate takes the LARGER: an estimate that has been contradicted by a
+        # measurement on this machine does not get to decide alone
+        need = max([n for n in (planned, measured) if n is not None], default=None)
         gate = None
         if need is not None and need * MARGIN > avail:
-            row = {"model": model, "gated_out": True, "need_mb": need, "available_mb": avail,
-                   "detail": f"not measured, need {need} MB * {MARGIN} > available {avail} MB"}
+            row = {"model": model, "gated_out": True, "need_mb": need,
+                   "planned_mb": planned, "measured_mb": measured, "available_mb": avail,
+                   "detail": (f"not measured, need {need} MB * {MARGIN} > available "
+                              f"{avail} MB (Prism planned {planned} MB; measured "
+                              f"{measured} MB live on this machine)")}
             print(f"[GATED] {model}: need {need}MB avail {avail}MB -> not measured", flush=True)
             rows.append(row); Path(out_dir/"rows.json").write_text(json.dumps(rows, indent=1)); continue
         print(f"[RUN] {model}: need {need}MB avail {avail}MB -> fits, running 3 modes", flush=True)
