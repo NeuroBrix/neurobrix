@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-70 entries, of which five are placeholders and 65 carry a site. Two
+71 entries, of which five are placeholders and 66 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1747,3 +1747,36 @@ in advance, never to the verdict that would rather be green.
 Both defects survived because the verdict lived inside `main()`, below eight subprocess
 launches — nothing could reach it without fifteen minutes of card time, so nothing ever did.
 It is now `build_report(rows, platform)`, pure, and the injections above run in 0.03 s.
+
+### 71 — a test that chose its card from NVML and then allocated with CUDA
+
+`tests/unit/kernels/test_prefill_determinism.py` proves the prefill route on BOTH memory
+classes: chunked inside the 16G window, plain math on a 32G card. To do that it has to find a
+card of each class, and it asked `nvidia-smi`.
+
+`CUDA_VISIBLE_DEVICES` is a CUDA-RUNTIME mask. It renumbers ordinals for everything that goes
+through libcuda — every allocation the test then makes. `nvidia-smi` answers from NVML, which
+sits outside that mask and always reports the whole board. On this rack the 32G cards are
+physical 2 and 3, so under `CUDA_VISIBLE_DEVICES=0` the helper returned `big=2`, the test
+declined to skip, and `_route_spy` asked for `cuda:2` on a process that owns exactly one
+ordinal. The suite went red at `DeviceAllocator.set_device(2)`.
+
+**It is not an error that reads as an error.** It is a WRONG ANSWER, because `2` is a valid
+integer in both namespaces and merely names different cards in each. Had the rack's classes
+been laid out the other way round the same helper would have returned a plausible ordinal, the
+test would have passed, and it would have proven the 32G route using a 16G card.
+
+Found on 2026-09-17 while checking that the launcher change (27b05cc4) had not regressed
+anything — so the cost was not only the red, it was a red sitting in the one suite being read
+as the verdict on an unrelated fix. That is the second time in one day that an always-red
+signal had to be cleared before a real question could be asked (see 70).
+
+**The rule**: decide in the namespace you are going to act in. A device index that will be
+handed to an allocator comes from the allocator — `DeviceAllocator.visible_device_memory()`,
+added for this and used by `most_free_device`'s caller path, whose inline copy of the same
+ctypes walk it replaces. NVML is the right authority for what the RACK has and the wrong one
+for what THIS PROCESS may touch.
+
+Seen red on the injection that restores the `nvidia-smi` helper: six of the seven new cells
+turn, and the original `test_32g_pow2_window_keeps_prefix_route_on_device` failure reproduces
+under the pin.
