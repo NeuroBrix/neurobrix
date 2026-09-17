@@ -292,6 +292,187 @@ family entirely (every conv entry in the directory carries the fp64 proof).
 
 ---
 
+## 4 — the engine stack both machines align on, 2026-09-16: torch 2.14.0 (cu126 on the rack) + Triton 3.8.0, Python 3.10
+
+* **owed by** the Dell (this rack) · **to** the Mac: align the engine environment on it;
+  the Mac's only divergence is the Triton version triton-ext pins for Metal, dictated upstream.
+* **what was measured here.** The CUDA door (`tools/stack_door.py`): `torch==2.14.0+cu126`
+  from `https://download.pytorch.org/whl/cu126` embeds CUDA 12.6 with archs
+  sm_50…sm_90 (sm_70 present) and sees the four V100s with their capabilities —
+  ACCEPTED. The PyPI `torch==2.14.0` wheel is the cu130 build (no sm_70) and
+  cu130/cu132 carry sm_75+: refused by the door. cu126 is the only cu12x of 2.14,
+  and 2.14 is the last PyTorch release with any CUDA 12.x wheel and the last with
+  Python 3.10 (2.15, 2026-10-28, drops both) — this rack's stack is terminal on
+  both axes at 2.14; what comes after is a source build against a 12.x toolkit,
+  or another rack. torch 2.14 requires `triton~=3.8.0` and installs `triton==3.8.0`.
+* **Triton 3.8.0, retained as the wheel torch pins — not 3.8.0 + cherry-picks, not
+  "3.8.1".** Facts: issue triton-lang#11735 names eleven correctness fixes on
+  `main` absent from `release/3.8.x` (the branch is 25 ahead / 551 behind main since
+  2026-06-23); the six PRs the reporter opened against the branch are all open with
+  no maintainer reply; no `[v3.8.1] Release Tracker` exists and Triton's RELEASE.md
+  says patch releases are optional — the 2026-10-21 date is PyTorch 2.15's GA minus
+  one week, stated nowhere as a 3.8.1 commitment. The cost of the picks: a source
+  build of Triton (LLVM prebuilt fetched, wall time unmeasured by any primary
+  source), thirteen upstream commits carried as a local fork (R25), and a stack the
+  other machine cannot reproduce from an index. The house kernels use none of the
+  constructs nine of the eleven fixes touch (`tl.softmax`, block pointers,
+  `tl.range(flatten=True)`, `tl.histogram`, `tl.gather`, `dot_scaled`, constexpr
+  list comprehensions with `if`, `tl.full(-0.0)`, TMA); the two that could reach
+  them silently — #11186 (`OptimizeThreadLocality` reordering reductions) and
+  #10353's `tl.dot` out-dtype change — are exactly what the kernel suite (928 tests
+  against torch), the certification screen (every setting against the fp64 oracle)
+  and the full battery measure. **So the wheel is the stack; the gates are its proof;
+  a source build with the picks is taken only if a gate reads a wrong result of
+  that class, and then said by name.**
+* **what 3.8 brings that we consume.** `knobs.autotuning.listener` (#10125): chosen
+  config, per-config timings, duration, disk-cache hit for every `@triton.autotune`
+  — our four autotuned kernels (mm, bmm, addmm, conv2d) get it as the observability
+  seam of certification instead of a rewrite. Deterministic JIT cache keys (#10494):
+  the on-disk Triton cache is invalidated once. `kernel_unload_hook` (#9444):
+  harmless for the NeuroBrix launcher, which loads its own modules through
+  `cuModuleLoadData`. Under 3.7+ the CUDA driver probe is native when torch is
+  absent (#9578/#10935): the R33 proof (`sys.modules` without torch after a
+  `--triton` run) is re-run on the new stack.
+* **THE BATTERY'S VERDICT, 2026-09-17 05:21 — RED, and the switch waits.** 5 failed, 79 passed
+  in 1 h 04, from the frozen worktree at `dd120774` whose directory had just been re-proven to
+  100 % on both memory classes. Two of the five are `D-DEEPSTACK-ZERO-EXTENT` (Qwen3-VL, the
+  two 57 GB re-traces still queued) and are not the stack. **Three are one defect and it IS the
+  stack**: the warm serving path of vlm, multimodal and image refuses `aten.bmm::0` a device
+  address the allocator never handed out. Same tree, same cell, only the interpreter changing,
+  three repetitions per arm alternating: 2.14.0+cu126 / 3.8.0 fails 3/3, 2.5.1+cu121 / 3.6.0
+  passes 3/3. Cold passes and warm fails on the same models. The allocator's segment mode is
+  refuted as the cause. Filed `D-WARM-COMPILED-BMM-ADDRESS-REFUSED-UNDER-TORCH-2.14`; the
+  current stack stays in force and the candidate stays beside it, which is what this order is
+  for. Verdict: `nbx/campaigns/2026_09_16_converge/BATTERY_T38_VERDICT.md`.
+* **the order, unchanged**: door ✓ → the stack in `venvs/nbx_t214` beside the current
+  one ✓ (engine installed; first fix already needed and landed: the engine's
+  `libcudart` loader opens the environment's own runtime first — the system's 12.2
+  broke torch 2.14's import) → the full battery on it (kernel suite first) → the
+  re-proof of the certified directory in a frozen tree (the old directory served
+  until the new is complete; each proof names its generator — `autotune status`,
+  the catalogue's *proven under* column) → the switch. Nothing is erased before the
+  new is proven.
+* **first measurements on the candidate stack**: launcher, source gates, tensor
+  suites 19 passed; TinyLlama bytes IDENTICAL on old and new stack on both engines
+  (sha `c70888b8e01d`, 0 sweeps — the certified directory serves at the same keys
+  under 3.8.0); the triton cold run 21.7 s vs 8.1 s on the old stack (a fresh JIT
+  cache, to re-measure warm).
+* **returned by** the Mac when its engine environment carries torch 2.14.0 + the
+  Triton triton-ext pins — say the versions here.
+
+### Addendum 2026-09-16 15:5x — the owner's correction, and what the door measured
+
+The correction said: CUDA 13 begins at Turing; PyTorch 2.11 removed Volta from
+its cu128/cu129 binaries (cuDNN 9.15.1 no longer serves a V100); **the last torch
+that sees a V100 is 2.10 in cu126**; measure the bundled ptxas before Triton 3.8.
+The door was extended with the half the arch list cannot see — one cuDNN
+convolution and one cuBLAS matmul RUN on every card, read against the CPU's —
+and answered on this rack:
+
+* `torch 2.14.0+cu126`: archs sm_50…sm_90 (sm_70 present), cuDNN **9.10.2**
+  (`91002`), convolution and matmul run on all four V100s with results equal to
+  the CPU's (max |diff| 1.3e-5 / 0.019 fp16) — ACCEPTED. The correction's facts
+  hold for the cu128/cu129 builds and not for the cu126 wheel, whose metadata pins
+  `nvidia-cudnn-cu12==9.10.2.21` through 2.14 (the build table on `release/2.14`
+  keeps sm_70 for 12.6). So on THIS rack the last torch that sees a V100 is
+  2.14.0+cu126, not 2.10 — 2.15 ships no cu126 wheel at all. The 2.10.0+cu126
+  wheel is installed beside it and put through the same door, so both numbers
+  stand in the record.
+* Triton 3.8.0's bundled `ptxas` is CUDA **12.9** (`V12.9.86`), not 13; it compiles a
+  `.target sm_70` PTX; the kernel suites and TinyLlama already ran through it on
+  the V100s. Volta is not out of Triton at 3.8.
+* Reformulation taken: the 3.6.0 proofs are **not invalid** under 3.8 — the oracle
+  proved the source, not the compiler; only the rank as the fastest may age by a
+  few percent. The re-proof is an optimisation pass on this rack, incremental
+  (`--reprove-generator` skips what the running generator already ranked),
+  checkpointed, invisible to a request; the document reads each rank with its
+  generator. The wording in the CHANGELOG, the tool and the document was changed
+  to say so.
+* Measurement over directive, said: the target stays **torch 2.14.0+cu126 +
+  Triton 3.8.0** unless the owner, reading this, holds 2.10 for a reason the door
+  does not measure — the switch itself waits on the full battery and the
+  re-proof, as ordered, so nothing is committed by this choice yet.
+
+---
+
+## 5 — the Metal seam fold: proof of inertness owed to the Mac by this rack, 2026-09-16
+
+* **owed by** the Dell (this rack) · **when** the fold lands on `main` by merge.
+* **what the Mac is folding.** Three trunk files name the Metal fork today —
+  `kernels/autotune_refusals.py:58` imports `MetalNonRecoverableError` into the
+  shared refusal module, `triton/metal_driver.py` imports `MetalBackend` by
+  name, `triton/metal_backend.py` iterates two possible providers. The fold:
+  the engine targets Triton, the backend is chosen by the profile, and the
+  provider's exceptions are translated into our own refusal type before they
+  reach `autotune_refusals.py`, which then names no vendor.
+* **the proof this rack returns.** The fold is declared INERT on CUDA, so it is
+  proven where it is declared: from a frozen worktree at the merge commit, on
+  this rack's V100s — (1) the kernel suite (`tests/unit/kernels`,
+  `tests/unit/nbx_tensor`, `tests/unit/runtime`) before and after, same count;
+  (2) a byte pair on four models across the merge, cold, `--triton`, outputs
+  compared byte for byte; (3) `neurobrix autotune check` on the certified
+  directory, 0 refused. The three numbers go in this entry with the commit.
+  A refusal path that changes shape is not inert, whatever the tests say: the
+  entry will name what the refusal module answers on a CUDA compilation error
+  before and after.
+
+## 6 — real-esrgan-x2 re-traced at the stimulus its own extents clear, 2026-09-16
+
+* **owed by** the Dell (this rack) · **when** a card frees between campaigns; not urgent and not
+  a class proof either way.
+* **what was measured.** The stimulus-collision guard (`cad67f7`) reads a model's architecture
+  extents off the model. Over the ten cached upscalers at the family default 112x80, nine clear
+  and `real-esrgan-x2` does not: its width times its own scale, **80 x 2 = 160**, is the RDB
+  dense-concat width (64 + 3x32) carried by 69 of its convolution weights. The guard would trace
+  it at **112x144** instead; the nine others are returned unchanged and re-trace byte-identically.
+* **what it does NOT mean.** The container on disk was proven the same evening at four sizes —
+  96x96, 160x112, 208x144 and the 448x448 that first exposed the white square — and the symbol
+  census reads 0 breaks and 0 never-carried on it. The collision is a LATENT ambiguity, not a
+  live defect: nothing in that graph is frozen today. What is wrong is the epistemic status —
+  the render is correct by luck rather than by construction.
+* **the proof this rack returns.** A re-trace at 112x144, the symbol census re-read on the new
+  graph (expected: still 0 and 0), and the same three non-trace sizes judged again, so the line
+  moves from *correct* to *correct for a reason*. Neither container is published, so nothing on
+  the hub waits on it.
+
+## 7 — WITHDRAWN: "the 1 168 entries the re-proof will never reach" was wrong, 2026-09-17
+
+**The claim is retracted. They were reachable and they drained.** At 22:24 the unknown-card
+bucket held 1 168 entries, 725 of them in `matmul_kernel.fp32.json`. At 02:55 the same file held
+**4** and the directory held **223**. The pass reaches them; it had simply not reached them yet.
+
+**How I got it wrong, since that is the part worth keeping.** I had two readings six minutes
+apart showing no movement, and a control that looked decisive: of 725 unknown-card keys present
+in the 32 GB side tree, **0** were re-proven there while **1 374 of 3 920** known-card keys in
+that same tree were. I treated zero-against-thirty-five-per-cent as an attribution.
+
+It was an ORDERING artefact. A certifier walks its key space in an order, and the legacy
+unknown-card keys sit together in it — so at any moment before the walk reaches them they are
+uniformly absent from the done set, and a snapshot of a contiguous region reads as a property of
+the region. **I had named that exact confound four hours earlier**, on the question of whether
+running the test suite beside a certifier moved its rankings: *"a time window is a contiguous
+slice of shape space, because keys are certified in order — so the comparison is confounded by
+construction"*. I applied it there and then walked into it here.
+
+The control that would have settled it: read the SAME bucket twice with enough time between the
+readings for the walk to move — which is what the morning did by itself. Six minutes was not
+enough and I should have said so rather than concluding.
+
+**And there IS a real unreachable set — it is 184, not 1 168, and it was already named.** Card 1
+closed its own kernels at 02:57 with `rc=0` and this line: *"71 census key(s) are unreachable to
+this engine — the debt `D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE`, not a failure."* That
+debt (filed 2026-09-11, 184 of 6 277) is keys an OLDER engine's wrapper computed differently, so
+no run presents them again; they were retired from the census on 09-13 and the certifier counts
+them apart. So the engine already knew which keys it cannot reach, said so at the end of the run,
+and the number is two orders smaller than the one I invented for it.
+
+**What remains true and is now the only open part.** 223 unknown-card entries remain in the main
+tree and 1 317 in the side tree. The 16 GB class is at 99.1 %, so those 223 sit inside the last
+0.9 % of the pass. Whether the bucket reaches zero is answered by reading it when the pass ends,
+not before. `tools/reproof_coverage.py` is the instrument and its `?` row is the number.
+
+---
+
 ## OWED TO THE DELL — the certifier's stability contract now has two regimes (2026-09-16)
 
 The common certifier changed, minimally, and your suite must see it before a red

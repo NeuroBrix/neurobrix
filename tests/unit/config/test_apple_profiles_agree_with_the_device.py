@@ -36,8 +36,26 @@ _ARCHITECTURAL = (
     ("memory", "max_shared_memory_per_block"),
     ("block_sizes", "default"),
     ("autotune_screen_rtol",),
-    ("autotune_screen_max_bytes",),
     ("shader", "language_version"),
+)
+
+#: Keys every profile must CARRY — the launcher raises loudly when one is absent —
+#: but which may legitimately DIFFER between chips, because they are measured on the
+#: machine rather than fixed by the architecture.
+#:
+#: `autotune_screen_max_bytes` was in the list above until 2026-09-16 and made a red
+#: that meant nothing. It is a BUDGET: how much memory the screen will spend
+#: verifying a candidate against the oracle, which is a fact about the machine's
+#: memory and about the shapes it meets, not about the GPU family. The commit that
+#: proves it is `75e3718`, which raised the M4 Pro from 32 MB to 256 MB with a
+#: measurement — the upscaler convs carry 73-145 MB of arguments, so a 32 MB budget
+#: skipped the screen before the wired fp64 oracle was ever consulted and seated
+#: every upscaler conv UNSCREENED — and said in the same breath: "The other Apple
+#: profiles are left at 32 MB pending their own measurement." A test that then
+#: demands they all agree contradicts a decision that was taken deliberately, and
+#: asks this machine to write twenty numbers it has not measured.
+_MEASURED_PER_PROFILE = (
+    ("autotune_screen_max_bytes",),
 )
 
 
@@ -71,7 +89,7 @@ def test_there_is_at_least_one_apple_profile():
     assert _profiles(), f"no Apple profile under {APPLE}"
 
 
-@pytest.mark.parametrize("path", _ARCHITECTURAL, ids=lambda p: ".".join(p))
+@pytest.mark.parametrize("path", _ARCHITECTURAL + _MEASURED_PER_PROFILE, ids=lambda p: ".".join(p))
 def test_every_profile_declares_the_architectural_limits(path):
     """A standalone file that omits a hard limit is not standalone: it is a
     file with a hole that something else will have to fill, which is the
@@ -241,3 +259,20 @@ def test_this_device_has_a_profile_or_the_fallback_is_deliberate():
         f"{doc.get('compute_capability')!r}; the backend reports {variant!r}, "
         f"so this file would never be the exact match and the family profile "
         f"would serve this machine instead")
+
+
+@pytest.mark.parametrize("path", _MEASURED_PER_PROFILE, ids=lambda p: ".".join(p))
+def test_a_measured_budget_is_a_positive_number_on_every_profile(path):
+    """What is true of a per-profile budget, in place of an equality that is not.
+
+    It may differ between chips — that is the point of measuring it — but it may not
+    be absent (the launcher refuses), zero, or a string. A profile that carries a
+    budget of 0 screens nothing and says nothing about it.
+    """
+    bad = {}
+    for name, doc in _profiles().items():
+        v = _dig(doc, path)
+        if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+            bad[name] = v
+    assert not bad, (
+        f"{'.'.join(path)} must be a positive integer on every profile; these are not: {bad}")

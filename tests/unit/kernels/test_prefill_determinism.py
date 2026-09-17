@@ -298,19 +298,27 @@ def test_budget_unchanged_without_fraction_key() -> None:
 # ---------------------------------------------------------------------------
 
 def _gpu_classes():
+    """(small_ordinal, big_ordinal) among the devices THIS PROCESS can see.
+
+    Read through the allocator, never `nvidia-smi`. NVML sits outside
+    `CUDA_VISIBLE_DEVICES` and reports the whole board, so the previous
+    version of this helper picked physical index 2 on a rack whose 32G cards
+    are 2 and 3, declined to skip, and asked `_route_spy` for `cuda:2` under
+    `CUDA_VISIBLE_DEVICES=0` — where only ordinal 0 exists. The suite went red
+    at `DeviceAllocator.set_device(2)` (2026-09-17, card 0, candidate stack),
+    a failure about the pin and not about the prefill route this file tests.
+    The ordinals below come from the same runtime that will serve the
+    allocation, so the answer cannot disagree with it.
+    """
     try:
-        import subprocess
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=10).stdout
-        devs = [(int(l.split(",")[0]), int(l.split(",")[1]))
-                for l in out.strip().splitlines() if l.strip()]
-        small = next((i for i, m in devs if m < 20000), None)
-        big = next((i for i, m in devs if m >= 20000), None)
-        return small, big
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        devs = DeviceAllocator.visible_device_memory()
     except Exception:
         return None, None
+    mib = [(i, total // (1024 * 1024)) for i, total in devs]
+    small = next((i for i, m in mib if m < 20000), None)
+    big = next((i for i, m in mib if m >= 20000), None)
+    return small, big
 
 
 def _stash_real_profile():

@@ -198,8 +198,12 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str,
         # Multimodal image gen (Janus) benefits from the same simple-
         # object prompt as image diffusion — Sana-class style
         # sensitivity applies here too.
-        prompt = IMAGE_PROMPT if (gen_type or "").startswith("autoregressive_image") else "Hello world"
-        return ["--mode", _mode_for_gen_type(gen_type), "--prompt", prompt]
+        if (gen_type or "").startswith("autoregressive_image"):
+            return ["--mode", _mode_for_gen_type(gen_type), "--prompt", IMAGE_PROMPT]
+        # A text-answering multimodal cell is an autoregressive decode: bounded
+        # like the llm cell, never the model's own default length.
+        return ["--mode", _mode_for_gen_type(gen_type), "--prompt", "Hello world",
+                "--max-tokens", str(LLM_MAX_TOKENS)]
     if flow in STT_FLOWS:
         return ["--audio", str(AUDIO_REF)]
     if flow == "audio_llm":
@@ -212,7 +216,14 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str,
         # never reached the model and reported a RED that said nothing
         # about it (both GLM-4.1V cells, 2026-08-19 freshness run). The
         # engine is right; the harness was calling it wrong.
-        return ["--input-image", str(IMAGE_REF), "--prompt", "What is in this image?"]
+        # ... and a vlm answer is an autoregressive decode: without a bound the
+        # thinking model wrote at its own default length and the cell timed
+        # out at 180 s on every run since 2026-08-19 while the same request
+        # bounded to LLM_MAX_TOKENS ends in 74 s alone on a 32 GB card
+        # (2026-09-16) — the harness composed an unbounded request and read
+        # the model as slow.
+        return ["--input-image", str(IMAGE_REF), "--prompt", "What is in this image?",
+                "--max-tokens", str(LLM_MAX_TOKENS)]
     # Image-diffusion + video + TTS without ref + any other family:
     # use the historical anti-reg prompt for image (Sana 1600M reads
     # this photorealistically; landscapes return stylised illustration).

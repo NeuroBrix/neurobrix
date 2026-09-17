@@ -65,9 +65,10 @@ def _backend() -> str | None:
     test can run. What it cannot do is skip: a boundary crossing is a
     boundary crossing on every backend.
     """
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    detect = nbx._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
-        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
-        return _detect_gpu_backend()
+        return detect()
     except Exception:
         return None
 

@@ -129,6 +129,10 @@ def _two_environments(monkeypatch, tmp_path):
     """Two processes on one host, pinned to different cards."""
     monkeypatch.setattr(autodetect, "HARDWARE_DIR", tmp_path)
     monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", tmp_path / "default.yml")
+    # A four-card host, stated rather than inherited: without this the
+    # whole-machine check below would read the REAL rig, and the test would
+    # pass or fail by how many GPUs the developer's box happens to have.
+    monkeypatch.setattr(autodetect, "_machine_device_count", lambda: 4)
     seen = {"models": ["Tesla V100-SXM2-32GB"]}
     monkeypatch.setattr(autodetect, "_detect_gpus",
                         lambda _sys: ([{"model": m} for m in seen["models"]], "nvidia"))
@@ -151,8 +155,28 @@ def test_each_visible_set_reads_its_own_profile_file(monkeypatch, tmp_path):
     # the second detection did not touch the first environment's file
     seen["models"] = ["Tesla V100-SXM2-32GB"]
     assert autodetect.get_or_create_default_profile() == id_32
-    # the human-facing default.yml mirrors the latest detection, whole file, no leftovers
-    assert (tmp_path / "default.yml").exists()
+    # ... and NEITHER wrote the machine's shared default.yml: each saw one card
+    # of a four-card host. This assertion read the other way until 2026-09-17,
+    # when the shared file on the rack was found describing `2 x Tesla
+    # V100-SXM2-16GB` — 32 GB of a 96 GB machine, both 32 GB cards absent,
+    # written by a run pinned to `CUDA_VISIBLE_DEVICES=0,1`. default.yml is not
+    # only human-facing: an unmasked process READS it as its profile (and
+    # `test_detection_unavailable_falls_back_to_the_shared_default` below reads
+    # it as the fallback), so a partial view writing it plans every unmasked run
+    # against a machine that does not exist.
+    assert not (tmp_path / "default.yml").exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_process_seeing_every_card_does_write_the_shared_default(monkeypatch, tmp_path):
+    """The other half: the shared file must still be written by someone, or it
+    would never exist and the fallback above would have nothing to read."""
+    seen = _two_environments(monkeypatch, tmp_path)
+    seen["models"] = ["Tesla V100-SXM2-16GB"] * 2 + ["Tesla V100-SXM2-32GB"] * 2
+    autodetect.get_or_create_default_profile()
+    import yaml
+    written = yaml.safe_load((tmp_path / "default.yml").read_text())
+    assert len(written["devices"]) == 4
     assert not list(tmp_path.glob("*.tmp"))
 
 

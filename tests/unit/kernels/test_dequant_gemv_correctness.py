@@ -79,9 +79,10 @@ DEQUANT_GEMV_REL_BOUND = 5e-02
 
 
 def _has_gpu() -> bool:
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    set_device = nbx.DeviceAllocator.set_device   # a renamed symbol raises here, loudly
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        DeviceAllocator.set_device(0)
+        set_device(0)
         return True
     except Exception:
         return False

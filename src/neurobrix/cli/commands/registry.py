@@ -168,6 +168,25 @@ def download_resumable(url, dest, total_hint=0, desc="", get=None, progress=None
 CONTAINER_DIR_MODE = 0o755
 
 
+def is_installed_model_dir(d) -> bool:
+    """A cache entry that counts as a model: a directory with a manifest that
+    is not an import's staging directory (`<name>.installing`, see
+    `installing_path`)."""
+    from pathlib import Path
+    d = Path(d)
+    return d.is_dir() and not d.name.endswith(".installing") and (d / "manifest.json").exists()
+
+
+def installing_path(cache_path) -> "Path":
+    """Where an import extracts before the final name exists: `<name>.installing`
+    beside it. Model discovery keys on `<dir>/manifest.json`, and a staging
+    directory carries one from the first member on — so it must not be a
+    plain sibling; its suffix is the mark every reader can skip."""
+    from pathlib import Path
+    cache_path = Path(cache_path)
+    return cache_path.with_name(cache_path.name + ".installing")
+
+
 def extract_container(store_path, cache_path):
     """Extract a `.nbx` and give the result a mode that does not depend on the
     importer's environment.
@@ -205,18 +224,44 @@ def extract_container(store_path, cache_path):
     os.chmod(str(cache_path), CONTAINER_DIR_MODE)
 
 
+def _ev(args, name: str, **fields) -> None:
+    """One lifecycle event of `import` under --json (nothing otherwise)."""
+    from neurobrix.cli.json_out import wants_json, event
+    if wants_json(args):
+        event("import", name, fields)
+
+
+def _die(args, *lines: str, code: int = 1):
+    """Refuse: the human lines (stderr under --json), one `error` event
+    carrying the first line, then exit. Every refusal of `import` ends here
+    so a client always reads a terminal event."""
+    for line in lines:
+        print(line)
+    _ev(args, "error", message=lines[0] if lines else "refused")
+    sys.exit(code)
+
+
 def cmd_import(args):
-    """Download model from NeuroBrix registry and extract to local cache."""
+    """Download model from NeuroBrix registry and extract to local cache.
+    Under --json: one NDJSON event per phase on stdout (`info`, `license`,
+    `download` with real byte counts, `downloaded`, `extracting`, `installed`,
+    `done` — or `error`), every human line on stderr (Studio requests 5, 6)."""
+    from neurobrix.cli.json_out import wants_json, human_lines_to_stderr
+    with human_lines_to_stderr(wants_json(args)):
+        _import_body(args)
+
+
+def _import_body(args):
     import requests
     from tqdm import tqdm
+    from neurobrix.cli.json_out import wants_json, NdjsonProgress
 
     registry = args.registry or REGISTRY_URL
     model_ref = args.model_ref
 
     if "/" not in model_ref:
-        print(f"ERROR: Invalid model reference '{model_ref}'")
-        print("Expected format: org/name (e.g., pixart/sigma-xl-1024)")
-        sys.exit(1)
+        _die(args, f"ERROR: Invalid model reference '{model_ref}'",
+             "Expected format: org/name (e.g., pixart/sigma-xl-1024)")
 
     org, name = model_ref.split("/", 1)
 
@@ -231,6 +276,8 @@ def cmd_import(args):
     if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
         print(f"\nModel already installed: {cache_path}")
         print("Use --force to re-download.")
+        _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=True)
+        _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path))
         sys.exit(0)
 
     # 1. Get model metadata
@@ -240,17 +287,14 @@ def cmd_import(args):
         resp.raise_for_status()
         model_info = resp.json()
     except requests.ConnectionError:
-        print(f"ERROR: Cannot connect to registry at {registry}")
-        print("Check your network connection or use --registry to specify a different URL.")
-        sys.exit(1)
+        _die(args, f"ERROR: Cannot connect to registry at {registry}",
+             "Check your network connection or use --registry to specify a different URL.")
     except requests.HTTPError as e:
         status = e.response.status_code if e.response is not None else 0
         if status == 404:
-            print(f"ERROR: Model '{org}/{name}' not found on registry.")
-            print(f"Browse available models: {registry}")
-        else:
-            print(f"ERROR: Registry returned {status}: {e}")
-        sys.exit(1)
+            _die(args, f"ERROR: Model '{org}/{name}' not found on registry.",
+                 f"Browse available models: {registry}")
+        _die(args, f"ERROR: Registry returned {status}: {e}")
 
     model_data = model_info.get("model", model_info)
     file_size = int(model_data.get("fileSize", 0))
@@ -267,6 +311,8 @@ def cmd_import(args):
     if file_size > 0:
         print(f"   Size: {format_size(file_size)}")
     print(f"   License: {license_name}")
+    _ev(args, "info", model=f"{org}/{name}", category=category, bytes=file_size,
+        license=license_id, license_name=license_name, gated=bool(is_gated))
 
     # Before a byte is fetched. A 30.6 GB import died at 98 % on a full disk
     # because nothing looked first; the peak is store + cache, about twice the
@@ -279,9 +325,8 @@ def cmd_import(args):
             for _p in {_nearest_existing(STORE_DIR), _nearest_existing(CACHE_DIR)})
         _refusal = disk_refusal(_need, _free)
         if _refusal:
-            print(f"\nERROR: not enough disk for this import — {_refusal}.")
-            print("       Free space, or import to a device that has it.")
-            sys.exit(1)
+            _die(args, f"ERROR: not enough disk for this import — {_refusal}.",
+                 "       Free space, or import to a device that has it.")
         print(f"   Disk: {format_size(_need)} needed at peak, "
               f"{format_size(_free)} free")
 
@@ -316,10 +361,15 @@ def cmd_import(args):
         if accepted_via:
             _record_license_acceptance(org, name, license_id)
             print(f"   License accepted via {accepted_via}.\n")
+            _ev(args, "license", license=license_id, accepted_via=accepted_via)
         else:
-            if not sys.stdin.isatty():
+            # A client never answers a prompt: under --json the licence is
+            # an explicit parameter (--accept-license) or a refusal that
+            # names it — the prompt is for a person at a terminal.
+            if wants_json(args) or not sys.stdin.isatty():
                 _print_noninteractive_license_help(model_ref, license_name, full_url)
-                sys.exit(1)
+                _die(args, f"ERROR: license '{license_id}' requires explicit acceptance: "
+                     f"re-run with --accept-license (full text: {full_url or 'see the hub'})")
 
             try:
                 reply = input("\n   Accept license terms? [yes/No]: ").strip().lower()
@@ -334,6 +384,7 @@ def cmd_import(args):
 
             _record_license_acceptance(org, name, license_id)
             print("   License accepted.\n")
+            _ev(args, "license", license=license_id, accepted_via="prompt")
 
     # 2. Get signed download URL
     print(f"\n[2/4] Getting download URL...")
@@ -359,29 +410,23 @@ def cmd_import(args):
             code = server_error.get("code", "")
             message = server_error.get("message") or server_error.get("error") or ""
             if code == "LICENSE_LOGIN_REQUIRED":
-                if message:
-                    print(f"ERROR: {message}")
-                else:
-                    print("ERROR: License acceptance on the hub is required for this model.")
-                print("The hub requires a logged-in license acceptance for this model.")
-                print(f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
-                sys.exit(1)
+                _die(args,
+                     f"ERROR: {message}" if message else
+                     "ERROR: License acceptance on the hub is required for this model.",
+                     "The hub requires a logged-in license acceptance for this model.",
+                     f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
             if code or message:
-                print(f"ERROR: Failed to get download URL ({status}): {message or code}")
-                if code and message:
-                    print(f"   Server error code: {code}")
-                sys.exit(1)
+                _die(args, f"ERROR: Failed to get download URL ({status}): {message or code}",
+                     *( [f"   Server error code: {code}"] if code and message else [] ))
 
-        print(f"ERROR: Failed to get download URL: {e}")
-        sys.exit(1)
+        _die(args, f"ERROR: Failed to get download URL: {e}")
 
     download_url = download_info.get("url")
     file_name = download_info.get("fileName", f"{name}.nbx")
 
     if not download_url:
-        print("ERROR: Registry did not return a download URL.")
-        print("The model may not have a .nbx file uploaded yet.")
-        sys.exit(1)
+        _die(args, "ERROR: Registry did not return a download URL.",
+             "The model may not have a .nbx file uploaded yet.")
 
     # 3. Download .nbx to store/
     print(f"\n[3/4] Downloading {file_name}...")
@@ -390,35 +435,45 @@ def cmd_import(args):
 
     try:
         actual_size = download_resumable(download_url, store_path, total_hint=file_size,
-                                         desc=file_name, get=requests.get, progress=tqdm)
+                                         desc=file_name, get=requests.get,
+                                         progress=NdjsonProgress if wants_json(args) else tqdm)
         print(f"   Saved: {store_path} ({format_size(actual_size)})")
+        _ev(args, "downloaded", file=file_name, store=str(store_path), bytes=actual_size)
 
     except requests.HTTPError as e:
-        print(f"ERROR: Download failed: {e}")
-        sys.exit(1)
+        _die(args, f"ERROR: Download failed: {e}")
     except (requests.ConnectionError, requests.Timeout, IncompleteDownload) as e:
         part = partial_path(store_path)
         have = part.stat().st_size if part.exists() else 0
-        print(f"ERROR: Connection lost during download ({e}).")
-        print(f"   {format_size(have)} are kept in {part}; re-run the same command to resume "
-              f"from there.")
-        sys.exit(1)
+        _die(args, f"ERROR: Connection lost during download ({e}).",
+             f"   {format_size(have)} are kept in {part}; re-run the same command to resume "
+             f"from there.")
 
-    # 4. Extract to cache/
+    # 4. Extract to cache/ — into a staging directory beside the final name,
+    # renamed in one motion at the end: a model is visible (to `list`, to
+    # `run`, to a client) only after its extraction succeeded, never as a
+    # half-written directory that already carries a manifest (Studio request 6).
     print(f"\n[4/4] Extracting to cache...")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    if cache_path.exists():
-        import shutil
-        shutil.rmtree(cache_path)
+    staging = installing_path(cache_path)
+    import shutil
+    if staging.exists():
+        shutil.rmtree(staging)          # a previous import that died mid-extraction
+    _ev(args, "extracting", store=str(store_path), cache=str(cache_path))
 
     import zipfile
-    if zipfile.is_zipfile(store_path):
-        extract_container(store_path, cache_path)
-        print(f"   Extracted: {cache_path}")
-    else:
-        print(f"ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
-        sys.exit(1)
+    if not zipfile.is_zipfile(store_path):
+        _die(args, "ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
+    try:
+        extract_container(store_path, staging)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if cache_path.exists():
+        shutil.rmtree(cache_path)
+    os.replace(staging, cache_path)
+    print(f"   Extracted: {cache_path}")
+    _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=False)
 
     # Delete .nbx from store if --no-keep
     if args.no_keep:
@@ -433,6 +488,8 @@ def cmd_import(args):
     print(f"Model: {org}/{name}")
     print(f"Cache: {cache_path}")
     print(f"\nRun with: {_suggest_run_command(name, cache_path)}")
+    _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path),
+        store=None if args.no_keep else str(store_path))
 
 
 def _suggest_run_command(name: str, cache_path) -> str:
@@ -483,7 +540,38 @@ def _strip_build_stamp(stem: str) -> str:
     return re.sub(r"\.\d{8}T\d{6}$", "", stem)
 
 
+def list_record(args) -> dict:
+    """The installed models and the store, as one record (the same walk `list` prints)."""
+    store_files = {}
+    if STORE_DIR.exists():
+        for nbx_file in STORE_DIR.glob("*.nbx"):
+            store_files[nbx_file.stem] = nbx_file.stat().st_size
+    models = []
+    if CACHE_DIR.exists():
+        for model_dir in sorted(CACHE_DIR.iterdir()):
+            if not is_installed_model_dir(model_dir):
+                continue
+            try:
+                manifest = json.loads((model_dir / "manifest.json").read_text())
+            except (json.JSONDecodeError, OSError):
+                manifest = {}
+            models.append({"name": model_dir.name, "family": manifest.get("family", "?"),
+                           "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file()),
+                           "license": manifest.get("license", "") or "",
+                           "in_store": any(model_dir.name in stem for stem in store_files)})
+    installed = {m["name"] for m in models}
+    store_only = [{"name": stem, "size_bytes": size} for stem, size in sorted(store_files.items())
+                  if not any(name in stem for name in installed)]
+    return {"models": models, "store_only": store_only,
+            "store": {"path": str(STORE_DIR), "files": [{"name": k + ".nbx", "size_bytes": v} for k, v in sorted(store_files.items())],
+                      "bytes": sum(store_files.values())}}
+
+
 def cmd_list(args):
+    from neurobrix.cli.json_out import wants_json, emit
+    if wants_json(args):
+        emit("list", list_record(args))
+        return
     """List installed models (cache) and downloaded archives (store)."""
 
     # --store: show store contents only
@@ -613,7 +701,20 @@ def _find_store_files(model_name):
 
 
 def cmd_remove(args):
-    """Remove a model from cache, store, or both."""
+    """Remove a model from cache, store, or both. Under --json one record:
+    what was removed (kind, path, bytes) and whether the model was found."""
+    from neurobrix.cli.json_out import wants_json, human_lines_to_stderr, emit
+    record = {"model": args.model_name, "removed": []}
+    with human_lines_to_stderr(wants_json(args)):
+        try:
+            _remove_body(args, record)
+        finally:
+            if wants_json(args):
+                record["found"] = bool(record["removed"])
+                emit("remove", record)
+
+
+def _remove_body(args, record):
     import shutil
 
     model_name = args.model_name
@@ -632,6 +733,7 @@ def cmd_remove(args):
         total_size = sum(f.stat().st_size for f in cache_path.rglob("*") if f.is_file())
         shutil.rmtree(cache_path)
         print(f"Removed cache: {cache_path} ({format_size(total_size)} freed)")
+        record["removed"].append({"kind": "cache", "path": str(cache_path), "bytes": total_size})
         removed = True
     elif do_cache and not cache_path.exists():
         if not do_store:
@@ -651,6 +753,7 @@ def cmd_remove(args):
             size = nbx_file.stat().st_size
             nbx_file.unlink()
             print(f"Removed store: {nbx_file.name} ({format_size(size)} freed)")
+            record["removed"].append({"kind": "store", "path": str(nbx_file), "bytes": size})
             removed = True
 
         if not store_matches and not removed:
@@ -662,7 +765,7 @@ def cmd_remove(args):
         available = []
         if CACHE_DIR.exists():
             available += [f"{d.name} (cache)" for d in CACHE_DIR.iterdir()
-                         if d.is_dir() and (d / "manifest.json").exists()]
+                         if is_installed_model_dir(d)]
         for nbx_file in (STORE_DIR.glob("*.nbx") if STORE_DIR.exists() else []):
             available.append(f"{nbx_file.stem} (store)")
         if available:
@@ -704,7 +807,7 @@ def cmd_clean(args):
 
     if do_cache and CACHE_DIR.exists():
         for d in CACHE_DIR.iterdir():
-            if d.is_dir() and (d / "manifest.json").exists():
+            if is_installed_model_dir(d):
                 cache_size += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
                 cache_count += 1
         if cache_count:
@@ -741,6 +844,13 @@ def cmd_clean(args):
 
 
 def cmd_hub(args):
+    """Browse models available on the NeuroBrix registry."""
+    from neurobrix.cli.json_out import wants_json as _wj, human_lines_to_stderr
+    with human_lines_to_stderr(_wj(args)):
+        return _cmd_hub(args)
+
+
+def _cmd_hub(args):
     """Browse models available on the NeuroBrix registry."""
     import urllib.request
     import urllib.error
@@ -804,7 +914,22 @@ def cmd_hub(args):
 
     remote_models = data.get("models", [])
     total_count = data.get("total", len(remote_models))
-
+    from neurobrix.cli.json_out import wants_json as _wj, emit as _emit
+    if _wj(args):
+        installed_now = set()
+        if CACHE_DIR.exists():
+            installed_now = {d.name for d in CACHE_DIR.iterdir() if d.is_dir() and (d / "manifest.json").exists()}
+        rows = []
+        for rm in remote_models:
+            slug = rm.get("slug", f"{rm.get('org', '?')}/{rm.get('name', '?')}")
+            name = rm.get("name", slug.split("/")[-1])
+            rows.append({"slug": slug, "name": name, "category": rm.get("category", "?"),
+                         "size_bytes": int(rm.get("fileSize", 0) or 0), "license": rm.get("license") or None,
+                         "downloads": rm.get("downloadCount", 0), "visibility": (rm.get("visibility") or "PUBLIC").upper(),
+                         "installed": name in installed_now})
+        _emit("hub", {"registry": registry, "query": {"category": args.category, "search": args.search},
+                      "total": total_count, "models": rows})
+        return
     if not remote_models:
         print("\nNo models found.")
         if args.category or args.search:
@@ -815,7 +940,7 @@ def cmd_hub(args):
     installed = set()
     if CACHE_DIR.exists():
         for d in CACHE_DIR.iterdir():
-            if d.is_dir() and (d / "manifest.json").exists():
+            if is_installed_model_dir(d):
                 installed.add(d.name)
 
     # Display

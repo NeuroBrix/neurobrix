@@ -30,6 +30,7 @@ def cmd_autotune(args) -> int:
             summary = certify(args.profile, vendor=args.vendor, census_path=args.census, out=args.out,
                               kernels=kernels, limit=args.limit, only_missing=args.only_missing,
                               reprove_unclocked=getattr(args, "reprove_unclocked", False),
+                              reprove_generator=getattr(args, "reprove_generator", False),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")
@@ -65,6 +66,8 @@ def cmd_autotune(args) -> int:
     if action == "check":
         root = Path(args.dir) if getattr(args, "dir", None) else C.directory()
         n = bad = 0
+        _json = getattr(args, "json", False)
+        _files = []
         for path in C.files(root):
             n += 1
             if getattr(args, "restamp", False):
@@ -77,16 +80,45 @@ def cmd_autotune(args) -> int:
             try:
                 doc = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
-                bad += 1; print(f"REFUSED {path}: unreadable ({exc})"); continue
+                bad += 1; _files.append({"path": str(path), "ok": False, "problems": [f"unreadable ({exc})"]})
+                if not _json: print(f"REFUSED {path}: unreadable ({exc})")
+                continue
             problems = C.validate(doc, path)
             if problems:
-                bad += 1; print(f"REFUSED {path}: " + "; ".join(problems[:3]))
+                bad += 1; _files.append({"path": str(path), "ok": False, "problems": problems[:10]})
+                if not _json: print(f"REFUSED {path}: " + "; ".join(problems[:3]))
             else:
-                print(f"ok      {path} ({len(doc.get('entries') or {})} shape(s))")
-        print(f"{n} file(s), {bad} refused")
+                _files.append({"path": str(path), "ok": True, "shapes": len(doc.get("entries") or {})})
+                if not _json: print(f"ok      {path} ({len(doc.get('entries') or {})} shape(s))")
+        if _json:
+            from neurobrix.cli.json_out import emit
+            emit("autotune.check", {"directory": str(root), "files": _files, "refused": bad})
+        else:
+            print(f"{n} file(s), {bad} refused")
         return 0 if not bad else 1
     if action == "status":
         prof = C.active_profile()
+        if getattr(args, "json", False):
+            root = C.directory() / prof[0] / prof[1] if prof else None
+            files = list(C.files()) if root else []
+            mine = [p for p in files if root and p.parent == root]
+            docs = [json.loads(p.read_text(encoding='utf-8')).get('entries') or {} for p in mine]
+            by_class = {}; unknown = 0; by_backend = {}
+            for entries in docs:
+                for entry in entries.values():
+                    classes = C.covered_memory_classes(entry)
+                    if not classes: unknown += 1
+                    for c in classes: by_class[c] = by_class.get(c, 0) + 1
+                    for lab in (C.proof_backends(entry) or {"unknown"}): by_backend[lab] = by_backend.get(lab, 0) + 1
+            here = C.executing_memory_class()
+            from neurobrix.cli.json_out import emit
+            emit("autotune.status", {"profile": f"{prof[0]}/{prof[1]}" if prof else None, "directory": str(C.directory()),
+                                     "enabled": bool(C.enabled()), "files": len(mine), "shapes": sum(len(e) for e in docs),
+                                     "served_by_memory_class_gb": {str(k): v for k, v in sorted(by_class.items())},
+                                     "proven_on_unknown_card": unknown, "this_card_class_gb": here,
+                                     "proofs_by_backend": dict(sorted(by_backend.items())),
+                                     "would_be_served_here": by_class.get(here, 0) if here is not None else None})
+            return 0
         print(f"profile in force: {prof[0] + '/' + prof[1] if prof else 'none resolved'}")
         print(f"directory: {C.directory()} ({'on' if C.enabled() else 'OFF (NBX_AUTOTUNE_CERTIFIED=off)'})")
         root = C.directory() / prof[0] / prof[1] if prof else None
@@ -97,6 +129,7 @@ def cmd_autotune(args) -> int:
         here = C.executing_memory_class()
         by_class = {}
         unknown = 0
+        by_backend = {}
         for entries in docs:
             for entry in entries.values():
                 classes = C.covered_memory_classes(entry)
@@ -104,7 +137,11 @@ def cmd_autotune(args) -> int:
                     unknown += 1
                 for c in classes:
                     by_class[c] = by_class.get(c, 0) + 1
+                for lab in (C.proof_backends(entry) or {"unknown"}):
+                    by_backend[lab] = by_backend.get(lab, 0) + 1
         print(f"files for this profile: {len(mine)}; shapes: {total}")
+        print("proven under (a setting is proven for one code generator; a Triton upgrade re-proves): "
+              + (", ".join(f"{k}: {n}" for k, n in sorted(by_backend.items())) or "none"))
         print("served by memory class (an entry serves only the class it was proven on): "
               + (", ".join(f"{c} GB: {n}" for c, n in sorted(by_class.items())) or "none")
               + f"; proven on an unknown card (served to no card until re-proven): {unknown}")

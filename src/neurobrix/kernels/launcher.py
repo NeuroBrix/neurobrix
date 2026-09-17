@@ -364,10 +364,16 @@ class CudaDriver(Driver):
             raise TypeError(f"NeuroBrix launcher: the kernel declares {expected} parameters, "
                             f"{len(params)} given — refused, not launched")
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        for kind, value in params:
+        for i, (kind, value) in enumerate(params):
             if kind == "ptr" and value and not DeviceAllocator.holds(int(value)):
-                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} was not handed out "
-                                 f"by the allocator — refused, not launched")
+                # The refusal names the parameter: "which buffer" is the
+                # whole question the caller then has to answer (Ming's
+                # embedding, 2026-09-14, refused an address nobody could
+                # attribute from the address alone).
+                what = (f"parameter '{names[i]}'" if names and i < len(names)
+                        else f"parameter #{i}")
+                raise ValueError(f"NeuroBrix launcher: device address {int(value):#x} ({what}) was not "
+                                 f"handed out by the allocator — refused, not launched")
         # A caller may give one or two extents (the contract's checker does); CUDA wants three.
         gx, gy, gz = (tuple(int(g) for g in grid) + (1, 1, 1))[:3]
         bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]
@@ -1641,6 +1647,28 @@ def _record_screen_exclusions(dropped) -> None:
 _installed = False
 
 
+#: The package whose kernels this launcher owns. A kernel defined anywhere else —
+#: torch's in-tree Triton ops, a third-party library's — is launched by Triton's own
+#: path: this engine's allocator never handed out its memory and has no claim on it.
+_OWN_PACKAGE = "neurobrix"
+
+
+def _is_ours(jit_fn) -> bool:
+    """True when this JITFunction was defined inside the engine.
+
+    Read from the function's own module, which is the authority: a kernel's home is
+    where it was written, not a name we maintain a list of. An unreadable module is
+    treated as foreign — the conservative direction, since refusing a foreign launch
+    breaks a working library while passing one through only forgoes a check that was
+    never ours to make.
+    """
+    fn = getattr(jit_fn, "fn", None)
+    module = getattr(fn, "__module__", None) or getattr(jit_fn, "__module__", None)
+    if not isinstance(module, str):
+        return False
+    return module == _OWN_PACKAGE or module.startswith(_OWN_PACKAGE + ".")
+
+
 def install(force: Optional[bool] = None) -> bool:
     """Route `JITFunction.__getitem__` through the NeuroBrix launcher.
     `NBX_LAUNCHER=triton` keeps upstream's (the differential arm)."""
@@ -1649,14 +1677,44 @@ def install(force: Optional[bool] = None) -> bool:
         return True
     if force is None and os.environ.get("NBX_LAUNCHER", "nbx").lower() == "triton":
         return False
-    from triton.runtime.jit import JITFunction
+    try:
+        from triton.runtime.jit import JITFunction
+    except ModuleNotFoundError:
+        # A compiled-only install (no Triton wheel: a Mac without it, a CPU
+        # box) has no kernel launcher to route; the package import that
+        # installs the seam must not be the import that ends the engine.
+        # `tests/unit/cli/test_compiled_mode_needs_no_triton.py` was red on
+        # this line from c8ed017 to 2026-09-16.
+        return False
+
+    # The seam is process-wide: `JITFunction` is Triton's, so patching it routes
+    # EVERY Triton kernel in the process — including ones this engine does not own.
+    # torch 2.14 ships in-tree Triton implementations under `torch/_native/ops/`
+    # (bmm_outer_product, foreach_mm, norm, polar, scatter_add, sum, topk) and
+    # dispatches eager aten calls to them when a shape condition matches. Those
+    # kernels are torch's, launched on torch's memory, and this launcher refused
+    # them at its ownership rule — `aten.bmm::0`, parameter 'A_ptr', on the warm
+    # compiled path of GLM-4.1V, Janus-Pro-7B and Sana-1600M (2026-09-17).
+    #
+    # The ownership rule is right and stays: a NeuroBrix kernel may not read memory
+    # this engine did not hand out. It says nothing about a foreign library's kernel
+    # on that library's own memory, and it is not ours to police. So the seam asks
+    # whose kernel it is and gives a foreign one back to Triton's own path,
+    # unwrapped — the differential arm `NBX_LAUNCHER=triton` already proves that
+    # path works.
+    _upstream_getitem = JITFunction.__getitem__
+    _upstream_run = JITFunction.run
 
     def __getitem__(self, grid):
+        if not _is_ours(self):
+            return _upstream_getitem(self, grid)
         return lambda *args, **kwargs: launch(self, grid, *args, **kwargs)
 
-    def run(self, *args, grid, warmup=False, **kwargs):
+    def run(self, *args, grid=None, warmup=False, **kwargs):
         """`JITFunction.run` is the Autotuner's launch path (every autotuned
         kernel: mm, bmm, addmm, conv2d, ...) and `warmup`'s — both routed here."""
+        if not _is_ours(self):
+            return _upstream_run(self, *args, grid=grid, warmup=warmup, **kwargs)
         if warmup:
             prepare(self, args, kwargs)
             return None

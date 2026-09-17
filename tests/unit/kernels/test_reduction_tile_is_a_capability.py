@@ -69,7 +69,7 @@ def test_a_backend_without_a_row_refuses():
     from neurobrix.kernels.nbx_tensor import _backend_capability
 
     with pytest.raises(RuntimeError):
-        _backend_capability({"cuda": 1}, "_T", "its reduction tile cap")
+        _backend_capability({"no-such-backend": 1}, "_T", "its reduction tile cap")   # a table without the executing backend refuses on EVERY backend (with a cuda row it refused only on Metal)
 
 
 # ── the numerical verdict: the clamped tile computes the right norm ─────────

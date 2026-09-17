@@ -45,6 +45,26 @@ import numpy as np
 import pytest
 
 
+def _no_hardware_profile() -> bool:
+    """True when no hardware profile resolves in this process.
+
+    The screen reads its tolerance from the profile and REFUSES to invent one —
+    correct engine behaviour, and it makes the premise of every cell below "the
+    profile says what the tolerance is". With no device visible the profile is
+    empty and four cells failed on that refusal instead of saying their premise
+    was absent (2026-09-16, the suite under the device door)."""
+    try:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        return not active_vendor_profile()
+    except Exception:
+        return True
+
+
+pytestmark = pytest.mark.skipif(
+    _no_hardware_profile(),
+    reason="no hardware profile resolves here — these cells ask what the profile says")
+
+
 def _f32(values):
     return np.asarray(values, dtype=np.float32).tobytes()
 

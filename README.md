@@ -75,8 +75,8 @@ pip install torch --index-url https://download.pytorch.org/whl/cu124
 # For CUDA 12.1
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# For CUDA 11.8 (older GPUs like V100)
-pip install torch --index-url https://download.pytorch.org/whl/cu118
+# For Volta (V100) — see "Volta and the PyTorch ecosystem" below: a cu126 wheel, nothing newer
+pip install torch --index-url https://download.pytorch.org/whl/cu126
 ```
 
 Verify CUDA is available:
@@ -98,7 +98,30 @@ pip install neurobrix
 | **Windows** | CUDA | Fully supported. Triton not available on Windows |
 | **macOS** | Apple Silicon (MPS); Triton on Apple GPUs in progress | M-series GPUs via PyTorch MPS. Triton execution on Apple GPUs is proven on the public branch `metal-first-light` — first light passed, a complete language model run end to end, with a Metal allocator and a vendor-agnostic launcher and no torch dependency in the Triton path. Not on `main` yet |
 
-**Requirements:** Python 3.10+ / PyTorch 2.1+. NVIDIA GPU (CUDA) recommended for production; Apple Silicon (MPS) and CPU-only execution are also supported.
+#### Volta (V100) and the PyTorch ecosystem
+
+The PyTorch ecosystem is leaving the V100. CUDA 13 begins at Turing; PyTorch's
+cu128/cu129 binaries dropped Volta at 2.11; PyTorch 2.15 ships no CUDA 12.x wheel
+at all and no Python 3.10. **On a V100, the PyTorch branch of NeuroBrix needs a
+`cu126` wheel** — measured on this project's four-V100 rack with `tools/stack_door.py`
+(the wheel's embedded CUDA must carry `sm_70`, and a cuDNN convolution and a cuBLAS
+matmul must run on every card): `torch 2.10.0+cu126` and `torch 2.14.0+cu126` both
+pass (cuDNN 9.10.2); the PyPI `torch==2.14.0` (a cu130 build) and any cu128/cu129/
+cu130/cu132 wheel do not. Install from the cu126 index and run the door before
+trusting a wheel:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+python tools/stack_door.py            # refuses, by name, a wheel that does not serve every card
+```
+
+**The Triton branch has no such limit.** `neurobrix run --triton` loads no torch at
+all (the engine's Triton branch is torch-free by rule R33): its kernels are compiled
+by Triton's own bundled `ptxas` — CUDA 12.9 in Triton 3.8.0, which still compiles
+`sm_70` — so a V100 keeps running every model the Triton branch serves after the
+PyTorch ecosystem has moved on. That is what R33 is for.
+
+**Requirements:** Python 3.10+ / PyTorch 2.1+ (on Volta: a `cu126` wheel, see above). NVIDIA GPU (CUDA) recommended for production; Apple Silicon (MPS) and CPU-only execution are also supported.
 
 ---
 
