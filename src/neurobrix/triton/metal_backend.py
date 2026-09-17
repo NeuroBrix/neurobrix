@@ -241,6 +241,28 @@ METAL_BACKENDS = {
     },
 }
 
+#: What a backend says when it CANNOT emit and silently computes elsewhere.
+#: Only the seam names a vendor; the launcher asks for the list.
+_FALLBACK_MARKERS = {
+    "triton_msl": ("Kernel will fall back to CPU",),
+    "triton_ext": (),
+}
+
+
+def backend_fallback_markers():
+    """Phrases that mean the selected backend did not emit for the device.
+
+    A backend that warns and computes on the CPU returns numbers, so nothing
+    fails — the caller gets an answer from hardware it did not ask for.
+    Measured 2026-09-17: fifteen tests in trunk were red for exactly this, the
+    fork refusing batched MMA and falling back, and the engine accepting it.
+    """
+    try:
+        return _FALLBACK_MARKERS.get(selected_metal_backend(), ())
+    except Exception:                                  # noqa: BLE001
+        return ()
+
+
 _PROFILE_KEY = "metal_backend"
 _ENV_KEY = "NEUROBRIX_METAL_BACKEND"
 

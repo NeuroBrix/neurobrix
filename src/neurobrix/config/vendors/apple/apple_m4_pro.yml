@@ -356,6 +356,17 @@ autotune_screen_rtol:
 # emitter); `triton_ext` is triton-lang/triton-ext's AppleGPU backend (C++ MLIR
 # -> MSL). A declared backend that is not installed is REFUSED BY NAME rather
 # than silently swapped, so a measurement can always name what produced it.
+# The declared default STAYS triton_msl, and not for lack of evidence:
+# triton-ext's column is proven (seven cells, both modes, judged artefacts) and
+# the same fifteen tests that are red here pass on it. It cannot be the default
+# yet for an ENVIRONMENT reason, measured 2026-09-17: `triton_apple_backend` is
+# installed only in the triton-ext venv, which carries Triton 3.8.0 built from
+# source, while the engine's own venv carries the pip Triton and the fork. The
+# seam refuses by name rather than silently running the other backend —
+#   "the hardware profile declares `metal_backend: triton_ext` ... and it is NOT
+#    installed (no module 'triton_apple_backend')"
+# — which is correct, and is what makes this a packaging job rather than a
+# one-line profile edit.
 metal_backend: triton_msl
 
 # Measured 2026-09-16, swin2SR-classical-sr-x2-64 on this machine: its addmm

@@ -18,30 +18,8 @@ from neurobrix.triton.device_transfer import parse_device_idx
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
 
-
-def _require_max_tokens(defaults, override=None):
-    """`max_tokens` from the request, then the container — never a literal.
-
-    `defaults.get("max_tokens", 512)` and `... , 2048)` stood at nine sites. A
-    decode bound nobody declared is not a default, it is a claim: it silently
-    truncates a long generation or reserves a cache nobody asked for, and the
-    two literals disagreed with each other across the same engine.
-
-    Every container on this rack that generates declares it — Kokoro 4096,
-    whisper 448, TinyLlama via its lm_config — so the value exists; it was
-    simply not being read as required.
-    """
-    if override is not None:
-        return override
-    v = (defaults or {}).get("max_tokens")
-    if v is None:
-        from neurobrix.core.runtime_values import MissingRuntimeValue
-        raise MissingRuntimeValue(
-            "'max_tokens' is required to bound this generation and the "
-            "container declares none. Looked in: the request, then the "
-            "container's runtime/defaults.json['max_tokens']. Declare it there "
-            "— the engine will not invent a decode bound.")
-    return v
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
 
 
 
@@ -61,7 +39,7 @@ def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
 def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     """Build generator config from defaults.json — pure Python."""
     config = {
-        "max_tokens": _require_max_tokens(defaults),
+        "max_tokens": require_max_tokens(defaults),
         "temperature": defaults.get("temperature", 1.0),
         "top_p": defaults.get("top_p", 1.0),
         "top_k": defaults.get("top_k", 0),
@@ -666,7 +644,7 @@ class TritonAutoregressiveHandler:
             if _mt is None:
                 _mt = _resolved.get("max_tokens")
             if _mt is None:
-                _mt = _require_max_tokens(self.ctx.pkg.defaults)
+                _mt = require_max_tokens(self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
             kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
             if kv_plan is not None:

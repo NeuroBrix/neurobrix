@@ -86,8 +86,13 @@ def test_the_certified_directory_is_a_different_path_entirely():
     """Structural, not a promise: the runtime cache writes under the machine's
     replay cache and the directory lives in the installed package."""
     from neurobrix.triton import autotune_cache
-    assert "replay_cache" in autotune_cache._DIR
-    assert "config/autotune" not in autotune_cache._DIR
+    # `_dir()`, not `_DIR`: the latter is the snapshot taken at import, and a
+    # test earlier in the process that redirects NEUROBRIX_REPLAY_CACHE to a tmp
+    # path froze that value for everyone. Where the cache actually goes is what
+    # this test is about, and that is read live.
+    where = autotune_cache._dir()
+    assert "replay_cache" in where, where
+    assert "config/autotune" not in where, where
 
 
 def test_the_seat_is_recorded_under_the_key_the_choice_is_stored_under():
