@@ -210,8 +210,10 @@ def _rows(graph: dict, only: str | None):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--graph", help="one component graph.json")
-    ap.add_argument("--root", default=os.environ.get(
-        "NEUROBRIX_CACHE", str(Path.home() / ".neurobrix" / "cache")))
+    # The machine's cache from the one door (`neurobrix.core.paths`), which
+    # still honours $NEUROBRIX_CACHE and also reads ~/.neurobrix/paths.json.
+    from neurobrix.core.paths import cache_dir
+    ap.add_argument("--root", default=str(cache_dir()))
     ap.add_argument("--symbol", help="restrict to this symbol NAME (e.g. time)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
