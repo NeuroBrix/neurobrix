@@ -418,7 +418,32 @@ class CudaDriver(Driver):
         # `options` one only feeds the cache key), so the same dict goes in both.
         options, sig, cexprs, attrs = jit_fn._pack_args(backend, options, bound, spec, options)
         src = ASTSource(jit_fn, sig, cexprs, attrs)
-        compiled = triton_compile(src, target=target(), options=options.__dict__)
+        # A backend that cannot emit for the device may WARN and compute on the
+        # CPU instead. Numbers come back, nothing raises, and the caller has an
+        # answer from hardware it did not ask for. Correct-or-refuse applies to
+        # the compile as much as to the launch.
+        import warnings as _warnings
+        with _warnings.catch_warnings(record=True) as _w:
+            _warnings.simplefilter("always")
+            compiled = triton_compile(src, target=target(), options=options.__dict__)
+        try:
+            from neurobrix.triton.metal_backend import backend_fallback_markers
+            _markers = backend_fallback_markers()
+        except Exception:                              # noqa: BLE001
+            _markers = ()
+        if _markers:
+            for _warn in _w:
+                _msg = str(_warn.message)
+                if any(_m in _msg for _m in _markers):
+                    raise RuntimeError(
+                        f"the Metal backend could not emit {kernel.__name__} for "
+                        f"this device and fell back to the CPU. Refusing the "
+                        f"result: it would be an answer from hardware the caller "
+                        f"did not ask for, and it is indistinguishable from a "
+                        f"correct one. The backend said: {_msg.strip()[:400]}")
+        for _warn in _w:                               # keep every other warning visible
+            _warnings.warn_explicit(_warn.message, _warn.category,
+                                    _warn.filename, _warn.lineno)
         md = compiled.metadata
         if getattr(md, "num_ctas", 1) != 1 or getattr(md, "global_scratch_size", 0) or getattr(md, "profile_scratch_size", 0):
             raise RuntimeError(f"NeuroBrix launcher: {jit_fn.__name__} needs clusters or scratch memory the CUDA client does not provide yet")
