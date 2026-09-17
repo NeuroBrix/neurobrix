@@ -7,8 +7,14 @@ memory that sweep measures the swap, not the kernels.
 
 Three rules, each pinned:
 
-  * the decision is CONSTANT-FREE: arguments alone exceeding `available_mb`
-    (from `core.host_memory`, our own authority, read live) is the whole test;
+  * the decision carries NO TUNING MARGIN: what it adds to the arguments is
+    exactly the scratch `do_bench` really allocates, at the same name, so the
+    gate and the allocation cannot drift. (This read "CONSTANT-FREE" until
+    2026-09-17, when a flush allocation the sweep genuinely makes was added to
+    the gate after hat-s-x4 reached SIGKILL with the door open. The rule the
+    line was protecting -- nothing here is free to tune -- is unchanged;
+    "no constant at all" was the wrong way to say it, because a quantity the
+    code really allocates is not a knob.)
   * the sweep is cut to the single first-declared config and the cut is SAID
     with all three numbers;
   * the choice is marked UNMEASURED and `capture()` never persists it --
@@ -31,19 +37,50 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
     from neurobrix.kernels import launcher as L
     import neurobrix.core.host_memory as hm
 
+    # Available memory must exceed the flush the sweep allocates, or there is no
+    # "under the line" to test: below that figure every sweep swaps, which is
+    # itself correct and is what the third case below pins.
+    _FLUSH_MB = L._BENCH_FLUSH_BYTES // 2 ** 20
+
     class _M:
-        available_mb = 100
+        available_mb = _FLUSH_MB + 100
         total_mb = 24576
         source = "test"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
     monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
+    # Over the line, by one MiB, counting the flush the sweep really allocates.
     swaps, avail = L.bench_would_swap(101 * 2 ** 20)
-    assert swaps is True and avail == 100
+    assert swaps is True and avail == _FLUSH_MB + 100
+
+    # Under it, by one MiB.
     swaps, _ = L.bench_would_swap(99 * 2 ** 20)
     assert swaps is False, (
         "under the line nothing is gated: the comparison is the whole test, "
-        "with no margin constant to tune")
+        "and the only thing added to the arguments is the allocation do_bench "
+        "actually makes")
+
+    # The gate counts EXACTLY what do_bench allocates. Read from the source of
+    # both, so a future edit to one and not the other fails here rather than in
+    # a sweep on somebody's machine.
+    # A machine with less available than the flush alone cannot sweep at all,
+    # and must say so with zero arguments.
+    class _Tiny(_M):
+        available_mb = _FLUSH_MB - 1
+
+    monkeypatch.setattr(hm, "memory_state", lambda: _Tiny())
+    swaps, _ = L.bench_would_swap(0)
+    assert swaps is True, (
+        "below the flush the sweep allocates, every sweep measures the swap, "
+        "arguments or no arguments")
+
+    import inspect
+    bench_src = inspect.getsource(L.do_bench)
+    assert "_BENCH_FLUSH_BYTES // 4" in bench_src, (
+        "do_bench must allocate its flush at _BENCH_FLUSH_BYTES; a literal "
+        "repeated there can drift from the gate that counts it, and then the "
+        "gate is about nothing. Found:\n" +
+        "\n".join(l for l in bench_src.splitlines() if "flush" in l))
 
 
 def test_an_unreadable_platform_gates_nothing(monkeypatch):

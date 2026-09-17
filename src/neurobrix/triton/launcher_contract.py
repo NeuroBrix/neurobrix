@@ -230,8 +230,12 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
     It exercises the driver **exactly as `kernels/launcher.py` does**: Triton
     compiles for the target the driver names, the driver loads the artifact
     it declared, and the driver launches it with the launcher's own
-    `(kind, value)` parameter list. A checker that used a private path of its
-    own would certify a driver the engine cannot actually drive.
+    `(kind, value)` parameter list AND everything that travels beside it —
+    `names`, `types`, and the `trailing` buffers the driver itself declared
+    from the compile metadata. A checker that used a private path of its own
+    would certify a driver the engine cannot actually drive; until 2026-09-17
+    this one omitted all three, so a driver that needs any of them could not be
+    certified here at all.
 
     The callables are the caller's, because allocation is the allocator's job
     and this module must not grow one:
@@ -304,7 +308,27 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
         if driver.wants_scratch_params:
             params = params + [("ptr", 0), ("ptr", 0)]
 
-        driver.launch(function, grid, block, metadata.shared, 0, params)
+        # Everything `kernels/launcher.py` hands a driver, because that is what
+        # this function claims to do. Omitting any of it certifies a driver
+        # against a call the engine never makes: a backend that packs its
+        # scalars into one buffer needs `types` to place the fields, one that
+        # binds by name needs `names`, and one whose emitter appends its own
+        # buffers needs `trailing` — without which the checker would bless a
+        # launch that binds fewer buffers than the kernel declares.
+        #
+        # `names` and `types` cover the SIGNATURE's runtime parameters and stop
+        # there. The launcher appends the two scratch pointers to `params` and
+        # to nothing else, so this must not "helpfully" extend them either: the
+        # point is to make the launcher's call, divergences included.
+        names = [name for name, _ty in ordered]
+        types = [ty for _name, ty in ordered]
+        trailing = driver.trailing_buffers(metadata)
+
+        def _launch(p):
+            driver.launch(function, grid, block, metadata.shared, 0, p,
+                          names=names, types=types, trailing=trailing)
+
+        _launch(params)
         got = read_buffer(pointers[args_builder.output_index],
                           args_builder.output_bytes)
         check(got == expected,
@@ -314,8 +338,7 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
 
         # A wrong-length argument list must be refused, not padded.
         try:
-            driver.launch(function, grid, block, metadata.shared, 0,
-                          params[:-1])
+            _launch(params[:-1])
             failures.append("launch() accepted an argument list of the wrong "
                             "length instead of refusing it")
         except Exception:
@@ -331,7 +354,7 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
                 foreign[i] = ("ptr", 0x1000)
                 break
         try:
-            driver.launch(function, grid, block, metadata.shared, 0, foreign)
+            _launch(foreign)
             failures.append("launch() accepted a device address the "
                             "allocator never handed out")
         except Exception:
