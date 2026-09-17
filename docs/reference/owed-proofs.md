@@ -447,6 +447,14 @@ The control that would have settled it: read the SAME bucket twice with enough t
 readings for the walk to move — which is what the morning did by itself. Six minutes was not
 enough and I should have said so rather than concluding.
 
+**And there IS a real unreachable set — it is 184, not 1 168, and it was already named.** Card 1
+closed its own kernels at 02:57 with `rc=0` and this line: *"71 census key(s) are unreachable to
+this engine — the debt `D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE`, not a failure."* That
+debt (filed 2026-09-11, 184 of 6 277) is keys an OLDER engine's wrapper computed differently, so
+no run presents them again; they were retired from the census on 09-13 and the certifier counts
+them apart. So the engine already knew which keys it cannot reach, said so at the end of the run,
+and the number is two orders smaller than the one I invented for it.
+
 **What remains true and is now the only open part.** 223 unknown-card entries remain in the main
 tree and 1 317 in the side tree. The 16 GB class is at 99.1 %, so those 223 sit inside the last
 0.9 % of the pass. Whether the bucket reaches zero is answered by reading it when the pass ends,
