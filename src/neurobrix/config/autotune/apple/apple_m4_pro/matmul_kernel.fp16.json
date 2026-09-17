@@ -646,16 +646,16 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 4,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-12T21:48:21+00:00",
+    "date": "2026-09-17T21:19:51+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.7.0",
-     "name": "metal"
+     "triton": "3.8.0",
+     "name": "mps"
     },
     "shape": [
      64,
@@ -667,7 +667,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.00030761520117374234,
+    "deviation": 0.00036317483272655206,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -676,18 +676,37 @@
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
-     "target": "metal-apple-m4-pro"
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186
+     },
+     "clocks_mhz": null
     },
-    "best_ms": 0.04224667907549901,
-    "second_ms": 0.042398562996609046,
+    "best_ms": 0.23913134188301818,
+    "second_ms": 0.2875904720531751,
     "candidates": 10,
     "accepted": 10,
-    "benched": 10,
+    "benched": 2,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 0.003,
-     "bench": 17.246
+     "runs": 0.011,
+     "bench": 0.744
+    },
+    "stability_witness": {
+     "open_ms": 4.6481,
+     "close_ms": 4.4638,
+     "drift": 0.0397,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ]
     },
     "built": {
      "gpu": true,
@@ -790,11 +809,11 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-12T21:48:04+00:00",
+    "date": "2026-09-17T21:16:38+00:00",
     "engine_version": "0.5.3",
     "backend": {
-     "triton": "3.7.0",
-     "name": "metal"
+     "triton": "3.8.0",
+     "name": "mps"
     },
     "shape": [
      96,
@@ -806,7 +825,7 @@
      "fp16",
      "fp16"
     ],
-    "deviation": 0.0003374898991083967,
+    "deviation": 0.0003815247107561542,
     "tolerance": 0.02,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
@@ -815,18 +834,37 @@
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
-     "target": "metal-apple-m4-pro"
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186
+     },
+     "clocks_mhz": null
     },
-    "best_ms": 0.04288515692640995,
-    "second_ms": 0.04381319673067504,
+    "best_ms": 0.2385763765209251,
+    "second_ms": 0.27519771466719223,
     "candidates": 10,
     "accepted": 10,
-    "benched": 4,
+    "benched": 9,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 1.522,
-     "bench": 6.968
+     "runs": 0.004,
+     "bench": 2.099
+    },
+    "stability_witness": {
+     "open_ms": 4.444,
+     "close_ms": 4.4443,
+     "drift": 0.0001,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ]
     },
     "built": {
      "gpu": true,
