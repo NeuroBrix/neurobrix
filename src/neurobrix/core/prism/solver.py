@@ -433,7 +433,9 @@ class ExecutionPlan:
             name: ComponentAllocation(
                 name=name,
                 devices=comp["devices"],
-                dtype=comp.get("dtype", "float32"),
+                # required, like `devices` and `memory_mb` beside it: a plan
+                # serialised without a dtype is a defect, not a float32 request
+                dtype=comp["dtype"],
                 memory_mb=comp["memory_mb"],
                 architecture=comp.get("architecture", ""),
                 vendor=comp.get("vendor", ""),
@@ -465,7 +467,7 @@ class ExecutionPlan:
                 num_kv_heads=kv_data["num_kv_heads"],
                 k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
                 v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
-                dtype=kv_data.get("dtype", "float16"),
+                dtype=kv_data["dtype"],   # required, like num_layers above
                 memory_bytes=int(kv_data.get("memory_mb", 0) * 1024 * 1024),
                 per_token_bytes=kv_data.get("per_token_bytes", 0),
             )
@@ -1951,33 +1953,69 @@ class PrismSolver:
         return defaults.get("lm_config")
 
 
-    def _scale_activations_to_request(self, comp, activation_bytes, input_config):
-        """Scale a trace-sized activation estimate to the request's size.
+    #: How a declared symbol's NAME maps onto the request that will be run.
+    #: A symbol the request cannot answer for is left alone rather than guessed.
+    _SYMBOL_TO_REQUEST = {
+        "height": "height",
+        "width": "width",
+        "batch": "batch_size",
+        "batch_size": "batch_size",
+        "seq_len": "seq_len",
+        "sequence_length": "seq_len",
+        "num_frames": "num_frames",
+        "frames": "num_frames",
+    }
 
-        Returns the estimate unchanged when the graph declares no spatial trace
-        values, when the request carries no height/width, or when the ratio is
-        not greater than one — a smaller request does not get a smaller promise
-        than the profiler already made.
+    def _scale_activations_to_request(self, comp, activation_bytes, input_config):
+        """Scale a trace-sized activation estimate to the request actually made.
+
+        Graph tensor shapes are TRACE values — measured on this rack, all four
+        image models declare height/width symbols and ZERO of their tensors use
+        them (real-esrgan-x2 0/1800, hat-s-x4 0/4660, swin2SR 0/5163, swinir
+        0/4175) — while op arguments carry the symbolic expressions. So the
+        profiler sizes every activation at the trace whatever was asked, and
+        hat-s-x4 planned the same 278 MB for a 448x448 request and a 160x112 one.
+
+        EVERY declared symbol carrying a trace value is followed, not only
+        height and width: a sequence length or a frame count that differs
+        between trace and request scales the estimate exactly as a spatial
+        dimension does.
+
+        Refuses by name rather than swallowing: a bare `except Exception:
+        return activation_bytes` stood here, which would have turned any bug in
+        this method back into the trace-sized estimate that caused the problem.
         """
-        try:
-            sc = (getattr(comp, "graph", None) or {}).get("symbolic_context") or {}
-            syms = sc.get("symbols") or {}
-            th = tw = None
-            for spec in syms.values():
-                if spec.get("name") == "height":
-                    th = spec.get("trace_value")
-                elif spec.get("name") == "width":
-                    tw = spec.get("trace_value")
-            rh = getattr(input_config, "height", None)
-            rw = getattr(input_config, "width", None)
-            if not (th and tw and rh and rw):
-                return activation_bytes
-            ratio = (float(rh) * float(rw)) / (float(th) * float(tw))
-            if ratio <= 1.0:
-                return activation_bytes
-            return int(activation_bytes * ratio)
-        except Exception:                                  # noqa: BLE001
-            return activation_bytes
+        from neurobrix.core.runtime_values import MissingRuntimeValue
+
+        graph = getattr(comp, "graph", None) or {}
+        syms = ((graph.get("symbolic_context") or {}).get("symbols") or {})
+        if not isinstance(syms, dict) or not syms:
+            return activation_bytes                    # nothing declared: nothing to scale
+
+        ratio = 1.0
+        followed = []
+        for sym_id, spec in syms.items():
+            if not isinstance(spec, dict):
+                raise MissingRuntimeValue(
+                    f"the graph declares symbol {sym_id!r} as {type(spec).__name__}, "
+                    f"not a specification with a trace value; the estimate cannot "
+                    f"be scaled against a symbol it cannot read")
+            trace = spec.get("trace_value")
+            name = spec.get("name")
+            if trace in (None, 0) or not name:
+                continue                               # declared without a trace value
+            attr = self._SYMBOL_TO_REQUEST.get(name)
+            if attr is None:
+                continue                               # a symbol this request cannot answer for
+            actual = getattr(input_config, attr, None)
+            if actual in (None, 0):
+                continue
+            ratio *= float(actual) / float(trace)
+            followed.append(f"{name} {trace}->{actual}")
+
+        if ratio <= 1.0:
+            return activation_bytes                    # never promise LESS than measured
+        return int(activation_bytes * ratio)
 
 
     def _estimate_kv_cache_bytes(self, container, target_dtype_str: str) -> int:
@@ -3005,9 +3043,21 @@ class PrismSolver:
             return None  # fits untiled — no tiling needed
 
         # Runtime latent spatial extent (the input space the tiles cover).
-        vae_scale = getattr(ic, "vae_scale", None) or 8
-        latent_h = max(1, (getattr(ic, "height", None) or 1024) // vae_scale)
-        latent_w = max(1, (getattr(ic, "width", None) or 1024) // vae_scale)
+        # `or 8` and `or 1024` stood here: a tiling decision taken against an
+        # invented 1024x1024 at an invented VAE scale is a decision about a
+        # request nobody made. If this point is reached without them, the plan
+        # cannot size a tile and says so.
+        vae_scale = getattr(ic, "vae_scale", None)
+        _h, _w = getattr(ic, "height", None), getattr(ic, "width", None)
+        if not (vae_scale and _h and _w):
+            from neurobrix.core.runtime_values import MissingRuntimeValue
+            raise MissingRuntimeValue(
+                f"tiling was required for this component but its latent extent "
+                f"cannot be derived: vae_scale={vae_scale!r}, height={_h!r}, "
+                f"width={_w!r}. Declare them in the container's "
+                f"runtime/defaults.json or the family config.")
+        latent_h = max(1, _h // vae_scale)
+        latent_w = max(1, _w // vae_scale)
 
         window_alignment = config.get("window_size", 1) or 1
         frac = budget_bytes / full_act

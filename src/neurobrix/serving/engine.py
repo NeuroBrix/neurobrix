@@ -91,9 +91,14 @@ class InferenceEngine:
             with open(defaults_path) as f:
                 cached_defaults = json.load(f)
 
-        height = cached_defaults.get("height", 1024)
-        width = cached_defaults.get("width", 1024)
-        vae_scale = cached_defaults.get("vae_scale_factor", 8)
+        # Same cascade as the CLI, same refusal. 1024/1024/8 stood here and made
+        # the serving path plan for a request nobody sent — and it is the SAME
+        # InputConfig the CLI now fills from the request.
+        from neurobrix.core.runtime_values import resolve as _resolve_runtime
+        height = _resolve_runtime("height", container=cached_defaults, default=None)
+        width = _resolve_runtime("width", container=cached_defaults, default=None)
+        vae_scale = _resolve_runtime("vae_scale_factor", container=cached_defaults,
+                                     default=None)
 
         input_config = InputConfig(
             batch_size=2,
@@ -320,7 +325,13 @@ class InferenceEngine:
 
         # Context overflow protection
         max_cache_len = self._get_max_cache_len()
-        max_tokens = kwargs.get("max_tokens") or self._pkg.defaults.get("max_tokens", 512)
+        # A decode bound nobody declared truncates silently; the request wins,
+        # then the container, then a refusal.
+        from neurobrix.core.runtime_values import resolve as _resolve_runtime
+        max_tokens = _resolve_runtime(
+            "max_tokens", container=self._pkg.defaults,
+            extra=[("the request", kwargs.get("max_tokens"))],
+            why="It bounds this generation.")
         summarized = self._session.ensure_fits(
             max_cache_len=max_cache_len,
             max_tokens=max_tokens,
