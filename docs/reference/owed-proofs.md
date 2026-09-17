@@ -424,34 +424,30 @@ and answered on this rack:
   moves from *correct* to *correct for a reason*. Neither container is published, so nothing on
   the hub waits on it.
 
-## 7 — the 1 168 entries the Triton 3.8 re-proof will never reach, 2026-09-16
+## 7 — WITHDRAWN: "the 1 168 entries the re-proof will never reach" was wrong, 2026-09-17
 
-* **owed by** the Dell (this rack) · **when** after the 3.8 pass completes, because it is the
-  pass's completion that makes this visible rather than theoretical.
-* **what was measured, with a control.** 1 168 entries of the volta directory carry a PRIMARY
-  proof that names this rack's hostname and **no device memory size** — the legacy unknown-card
-  class, which serves no card until re-proven (register 56). They are spread over six files, 725
-  of them in `matmul_kernel.fp32.json`, the file the pass is 72 % through.
+**The claim is retracted. They were reachable and they drained.** At 22:24 the unknown-card
+bucket held 1 168 entries, 725 of them in `matmul_kernel.fp32.json`. At 02:55 the same file held
+**4** and the directory held **223**. The pass reaches them; it had simply not reached them yet.
 
-  They are not draining. Two readings six minutes apart: the 16 GB class went 6 159 → 6 231 done
-  while the unknown bucket stayed at exactly 1 168. And the control that makes it an attribution
-  rather than a coincidence: all 725 of the matmul ones are PRESENT in the 32 GB side tree, and
-  **0** are re-proven there, while **1 374 of 3 920** known-card keys in that same tree are. At
-  that rate roughly 254 of them would be done if they were reachable.
-* **a comparison that is NOT evidence, said so it is not read as one.** Register 56 counted
-  **1 530** of these on **7 191** entries; today there are **1 168** on **9 729**. That is not
-  progress and it is not regression: the directories are different sizes, so the two counts
-  cannot be subtracted. Only the control above says anything about reachability.
-* **why the six-minute reading is not thin either.** In those six minutes the 16 GB class gained
-  72 entries. If the unknown ones were drawn at the same rate as the rest of what remains, about
-  a third of that — two dozen — would have been unknown-card keys, and the bucket would have
-  fallen to roughly 1 144. It did not move at all.
-* **what it means, said plainly.** When the pass finishes, "the directory is re-proven under
-  3.8.0" will be true of every key the pass can reach and false of 1 168 entries that will still
-  carry a 3.6.0 proof serving no card. A completion notice that does not say so reads as more
-  than it is.
-* **the proof this rack returns.** Either the shapes are re-entered into the pass (they came from
-  requests the zoo no longer makes, which is why `certify --reprove-generator` never visits them)
-  and the 1 168 drain to 0; or they are removed as records of a machine-state the directory can
-  no longer attribute, with the removal counted and said. Not both, and not silence.
-  `tools/reproof_coverage.py` is the instrument: its `?` row is this number.
+**How I got it wrong, since that is the part worth keeping.** I had two readings six minutes
+apart showing no movement, and a control that looked decisive: of 725 unknown-card keys present
+in the 32 GB side tree, **0** were re-proven there while **1 374 of 3 920** known-card keys in
+that same tree were. I treated zero-against-thirty-five-per-cent as an attribution.
+
+It was an ORDERING artefact. A certifier walks its key space in an order, and the legacy
+unknown-card keys sit together in it — so at any moment before the walk reaches them they are
+uniformly absent from the done set, and a snapshot of a contiguous region reads as a property of
+the region. **I had named that exact confound four hours earlier**, on the question of whether
+running the test suite beside a certifier moved its rankings: *"a time window is a contiguous
+slice of shape space, because keys are certified in order — so the comparison is confounded by
+construction"*. I applied it there and then walked into it here.
+
+The control that would have settled it: read the SAME bucket twice with enough time between the
+readings for the walk to move — which is what the morning did by itself. Six minutes was not
+enough and I should have said so rather than concluding.
+
+**What remains true and is now the only open part.** 223 unknown-card entries remain in the main
+tree and 1 317 in the side tree. The 16 GB class is at 99.1 %, so those 223 sit inside the last
+0.9 % of the pass. Whether the bucket reaches zero is answered by reading it when the pass ends,
+not before. `tools/reproof_coverage.py` is the instrument and its `?` row is the number.
