@@ -164,6 +164,14 @@ def check_compute_environment() -> list[str]:
 
 def cmd_doctor(args) -> int:
     """PATH diagnosis (the original check) followed by the compute check."""
+    from neurobrix.cli.json_out import wants_json, human_lines_to_stderr, emit
+    if wants_json(args):
+        with human_lines_to_stderr(True):
+            from neurobrix.cli._path_helper import print_path_diagnostics
+            print_path_diagnostics()
+            problems = check_compute_environment()
+        emit("doctor", {"ok": not problems, "problems": list(problems)})
+        return 0 if not problems else 1
     from neurobrix.cli._path_helper import print_path_diagnostics
 
     print_path_diagnostics()

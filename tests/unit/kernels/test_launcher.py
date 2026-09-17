@@ -17,9 +17,14 @@ SRC = Path(__file__).resolve().parents[3] / "src"
 
 
 def _cuda():
+    # The module may legitimately be absent (another backend, a partial install);
+    # a NAME inside it may not. Splitting the two is the whole point: an absent
+    # module skips, a renamed symbol raises where the suite can see it, and the
+    # guarded call stays guarded because "no device here" is a real answer.
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    set_device = nbx.DeviceAllocator.set_device
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        DeviceAllocator.set_device(0)
+        set_device(0)
         return True
     except Exception:
         return False
@@ -189,3 +194,29 @@ def test_a_recorder_sees_every_launch_and_its_record_replays():
     seen.clear()
     launch(scale_kernel, grid, a_r, a_i, n, 0.5, BLOCK_SIZE=1024)
     assert seen == [], "the recorder still fires after it was cleared"
+
+
+def test_a_refused_address_is_named_by_its_parameter():
+    """The ownership door refuses a pointer the allocator never handed out;
+    the refusal names WHICH parameter carried it, because the address alone
+    attributes nothing (Ming's embedding, 2026-09-14). No device is touched:
+    the refusal fires before anything reaches the driver. Injection: with the
+    name dropped from the message this test failed on 'weight_ptr'."""
+    import ctypes
+    import pytest
+    from neurobrix.kernels.launcher import CudaDriver
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    drv = CudaDriver.__new__(CudaDriver)
+    drv._param_counts = {}
+    fn = ctypes.c_void_p(1)
+    # An address no allocation can cover: the first page. (The real address
+    # of the Ming refusal was used here first, and inside the full suite a
+    # live allocation happened to cover it — the door let it through and
+    # the stub driver fell over one line later, 2026-09-16.)
+    foreign = 0x1000
+    assert not DeviceAllocator.holds(foreign)
+    with pytest.raises(ValueError, match=r"parameter 'weight_ptr'"):
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", foreign), ("i32", 4)],
+                   names=["weight_ptr", "n"])
+    with pytest.raises(ValueError, match=r"parameter #0"):
+        drv.launch(fn, (1,), (32,), 0, 0, [("ptr", foreign)])

@@ -38,8 +38,8 @@ from typing import Dict, List, Optional, Tuple
 #   NBX_MALLOC_TRACE=/tmp/run.tsv  neurobrix run --model ... --triton
 #
 # Row format (tab-separated):
-#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (M rows only;
-#                                                           F leaves empty)
+#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (an F row carries the
+#                                                           engine frames that freed it, innermost first)
 #
 # Recipes:
 #   - Total allocation volume by site:
@@ -103,10 +103,28 @@ def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
     _MALLOC_TRACE_EVENTS.append((eid, "M", ptr, nbytes, site))
 
 
+def _extract_neurobrix_chain(max_frames: int = 40, keep: int = 8) -> str:
+    """The engine frames of the caller, innermost first, ' < '-joined — for
+    a FREE row. A block freed by a finalizer names `free()` as its site,
+    which says nothing; the frames above it name what dropped the last
+    reference (Ming's arenas freed under live weights, 2026-09-16)."""
+    f = sys._getframe(2)
+    n = 0
+    out = []
+    while f is not None and n < max_frames and len(out) < keep:
+        fname = f.f_code.co_filename
+        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
+            rel = fname.split("neurobrix/")[-1]
+            out.append(f"{rel}:{f.f_lineno} {f.f_code.co_name}")
+        f = f.f_back
+        n += 1
+    return " < ".join(out) or "<unknown>"
+
+
 def _record_free_site(ptr: int, nbytes: int) -> None:
     eid = _MALLOC_TRACE_COUNTER[0]
     _MALLOC_TRACE_COUNTER[0] = eid + 1
-    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, ""))
+    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, _extract_neurobrix_chain()))
 
 
 def _flush_malloc_trace() -> None:
@@ -610,10 +628,38 @@ def _get_tl_dtype(nbx_dtype: NBXDtype):
 # GPU RUNTIME — hardware-agnostic via ctypes (CUDA/ROCm)
 # ============================================================================
 
+def _environment_runtime_libs(package: str, names) -> list:
+    """The runtime libraries the ENVIRONMENT ships, ahead of the system's.
+    torch's CUDA wheels carry their own `nvidia/cuda_runtime/lib/libcudart.so.12`
+    and bind against it; a `libcudart.so.12` resolved by ldconfig is the
+    machine's toolkit (12.2 on this rack), and when the engine's ctypes loader
+    opened THAT one first, torch 2.14's `libc10_cuda.so` found an older runtime
+    than it was built on — `undefined symbol: cudaGetDriverEntryPointByVersion`
+    (2026-09-16, the stack alignment). One process, one runtime: the wheel's
+    own when it exists, the system's otherwise. Read from the package's
+    location, never a typed path."""
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec(package)
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None or not spec.submodule_search_locations:
+        return []
+    import os
+    root = list(spec.submodule_search_locations)[0]
+    out = []
+    for n in names:
+        cand = os.path.join(root, "lib", n)
+        if os.path.exists(cand):
+            out.append(cand)
+    return out
+
+
 # Runtime API mapping per backend
 _GPU_BACKENDS = {
     "cuda": {
-        "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        "rt_libs": _environment_runtime_libs("nvidia.cuda_runtime", ["libcudart.so.12"])
+                   + ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice",
@@ -937,6 +983,57 @@ class DeviceAllocator:
         # cache so the next ensure_triton_device re-syncs fully.
         invalidate_current_device_cache()
         return best_idx
+
+    @staticmethod
+    def visible_device_memory() -> list[tuple[int, int]]:
+        """`[(ordinal, total_bytes)]` for every device THIS PROCESS can see.
+
+        The ordinals come back usable as-is in `cuda:<i>`, because the whole
+        walk goes through the GPU RUNTIME — so `CUDA_VISIBLE_DEVICES` applies
+        to it, exactly as it applies to every allocation made afterwards.
+
+        That is the entire point of the method. `nvidia-smi` answers the same
+        question from NVML, which sits OUTSIDE the mask and always reports the
+        whole board: a caller that picks an index from `nvidia-smi` and then
+        allocates on it is reading one namespace and writing another, and the
+        two agree only on an unpinned host. `tests/unit/kernels/
+        test_prefill_determinism.py` did exactly that and asked for `cuda:2`
+        under `CUDA_VISIBLE_DEVICES=0` (2026-09-17) — a red that had nothing
+        to do with its subject, on a card that was simply not there.
+
+        Pure runtime API through ctypes — cudaGetDeviceCount + cudaSetDevice +
+        cudaMemGetInfo, no torch (R33). The previously-current device is
+        restored and the fast-path cache invalidated, as in
+        `most_free_device`, whose inline copy of this loop this replaces.
+        Returns `[]` when there is no runtime or no device.
+        """
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+        except Exception:
+            return []
+        ndev = DeviceAllocator.device_count()
+        if ndev <= 0:
+            return []
+        prev = DeviceAllocator.get_device()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        set_fn = backend["set_device"]
+        out: list[tuple[int, int]] = []
+        for i in range(ndev):
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(i))
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+                out.append((i, total_b.value))
+            except Exception:
+                continue
+        try:
+            getattr(rt, set_fn)(ctypes.c_int(prev))
+        except Exception:
+            pass
+        invalidate_current_device_cache()
+        return out
 
     @staticmethod
     def _maybe_init_pool() -> None:
@@ -2075,6 +2172,13 @@ def _set_device(t):
         DeviceAllocator.ensure_triton_device(t._device_idx)
 
 
+#: This engine names its backends for the vendor RUNTIME it loads (`cuda`, `hip`,
+#: `metal`); Triton names its own for the vendor's COMPILER target, which is the
+#: directory under `triton/backends/`. The two vocabularies are not the same and
+#: the mapping between them belongs here, once.
+_TRITON_BACKEND_BY_RUNTIME = {"cuda": "nvidia", "hip": "amd", "metal": "metal"}
+
+
 def _pin_triton_backend(name: str) -> str:
     """Tell Triton which backend is here, then return the name.
 
@@ -2090,15 +2194,51 @@ def _pin_triton_backend(name: str) -> str:
     directly and probe nothing else. We already know the answer here — this
     function found it without importing anything — so we say so. `setdefault`,
     because an explicit choice by the user or a test outranks ours.
+
+    **The name has to be TRITON'S, and ours is not.** This engine's backends are
+    called `cuda`, `hip` and `metal`; Triton's registry keys are the directory
+    names under `triton/backends/` — `nvidia` and `amd` — and `_create_driver`
+    raises `Unknown backend device '<name>'` on anything else. Pinning `cuda` was
+    therefore always wrong and never showed, because this engine's launcher does
+    every launch itself and never asks Triton for a driver. It showed the moment
+    a launch went down Triton's own path: torch 2.14 ships in-tree Triton ops and
+    the seam now hands those back to Triton, which then read the pin (2026-09-17).
+
+    A name Triton does not have is worse than no pin at all, so the mapped name is
+    checked against Triton's own registry when that can be read without probing —
+    `triton.backends` is a dict built at import and `is_active()` runs only inside
+    `_create_driver` — and the pin is skipped rather than set to something that
+    raises.
     """
-    os.environ.setdefault("TRITON_DEFAULT_BACKEND", name)
+    triton_name = _TRITON_BACKEND_BY_RUNTIME.get(name, name)
+    try:
+        from triton.backends import backends as _triton_backends
+        if triton_name not in _triton_backends:
+            return name                       # do not pin a name Triton would refuse
+    except Exception:                         # noqa: BLE001 — no Triton, or a shape we do not know
+        pass
+    os.environ.setdefault("TRITON_DEFAULT_BACKEND", triton_name)
     return name
 
 
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
     """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
-    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's driver
+    the process can load, or `NBX_GPU_BACKEND`.
+
+    **What this does NOT answer: whether a device is there.** On CUDA and ROCm
+    it succeeds when the vendor's runtime LIBRARY loads, which it does on a host
+    with the toolkit and no visible card — it answered "cuda" under
+    `CUDA_VISIBLE_DEVICES=` and five tests that had gated on it went on to fail
+    at their first allocation with `cudaErrorNoDevice` instead of skipping
+    (2026-09-16, register 62). On Metal the two questions coincide, because
+    there is no library to dlopen and the probe opens the device itself — which
+    is why the same call is an executing probe on one backend and a naming one
+    on the others. A caller asking "can I run here" wants
+    `DeviceAllocator.device_count() > 0`, which asks the driver, or an
+    allocation, which answers for the memory too.
+
+    Never through Triton's driver
     probe: `triton.runtime.driver.active` asks every backend `is_active()`,
     and those probes import torch (R33, universal since 2026-09-05 — this
     call was the first torch import of the launch path).

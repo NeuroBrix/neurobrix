@@ -9,8 +9,46 @@ from neurobrix import __version__
 from neurobrix.cli.utils import PACKAGE_ROOT, CACHE_DIR, STORE_DIR, format_size
 
 
+def info_record(args) -> dict:
+    """What `info` knows, as one record: the engine's version, where things live
+    on disk, the installed models, the hardware profiles, the compute stack —
+    read from the same sources the human listing reads (Studio request 1:
+    machine-readable discovery without loading a model)."""
+    rec = {"version": __version__, "package": str(PACKAGE_ROOT), "cache": str(CACHE_DIR), "store": str(STORE_DIR),
+           "python": sys.version.split()[0], "models": [], "hardware_profiles": [], "torch": None,
+           "cuda_available": False, "gpus": []}
+    if CACHE_DIR.exists():
+        for model_dir in sorted(CACHE_DIR.iterdir()):
+            if model_dir.is_dir() and (model_dir / "manifest.json").exists():
+                rec["models"].append({"name": model_dir.name,
+                                      "size_bytes": sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())})
+    hw_dir = PACKAGE_ROOT / "config" / "hardware"
+    if hw_dir.exists():
+        rec["hardware_profiles"] = [f.stem for f in sorted(hw_dir.glob("*.yml"))]
+    try:
+        from neurobrix.serving.engine import daemon_identity
+        rec.update({k: v for k, v in daemon_identity().items() if k != "engine"})
+    except Exception as exc:          # the serving module may not import on a minimal install: said, not hidden
+        rec["daemon"] = f"unavailable ({exc})"
+    try:
+        import torch
+        rec["torch"] = torch.__version__
+        rec["cuda_available"] = bool(torch.cuda.is_available())
+        if rec["cuda_available"]:
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                rec["gpus"].append({"index": i, "name": props.name, "memory_bytes": int(props.total_memory)})
+    except ImportError:
+        pass
+    return rec
+
+
 def cmd_info(args):
     """Display system information."""
+    from neurobrix.cli.json_out import wants_json, emit
+    if wants_json(args):
+        emit("info", info_record(args))
+        return
     print("=" * 70)
     print(f"NeuroBrix v{__version__}")
     print("Universal Deep Learning Inference Engine")
@@ -86,6 +124,24 @@ def cmd_inspect(args):
             print(f"  {exc}")
             sys.exit(1)
 
+    from neurobrix.cli.json_out import wants_json, emit
+    if wants_json(args):
+        container = NBXContainer.load(str(nbx_path))
+        manifest = container.get_manifest() or {}
+        comps = []
+        for comp_name in container.list_components():
+            comp = container.get_component(comp_name)
+            entry = {"name": comp_name, "category": comp.category, "neural": bool(comp.is_neural)}
+            if comp.graph:
+                nodes = comp.graph.get("nodes", comp.graph.get("operations", comp.graph.get("ops", [])))
+                entry["ops"] = len(nodes)
+            if getattr(comp, "weight_paths", None):
+                entry["shards"] = len(comp.weight_paths)
+            comps.append(entry)
+        emit("inspect", {"path": str(nbx_path), "model": manifest.get("model_name"),
+                         "nbx_version": manifest.get("nbx_version"), "family": manifest.get("family"),
+                         "components": comps})
+        return
     print("=" * 70)
     print(f"NBX Inspect: {nbx_path.name}")
     print("=" * 70)

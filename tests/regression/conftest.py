@@ -112,6 +112,10 @@ MODEL_TIMEOUT_S: Dict[str, int] = {
     "TinyLlama-1.1B-Chat-v1.0":     60,
     "orpheus-3b-0.1-ft":            180,
     "Qwen3-30B-A3B-Thinking-2507":  420,
+    # A 57 GB compiled load at the llm family's 180 s: measured 166-171 s on
+    # two trees, twice each, rig quiet (2026-09-16) — the cell passed or
+    # timed out on pytest's overhead alone. Twice the measured load.
+    "Qwen3-Coder-30B-A3B-Instruct": 360,
     "deepseek-moe-16b-chat":        420,
     "Sana_1600M_4Kpx_BF16":         900,
     "SANA-Video_2B_720p_diffusers": 1200,
@@ -386,12 +390,49 @@ def model_inventory() -> List[Dict[str, str | int]]:
     return discover_models()
 
 
+#: Files the battery's cells feed to models and which git does NOT carry: the audio
+#: reference every voice-cloning and STT cell reads, and the tiny image the upscaler
+#: family is fed. They live in the repository root and are ignored by design.
+REQUIRED_ASSETS = ("test_speech_ref.wav", "test_upscale_input.png")
+
+#: The tree this run executes from. A module-level name so a test can point the door at a
+#: tree it built, which is the only way to prove the hook is WIRED and not merely correct
+#: in isolation (register 17: a helper whose every test passes can still have no seam).
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def refuse_a_tree_without_its_ignored_assets(root: Path) -> list:
+    """The assets the battery needs and this tree does not have.
+
+    A worktree is created from a COMMIT, so nothing gitignored comes with it — and these
+    two files are gitignored by design. On 2026-09-05 a battery ran from a frozen worktree
+    that lacked them and returned **30 red cells of 33**, every one of them a missing file
+    rather than a defect. The cost is not the reds, it is the hours of cards spent producing
+    them and the afternoon spent reading them.
+
+    So the question is asked ONCE, before the first cell, instead of thirty times after.
+    """
+    return [a for a in REQUIRED_ASSETS if not (root / a).exists()]
+
+
 def pytest_collection_modifyitems(config, items):
-    """Skip slow tests (image, video) unless --runslow is passed.
+    """Refuse a tree missing its ignored assets, then skip slow tests unless --runslow.
 
     Must live in conftest.py, not in a test module, or pytest will not
     discover the hook during collection.
     """
+    root = REPO_ROOT
+    missing = refuse_a_tree_without_its_ignored_assets(root)
+    if missing and items:
+        pytest.exit(
+            "[battery] this tree is missing asset(s) every cell needs, and they are "
+            f"gitignored so a worktree never carries them: {', '.join(missing)}\n"
+            f"   tree: {root}\n"
+            "   A battery run from here would spend hours of cards to report a missing "
+            "file as a model failure (2026-09-05: 30 red cells of 33, all of them this).\n"
+            "   Copy them in from the working tree before launching:\n"
+            + "".join(f"     cp ~/NeuroBrix_System/{a} {root}/\n" for a in missing),
+            returncode=2)
     if config.getoption("--runslow"):
         return
     skip_slow = pytest.mark.skip(reason="skipped; pass --runslow to include")

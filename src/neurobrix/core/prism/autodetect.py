@@ -211,6 +211,52 @@ def _write_profile_atomically(path: Path, profile_data: dict) -> None:
     os.replace(tmp, path)
 
 
+def _machine_device_count() -> "Optional[int]":
+    """How many GPUs the MACHINE has, ignoring any mask — or None if unknown.
+
+    The mirror of `_visible_device_filter`, and deliberately a different
+    authority: NVML (`nvidia-smi`) sits OUTSIDE `CUDA_VISIBLE_DEVICES` and
+    always reports the whole board, which is the wrong answer to "what may I
+    allocate on" and the RIGHT answer to "what does this rack have".
+
+    Returns None when the question cannot be answered here (no nvidia-smi, a
+    non-NVIDIA machine). A caller that cannot establish it sees the whole
+    machine must behave as though it does not.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    return len([l for l in result.stdout.strip().splitlines() if l.strip()])
+
+
+def _describes_the_whole_machine(profile_data: Dict[str, Any]) -> bool:
+    """May this detection be written to the SHARED `default.yml`?
+
+    Only a process that sees every card may describe the machine. This was
+    special-cased once — a process seeing NO card (tag `cpu`) turned a
+    four-GPU rack into a CPU host for every reader of the shared file
+    (2026-09-13) — and the special case fixed that instance without naming
+    the class, so every OTHER partial view kept the privilege. On 2026-09-17
+    `default.yml` on this rack read `2 x Tesla V100-SXM2-16GB`, 32 GB total,
+    written by a process pinned to `CUDA_VISIBLE_DEVICES=0,1`: both 32 GB
+    cards, and two thirds of the VRAM, absent from the machine's own file.
+    An unmasked run — the battery is one — plans against that.
+
+    Unknowable counts as "no". The shared file is read by processes that
+    cannot check it, so a writer proves the right rather than assuming it.
+    """
+    machine = _machine_device_count()
+    if machine is None:
+        return False
+    return len(profile_data.get("devices", [])) == machine
+
+
 def get_or_create_default_profile() -> str:
     """
     Ensure the auto-detected profile of THIS environment exists in
@@ -244,13 +290,14 @@ def get_or_create_default_profile() -> str:
     print("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
     _write_profile_atomically(path, profile_data)
-    if tag != "cpu":
-        # The shared default.yml is the machine's latest detection. A
-        # process that sees no card describes its own environment, not
-        # the machine: written here it turned a four-card rack into a CPU
-        # host for every reader of the shared file (2026-09-13, the
-        # GPU-less regression cell, then two unit tests reading
-        # `devices[0]` of an empty list).
+    if _describes_the_whole_machine(profile_data):
+        # The shared default.yml is the MACHINE's latest detection, so only a
+        # process that sees the whole machine may write it. The condition used
+        # to be `tag != "cpu"`, which fixed the one partial view that had been
+        # caught — a process seeing NO card turned a four-card rack into a CPU
+        # host for every reader (2026-09-13) — and left the privilege with
+        # every other one. A process pinned to two of four cards then wrote a
+        # 2x16GB machine over a 2x16GB+2x32GB rack (2026-09-17).
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
     print(f"   [Auto-detect] Created profile: {path}")
     return hardware_id

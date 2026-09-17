@@ -113,3 +113,137 @@ def test_no_file_in_this_suite_carries_the_pattern():
         "these files would skip where they should fail:\n  "
         + "\n  ".join(offenders)
         + "\n\nGuard the package import; import the names inside the tests.")
+
+
+_NESTED_IN_A_FUNCTION = '''
+import pytest
+
+def test_something():
+    try:
+        from neurobrix.kernels.wrappers import flash_attention_wrapper
+    except Exception:
+        pytest.skip("no machine")
+    assert flash_attention_wrapper is not None
+'''
+
+_NESTED_IN_A_CLASS = '''
+import pytest
+
+class TestSuite:
+    try:
+        from neurobrix.core.prism.solver import PrismSolver
+    except Exception:
+        PrismSolver = None
+'''
+
+
+def test_a_swallowing_guard_nested_in_a_function_is_found_too(tmp_path):
+    """The thing this guard guards CAN be nested: the common pytest form puts
+    the try/except inside the test or the fixture, not at module level. A
+    detector that reads `tree.body` alone sees none of those — the class the
+    second reader names ("a guard that inspects only top-level structures when
+    the thing it guards can be nested"), found in our own tree on 2026-09-16
+    and reproduced here before the fix.
+
+    Injection: the scan restored to `tree.body` → both of these read zero."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import skips_that_hide_a_red as S
+
+    d = tmp_path / "tests"
+    d.mkdir()
+    (d / "test_nested_function.py").write_text(_NESTED_IN_A_FUNCTION)
+    (d / "test_nested_class.py").write_text(_NESTED_IN_A_CLASS)
+    (d / "test_module_level.py").write_text(_GUARDS_NAMES)
+    found = S.risky_guards(d)
+    names = sorted(p.name for p, _l, _s in found)
+    assert names == ["test_module_level.py", "test_nested_class.py", "test_nested_function.py"], names
+
+
+def test_a_guard_around_a_module_import_is_still_not_flagged_at_any_depth(tmp_path):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import skips_that_hide_a_red as S
+
+    d = tmp_path / "tests"
+    d.mkdir()
+    (d / "test_ok.py").write_text('''
+import pytest
+
+def test_x():
+    try:
+        import torch
+    except Exception:
+        pytest.skip("no torch")
+''')
+    assert S.risky_guards(d) == []
+
+
+_IMPORTS_IN_THE_HANDLER = '''
+import pytest
+
+def test_x():
+    try:
+        got = run_the_thing()
+    except Exception as exc:
+        from third_party.errors import ARefusal
+        assert isinstance(exc, ARefusal), f"not a refusal: {exc}"
+        pytest.skip("refused at codegen")
+    assert got
+'''
+
+_IMPORTS_IN_A_NESTED_HANDLER = '''
+import pytest
+
+def test_x():
+    try:
+        try:
+            got = run_the_thing()
+        except ValueError:
+            from neurobrix.kernels.helpers import the_function_under_test
+            got = the_function_under_test()
+    except Exception:
+        pytest.skip("no machine")
+    assert got
+'''
+
+
+def test_an_import_in_the_handler_is_not_swallowed_by_it(tmp_path):
+    """A handler's own import raises where the suite can see it.
+
+    `except Exception as exc: from x import E; assert isinstance(exc, E)` is the
+    opposite of the pattern under hunt — it NARROWS a broad catch by asserting
+    the exception's type, and if `E` is gone the test errors loudly. Walking the
+    whole `Try` node counted it anyway and the scan named a file that could not
+    swallow anything (2026-09-16, `test_staged_dot_computes_not_merely_compiles`).
+    `else` and `finally` are outside the protection for the same reason.
+
+    Injection: walk the whole node again → this reads one finding instead of none.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import skips_that_hide_a_red as S
+
+    d = tmp_path / "tests"
+    d.mkdir()
+    (d / "test_handler_import.py").write_text(_IMPORTS_IN_THE_HANDLER)
+    assert S.risky_guards(d) == []
+
+
+def test_an_import_in_a_nested_handler_inside_the_body_is_still_found(tmp_path):
+    """The other side, which the fix must not give away: an inner handler sits
+    INSIDE the outer try's body, so an ImportError there does reach the outer
+    catch-all and does read as a skip."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import skips_that_hide_a_red as S
+
+    d = tmp_path / "tests"
+    d.mkdir()
+    (d / "test_nested_handler.py").write_text(_IMPORTS_IN_A_NESTED_HANDLER)
+    found = S.risky_guards(d)
+    assert [s for _p, _l, s in found] == [["neurobrix.kernels.helpers.the_function_under_test"]], found

@@ -1,5 +1,11 @@
 # Register of vacuous gates — instrumentation that lies by construction
 
+> **Each of the week's errors was seen by a measurement, none by rereading.**
+> (Volta certificate roadmap, 2026-09-14: five errors, five measurements —
+> the owner's line, kept at the head of this register on 2026-09-16. The
+> latest instance the same day: a dtype rule wired into the wrong map,
+> caught by a 56-container sweep, not by the eyes that wrote it.)
+
 > **A helper whose every test passes can still have no seam.**
 >
 > Entry 17, and the whole class fits in it. `configs_agreeing_with_oracle`
@@ -386,9 +392,15 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-54 entries, of which five are placeholders and 49 carry a site. Two
-machines, two weeks of concentrated looking. Every one of them produced silence
-or a green rather than an error.
+73 entries, of which five are placeholders and 68 carry a site. Two
+machines, two weeks of concentrated looking. Almost every one produced silence
+or a green rather than an error — and two do the opposite, which is why they are
+here rather than elsewhere: **65** (a door that held a COPY of its authority's
+format list and refused every upscaler) and **67** (a gate whose classifier
+assumed both graphs shared a stimulus, so it scored a correct repair FAIL and
+could not see the transition it is named for). A false refusal costs what a
+false pass costs — a card idle, a repair postponed — and its cause is the same:
+an instrument whose model of the world excludes the case in front of it.
 
 **"Not one was found by a test" was true until 2026-09-12 and is no longer.**
 They are still overwhelmingly found by users, by contradictions between two
@@ -1328,3 +1340,521 @@ before it stands, and the summary says where to resume. Gate:
 lost 227 keys are re-certified on the fixed tree — the small ones on a 16 GB
 card for the class the guard needs, the Mochi-size ones on a 32 GB card, the
 only class that can hold them.
+
+### 60 — four green tests beside a rule wired into the wrong map
+
+The rule "an uncalibrated component's activations are estimated in fp32,
+the conservative path's dtype" shipped on 2026-09-16 with four green tests
+and one injection seen red. Every test called the helper that decides the
+dtype; none called the solver that consumed it. The helper was wired into
+`_resolve_component_dtypes` — the per-component map that sizes the WEIGHTS
+and that the executor takes as the component's dtype — not into the
+activation estimate. The 56-container `--explain-plan` sweep, run before the
+commit because the owner's rule says a plan is budgeted under the model
+that executes it, read **thirty weight bills doubled and nine strategies
+moved** (Qwen3-30B's 57 GB of fp16 weights planned at 115 GB; Ming and
+Qwen3-Omni pushed from block_scatter to lazy_sequential by weights that do
+not exist). Rewired to the activation estimate alone; a fifth test now calls
+the map and asserts the weights' dtype is untouched — it was RED on the
+first wiring.
+
+**The shape**: a helper tested in isolation is proven correct; where it is
+CALLED FROM is a second claim nothing tested — the same class as entry 17
+(a helper whose every test passes can still have no seam), from the other
+side: the seam existed and led to the wrong consumer. **The rule**: a change
+that adds a decision to a computation tests the computation's OUTPUT (here:
+weights unchanged, activations moved), not only the decision. And the
+measurement that caught it — the sweep — is not optional when the change
+moves a plan: it is the gate the owner named.
+
+### 61 — a comparison of two absent keys, read as "identical"
+
+The CogVideoX-2b fingerprint walk (2026-09-16) compared the two runs' op
+records on a key named `sha256`. The instrument writes `sha`. Every record's
+`sha256` was None on both sides, None equalled None 39 116 times, and the
+walk printed **"IDENTICAL op by op"** for two runs whose videos differed in
+99 % of their pixels. Read on the right key an hour later: the first
+differing op is `aten.view::2` [26, 16, 60, 90] — the initial latent — and
+32 412 of 39 116 ops differ after it. The cause (a seedless request's Triton
+stream ran unseeded: a present-None slot shadowed the default, and the
+default was read from the container instead of the merged defaults) was
+within reach of the first walk; the absent key hid it behind the most
+reassuring word the walk could print.
+
+**The shape**: entry 17's family from yet another side — an absent key is
+silence, and silence compares equal to silence. **The rule**: a comparison
+REFUSES when the field it compares is absent on either side (the re-read
+script does; the walk did not), and a verdict of "identical" over N records
+states what it compared — `hashed elements per op` beside the count. The
+memory that names the key (`sha`) was written in April; the script was
+written from the head in September.
+
+### 62 — a capability probe that compiles is not a probe that executes
+
+Found on the Mac (2026-09-16): the Metal fork chose `-std=metal4.1` because a
+probe COMPILED under it — and the GPU runtime rejected the metallib it
+produced. A probe that compiles proves the toolchain accepts the syntax; it
+proves nothing about the device running the artefact. The same day this rack
+measured Triton 3.8.0's bundled `ptxas` the other way round — compiled a
+`.target sm_70` PTX, then EXECUTED the kernel suite (943 passed) and TinyLlama
+on the V100s with bytes compared to the old stack — and that is why that
+reading holds. The stack door (`tools/stack_door.py`) was extended in the same
+spirit: the wheel's arch list says what it was built for; a cuDNN convolution
+and a cuBLAS matmul RUN on every card say what serves it.
+
+**The rule, general**: a capability probe — architecture, shared memory, a
+dtype's native support, tf32, bf16, anything that decides a code path —
+EXECUTES the path it decides and VERIFIES its result against a reference;
+compiling, linking or loading are not evidence. **Census on the CUDA side of
+this trunk (2026-09-16)**: the launcher reads compute capability and shared
+memory from the DRIVER (attributes, not probes); native bf16 is a hardware
+profile flag (`config/vendors`), not a probe; the reduction tile is a
+backend-capability table; the certification screen executes every setting
+against the fp64 oracle; a candidate configuration is timed by running it.
+No compile-only probe found here; the one that fit the shape sits in the
+Metal driver's standard selection and is being converted where it lives.
+
+### 63 — four days of "proven by execution" that no one had looked at
+
+Between 2026-09-12 and 2026-09-16 this project wrote *proven by run* on model
+after model. Every one of those proofs was a NUMBER: a byte gate between the
+Triton arm and the PyTorch arm, a PSNR against another arm, a pixel-dynamics
+range, a wall clock. Not one artefact had been opened — no image looked at, no
+text read, no sound heard. And a byte gate cannot see a defect present on both
+sides: one broken graph upstream breaks both arms identically and the matrix
+prints **IDENTICAL**, which reads exactly like success. The register already
+held that shape under *the contaminated oracle*; what was missing was the
+positive rule that would have forced the look.
+
+The owner's form, and it is R29 hardened rather than a new rule: **a line is
+PROVEN only when an artefact of a REAL request — never a trace stimulus — has
+been judged by an instrument OUTSIDE the engine, and the verdict is written
+beside the file.** Outside means: a text is read, and code it contains is
+EXECUTED; a transcription is compared with a text known in advance and with a
+third-party ASR; a synthesised voice is read back by that ASR and the words
+compared; an image is looked at for the thing the request asked for, with the
+degeneracy facts beside the look; a sequence of frames is watched as a
+sequence. Agreement between two arms of this engine is an AGREEMENT — a
+measurement, named as such in the document, never a proof. And the consequence
+that was not being drawn: **a degenerate artefact is an open defect, ahead of
+everything else in the queue**, not a table line.
+
+The first application (`nbx/campaigns/2026_09_16_vitrine`) paid for itself in
+nine seconds: the standing belief that `real-esrgan` had been "rendering white
+on both arms for four days" was false. On a real photograph it returns the
+input's scene at four times the size, correlation 0.998 with the bicubic
+reference, 199 358 distinct colours. What the record actually held was a
+different, closed defect on `swin2SR-x2`; the upscaler's byte-matrix cells had
+been run on a 64×64, 138-byte fixture and reported *identical* — an agreement
+between two arms about a toy. Nobody had opened the file.
+
+**The rule's own trap, seen in the same hour**: the degeneracy facts for that
+photograph read *417 uniform rows of 1792* — 23 % — because a studio photograph
+has a white background, and the input carries the same 23 %. A threshold alone
+would have called a correct artefact degenerate. The numbers bound the look;
+they do not replace it, in either direction.
+
+### 64 — a guard that scanned the wrong level, and had therefore never seen anything
+
+`tools/skips_that_hide_a_red.py` exists to find the form where a red becomes a
+skip: a catch-all `try` around `from x import a`, so the absence of `a` — the
+function under test — reads as the absence of a machine. It scanned
+`tree.body`, with the comment `# MODULE level only`. The form it hunts is
+almost always written INSIDE a test or a fixture, so on 2026-09-16 the scan
+reported **0 findings across 274 test files**, and a walk of the whole tree
+reported **20, in 17 files** — every one of them invisible to it since the day
+it was written. A clean report from a guard looking at the wrong level is
+indistinguishable from a clean tree.
+
+Found by applying, to our own tools, a rule the repository's new second reader
+carries in its configuration: *any guard or predicate that inspects only
+top-level structures when the thing it guards can be nested*. The same class as
+entry 17 — a helper correct in isolation, wired where nothing reaches it —
+except here the helper was reached, ran on every file, and answered zero.
+
+**The rule**: a guard states the DEPTH it inspects, and the test that lands with
+it injects the thing it guards at a depth greater than one. The detector now
+walks (`risky_guards`, any depth), and its test injects the nested form inside a
+function and inside a class body, seen red against the old scan.
+
+**The twenty it now sees are a finding of their own**, filed as
+`D-SKIPS-THAT-HIDE-A-RED-TWENTY-GUARDS`: each is a named import inside a
+catch-all, and the fix is scope, not removal — guard the package import, import
+the names inside the test where a missing one fails.
+
+**CLOSED the same day.** All twenty scoped, the scan reads zero, and the unit
+suite under the device door went from 56 failures to 50 — none new, six gone.
+Two of the twenty were more than a scope fault and are recorded here because
+they were found by doing the work, not by reading it:
+
+* `test_autotune_correctness_screen.py` guarded five tests behind
+  `_detect_gpu_backend() is not None`, which answers **which backend this build
+  can address** — a fact about the install. It answered "cuda" on a machine with
+  no visible device and the five tests failed at their first allocation with
+  `cudaErrorNoDevice` instead of skipping. That is entry 62's class exactly, a
+  probe that compiles standing in for a probe that executes; the probe now
+  allocates one element and frees it.
+* `test_gather_scatter_oob.py` declared its device probe BELOW one of the tests
+  that opens a device, so that one ran unguarded while its two siblings skipped.
+  Order of declaration decided which tests were protected.
+
+And the detector itself was one entry short of correct: it walked the whole
+`ast.Try` node, so an import in a HANDLER — `except Exception as exc: from x
+import E; assert isinstance(exc, E)`, which NARROWS a broad catch — counted as
+a swallowing guard. It walks `node.body` now; a nested handler inside that body
+is still counted, because an exception there does reach the outer catch-all.
+Both directions land with their injection.
+
+### 65 — a door that copied its authority's list, and refused what the authority accepts
+
+The re-trace door asks "is there a COMPLETE snapshot here?" before it spends a
+card. Its format test listed four layouts: a diffusers pipeline, a transformers
+model, a NeMo archive, a NeMo directory. The build toolchain's own detector
+(`tracer/format_detector.py`) accepts a fifth — BARE_WEIGHTS, a `.pth`/`.pt`/
+`.safetensors`/`.ckpt` with no config of any kind — which is how every upscaler
+in the catalogue ships. So on 2026-09-16 the re-trace of `real-esrgan-x2`
+stopped with **"no COMPLETE snapshot on the export or in the download
+directory"** while the checkpoint sat in the directory it had just been handed,
+and the same refusal had been waiting for every upscaler since the door was
+written.
+
+This is the mirror of the usual entry and belongs in the same register: a gate
+whose green is empty here has a red that is empty, and a false refusal costs
+what a false pass costs — a card idle, a repair postponed, and a message that
+reads like a fact about the disk. What makes it the same class is not the
+direction, it is the cause: **the door held a COPY of a rule whose authority
+lives elsewhere.** Four of the five layouts were transcribed correctly. The
+fifth had never existed at transcription time, and nothing re-reads a copy.
+
+**The rule**: a door that reproduces another component's decision names that
+component and re-reads its input, never its conclusion. Where the authority
+cannot be imported (this one lives in the separate build toolchain), read the
+DECLARATION the authority reads — here the registry entry, which names the
+checkpoint file for exactly the models that ship as one, because several
+variants share one upstream repository and only the entry says which is which.
+
+The fix admits bare weights **only** when the registry names the checkpoint and
+it is present, which is also what keeps the guard the door was built for: a
+stopped diffusers download (Sana 4K, 6 GB of shards, no `model_index.json`,
+2026-09-07) is bare weights too and declares no checkpoint, so it stays refused.
+Landed with both injections seen red —
+`tests/unit/tools/test_snapshot_bare_weights_is_a_format.py`: the old four-layout
+form fails the upscaler case, and a naive "accept any bare weights" fails the
+stopped-download case and the wrong-variant case.
+
+### 66 — a census that followed symbol ids where the thing that can be lost is a dimension
+
+`tools/where_the_symbol_chain_breaks.py` follows each declared input symbol
+through a graph and names the operator where its expression became a literal.
+Its second run reported **167 breaks and 82 symbols never carried**, with
+`aten::view` at 78 — and among the twenty cleanest of those breaks stood
+TinyLlama, DeepSeek, Voxtral, VibeVoice, canary-qwen, granite-speech and every
+T5 text encoder in the catalogue, all with the same `[1, S, C] -> [S, C]`
+flatten said to have frozen `seq_len` at 23.
+
+Those models run at seq_len ≠ 23 every day. Opening ONE of the twenty against
+its graph took a minute and dissolved all twenty: the view's arguments record
+`{"type": "mul", "left": s0, "right": s1}` in full. The census was following
+`s3` — `seq_len` declared a SECOND time, on `position_ids` instead of
+`input_ids` — which no operation names, because the tracer bound the expression
+to `s1`.
+
+**The rule**: what can be lost is a DIMENSION, not a declaration. A tracer
+declares one symbol per input that carries the dimension, so any instrument that
+iterates over declarations counts a model's `seq_len` once per input and reports
+the unreferenced copies as losses. Group by the dimension (name and trace value),
+and a carrier of any member carries it. **102 of the 447 declarations are
+duplicates** — and every gate that reads the declaration has been counting them.
+
+Corrected: 345 dimensions, **111 breaks** (not 167), **48 never carried** (not
+82), `aten::view` **36 in 20 components** (not 78 in 38). The ranking survived;
+the magnitudes did not, and a report had already been written with them.
+
+The general form, and the reason this entry sits beside 64 rather than
+elsewhere: **the first count that looks like an answer is the moment to open one
+row against the source.** Both errors of this census — axis indices read as lost
+expressions, then aliases read as lost dimensions — inflated the number and left
+the ranking intact, which is exactly the shape that survives a sanity check.
+
+### 67 — the gate that could not see the repair it exists to recognise
+
+The re-trace gate's whole vocabulary — `witnessed`, `symbolized`, `re-expressed`,
+`slice-end-symbolized` — reads one transition: a shape argument that was a
+literal is now an expression. It reads it by checking that **the expression's
+trace value equals the old literal**, which is exact and correct as long as both
+graphs were traced at the same stimulus.
+
+On 2026-09-16 the repair WAS the stimulus. `real-esrgan-x2`'s pixel-unshuffle
+went from the literal `32` (64//2 at a 64x64 trace) to `floordiv(s1, 2)` of trace
+`56` (112//2 at 112x80). 32 ≠ 56, so the classifier scored the transition it is
+named for **zero symbolized**, counted every recorded shape in the graph as a
+change it could not classify — **2193 beyond annotation** — and the gate answered
+**FAIL** on a repair that is correct and proven by artefact at three sizes.
+
+The sibling case makes the shape of the blindness plain: `real-esrgan-x8`, the
+same re-trace, came back **byte-identical on both arms** — the strongest evidence
+a gate can be handed — and was also refused, by the same count.
+
+**The rule**: an instrument that compares two artefacts states the invariant its
+comparison assumes, and detects when that invariant does not hold instead of
+reporting a number computed under it. A count taken under a broken assumption is
+not evidence of anything, and it may not read as a refusal. The gate now detects
+a stimulus change, names which dimensions moved and what the bytes did, and
+leaves the verdict to the artefacts. What refused before still refuses: a
+corrupted dim, a routing field removed or changed, a run that failed.
+
+This is the mirror of 65 in the same way 65 is the mirror of the rest — a false
+refusal costs what a false pass costs, and here it would have cost the repair.
+
+### 62 (addendum, 2026-09-16 evening) — the census that answered "none" had a scope, and the instrument now says it
+
+Entry 62's census read the ENGINE and answered "no compile-only probe found
+here". It was right about what it read and it did not read the probes that decide
+whether a TEST runs — which is where the next one was, the same day:
+`test_autotune_correctness_screen.py` gated five tests on
+`_detect_gpu_backend() is not None`.
+
+**The finding underneath it is worth more than the instance.** That call OPENS THE
+DEVICE on Metal — `metal_device_available`: *"it opens the real device rather than
+checking for the import, because a machine with the bindings and no usable GPU
+must not be reported as ready"* — and on CUDA and ROCm it succeeds when the
+vendor's runtime LIBRARY loads. So **the same call is an executing probe on one
+backend and a naming one on the others**, and nothing at the call site shows which
+one you got. Measured in one line under the device door: the probe answers `cuda`
+while `DeviceAllocator.device_count()` answers `0`.
+
+Three things landed rather than a reading:
+
+* the function now says at its own definition what it does NOT answer, and names
+  `DeviceAllocator.device_count()` — which asks the driver — for callers who mean
+  "can I run here";
+* `tests/unit/kernels/test_naming_a_backend_is_not_finding_a_device.py` pins the
+  asymmetry by asking both questions in a child process with no device visible, on
+  a host that has one, and skips where the premise does not hold. Seen red against
+  a `device_count` that answers from the install instead of the driver;
+* `tools/probes_that_compile_without_executing.py` makes the census repeatable —
+  it classifies every function whose name announces a capability decision as
+  EXECUTES / DETECTS ONLY / DELEGATES / UNCLEAR, excludes the vendored reference
+  tree, and exits 0 because it is a census and an exit code would turn eight
+  benign candidates into an alarm.
+
+Re-run over the trunk after the conversions: **8 DETECTS ONLY, all read, none a
+device-capability probe** — three ask about a tokenizer, a cache and a DAG; two
+are honest pre-filters (`_triton_cpu_available`, `triton_metal_available`) whose
+refusal names the install command; three ask whether a FILE is present.
+
+**The rule, sharpened**: "a capability probe executes" is satisfied PER BACKEND,
+not per call site. A shared probe that executes on one backend and reads a name on
+another must say so where it is defined, because no caller can see it.
+
+### 68 — a guard whose constants were a written list, and the eleventh model it knew nothing about
+
+The trace stimulus for the upscaler family was moved to 112x80 on 2026-08-29 to clear the
+collisions that had frozen `real-esrgan`'s spatial dims. The choice was correct and the reasoning
+was written out in full: window areas (49, 64, 144, 256, 576, 1024), relative-position table
+sizes (225, 529, 961), "the usual embed/feature widths (48, 60, 64, 96, 180)", and the scale
+multiples of each.
+
+**Every one of those numbers is a constant in code answering a live question.** The list was
+right for the ten upscalers that existed when it was written, and it says nothing about the
+eleventh. Worse, it was not even complete for the ten: reading the constants OFF THE MODELS
+instead, on 2026-09-16, found that nine clear 112x80 and **`real-esrgan-x2` does not** — its
+width times its own scale, 80 x 2 = 160, is the RDB dense-concat width (64 + 3x32) carried by 69
+of its convolution weights. The container whose renders were proven correct at four sizes that
+same evening sits on a stimulus the rule refuses. Its correctness there is luck, not a property,
+and that is the whole distinction this entry exists for.
+
+**The rule**: a guard that must avoid a model's constants READS THEM FROM THE MODEL. Parameters
+and buffers for what the graph's literals are made of; the configuration's own integers, and
+their squares, for what a view computes from a side and never stores (a window area). And it
+holds over the scale multiples, because the collision that cost HAT on 2026-08-27 was with the
+trace OUTPUT size, 64 x 4 = 256 — a number the old list had to be told and the new rule finds,
+because `hat-l-x4` carries 256 as a parameter extent.
+
+Landed in the build toolchain as `stimulus_collision.py` (`cad67f7`), where the stimulus is
+corrected at the source rather than left to a default's luck: clean models are returned unchanged
+so they re-trace byte-identically (R27), and `real-esrgan-x2` moves to 112x144. Seen RED on the
+real 64x64 case against that model's measured extents, with both of its reasons — the square and
+the 64 — and on three injections: the scale multiples ignored, the extents taken from a written
+list, the square rule dropped.
+
+**Why it is not the spatial net (b69e51c) again.** The net catches a graph where a dimension ends
+up named NOWHERE, which is the loudest outcome and not the only one: a collision can freeze ONE
+expression in a graph that carries the dimension elsewhere, and the net sees nothing at all. The
+net is downstream and after the fact; this is upstream and before it.
+
+### 69 — a negative control that upstream switched off, and a table that kept printing verdicts
+
+`tools/r33_execution_proof.py` runs each step of the engine's Triton startup in a fresh
+process with a cold cache and asks whether `torch` is in `sys.modules` at the end. A table
+where every line reads `False` and nothing CAN read `True` measures nothing, so the file
+carried a negative control, and the control was Triton's own `kernel[grid]` — whose C++
+argument binder imported torch on every backend. That was true, and it was the reason the
+NeuroBrix launcher exists.
+
+Upstream made the CUDA driver probe native in Triton 3.7 (triton#9578, #10935). On the
+candidate stack's 3.8.0 the control reads `False`. **Nothing announced it.** The table went
+on printing a verdict every run, having lost the ability to detect torch at all — every
+`False` above it now unfalsifiable, and read by anyone opening the file as thirteen proofs.
+
+The control was chosen from the world outside the repository, and the world moved. The
+replacement cannot: it is a bare `import torch`, whose reading is a property of the harness
+and of nothing else. The old row is kept one line above as an OBSERVATION — it is still
+interesting that upstream no longer pulls torch in — but it is no longer load-bearing.
+
+**The rule**: a control's job is to prove the instrument can still fire. Build it out of
+something YOU own. A control that depends on an external implementation detail is a gate
+whose off-switch is in someone else's repository, and it will be thrown without a message.
+
+Seen red on the injection that restores the old control (`test_the_last_case_is_a_control_that_cannot_go_inert`).
+
+### 70 — "could not run here" read as "torch was here", on every CUDA box, for weeks
+
+The same file, same day. Its verdict was one line:
+
+```python
+clean = all(not t and not e for _, t, e in owned)
+```
+
+`t` is "torch was present". `e` is "this step did not run". Two Metal steps in the table
+compile to MSL through our own driver, and a CUDA box has no Metal device, so those two rows
+error **every single time they are run here**. Folding `e` into `t` meant the table printed
+`*** R33 VIOLATION ***` on every CUDA run since the Metal rows landed.
+
+Measured 2026-09-17 on both stacks, one variable apart, while verifying an unrelated launcher
+change: candidate stack `*** R33 VIOLATION ***`, old stack `*** R33 VIOLATION ***`, and
+**torch appeared in zero owned rows on either**. The alarm had no relationship to its subject.
+A verdict that is red whatever happens carries exactly as much information as one that is
+green whatever happens, and costs more, because it trains its reader to scroll past it.
+
+The fix is NOT "an error is benign". That swaps this failure for the register's most expensive
+family — a step that quietly stops being measured would then read exactly like a step that
+passed, and silence and success would again be one reading. Three outcomes are now kept apart,
+and each names itself: torch seen in an owned step is a VIOLATION; a step that should run here
+and did not is a BROKEN HARNESS; a silent detector control is UNPROVEN. Which steps may be
+excused is not a judgement made at verdict time but a declaration each case carries — the two
+Metal rows say `"darwin"`, and are excused on `linux` and **nowhere else**, so the same unrun
+row read on a Mac turns the table red.
+
+The exit code had the identical defect and was fixed with it: `failures` counted the unrun
+Metal rows, so the tool returned 1 on every CUDA box no matter what it found. It now returns
+the verdict.
+
+**The rule**: when an instrument can report "yes", "no" and "I could not look", never let two
+of those three share a branch. And the excuse for not looking belongs to the CASE, declared
+in advance, never to the verdict that would rather be green.
+
+Both defects survived because the verdict lived inside `main()`, below eight subprocess
+launches — nothing could reach it without fifteen minutes of card time, so nothing ever did.
+It is now `build_report(rows, platform)`, pure, and the injections above run in 0.03 s.
+
+### 71 — a test that chose its card from NVML and then allocated with CUDA
+
+`tests/unit/kernels/test_prefill_determinism.py` proves the prefill route on BOTH memory
+classes: chunked inside the 16G window, plain math on a 32G card. To do that it has to find a
+card of each class, and it asked `nvidia-smi`.
+
+`CUDA_VISIBLE_DEVICES` is a CUDA-RUNTIME mask. It renumbers ordinals for everything that goes
+through libcuda — every allocation the test then makes. `nvidia-smi` answers from NVML, which
+sits outside that mask and always reports the whole board. On this rack the 32G cards are
+physical 2 and 3, so under `CUDA_VISIBLE_DEVICES=0` the helper returned `big=2`, the test
+declined to skip, and `_route_spy` asked for `cuda:2` on a process that owns exactly one
+ordinal. The suite went red at `DeviceAllocator.set_device(2)`.
+
+**It is not an error that reads as an error.** It is a WRONG ANSWER, because `2` is a valid
+integer in both namespaces and merely names different cards in each. Had the rack's classes
+been laid out the other way round the same helper would have returned a plausible ordinal, the
+test would have passed, and it would have proven the 32G route using a 16G card.
+
+Found on 2026-09-17 while checking that the launcher change (27b05cc4) had not regressed
+anything — so the cost was not only the red, it was a red sitting in the one suite being read
+as the verdict on an unrelated fix. That is the second time in one day that an always-red
+signal had to be cleared before a real question could be asked (see 70).
+
+**The rule**: decide in the namespace you are going to act in. A device index that will be
+handed to an allocator comes from the allocator — `DeviceAllocator.visible_device_memory()`,
+added for this and used by `most_free_device`'s caller path, whose inline copy of the same
+ctypes walk it replaces. NVML is the right authority for what the RACK has and the wrong one
+for what THIS PROCESS may touch.
+
+Seen red on the injection that restores the `nvidia-smi` helper: six of the seven new cells
+turn, and the original `test_32g_pow2_window_keeps_prefix_route_on_device` failure reproduces
+under the pin.
+
+### 72 — the machine's own profile, written by a process that could see a third of it
+
+`config/hardware/default.yml` is the MACHINE's hardware profile. It is not decoration: a process
+with no `CUDA_VISIBLE_DEVICES` reads it as its profile, and it is the fallback when detection is
+unavailable. The battery is such a process.
+
+On 2026-09-17 it read:
+
+    # Hardware Profile: 2 x Tesla V100-SXM2-16GB
+    total_gpus: 2
+    total_vram_gb: 32.0
+
+on a rack of two 16 GB and two 32 GB cards — 96 GB, of which 64 GB and both large cards were
+absent. Written 09-16 12:37 by a run pinned to `CUDA_VISIBLE_DEVICES=0,1`. Every unmasked run
+since had been planning against a machine two thirds smaller than the one under it, and the
+battery re-run this block is working toward would have done the same.
+
+The branch that writes the shared file is only reached by a process that HAS a mask set. Its only
+writers are, by construction, the ones most likely to be partial. The guard was:
+
+```python
+if tag != "cpu":
+```
+
+— which is the 2026-09-13 incident, fixed by name: a process seeing NO card had turned the rack
+into a CPU host for every reader of the shared file. **The instance was named, the class was
+not**, so every partial view that was not zero-card kept the pen, and the same failure returned
+three days later one step up: not zero of four, but two of four.
+
+**The rule**: a file that describes the machine may only be written by a process that can see the
+machine. `_describes_the_whole_machine()` compares the detection against NVML's count — and
+"unknowable" counts as "no", because the shared file is read by processes that cannot check it,
+so a writer proves the right rather than assuming it.
+
+This is the converse of **71**, and the two make one rule: **NVML is the authority for what the
+RACK has; the CUDA runtime is the authority for what THIS PROCESS may touch.** 71 was code asking
+NVML a process-scoped question. 72 is code letting a process-scoped answer overwrite a rack-scoped
+file. Both were found in one morning, both by asking what a green or a red actually stood on.
+
+An existing test pinned the old behaviour — `the human-facing default.yml mirrors the latest
+detection` — and it was rewritten rather than deleted, because the file's OTHER role (the profile
+an unmasked process reads) is the load-bearing one and the two cannot both hold. The same test
+also learned to state its host: it compared against the real rig's card count, so it would have
+passed or failed by how many GPUs the developer's box happened to have. Seen red on the injection
+that restores `tag != "cpu"`.
+
+### 73 — a chain that finished its work and could not say so
+
+`tools/certified_checkpoint.py` holds its producers and exits when the last is gone — its own
+header says "so a chain can wait on IT". `reproof_t38_v2.sh` passed `--producer-pid $$`: the chain
+named ITSELF as the producer, then ran `wait` over its job table, which contained the checkpointer.
+The chain waited for the checkpointer; the checkpointer waited for the chain.
+
+All four certifiers succeeded — card 3 rc=0 at 02:53 and card 1 rc=0 at 02:57, card 2 rc=0 at
+04:13, 4172 and 5942 shapes proven — and `== reproof t38 done` was **never written**. The pair sat
+there for the eight hours after the work was complete, logging `nothing to commit` every ten
+minutes.
+
+This is register **55** from the other side. 55 was a waiter starving because its producer had
+DIED without writing the marker; this is a waiter starving because its producer had SUCCEEDED and
+could not write it. From outside the two are one symptom — the marker is absent — and the contract
+is the marker, so a chain that cannot write its own is indistinguishable from one that failed.
+
+Two further costs, both paid today: the watcher on those two pids fired `== TRUE END of the triton
+3.8.0 re-proof 11:47:00` the moment I stopped them, dating the pass seven hours after it ended (a
+correction is written beside it, and the pass ended at **04:13**); and the deadlocked pair was
+still polling git every ten minutes with a battery chained to start on a quiet rig.
+
+**The rule**: the producers are the processes doing the WORK, never the shell that schedules them.
+`refuse_a_producer_that_will_wait_for_us()` refuses at entry when `--producer-pid` names the
+checkpointer's own parent, prints the command that satisfies it, and leaves one opening that reads
+as deliberate — `--allow-parent-as-producer`, for a shell that launches it and exits without
+waiting, which is a legitimate caller.
+
+Seen red on two injections: unwiring the door from `main()` turns **only** the cell that runs the
+tool for real from a shell naming itself (register 17 — a helper whose every unit test passes can
+still have no seam), and blinding the helper turns five.

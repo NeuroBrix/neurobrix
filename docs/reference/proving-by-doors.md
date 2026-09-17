@@ -63,6 +63,15 @@ that it is **armed and has never run**. The numbers attributed to it — 42/42,
 `docs/reference/vacuous-gates-register.md` for the same reason every other
 member of that class is: its failure mode is a green.
 
+*Since then the gate has run, and this is the answer that retires the numbers
+above where they were written: five pinned pairs whose Prism strategy changes
+between the arms rendered byte-identical images, three cold repetitions each
+(2026-09-13); the byte matrix over the whole catalogue read 30 cells identical,
+2 unadjudicated on the two models whose own nondeterminism is on record, 0
+adjudicated differences, and 16 cells unmeasurable on a before tree that
+cannot load today's containers (2026-09-14). The strategy change moves no
+byte — measured, not attributed.*
+
 The IR harness was one afternoon from the same fate. Behind the census it would
 have waited for the campaign to close, would have been reported as "written, not
 launched", and would have been believed on its prose. Behind the door it ran

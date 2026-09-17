@@ -226,6 +226,37 @@ def _variant_slot(cls: int) -> str:
     return f"{int(cls)}g"
 
 
+def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The code generator a proof was made with, as one label: `triton <version>`
+    plus the backend name when it is not cuda (e.g. `triton 3.7.0 metal`). A
+    setting stays correct under any generator — the oracle proved the source,
+    not the compiler; what a newer generator may age is its rank as the
+    fastest, by a few percent — so the directory is re-proven under a new one
+    as an optimisation pass and the document reads each rank with its
+    generator's date (owner, 2026-09-16)."""
+    if not proof:
+        return None
+    b = proof.get("backend") or {}
+    ver = b.get("triton")
+    if not ver:
+        return None
+    name = b.get("name")
+    return f"triton {ver}" + (f" {name}" if name and name != "cuda" else "")
+
+
+def proof_backends(entry: Dict[str, Any]) -> set:
+    """Every generator label this entry carries a proof from (primary and variants)."""
+    out = set()
+    lab = proof_backend(entry.get("proof"))
+    if lab:
+        out.add(lab)
+    for slot, var in (entry.get("variants") or {}).items():
+        lab = proof_backend((var or {}).get("proof"))
+        if lab:
+            out.add(lab)
+    return out
+
+
 def covered_memory_classes(entry: Dict[str, Any]) -> set:
     """Every memory class this entry carries a proof for: its primary proof's
     class and each variant's."""
@@ -276,14 +307,22 @@ proof_records_clock = proof_records_regime
 
 
 def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],
-                 need_clock: bool = False) -> bool:
+                 need_clock: bool = False, need_generator: Optional[str] = None) -> bool:
     """`--only-missing`'s question, asked per memory class; with `need_clock`
     (`--reprove-unclocked`) a certification whose proof records no clock does
-    not count as coverage — it is re-proven at the protocol clock."""
+    not count as coverage — it is re-proven at the protocol clock; with
+    `need_generator` (`--reprove-generator`, the running code generator's label,
+    e.g. `triton 3.8.0`) a certification proven under another generator does
+    not count either — a Triton upgrade changes the code it emits, so every
+    setting is re-proven under the new one (owner, 2026-09-16)."""
     cert = entry_for_memory_class(entries.get(ktext), cls)
     if cert is None:
         return False
-    return proof_records_clock(cert.get("proof")) if need_clock else True
+    if need_clock and not proof_records_clock(cert.get("proof")):
+        return False
+    if need_generator is not None and proof_backend(cert.get("proof")) != need_generator:
+        return False
+    return True
 
 
 def file_certification(entries: Dict[str, Dict[str, Any]], ktext: str, cert: Dict[str, Any]) -> None:

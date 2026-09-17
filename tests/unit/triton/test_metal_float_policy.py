@@ -22,9 +22,10 @@ metal_driver = pytest.importorskip("neurobrix.triton.metal_driver")
 
 
 def _has_metal():
+    nbx_tensor = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    detect = nbx_tensor._detect_gpu_backend   # a renamed probe raises here, loudly
     try:
-        from neurobrix.kernels import nbx_tensor
-        return nbx_tensor._detect_gpu_backend() == "metal"
+        return detect() == "metal"
     except Exception:
         return False
 

@@ -35,6 +35,7 @@ def _add_run_arguments(p):
     p.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
     p.add_argument('--explain-plan', action='store_true', dest='explain_plan',
                    help='Print the placement plan — the strategy, why it won and what it beat, every component with its device and memory — then exit without loading anything')
+    p.add_argument('--json', action='store_true', help='with --explain-plan: the plan as one JSON record on stdout')
     p.add_argument('--prompt', default=None, help='Text prompt for generation')
     p.add_argument('--audio', default=None, help='Input audio file path (for speech-to-text models)')
     p.add_argument('--steps', type=int, default=None, help='Number of inference steps')
@@ -216,6 +217,10 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--reprove-unclocked', action='store_true',
                            help='skip only the shapes certified for this card\'s class AT A RECORDED CLOCK; a proof that '
                                 'does not say its clock is re-proven at the protocol clock')
+    certify_p.add_argument('--reprove-generator', action='store_true',
+                           help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
+                                '(the Triton version); a proof made under another one is re-ranked by this optimisation pass — '
+                                'it stays correct and served meanwhile')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
@@ -223,7 +228,9 @@ For more information: https://neurobrix.es
     check_p.add_argument('--dir', default=None)
     check_p.add_argument('--restamp', action='store_true',
                          help='repair a file whose format claim its entries do not satisfy (entries untouched)')
-    autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')
+    check_p.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
+    status_p = autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')
+    status_p.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     drift_parser = subparsers.add_parser(
         'drift',
@@ -264,6 +271,7 @@ For more information: https://neurobrix.es
                                  help='ops the engine classifies that NO container carries')
     coverage_parser.add_argument('--field', default=None, metavar='KEY',
                                  help='a container metadata key, and the values declared for it')
+    coverage_parser.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # INFO command
@@ -276,6 +284,7 @@ For more information: https://neurobrix.es
     info_parser.add_argument('--models', action='store_true', help='List available models')
     info_parser.add_argument('--hardware', action='store_true', help='Show hardware profiles')
     info_parser.add_argument('--system', action='store_true', help='Show system configuration')
+    info_parser.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # INSPECT command
@@ -291,6 +300,7 @@ For more information: https://neurobrix.es
                                 help='Path to a .nbx file, or an installed model name')
     inspect_parser.add_argument('--topology', action='store_true', help='Show topology details')
     inspect_parser.add_argument('--weights', action='store_true', help='Show weight statistics')
+    inspect_parser.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # IMPORT command
@@ -314,6 +324,9 @@ Examples:
     import_parser.add_argument('--accept-license', action='store_true', dest='accept_license',
                                help='Record acceptance of the model license non-interactively '
                                     '(for scripts/CI; equivalent: NBX_ACCEPT_LICENSE=1)')
+    import_parser.add_argument('--json', action='store_true',
+                               help='One NDJSON event per phase on stdout (info, license, download with byte '
+                                    'counts, downloaded, extracting, installed, done | error); human lines on stderr')
 
     # ========================================
     # LIST command
@@ -325,6 +338,7 @@ Examples:
     )
     list_parser.add_argument('--store', action='store_true',
                              help='Show .nbx files in store (~/.neurobrix/store/)')
+    list_parser.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # REMOVE command
@@ -346,6 +360,7 @@ Examples:
                                help='Remove from store only (keep cache)')
     remove_parser.add_argument('--all', action='store_true',
                                help='Remove from both cache and store')
+    remove_parser.add_argument('--json', action='store_true', help='One JSON record of what was removed on stdout; human lines on stderr')
 
     # ========================================
     # CLEAN command
@@ -389,6 +404,7 @@ Examples:
                                  'valid ones.')
     hub_parser.add_argument('--search', '-s', default=None, help='Search models by name, tag, or description')
     hub_parser.add_argument('--registry', default=None, help=f'Registry URL (default: {REGISTRY_URL})')
+    hub_parser.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # SERVE command
@@ -481,7 +497,7 @@ Slash commands (inside chat):
     # ========================================
     # DOCTOR command
     # ========================================
-    subparsers.add_parser(
+    doctor_p = subparsers.add_parser(
         'doctor',
         help='Diagnose installation problems (PATH, PyTorch/CUDA, GPU visibility)',
         description=(
@@ -491,6 +507,7 @@ Slash commands (inside chat):
             'finds something that will block a real run.'
         ),
     )
+    doctor_p.add_argument('--json', action='store_true', help='one JSON record on stdout, human lines on stderr (schema in neurobrix/cli/json_out.py)')
 
     # ========================================
     # VALIDATE command
@@ -568,12 +585,12 @@ def main():
             if _rc:
                 sys.exit(int(_rc))
         elif args.command == 'run':
-            from neurobrix.cli.commands.run import cmd_run
+            from neurobrix.cli.commands.run import cmd_run, run_entry
             # cmd_run returns a non-zero status on refusal paths (mode-flag
             # conflict, gate errors) — a loud refusal that exits 0 turns
             # every harness cell into a silent false-green (the tseq
             # `--triton --sequential` no-op class, 2026-09-02).
-            _rc = cmd_run(args)
+            _rc = run_entry(args)
             if _rc:
                 sys.exit(int(_rc))
         elif args.command == 'import':

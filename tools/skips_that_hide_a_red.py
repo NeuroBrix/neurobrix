@@ -56,11 +56,20 @@ def _swallowed_names(node: ast.Try) -> list[str]:
     gone -- and `a` is usually the function under test, so its absence reads
     as the absence of the machine.
     """
+    # Only the GUARDED region — `node.body`. An import in a handler, in `else`
+    # or in `finally` is not protected by this try's handlers: it raises where
+    # the suite can see it. Walking the whole node counted one of those and the
+    # scan reported a site that could not swallow anything
+    # (`test_staged_dot_computes_not_merely_compiles.py`, whose handler imports
+    # the exception class it then asserts on). Nested handlers INSIDE the body
+    # stay counted, and correctly: an exception there does reach the outer
+    # catch-all.
     out = []
-    for sub in ast.walk(node):
-        if isinstance(sub, ast.ImportFrom):
-            for a in sub.names:
-                out.append(f"{sub.module or ''}.{a.name}")
+    for stmt in node.body:
+        for sub in ast.walk(stmt):
+            if isinstance(sub, ast.ImportFrom):
+                for a in sub.names:
+                    out.append(f"{sub.module or ''}.{a.name}")
     return out
 
 
@@ -71,26 +80,43 @@ def _catches_everything(handler: ast.ExceptHandler) -> bool:
     return name in ("Exception", "BaseException") or "Exception" in name
 
 
-def scan(verbose: bool) -> int:
-    total_files = 0
-    risky = []
-    for path in sorted(TESTS.rglob("test_*.py")):
+def risky_guards(root) -> list:
+    """Every catch-all `try` in the tree that swallows a `from x import a`,
+    AT ANY DEPTH — module level, inside a test function, inside a class body,
+    inside another try.
+
+    It used to read `tree.body` alone ("MODULE level only"), and the form this
+    guard exists to catch is most often written INSIDE the test or the fixture:
+    `def test_x(): try: from m import f; except Exception: pytest.skip(...)`.
+    A guard that inspects only top-level structures when the thing it guards
+    can be nested is a defect class of its own (found in our own tools on
+    2026-09-16, reproduced red before this line changed).
+    """
+    from pathlib import Path
+    root = Path(root)
+    out = []
+    for path in sorted(root.rglob("test_*.py")):
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:
             continue
-        total_files += 1
-        for node in tree.body:                      # MODULE level only
+        for node in ast.walk(tree):
             if not isinstance(node, ast.Try):
                 continue
             if not any(_catches_everything(h) for h in node.handlers):
                 continue
             swallowed = _swallowed_names(node)
             if swallowed:
-                risky.append((path.relative_to(ROOT), node.lineno, swallowed))
+                out.append((path, node.lineno, swallowed))
+    return out
+
+
+def scan(verbose: bool) -> int:
+    total_files = sum(1 for _ in TESTS.rglob("test_*.py"))
+    risky = [(p.relative_to(ROOT), l, s) for p, l, s in risky_guards(TESTS)]
 
     print(f"test files scanned                        : {total_files}")
-    print(f"with a module-level catch-all around imports: {len(risky)}")
+    print(f"with a catch-all around imports (any depth)   : {len(risky)}")
     print()
     if risky:
         for rel, lineno, swallowed in risky:

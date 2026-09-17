@@ -13,10 +13,19 @@ the kind of miss this file exists to prevent.
 
     python tools/r33_execution_proof.py [--out FILE]
 
-The last case is deliberately the one that has always been True: Triton's own
-`kernel[grid]`, whose C++ argument binder imports torch on every backend. It
-is kept in the table as the negative control — a table where every line reads
-False and nothing can read True is not a measurement.
+The last case deliberately imports torch: it is the DETECTOR CONTROL, and a
+table where every line reads False and nothing can read True is not a
+measurement. It is a bare `import torch` precisely so that it cannot go
+inert — the control before it was Triton's own `kernel[grid]`, whose C++
+argument binder imported torch on Triton 3.6, and upstream made the CUDA
+driver probe native in 3.7 (triton#9578, #10935). That control then read
+False on 3.8 and the table went on printing a verdict, having lost the
+ability to detect anything. It is kept, one row above, as an OBSERVATION of
+upstream.
+
+Each case declares the machine it needs. A case that does not run on a
+machine that should run it is a BROKEN HARNESS, not a violation and not a
+pass: silence and success must never be the same reading.
 """
 
 from __future__ import annotations
@@ -32,8 +41,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 
-#: (label, body). Each body runs in a fresh interpreter; the harness appends
-#: the verdict print. Order is the order of the engine's own startup.
+#: (label, body) or (label, body, requires). Each body runs in a fresh
+#: interpreter; the harness appends the verdict print. Order is the order of
+#: the engine's own startup. `requires` names the platform the case needs
+#: (`sys.platform`); a case that cannot run HERE is reported apart, and a case
+#: that fails to run where it SHOULD turns the table red.
 CASES = [
     ("import neurobrix.kernels",
      "import neurobrix.kernels"),
@@ -87,7 +99,8 @@ CASES = [
      "constexprs = {'scale_by_weight': True, 'BLOCK_SIZE_BATCH': 4,\n"
      "              'BLOCK_SIZE_FEAT': 128}\n"
      "msl, meta = compile_to_msl(k, signature, constexprs)\n"
-     "assert 'kernel void' in msl, msl[:200]"),
+     "assert 'kernel void' in msl, msl[:200]",
+     "darwin"),
 
     ("COLD compile + LAUNCH a real wrapper through the launcher",
      "# The whole path the engine actually takes: a wrapper from\n"
@@ -112,15 +125,24 @@ CASES = [
      "spec.loader.exec_module(mod)\n"
      "drv = mod._DRIVERS['metal']()\n"
      "assert drv is not None, 'no Metal driver on this machine'\n"
-     "mod.test_driver_satisfies_the_launcher_contract(drv)"),
+     "mod.test_driver_satisfies_the_launcher_contract(drv)",
+     "darwin"),
 
-    ("launch through TRITON's own kernel[grid] (NEGATIVE CONTROL)",
-     "# The component the launcher replaces. Triton's C++ argument binder\n"
-     "# imports torch on every backend; this line must read True or the\n"
-     "# table above is not measuring anything.\n"
+    ("launch through TRITON's own kernel[grid] (OBSERVATION, not the control)",
+     "# The component the launcher replaces. On Triton 3.6 this imported torch on\n"
+     "# every backend, which is why the replacement exists; on 3.7+ upstream made\n"
+     "# the CUDA driver probe native (#9578/#10935) and it no longer does. Kept as\n"
+     "# an OBSERVATION of upstream, never again as the control: a control that goes\n"
+     "# quiet when upstream changes stops measuring without anyone noticing, which\n"
+     "# is what happened between 3.6 and 3.8 (2026-09-17).\n"
      "from triton._C.libtriton import native_specialize_impl\n"
      "from triton.backends.compiler import BaseBackend\n"
      "native_specialize_impl(BaseBackend, 16, False, True, True)"),
+
+    ("import torch on purpose (DETECTOR CONTROL — must read True)",
+     "# The control, and it cannot go inert: if THIS reads False the probe is\n"
+     "# broken and every False above means nothing.\n"
+     "import torch  # noqa: F401"),
 ]
 
 _VERDICT = (
@@ -153,50 +175,96 @@ def run_case(label: str, body: str, cache_root: Path) -> tuple[bool, str]:
     return False, f"CASE DID NOT RUN: {tail[:160]}"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=None)
-    args = parser.parse_args()
+def build_report(rows: list[tuple[str, bool, str, str | None]],
+                 platform: str) -> tuple[str, int]:
+    """Turn the measured rows into the report and the exit code.
 
-    rows, failures = [], []
-    with tempfile.TemporaryDirectory(prefix="r33_proof_") as tmp:
-        for label, body in CASES:
-            torch_present, error = run_case(label, body, Path(tmp))
-            if error:
-                failures.append(f"{label}: {error}")
-            rows.append((label, torch_present, error))
-            print(f"  {label:<58} {'ERROR' if error else torch_present}",
-                  flush=True)
+    Pure, so the verdict can be tested without spending fifteen minutes of card
+    time on eight subprocesses. Both defects this function was rewritten for
+    (2026-09-17) survived precisely because nothing could reach the verdict
+    without running the whole table.
 
-    width = max(len(label) for label, _, _ in rows)
+    Three outcomes, kept apart, because folding any two of them together is how
+    this table spent weeks printing a violation nobody could act on:
+      * torch seen in an owned step        -> R33 VIOLATION
+      * a step that should run here didn't -> BROKEN HARNESS (never a pass)
+      * the detector control stayed silent -> UNPROVEN (no False means anything)
+    """
+    width = max(len(label) for label, _, _, _ in rows)
     lines = [
         "R33 EXECUTION PROOF — is torch in sys.modules at the end of the "
         "process?",
         "Each case: a fresh process AND a cold compile cache.",
-        f"generated by tools/r33_execution_proof.py",
+        "generated by tools/r33_execution_proof.py",
         "",
         f"{'step':<{width}} torch",
         "-" * (width + 7),
     ]
-    for label, torch_present, error in rows:
-        lines.append(f"{label:<{width}} {'ERROR' if error else torch_present}")
+    for label, torch_present, error, requires in rows:
+        if error:
+            mark = "n/a" if requires and requires != platform else "ERROR"
+        else:
+            mark = str(torch_present)
+        lines.append(f"{label:<{width}} {mark}")
     lines.append("")
 
-    owned = [r for r in rows[:-1]]
-    clean = all(not t and not e for _, t, e in owned)
+    # The observation and the detector control are instruments, not steps the
+    # engine owns; an owned step is every other row.
+    owned = rows[:-2]
+    saw_torch = [lbl for lbl, t, e, _ in owned if t and not e]
+    # An ERROR is a step that could not RUN. On a CUDA box the two Metal rows
+    # error every single time, and counting that as a torch sighting is what
+    # made this table print "*** R33 VIOLATION ***" on BOTH stacks while torch
+    # appeared in no owned step at all (measured 2026-09-17, one variable apart).
+    # But "could not run" may not be silently benign either, or a step that
+    # stops being measured reads exactly like a step that passed — so a case
+    # says which platform it needs, and only that case is excused here.
+    not_applicable = [lbl for lbl, _, e, req in owned if e and req and req != platform]
+    broken = [lbl for lbl, _, e, req in owned if e and not (req and req != platform)]
     control_fired = rows[-1][1]
 
-    lines.append("Every step NeuroBrix owns: "
-                 + ("TORCH-FREE" if clean else "*** R33 VIOLATION ***"))
-    lines.append("Negative control (Triton's own binder) reads True: "
+    if saw_torch:
+        verdict, code = ("*** R33 VIOLATION *** — torch in: "
+                         + ", ".join(saw_torch)), 1
+    elif broken:
+        verdict, code = ("*** BROKEN HARNESS *** — a step that should run on "
+                         f"{platform} did not: " + ", ".join(broken)), 1
+    elif not control_fired:
+        verdict, code = ("UNPROVEN — the detector control did not fire, so no "
+                         "False above means anything"), 1
+    else:
+        verdict, code = "TORCH-FREE", 0
+    lines.append("Every step NeuroBrix owns: " + verdict)
+    if not_applicable:
+        lines.append(f"  not applicable on {platform} (declared, not a "
+                     "violation): " + ", ".join(not_applicable))
+    lines.append("Detector control (a deliberate `import torch`) reads True: "
                  + ("yes — the table can detect torch"
                     if control_fired
                     else "NO — this table proves nothing, fix the harness"))
     lines.append("")
     lines.append("The ATen branch is torch BY NATURE and is not covered by "
                  "this table, by design.")
-    report = "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n", code
 
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out", type=Path, default=None)
+    args = parser.parse_args()
+
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="r33_proof_") as tmp:
+        for case in CASES:
+            label, body = case[0], case[1]
+            requires = case[2] if len(case) > 2 else None
+            torch_present, error = run_case(label, body, Path(tmp))
+            rows.append((label, torch_present, error, requires))
+            mark = ("n/a" if requires and requires != sys.platform else "ERROR") \
+                if error else torch_present
+            print(f"  {label:<58} {mark}", flush=True)
+
+    report, code = build_report(rows, sys.platform)
     print()
     print(report)
     if args.out:
@@ -204,11 +272,11 @@ def main() -> int:
         args.out.write_text(report)
         print(f"written to {args.out}")
 
-    if failures:
-        print("CASES THAT DID NOT RUN:", file=sys.stderr)
-        for failure in failures:
-            print(f"  {failure}", file=sys.stderr)
-    return 0 if (clean and control_fired and not failures) else 1
+    for label, _, error, requires in rows:
+        if error and not (requires and requires != sys.platform):
+            print(f"CASE THAT SHOULD HAVE RUN DID NOT: {label}: {error}",
+                  file=sys.stderr)
+    return code
 
 
 if __name__ == "__main__":

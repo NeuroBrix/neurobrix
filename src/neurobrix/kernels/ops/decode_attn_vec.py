@@ -94,7 +94,8 @@ def decode_attn_vec_split_kernel(
     q = _round_q(q, Q_TO, Q_SATURATE)
 
     seg_start = pid_s * seg_len
-    seg_end = tl.minimum(seg_start + seg_len, T_k)
+    seg_start = seg_start.to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    seg_end = tl.minimum(seg_start + seg_len, T_k).to(tl.int32)
 
     m_i = float("-inf")
     l_i = 0.0
@@ -179,7 +180,8 @@ def decode_attn_vec_grouped_kernel(
     offs_g = tl.arange(0, GQA_GROUPS)
 
     seg_start = pid_s * seg_len
-    seg_end = tl.minimum(seg_start + seg_len, T_k)
+    seg_start = seg_start.to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    seg_end = tl.minimum(seg_start + seg_len, T_k).to(tl.int32)
 
     m_i = tl.full((GQA_GROUPS,), float("-inf"), dtype=tl.float32)
     l_i = tl.zeros((GQA_GROUPS,), dtype=tl.float32)

@@ -4,7 +4,14 @@
 Every number is READ from the artefact that produced it. Nothing is retyped, and
 every cell carries how it was obtained:
 
-    measured      an artefact on this machine holds it, and the line names which
+    proven        an ARTEFACT of a real request was judged by an instrument
+                  OUTSIDE this engine, and the line links the file and the
+                  written verdict (R29, hardened by the owner 2026-09-16)
+    measured      an artefact on this machine holds a number, and the line names
+                  which — including every AGREEMENT between two arms of this
+                  engine (bytes identical, PSNR, pixel dynamics): two arms
+                  agreeing says they agree, never that either is right, because
+                  one broken graph upstream breaks both the same way
     inferred      derived from a measured line by a stated structural identity
     not measured  said in clear, because a blank cell and a zero read the same
 
@@ -82,19 +89,110 @@ ADJUDICATED_AXES = {
 
 # Verdicts that belong to no single line. Each names its artefact; a number here
 # was read from it after the run, never before.
+# ---------------------------------------------------------------------------
+# The artefacts a human has judged with an instrument outside the engine. A line
+# is PROVEN only here; everything else is measured, however many numbers it has.
+# Campaign: nbx/campaigns/2026_09_16_vitrine (its README names the instruments).
+VITRINE_DIR = "nbx/campaigns/2026_09_16_vitrine"
+VITRINE = {
+    "whisper-large": dict(
+        artefact="whisper/transcript.txt",
+        instrument="the text known in advance (jfk_11s.expected.txt) and faster-whisper 1.2.1, a third-party ASR",
+        answer="word error rate 0.0 against the expected text (22 words, 0 edits); the third-party ASR returns the identical sentence"),
+    "Qwen3-Coder-30B-A3B-Instruct": dict(
+        artefact="qwen3_coder/answer.txt",
+        instrument="the function it wrote was extracted and EXECUTED against eight cases it never saw",
+        answer="8 of 8 — overlapping, touching, contained, empty, single, unsorted, disjoint and degenerate inputs all return exactly what they must (execution.json); 3591 s for 160 tokens, the model streaming per token on one 32 GB card"),
+    "Wan2.1-T2V-1.3B-Diffusers": dict(
+        artefact="wan_t2v/sailboat.mp4",
+        instrument="the frames assembled and watched as a sequence (contact_sheet.png), beside the per-frame facts",
+        answer="a wooden boat on a calm bay at sunrise, coherent and moving (frame-to-frame change 9.3, 12.9, 3.6, 4.1); two things named — the model drew a rowing boat where the request said sailboat, and five frames came back for eight asked (the VAE's temporal grid; the engine now says so)"),
+    "Kokoro-82M": dict(
+        artefact="kokoro_en/lighthouse.wav",
+        instrument="faster-whisper 1.2.1 (a third-party ASR) reading the synthesised WAV back",
+        answer="word error rate 0.0 against the sentence asked for (14 words, 0 edits) IN ENGLISH — the container's only lexicon; the French voice on the same lexicon said other words (WER 1.42) and is now refused by name, D-KOKORO-G2P-ONE-LANGUAGE"),
+    "PixArt-XL-1024": dict(
+        artefact="pixart_xl_1024/bench.png",
+        instrument="looked at, beside the degeneracy facts",
+        answer="the request's own scene — a red wooden bench under a blossoming cherry tree, petals drifted on the path, park behind, afternoon light; not flat, not banded (image_facts.json)"),
+    "PixArt-XL-2-1024-MS": dict(
+        artefact="pixart/bench.png",
+        instrument="looked at, beside the degeneracy facts",
+        answer="the request's own scene — a red wooden bench under a blossoming cherry tree, petals on the ground, afternoon light; std 75.28, 525 544 distinct colours, 0 uniform rows"),
+    "real-esrgan-x4": dict(
+        artefact="real_esrgan/apple_x4.png",
+        instrument="looked at, beside the degeneracy facts and the correlation with the input's bicubic upscale",
+        answer="the input's scene at 1792x1792, sharp: correlation 0.998, std 104.65, 199 358 distinct colours — not white, not flat"),
+}
+
+
+def vitrine_cell(container: str) -> str:
+    """The line's verdict: `proven` with its artefact and verdict file when one
+    exists, else the row's own (measured / inferred / not measured).
+
+    An entry may name its own `dir` and `verdict`: a proof made in another
+    campaign than the vitrine's is still a proof, and pointing at the campaign
+    that produced it beats copying the artefact to where this function expects
+    it (real-esrgan-x2 and -x8, proven in the re-trace campaign, 2026-09-16)."""
+    v = VITRINE.get(container)
+    if not v:
+        return ""
+    root = v.get("dir", VITRINE_DIR)
+    verdict = v.get("verdict", f"{v['artefact'].rsplit('/', 1)[0]}/VERDICT.md")
+    return (f"**proven** — [{v['artefact'].split('/')[-1]}]({root}/{v['artefact']}), "
+            f"judged by {v['instrument']}: {v['answer']} "
+            f"([verdict]({root}/{verdict}))")
+
+
 CROSS_CUTTING = [
+    "**A white image was a trace stimulus, not a model limit** (real-esrgan, 2026-09-16). "
+    "`real-esrgan-x2` answered a 448x448 request with a WHITE 128x128 square. Cause measured, "
+    "not inferred: it was traced at 64x64, where the image height, the image width and the "
+    "first convolution's 64 channels are ONE NUMBER, so no rule could attribute a 64 to an "
+    "axis and the pixel-unshuffle view recorded `[1, 3, 32, 2, 32, 2]` instead of "
+    "`[s0, 3, s1//2, 2, s2//2, 2]`. `real-esrgan-x8` carries the identical loss at its first "
+    "`upsample_nearest2d` and renders correctly anyway, because that operator records "
+    "`scales_h`/`scales_w` BESIDE the frozen size and both engines recompute from the scale "
+    "(`sequential_dispatcher.py:356`, `compiled_ops.py:748`) — a run-time repair of a "
+    "build-time loss, which is why the same defect is invisible in one and fatal in the "
+    "other. Repair: a RE-TRACE at the collision-free upscaler stimulus (112x80), which the "
+    "tracer has shipped since 2026-08-29 and the four other upscalers carry; the tracer "
+    "gained nothing, its window-split branch was correct the whole time. Proven by artefact "
+    "at three sizes that are not the trace size, two of them non-square — x2: 96x96 -> "
+    "192x192, 160x112 -> 320x224, 208x144 -> 416x288, correlations 0.997/0.998/0.999 against "
+    "the bicubic and looked at; x8 the same three at eight times. The weights were verified "
+    "first, 702/702 and 704/704 tensors bit-identical to the snapshot the containers were "
+    "built from. The net returns under the repair: a graph that DECLARES a spatial dimension "
+    "no operation references is refused at the disk boundary, seen red on the real "
+    "pre-repair container and refusing 0 of the 181 cached ones. "
+    "`nbx/campaigns/2026_09_16_root_pngs/THREE_SIZES_VERDICT.md`, "
+    "`nbx/campaigns/2026_09_16_symbol_chains/REPORT.md`.",
     "**The strategy change moves no byte** (budget-unified gate, 2026-09-13 15:35-16:03, "
     "after-arm rebuilt on the trunk at run time): five pinned pairs whose Prism strategy "
     "changes between the arms — PixArt-XL-1024, PixArt-XL-2-1024-MS, PixArt-Sigma-XL-1024, "
     "PixArt-Sigma-XL-2-1024-MS on a 16 GB card, Flex.1-alpha on a 32 GB card — rendered "
-    "byte-identical images on both arms, three cold repetitions each, triton. The sixth "
-    "pair (mochi) is named, not run. The byte matrix over the models that do NOT change "
-    "strategy ran zero cells that day (register 52) and is re-armed. "
-    "`nbx/campaigns/prepared/budget_unified_gate_20260913_1535/VERDICT.md`.",
+    "byte-identical images on both arms, three cold repetitions each, triton. The byte "
+    "matrix over the whole catalogue ran 2026-09-14 09:11-15:12 (register 52's re-arm): "
+    "30 cells identical, 0 adjudicated differences, 2 unadjudicated on the two models "
+    "whose own nondeterminism is on record — orpheus-3b-0.1-ft (its sampler draws off the "
+    "executor's RNG stream, D-ORPHEUS-SEED-NOT-PINNED) and CogVideoX-2b (differs run to "
+    "run on both engines with no RNG op in its graph; cause not yet named, "
+    "D-COGVIDEOX-2B-NONDETERMINISTIC-PER-RUN) — and 16 cells unmeasurable on this pair "
+    "because its before tree (5ca23b1) cannot load today's containers. **Re-posed on "
+    "2026-09-16** (before 46479ae, the loader fix; after the merged trunk 291c3b8; two 16 GB "
+    "cards, triton, cold pairs): GLM-4.1V-9B-Thinking, Janus-Pro-7B and MiniCPM-o-4_5 "
+    "IDENTICAL (833eb058f3ae, 9a30d277cf21, 35d48303f4e7; each faster on the trunk, 143→127 s, "
+    "93→87 s, 59→49 s). Still unmeasurable, said by name: Qwen3-VL-30B-A3B-Thinking and "
+    "Qwen3-Omni-30B-A3B-Instruct (both arms refuse at the deepstack zero-length bind until "
+    "their retrace), Ming-Lite-Omni-1.5 triton (the before arm refuses at a freed arena — the "
+    "defect the trunk fixed today, so the pair has no before). Determinism per mode is a "
+    "public claim: the two nondeterministic models are its named exceptions until their "
+    "causes are. `nbx/campaigns/prepared/budget_unified_gate_20260913_1535/RUN.md`, "
+    "`nbx/campaigns/2026_09_16_converge/matrix_repose/`.",
     "**The engine suite on the trunk** (`pytest tests/unit tests/regression`, 2026-09-13 "
     "13:28-15:20, 1 h 52): 2100 passed, 21 failed. Ten of the 21 were one defect in the "
     "triton weight loader's consumed-weight filter (register 50, fixed the same afternoon, "
-    "proven by run on three cells), one a GPU-less host planned on a GPU (register 51, "
+    "measured by run on three cells), one a GPU-less host planned on a GPU (register 51, "
     "fixed), eight out-of-memory against a foreign process on the cards, two Qwen3-Omni "
     "triton cells to re-read after the fix. The 21 are re-run from a worktree frozen at "
     "`8a92312` on a quiet rig; the verdict line is written here when it exists, not before. "
@@ -130,7 +228,7 @@ OVERLAY = {
              "on this stack until cuDNN >= 9.3 or a per-tile conv bound lands (DETTE D2).",
         line="measured"),
     "CogVideoX-5b-I2V": dict(
-        now="RUNS — corrected at the source, published, installed, PROVEN by run",
+        now="RUNS — corrected at the source, published, installed; run to completion (MEASURED: no artefact judged outside the engine, R29 hardened 2026-09-16)",
         evidence="hub record THUDM/CogVideoX-5b-I2V fileSize 23126413914, updatedAt "
                  "2026-09-12T22:09:39Z (replace through the internal entry point, "
                  "2498 s); installed manifest 22:10:26 UTC; the installed "
@@ -147,7 +245,7 @@ OVERLAY = {
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, PROVEN BY RUN (triton, 9 frames, 2026-09-13 15:33)",
+        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, ran to completion (triton, 9 frames, 2026-09-13 15:33) — MEASURED: no artefact judged outside the engine (R29 hardened 2026-09-16)",
         evidence="re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
                  "vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops "
                  "at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the "
@@ -162,7 +260,7 @@ OVERLAY = {
              "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
         line="measured"),
     "mochi-1-preview": dict(
-        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, fixed at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
+        now="RENDERS on triton at 9 frames (1 step, 118 s) — the CUDA 700 was three int32 index wraps past 2^31 elements, a defect of EVERY kernel for ANY model whose tensor exceeds two billion elements (the next family to meet it will not be called Mochi), fixed for the class at the kernels; at its default 84 frames the VAE decoder OOMs where Prism planned 3.2 GB (estimator debt)",
         evidence="two compute-sanitizer runs (7 200 s 09-13, 18 000 s 09-14) measured nothing; "
                  "--triton-sequential + CUDA_LAUNCH_BLOCKING=1 named aten.mm::1 of the VAE in 19 min "
                  "(M=1 068 480 x N=2048: 2.19e9 output elements, stride_cm * offs_cm wrapped in int32 — "
@@ -182,7 +280,7 @@ OVERLAY = {
              "estimate carrying the runtime frame count.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
-        now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
+        now="RUNS — compiled ran to completion at the default guidance (MEASURED, R29 hardened 2026-09-16); triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
         evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
                  "five components; upload through the internal entry point 22:22:46 -> "
                  "rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub "
@@ -315,7 +413,44 @@ def memory_class_coverage(container: str):
             out["unknown"] += 1
         for c in classes:
             out["by_class"][c] = out["by_class"].get(c, 0) + 1
+        for lab in (C.proof_backends(entry) or {"unknown"}):
+            out.setdefault("by_backend", {})[lab] = out.get("by_backend", {}).get(lab, 0) + 1
     return out
+
+
+def apple_directory_summary() -> dict:
+    """What the certified directory holds for Apple silicon — read from the
+    live tree (`config/autotune/apple/<profile>/`), the Mac branch's own
+    proofs. No model run is measured on this rack for it: there is no Apple
+    device here, and the Volta census's shape keys are not the keys a Mac
+    meets (its dtype policy differs), so nothing is inferred either."""
+    root = REPO / "src" / "neurobrix" / "config" / "autotune" / "apple"
+    out = {"profiles": {}}
+    if not root.exists():
+        return out
+    for prof in sorted(p for p in root.iterdir() if p.is_dir()):
+        files = {}
+        dates = set()
+        machine = None
+        for f in sorted(prof.glob("*.json")):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            ents = d.get("entries") or {}
+            files[f.stem] = len(ents)
+            for e in ents.values():
+                pr = e.get("proof") or {}
+                if pr.get("date"):
+                    dates.add(str(pr["date"])[:10])
+                if machine is None and pr.get("machine"):
+                    machine = pr["machine"].get("platform")
+        out["profiles"][prof.name] = {"files": files, "shapes": sum(files.values()),
+                                      "dates": sorted(dates), "platform": machine}
+    return out
+
+
+APPLE_CELL = "not measured here"
 
 
 def coverage_cell(cov) -> str:
@@ -330,7 +465,9 @@ def coverage_cell(cov) -> str:
         extra.append(f"{cov['unknown']} proven on an unknown card")
     if cov["absent"]:
         extra.append(f"{cov['absent']} not in the directory")
-    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "")
+    gens = cov.get("by_backend") or {}
+    gen = (" · proven under " + ", ".join(k if len(gens) == 1 else f"{k} ×{n}" for k, n in sorted(gens.items()))) if gens else ""
+    return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "") + gen
 
 
 # ---------------------------------------------------------------------------
@@ -519,8 +656,8 @@ def main() -> int:
           f"and every one of the nine failures was a VIDEO model.\n")
 
     print("| model | family | GB | on this rack | swept | screened | certified cost | "
-          "certified for this card's memory | where a defect would be invisible | debts named | line |")
-    print("|---|---|---:|---|---:|---:|---|---|---|---|---|")
+          "certified for this card's memory | Apple M4 Pro | where a defect would be invisible | debts named | line |")
+    print("|---|---|---:|---|---:|---:|---|---|---|---|---|---|")
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
@@ -580,7 +717,7 @@ def main() -> int:
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{coverage} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
+              f"{coverage} | {APPLE_CELL} | {blind_cell} | {debts_cell(container, slug)} | {vitrine_cell(container) or line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -592,6 +729,21 @@ def main() -> int:
         print(f"*Evidence:* {ov['evidence']}  ·  *line:* {ov['line']}\n")
 
     print("## How to read the columns\n")
+    print("**line** — the last column is the verdict on the line itself, and since")
+    print("2026-09-16 it distinguishes two things that were being written as one.")
+    print("*proven* means an ARTEFACT of a real request — not a trace stimulus — was")
+    print("judged by an instrument OUTSIDE this engine, and the cell links the file and")
+    print("the written verdict: a transcription against a text known in advance and a")
+    print("third-party ASR, a synthesised voice read back by that ASR, code that was")
+    print("executed, an image or a sequence of frames looked at. *measured* is")
+    print("everything else that rests on an artefact of this machine: a wall clock, a")
+    print("shape count, a PSNR — and every AGREEMENT between two arms of this engine.")
+    print("Bytes identical between the Triton and the PyTorch path say the two paths")
+    print("agree; a graph broken upstream breaks both the same way and the matrix still")
+    print("reads *identical*. Lines that said \"proven by run\" before that date and rest")
+    print("on a run or an agreement were demoted here to *measured* and keep their")
+    print("evidence; each returns to *proven* when its artefact is produced and judged")
+    print("(`nbx/campaigns/2026_09_16_vitrine`).\n")
     print("**debts named** — the entries of `DETTE.md` that hold this line (the A rows of")
     print("`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on")
     print("without opening the debt file. A line that runs and measures may still name one:")
@@ -604,7 +756,29 @@ def main() -> int:
     print("32 GB card until it is certified there, and a shape proven on the rig with the")
     print("card unknown serves no card until re-proven. The two numbers are what a")
     print("request on each SKU of this rack is served without a sweep — not what the")
-    print("directory holds.\n")
+    print("directory holds. *Proven under* names the code generator (the Triton version)")
+    print("each served proof was made with, so a rank reads with its date: a setting stays")
+    print("correct under any generator — the fp64 oracle proved the SOURCE, not the")
+    print("compiler — and what a Triton upgrade may age is its rank as the fastest, by a few")
+    print("percent. A re-proof under a new generator is an optimisation pass on this rack,")
+    print("incremental, checkpointed, invisible to a request; the old proofs serve meanwhile")
+    print("(owner, 2026-09-16).\n")
+    apple = apple_directory_summary()
+    print("**Apple M4 Pro** — every cell says *not measured here*, and that is the")
+    print("whole truth of this rack: it has no Apple device, and a Mac's shape keys are")
+    print("not this rack's (the dtype policy differs), so nothing is inferred from the")
+    print("Volta census either. What the trunk carries for Apple since the Mac branch")
+    print("merged is the certified directory the Mac itself wrote, read from the live tree:")
+    if apple["profiles"]:
+        for name, prof in apple["profiles"].items():
+            files = ", ".join(f"{k} {v}" for k, v in prof["files"].items())
+            dates = f"{prof['dates'][0]}..{prof['dates'][-1]}" if prof["dates"] else "no dated proof"
+            print(f"`{name}`: **{prof['shapes']} shapes** ({files}), proofs {dates}, "
+                  f"platform `{prof['platform']}`. A model's Apple line is measured on the machine")
+            print("that carries the card, by its own matrix runner (`tools/apple_matrix*.py`), and")
+            print("lands here as a row when it does.\n")
+    else:
+        print("nothing — the live tree carries no `config/autotune/apple/` directory.\n")
     print("**swept** — shape keys this model had to sweep AT RUNTIME because the")
     print("certified directory did not hold them. On a row that MET, `0` is the")
     print("per-model measure of certified coverage: it was served entirely from the")

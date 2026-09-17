@@ -1,0 +1,75 @@
+# CodeRabbit — second reader on pull requests.
+#
+# It reads diffs; it runs nothing. Every finding it raises is a HYPOTHESIS and is
+# reproduced here before it is believed or acted on, like any other instrument.
+# Configured narrow on purpose: we want defects, not style.
+
+language: en-GB
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+
+  # Biome owns lint here; CodeRabbit must not duplicate it.
+  tools:
+    biome:
+      enabled: false
+  high_level_summary: true
+  review_status: false
+  poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+
+  # Noise we do not want: generated artefacts, vendored trees, measurement outputs.
+  path_filters:
+    - "!**/*.lock"
+    - "!**/*.min.js"
+    - "!validation_outputs/**"
+    - "!reports/**"
+    - "!third_party/**"
+    - "!**/*.nbx"
+    - "!**/*.safetensors"
+    - "!src/neurobrix/config/autotune/**"
+
+  # The project's own rules, so findings land where they matter.
+  path_instructions:
+    - path: "src/neurobrix/**/*.py"
+      instructions: >-
+        This is an inference engine. Its contract is correct-or-refuse: a path that
+        cannot be handled correctly must raise loudly, never fall back, never emit a
+        plausible-looking wrong result. Flag, in order of importance: any silent
+        fallback or bare except that swallows a failure; any result returned on a path
+        whose correctness was not established; any hardcoded constant that should be
+        read from a hardware profile, a model config, or a device query (tile sizes,
+        memory limits, dtype maps, thread or block counts, architecture names); any
+        vendor or backend name (cuda, metal, triton_msl, mps, rocm) appearing in a
+        module shared across backends; any guard or predicate that inspects only
+        top-level structures when the thing it guards can be nested; any capability
+        probe that proves compilation rather than execution. Two decisions that are
+        each correct alone but wrong together are the defect class that costs us most.
+    - path: "src/neurobrix/core/dtype/**"
+      instructions: >-
+        dtype handling must go through DtypeEngine. Flag any hand-written dtype-to-numpy
+        or dtype-to-backend mapping, especially one that omits bfloat16 — that exact
+        omission has produced two separate silent-wrong defects here.
+    - path: "tests/**"
+      instructions: >-
+        A test that has never been seen to fail proves nothing. Flag assertions that
+        would hold even if the code under test did nothing; tests whose imports are
+        wrapped so a failure becomes a skip; skips without a stated reason; and tests
+        that assert a property of the environment (a library version, the presence of a
+        kernel, a device) rather than a decision of our code.
+
+chat:
+  auto_reply: true
+
+# No docstring or style gate: this is disabled at its own switch, not implied.
+pre_merge_checks:
+  docstrings:
+    mode: "off"
+  title:
+    mode: "off"
+  description:
+    mode: "off"

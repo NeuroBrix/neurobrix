@@ -20,9 +20,10 @@ cuda = pytest.importorskip("triton")
 
 
 def _cuda_available():
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    device_count = nbx.DeviceAllocator.device_count   # a renamed symbol raises here, loudly
     try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        return DeviceAllocator.device_count() > 0
+        return device_count() > 0
     except Exception:
         return False
 

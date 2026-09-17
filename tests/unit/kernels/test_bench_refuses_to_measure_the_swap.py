@@ -37,24 +37,28 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
     from neurobrix.kernels import launcher as L
     import neurobrix.core.host_memory as hm
 
-    # Available memory must exceed the flush the sweep allocates, or there is no
-    # "under the line" to test: below that figure every sweep swaps, which is
-    # itself correct and is what the third case below pins.
-    _FLUSH_MB = L._BENCH_FLUSH_BYTES // 2 ** 20
+    # The numbers straddle `available - the bench's own flush buffer`, not
+    # `available` alone: `do_bench` allocates a 256 MiB L2 flush buffer per
+    # call, so the sweep needs the arguments PLUS that, and the door counts it
+    # (launcher.py `_BENCH_FLUSH_BYTES`, added 2026-09-17 after a baddbmm key
+    # carrying 5.92 GB of arguments answered False and the machine died).
+    # This file straddled `available` alone and was left behind by that change,
+    # so it failed on CUDA the first time it ran here: 99 MB of arguments plus
+    # 256 MiB of flush is over a 100 MB line, and the door was right.
+    # The flush is a measured allocation, not a margin to tune, so the test's
+    # own point — the comparison IS the whole decision — is unchanged.
+    flush_mb = L._BENCH_FLUSH_BYTES // 2 ** 20
 
     class _M:
-        available_mb = _FLUSH_MB + 100
+        available_mb = 1000
         total_mb = 24576
         source = "test"
 
     monkeypatch.setattr(hm, "memory_state", lambda: _M())
     monkeypatch.setattr(hm, "host_shares_memory_with_device", lambda: True)   # the doors reason about a unified pool
-    # Over the line, by one MiB, counting the flush the sweep really allocates.
-    swaps, avail = L.bench_would_swap(101 * 2 ** 20)
-    assert swaps is True and avail == _FLUSH_MB + 100
-
-    # Under it, by one MiB.
-    swaps, _ = L.bench_would_swap(99 * 2 ** 20)
+    swaps, avail = L.bench_would_swap((1000 - flush_mb + 1) * 2 ** 20)
+    assert swaps is True and avail == 1000
+    swaps, _ = L.bench_would_swap((1000 - flush_mb - 1) * 2 ** 20)
     assert swaps is False, (
         "under the line nothing is gated: the comparison is the whole test, "
         "and the only thing added to the arguments is the allocation do_bench "
@@ -66,7 +70,7 @@ def test_the_decision_is_the_live_available_memory(monkeypatch):
     # A machine with less available than the flush alone cannot sweep at all,
     # and must say so with zero arguments.
     class _Tiny(_M):
-        available_mb = _FLUSH_MB - 1
+        available_mb = flush_mb - 1
 
     monkeypatch.setattr(hm, "memory_state", lambda: _Tiny())
     swaps, _ = L.bench_would_swap(0)
