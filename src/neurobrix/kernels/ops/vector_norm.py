@@ -143,10 +143,12 @@ def lp_norm_kernel(
         col_mask = cols < N
         mask = row_mask & col_mask
         a = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-        _sum += tl.extra.cuda.libdevice.pow(tl.abs(a), ord)
+        # |a|**ord for ord > 0 and a >= 0: exp/log is exact enough and portable.
+        # `libdevice.pow` is NVIDIA-only and fails to lower elsewhere.
+        _sum += tl.exp(ord * tl.log(tl.abs(a) + 1e-38))
 
     s = tl.sum(_sum, axis=1)
-    out = tl.extra.cuda.libdevice.pow(s, 1.0 / ord)[:, None]
+    out = tl.exp((1.0 / ord) * tl.log(s + 1e-38))[:, None]
     tl.store(Out, out, mask=row_mask)
 
 
