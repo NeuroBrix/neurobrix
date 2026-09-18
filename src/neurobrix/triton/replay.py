@@ -1,5 +1,13 @@
 """Frozen-plan replayer for the triton hot loop (Phase 4a: E1+E2+E6).
 
+ONE-SHOT REQUESTS: recording is opt-in, off by default, and should stay off for
+a single request — the plan does not outlive this process (only the slab SIZE
+cache is written; there is no plan serialiser and no loader). Measured on an
+M4 Pro, 120 tokens, byte-identical output: **+7.6% at a short prompt, 8.0x at
+~480 tokens of context**. The cost is context-dependent; a single number
+misstates it. Full record and the reasoning:
+docs/reference/replay-recording-in-a-one-shot-request.md
+
 Removes the per-launch Python band (wrapper dtype protocol, arg
 resolvers, allocation, autotune lookup, triton's Python launcher —
 measured ~0.57 ms/launch on the Ming denoiser) by recording the FINAL
