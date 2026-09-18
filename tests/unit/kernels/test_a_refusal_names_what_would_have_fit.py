@@ -115,17 +115,54 @@ def test_an_unrelated_failure_is_not_dressed_up_as_a_memory_problem():
         assert annotate("Failed at op x", cause) == "Failed at op x"
 
 
-def test_the_seams_that_use_it_pass_the_cause_and_not_the_message():
-    """Both modes wire it, and neither parses the allocator's prose.
+def test_EVERY_op_failure_seam_goes_through_it():
+    """Presence of the name is not coverage, and that difference cost a run.
 
-    A controller built on a regex over a diagnostic breaks the first time the
-    diagnostic is reworded; this pins that neither seam does that.
+    The first version of this cell asserted `"oom_advice" in triton`. That was
+    true with ONE of the three seams in `triton/sequence.py` wired — and the real
+    reproducer, real-esrgan-x8 at 16 GB, raises from another one. It failed at
+    `aten.convolution::349` wanting 8 589 934 592 bytes with 7 598 MB free and
+    printed no advice, under a green test.
+
+    So the cell counts. Every `raise RuntimeError(... "Failed at ...")` in both
+    sequences must pass its message through `_oom_annotate`, and a seam added
+    later turns this red instead of silently not carrying the sentence.
     """
+    import re
     from pathlib import Path
+
     root = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
-    triton = (root / "triton" / "sequence.py").read_text()
-    compiled = (root / "core" / "runtime" / "graph" / "compiled_sequence.py").read_text()
-    assert "oom_advice" in triton and "oom_advice" in compiled
-    for text in (triton, compiled):
+    for path in (root / "triton" / "sequence.py",
+                 root / "core" / "runtime" / "graph" / "compiled_sequence.py"):
+        text = path.read_text()
+        # Each op-failure seam is a `raise RuntimeError(` whose message begins
+        # with "Failed at". Find them and require the annotate call in between.
+        seams = [m.start() for m in re.finditer(r'raise RuntimeError\(', text)
+                 if 'f"Failed at' in text[m.start():m.start() + 400]]
+        assert seams, f"no op-failure seam found in {path.name} — has it moved?"
+        for pos in seams:
+            window = text[pos:pos + 400]
+            assert "_oom_annotate" in window, (
+                f"{path.name}: an op-failure seam near offset {pos} does not pass "
+                f"its message through _oom_annotate:\n{window[:220]}")
         assert "GPU malloc failed" not in text, (
-            "a seam is matching on the allocator's message text")
+            f"{path.name} is matching on the allocator's message text")
+
+
+def test_the_three_triton_seams_and_the_six_compiled_ones_are_all_there():
+    """A count, so that losing a seam is as visible as adding an unwired one."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+    counts = {}
+    for path in (root / "triton" / "sequence.py",
+                 root / "core" / "runtime" / "graph" / "compiled_sequence.py"):
+        text = path.read_text()
+        counts[path.name] = len([
+            m for m in re.finditer(r'raise RuntimeError\(_oom_annotate\(', text)])
+    assert counts["sequence.py"] == 2 and counts["compiled_sequence.py"] == 6, counts
+    # The third triton seam builds its message into `_msg` first, so it is counted
+    # separately rather than pretending the shapes are uniform.
+    triton = (root / "triton" / "sequence.py").read_text()
+    assert "_msg = _oom_annotate(" in triton and "raise RuntimeError(_msg)" in triton
