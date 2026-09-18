@@ -73,3 +73,44 @@ It is not a caching-allocator change: the pool is off in the reproducer and the 
 identical. It is not zero3 or offload: the 8.24 GB live set is what the op needs to read. And it is
 not a threshold to tune — every number above is measured from the run that failed, and the design
 stands or falls on whether the controller can reach the tiling rung, not on where a constant sits.
+
+## Where the controller can and cannot be put (measured 2026-09-18)
+
+Addition 3 says "re-enter the cascade at the op-level tiling rung". It is worth writing
+down why the cheaper seam beside it does **not** work, because it looks like it should.
+
+`conv2d_wrapper` already carries a kernel-level band-streaming lever
+(`_NBX_CONV2D_BAND_BYTES`, 4 GiB, P-SANA-4KPX Étape 1). The reproducer's failing allocation
+is **8 589 934 592 bytes** — the conv's own output, `(1, 64, 8192, 8192)` in fp16 — which is
+**above** that threshold, so the band path is entered. And it still dies, for the reason its
+own docstring gives:
+
+> The full output tensor is allocated up front (downstream consumers expect it whole); per
+> band we slice the input H, recurse into conv2d_wrapper for the band ... and write the band
+> slice back into the full output.
+
+**Band streaming reduces the transient working set. It does not reduce the output.** The
+allocation that fails is the output, before any band runs, so no threshold inside the wrapper
+can help: at 4 GiB it bands and dies, at 16 GiB it does not band and dies identically.
+
+That is what "reshape the work" means in addition 3, stated exactly: **the output extent
+itself has to shrink**, and that can only be decided where the DOWNSTREAM CONSUMERS are
+known — because the reason the wrapper hands back a whole tensor is that its callers expect
+one. The op-level rung is the only place that holds both sides.
+
+So the controller's shape is fixed by this:
+
+* it may not live in a wrapper, because a wrapper cannot change its own output contract;
+* it enters at the op-failure seam, where the op_uid and the allocator's real figures are
+  both in hand (`DeviceOOMError` now carries requested / live / pool_cached / driver_free /
+  shortfall, `bd96c7b1`);
+* it re-enters at the op-level tiling rung for THAT op_uid, which already owns the
+  downstream-aware machinery (`OpLevelTilingPlan`, `register_op_uid_interceptors`, mirrored
+  into both sequences);
+* one re-entry, then a refusal that names what would have fit — which is already there
+  (`kernels/oom_advice.py`, `66ed17af`) and already says, on this exact failure:
+  `what would have fit: short by 594 MB; it would fit in 2 bands of about 4,096 MB`.
+
+The remaining work is the re-entry itself: building a one-op `OpLevelTilingPlan` from the
+failure and registering its interceptor mid-run, which the machinery currently expects to be
+done at plan time. That is the next step, and it is named rather than assumed to be small.
