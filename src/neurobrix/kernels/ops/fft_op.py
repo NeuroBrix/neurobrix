@@ -34,10 +34,24 @@ def bit_reverse_kernel(
     # backend; the Metal census, 2026-09-05).
     m = tid < n
 
-    # Compute bit-reversed index
+    # Compute bit-reversed index.
+    #
+    # `rev_idx` is seeded as an explicit int64 and NOT as the literal 0. A bare
+    # `0` is int32, and the loop body below computes
+    # `(rev_idx << 1) | (temp_idx & 1)` where `temp_idx` descends from
+    # `tid.to(tl.int64)` — so the first iteration re-assigns an int64 into an
+    # int32 loop-carried variable and Triton refuses the kernel outright:
+    #
+    #   Loop-carried variable rev_idx has initial type int32 but is re-assigned
+    #   to int64 in loop! Please make sure that the type stays consistent.
+    #
+    # Found 2026-09-18 by `chatterbox`, whose vocoder calls `aten::stft`; the
+    # whole pipeline died there. No other loop-carried variable here has the
+    # problem: `temp_n` stays int32 under `//= 2`, and `temp_idx` is int64
+    # throughout.
     temp_n = n
     idx = tid
-    rev_idx = 0
+    rev_idx = tl.cast(0, tl.int64)
     temp_idx = idx
     while temp_n > 1:
         temp_n //= 2
