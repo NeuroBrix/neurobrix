@@ -2904,12 +2904,30 @@ class NBXTensor:
         except Exception:
             pass
 
-        if self._owns_data and self._data_ptr:
+        # A tensor built by `NBXTensor.__new__` without `__init__` has NO
+        # slot set at all — `copy`, `pickle`, the routing-contract test in
+        # test_prefill_determinism, and any `__init__` that raises part-way
+        # all leave one. Reading `_owns_data` there raises AttributeError, and
+        # Python does not propagate an exception out of `__del__`: it prints an
+        # unraisable exception and ABANDONS THE REST OF THIS METHOD — which is
+        # the free below. So the one case the old line could not survive is the
+        # one where failing silently would leak a device buffer.
+        #
+        # Returning early is correct and not a papered-over free: `__init__` is
+        # pure assignment and allocates nothing, so a tensor that did not finish
+        # it cannot own device memory. Ownership is recorded FROM the
+        # `owns_data` argument, never established inside the tensor.
+        try:
+            owns, ptr = self._owns_data, self._data_ptr
+        except AttributeError:
+            return
+
+        if owns and ptr:
             if self._device == 'cuda':
-                DeviceAllocator.free_cuda(self._data_ptr)
+                DeviceAllocator.free_cuda(ptr)
             elif self._device == 'cpu' and self._pinned:
                 # Pinned host memory allocated via cudaMallocHost.
-                DeviceAllocator.free_host_pinned(self._data_ptr)
+                DeviceAllocator.free_host_pinned(ptr)
             # Unpinned CPU: backed by self._base (numpy array) — Python
             # GC drops it automatically when self goes out of scope.
 
