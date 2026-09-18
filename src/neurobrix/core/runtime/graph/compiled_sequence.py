@@ -27,6 +27,12 @@ import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
 from .compiled_ops import CompiledOpResolver
+# R30: the same "what would have fit" sentence as the triton sequence. It fires on
+# a DeviceOOMError, which this path raises wherever an NBXTensor allocation sits in
+# it. A torch OOM passes through untouched, deliberately: torch's own message
+# already carries the free and total figures, and re-deriving them from its prose
+# is exactly the string-parsing this design exists to avoid.
+from neurobrix.kernels.oom_advice import annotate as _oom_annotate
 
 # TEMP diagnostic state for _maybe_dump_tid_native (CompiledSequence has
 # __slots__, so per-instance dump state lives in this module-level dict
@@ -3802,7 +3808,8 @@ class CompiledSequence:
                                 arena[kill_slot] = None
                             continue
                     else:
-                        raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                        raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                 else:
                     import os as _os_fe
                     if _os_fe.environ.get("NBX_DEBUG") == "1":
@@ -3826,7 +3833,8 @@ class CompiledSequence:
                         print(f"[FAIL-CTX] op={op.op_uid} resolver_bound={_rb} "
                               f"resolver_is={id(self._shape_resolver)} "
                               f"re-resolved_args={_ras}", flush=True)
-                    raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                    raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
 
             # ================================================================
             # NaN/Inf-GUARD (OFF by default — engine.py inf-fix handles overflow)
@@ -4197,9 +4205,11 @@ class CompiledSequence:
                                     arena[kill_slot] = None
                                 continue
                         else:
-                            raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                            raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                     else:
-                        raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                        raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
             else:
                 # ── SLOW PATH: GPU boundary — device alignment needed ──
                 # Rule: CUDA always wins over CPU — compute happens on GPU
@@ -4297,9 +4307,11 @@ class CompiledSequence:
                                     arena[kill_slot] = None
                                 continue
                         else:
-                            raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                            raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
                     else:
-                        raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
+                        raise RuntimeError(_oom_annotate(
+                        f"Failed at op {op.op_uid} ({op.op_type}): {e}", e)) from e
 
             slots = op.output_slots
             # === NBX_OPLOG: every-op execution log (None vs l2) — covers the

@@ -8,7 +8,8 @@ them on one 2 252 800 000-element fp16 tensor (4.5 GB; a 32 GB card):
 `add` reads and writes it; the elements before, at and past 2^31 are read
 back. Seen RED before the promotion (2026-09-14: the strided copy of a
 transposed 2.2e9-element view faulted / wrote garbage past 2^31), GREEN
-after. Skipped, and said, without >= 10 GB free.
+after. Skipped, and said, without room for all three tensors at once (13.5 GB
++ headroom, computed from the shapes below).
 
     CUDA_VISIBLE_DEVICES=2 PYTHONPATH=src pytest tests/unit/kernels/test_a_flat_kernel_beyond_two_billion_elements.py -p no:cacheprovider
 """
@@ -39,8 +40,48 @@ def _at(t, flat_index):
     return float(t[r:r + 1].contiguous().numpy()[0, c])
 
 
-@pytest.mark.skipif(_cuda_free_bytes() < 10 * 2 ** 30, reason="needs a CUDA card with >= 10 GB free")
+#: What this test actually holds at its peak, derived from its own shapes rather
+#: than written by hand: `x`, the materialised transpose `y`, and the sum `z`.
+LIVE_TENSORS = 3
+NEEDED_BYTES = ROWS * COLS * 2 * LIVE_TENSORS + (1 << 30)      # fp16, + 1 GB headroom
+
+
+def _require_room():
+    """Refuse at entry, at the moment the memory is actually wanted.
+
+    This was `@pytest.mark.skipif(_cuda_free_bytes() < 10 * 2 ** 30, ...)`, and it
+    was wrong in both of its terms. The call is a DECORATOR ARGUMENT, so it ran at
+    collection — it measured an empty card and answered a question about a moment
+    that had not happened yet. And 10 GB is below what the test holds: three fp16
+    tensors of 2 252 800 000 elements is 13.5 GB. On a 16 GB card the guard
+    therefore neither skipped nor passed; it reported a card-capacity fact as a
+    kernel failure, which is exactly how a merge gate comes to say "regression"
+    (2026-09-18, merge_gate2). The threshold now comes from the shapes above, so
+    it cannot drift away from them.
+    """
+    # `cudaMemGetInfo` reports what the DRIVER holds, and the NBX allocator's
+    # free-list pool (on by default) keeps released blocks instead of returning
+    # them. So a previous test's tensors read as "not free" while the allocator
+    # could serve this test from them immediately. Measured 2026-09-18 on a 16 GB
+    # card: after dropping two 4.2 GB tensors the driver reported 7.07 GB free with
+    # the pool on and 15.47 GB with `NBX_ALLOC_POOL=0` — the same 8.4 GB, parked.
+    # Flushing first makes the question answerable by the driver again, and
+    # releasing the cache before a multi-gigabyte allocation is right anyway.
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        DeviceAllocator.empty_cache_pool()
+    except Exception:
+        pass
+    free = _cuda_free_bytes()
+    if free < NEEDED_BYTES:
+        pytest.skip(
+            f"needs {NEEDED_BYTES / 2 ** 30:.1f} GB free on one card — {LIVE_TENSORS} "
+            f"fp16 tensors of {ROWS * COLS:,} elements plus headroom; "
+            f"{free / 2 ** 30:.1f} GB free")
+
+
 def test_fill_strided_copy_and_add_reach_past_the_boundary():
+    _require_room()
     probes = [0, BOUNDARY - 1, BOUNDARY, BOUNDARY + 1, ROWS * COLS - 1]
     x = NBXTensor.ones((ROWS, COLS), dtype="float16")           # the fill kernel writes 2.25e9 elements
     for p in probes:
