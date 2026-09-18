@@ -28,6 +28,33 @@ is 8.59 GB. **The cascade is not missing a rung. It is missing a moment.** Every
 once, before the first byte is allocated, from an estimate; and when the estimate turns out wrong
 the cascade is never re-entered.
 
+**CORRECTION, 2026-09-18 — read from `solver.py` rather than from the paragraph above.**
+That last arrow is not in the cascade. The strategy list the solver actually tries ends
+`... -> zero3 -> layer_streaming -> cpu_execution -> cpu_streaming`, and **op-level tiling is
+not an entry in it at all**: `plan.runtime_op_tiling = self._detect_op_level_tiling_pairs(...)`
+runs at `solver.py:1082`, AFTER `chosen_strategy` is already settled, as a decoration of
+whatever the cascade picked.
+
+So *"the cascade is not missing a rung"* is **wrong in its first half**. It is missing the
+rung. And that single fact explains both machines at once, which is how it was found:
+
+* **On Apple** the cascade exhausts and `_fail_error` refuses. Tiling is never consulted as an
+  alternative to refusing, because it is not one of the things tried.
+* **On CUDA** the cascade does not refuse: `cpu_streaming` accepts the model and wins by score,
+  so the component is placed on the host. The tiling decoration then runs against a CPU
+  placement and finds nothing to do.
+
+Measured the same day, on both machines: `real-esrgan-x8` at 1024x1024 plans **17237 MB** —
+the same figure to the megabyte — and both print **`tiling none planned`** for 17 GB of
+activations against 32 MB of weights.
+
+The missing MOMENT is real too, and addition 3 still addresses it. But addition 2's first act
+is structural: put the rung IN the cascade, between `zero3` and `layer_streaming`, so it is
+tried before the host rungs and before the refusal. A controller that only re-enters after a
+failed allocation is dead code on Apple, where nothing is allocated, and dead code on CUDA,
+where the host rung has already accepted. **Both doors are needed, and neither is the one this
+document originally named.**
+
 ## Which of the three answers is right here
 
 **A plan that never promises what the card cannot hold.** Necessary, and insufficient alone.
@@ -73,3 +100,44 @@ It is not a caching-allocator change: the pool is off in the reproducer and the 
 identical. It is not zero3 or offload: the 8.24 GB live set is what the op needs to read. And it is
 not a threshold to tune — every number above is measured from the run that failed, and the design
 stands or falls on whether the controller can reach the tiling rung, not on where a constant sits.
+
+## Where the controller can and cannot be put (measured 2026-09-18)
+
+Addition 3 says "re-enter the cascade at the op-level tiling rung". It is worth writing
+down why the cheaper seam beside it does **not** work, because it looks like it should.
+
+`conv2d_wrapper` already carries a kernel-level band-streaming lever
+(`_NBX_CONV2D_BAND_BYTES`, 4 GiB, P-SANA-4KPX Étape 1). The reproducer's failing allocation
+is **8 589 934 592 bytes** — the conv's own output, `(1, 64, 8192, 8192)` in fp16 — which is
+**above** that threshold, so the band path is entered. And it still dies, for the reason its
+own docstring gives:
+
+> The full output tensor is allocated up front (downstream consumers expect it whole); per
+> band we slice the input H, recurse into conv2d_wrapper for the band ... and write the band
+> slice back into the full output.
+
+**Band streaming reduces the transient working set. It does not reduce the output.** The
+allocation that fails is the output, before any band runs, so no threshold inside the wrapper
+can help: at 4 GiB it bands and dies, at 16 GiB it does not band and dies identically.
+
+That is what "reshape the work" means in addition 3, stated exactly: **the output extent
+itself has to shrink**, and that can only be decided where the DOWNSTREAM CONSUMERS are
+known — because the reason the wrapper hands back a whole tensor is that its callers expect
+one. The op-level rung is the only place that holds both sides.
+
+So the controller's shape is fixed by this:
+
+* it may not live in a wrapper, because a wrapper cannot change its own output contract;
+* it enters at the op-failure seam, where the op_uid and the allocator's real figures are
+  both in hand (`DeviceOOMError` now carries requested / live / pool_cached / driver_free /
+  shortfall, `bd96c7b1`);
+* it re-enters at the op-level tiling rung for THAT op_uid, which already owns the
+  downstream-aware machinery (`OpLevelTilingPlan`, `register_op_uid_interceptors`, mirrored
+  into both sequences);
+* one re-entry, then a refusal that names what would have fit — which is already there
+  (`kernels/oom_advice.py`, `66ed17af`) and already says, on this exact failure:
+  `what would have fit: short by 594 MB; it would fit in 2 bands of about 4,096 MB`.
+
+The remaining work is the re-entry itself: building a one-op `OpLevelTilingPlan` from the
+failure and registering its interceptor mid-run, which the machinery currently expects to be
+done at plan time. That is the next step, and it is named rather than assumed to be small.

@@ -142,3 +142,51 @@ def test_the_scaler_is_CALLED_by_the_planner_not_merely_defined():
     src = inspect.getsource(solver_mod)
     calls = src.count("self._scale_activations_to_request(")
     assert calls >= 1, "the scaler is defined but never called — the plan will not scale"
+
+
+# ---------------------------------------------------------------------------
+# The temporal axis, 2026-09-18. CogVideoX-2b on a 16 G card saves at 5, 6, 7
+# and 8 frames and OOMs at 9, at `aten.convolution::90` asking 4.29 GiB. The
+# container declares `temporal_compression_ratio: 4`, so 8 frames needs 2 latent
+# frames and 9 is the FIRST count that needs 3 — the bisect lands exactly on that
+# boundary. Prism planned the SAME 22 993 MB for both, because the video VAEs
+# call their temporal axis `time` and the symbol map knew only `num_frames`.
+# ---------------------------------------------------------------------------
+
+
+def test_the_video_vaes_temporal_axis_is_followed(solver):
+    """`time` is what CogVideoX-2b, mochi and Wan2.1 all declare, each with
+    `source=input::z::dim_2`. Absent from the map, it was skipped in silence."""
+    comp = _comp(("time", 9))
+    got = scale(solver, comp, InputConfig(num_frames=33, temporal_compression=4))
+    assert got == pytest.approx(1.0), "33 frames is (33-1)//4+1 = 9 latent, the trace value"
+
+
+def test_a_temporal_axis_counts_LATENT_frames_by_the_engines_own_arithmetic(solver):
+    """(n-1)//ratio + 1, not n/ratio. Plain division under-counts exactly where
+    it matters: 9 frames at ratio 4 is 3 latent frames and not 2.25, and 9 is
+    the first count needing a third."""
+    comp = _comp(("time", 2))
+    got = scale(solver, comp, InputConfig(num_frames=9, temporal_compression=4))
+    assert got == pytest.approx(1.5), "3 latent against a trace of 2"
+    assert got != pytest.approx(9 / 4 / 2), "plain division would read 1.125"
+
+
+def test_the_step_between_eight_and_nine_frames_is_visible(solver):
+    """The boundary the card dies on must appear in the estimate."""
+    comp = _comp(("time", 2))
+    eight = scale(solver, comp, InputConfig(num_frames=8, temporal_compression=4))
+    nine = scale(solver, comp, InputConfig(num_frames=9, temporal_compression=4))
+    assert eight == pytest.approx(1.0), "8 frames is 2 latent, the trace value"
+    assert nine > eight, "9 frames needs a third latent frame and the plan must say so"
+
+
+def test_a_symbol_no_request_field_answers_for_is_SAID_not_skipped(solver, caplog):
+    """A dimension the estimate stops following in silence is how the plan read
+    the same number at 8 and 9 frames while one ran and the other died."""
+    import logging
+    with caplog.at_level(logging.INFO, logger="neurobrix.core.prism.solver"):
+        scale(solver, _comp(("a_dimension_nobody_maps", 7)), InputConfig(num_frames=9))
+    said = " ".join(r.getMessage() for r in caplog.records)
+    assert "a_dimension_nobody_maps" in said
+    assert "does not follow" in said
