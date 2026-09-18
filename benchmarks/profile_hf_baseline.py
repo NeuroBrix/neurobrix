@@ -13,10 +13,13 @@ Compares: NeuroBrix compiled mode vs HuggingFace diffusers (native pipeline)
 """
 import sys
 import os
+import sys
 import time
 import json
 import argparse
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import torch
 import torch.cuda
@@ -33,9 +36,14 @@ def run_sana_hf(steps: int, prompt: str, warmup: bool = True):
 
     from diffusers import SanaPipeline
 
-    # Use local snapshot if available, otherwise try Hub
-    local_path = Path("/home/mlops/hf_snapshots/Sana_1600M_1024px_MultiLing")
-    model_id = str(local_path) if local_path.exists() else "Efficient-Large-Model/Sana_1600M_1024px_MultiLing_BF16"
+    # The snapshot is read IN PLACE from the configured root. This used to be a
+    # literal path with "otherwise try Hub" behind it, which downloaded a second
+    # copy into ~/.cache/huggingface/hub whenever the name on disk did not match
+    # the one in the code. A vendor model is downloaded once, to the snapshots
+    # root, and every tool reads it there.
+    from vendor_snapshot import vendor_snapshot
+    model_id = str(vendor_snapshot("Sana_1600M_1024px_MultiLing",
+                                   "Sana_1600M_1024px_MultiLing_BF16"))
 
     print(f"[HF] Loading Sana pipeline from: {model_id}")
     t0 = time.perf_counter()

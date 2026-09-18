@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-73 entries, of which five are placeholders and 68 carry a site. Two
+76 entries, of which five are placeholders and 71 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -1858,3 +1858,140 @@ waiting, which is a legitimate caller.
 Seen red on two injections: unwiring the door from `main()` turns **only** the cell that runs the
 tool for real from a shell naming itself (register 17 — a helper whose every unit test passes can
 still have no seam), and blinding the helper turns five.
+
+### 74 — a skip guard evaluated at collection, answering about a moment that had not happened
+
+`tests/unit/kernels/test_a_flat_kernel_beyond_two_billion_elements.py` and
+`test_a_gemm_beyond_two_billion_elements.py` are the two cells that prove the int32 offset
+promotion of register 58/59 — a GEMM and a flat kernel addressing past 2^31 elements. Both
+carried a guard of the form:
+
+    @pytest.mark.skipif(_cuda_free_bytes() < 10 * 2 ** 30, reason="needs >= 10 GB free")
+
+The merge gate of 2026-09-18 ran the unit suite on a 16 GB card and returned **2 failed, 2229
+passed**. Both failures were these two cells, both at `NBXTensor.empty` for 4 505 600 000 bytes.
+Read as a kernel regression on the branch under test, they would have blocked the merge.
+
+The guard was wrong in **both** of its terms, and each alone was enough.
+
+**The moment.** `_cuda_free_bytes()` is a DECORATOR ARGUMENT: it runs at collection, before any
+test in the session has allocated anything. It measured an empty card and answered a question
+about a moment forty minutes in the future. A guard that asks at import time can only ever
+describe the card the suite *started* on.
+
+**The number.** The flat cell holds three fp16 tensors of 2 252 800 000 elements at its peak —
+13.5 GB — behind a threshold of 10. Its own docstring said "a 32 GB card" while its guard said
+10 GB, and nothing made the two agree. The threshold is now computed from `ROWS`, `COLS` and the
+count of live tensors, so it cannot drift away from the shapes it is about.
+
+**And underneath, a third thing, which is why the first fix was not enough.** With the guard
+corrected to run inside the test, the GEMM cell then *skipped* — "5.3 GB needed, 2.9 GB free" —
+because the flat cell that ran before it had released its tensors into the allocator's free-list
+pool, which is on by default. `cudaMemGetInfo` reports what the DRIVER holds, so parked blocks
+read as unavailable although the allocator would serve them instantly. Measured on one 16 GB
+card, same two tensors dropped:
+
+| | driver-reported free after the drop |
+|---|---|
+| `NBX_ALLOC_POOL=1` (default) | **7.07 GB** |
+| `NBX_ALLOC_POOL=0` | **15.47 GB** |
+
+Not a leak — the caching allocator doing its job. But a cell that always skips proves exactly as
+much as a cell that always passes, so the fix would have traded a false red for a silent hole.
+The guard now calls `DeviceAllocator.empty_cache_pool()` before it measures, which both makes the
+figure true and is the right thing to do before a multi-gigabyte allocation.
+
+**After the fix, on the SAME 16 GB card that produced the two failures: 2 passed in 112 s.**
+
+The shape, and it is not confined to memory: **a precondition is checked at the moment it is
+needed, never at the moment the file is read.** Anything evaluated in a decorator argument — free
+memory, a device count, a file's presence, a clock — describes collection time and is stated as
+though it described the test. And when the quantity is owned by a cache, the driver is the wrong
+authority to ask.
+
+### 75 — the shape that makes a finalizer bug invisible, and a gate of mine that was green against it
+
+Found while measuring something else: every teardown of a process that had used
+`NBXTensor` printed two of these.
+
+    Exception ignored in: <function NBXTensor.__del__>
+      File "nbx_tensor.py", line 1461, in free_cuda
+      File "nbx_tensor.py", line 1807, in _range_del
+    ImportError: sys.meta_path is None, Python is likely shutting down
+
+Three `DeviceAllocator` range helpers carried a function-level `import bisect`, and they
+run on the finalizer path. At interpreter shutdown the import machinery is gone, so the
+import raises — **after** `cudaFree` has already been called, aborting the accounting that
+follows it. Harmless for the memory; not harmless as a signal, because `free_cuda`
+deliberately PRINTS rather than raises when `cudaFree` returns non-zero, and that print is
+the site where an asynchronous fault from an earlier kernel becomes visible. Two ignored
+tracebacks per teardown are how a real `[NBX-CUDA-ERROR]` gets scrolled past.
+
+The entry is not the bug. **The entry is the test I wrote for it, which passed against the
+un-fixed code.**
+
+Its child process held a tensor at MODULE scope and let the interpreter tear down. That
+seemed like the obvious way to make a finalizer run late. It is not: a module-scope tensor
+is finalised while the import machinery still stands, and nothing fires. The cell was green
+in both directions and I nearly landed it.
+
+What reproduces it is a tensor **and its materialised transpose**, created and dropped
+INSIDE a function — the strided-copy path leaves finalizers that run late enough. 256x256
+is enough; the fault is in the import, not the size.
+
+And the injection has a second trap, which cost the run in between. Restoring ONE of the
+three local imports does not turn it red: the module-level `import bisect` added by the fix
+keeps `bisect` in `sys.modules`, so a local `import bisect` resolves from the cache and
+never reaches `meta_path`. Only restoring **all four** edits — dropping the module-level
+import and putting all three local ones back — is the pre-fix state, and that is red: four
+lines of `Exception ignored` / `sys.meta_path is None`.
+
+Two rules, and the second is the one worth carrying:
+
+* **The shape is part of the test** (register 62's rule, met again in a new place): the
+  choice of *how* the object dies decided whether the cell could see anything at all.
+* **An injection must restore the whole of the old state, not the line the diff is about.**
+  A partial revert that leaves the fix's side effects in place tests the fix against
+  itself. The green it produces is indistinguishable from a passing gate.
+
+### 76 — a test module that broke the eleven after it, each of which passed alone
+
+Mine, made and found the same day. A cell added this morning asked whether a CUDA device
+exists, at module scope, the ordinary way:
+
+    ctypes.CDLL("libcudart.so")           # then cudaGetDeviceCount
+
+Its file name sorts first in `tests/unit/kernels`, so this ran before any other module in
+the session imported torch. The bare SONAME resolves `libcudart.so.12` to the SYSTEM
+runtime; torch's `libc10_cuda.so` is then linked against that copy instead of the newer one
+torch ships, and every later module that imports torch dies at import:
+
+    ImportError: .../torch/lib/libc10_cuda.so: undefined symbol:
+    cudaGetDriverEntryPointByVersion, version libcudart.so.12
+
+| | tests collected | errors |
+|---|---|---|
+| `a1aaa1ec`, before the file | **1084** | 0 |
+| with the file | **859** | **11** |
+| after the fix | **1096** | 0 |
+
+**Every one of the eleven passes when run alone.** That is the whole shape: the damage is
+done by an earlier module and lands on later ones, so the failing files are innocent and
+bisecting them teaches nothing. It was found only because a directory run was compared
+against the same directory at an earlier commit — and it would otherwise have surfaced as
+eleven new failures in the next merge gate, on a day when a merge gate's two reds had
+already turned out to be a guard defect rather than a regression.
+
+The fix is to ask torch, which is already loaded by these tests, instead of opening a second
+CUDA runtime in the process. Applied to both cells that did it, not only the one that fired:
+the second was harmless purely because of where its name sorts, which is not a property to
+rely on.
+
+Two rules:
+
+* **A test module's import-time side effects are part of the suite, not part of the test.**
+  Anything a module does at import — loading a shared library, initialising a runtime,
+  setting an environment variable, opening a device — happens to every module after it.
+* **When a suite develops errors, compare the DIRECTORY against an earlier commit before
+  reading the individual failures.** Eleven tracebacks all pointed at torch and none of them
+  pointed at the cause.

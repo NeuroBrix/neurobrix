@@ -131,7 +131,14 @@ class AudioOutputProcessor:
         codes_2_t = torch.tensor(codes_2, dtype=torch.long, device=device).unsqueeze(0)
 
         import snac
-        snac_model = snac.SNAC.from_pretrained("hubertsiuzdak/snac_24khz").to(device).eval()
+        # The snapshot is read IN PLACE. A bare hub id here fetched a second
+        # copy into ~/.cache/huggingface/hub on every machine that ran this —
+        # 76 MB of it was still sitting there on 2026-09-17 while the same
+        # model sat on the NAS. (The R34 remedy, baking the codec into the
+        # container, is its own chantier; this stops the duplication now.)
+        from neurobrix.core.workspace import snapshot_path
+        snac_model = snac.SNAC.from_pretrained(
+            str(snapshot_path("snac_24khz"))).to(device).eval()
         with torch.inference_mode():
             audio = snac_model.decode([codes_0_t, codes_1_t, codes_2_t])
         return audio  # [1, 1, samples] at 24kHz

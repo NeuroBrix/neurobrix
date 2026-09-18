@@ -14,6 +14,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.dispatch import dispatch
+# When the cause is the allocator refusing, say what would have made it fit.
+# "Out of memory" alone costs the reader the whole diagnosis, and the numbers
+# that answer it are already on the exception (adaptive-memory addition 4).
+# Imported once for ALL THREE op-failure seams in this file: wiring only the
+# single-device one left the real reproducer — real-esrgan-x8 at 16 GB, which
+# goes through the multi-device path — printing no advice at all (2026-09-18).
+from neurobrix.kernels.oom_advice import annotate as _oom_annotate
 from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, parse_dtype,
     invalidate_current_device_cache,
@@ -3910,10 +3917,13 @@ class TritonSequence:
                         f" shape={tuple(getattr(a, '_shape', ()))}"
                         for i, a in enumerate(args)
                         if isinstance(a, NBXTensor))
-                    raise RuntimeError(
+                    _msg = _oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
-                        f"positions {_none_pos} of {len(args)} | NBX args: "
-                        f"{_arg_diag}") from e
+                        f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
+                        e,
+                        next((tuple(getattr(a, "_shape", ())) for a in args
+                              if isinstance(a, NBXTensor)), None))
+                    raise RuntimeError(_msg) from e
                 if _PROF:
                     DeviceAllocator.sync_device()
                     _dt = _time.perf_counter() - _t0
@@ -4271,9 +4281,11 @@ class TritonSequence:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
                     _none_pos = [i for i, a in enumerate(args) if a is None]
-                    raise RuntimeError(
+                    raise RuntimeError(_oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
-                        f"positions {_none_pos} of {len(args)}") from e
+                        f"positions {_none_pos} of {len(args)}", e,
+                        next((tuple(getattr(a, "_shape", ())) for a in args
+                              if isinstance(a, NBXTensor)), None))) from e
             else:
                 # SLOW PATH: transfer inputs to target device
                 target = op.device_idx
@@ -4288,8 +4300,10 @@ class TritonSequence:
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
-                    raise RuntimeError(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+                    raise RuntimeError(_oom_annotate(
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}", e,
+                        next((tuple(getattr(a, "_shape", ())) for a in args
+                              if isinstance(a, NBXTensor)), None))) from e
 
             # Defer any tensors currently in the output slots before overwriting.
             for s in op.output_slots:

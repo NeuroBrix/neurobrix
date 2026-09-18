@@ -41,7 +41,14 @@ if not HF_TOKEN:
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
-MODEL_ID = "deepseek-ai/deepseek-moe-16b-chat"
+# The snapshot is read IN PLACE from the configured root, never fetched here: a
+# bare hub id handed to `from_pretrained` downloads a second copy into
+# ~/.cache/huggingface/hub, which must stay empty.
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from vendor_snapshot import vendor_snapshot as _vendor_snapshot
+
+MODEL_ID = str(_vendor_snapshot("deepseek-moe-16b-chat", "DeepSeek-MoE-16B-Chat"))
 
 
 def main():

@@ -13,6 +13,12 @@ Metadata ops: pure Python stride/shape computation
 
 from __future__ import annotations
 
+import bisect          # module level, NOT inside the range helpers: they run on the
+                      # finalizer path, and at interpreter shutdown `sys.meta_path` is
+                      # None, so a function-level import raises ImportError AFTER the
+                      # cudaFree has already happened — aborting the bookkeeping that
+                      # follows it and printing a traceback that can mask a real
+                      # [NBX-CUDA-ERROR] from the same free (observed 2026-09-18).
 import ctypes
 import functools
 import math
@@ -852,7 +858,40 @@ class DeviceOOMError(RuntimeError):
     the allocation after the deferred-free drain and the single retry.
     Typed so callers that can legitimately shrink their request (the
     chunked SDPA prefill halves its row chunk) catch exactly this and
-    nothing else — every other RuntimeError keeps propagating."""
+    nothing else — every other RuntimeError keeps propagating.
+
+    It also CARRIES the figures it prints, as attributes. The refusal already
+    computes requested / live / pool-cached / driver-free in order to write the
+    message; a caller that wants to reshape the work rather than give up then had
+    to parse them back out of English. They are the input a controller needs to
+    re-enter the placement cascade at the op-level tiling rung with the real free
+    figure at the moment of failure instead of the estimate made before the run
+    (`docs/reference/adaptive-memory-a-runtime-controller.md`, addition 3).
+
+    Every field is bytes, and `None` where the runtime could not answer — never 0,
+    which is a legitimate reading and would be acted on as one.
+    """
+
+    def __init__(self, message: str, *, requested: Optional[int] = None,
+                 device_idx: Optional[int] = None, live: Optional[int] = None,
+                 pool_cached: Optional[int] = None, pool_blocks: Optional[int] = None,
+                 driver_free: Optional[int] = None, driver_total: Optional[int] = None):
+        super().__init__(message)
+        self.requested = requested
+        self.device_idx = device_idx
+        self.live = live
+        self.pool_cached = pool_cached
+        self.pool_blocks = pool_blocks
+        self.driver_free = driver_free
+        self.driver_total = driver_total
+
+    @property
+    def shortfall(self) -> Optional[int]:
+        """How many bytes the request was short by, or None if the driver did
+        not report its free figure. This is the number a reshape has to close."""
+        if self.requested is None or self.driver_free is None:
+            return None
+        return max(0, self.requested - self.driver_free)
 
 class DeviceAllocator:
     """GPU + pinned-host memory allocator via raw runtime API.
@@ -1415,12 +1454,18 @@ class DeviceAllocator:
                     driver_free = driver_total = 0
             except Exception:
                 driver_free = driver_total = 0
+            # The message is unchanged to the byte: the queue runner's error
+            # extractor and every log-reading tool key on this text.
             raise DeviceOOMError(
                 f"GPU malloc failed (error {ret}) for {nbytes} bytes "
                 f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
                 f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
                 f"driver_free={driver_free/1024/1024:.0f}MB / "
-                f"driver_total={driver_total/1024/1024:.0f}MB]")
+                f"driver_total={driver_total/1024/1024:.0f}MB]",
+                requested=nbytes, device_idx=dev, live=live_now,
+                pool_cached=pool_total, pool_blocks=pool_count,
+                driver_free=driver_free if driver_total else None,
+                driver_total=driver_total or None)
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._range_add(p, nbytes)
@@ -1850,7 +1895,6 @@ class DeviceAllocator:
         size = DeviceAllocator._range_size.get(ptr)
         if size is not None:
             return True
-        import bisect
         bases = DeviceAllocator._range_bases
         i = bisect.bisect_right(bases, ptr) - 1
         return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
@@ -1860,14 +1904,12 @@ class DeviceAllocator:
         """Register a live range for `holds()` — O(log n) insert, kept sorted
         so a launch pays one bisect and never a re-sort."""
         if base not in DeviceAllocator._range_size:
-            import bisect
             bisect.insort(DeviceAllocator._range_bases, base)
         DeviceAllocator._range_size[base] = int(nbytes)
 
     @staticmethod
     def _range_del(base: int) -> None:
         if DeviceAllocator._range_size.pop(base, None) is not None:
-            import bisect
             bases = DeviceAllocator._range_bases
             i = bisect.bisect_left(bases, base)
             if i < len(bases) and bases[i] == base:
