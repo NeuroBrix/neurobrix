@@ -359,6 +359,12 @@ class ExecutionPlan:
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
     # GraphExecutor. Empty dict when no op-level tiling is required.
     runtime_op_tiling: Dict = field(default_factory=dict)
+    #: Why the op-level tiling RUNG declined, in words, or None when it did not
+    #: decline. It rides on the plan because `explain_plan` never sees the
+    #: solver — the solver's own `_op_tiling_declined` was assigned in three
+    #: places and read in none, so the reason existed only for someone who
+    #: wrapped the method from outside to look at it.
+    op_tiling_declined: Optional[str] = None
     # Component-level spatial tiling — per-component plan emitted when a
     # spatial component (4D/5D input + scale config) would NOT fit a GPU
     # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
@@ -898,6 +904,45 @@ class PrismSolver:
         if not candidates:
             self._fail_error(sorted_components, devices)
 
+        # TILING BEATS OFFLOADING THE SAME COMPONENT.
+        #
+        # A strategy is scored by its NAME, not by where it actually put the
+        # work. Measured on real-esrgan-x8 at 1024x1024 once the estimators
+        # agreed: `lazy_sequential` scored 280 and placed the model on **cpu**,
+        # while `op_level_tiling` scored 60 and would have kept it on the card.
+        # The cascade preferred leaving the accelerator to cutting the ops.
+        #
+        # This is narrow on purpose. It compares only against the op-level
+        # tiling candidate, and only for a component that candidate keeps on an
+        # accelerator while the higher-scoring plan sends it to the host. A plan
+        # that routes a VAE to the host for its own reasons, with no tiling
+        # candidate to compare against, is untouched — re-scoring host placement
+        # in general changes plans across every model and belongs behind the
+        # battery, not in front of it.
+        _tiling = next((c for c in candidates if c[1] == "op_level_tiling"), None)
+        if _tiling is not None:
+            _t_alloc = _tiling[2] or {}
+            def _on_host(alloc):
+                dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
+                return isinstance(dev, str) and dev.startswith("cpu")
+            _offloaded = {
+                name for name, a in _t_alloc.items() if not _on_host(a)}
+            _demoted = []
+            for i, cand in enumerate(candidates):
+                score, name, alloc, devs = cand
+                if name == "op_level_tiling" or score <= _tiling[0]:
+                    continue
+                sent_home = sorted(n for n, a in (alloc or {}).items()
+                                   if n in _offloaded and _on_host(a))
+                if sent_home:
+                    candidates[i] = (_tiling[0] - 1.0, name, alloc, devs)
+                    _demoted.append(f"{name} (sends {', '.join(sent_home)} to the host)")
+            if _demoted:
+                logging.getLogger(__name__).info(
+                    "Prism: op-level tiling keeps %s on the accelerator, so %s "
+                    "no longer outrank it", ", ".join(sorted(_offloaded)),
+                    " and ".join(_demoted))
+
         # Sort candidates by score descending
         ranked = sorted(candidates, key=lambda x: -x[0])
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
@@ -1109,6 +1154,10 @@ class PrismSolver:
         # the detector above re-derives from the final allocations and would
         # otherwise be free to return nothing for a component whose placement only
         # exists because tiling was promised.
+        # The rung's reason travels ON THE PLAN, because `explain_plan` is a
+        # module-level function that never sees the solver — which is why
+        # `_op_tiling_declined` was written three times and read nowhere.
+        plan.op_tiling_declined = getattr(self, "_op_tiling_declined", None)
         _from_rung = getattr(self, "_op_tiling_from_rung", None)
         if _from_rung:
             plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
@@ -2086,6 +2135,76 @@ class PrismSolver:
         if not isinstance(syms, dict) or not syms:
             return activation_bytes                    # nothing declared: nothing to scale
 
+        # WHAT THE PROFILER ALREADY FOLLOWED IS NOT SCALED AGAIN.
+        #
+        # This method was written under a census that said the tensors do not
+        # carry their symbols — "real-esrgan-x2 0/1800" and so on. That census
+        # looked for a symbol NAME inside `shape`, which is concrete, and inside
+        # `symbolic_shape` treated as a list of strings. It is neither: it is
+        # `{"dims": [{"type":"mul","left":{"type":"symbol","id":"s1","trace":112},
+        # "right":2,"trace":224}, ...]}`, a structured expression, and every one
+        # of the 1801 tensors carries one. The premise was false, and I made the
+        # same mistake re-checking it before believing the Mac's measurement.
+        #
+        # So once `build_symbol_map` binds a spatial symbol to the request, the
+        # profiler's peak is ALREADY at the requested extent and multiplying by
+        # trace->request here applies the same correction twice. Measured on
+        # real-esrgan-x8 at 1024x1024 the moment the binding was fixed: the
+        # profiler answered 16 384 MiB, this method multiplied by
+        # (1024/112)x(1024/80) = 117.03, and the plan read 1 917 396 MB of
+        # activations — 1.87 TB for a model with 32 MB of weights.
+        #
+        # A symbol the map leaves at its trace value is still followed here:
+        # that is the case this method exists for and it is unchanged.
+        # The discriminator is whether the TENSORS carry the symbol, not whether
+        # the map binds it. A bound symbol that no tensor uses changes nothing in
+        # the profiler's peak, and skipping the scale for it would leave the
+        # estimate at its trace size — which is the defect this method exists to
+        # remove. So: walk the structured `symbolic_shape` and collect the symbol
+        # ids that actually appear in a dimension.
+        def _symbol_ids_in(dim, into):
+            if isinstance(dim, dict):
+                if dim.get("type") == "symbol" and dim.get("id"):
+                    into.add(dim["id"])
+                for key in ("left", "right", "base", "value", "operand"):
+                    if key in dim:
+                        _symbol_ids_in(dim[key], into)
+                for v in dim.get("args", []) or []:
+                    _symbol_ids_in(v, into)
+            elif isinstance(dim, (list, tuple)):
+                for v in dim:
+                    _symbol_ids_in(v, into)
+            elif isinstance(dim, str):
+                for _sid in syms:
+                    if re.search(rf"\b{re.escape(_sid)}\b", dim):
+                        into.add(_sid)
+
+        used_by_tensors = set()
+        for _t in (graph.get("tensors") or {}).values():
+            ss = (_t or {}).get("symbolic_shape")
+            dims = ss.get("dims") if isinstance(ss, dict) else ss
+            _symbol_ids_in(dims, used_by_tensors)
+
+        bound_to_request = set()
+        try:
+            from neurobrix.core.prism.profiler import ActivationProfiler as _AP
+            _map = _AP(graph).build_symbol_map(input_config)
+            for _sid, _spec in syms.items():
+                if not isinstance(_spec, dict) or _sid not in used_by_tensors:
+                    continue          # no tensor carries it: the peak is at trace
+                _t = _spec.get("trace_value")
+                _m = _map.get(_sid)
+                if isinstance(_m, int) and isinstance(_t, int) and _m != _t:
+                    bound_to_request.add(_sid)
+        except Exception as _e:
+            # Said, not swallowed: without this set the scaler would double every
+            # dimension the profiler resolved, and a silent fallback here is the
+            # failure mode the method's own docstring refuses.
+            logging.getLogger(__name__).warning(
+                "Prism: could not read the profiler's symbol map for %s (%s: %s); "
+                "the estimate may be scaled for dimensions it already follows",
+                getattr(comp, "name", "?"), type(_e).__name__, _e)
+
         ratio = 1.0
         followed = []
         # One DIMENSION contributes once, however many times it is declared.
@@ -2106,6 +2225,8 @@ class PrismSolver:
             name = spec.get("name")
             if trace in (None, 0) or not name:
                 continue                               # declared without a trace value
+            if sym_id in bound_to_request:
+                continue                               # the profiler already followed it
             attr = self._SYMBOL_TO_REQUEST.get(name)
             if attr is None:
                 # SAY IT. A symbol carrying a trace value that this map does not
@@ -5038,5 +5159,13 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append(f"component tiling {name}: {short}")
     if not plan.runtime_op_tiling and not plan.component_tiling:
         lines.append("tiling          none planned")
+        # WHY, not just "none". `_op_tiling_declined` was assigned in three
+        # places and read in NONE, so the rung's reason existed only for
+        # whoever thought to wrap the method from outside and look — which is
+        # exactly what the Mac had to do. A reason nobody can read is the same
+        # silence as no reason at all, and this file catalogues that family.
+        _why = getattr(plan, "op_tiling_declined", None)
+        if _why:
+            lines.append(f"                the tiling rung declined: {_why}")
     return "\n".join(lines)
 

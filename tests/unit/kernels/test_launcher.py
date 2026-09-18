@@ -145,7 +145,7 @@ def test_our_binder_returns_triton_s_triple_on_a_real_kernel():
     assert o1 == o2
 
 
-def test_an_autotuned_kernel_launches_and_benchmarks_without_torch():
+def test_an_autotuned_kernel_launches_and_benchmarks_without_torch(a_free_rig):
     """The Autotuner's path (`JITFunction.run`) and its sweep (the engine's
     `do_bench`) — measured in a subprocess on the matmul wrapper, whose
     kernels are autotuned."""

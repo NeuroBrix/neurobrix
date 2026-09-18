@@ -436,10 +436,32 @@ class ActivationProfiler:
         if not isinstance(syms, dict) or not syms:
             return symbol_map
         vae_scale = input_config.vae_scale
+        # A graph with NO vae_scale has no latent space, so its spatial symbols
+        # ARE the pixel extents and bind to the request directly. They used to
+        # bind to None, and a symbol mapped to None resolves nowhere: every shape
+        # fell back to its TRACE dim, and the profiler answered for the traced
+        # request instead of the one being planned.
+        #
+        # Measured on `real-esrgan-x8` at 1024x1024 (the Mac found it, 2026-09-18):
+        # ActivationProfiler reported 128 MB where the solver's own estimator
+        # reported A=16384 MB — 128x apart, because 128 MB is the answer at the
+        # trace extent s1=112 and 16384 MB is the answer at 1024. The largest
+        # tensor resolves to 8192 MiB there, and 8192 MiB is 8 589 934 592 bytes,
+        # which is the exact allocation in the failure this whole design opens
+        # with. The graph was never at fault: all 1801 of its tensors carry a
+        # `symbolic_shape` and its upsamples carry the symbol multiplied by 2, 4
+        # and 8.
+        #
+        # The discriminator is in the container, not in a model list: these
+        # symbols declare `source=input::pixel_values::dim_2/3`, while a latent
+        # graph's declare `input::hidden_states::dim_*` or `input::z::dim_*`
+        # (Sana, CogVideoX — checked before this line was written). Absent a
+        # vae_scale there is nothing to divide by, and dividing by nothing is
+        # not the same as having no answer.
         latent_h = (input_config.height // vae_scale
-                    if (input_config.height and vae_scale) else None)
+                    if (input_config.height and vae_scale) else input_config.height)
         latent_w = (input_config.width // vae_scale
-                    if (input_config.width and vae_scale) else None)
+                    if (input_config.width and vae_scale) else input_config.width)
         latent_t = None
         if input_config.num_frames:
             tc = input_config.temporal_compression
