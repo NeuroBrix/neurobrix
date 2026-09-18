@@ -214,6 +214,38 @@ _FLOATING_DTYPES = frozenset({
     NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64,
 })
 
+
+def bf16_carrier_to_float32(arr):
+    """Decode numpy's stand-in for bfloat16 into real float32 values.
+
+    numpy has no bfloat16, so `_DTYPE_TYPESTR` maps it to `'<V2'` and a bf16
+    tensor's `.numpy()` is a 2-byte VOID array: the bits are correct and nothing
+    can read them as numbers. `np.asarray(that, dtype=np.float32)` does not
+    fail usefully either — it raises "setting an array element with a
+    sequence", which names neither bf16 nor the tensor.
+
+    That error has now been met twice in two unrelated places, which is why the
+    decode lives HERE, once, beside the table that creates the carrier:
+
+      * certification read every bf16 kernel output through it and reported "no
+        config could run (10 of 10)" on kernels that had run correctly;
+      * the RNNT decoder read every LSTM weight through it and the whole
+        parakeet-tdt-1.1b pipeline died at `np.ascontiguousarray(w,
+        dtype=np.float32)`.
+
+    Widening is exact: a bf16 value is the top 16 bits of an fp32, so shifting
+    them back up loses nothing and the result is the number the kernel had.
+
+    Anything that is not the 2-byte void carrier is returned untouched, so this
+    is safe to apply to an array of unknown dtype.
+    """
+    import numpy as np
+    a = np.asarray(arr)
+    if a.dtype.kind != 'V' or a.dtype.itemsize != 2:
+        return a
+    bits = np.ascontiguousarray(a).view(np.uint16).astype(np.uint32)
+    return (bits << np.uint32(16)).view(np.float32).reshape(a.shape)
+
 _COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
 
 

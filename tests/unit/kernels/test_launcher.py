@@ -47,6 +47,24 @@ def _host(t, np_dtype):
     return buf.view(np_dtype).reshape(t.shape)
 
 
+def _torch_verdict(stdout: str) -> str:
+    """The child's verdict line, which is the LAST thing it prints.
+
+    These tests used to compare the whole of stdout to "False". That holds only
+    while the engine prints nothing else, and the engine legitimately does: on a
+    shape the directory does not serve it announces a runtime sweep
+    ("[autotune] no certified setting for matmul_kernel fp16 (M=67 N=65
+    K=33) ... sweeping at runtime"). The verdict was still False — torch was
+    still absent — and the test failed anyway, on an informational line that is
+    not its subject (2026-09-18, after the replay cache was cleared).
+
+    Reading the LAST line keeps the gate exactly as strict: a child that
+    imported torch prints True there and still fails.
+    """
+    lines = [ln for ln in stdout.strip().splitlines() if ln.strip()]
+    return lines[-1].strip() if lines else ""
+
+
 def test_launch_is_byte_identical_to_upstream_on_a_house_kernel():
     from neurobrix.kernels.launcher import launch
     from neurobrix.kernels.ops.fft_op import scale_kernel
@@ -83,7 +101,8 @@ print("torch" in sys.modules)
                                         "CUDA_VISIBLE_DEVICES": "0",
                                         "HOME": str(Path.home())}))
     assert out.returncode == 0, out.stderr[-1500:]
-    assert out.stdout.strip() == "False", f"the launch path pulled torch:\n{out.stderr[-800:]}"
+    assert _torch_verdict(out.stdout) == "False", (
+        f"the launch path pulled torch:\n{out.stderr[-800:]}\nstdout:\n{out.stdout[-500:]}")
 
 
 def test_our_specialisation_matches_triton_s_binder():
@@ -150,7 +169,8 @@ print("torch" in sys.modules)
                                         "HOME": str(Path.home()),
                                         "NBX_DISABLE_AUTOTUNE": "0"}))
     assert out.returncode == 0, out.stderr[-1500:]
-    assert out.stdout.strip() == "False", f"the autotuned launch path pulled torch:\n{out.stderr[-800:]}"
+    assert _torch_verdict(out.stdout) == "False", (
+        f"the autotuned launch path pulled torch:\n{out.stderr[-800:]}\nstdout:\n{out.stdout[-500:]}")
 
 
 def test_do_bench_returns_quantiles_in_milliseconds():
