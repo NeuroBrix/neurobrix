@@ -596,3 +596,40 @@ Scope, stated: one card, one dtype, one distribution (uniform int32), warm, five
 with the spread shown. The 65 536 row is the only one where the extra launches show, and it
 is the row where a launch-bound measurement is least trustworthy — its max is more than twice
 its min on both trees.
+
+## 2026-09-18 — the Mac's remaining CUDA proofs: launcher, workshop, and `core/paths.py`
+
+Run at its head `831e10c8` against `main` as the baseline, on this rack.
+
+| | `main` | Mac `831e10c8` |
+|---|---|---|
+| `test_launcher.py` + `tests/unit/workshop` | **25 passed** | **15 passed, 10 skipped** |
+| `core/paths.py` | not present (ImportError) | present |
+
+**The ten skips are not a coverage loss.** They are `test_workshop_layout.py` looking for the
+workshop root relative to its own tree: from a worktree at
+`/home/mlops/nbx/worktrees/mac_ff288827` it computes `/home/mlops/nbx/worktrees/nbx`, which
+does not exist, and says so — *"no workshop root at ... — discipline not installed here"*. The
+same class as a frozen worktree missing its ignored pointers, and a property of where the tree
+sits rather than of what it contains. Everything that runs, passes.
+
+**Item 1 — `_current_backend()` on CUDA.** Covered by `test_launcher.py` passing at the Mac's
+head: the launcher cells exercise the backend detection, and nothing reports "declares no
+measurement protocol".
+
+**Item 6 — `core/paths.py`.** It resolves the rig's real locations and creates nothing:
+
+    cache_dir()      -> /home/mlops/.neurobrix/cache    exists=True
+    store_dir()      -> /home/mlops/.neurobrix/store    exists=True
+    neurobrix_home() -> /home/mlops/.neurobrix          exists=True
+    describe()       -> says which source each came from ('said_by': 'default')
+
+`describe()` naming the source of each path is what makes this checkable rather than
+plausible: a path that came from an environment variable and one that came from the default
+are different facts, and it says which.
+
+**Still unmeasured here**, and they are the three the handover itself expected to be
+invisible on CUDA: `host_values()` (the bf16 branch — V100 is sm_70 with no native bf16, so it
+may simply not arise, in which case the claim stays Apple-only and this says so), the witness
+re-entrancy guard (a clock-lock rig never calls `_witness_ms()`), and the MoE capability row
+(`{"cuda": True}`, so the refusal cannot fire).
