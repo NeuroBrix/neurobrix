@@ -1953,3 +1953,45 @@ Two rules, and the second is the one worth carrying:
 * **An injection must restore the whole of the old state, not the line the diff is about.**
   A partial revert that leaves the fix's side effects in place tests the fix against
   itself. The green it produces is indistinguishable from a passing gate.
+
+### 76 — a test module that broke the eleven after it, each of which passed alone
+
+Mine, made and found the same day. A cell added this morning asked whether a CUDA device
+exists, at module scope, the ordinary way:
+
+    ctypes.CDLL("libcudart.so")           # then cudaGetDeviceCount
+
+Its file name sorts first in `tests/unit/kernels`, so this ran before any other module in
+the session imported torch. The bare SONAME resolves `libcudart.so.12` to the SYSTEM
+runtime; torch's `libc10_cuda.so` is then linked against that copy instead of the newer one
+torch ships, and every later module that imports torch dies at import:
+
+    ImportError: .../torch/lib/libc10_cuda.so: undefined symbol:
+    cudaGetDriverEntryPointByVersion, version libcudart.so.12
+
+| | tests collected | errors |
+|---|---|---|
+| `a1aaa1ec`, before the file | **1084** | 0 |
+| with the file | **859** | **11** |
+| after the fix | **1096** | 0 |
+
+**Every one of the eleven passes when run alone.** That is the whole shape: the damage is
+done by an earlier module and lands on later ones, so the failing files are innocent and
+bisecting them teaches nothing. It was found only because a directory run was compared
+against the same directory at an earlier commit — and it would otherwise have surfaced as
+eleven new failures in the next merge gate, on a day when a merge gate's two reds had
+already turned out to be a guard defect rather than a regression.
+
+The fix is to ask torch, which is already loaded by these tests, instead of opening a second
+CUDA runtime in the process. Applied to both cells that did it, not only the one that fired:
+the second was harmless purely because of where its name sorts, which is not a property to
+rely on.
+
+Two rules:
+
+* **A test module's import-time side effects are part of the suite, not part of the test.**
+  Anything a module does at import — loading a shared library, initialising a runtime,
+  setting an environment variable, opening a device — happens to every module after it.
+* **When a suite develops errors, compare the DIRECTORY against an earlier commit before
+  reading the individual failures.** Eleven tracebacks all pointed at torch and none of them
+  pointed at the cause.
