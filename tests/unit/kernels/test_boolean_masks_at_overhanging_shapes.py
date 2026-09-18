@@ -80,36 +80,16 @@ if _IMPORTED:
 
 
 def _rig_reason() -> str:
-    """Why the oracle half may not run, or "" if it may.
+    """Delegates to the shared door in `_rig.py`.
 
-    A DOOR, not a check afterwards. The oracle half launches real kernels, and
-    this repository runs timed campaigns on the same four cards — a stray
-    context on a locked-clock measurement is exactly the perturbation that cost
-    a cell on 2026-09-10.
-
-    Deliberately NOT the repository's older idiom, which decides by allocating a
-    one-element tensor on `cuda:0`: that creates the very context it is asking
-    permission for, and it does so at COLLECTION time, so merely listing the
-    tests touches the rig. `nvidia-smi` reads NVML and opens no context.
+    This logic lived here alone and was then needed by `test_launcher.py`'s R33
+    benchmark cell, which had no door and failed on the release commit while
+    three processes held the cards. The same bug written twice is a missing
+    brick, so the brick now lives in `_rig.py` and this is the one caller that
+    still wants it as a MARK rather than a fixture.
     """
-    if not _IMPORTED:
-        return "the kernel wrappers did not import"
-    smi = shutil.which("nvidia-smi")
-    if smi is None:
-        return "no nvidia-smi: cannot establish that the rig is free"
-    try:
-        out = subprocess.run(
-            [smi, "--query-compute-apps=pid", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return f"nvidia-smi did not answer ({exc.__class__.__name__})"
-    if out.returncode != 0:
-        return "nvidia-smi reported no device"
-    busy = [line for line in out.stdout.splitlines() if line.strip()]
-    if busy:
-        return (f"{len(busy)} compute process(es) hold the rig — the oracle "
-                f"half would perturb a measurement in flight")
-    return ""
+    from ._rig import rig_reason
+    return rig_reason()
 
 
 _REASON = _rig_reason()
