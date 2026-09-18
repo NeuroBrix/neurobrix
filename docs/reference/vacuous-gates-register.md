@@ -1995,3 +1995,43 @@ Two rules:
 * **When a suite develops errors, compare the DIRECTORY against an earlier commit before
   reading the individual failures.** Eleven tracebacks all pointed at torch and none of them
   pointed at the cause.
+
+### 77 — a suite that never started, reporting success through a pipe
+
+`pytest tests/unit/ -q --timeout=300 2>&1 | tail -25` came back with
+`[exited with code 0]` and twenty-five lines of output. The suite had not run a
+single test. `--timeout` belongs to `pytest-timeout`, which is not installed here,
+so pytest refused at argument parsing:
+
+```
+ERROR: usage: __main__.py [options] [file_or_dir] [...]
+__main__.py: error: unrecognized arguments: --timeout=300
+```
+
+and exited 4. **The zero came from `tail`.** A shell pipeline reports the exit
+status of its LAST command, and `tail` succeeds at reading a stream of error text
+exactly as it succeeds at reading a stream of dots.
+
+This was caught only because the output was read rather than the status — the
+error text was the visible part, and the `exited with code 0` line sat directly
+underneath it. Read the other way round, "0" is the whole answer, and a
+shared-infra change to `core/prism/profiler.py` and `core/prism/solver.py` would
+have been committed under a suite that never collected.
+
+The family is the one this register opens with: a result produced by a path that
+was skipped. Entry 30's rule was *test the artefact, never the commentary about
+it*; here the artefact is the test run and the commentary is a pipeline's exit
+status, which describes the last program in the pipe and nothing before it.
+
+Two rules:
+
+* **Capture a gate's exit status from the gate, not from the pipeline.** Redirect
+  to a file and read `$?` immediately (`pytest ... > out.txt 2>&1; rc=$?`), or set
+  `pipefail`. A status read after a pipe is a statement about `tail`.
+* **A green needs a COUNT, not a status.** `2280 passed` is evidence that tests
+  ran; `rc=0` is compatible with zero tests collected, with a suite that errored at
+  startup, and with the run being killed before it began. Quote the count in any
+  report, and if there is no count there is no result.
+
+The same shape hides behind `&&` chains ending in a formatter, `| head` on a build
+log, and any `set -e` script whose final command is a printer.
