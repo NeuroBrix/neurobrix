@@ -164,6 +164,197 @@ def triton_metal_available() -> bool:
                for p in plugins.split(os.pathsep) if p)
 
 
+def backend_refusal_types() -> tuple:
+    """The exception types a Metal backend raises to say 'I cannot compile this
+    config correctly' — collected here so the SHARED refusal module
+    (`autotune_refusals.py`, which the Dell also runs) names no vendor.
+
+    Both selectable backends contribute their type if present: the bledden fork
+    (`triton_msl.errors.MetalNonRecoverableError`) and, when triton-ext exposes a
+    named refusal type, that too. Empty off Apple / when no Metal backend is
+    installed — so on CUDA the shared check is exactly as inert as before this
+    seam existed. A backend absent contributes nothing rather than raising.
+    """
+    types: list = []
+    try:
+        from triton_msl.errors import MetalNonRecoverableError
+        types.append(MetalNonRecoverableError)
+    except Exception:
+        pass
+    # triton-ext (AppleGPU) refusal type, if/when it exposes one by name.
+    try:
+        from triton_apple_backend.errors import AppleGPUNonRecoverableError  # type: ignore
+        types.append(AppleGPUNonRecoverableError)
+    except Exception:
+        pass
+    return tuple(types)
+
+
+def is_backend_refusal(exc: BaseException) -> bool:
+    """True when `exc` is a Metal backend saying it cannot compile this config —
+    asked by class against whichever backend(s) are present, naming none in the
+    caller. False (never raising) when no Metal backend is installed."""
+    rt = backend_refusal_types()
+    return bool(rt) and isinstance(exc, rt)
+
+
+#: The Metal backends NeuroBrix can target. The engine targets Triton; WHICH
+#: Metal backend runs is a selection, not a branch, and this table is the only
+#: place either is named. `probe` is the import that proves it is installed;
+#: `compiler` is the dotted path to its Triton backend class (the thing a driver
+#: needs to patch a stage).
+METAL_BACKENDS = {
+    "triton_msl": {
+        "probe": "triton_msl",
+        "compiler": ("triton_msl.backend.compiler", "MetalBackend"),
+        "target": "metal",
+        # The NeuroBrix launcher driver that implements THIS backend's launch
+        # ABI. Our Metal driver derives its argument binding from the emitted
+        # MSL's own conventions (a scalar the emitter passes through a pointer
+        # is named `<param>_buf`), so it is specific to this emitter.
+        "nbx_driver": "neurobrix.triton.metal_driver",
+        "what": "the bledden triton-msl fork (text MSL emitter)",
+    },
+    "triton_ext": {
+        "probe": "triton_apple_backend",
+        "compiler": ("triton_apple_backend.compiler", "MetalBackend"),
+        "target": "mps",
+        # NONE YET. triton-ext emits MSL from C++ MLIR passes with its own
+        # argument conventions and ships its own driver; our fork-shaped driver
+        # mis-binds its kernels (measured 2026-09-16: scalars after the first
+        # arrive as 0, so every mask is false and the output keeps its zeros).
+        # Until an adapter exists, selecting this backend REFUSES at the driver
+        # rather than launching through an ABI that is not its own.
+        "nbx_driver": "neurobrix.triton.triton_ext_driver",
+        "what": "triton-lang/triton-ext AppleGPU (C++ MLIR -> MSL)",
+    },
+}
+
+#: What a backend says when it CANNOT emit and silently computes elsewhere.
+#: Only the seam names a vendor; the launcher asks for the list.
+_FALLBACK_MARKERS = {
+    "triton_msl": ("Kernel will fall back to CPU",),
+    "triton_ext": (),
+}
+
+
+def backend_fallback_markers():
+    """Phrases that mean the selected backend did not emit for the device.
+
+    A backend that warns and computes on the CPU returns numbers, so nothing
+    fails — the caller gets an answer from hardware it did not ask for.
+    Measured 2026-09-17: fifteen tests in trunk were red for exactly this, the
+    fork refusing batched MMA and falling back, and the engine accepting it.
+    """
+    try:
+        return _FALLBACK_MARKERS.get(selected_metal_backend(), ())
+    except Exception:                                  # noqa: BLE001
+        return ()
+
+
+_PROFILE_KEY = "metal_backend"
+_ENV_KEY = "NEUROBRIX_METAL_BACKEND"
+
+
+def _installed(name: str) -> bool:
+    spec = METAL_BACKENDS.get(name)
+    if not spec:
+        return False
+    try:
+        return importlib.util.find_spec(spec["probe"]) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def selected_metal_backend() -> str:
+    """WHICH Metal backend this machine runs, decided by the PROFILE.
+
+    The profile may declare `metal_backend: triton_msl | triton_ext`. A declared
+    backend that is not installed is REFUSED BY NAME — silently falling back to
+    the other one would make a measurement attribute itself to the wrong
+    implementation, which is the whole reason this is a selection and not a
+    branch. When the profile declares nothing, the single installed backend is
+    used; if both are installed and none is declared, that ambiguity is refused
+    too — a machine that can run either must say which.
+    """
+    # An explicit operator override, above the profile and named in the run's
+    # own environment. It exists for one real case: evaluating a SECOND backend
+    # from a different virtualenv that shares this source tree, so the profile
+    # file cannot hold both answers at once. It is still a SELECTION — declared,
+    # refused by name when absent — never a silent fallback.
+    declared = os.environ.get(_ENV_KEY)
+    if not declared:
+        try:
+            from neurobrix.kernels.ops._configs import active_vendor_profile
+            declared = (active_vendor_profile() or {}).get(_PROFILE_KEY)
+        except Exception:
+            declared = None
+
+    if declared:
+        if declared not in METAL_BACKENDS:
+            raise RuntimeError(
+                f"the hardware profile declares `{_PROFILE_KEY}: {declared}`, which is "
+                f"not a Metal backend this engine knows. Known: "
+                f"{', '.join(sorted(METAL_BACKENDS))}.")
+        if not _installed(declared):
+            raise RuntimeError(
+                f"the hardware profile declares `{_PROFILE_KEY}: {declared}` "
+                f"({METAL_BACKENDS[declared]['what']}) and it is NOT installed "
+                f"(no module {METAL_BACKENDS[declared]['probe']!r}). Refusing rather "
+                f"than running on the other backend and attributing the numbers to "
+                f"the declared one. Install it, or change the profile.")
+        return declared
+
+    present = [n for n in METAL_BACKENDS if _installed(n)]
+    if not present:
+        raise RuntimeError(
+            "no Metal backend is installed (looked for "
+            + ", ".join(f"{n} ({METAL_BACKENDS[n]['probe']})" for n in METAL_BACKENDS)
+            + "), and the profile declares none.")
+    if len(present) > 1:
+        raise RuntimeError(
+            f"both Metal backends are installed ({', '.join(present)}) and the "
+            f"profile declares no `{_PROFILE_KEY}`. A machine that can run either "
+            f"must say which, or its measurements cannot name the backend that "
+            f"produced them.")
+    return present[0]
+
+
+def backend_target_name() -> str:
+    """The Triton GPUTarget backend NAME the selected implementation answers to.
+
+    Triton resolves a backend by asking each registered one `supports_target`,
+    which compares this string. The two Metal backends do not use the same one —
+    the fork answers to `metal`, triton-ext's AppleGPU to `mps` — so a driver
+    that hardcodes either can only ever reach one of them ("0 compatible
+    backends for target (metal)"). The name is a property of the selected
+    backend, so it lives in the table with it.
+    """
+    return METAL_BACKENDS[selected_metal_backend()]["target"]
+
+
+def backend_compiler_class():
+    """The selected backend's Triton backend class — the object a driver patches.
+
+    Raises with the backend NAMED when it is selected but its compiler cannot be
+    imported, so a driver never silently does nothing.
+    """
+    name = selected_metal_backend()
+    mod_name, attr = METAL_BACKENDS[name]["compiler"]
+    try:
+        mod = importlib.import_module(mod_name)
+    except Exception as exc:                            # noqa: BLE001
+        raise RuntimeError(
+            f"the Metal backend in force is {name!r} ({METAL_BACKENDS[name]['what']}) "
+            f"but its compiler module {mod_name!r} could not be imported ({exc}).")
+    cls = getattr(mod, attr, None)
+    if cls is None:
+        raise RuntimeError(
+            f"the Metal backend in force is {name!r} but {mod_name}.{attr} does not "
+            f"exist — this engine cannot patch a stage it cannot name.")
+    return cls
+
+
 def metal_shader_compiler_available() -> bool:
     """True when Apple's offline shader compiler (`xcrun metal`) can be run.
 

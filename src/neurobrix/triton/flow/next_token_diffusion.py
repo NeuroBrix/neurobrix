@@ -34,6 +34,10 @@ from neurobrix.triton.device_transfer import parse_device_idx
 from neurobrix.triton.scheduler.dpm_solver_pp import TritonDPMSolverPPScheduler
 from neurobrix.triton.cfg.engine import TritonCFGEngine
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 
 def _to_numpy(t) -> np.ndarray:
     if isinstance(t, NBXTensor):
@@ -145,7 +149,7 @@ class TritonNextTokenDiffusionEngine:
 
         # ── generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
-        max_steps = int(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_steps = int(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
         _cfg_override = _ov.get("global.guidance_scale")
         cfg_scale = (float(_cfg_override) if _cfg_override is not None

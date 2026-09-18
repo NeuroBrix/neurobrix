@@ -30,7 +30,30 @@ from typing import Dict, Iterator, Optional, Tuple
 # a gate that needs a truly cold sweep per arm gives every arm its own, else
 # sweep mode seeds the autotuners from here and no arm sweeps (2026-09-06:
 # a screened arm reported "checked 0 key(s)" for exactly this reason).
-_DIR = os.environ.get("NEUROBRIX_REPLAY_CACHE") or os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
+def _dir() -> str:
+    """Where the local replay cache lives, read WHEN USED.
+
+    This was a module global computed at import time. A value frozen at import
+    from an environment variable is the same class of defect as a literal
+    standing in for a runtime value: whoever imports the module first decides it
+    for the whole process. Measured 2026-09-17 — a test redirecting
+    NEUROBRIX_REPLAY_CACHE to a tmp path imported this module inside its own
+    body, froze the tmp path, and a later test in the same process asserting on
+    the real directory failed. monkeypatch restored the env; it could not
+    restore a constant already computed from it.
+    """
+    return (os.environ.get("NEUROBRIX_REPLAY_CACHE")
+            or os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache"))
+
+
+#: The directory as it stood AT IMPORT. Kept as a real attribute because
+#: `importlib.reload` is how the relocation test observes it, and a module
+#: __getattr__ does not survive that cleanly. Everything INSIDE this module
+#: calls `_dir()` instead, so a process that changes the environment after
+#: import writes where the environment now says — which is what a test
+#: redirecting it to a tmp path needs, and what a later test reading the real
+#: directory needs too.
+_DIR = _dir()
 
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
@@ -68,7 +91,7 @@ def _artifact_path() -> Optional[str]:
     arch = _arch_fingerprint()
     if arch is None:
         return None
-    return os.path.join(_DIR, f"autotune_configs_{arch}.json")
+    return os.path.join(_dir(), f"autotune_configs_{arch}.json")
 
 
 def _autotuners() -> Iterator[Tuple[str, object]]:
@@ -136,7 +159,7 @@ def record_screen_exclusions(entries) -> int:
     if path is None or not entries:
         return 0
     try:
-        os.makedirs(_DIR, exist_ok=True)
+        os.makedirs(_dir(), exist_ok=True)
         stored: Dict[str, Dict] = {}
         try:
             with open(path) as f:
@@ -237,7 +260,7 @@ def capture() -> int:
     if not entries:
         return 0
     try:
-        os.makedirs(_DIR, exist_ok=True)
+        os.makedirs(_dir(), exist_ok=True)
         stored: Dict[str, Dict] = {}
         try:
             with open(path) as f:

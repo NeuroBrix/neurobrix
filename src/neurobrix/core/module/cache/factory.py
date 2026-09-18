@@ -15,6 +15,10 @@ Usage:
 import torch
 from typing import Any, Dict, TYPE_CHECKING
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
     from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper
@@ -114,7 +118,7 @@ class StateCacheFactory:
             if mt is None:
                 mt = resolved.get("max_tokens")
             if mt is None:
-                mt = ctx.pkg.defaults.get("max_tokens", 512)
+                mt = require_max_tokens(ctx.pkg.defaults)
             budget = int(decode_bound(int(mt)))
             lm_config = {**lm_config, "max_position_embeddings": budget + 128}
             print(f"   [KV cache] no context window declared by the container — sized from the request: "

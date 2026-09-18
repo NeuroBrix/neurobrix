@@ -18,6 +18,10 @@ from neurobrix.triton.device_transfer import parse_device_idx
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 
 def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
     """Normalize tokenizer return into a flat List[int]."""
@@ -35,7 +39,7 @@ def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
 def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     """Build generator config from defaults.json — pure Python."""
     config = {
-        "max_tokens": defaults.get("max_tokens", 512),
+        "max_tokens": require_max_tokens(defaults),
         "temperature": defaults.get("temperature", 1.0),
         "top_p": defaults.get("top_p", 1.0),
         "top_k": defaults.get("top_k", 0),
@@ -640,7 +644,7 @@ class TritonAutoregressiveHandler:
             if _mt is None:
                 _mt = _resolved.get("max_tokens")
             if _mt is None:
-                _mt = self.ctx.pkg.defaults.get("max_tokens", 512)
+                _mt = require_max_tokens(self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
             kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
             if kv_plan is not None:
