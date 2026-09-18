@@ -16,6 +16,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 # Shared default sampler seed (R27/R28) — MUST equal the triton dual_ar literal
 # (triton/flow/dual_ar.py:_DUALAR_SEED) so the two separate code paths draw
 # identical randoms when --seed is not passed.
@@ -115,7 +119,7 @@ class DualAREngine(FlowHandler):
         # defaults, mirroring the autoregressive flow — --temperature 0 ⇒ greedy.
         _ov = self.ctx.variable_resolver.resolved
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
 

@@ -30,6 +30,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 # Deterministic sampler seed — duplicated identically in triton/flow/tts_llm.py
 # (_TTS_LLM_SEED) so the two separate code paths draw the SAME speech tokens from
 # the SAME numpy RandomState + algorithm (the openaudio dual_ar discipline). A
@@ -248,7 +252,7 @@ class TTSLLMEngine(FlowHandler):
         # ⇒ deterministic greedy (the cross-mode-reconciling floor; stochastic
         # temp 0.8 is intelligible-but-not-token-identical across engines).
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.8))
         eos_token_id = defaults.get("eos_token_id")
         bos_token_id = defaults.get("bos_token_id")

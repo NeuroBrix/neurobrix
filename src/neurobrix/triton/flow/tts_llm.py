@@ -26,6 +26,10 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.device_transfer import parse_device_idx
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 # Deterministic sampler seed — shared by both triton modes so triton-seq and
 # triton-compiled produce reproducible (and, given matching logits, identical)
 # speech tokens. Same discipline as core/flow/dual_ar's _DUALAR_SEED.
@@ -173,7 +177,7 @@ class TritonTTSLLMEngine:
         # CLI sampling overrides (global.*) take precedence over embedded defaults
         # (R30 mirror of core / dual_ar) — --temperature 0 ⇒ deterministic greedy.
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.8))
         eos_token_id = defaults.get("eos_token_id")
         bos_token_id = defaults.get("bos_token_id")

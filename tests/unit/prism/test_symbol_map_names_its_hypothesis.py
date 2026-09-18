@@ -33,7 +33,11 @@ import pytest
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 
 
-REQUEST = InputConfig(batch_size=1, height=512, width=512, num_frames=17)
+# temporal_compression is DECLARED, not inherited from a literal: the default 4
+# this file's arithmetic used to rely on was removed on 2026-09-17 (cc7d314b),
+# because a default for a runtime value is a claim about a request nobody made.
+REQUEST = InputConfig(batch_size=1, height=512, width=512, num_frames=17,
+                      temporal_compression=4, vae_scale=8)
 
 # A video graph, as the live containers declare themselves: the symbol table
 # says `s1` is TIME, and the positional guess says it is a latent height.

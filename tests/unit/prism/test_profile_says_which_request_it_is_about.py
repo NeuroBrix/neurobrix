@@ -88,7 +88,7 @@ def test_no_config_binds_to_the_trace_and_says_so(tmp_path):
 
 def test_a_supplied_config_is_marked_as_a_request(tmp_path):
     prof = _profiler(tmp_path, _graph(trace_time=9, coefficient=1))
-    result = prof.estimate_peak_memory(InputConfig(num_frames=33))
+    result = prof.estimate_peak_memory(InputConfig(num_frames=33, temporal_compression=4))
     assert result.binding == "request"
 
 
@@ -114,7 +114,7 @@ def test_a_compounded_rule_is_an_anomaly_and_a_sound_one_is_not(tmp_path):
     one grows 9x, as its extents justify. The compounded one is 3 at the trace
     and 17499 at the request, and the ratio says so.
     """
-    request = InputConfig(num_frames=33)          # latent (33-1)//4+1 = 9
+    request = InputConfig(num_frames=33, temporal_compression=4)          # latent (33-1)//4+1 = 9
 
     sound_dir = tmp_path / "sound"
     sound_dir.mkdir()

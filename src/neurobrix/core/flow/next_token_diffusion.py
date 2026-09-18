@@ -47,6 +47,10 @@ from typing import Any, Callable, Dict, List, Optional
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 
 def _require_default(defaults: Dict[str, Any], key: str) -> Any:
     """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
@@ -158,7 +162,7 @@ class NextTokenDiffusionEngine(FlowHandler):
 
         # ── Generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
-        max_steps = int(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_steps = int(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
         # CFG scale cascade: CLI `--cfg` (global.guidance_scale) >
         # defaults.json cfg_scale (required — ZERO FALLBACK). cfg_scale=1.0

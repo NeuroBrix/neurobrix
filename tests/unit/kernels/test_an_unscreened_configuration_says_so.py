@@ -86,8 +86,13 @@ def test_the_certified_directory_is_a_different_path_entirely():
     """Structural, not a promise: the runtime cache writes under the machine's
     replay cache and the directory lives in the installed package."""
     from neurobrix.triton import autotune_cache
-    assert "replay_cache" in autotune_cache._DIR
-    assert "config/autotune" not in autotune_cache._DIR
+    # `_dir()`, not `_DIR`: the latter is the snapshot taken at import, and a
+    # test earlier in the process that redirects NEUROBRIX_REPLAY_CACHE to a tmp
+    # path froze that value for everyone. Where the cache actually goes is what
+    # this test is about, and that is read live.
+    where = autotune_cache._dir()
+    assert "replay_cache" in where, where
+    assert "config/autotune" not in where, where
 
 
 def test_the_seat_is_recorded_under_the_key_the_choice_is_stored_under():
@@ -159,6 +164,17 @@ def test_the_screen_deduplicates_by_the_shape_key_not_the_constexpr_key():
     the first and silently skipped nine (2026-09-13, real-esrgan-x4 live)."""
     import inspect
     from neurobrix.kernels import launcher
-    src = inspect.getsource(launcher.screen_configs)
+    # `screen_configs` is a thin wrapper since 2026-09-17 (it releases the
+    # allocator pool in a `finally` after every sweep); the dedup lives in the
+    # body it delegates to. Inspecting the wrapper found none of this and the
+    # test failed while the behaviour was unchanged — so it reads the body, and
+    # asserts the wrapper really is only a wrapper.
+    body = getattr(launcher, "_screen_configs", launcher.screen_configs)
+    src = inspect.getsource(body)
     assert "if _rk in seen:" in src and "seen.add(_rk)" in src
     assert "if key in seen:" not in src
+    wrapper = inspect.getsource(launcher.screen_configs)
+    assert "empty_cache_pool" in wrapper, (
+        "the wrapper must still release the sweep's pool; a sweep that keeps its "
+        "blocks leaves the next key poorer, and the memory door reads what is "
+        "available at that moment")

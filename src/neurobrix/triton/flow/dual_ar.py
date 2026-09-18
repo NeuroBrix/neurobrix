@@ -15,6 +15,10 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.device_transfer import parse_device_idx
 
+# The rule and its history live in core.runtime_values.
+from neurobrix.core.runtime_values import require_max_tokens
+
+
 # Shared default sampler seed (R27/R28). The pytorch dual_ar path
 # (core/flow/dual_ar.py) MUST use this same literal so the two separate code
 # paths draw identical randoms when --seed is not passed.
@@ -73,7 +77,7 @@ class TritonDualAREngine:
         # defaults, mirroring the compiled dual_ar flow (R30) — --temperature 0 ⇒
         # greedy. Without this the triton flow silently sampled at the default 0.7.
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        max_tokens = decode_bound(_ov.get("global.max_tokens", require_max_tokens(defaults)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
         # Deterministic shared-seed sampler RNG (R27/R28). Same seed + identical

@@ -26,6 +26,21 @@ from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, Prism
 from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.host_memory import MemoryState, memory_state
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+from neurobrix.core.runtime_values import MissingRuntimeValue
+
+
+class PlanNotComputable(RuntimeError):
+    """A plan that cannot be computed refuses by name.
+
+    Prism's numbers are consulted by the per-cell memory gate as if
+    they had been measured. A coefficient standing in for a failed
+    measurement (`weight_bytes * 0.5`), an empty string standing in for
+    an unreadable topology, or `None` standing in for an unreadable
+    graph all produce a plan that LOOKS computed. See
+    `core.runtime_values` for the same rule on request values.
+    """
+
+
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
 from neurobrix.core.config.system import PRISM_DEFAULTS
@@ -433,7 +448,9 @@ class ExecutionPlan:
             name: ComponentAllocation(
                 name=name,
                 devices=comp["devices"],
-                dtype=comp.get("dtype", "float32"),
+                # required, like `devices` and `memory_mb` beside it: a plan
+                # serialised without a dtype is a defect, not a float32 request
+                dtype=comp["dtype"],
                 memory_mb=comp["memory_mb"],
                 architecture=comp.get("architecture", ""),
                 vendor=comp.get("vendor", ""),
@@ -465,7 +482,7 @@ class ExecutionPlan:
                 num_kv_heads=kv_data["num_kv_heads"],
                 k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
                 v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
-                dtype=kv_data.get("dtype", "float16"),
+                dtype=kv_data["dtype"],   # required, like num_layers above
                 memory_bytes=int(kv_data.get("memory_mb", 0) * 1024 * 1024),
                 per_token_bytes=kv_data.get("per_token_bytes", 0),
             )
@@ -671,12 +688,19 @@ class PrismSolver:
             pass
 
         # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
-        gen_type = ""
         try:
             topology = container.get_topology() or {}
-            gen_type = topology.get("flow", {}).get("generation", {}).get("type", "") or ""
-        except Exception:
-            gen_type = ""
+        except Exception as exc:
+            # `gen_type = ""` stood here, and an empty generation type reads as
+            # "not an image-VQ model" — a container whose topology cannot be
+            # read was silently planned as something else.
+            raise PlanNotComputable(
+                f"the container's topology could not be read "
+                f"({type(exc).__name__}: {exc}), so the generation type is "
+                f"unknown and the plan cannot tell which flow this model runs."
+            ) from exc
+        gen_type = (topology.get("flow", {})
+                            .get("generation", {}).get("type", "") or "")
         is_image_vq = (gen_type == "autoregressive_image") and has_lm_config
 
         if is_image_vq:
@@ -1844,12 +1868,46 @@ class PrismSolver:
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     activation_profiled = True
-                except Exception:
-                    activation_bytes = int(weight_bytes * 0.5)
+                except MissingRuntimeValue:
+                    raise
+                except Exception as exc:
+                    # `int(weight_bytes * 0.5)` stood here. A coefficient is not
+                    # a measurement: this is the very estimate the per-cell
+                    # memory gate consults, and it is what let hat-s-x4 through
+                    # to hold 8408 MB live and take the machine to 127 MB. A
+                    # plan that cannot be computed refuses by name.
+                    raise PlanNotComputable(
+                        f"activation profiling failed for component "
+                        f"{comp.name!r} ({type(exc).__name__}: {exc}). The plan "
+                        f"will not substitute a coefficient for a measurement — "
+                        f"the number would then be consulted by the memory gate "
+                        f"as if it had been measured."
+                    ) from exc
             else:
                 if category == "diffusion":
-                    activation_bytes = int(weight_bytes * 0.5)
+                    raise PlanNotComputable(
+                        f"component {comp.name!r} is a diffusion component with "
+                        f"no graph to profile, so its activation footprint is "
+                        f"unknown. `weight_bytes * 0.5` stood here; half the "
+                        f"weights is a guess wearing a measurement's clothes.")
                 # llm/image_vq without graph: no activation estimate (KV cache added below)
+
+            # The graph records TRACE literals, not symbols: measured 2026-09-17,
+            # all four image models on this rack declare height/width symbols in
+            # `symbolic_context` and ZERO of their tensors use them
+            #   real-esrgan-x2 0/1800   hat-s-x4 0/4660
+            #   swin2SR        0/5163   swinir   0/4175
+            # so the profiler sizes every activation at the trace, whatever was
+            # asked. hat-s-x4 planned the SAME 278 MB for a 448x448 request and a
+            # 160x112 one — 22.4x the pixels, not one byte of difference — and the
+            # per-cell gate was fed that number.
+            #
+            # The runtime executes at the REQUEST size regardless (real-esrgan
+            # renders 320x224 correctly from a 112x80 trace), so the estimate is
+            # scaled by the pixel ratio the two sizes imply. Derived from the
+            # graph's own declared trace_value and the request; no per-model data.
+            activation_bytes = self._scale_activations_to_request(
+                comp, activation_bytes, input_config)
 
             # Add KV cache to activation budget for the LM component
             if needs_kv_cache and lm_component_name and comp.name == lm_component_name:
@@ -1932,6 +1990,151 @@ class PrismSolver:
         if not defaults:
             return None
         return defaults.get("lm_config")
+
+
+    #: How a declared symbol's NAME maps onto the request that will be run.
+    #: A symbol the request cannot answer for is left alone rather than guessed.
+    _SYMBOL_TO_REQUEST = {
+        "height": "height",
+        "width": "width",
+        "batch": "batch_size",
+        "batch_size": "batch_size",
+        "seq_len": "seq_len",
+        "sequence_length": "seq_len",
+        "num_frames": "num_frames",
+        "frames": "num_frames",
+        # The video VAEs call their temporal axis `time`, not `num_frames`:
+        # CogVideoX-2b, mochi-1-preview and Wan2.1 all declare
+        # `time  source=input::z::dim_2`, the latent tensor's temporal dim.
+        # It was absent here, so the scaler skipped it and the plan did not
+        # follow the frame count at all — measured 2026-09-18, CogVideoX plans
+        # the SAME 22 993 MB at 8 frames (which runs) and at 9 (which OOMs at
+        # `aten.convolution::90` asking 4.29 GiB on a 16 G card).
+        "time": "num_frames",
+    }
+
+    #: The UNIT a declared symbol counts in, as an `input_config` field holding
+    #: the conversion from the request's unit to the symbol's. A symbol's NAME
+    #: does not carry its unit: `height` in Sana's transformer counts LATENT
+    #: rows and `height` in the request counts PIXELS, and dividing one by the
+    #: other compares two different quantities. Read from the container (the
+    #: VAE's own compression), never per model.
+    _SYMBOL_UNIT = {
+        "height": "vae_scale",
+        "width": "vae_scale",
+        "num_frames": "temporal_compression",
+        "frames": "temporal_compression",
+        # `time` is the video VAEs' own name for the temporal axis and it counts
+        # LATENT frames, so it needs the compression exactly as the others do.
+        # Adding it to the request map without adding it here left 33 frames
+        # reading 33/9 = 3.67 instead of 1.0 — the unit half of the same defect.
+        "time": "temporal_compression",
+    }
+
+    def _scale_activations_to_request(self, comp, activation_bytes, input_config):
+        """Scale a trace-sized activation estimate to the request actually made.
+
+        Graph tensor shapes are TRACE values — measured on this rack, all four
+        image models declare height/width symbols and ZERO of their tensors use
+        them (real-esrgan-x2 0/1800, hat-s-x4 0/4660, swin2SR 0/5163, swinir
+        0/4175) — while op arguments carry the symbolic expressions. So the
+        profiler sizes every activation at the trace whatever was asked, and
+        hat-s-x4 planned the same 278 MB for a 448x448 request and a 160x112 one.
+
+        EVERY declared symbol carrying a trace value is followed, not only
+        height and width: a sequence length or a frame count that differs
+        between trace and request scales the estimate exactly as a spatial
+        dimension does.
+
+        Refuses by name rather than swallowing: a bare `except Exception:
+        return activation_bytes` stood here, which would have turned any bug in
+        this method back into the trace-sized estimate that caused the problem.
+        """
+        from neurobrix.core.runtime_values import MissingRuntimeValue
+
+        graph = getattr(comp, "graph", None) or {}
+        syms = ((graph.get("symbolic_context") or {}).get("symbols") or {})
+        if not isinstance(syms, dict) or not syms:
+            return activation_bytes                    # nothing declared: nothing to scale
+
+        ratio = 1.0
+        followed = []
+        # One DIMENSION contributes once, however many times it is declared.
+        # PixArt-XL-1024's transformer declares `seq_len` at two symbol ids, and
+        # the product over declarations made a request of 300 against a trace of
+        # 120 read as x6.25 instead of x2.5 — a dimension counted twice, which is
+        # how an over-estimate becomes a refusal of a model that runs. Height and
+        # width are DIFFERENT dimensions and still contribute one factor each,
+        # which is why hat-s-x4 reads x22.4 = (448/112)x(448/80).
+        seen_dims = set()
+        for sym_id, spec in syms.items():
+            if not isinstance(spec, dict):
+                raise MissingRuntimeValue(
+                    f"the graph declares symbol {sym_id!r} as {type(spec).__name__}, "
+                    f"not a specification with a trace value; the estimate cannot "
+                    f"be scaled against a symbol it cannot read")
+            trace = spec.get("trace_value")
+            name = spec.get("name")
+            if trace in (None, 0) or not name:
+                continue                               # declared without a trace value
+            attr = self._SYMBOL_TO_REQUEST.get(name)
+            if attr is None:
+                # SAY IT. A symbol carrying a trace value that this map does not
+                # know is a dimension the estimate silently stops following, and
+                # that silence is how the plan read the same 22 993 MB at 8 and
+                # 9 frames while one ran and the other died.
+                logging.getLogger(__name__).info(
+                    "Prism: %s declares symbol %r (trace %s) that no request "
+                    "field answers for — the estimate does not follow it",
+                    getattr(comp, "name", "?"), name, trace)
+                continue
+            actual = getattr(input_config, attr, None)
+            if actual in (None, 0):
+                continue
+            # Put the request into the SYMBOL's unit before dividing. A model
+            # with a VAE declares its spatial symbols in latent rows/columns:
+            # measured 2026-09-17, Sana-1600M declares height/width with a trace
+            # value of 32 and a `trace_resolution` of 1024 — the symbol counts
+            # latents, the request counts pixels, and 1024/32 is the VAE's own
+            # compression, not a change of size. Taken raw it multiplied the
+            # estimate by 32 per axis and Prism then refused a model that runs:
+            # "This model cannot run on this machine" for a Sana-1600M that had
+            # rendered on a 16 GB card that morning. The upscalers declare no
+            # vae_scale, their symbols are already pixels, and the factor is 1.
+            unit_attr = self._SYMBOL_UNIT.get(name)
+            unit = getattr(input_config, unit_attr, None) if unit_attr else None
+            if unit in (None, 0):
+                unit = 1
+            if unit_attr == "temporal_compression" and unit != 1:
+                # A temporal axis counts LATENT frames, and the engine's own
+                # arithmetic is (n - 1) // ratio + 1, not n / ratio. Plain
+                # division under-counts exactly where it matters: 9 frames at
+                # ratio 4 is 3 latent frames, not 2.25, and 9 is the first count
+                # that needs a third — which is the step the 16 G card dies on.
+                comparable = float((int(actual) - 1) // int(unit) + 1)
+            else:
+                comparable = float(actual) / float(unit)
+            if comparable <= 0:
+                continue
+            if attr in seen_dims:
+                continue                               # already counted this dimension
+            seen_dims.add(attr)
+            ratio *= comparable / float(trace)
+            followed.append(f"{name} {trace}->{comparable:g}"
+                            + (f" (request {actual} / unit {unit})" if unit != 1 else ""))
+
+        if ratio <= 1.0:
+            return activation_bytes                    # never promise LESS than measured
+        # SAY IT. This multiplies the estimate the per-cell memory gate consults —
+        # x22.4 on hat-s-x4 at 448x448 — and `followed` was built and thrown away,
+        # so the decision changed the plan and left no line behind. An unflushed
+        # list is the silence-by-construction family: indistinguishable from not
+        # having run at all.
+        logging.getLogger(__name__).info(
+            "Prism: %s activations x%.3g to the request (%s)",
+            getattr(comp, "name", "?"), ratio, ", ".join(followed))
+        return int(activation_bytes * ratio)
+
 
     def _estimate_kv_cache_bytes(self, container, target_dtype_str: str) -> int:
         """Estimate KV cache memory for budget planning.
@@ -2885,10 +3088,19 @@ class PrismSolver:
         if not gpath.exists() or not ppath.exists():
             return None
         try:
-            graph = json.load(open(gpath))
-            profile_j = json.load(open(ppath))
-        except Exception:
-            return None
+            with open(gpath) as _gf:
+                graph = json.load(_gf)
+            with open(ppath) as _pf:
+                profile_j = json.load(_pf)
+        except Exception as exc:
+            # `return None` stood here: an unreadable or malformed graph.json
+            # became "no tiling needed", which is a decision, not an absence.
+            raise PlanNotComputable(
+                f"the component's graph or profile could not be read "
+                f"({gpath.name} / {ppath.name}: {type(exc).__name__}: {exc}), so "
+                f"its trace size is unknown and no tiling decision can be taken "
+                f"for it."
+            ) from exc
 
         # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
         tensors = graph.get("tensors", {})
@@ -2958,9 +3170,21 @@ class PrismSolver:
             return None  # fits untiled — no tiling needed
 
         # Runtime latent spatial extent (the input space the tiles cover).
-        vae_scale = getattr(ic, "vae_scale", None) or 8
-        latent_h = max(1, (getattr(ic, "height", None) or 1024) // vae_scale)
-        latent_w = max(1, (getattr(ic, "width", None) or 1024) // vae_scale)
+        # `or 8` and `or 1024` stood here: a tiling decision taken against an
+        # invented 1024x1024 at an invented VAE scale is a decision about a
+        # request nobody made. If this point is reached without them, the plan
+        # cannot size a tile and says so.
+        vae_scale = getattr(ic, "vae_scale", None)
+        _h, _w = getattr(ic, "height", None), getattr(ic, "width", None)
+        if not (vae_scale and _h and _w):
+            from neurobrix.core.runtime_values import MissingRuntimeValue
+            raise MissingRuntimeValue(
+                f"tiling was required for this component but its latent extent "
+                f"cannot be derived: vae_scale={vae_scale!r}, height={_h!r}, "
+                f"width={_w!r}. Declare them in the container's "
+                f"runtime/defaults.json or the family config.")
+        latent_h = max(1, _h // vae_scale)
+        latent_w = max(1, _w // vae_scale)
 
         window_alignment = config.get("window_size", 1) or 1
         frac = budget_bytes / full_act
