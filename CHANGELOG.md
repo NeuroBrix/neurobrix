@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An activation now writes into the buffer it just read, where nothing else
+  needs it.** A convolution and the activation reading it held two buffers of
+  identical size while only one was needed. On `real-esrgan-x8` at 1024x1024 on a
+  16 GB card that second buffer is 8,589,934,592 bytes and the run died asking
+  for it. The engine now proves from the graph that the tensor has no other
+  consumer and is not an output, then writes in place — for `relu`, `leaky_relu`,
+  `silu`, `gelu`, `hardswish`, `elu` and `mish`. Peak driver memory on that run
+  falls from 12,162 MB to 11,043 MB and pool evictions from 4 to none.
+  `NBX_DISABLE_INPLACE_UNARY=1` switches it off.
+
+  **That request still does not complete.** It now fails one operation later, at
+  `aten.convolution::350`, which needs its input and its output resident at the
+  same time — 8 GiB each. Spatial tiling bounds a convolution's workspace, not
+  its output buffer, so no tile count fixes this one; it needs the whole
+  convolution-activation chain streamed in bands, which is not built.
+- **`run --explain-plan` now says what op-level tiling plans, not just that it
+  planned something.** The line named the component and stopped, so a plan tiling
+  two operations and one tiling two hundred printed identically.
 - **A large operation is now budgeted against what is left of the card, not
   against the whole card.** The planner asked whether one operation's own
   footprint cleared 85% of the GPU — a question about an empty card. The card is

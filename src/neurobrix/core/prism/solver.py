@@ -5170,7 +5170,30 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
     if plan.runtime_op_tiling:
-        lines.append("op-level tiling " + ", ".join(sorted(plan.runtime_op_tiling)))
+        # WHAT it tiles, not merely THAT it does. This line named the component
+        # and stopped, so a plan that tiled two ops and a plan that tiled two
+        # hundred printed the same four words -- and when `real-esrgan-x8` died
+        # at `aten.convolution::350` with `op-level tiling model` on the plan,
+        # the plan could not say whether that conv was in it. A rendering that
+        # cannot distinguish the working case from the broken one is the same
+        # silence as no rendering.
+        for _cname in sorted(plan.runtime_op_tiling):
+            _p = plan.runtime_op_tiling[_cname]
+            _parts = []
+            for _label, _attr in (("fused upsample+conv", "fusion_pairs"),
+                                  ("tiled ops", "tiled_ops"),
+                                  ("in-place adds", "inplace_adds"),
+                                  ("in-place activations", "inplace_unary"),
+                                  ("residual chains", "residual_chains")):
+                _v = getattr(_p, _attr, None)
+                if _v:
+                    _parts.append(f"{len(_v)} {_label}")
+            lines.append(f"op-level tiling {_cname}: "
+                         + (", ".join(_parts) if _parts else "nothing planned"))
+            for _u, _c, _f in (getattr(_p, "fusion_pairs", None) or [])[:6]:
+                lines.append(f"                  fuse {_u} -> {_c} in {_f} tiles")
+            for _u, _t, _f in (getattr(_p, "tiled_ops", None) or [])[:8]:
+                lines.append(f"                  tile {_u} ({_t}) in {_f} bands")
     for name, spec in (plan.component_tiling or {}).items():
         short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
         lines.append(f"component tiling {name}: {short}")

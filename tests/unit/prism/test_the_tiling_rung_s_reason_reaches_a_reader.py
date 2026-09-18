@@ -96,3 +96,34 @@ def test_the_solver_still_spells_the_attribute_the_way_solve_reads_it():
         f"found {assigns} -- if a site was renamed, solve()'s getattr returns "
         f"None for it and the rung goes silent again")
     assert 'getattr(self, "_op_tiling_declined", None)' in src
+
+
+def test_the_plan_says_WHAT_it_tiles_not_merely_that_it_does():
+    """`op-level tiling model` was the whole line, for any plan at all.
+
+    A plan that tiled two ops and one that tiled two hundred rendered the same
+    four words. When `real-esrgan-x8` died at `aten.convolution::350` with
+    `op-level tiling model` on its plan, the plan could not say whether that conv
+    was in it -- it was, tiled in 64 bands, and finding that out needed a code
+    edit. A rendering that cannot separate the working case from the broken one
+    is the same silence as no rendering.
+
+    SEEN RED: with the per-plan loop reverted to
+    `", ".join(sorted(plan.runtime_op_tiling))`, this fails on every assertion
+    below except the component name.
+    """
+    from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
+
+    p = OpLevelTilingPlan("model")
+    p.add_upsample_conv_fusion("aten.upsample_nearest2d::2", "aten.convolution::349", 64)
+    p.add_tiled_op("aten.convolution::350", "aten::convolution", 64)
+    p.add_inplace_unary("aten.leaky_relu::278", "aten::leaky_relu")
+
+    text = explain_plan(_plan(runtime_op_tiling={"model": p}))
+    assert "1 fused upsample+conv" in text
+    assert "1 tiled ops" in text
+    assert "1 in-place activations" in text
+    # the op_uids themselves, which is the question a reader actually has
+    assert "aten.convolution::350" in text
+    assert "64 bands" in text
+    assert "aten.upsample_nearest2d::2 -> aten.convolution::349 in 64 tiles" in text
