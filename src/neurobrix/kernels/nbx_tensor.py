@@ -13,6 +13,12 @@ Metadata ops: pure Python stride/shape computation
 
 from __future__ import annotations
 
+import bisect          # module level, NOT inside the range helpers: they run on the
+                      # finalizer path, and at interpreter shutdown `sys.meta_path` is
+                      # None, so a function-level import raises ImportError AFTER the
+                      # cudaFree has already happened — aborting the bookkeeping that
+                      # follows it and printing a traceback that can mask a real
+                      # [NBX-CUDA-ERROR] from the same free (observed 2026-09-18).
 import ctypes
 import functools
 import math
@@ -1787,7 +1793,6 @@ class DeviceAllocator:
         size = DeviceAllocator._range_size.get(ptr)
         if size is not None:
             return True
-        import bisect
         bases = DeviceAllocator._range_bases
         i = bisect.bisect_right(bases, ptr) - 1
         return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
@@ -1797,14 +1802,12 @@ class DeviceAllocator:
         """Register a live range for `holds()` — O(log n) insert, kept sorted
         so a launch pays one bisect and never a re-sort."""
         if base not in DeviceAllocator._range_size:
-            import bisect
             bisect.insort(DeviceAllocator._range_bases, base)
         DeviceAllocator._range_size[base] = int(nbytes)
 
     @staticmethod
     def _range_del(base: int) -> None:
         if DeviceAllocator._range_size.pop(base, None) is not None:
-            import bisect
             bases = DeviceAllocator._range_bases
             i = bisect.bisect_left(bases, base)
             if i < len(bases) and bases[i] == base:

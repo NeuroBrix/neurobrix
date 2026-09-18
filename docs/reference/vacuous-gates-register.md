@@ -1908,3 +1908,48 @@ needed, never at the moment the file is read.** Anything evaluated in a decorato
 memory, a device count, a file's presence, a clock — describes collection time and is stated as
 though it described the test. And when the quantity is owned by a cache, the driver is the wrong
 authority to ask.
+
+### 75 — the shape that makes a finalizer bug invisible, and a gate of mine that was green against it
+
+Found while measuring something else: every teardown of a process that had used
+`NBXTensor` printed two of these.
+
+    Exception ignored in: <function NBXTensor.__del__>
+      File "nbx_tensor.py", line 1461, in free_cuda
+      File "nbx_tensor.py", line 1807, in _range_del
+    ImportError: sys.meta_path is None, Python is likely shutting down
+
+Three `DeviceAllocator` range helpers carried a function-level `import bisect`, and they
+run on the finalizer path. At interpreter shutdown the import machinery is gone, so the
+import raises — **after** `cudaFree` has already been called, aborting the accounting that
+follows it. Harmless for the memory; not harmless as a signal, because `free_cuda`
+deliberately PRINTS rather than raises when `cudaFree` returns non-zero, and that print is
+the site where an asynchronous fault from an earlier kernel becomes visible. Two ignored
+tracebacks per teardown are how a real `[NBX-CUDA-ERROR]` gets scrolled past.
+
+The entry is not the bug. **The entry is the test I wrote for it, which passed against the
+un-fixed code.**
+
+Its child process held a tensor at MODULE scope and let the interpreter tear down. That
+seemed like the obvious way to make a finalizer run late. It is not: a module-scope tensor
+is finalised while the import machinery still stands, and nothing fires. The cell was green
+in both directions and I nearly landed it.
+
+What reproduces it is a tensor **and its materialised transpose**, created and dropped
+INSIDE a function — the strided-copy path leaves finalizers that run late enough. 256x256
+is enough; the fault is in the import, not the size.
+
+And the injection has a second trap, which cost the run in between. Restoring ONE of the
+three local imports does not turn it red: the module-level `import bisect` added by the fix
+keeps `bisect` in `sys.modules`, so a local `import bisect` resolves from the cache and
+never reaches `meta_path`. Only restoring **all four** edits — dropping the module-level
+import and putting all three local ones back — is the pre-fix state, and that is red: four
+lines of `Exception ignored` / `sys.meta_path is None`.
+
+Two rules, and the second is the one worth carrying:
+
+* **The shape is part of the test** (register 62's rule, met again in a new place): the
+  choice of *how* the object dies decided whether the cell could see anything at all.
+* **An injection must restore the whole of the old state, not the line the diff is about.**
+  A partial revert that leaves the fix's side effects in place tests the fix against
+  itself. The green it produces is indistinguishable from a passing gate.
