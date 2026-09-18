@@ -47,6 +47,43 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 
 ENABLED = os.environ.get("NBX_TRITON_REPLAY") == "1"
 
+# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS, and enabling this for a single
+# request pays for something nothing will read.
+#
+# Plans live on the sequence object (`seq.__dict__["_replay_plans"]`), so they
+# are reused across the decode steps of ONE generation and discarded at exit.
+# The only thing this module writes to disk is the slab SIZE cache
+# (`_store_slab_size`); there is no plan serialiser and no loader.
+#
+# Measured on an M4 Pro, TinyLlama-1.1B, 120 tokens, byte-identical output in
+# every arm (2026-09-18):
+#
+#     short prompt (~6 tok)     plain  19.71 s   replay  21.20 s   +7.6%
+#     long prompt (~480 tok)    plain 282.05 s   replay 2257.70 s  +8.0x
+#
+# and within the long run replay DID engage — 87.5% of sequence runs took the
+# fast path — so the cost is not a failure to replay. It is what recording and
+# replaying cost at that context, and it is paid again by the next process.
+#
+# This is opt-in and OFF by default, which is the right default and is left
+# alone. The note below exists so that turning it on for a one-shot request is a
+# visible choice rather than a silent 8x.
+def _one_shot_note() -> None:
+    """Say once, on stderr, that a recorded plan will not outlive this process."""
+    global _SAID_ONE_SHOT
+    if not ENABLED or _SAID_ONE_SHOT:
+        return
+    _SAID_ONE_SHOT = True
+    import sys as _sys
+    print("[replay] recording is ON. The plan lives in THIS process only — "
+          "nothing is written to disk and the next process records again. "
+          "Measured cost on one request: +7.6% at a short prompt, 8.0x at ~480 "
+          "tokens of context. Worth it for a process that serves many requests; "
+          "not for one.", file=_sys.stderr, flush=True)
+
+
+_SAID_ONE_SHOT = False
+
 # Multi-device replay is LOCKED by default and this flag is how the lock is
 # exercised for its equivalence proof — it is not a feature switch.
 #
@@ -1192,6 +1229,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     plan machine directly: the B1 stabilizer stays OFF (the recording
     slab is the address-pinning authority) and the interceptor
     registration contract in signature() decides eligibility."""
+    _one_shot_note()
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
         if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
