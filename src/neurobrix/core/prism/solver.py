@@ -1230,6 +1230,18 @@ class PrismSolver:
                 vram_per_gpu_bytes=comp_vram,
                 mode="compiled",
                 safety=0.85,
+                # The component's weights sit on this card for the whole of its
+                # execution, so an op's transient has 0.85 of the card MINUS
+                # them, not 0.85 of the card. Kept in step with the placement
+                # estimate below, which passes its own `weight_bytes`: these are
+                # the only two call sites that compute overflow_ops, and the
+                # tiling-aware estimator derives which upsamples become
+                # zero-size proxies from that set. If one site subtracts the
+                # weights and the other does not, they disagree about which
+                # upsamples are free, which is the desync
+                # `_tiling_aware_zero_alloc_uids` was written to prevent.
+                resident_bytes=int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
+                if not isinstance(alloc, tuple) else 0,
             )
             # S5: residual chains are detected unconditionally — even
             # when no overflow_ops are reported on this hardware, the
@@ -1868,6 +1880,11 @@ class PrismSolver:
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
                         vram_per_gpu_bytes=smallest_gpu_bytes or None,
+                        # Same correction as the detector: an op's transient is
+                        # budgeted against what is LEFT of the card once this
+                        # component's weights are on it. Both sites must pass a
+                        # weights figure or neither -- see the note there.
+                        resident_bytes=weight_bytes or 0,
                         force_compute_dtype_for_fp=True,
                         # PLACEMENT estimate: no symbol binds below its
                         # witnessed trace extent (the audio-tower

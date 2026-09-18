@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A large operation is now budgeted against what is left of the card, not
+  against the whole card.** The planner asked whether one operation's own
+  footprint cleared 85% of the GPU — a question about an empty card. The card is
+  not empty when the operation runs: the model's weights are on it for the whole
+  of its execution, and so is every intermediate result still in use at that
+  point. Both are now subtracted before the question is asked. Measured over the
+  56 containers in the local cache, this changes the answer on five of 308
+  model/card pairs — the video VAEs of CogVideoX-2b, CogVideoX-5b-I2V,
+  SANA-Video 2B 720p and Sana 1600M 4Kpx, each by a few hundred megabytes, which
+  is where the old question gave the wrong answer. It does not change any plan
+  for `real-esrgan-x8` at 1024x1024, whose refusal is a separate open defect.
+- **`run --explain-plan` now says why automatic tiling declined.** The reason was
+  computed and discarded, so a request refused for memory gave no account of the
+  one strategy that might have reshaped it.
+
 ## [0.5.4] - 2026-09-18
 
 NVIDIA (CUDA) and CPU. Apple Silicon is not in this release — its work is on
