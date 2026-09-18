@@ -852,8 +852,21 @@ def cmd_hub(args):
 
 def _cmd_hub(args):
     """Browse models available on the NeuroBrix registry."""
-    import urllib.request
-    import urllib.error
+    # `requests`, like every other registry call in this file, and NOT raw
+    # urllib. urllib verifies against OpenSSL's default CA file, and on a
+    # python.org macOS install that file does not exist until the user runs
+    # `Install Certificates.command` — measured here 2026-09-18:
+    #
+    #   ssl default verify paths: .../Python.framework/.../etc/openssl/cert.pem
+    #   that file exists: False
+    #   plain urlopen    : CERTIFICATE_VERIFY_FAILED
+    #   requests         : HTTP 200
+    #
+    # So `neurobrix hub` reported "Cannot connect to registry" on a machine
+    # whose network was fine and whose registry answered every other command,
+    # because this one function reached for a different HTTP client. requests
+    # carries certifi and is already a declared dependency.
+    import requests
     import urllib.parse
 
     registry = args.registry or REGISTRY_URL
@@ -878,33 +891,34 @@ def _cmd_hub(args):
 
     # Fetch model list (no auth required)
     try:
-        req = urllib.request.Request(url, headers={
+        resp = requests.get(url, timeout=10, headers={
             "Accept": "application/json",
             "User-Agent": f"neurobrix-cli/{__version__}",
         })
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.HTTPError as e:
         # HTTPError subclasses URLError, so it used to land in the branch
         # below and every rejected request was reported as a connectivity
         # failure — sending a user who had merely mistyped a category off to
         # check their firewall. The registry answered, and it answered
         # usefully: the body carries the reason and the vocabulary.
         detail = {}
+        code = e.response.status_code if e.response is not None else 0
         try:
-            detail = json.loads(e.read().decode())
+            detail = e.response.json()
         except Exception:
             pass
-        if e.code < 500 and detail:
+        if code < 500 and detail:
             print(f"\nERROR: {detail.get('error', e)}")
             valid = detail.get("validCategories")
             if valid:
                 print(f"  Valid categories: {', '.join(valid)}")
             sys.exit(2)
-        print(f"\nERROR: registry returned HTTP {e.code} for {url}")
+        print(f"\nERROR: registry returned HTTP {code} for {url}")
         print(f"  {e}")
         sys.exit(1)
-    except urllib.error.URLError as e:
+    except requests.RequestException as e:
         print(f"\nERROR: Cannot connect to registry at {registry}")
         print(f"  {e}")
         sys.exit(1)
