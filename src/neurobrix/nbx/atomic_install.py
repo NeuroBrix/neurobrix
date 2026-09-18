@@ -140,6 +140,45 @@ def _describe(owner: dict) -> str:
     return f"{host} (pid {pid}{age})"
 
 
+#: `renameat2(2)` with `RENAME_EXCHANGE` swaps two paths in ONE syscall, so there is
+#: no instant at which either name is missing. The two-rename form is correct but not
+#: instantaneous, and its window is real rather than theoretical: the gate
+#: `test_the_live_tree_is_readable_at_every_instant_of_a_reinstall` caught it on
+#: 2026-09-18 with a single observation of `manifest.json absent` out of thousands of
+#: polls on a loaded machine. One observation is enough — the claim is "at every instant".
+_AT_FDCWD = -100
+_RENAME_EXCHANGE = 2
+_SYS_renameat2 = 316          # x86_64
+
+
+def _exchange(a: Path, b: Path) -> bool:
+    """Swap two existing paths atomically. False if the platform cannot.
+
+    Returns False rather than raising on ENOSYS (a kernel older than the call),
+    EINVAL/EOPNOTSUPP (a filesystem without the flag — several network filesystems
+    included) and on any non-x86_64 build, so the caller keeps its portable path
+    instead of an install failing on a machine whose kernel simply predates this.
+    """
+    import ctypes
+    if os.uname().machine != "x86_64":
+        return False
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    except OSError:
+        return False
+    ctypes.set_errno(0)
+    rc = libc.syscall(ctypes.c_long(_SYS_renameat2),
+                      ctypes.c_int(_AT_FDCWD), ctypes.c_char_p(str(a).encode()),
+                      ctypes.c_int(_AT_FDCWD), ctypes.c_char_p(str(b).encode()),
+                      ctypes.c_uint(_RENAME_EXCHANGE))
+    if rc == 0:
+        return True
+    err = ctypes.get_errno()
+    if err in (errno.ENOSYS, errno.EINVAL, errno.ENOTTY, errno.EOPNOTSUPP):
+        return False
+    raise OSError(err, os.strerror(err), str(a), None, str(b))
+
+
 @contextmanager
 def installing(cache_path, *, label: str = "install",
                allow_break: bool = False) -> Iterator[Path]:
@@ -198,32 +237,44 @@ def installing(cache_path, *, label: str = "install",
     staging.mkdir(parents=True)
 
     aside: Optional[Path] = None
+    exchanged = False
     try:
         yield staging
 
-        # The swap. Two renames, no recursive delete between them.
-        if cache_path.exists():
-            aside = cache_path.with_name(
-                f"{cache_path.name}.replaced.{_tag()}.{int(time.time())}")
-            os.replace(cache_path, aside)
-        try:
-            os.replace(staging, cache_path)
-        except OSError as e:
-            # Put the working copy back before surfacing: a failed install must
-            # never be the reason a model that worked is gone.
-            if aside is not None and not cache_path.exists():
-                os.replace(aside, cache_path)
-                aside = None
-            if e.errno == errno.EXDEV:
-                raise OSError(
-                    errno.EXDEV,
-                    f"staging and cache are on different filesystems "
-                    f"({staging} -> {cache_path}); the swap cannot be atomic. "
-                    f"Point the staging directory at the cache's own filesystem."
-                ) from e
-            raise
+        # The swap. ONE syscall where the kernel and filesystem allow it, so the
+        # model is never absent for any instant; two renames otherwise, which is
+        # the best a portable path can do. No recursive delete before either.
+        if cache_path.exists() and _exchange(staging, cache_path):
+            # `cache_path` now holds the new tree and `staging` the old one, and
+            # no instant existed in which either name was missing. The old tree is
+            # handed to the cleanup below under the name it now occupies.
+            aside, exchanged = staging, True
+        else:
+            if cache_path.exists():
+                aside = cache_path.with_name(
+                    f"{cache_path.name}.replaced.{_tag()}.{int(time.time())}")
+                os.replace(cache_path, aside)
+            try:
+                os.replace(staging, cache_path)
+            except OSError as e:
+                # Put the working copy back before surfacing: a failed install
+                # must never be the reason a model that worked is gone.
+                if aside is not None and not cache_path.exists():
+                    os.replace(aside, cache_path)
+                    aside = None
+                if e.errno == errno.EXDEV:
+                    raise OSError(
+                        errno.EXDEV,
+                        f"staging and cache are on different filesystems "
+                        f"({staging} -> {cache_path}); the swap cannot be atomic. "
+                        f"Point the staging directory at the cache's own filesystem."
+                    ) from e
+                raise
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        # After an exchange, `staging` IS the model that is now live: removing it
+        # here would delete what was just installed.
+        if not exchanged:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
     finally:
         if aside is not None:

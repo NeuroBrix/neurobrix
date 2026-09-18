@@ -225,3 +225,87 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     # last = 202). A count in between is a half-written model made visible.
     assert set(observations) <= {2, 202}, (
         f"a partially extracted model was visible at {final}: sizes {sorted(set(observations))}")
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18, second pass. The cell above went RED once in the merged-tree gate:
+#
+#   AssertionError: the model was unreadable during its own reinstall:
+#   ['manifest.json absent'] (1 observations)
+#
+# One observation out of thousands of polls, on a loaded machine — and one is
+# enough, because the claim is "at every instant". The two-rename swap is correct
+# but not instantaneous: between `rename(cache -> aside)` and
+# `rename(staging -> cache)` the name does not exist. I had written that window
+# off as "two syscalls", which is a description of its size, not an argument that
+# it is absent.
+#
+# `renameat2(RENAME_EXCHANGE)` closes it: one syscall, no window at all.
+# ---------------------------------------------------------------------------
+
+def test_the_exchange_path_is_actually_taken_here():
+    """A fallback that is always taken is a fallback that is the implementation.
+
+    `_exchange` returns False on a kernel or filesystem without RENAME_EXCHANGE,
+    which is deliberate — but then the window is back, and nothing would say so.
+    This asserts which path this machine's cache filesystem takes, so a silent
+    demotion to the two-rename form is visible rather than assumed.
+    """
+    from neurobrix.nbx.atomic_install import _exchange
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        a, b = Path(d) / "a", Path(d) / "b"
+        a.mkdir(); b.mkdir()
+        (a / "m").write_text("A"); (b / "m").write_text("B")
+        took_it = _exchange(a, b)
+        if not took_it:
+            pytest.skip("this filesystem has no RENAME_EXCHANGE; the portable "
+                        "two-rename swap is in use and its window is open")
+        assert (a / "m").read_text() == "B" and (b / "m").read_text() == "A", (
+            "_exchange reported success without swapping the two paths")
+
+
+def test_twenty_five_reinstalls_and_the_model_is_never_absent(tmp_path):
+    """The window was found under load, so the cell that pins it applies load.
+
+    One reinstall gave one absence in thousands of polls. Twenty-five give the
+    poller twenty-five chances at a window this small, which is what it takes for
+    the red to be reproducible rather than occasional.
+
+    Injection: make `_exchange` return False unconditionally, so the portable
+    two-rename path is used, and this reports absences.
+    """
+    cache = tmp_path / "cache"
+    target = _model(cache, "hot-model", "v0")
+    for i in range(80):
+        (target / f"f_{i}.bin").write_bytes(b"x" * 256)
+
+    absences: list[str] = []
+    stop = threading.Event()
+
+    def poll():
+        while not stop.is_set():
+            try:
+                json.loads((target / "manifest.json").read_text())
+            except FileNotFoundError:
+                absences.append("absent")
+            except (ValueError, OSError):
+                absences.append("unreadable")
+
+    reader = threading.Thread(target=poll, daemon=True)
+    reader.start()
+    try:
+        for n in range(25):
+            with installing(target, label=f"round-{n}") as staging:
+                (staging / "manifest.json").write_text(json.dumps({"version": f"v{n + 1}"}))
+                for i in range(80):
+                    (staging / f"f_{i}.bin").write_bytes(b"y" * 256)
+    finally:
+        stop.set()
+        reader.join(timeout=5)
+
+    assert not absences, (
+        f"{len(absences)} observations of the model missing across 25 reinstalls: "
+        f"{absences[:3]}")
+    assert json.loads((target / "manifest.json").read_text())["version"] == "v25"
