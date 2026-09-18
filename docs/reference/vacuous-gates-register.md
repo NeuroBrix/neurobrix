@@ -1858,3 +1858,53 @@ waiting, which is a legitimate caller.
 Seen red on two injections: unwiring the door from `main()` turns **only** the cell that runs the
 tool for real from a shell naming itself (register 17 — a helper whose every unit test passes can
 still have no seam), and blinding the helper turns five.
+
+### 74 — a skip guard evaluated at collection, answering about a moment that had not happened
+
+`tests/unit/kernels/test_a_flat_kernel_beyond_two_billion_elements.py` and
+`test_a_gemm_beyond_two_billion_elements.py` are the two cells that prove the int32 offset
+promotion of register 58/59 — a GEMM and a flat kernel addressing past 2^31 elements. Both
+carried a guard of the form:
+
+    @pytest.mark.skipif(_cuda_free_bytes() < 10 * 2 ** 30, reason="needs >= 10 GB free")
+
+The merge gate of 2026-09-18 ran the unit suite on a 16 GB card and returned **2 failed, 2229
+passed**. Both failures were these two cells, both at `NBXTensor.empty` for 4 505 600 000 bytes.
+Read as a kernel regression on the branch under test, they would have blocked the merge.
+
+The guard was wrong in **both** of its terms, and each alone was enough.
+
+**The moment.** `_cuda_free_bytes()` is a DECORATOR ARGUMENT: it runs at collection, before any
+test in the session has allocated anything. It measured an empty card and answered a question
+about a moment forty minutes in the future. A guard that asks at import time can only ever
+describe the card the suite *started* on.
+
+**The number.** The flat cell holds three fp16 tensors of 2 252 800 000 elements at its peak —
+13.5 GB — behind a threshold of 10. Its own docstring said "a 32 GB card" while its guard said
+10 GB, and nothing made the two agree. The threshold is now computed from `ROWS`, `COLS` and the
+count of live tensors, so it cannot drift away from the shapes it is about.
+
+**And underneath, a third thing, which is why the first fix was not enough.** With the guard
+corrected to run inside the test, the GEMM cell then *skipped* — "5.3 GB needed, 2.9 GB free" —
+because the flat cell that ran before it had released its tensors into the allocator's free-list
+pool, which is on by default. `cudaMemGetInfo` reports what the DRIVER holds, so parked blocks
+read as unavailable although the allocator would serve them instantly. Measured on one 16 GB
+card, same two tensors dropped:
+
+| | driver-reported free after the drop |
+|---|---|
+| `NBX_ALLOC_POOL=1` (default) | **7.07 GB** |
+| `NBX_ALLOC_POOL=0` | **15.47 GB** |
+
+Not a leak — the caching allocator doing its job. But a cell that always skips proves exactly as
+much as a cell that always passes, so the fix would have traded a false red for a silent hole.
+The guard now calls `DeviceAllocator.empty_cache_pool()` before it measures, which both makes the
+figure true and is the right thing to do before a multi-gigabyte allocation.
+
+**After the fix, on the SAME 16 GB card that produced the two failures: 2 passed in 112 s.**
+
+The shape, and it is not confined to memory: **a precondition is checked at the moment it is
+needed, never at the moment the file is read.** Anything evaluated in a decorator argument — free
+memory, a device count, a file's presence, a clock — describes collection time and is stated as
+though it described the test. And when the quantity is owned by a cache, the driver is the wrong
+authority to ask.
