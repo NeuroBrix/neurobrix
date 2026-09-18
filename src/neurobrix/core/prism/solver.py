@@ -2003,6 +2003,14 @@ class PrismSolver:
         "sequence_length": "seq_len",
         "num_frames": "num_frames",
         "frames": "num_frames",
+        # The video VAEs call their temporal axis `time`, not `num_frames`:
+        # CogVideoX-2b, mochi-1-preview and Wan2.1 all declare
+        # `time  source=input::z::dim_2`, the latent tensor's temporal dim.
+        # It was absent here, so the scaler skipped it and the plan did not
+        # follow the frame count at all — measured 2026-09-18, CogVideoX plans
+        # the SAME 22 993 MB at 8 frames (which runs) and at 9 (which OOMs at
+        # `aten.convolution::90` asking 4.29 GiB on a 16 G card).
+        "time": "num_frames",
     }
 
     #: The UNIT a declared symbol counts in, as an `input_config` field holding
@@ -2016,6 +2024,11 @@ class PrismSolver:
         "width": "vae_scale",
         "num_frames": "temporal_compression",
         "frames": "temporal_compression",
+        # `time` is the video VAEs' own name for the temporal axis and it counts
+        # LATENT frames, so it needs the compression exactly as the others do.
+        # Adding it to the request map without adding it here left 33 frames
+        # reading 33/9 = 3.67 instead of 1.0 — the unit half of the same defect.
+        "time": "temporal_compression",
     }
 
     def _scale_activations_to_request(self, comp, activation_bytes, input_config):
@@ -2066,7 +2079,15 @@ class PrismSolver:
                 continue                               # declared without a trace value
             attr = self._SYMBOL_TO_REQUEST.get(name)
             if attr is None:
-                continue                               # a symbol this request cannot answer for
+                # SAY IT. A symbol carrying a trace value that this map does not
+                # know is a dimension the estimate silently stops following, and
+                # that silence is how the plan read the same 22 993 MB at 8 and
+                # 9 frames while one ran and the other died.
+                logging.getLogger(__name__).info(
+                    "Prism: %s declares symbol %r (trace %s) that no request "
+                    "field answers for — the estimate does not follow it",
+                    getattr(comp, "name", "?"), name, trace)
+                continue
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
                 continue
@@ -2084,7 +2105,15 @@ class PrismSolver:
             unit = getattr(input_config, unit_attr, None) if unit_attr else None
             if unit in (None, 0):
                 unit = 1
-            comparable = float(actual) / float(unit)
+            if unit_attr == "temporal_compression" and unit != 1:
+                # A temporal axis counts LATENT frames, and the engine's own
+                # arithmetic is (n - 1) // ratio + 1, not n / ratio. Plain
+                # division under-counts exactly where it matters: 9 frames at
+                # ratio 4 is 3 latent frames, not 2.25, and 9 is the first count
+                # that needs a third — which is the step the 16 G card dies on.
+                comparable = float((int(actual) - 1) // int(unit) + 1)
+            else:
+                comparable = float(actual) / float(unit)
             if comparable <= 0:
                 continue
             if attr in seen_dims:
