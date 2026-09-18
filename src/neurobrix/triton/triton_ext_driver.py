@@ -455,5 +455,16 @@ def _nbx_queue_drain():
     buffers. Coarse — a host wait — but correct; an MTLSharedEvent between the
     two queues is the finer instrument and is owed if this costs measurably."""
     from neurobrix.kernels.metal_device import runtime
-    runtime().sync()
+    rt = runtime()
+    # Skip the round trip when this queue has nothing that could be writing.
+    # `sync()` does `flush()` and then commits an EMPTY command buffer and waits
+    # on it — and that empty buffer queues behind triton-ext's work on a busy
+    # GPU, which is why it costs 0.458 ms per launch in a decode against
+    # 0.019 ms on an idle queue standalone. Measured over a 120-token TinyLlama
+    # decode, 4943 drains: 0 had a committed buffer pending, 1240 (25.1 %) had an
+    # open encoder, and 3703 (74.9 %) had NOTHING. Waiting for work that does not
+    # exist cannot order anything, so those 3703 are skipped.
+    if not rt.has_pending_gpu_writes():
+        return
+    rt.sync()
 
