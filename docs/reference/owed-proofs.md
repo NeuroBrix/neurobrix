@@ -470,3 +470,79 @@ and the number is two orders smaller than the one I invented for it.
 tree and 1 317 in the side tree. The 16 GB class is at 99.1 %, so those 223 sit inside the last
 0.9 % of the pass. Whether the bucket reaches zero is answered by reading it when the pass ends,
 not before. `tools/reproof_coverage.py` is the instrument and its `?` row is the number.
+
+## 2026-09-18 — the Mac's three handed-over models, measured on CUDA
+
+The Mac handed over `hat-l-x4`, `hat-s-x4` and `canary-qwen-2.5b` on 2026-09-18
+(`models/_agents/for_the_dell_cuda_proofs_owed.md`), with the question, for
+hat-l-x4, of whether this is *an estimate that is wrong* or *a model that machine
+cannot hold*. Measured here on one 16 GB V100, Triton mode, from the
+`runtime_values` worktree.
+
+**All three run.** hat-l-x4 rc=0 in 22 s, hat-s-x4 rc=0 in 12 s,
+canary-qwen-2.5b rc=0 in 33 s.
+
+| model | Prism plan | held (`peak_driver`, pool on) | short by | artefact, judged |
+|---|---|---|---|---|
+| hat-l-x4 | 3383 MB | 12783 MB | **3.78x** | 1792x1792 PNG, looked at: a sharp, coherent x4 upscale — correct colour, skin speckle preserved, clean edges |
+| hat-s-x4 | 3245 MB | 12907 MB | **3.98x** | same, judged the same way |
+| canary-qwen-2.5b | 6447 MB | 12073 MB | **1.87x** | transcription **matches `benchmarks/assets/jfk_11s.expected.txt`** word for word — an instrument outside the engine, written before the run |
+
+**The answer to the question: it is the ESTIMATE, and hat-l-x4 and hat-s-x4 are
+the same defect, not two different ones.** The plan is short by a factor of
+roughly four for both. A model that runs to completion in 22 s on a 16 GB card is
+not a model that cannot be held; what cannot be held is the gap between 3383 MB
+promised and what execution actually takes. On a 24 GiB machine under a 4096 MB
+floor, a plan of 3383 MB is allowed to start and then meets its real need — which
+is exactly the shape of `rc=42 at 1567 MB with zero autotune misses`.
+
+**Caveat on the ratios, stated rather than smoothed**: these were measured with
+the allocator pool ON (the default), so `peak_driver` includes up to ~8 GB of
+free-list cache (`pool_peak` 8050 / 7944 / 8076 MB) and is a watermark of bytes
+taken from the driver, not of the live set. The earlier 1.41x-2.27x residue was
+measured with `NBX_ALLOC_POOL=0` and the deferred queue drained. The two sets are
+NOT comparable, and the drained runs are queued to give figures that are. What the
+pool-on numbers do settle, and what the Mac's question turned on, is the second
+question — whether the card can hold it — and the answer there is yes.
+
+Plans read with `--explain-plan`: hat-l-x4 weights 79 MB + activations 3144 MB +
+overhead 161 MB, peak at `aten.add::27`, **no tiling planned**; hat-s-x4 weights
+19 MB + activations 3071 MB + overhead 155 MB, same peak op, no tiling;
+canary-qwen-2.5b three components on one card, peak at `aten.mm::196`.
+
+Note that the large and the small HAT are given activation figures 73 MB apart
+(3144 vs 3071) while their measured watermarks differ by 124 MB in the other
+direction. The estimator is not distinguishing them.
+
+## 2026-09-18 — the shared-cache install hazard: FIXED here, nothing owed back
+
+Item 7 of `for_the_dell_cuda_proofs_owed.md`. `c40abf30` on `main`, both remotes.
+One brick, `src/neurobrix/nbx/atomic_install.py`, used by `cli/commands/registry.py`
+and by `NBXCache.extract`:
+
+* a per-model lock taken with `os.mkdir` (atomic on NFS), which **refuses** rather
+  than waiting or breaking, naming the holder's host, pid and age — and never
+  judges a lock from another host stale, since we cannot see that machine's
+  process table;
+* a staging directory carrying host and pid, so neither machine can delete the
+  other's work;
+* **two renames instead of a removal** — the live tree is renamed aside, staging is
+  renamed in, the aside is deleted afterwards — because POSIX `rename(2)` refuses
+  to replace a non-empty directory, which is why both call sites used to delete
+  first.
+
+Reading it turned up a third race the report did not name: **`NBXCache.extract` did
+not stage at all**, removing the live tree and unpacking in place at the final
+name, where a `manifest.json` exists from the first member on. The injection that
+restores that behaviour shows the final directory at **47 distinct partial sizes**,
+each one a moment another machine would have loaded an incomplete model.
+
+Eleven gates, each seen failing on a named injection.
+
+**What the Mac will see**: an import of a model this machine is already installing
+now fails with a named refusal instead of interleaving — that is intended.
+Directories named `<model>.installing.<host>.<pid>`, `<model>.lock` and transiently
+`<model>.replaced.<host>.<pid>.<stamp>` may appear beside models in the shared
+cache; none is a model and none is listed as one. One left behind by a crashed
+install on the Mac's own host is cleared by its next install of that model; one
+left by this machine is not, by design.
