@@ -726,3 +726,40 @@ Directories named `<model>.installing.<host>.<pid>`, `<model>.lock` and transien
 cache; none is a model and none is listed as one. One left behind by a crashed
 install on the Mac's own host is cleared by its next install of that model; one
 left by this machine is not, by design.
+
+## 2026-09-18 — the Mac's radix sort, proven on CUDA: correct AND faster
+
+Item 5 of `for_the_dell_cuda_proofs_owed.md`, the one its author called "the one most
+likely to bite": `radix_sort_sweep_kernel` became three kernels (tile counts, tile prefix,
+scatter) because the decoupled-lookback spin does not terminate on Metal. CUDA owed a
+**permutation check across the tile boundary** and a **throughput number**, since three
+launches replace one on a machine where the lookback worked.
+
+**Correctness.** At the Mac's head `831e10c8`, on one V100-SXM2:
+
+    tests/unit/kernels/test_the_sort_crosses_its_tile_boundary.py
+    tests/unit/kernels/test_sort_values_and_indices.py      31 passed in 18.49 s
+
+The boundary cell is the permutation check, and the Mac had already written it. It does not
+exist on `main`, so there is no same-cell baseline to quote — what is quotable is that it
+passes on CUDA, which is what was owed.
+
+**Throughput**, int32, five repetitions, same card, same sizes, warm:
+
+| n | Mac `831e10c8` (three kernels) | `main` (one-kernel lookback) | |
+|---|---|---|---|
+| 65 536 | 2.702 ms | 2.306 ms | **17 % slower** |
+| 1 048 576 | 10.832 ms | 11.930 ms | **9 % faster** |
+| 4 194 304 | 42.003 ms | 47.779 ms | **12 % faster** |
+| 16 777 216 | 164.960 ms | 183.775 ms | **10 % faster** |
+
+**The rewrite does not regress CUDA — it is faster at every size above 64 K**, by 9-12 %, and
+slower only at the smallest, where three launches cost more than one and there is not enough
+work to amortise them. So the contingency the handover named — *"if it regresses on NVIDIA,
+the right shape is a capability row choosing the lookback where it terminates, not a revert"*
+— **is not needed**. One implementation serves both backends, and it is the better one here.
+
+Scope, stated: one card, one dtype, one distribution (uniform int32), warm, five repetitions
+with the spread shown. The 65 536 row is the only one where the extra launches show, and it
+is the row where a launch-bound measurement is least trustworthy — its max is more than twice
+its min on both trees.

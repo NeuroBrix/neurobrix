@@ -2003,6 +2003,14 @@ class PrismSolver:
         "sequence_length": "seq_len",
         "num_frames": "num_frames",
         "frames": "num_frames",
+        # The video VAEs call their temporal axis `time`, not `num_frames`:
+        # CogVideoX-2b, mochi-1-preview and Wan2.1 all declare
+        # `time  source=input::z::dim_2`, the latent tensor's temporal dim.
+        # It was absent here, so the scaler skipped it and the plan did not
+        # follow the frame count at all — measured 2026-09-18, CogVideoX plans
+        # the SAME 22 993 MB at 8 frames (which runs) and at 9 (which OOMs at
+        # `aten.convolution::90` asking 4.29 GiB on a 16 G card).
+        "time": "num_frames",
     }
 
     #: The UNIT a declared symbol counts in, as an `input_config` field holding
@@ -2016,6 +2024,11 @@ class PrismSolver:
         "width": "vae_scale",
         "num_frames": "temporal_compression",
         "frames": "temporal_compression",
+        # `time` is the video VAEs' own name for the temporal axis and it counts
+        # LATENT frames, so it needs the compression exactly as the others do.
+        # Adding it to the request map without adding it here left 33 frames
+        # reading 33/9 = 3.67 instead of 1.0 — the unit half of the same defect.
+        "time": "temporal_compression",
     }
 
     def _scale_activations_to_request(self, comp, activation_bytes, input_config):
@@ -2066,7 +2079,15 @@ class PrismSolver:
                 continue                               # declared without a trace value
             attr = self._SYMBOL_TO_REQUEST.get(name)
             if attr is None:
-                continue                               # a symbol this request cannot answer for
+                # SAY IT. A symbol carrying a trace value that this map does not
+                # know is a dimension the estimate silently stops following, and
+                # that silence is how the plan read the same 22 993 MB at 8 and
+                # 9 frames while one ran and the other died.
+                logging.getLogger(__name__).info(
+                    "Prism: %s declares symbol %r (trace %s) that no request "
+                    "field answers for — the estimate does not follow it",
+                    getattr(comp, "name", "?"), name, trace)
+                continue
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
                 continue
@@ -2084,7 +2105,15 @@ class PrismSolver:
             unit = getattr(input_config, unit_attr, None) if unit_attr else None
             if unit in (None, 0):
                 unit = 1
-            comparable = float(actual) / float(unit)
+            if unit_attr == "temporal_compression" and unit != 1:
+                # A temporal axis counts LATENT frames, and the engine's own
+                # arithmetic is (n - 1) // ratio + 1, not n / ratio. Plain
+                # division under-counts exactly where it matters: 9 frames at
+                # ratio 4 is 3 latent frames, not 2.25, and 9 is the first count
+                # that needs a third — which is the step the 16 G card dies on.
+                comparable = float((int(actual) - 1) // int(unit) + 1)
+            else:
+                comparable = float(actual) / float(unit)
             if comparable <= 0:
                 continue
             if attr in seen_dims:
@@ -4720,6 +4749,36 @@ class PrismSolver:
         # a refusal to try (P-PRISM-NEVER-REFUSE, closed 2026-09-03).
         peak_mb = max((m.total_mb for _, m in sorted_comps), default=0.0)
         biggest = max(sorted_comps, key=lambda item: item[1].total_mb)[0] if sorted_comps else "?"
+
+        # "A smaller input" is the remedy this refusal already names and does not
+        # take. It is now COMPUTED: for every component whose ACTIVATIONS are what
+        # overflows, how many tiles the work fits in, and what that is as an input
+        # scale. Measured case handed over from Apple 2026-09-18: real-esrgan-x8 at
+        # 1024 refused at plan time in one second, 17237 MB planned against 12598 MB
+        # available, 16.4 GB of it activations against 32 MB of weights -- and four
+        # tiles then rendered it by hand in 194 s, artefact judged, seam +2.07 sigma.
+        # The budget carries a margin because Prism's own reading of available
+        # memory moved 12598 -> 15248 MB minutes apart on an idle machine, a 21%
+        # swing that would move any band count divided straight out of it.
+        _reshape_block = ""
+        try:
+            from neurobrix.core.prism import plan_advice as _pa
+            _largest = max((d.capacity_mb for d in devices), default=0.0) * 1024 * 1024
+            _verdicts = [
+                _pa.assess(_n, _m.weight_bytes, _m.activation_bytes,
+                           _m.overhead_bytes, int(_largest))
+                for _n, _m in sorted_comps
+                if _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes)
+            ]
+            _lines = _pa.what_would_have_fit(_verdicts, spatial=True)
+            if _lines:
+                _reshape_block = ("\n\nWhat tiling would do, computed rather than named:\n"
+                                  + "\n".join(_lines))
+        except Exception as _adv_e:
+            # The refusal must survive its own advice: a model whose memory record
+            # is shaped unexpectedly still gets the refusal it came for, with the
+            # reason the advice could not be computed said rather than swallowed.
+            _reshape_block = f"\n\n(tiling advice unavailable: {_adv_e})"
         raise RuntimeError(
             f"This model cannot run on this machine.\n\n"
             f"Every strategy was tried, down to streaming one component at a "
@@ -4737,6 +4796,7 @@ class PrismSolver:
             f"  2. A GPU with more memory\n"
             f"  3. A smaller input (resolution, batch, context)\n"
             f"  4. A smaller model"
+            f"{_reshape_block}"
         )
 
     def _print_summary(self, devices: List[DeviceState], plan: ExecutionPlan, profile: PrismProfile):
