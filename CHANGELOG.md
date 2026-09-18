@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-09-18
+
+NVIDIA (CUDA) and CPU. Apple Silicon is not in this release — its work is on
+`metal-first-light` and ships in 0.5.5.
+
+### For NeuroBrix Studio
+
+Read against `docs/reference/studio-engine-requests.md`, and checked by reaching the
+code rather than by reading the list.
+
+**Delivered in 0.5.4**
+
+- **Request 5 — machine-readable output.** `--json` on every read command: `info`,
+  `list`, `hub`, `inspect`, `coverage`, `doctor`, `autotune status`,
+  `autotune check`, `run --explain-plan`. Exactly one JSON record on stdout
+  (`schema` `neurobrix.<command>/<version>` plus `engine`), every human line on
+  stderr, so a client may pipe stdout without filtering. Contract:
+  `docs/reference/json-output.md`, gated by a test that parses each command's
+  output. `import` speaks NDJSON for its phases and byte counts.
+- **Request 1 — discovery without loading a model.** `neurobrix info --json` and the
+  daemon's `status` share one identity record: engine, protocol, endpoint,
+  operations.
+- **Request 7 — a compatibility handshake.** Every response envelope carries
+  `protocol` (`serving/protocol.py::PROTOCOL_VERSION`, currently 1) and `engine`, so
+  a client refuses an engine it does not know instead of guessing.
+- **Request 6 — the installation lifecycle stays in the engine.** Phases and real
+  byte counts over NDJSON, and an install that cannot leave a half-written model
+  behind: a per-model lock, a staging tree carrying host and pid, and a swap done in
+  ONE syscall where the kernel allows it.
+
+**Still open, and not promised here**
+
+- **Request 2 — decoded text deltas.** The stream emits `{"step", "n", "token",
+  "done"}` with a token ID, not decoded text. A client still needs the tokenizer.
+- **Request 3 — acknowledged cancellation.** There is no cancel operation; a
+  generation runs to its end.
+- **Request 4 — a daemon responsive during inference.** The server accepts one
+  connection at a time, so a control request waits for the generation in front of
+  it. The dispatcher's shape is designed and written down in the requests document;
+  it is not built.
+- **Request 8 — Windows instance isolation.** `NBX_SOCKET_PATH` isolates the Unix
+  socket; the Windows loopback port of the default instance is still fixed.
+
+### Known limitations in this release
+
+Named here rather than left to be discovered, because a tester who knows what to
+avoid leaves satisfied and one who finds out alone does not.
+
+- **The video family is under investigation.** `Wan2.1-T2V-1.3B-Diffusers` produces
+  a degenerate output — a textured field with no scene — and the cause is not yet
+  found. Excluded by measurement so far: the engine commit (three, including the
+  one whose artefact was coherent two days earlier), the stack (torch 2.14.0+cu126
+  and torch 2.5.1+cu121), autotune on and off, the local replay cache empty, the
+  certified directory off, BOTH execution modes including the compiled oracle, and
+  the container's bytes (CRC-verified against its archive, 45 members, only a build
+  timestamp differing). Other families are unaffected and another video model,
+  `CogVideoX-2b`, renders coherently at 9, 13 and 17 frames. Degeneracy statistics
+  do not catch this case — standard deviation, distinct values and frame-to-frame
+  change all read healthy — so judge a video by looking at it.
+- **Automatic op-level tiling is not wired.** A request too large for the card is
+  REFUSED with its figures — how many tiles the work would fit in, what each would
+  cost, and what that is as an input scale — and is not reshaped for you. Prism's
+  cascade now has the rung and consults it; the detector it asks decides overflow
+  from an op's own footprint against the card rather than against what is left of
+  the card at that point, so it declines on the case that motivated it. Use a
+  smaller input, or the tile count the refusal names.
+- **Apple Silicon is not supported here.** It is coming in 0.5.5 with its numbers
+  already published upstream.
+- **The Prism memory estimate is not exact, and its error has two signs.** It runs
+  short by roughly 1.1x-2.3x where activations dominate (single-component
+  upscalers), is near-exact where components are all persistent (TinyLlama 0.99x,
+  whisper-large-v3-turbo 1.06x), and runs OVER where a component is transient and
+  counted as co-resident (canary-qwen-2.5b 1.69x over, Sana-1600M 2.20x over). An
+  over-estimate is safe against a crash and can place a model on a heavier rung
+  than it needs.
+
+
 ### Added
 - The machine's shared hardware profile (`config/hardware/default.yml`) is written only by a process that can see every card. A run pinned to some of the machine's GPUs describes its own environment in its own `default-<tag>.yml`, as before, but no longer overwrites the machine's — where it had left `2 x Tesla V100-SXM2-16GB` on a rack of two 16 GB and two 32 GB cards, which every unmasked run then planned against.
 - `DeviceAllocator.visible_device_memory()` answers which GPUs THIS PROCESS can see and how much memory each has, as `[(ordinal, total_bytes)]` walked through the GPU runtime — so `CUDA_VISIBLE_DEVICES` applies to the answer exactly as it applies to the allocation made from it. `nvidia-smi` reports the whole board whatever the mask says, and an index taken from it and handed to an allocator names a different card; code that picks a device now decides in the namespace it will act in.
