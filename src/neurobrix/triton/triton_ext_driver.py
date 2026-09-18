@@ -49,6 +49,21 @@ def _ext():
     return D
 
 
+_SYNC_TIMING = __import__("os").environ.get("NBX_SYNC_TIMING", "0") == "1"
+_SYNC_ACC = [0.0, 0.0, 0.0, 0]   # drain, submit, synchronize, count
+if _SYNC_TIMING:                                       # pragma: no cover
+    import atexit as _ax
+
+    @_ax.register
+    def _report_sync():
+        d, s_, y, n = _SYNC_ACC
+        if not n:
+            return
+        print(f"[sync-timing] launches={n}  drain={d:.3f}s  submit={s_:.3f}s  "
+              f"synchronize={y:.3f}s  (per launch: drain {1000*d/n:.3f}ms  "
+              f"submit {1000*s_/n:.3f}ms  sync {1000*y/n:.3f}ms)", flush=True)
+
+
 def _native():
     from triton_apple_backend import metal_native
     return metal_native
@@ -276,11 +291,20 @@ class TritonExtDriver(Driver):
         # the fp64 screen refused all 18 candidates. A host round trip inserted
         # before the launch made the same run clean, which is what identified
         # the ordering rather than the arithmetic.
-        _nbx_queue_drain()
-        function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
-        # And the other direction: the host (and NeuroBrix's own blits) must see
-        # what this kernel wrote.
-        _native().synchronize()
+        if _SYNC_TIMING:
+            import time as _t
+            _a = _t.perf_counter(); _nbx_queue_drain()
+            _b = _t.perf_counter()
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
+            _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
+            _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
+        else:
+            _nbx_queue_drain()
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            # And the other direction: the host (and NeuroBrix's own blits) must
+            # see what this kernel wrote.
+            _native().synchronize()
 
         # Read what the kernel recorded. Prints first, so anything it printed is
         # already out when a failed assert raises.
