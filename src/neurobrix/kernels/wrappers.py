@@ -2134,9 +2134,29 @@ def mm(a, b, _epilogue: int = 0) :
     #   3. Anything else (fp32 × bf16, bf16 × fp16, etc.) → widen to the
     #      common dtype. Rare; typically a downstream force_fp32 bmm feeding
     #      the next matmul.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_eff == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
+    # A NARROW WEIGHT IS PROMOTED IN THE KERNEL, NOT MATERIALISED.
+    #
+    # `PROMOTE_B` makes the kernel do `b = b.to(a.dtype)` on the loaded tile —
+    # it is dtype-agnostic (matmul.py:243) and has always been able to take
+    # bf16. The `not _NBX_HAS_NATIVE_BF16` guard is a pre-Ampere CUDA
+    # condition, and it excluded every machine that HAS native bf16 from a path
+    # that has nothing to do with bf16 arithmetic: here `a_eff` is fp32, so the
+    # math is fp32 either way and the only question is whether the weight is
+    # widened in memory first.
+    #
+    # It was being widened, on EVERY call, for a weight that never changes.
+    # Measured on an M4 Pro (TinyLlama-1.1B, 120 tokens, 2026-09-18):
+    # `strided_copy_nd_kernel` was 1408 calls and 11.86 s of a 19.74 s decode —
+    # 60% — and its four dominant shapes are weight-sized with transposing
+    # strides, e.g. shape (2048, 5632) src (1, 2048) -> dst (5632, 1) at
+    # ~5.5 GB/s against the 80.97 GB/s a contiguous copy reaches. Every one came
+    # from this line via `b.to(widest)`.
+    #
+    # bf16 -> fp32 is lossless, so promoting per tile yields the same fp32
+    # values the materialised cast did; the outputs are expected to be
+    # bit-identical and that is checked, not assumed.
+    promote_b = (a_eff == NBXDtype.float32
+                 and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16))
     if a_eff != b_nbx and not promote_b:
         if promote_a:                       # widened for real when the pair needs the widest
             a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
