@@ -496,14 +496,27 @@ promised and what execution actually takes. On a 24 GiB machine under a 4096 MB
 floor, a plan of 3383 MB is allowed to start and then meets its real need — which
 is exactly the shape of `rc=42 at 1567 MB with zero autotune misses`.
 
-**Caveat on the ratios, stated rather than smoothed**: these were measured with
-the allocator pool ON (the default), so `peak_driver` includes up to ~8 GB of
-free-list cache (`pool_peak` 8050 / 7944 / 8076 MB) and is a watermark of bytes
-taken from the driver, not of the live set. The earlier 1.41x-2.27x residue was
-measured with `NBX_ALLOC_POOL=0` and the deferred queue drained. The two sets are
-NOT comparable, and the drained runs are queued to give figures that are. What the
-pool-on numbers do settle, and what the Mac's question turned on, is the second
-question — whether the card can hold it — and the answer there is yes.
+**The drained figures, which are the comparable ones** (`NBX_ALLOC_POOL=0`, deferred
+queue at a 64 MB floor — how the 1.41x-2.27x residue was measured). The pool-on
+numbers above include up to ~8 GB of free-list cache (`pool_peak` 8050 / 7944 /
+8076 MB) and are a watermark of bytes taken from the driver, not of the live set:
+
+| model | plan | held, drained | |
+|---|---|---|---|
+| hat-l-x4 | 3383 MB | **7552 MB** | **2.23x short** |
+| hat-s-x4 | 3245 MB | **7361 MB** | **2.27x short** |
+| canary-qwen-2.5b | 6447 MB | **3814 MB** | **1.69x OVER** |
+
+The two HATs land inside the residue band already measured on this rack, at its
+top. **canary-qwen-2.5b is the first model measured here where the plan is
+GENEROUS**, and that is worth as much as the shortfalls: the residue is not a
+uniform scaling factor that could be corrected with a multiplier. An
+over-estimate is the safe direction for a crash and the wrong direction for
+placement — it can push a model to a heavier rung of the cascade than it needs.
+
+So the answer to the Mac's question, in its comparable form: hat-l-x4 holds
+**7552 MB** against a **3383 MB** plan. Under a 4096 MB floor that is exactly why
+it stops, and the 16 GB card runs it in 22 s. The estimate is the defect.
 
 Plans read with `--explain-plan`: hat-l-x4 weights 79 MB + activations 3144 MB +
 overhead 161 MB, peak at `aten.add::27`, **no tiling planned**; hat-s-x4 weights
