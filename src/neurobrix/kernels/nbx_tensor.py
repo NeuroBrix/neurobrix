@@ -795,7 +795,40 @@ class DeviceOOMError(RuntimeError):
     the allocation after the deferred-free drain and the single retry.
     Typed so callers that can legitimately shrink their request (the
     chunked SDPA prefill halves its row chunk) catch exactly this and
-    nothing else — every other RuntimeError keeps propagating."""
+    nothing else — every other RuntimeError keeps propagating.
+
+    It also CARRIES the figures it prints, as attributes. The refusal already
+    computes requested / live / pool-cached / driver-free in order to write the
+    message; a caller that wants to reshape the work rather than give up then had
+    to parse them back out of English. They are the input a controller needs to
+    re-enter the placement cascade at the op-level tiling rung with the real free
+    figure at the moment of failure instead of the estimate made before the run
+    (`docs/reference/adaptive-memory-a-runtime-controller.md`, addition 3).
+
+    Every field is bytes, and `None` where the runtime could not answer — never 0,
+    which is a legitimate reading and would be acted on as one.
+    """
+
+    def __init__(self, message: str, *, requested: Optional[int] = None,
+                 device_idx: Optional[int] = None, live: Optional[int] = None,
+                 pool_cached: Optional[int] = None, pool_blocks: Optional[int] = None,
+                 driver_free: Optional[int] = None, driver_total: Optional[int] = None):
+        super().__init__(message)
+        self.requested = requested
+        self.device_idx = device_idx
+        self.live = live
+        self.pool_cached = pool_cached
+        self.pool_blocks = pool_blocks
+        self.driver_free = driver_free
+        self.driver_total = driver_total
+
+    @property
+    def shortfall(self) -> Optional[int]:
+        """How many bytes the request was short by, or None if the driver did
+        not report its free figure. This is the number a reshape has to close."""
+        if self.requested is None or self.driver_free is None:
+            return None
+        return max(0, self.requested - self.driver_free)
 
 class DeviceAllocator:
     """GPU + pinned-host memory allocator via raw runtime API.
@@ -1358,12 +1391,18 @@ class DeviceAllocator:
                     driver_free = driver_total = 0
             except Exception:
                 driver_free = driver_total = 0
+            # The message is unchanged to the byte: the queue runner's error
+            # extractor and every log-reading tool key on this text.
             raise DeviceOOMError(
                 f"GPU malloc failed (error {ret}) for {nbytes} bytes "
                 f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
                 f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
                 f"driver_free={driver_free/1024/1024:.0f}MB / "
-                f"driver_total={driver_total/1024/1024:.0f}MB]")
+                f"driver_total={driver_total/1024/1024:.0f}MB]",
+                requested=nbytes, device_idx=dev, live=live_now,
+                pool_cached=pool_total, pool_blocks=pool_count,
+                driver_free=driver_free if driver_total else None,
+                driver_total=driver_total or None)
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._range_add(p, nbytes)
