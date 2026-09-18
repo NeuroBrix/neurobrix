@@ -4142,6 +4142,9 @@ class PrismSolver:
         input_config = getattr(self, "_input_config", None)
         dtype_str = getattr(self, "_target_dtype_str", None)
         if not components or dtype_str is None:
+            self._op_tiling_declined = (
+                "the solver did not stash the components or the target dtype, so the "
+                "detector could not be asked")
             return None
 
         # The hypothetical placement: every component on the accelerator. This is
@@ -4151,10 +4154,21 @@ class PrismSolver:
         try:
             plans = self._detect_op_level_tiling_pairs(
                 container, components, hypothetical, profile, input_config, dtype_str)
-        except Exception:
+        except Exception as e:
+            # A bare `except: return None` here is the silent-failure class this
+            # repository catalogues: the rung would decline for a reason nobody
+            # could read, and the plan would say "tiling none planned" whether the
+            # detector had nothing to offer or had raised. Measured the first time
+            # it mattered — real-esrgan-x8 at 1024, where the pattern the detector
+            # looks for DOES exist (3 upsample -> single-consumer-conv pairs, and
+            # conv::349 is fed by upsample_nearest2d::2) and the rung still declined.
+            self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
             return None
         if not plans:
-            return None                      # the detector found nothing it can tile
+            self._op_tiling_declined = (
+                "the detector returned no tileable op for the blocking component(s) "
+                + ", ".join(n for n, _ in blocking))
+            return None
 
         # Only claim the components the detector can actually tile.
         if any(n not in plans for n, _ in blocking):
