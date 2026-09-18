@@ -169,22 +169,28 @@ CONTAINER_DIR_MODE = 0o755
 
 
 def is_installed_model_dir(d) -> bool:
-    """A cache entry that counts as a model: a directory with a manifest that
-    is not an import's staging directory (`<name>.installing`, see
-    `installing_path`)."""
+    """A cache entry that counts as a model: a directory with a manifest that is
+    none of the things an install leaves beside the final name — a staging tree,
+    a lock, or a tree renamed aside during the swap. Each of those can carry a
+    `manifest.json` while being incomplete or on its way out, so the test is
+    `is_install_artifact`, never an equality against one suffix."""
     from pathlib import Path
+    from neurobrix.nbx.atomic_install import is_install_artifact
     d = Path(d)
-    return d.is_dir() and not d.name.endswith(".installing") and (d / "manifest.json").exists()
+    return d.is_dir() and not is_install_artifact(d.name) and (d / "manifest.json").exists()
 
 
 def installing_path(cache_path) -> "Path":
-    """Where an import extracts before the final name exists: `<name>.installing`
-    beside it. Model discovery keys on `<dir>/manifest.json`, and a staging
-    directory carries one from the first member on — so it must not be a
-    plain sibling; its suffix is the mark every reader can skip."""
-    from pathlib import Path
-    cache_path = Path(cache_path)
-    return cache_path.with_name(cache_path.name + ".installing")
+    """Where an import extracts before the final name exists, beside it.
+
+    The name carries THIS host and THIS pid — `<name>.installing.<host>.<pid>` —
+    because the old shared `<name>.installing` let two machines extract into one
+    directory and each remove the other's tree as "a previous import that died".
+    Model discovery keys on `<dir>/manifest.json`, and a staging tree carries one
+    from its first member on, so the suffix is also the mark every reader skips.
+    """
+    from neurobrix.nbx.atomic_install import staging_path
+    return staging_path(cache_path)
 
 
 def extract_container(store_path, cache_path):
@@ -455,23 +461,22 @@ def _import_body(args):
     # half-written directory that already carries a manifest (Studio request 6).
     print(f"\n[4/4] Extracting to cache...")
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    staging = installing_path(cache_path)
-    import shutil
-    if staging.exists():
-        shutil.rmtree(staging)          # a previous import that died mid-extraction
     _ev(args, "extracting", store=str(store_path), cache=str(cache_path))
 
     import zipfile
     if not zipfile.is_zipfile(store_path):
         _die(args, "ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
+    # The staging tree, the lock and the two-rename swap are one brick, shared
+    # with `NBXCache.extract`: the cache is often a mounted export, and the old
+    # code here removed the live tree BEFORE renaming staging over it, leaving
+    # the model absent for the length of a recursive delete and destroying the
+    # copy a run on another machine was loading from.
+    from neurobrix.nbx.atomic_install import installing, InstallHeldByAnother
     try:
-        extract_container(store_path, staging)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    if cache_path.exists():
-        shutil.rmtree(cache_path)
-    os.replace(staging, cache_path)
+        with installing(cache_path, label=f"import {org}/{name}") as staging:
+            extract_container(store_path, staging)
+    except InstallHeldByAnother as e:
+        _die(args, f"ERROR: {e}")
     print(f"   Extracted: {cache_path}")
     _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=False)
 
@@ -615,7 +620,7 @@ def cmd_list(args):
 
     if CACHE_DIR.exists():
         for model_dir in sorted(CACHE_DIR.iterdir()):
-            if not model_dir.is_dir():
+            if not is_installed_model_dir(model_dir):
                 continue
             manifest_path = model_dir / "manifest.json"
             if manifest_path.exists():
