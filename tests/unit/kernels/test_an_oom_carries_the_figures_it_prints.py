@@ -22,7 +22,6 @@ DeviceOOMError(...)` in `malloc_cuda` and keep the message.
 
 from __future__ import annotations
 
-import ctypes
 import re
 
 import pytest
@@ -31,17 +30,25 @@ from neurobrix.kernels.nbx_tensor import DeviceAllocator, DeviceOOMError
 
 
 def _cuda_total_bytes():
+    """Through torch, not a bare `ctypes.CDLL("libcudart.so")`.
+
+    This runs at MODULE scope, and a bare CDLL of the SONAME resolves
+    `libcudart.so.12` to the system runtime; torch's `libc10_cuda.so` then binds
+    to that copy instead of the one torch ships, and every later module in the
+    session that imports torch fails to import. The sibling cell
+    `test_a_finalizer_does_not_import_at_shutdown` did exactly that on
+    2026-09-18 and cost eleven collection errors in this directory — each of
+    which passed when run alone, which is what makes the shape hard to see.
+
+    Same question, same answer, no second CUDA runtime in the process.
+    """
     try:
-        rt = ctypes.CDLL("libcudart.so")
-    except OSError:
+        import torch
+        if not torch.cuda.is_available():
+            return 0
+        return int(torch.cuda.get_device_properties(0).total_memory)
+    except Exception:
         return 0
-    n = ctypes.c_int()
-    if rt.cudaGetDeviceCount(ctypes.byref(n)) != 0 or n.value < 1:
-        return 0
-    free, total = ctypes.c_size_t(), ctypes.c_size_t()
-    if rt.cudaMemGetInfo(ctypes.byref(free), ctypes.byref(total)) != 0:
-        return 0
-    return total.value
 
 
 _TOTAL = _cuda_total_bytes()

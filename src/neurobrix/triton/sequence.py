@@ -3868,10 +3868,18 @@ class TritonSequence:
                         f" shape={tuple(getattr(a, '_shape', ()))}"
                         for i, a in enumerate(args)
                         if isinstance(a, NBXTensor))
-                    raise RuntimeError(
+                    # When the cause is the allocator refusing, say what would
+                    # have made it fit. "Out of memory" alone costs the reader the
+                    # whole diagnosis, and the two numbers that answer it are
+                    # already on the exception (adaptive-memory addition 4).
+                    from neurobrix.kernels.oom_advice import annotate as _oom_annotate
+                    _msg = _oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
-                        f"positions {_none_pos} of {len(args)} | NBX args: "
-                        f"{_arg_diag}") from e
+                        f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
+                        e,
+                        next((tuple(getattr(a, "_shape", ())) for a in args
+                              if isinstance(a, NBXTensor)), None))
+                    raise RuntimeError(_msg) from e
                 if _PROF:
                     DeviceAllocator.sync_device()
                     _dt = _time.perf_counter() - _t0

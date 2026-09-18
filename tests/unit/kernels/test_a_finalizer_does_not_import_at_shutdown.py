@@ -60,14 +60,31 @@ print("ALLOCATED", flush=True)
 
 
 def _cuda_present() -> bool:
+    """Asked of torch, deliberately, and not of `libcudart` through ctypes.
+
+    This module sorts first in its directory, so whatever it does at import time
+    happens before any other test module loads torch. A bare
+    `ctypes.CDLL("libcudart.so")` here resolves the SONAME `libcudart.so.12` to
+    the SYSTEM runtime; torch's `libc10_cuda.so` is then linked against that one
+    instead of the newer copy torch ships, and every later module that imports
+    torch dies with
+
+        ImportError: .../torch/lib/libc10_cuda.so: undefined symbol:
+        cudaGetDriverEntryPointByVersion, version libcudart.so.12
+
+    Measured 2026-09-18: with this file present, `pytest tests/unit/kernels`
+    collected 859 tests and 11 errors; without it, 1084 and none. Each of the
+    eleven passes when run alone, which is what makes the shape worth naming —
+    the damage is done by an earlier module and lands on later ones.
+
+    The child process below still uses the real allocator; only this question,
+    asked in the parent before anything else, goes through torch.
+    """
     try:
-        import ctypes
-        ctypes.CDLL("libcudart.so")
-    except OSError:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
         return False
-    n = ctypes.c_int()
-    rt = ctypes.CDLL("libcudart.so")
-    return rt.cudaGetDeviceCount(ctypes.byref(n)) == 0 and n.value > 0
 
 
 @pytest.mark.skipif(not _cuda_present(), reason="needs a CUDA device to allocate on")
