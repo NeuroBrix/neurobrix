@@ -121,6 +121,14 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # === Single Device ===
     "single_gpu": "SingleGPUStrategy",
     "single_gpu_lifecycle": "SingleGPUStrategy",
+    # The PLACEMENT of the op-level tiling rung is single-GPU — every component on
+    # the largest card, exactly as `single_gpu` places them. What distinguishes it
+    # is not where the weights go but that the ops which overflow are cut, and that
+    # rides in `plan.runtime_op_tiling`, which the graph executor wires as op_uid
+    # interceptors. So it is the same strategy class under a name that says WHY the
+    # component is on the accelerator, and this entry is what makes that name
+    # buildable rather than a crash at selection time.
+    "op_level_tiling": "SingleGPUStrategy",
 
     # === Component Placement (whole-component distribution) ===
     "component_placement": "ComponentPlacementStrategy",

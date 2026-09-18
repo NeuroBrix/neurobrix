@@ -633,6 +633,7 @@ class PrismSolver:
             input_config = InputConfig(batch_size=batch, height=1024, width=1024)
 
         neural_components = sorted(neural_components, key=lambda c: c.name)
+        self._neural_components = neural_components
 
         # vae_scale is a MODEL property (the VAE's spatial compression ratio),
         # NOT a run-time knob. Callers pass a placeholder default (8) because
@@ -759,7 +760,11 @@ class PrismSolver:
             # straight to cpu_execution.
             strategies = [
                 # Below every rung that keeps a component whole, above the
-                # host ones. It wins by score (50), never by a gate.
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
                 ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
@@ -774,7 +779,11 @@ class PrismSolver:
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
                 # Below every rung that keeps a component whole, above the
-                # host ones. It wins by score (50), never by a gate.
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
                 ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
@@ -791,7 +800,11 @@ class PrismSolver:
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
                 # Below every rung that keeps a component whole, above the
-                # host ones. It wins by score (50), never by a gate.
+                # host ones. Tiling comes first of the two: cutting a
+                # component's OPS keeps it on the accelerator and keeps its
+                # dataflow intact, where layer_streaming cuts the component
+                # itself and cpu_* leaves the accelerator altogether.
+                ("op_level_tiling", self._try_op_level_tiling),
                 ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
@@ -1051,6 +1064,14 @@ class PrismSolver:
         if chosen_strategy == AllocationStrategy.SINGLE_GPU_LIFECYCLE.value:
             plan.transient_components = list(getattr(self, "_lifecycle_transient", []) or [])
 
+        if chosen_strategy == "op_level_tiling":
+            # Only when this rung WON. `_op_tiling_plans` is left behind by every
+            # attempt, including rejected ones, and carrying a rejected attempt's
+            # tiling into another strategy's plan would hand the executor a
+            # reshaping nothing agreed to — the same trap `layer_streaming`'s
+            # partitions carry, and the same guard.
+            self._op_tiling_from_rung = dict(getattr(self, "_op_tiling_plans", {}) or {})
+
         if chosen_strategy == "layer_streaming":
             # Only when this rung WON. `_layer_stream_partitions` is left
             # behind by every attempt, including rejected ones, and carrying a
@@ -1083,6 +1104,14 @@ class PrismSolver:
             container, neural_components, allocations, profile, input_config,
             target_dtype_str,
         )
+        # If the op_level_tiling RUNG won, its plans are the reason the component
+        # is on the accelerator at all, and they must survive this second look:
+        # the detector above re-derives from the final allocations and would
+        # otherwise be free to return nothing for a component whose placement only
+        # exists because tiling was promised.
+        _from_rung = getattr(self, "_op_tiling_from_rung", None)
+        if _from_rung:
+            plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
 
         # COHERENCE: a component that Strategy 3.5 already tiles at the
         # COMPONENT level must not ALSO carry full-extent op-level tiling.
@@ -3800,6 +3829,14 @@ class PrismSolver:
             # host ones. That ordering IS the inertia: on a card where
             # single_gpu or zero3 is viable, this loses by 950 or 50 points
             # and is never chosen. It is not gated on a vendor or a size.
+            # Between zero3 and layer_streaming. It keeps the component on the
+            # accelerator AND keeps its dataflow whole — it only cuts the ops that
+            # overflow — so it is preferable to cutting the component into layer
+            # segments, and far preferable to leaving the accelerator. It still
+            # loses to every rung that needs no cutting at all: on a card where
+            # single_gpu or zero3 is viable this is behind by 940 or 40 points and
+            # is never chosen. That ordering is the inertia; there is no gate.
+            "op_level_tiling": 60,
             "layer_streaming": 50,
             "cpu_streaming": 5,
         }
@@ -4047,6 +4084,103 @@ class PrismSolver:
         # factory for context; an empty list is the historical signal
         # for "no GPU used". We preserve that signal.
         fresh = self._fresh_devices(devices)
+        return allocations, fresh
+
+    def _try_op_level_tiling(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Tile an activation-dominated component's ops so it fits the accelerator.
+
+        The rung this cascade did not have. `runtime_op_tiling` existed, but it was
+        computed at `solve` AFTER a strategy had been chosen, against the
+        allocations that strategy produced — so a component the cascade had already
+        sent to the host was looked at with `device_caps.get("cpu") == 0` and
+        skipped. Tiling could therefore never be the REASON a component stayed on
+        the accelerator; it could only decorate a component that was already there.
+
+        Measured on both machines the same day, `real-esrgan-x8` at 1024x1024:
+        **17237 MB planned**, 16.4 GB of it activations against 32 MB of weights,
+        and both printing `tiling none planned`. On Apple the cascade exhausted and
+        `_fail_error` refused; on CUDA `cpu_streaming` accepted and won by score.
+        Neither machine asked whether the work could be cut.
+
+        What this rung does NOT do is invent a plan shape. It asks the existing
+        detector — `_detect_op_level_tiling_pairs`, which knows how to find the
+        upsample->conv pairs the runtime can actually intercept — the question it
+        was never asked: not "is this GPU-placed component overflowing?" but "would
+        this component fit a GPU IF its overflowing ops were tiled?". A rung that
+        claimed a tiling the runtime cannot execute would be worse than the refusal
+        it replaced.
+
+        Inert by construction where it is not needed: it declines unless a
+        component actually overflows, unless that overflow is ACTIVATIONS rather
+        than weights (weights are paid in full by every tile, so no tile count
+        reaches them), and unless the detector returns a plan.
+        """
+        from neurobrix.core.prism import plan_advice as _pa
+
+        if not devices:
+            return None
+        largest = devices[0]
+        effective_mb = largest.capacity_mb - self.oom_reserve_mb
+        if effective_mb <= 0:
+            return None
+
+        total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+        if total_weights_mb >= effective_mb:
+            return None                      # weights alone do not fit: another rung
+        room_mb = effective_mb - total_weights_mb
+
+        blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_mb]
+        if not blocking:
+            return None                      # nothing overflows: a whole-component rung wins
+        for _n, _m in blocking:
+            if not _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes):
+                return None                  # its WEIGHTS are the problem
+
+        components = getattr(self, "_neural_components", None)
+        input_config = getattr(self, "_input_config", None)
+        dtype_str = getattr(self, "_target_dtype_str", None)
+        if not components or dtype_str is None:
+            self._op_tiling_declined = (
+                "the solver did not stash the components or the target dtype, so the "
+                "detector could not be asked")
+            return None
+
+        # The hypothetical placement: every component on the accelerator. This is
+        # the question the post-hoc call cannot ask, because by then the answer has
+        # already been decided.
+        hypothetical = {n: (largest.device_string, {}) for n, _ in sorted_comps}
+        try:
+            plans = self._detect_op_level_tiling_pairs(
+                container, components, hypothetical, profile, input_config, dtype_str)
+        except Exception as e:
+            # A bare `except: return None` here is the silent-failure class this
+            # repository catalogues: the rung would decline for a reason nobody
+            # could read, and the plan would say "tiling none planned" whether the
+            # detector had nothing to offer or had raised. Measured the first time
+            # it mattered — real-esrgan-x8 at 1024, where the pattern the detector
+            # looks for DOES exist (3 upsample -> single-consumer-conv pairs, and
+            # conv::349 is fed by upsample_nearest2d::2) and the rung still declined.
+            self._op_tiling_declined = f"the detector raised {type(e).__name__}: {e}"
+            return None
+        if not plans:
+            self._op_tiling_declined = (
+                "the detector returned no tileable op for the blocking component(s) "
+                + ", ".join(n for n, _ in blocking))
+            return None
+
+        # Only claim the components the detector can actually tile.
+        if any(n not in plans for n, _ in blocking):
+            return None
+
+        self._op_tiling_plans = plans
+        allocations = {}
+        fresh = self._fresh_devices(devices)
+        for comp_name, _ in sorted_comps:
+            shard_map = {sh: largest.device_string for sh in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (largest.device_string, shard_map)
+            fresh[0].components.append(comp_name)
         return allocations, fresh
 
     def _try_layer_streaming(
