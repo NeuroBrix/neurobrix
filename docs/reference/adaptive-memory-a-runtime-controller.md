@@ -28,6 +28,33 @@ is 8.59 GB. **The cascade is not missing a rung. It is missing a moment.** Every
 once, before the first byte is allocated, from an estimate; and when the estimate turns out wrong
 the cascade is never re-entered.
 
+**CORRECTION, 2026-09-18 — read from `solver.py` rather than from the paragraph above.**
+That last arrow is not in the cascade. The strategy list the solver actually tries ends
+`... -> zero3 -> layer_streaming -> cpu_execution -> cpu_streaming`, and **op-level tiling is
+not an entry in it at all**: `plan.runtime_op_tiling = self._detect_op_level_tiling_pairs(...)`
+runs at `solver.py:1082`, AFTER `chosen_strategy` is already settled, as a decoration of
+whatever the cascade picked.
+
+So *"the cascade is not missing a rung"* is **wrong in its first half**. It is missing the
+rung. And that single fact explains both machines at once, which is how it was found:
+
+* **On Apple** the cascade exhausts and `_fail_error` refuses. Tiling is never consulted as an
+  alternative to refusing, because it is not one of the things tried.
+* **On CUDA** the cascade does not refuse: `cpu_streaming` accepts the model and wins by score,
+  so the component is placed on the host. The tiling decoration then runs against a CPU
+  placement and finds nothing to do.
+
+Measured the same day, on both machines: `real-esrgan-x8` at 1024x1024 plans **17237 MB** —
+the same figure to the megabyte — and both print **`tiling none planned`** for 17 GB of
+activations against 32 MB of weights.
+
+The missing MOMENT is real too, and addition 3 still addresses it. But addition 2's first act
+is structural: put the rung IN the cascade, between `zero3` and `layer_streaming`, so it is
+tried before the host rungs and before the refusal. A controller that only re-enters after a
+failed allocation is dead code on Apple, where nothing is allocated, and dead code on CUDA,
+where the host rung has already accepted. **Both doors are needed, and neither is the one this
+document originally named.**
+
 ## Which of the three answers is right here
 
 **A plan that never promises what the card cannot hold.** Necessary, and insufficient alone.
