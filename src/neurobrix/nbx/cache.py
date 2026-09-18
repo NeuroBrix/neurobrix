@@ -100,11 +100,29 @@ class NBXCache:
 
         print(f"[Cache] Extracting {nbx_path.name} -> {cache_path}")
 
-        # Remove old cache if exists
-        if cache_path.exists():
-            shutil.rmtree(cache_path)
+        # Extraction goes to a private staging tree and is swapped in at the end.
+        #
+        # This used to remove the live tree and then extract IN PLACE at the final
+        # name, for as long as the container took to unpack. A `manifest.json`
+        # appears from the first member on, so for those minutes any other reader —
+        # a `run` on this machine, or on another machine sharing this mounted cache
+        # — saw a half-written model as a complete one, and the model it had been
+        # about to load was gone. `cli/commands/registry.py` had already been fixed
+        # for exactly this (Studio request 6); the same bug written twice is a
+        # missing brick, and `nbx/atomic_install` is that brick.
+        from neurobrix.nbx.atomic_install import installing
+        with installing(cache_path, label=f"cache extract {nbx_path.name}") as staging:
+            return self._extract_into(nbx_path, staging, cache_path)
 
-        cache_path.mkdir(parents=True, exist_ok=True)
+    def _extract_into(self, nbx_path: Path, cache_path: Path,
+                      final_path: Path) -> Path:
+        """Unpack `nbx_path` into `cache_path`, which is a staging directory.
+
+        `final_path` is where the result will be visible once the caller swaps it
+        in, and is used only for the lines this prints — a progress message naming
+        a staging directory would send a reader looking for a path that is about
+        to stop existing.
+        """
 
         # SPRINT 0 - R0.1: Parallel extraction using ThreadPoolExecutor
         # I/O bound operation benefits from parallel workers
@@ -191,7 +209,7 @@ class NBXCache:
             json.dump(cache_meta, f, indent=2)
 
         print(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
-        return cache_path
+        return final_path
 
     def clear(self, model_name: Optional[str] = None):
         """Clear cache for a model or all models."""
@@ -213,9 +231,12 @@ class NBXCache:
         if not self.cache_dir.exists():
             return []
 
+        from neurobrix.nbx.atomic_install import is_install_artifact
         cached = []
         for d in self.cache_dir.iterdir():
-            if d.is_dir():
+            # A staging tree, a lock, or a tree renamed aside mid-swap is not a
+            # cached model, however complete its contents look from outside.
+            if d.is_dir() and not is_install_artifact(d.name):
                 meta_path = d / ".cache_meta.json"
                 if meta_path.exists():
                     with open(meta_path) as f:

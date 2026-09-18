@@ -126,7 +126,10 @@ def test_a_failed_extraction_leaves_no_half_model_behind(tmp_path, monkeypatch, 
     final = tmp_path / "cache" / NAME
 
     def boom(store_path, cache_path):
-        Path(cache_path).mkdir(parents=True)
+        # `exist_ok=True`, like the real `extract_container` it stands in for:
+        # the staging directory is created by the install brick before the
+        # extractor is called, not by the extractor itself.
+        Path(cache_path).mkdir(parents=True, exist_ok=True)
         (Path(cache_path) / "manifest.json").write_text("{}")
         raise ValueError("member refused")
     monkeypatch.setattr(reg, "extract_container", boom)
