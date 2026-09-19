@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A tuned kernel setting is now served only to the compiler that proved it.**
+  Every certified setting records the code generator it was measured under, and
+  nothing compared that with the one actually running. The engine now refuses a
+  setting proven under a different compiler, says so once per kernel, and sweeps
+  that shape at runtime instead — because which configuration is fastest is a
+  property of the compiler that produced it. `NBX_AUTOTUNE_ANY_GENERATOR=1`
+  serves them anyway. On a machine whose compiler matches its settings, nothing
+  changes.
+- **Copying a complex tensor to the host no longer writes past its buffer.** The
+  host allocation chose its element size from a table with no entry for complex,
+  silently falling back to a four-byte float while the copy that followed moved
+  eight bytes an element — corrupting memory on every complex read-back, often
+  crashing somewhere unrelated later. The table is now complete and refuses a
+  type it does not know instead of guessing.
+
 - **An activation now writes into the buffer it just read, where nothing else
   needs it.** A convolution and the activation reading it held two buffers of
   identical size while only one was needed. On `real-esrgan-x8` at 1024x1024 on a
