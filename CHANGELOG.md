@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The plan now keeps back a margin sized to the card, and says how much.** It
+  reserved a flat 3 GB whatever the hardware, while the free-memory reading it
+  budgets against moves by up to 12% of the card between identical runs — so on a
+  32 GB card the reserve was below the noise it was there to absorb. The margin is
+  now the larger of the two and `run --explain-plan` prints it. A refusal that
+  misses by less than the reading's own spread is not a decision, and this is what
+  stops the engine making one.
+
+- **A tuned kernel setting is now served only to the compiler that proved it.**
+  Every certified setting records the code generator it was measured under, and
+  nothing compared that with the one actually running. The engine now refuses a
+  setting proven under a different compiler, says so once per kernel, and sweeps
+  that shape at runtime instead — because which configuration is fastest is a
+  property of the compiler that produced it. `NBX_AUTOTUNE_ANY_GENERATOR=1`
+  serves them anyway. On a machine whose compiler matches its settings, nothing
+  changes.
+- **Copying a complex tensor to the host no longer writes past its buffer.** The
+  host allocation chose its element size from a table with no entry for complex,
+  silently falling back to a four-byte float while the copy that followed moved
+  eight bytes an element — corrupting memory on every complex read-back, often
+  crashing somewhere unrelated later. The table is now complete and refuses a
+  type it does not know instead of guessing.
+
+- **An activation now writes into the buffer it just read, where nothing else
+  needs it.** A convolution and the activation reading it held two buffers of
+  identical size while only one was needed. On `real-esrgan-x8` at 1024x1024 on a
+  16 GB card that second buffer is 8,589,934,592 bytes and the run died asking
+  for it. The engine now proves from the graph that the tensor has no other
+  consumer and is not an output, then writes in place — for `relu`, `leaky_relu`,
+  `silu`, `gelu`, `hardswish`, `elu` and `mish`. Peak driver memory on that run
+  falls from 12,162 MB to 11,043 MB and pool evictions from 4 to none.
+  `NBX_DISABLE_INPLACE_UNARY=1` switches it off.
+
+  **That request still does not complete.** It now fails one operation later, at
+  `aten.convolution::350`, which needs its input and its output resident at the
+  same time — 8 GiB each. Spatial tiling bounds a convolution's workspace, not
+  its output buffer, so no tile count fixes this one; it needs the whole
+  convolution-activation chain streamed in bands, which is not built.
+- **`run --explain-plan` now says what op-level tiling plans, not just that it
+  planned something.** The line named the component and stopped, so a plan tiling
+  two operations and one tiling two hundred printed identically.
+- **A large operation is now budgeted against what is left of the card, not
+  against the whole card.** The planner asked whether one operation's own
+  footprint cleared 85% of the GPU — a question about an empty card. The card is
+  not empty when the operation runs: the model's weights are on it for the whole
+  of its execution, and so is every intermediate result still in use at that
+  point. Both are now subtracted before the question is asked. Measured over the
+  56 containers in the local cache, this changes the answer on five of 308
+  model/card pairs — the video VAEs of CogVideoX-2b, CogVideoX-5b-I2V,
+  SANA-Video 2B 720p and Sana 1600M 4Kpx, each by a few hundred megabytes, which
+  is where the old question gave the wrong answer. It does not change any plan
+  for `real-esrgan-x8` at 1024x1024, whose refusal is a separate open defect.
+- **`run --explain-plan` now says why automatic tiling declined.** The reason was
+  computed and discarded, so a request refused for memory gave no account of the
+  one strategy that might have reshaped it.
+
 ## [0.5.4] - 2026-09-18
 
 NVIDIA (CUDA) and CPU. Apple Silicon is not in this release — its work is on

@@ -271,6 +271,58 @@ def covered_memory_classes(entry: Dict[str, Any]) -> set:
     return out
 
 
+_GEN_REFUSED: Dict[str, int] = {}
+
+
+def running_generator() -> Optional[str]:
+    """The code generator about to run, as a proof's `backend` records it.
+
+    None when Triton cannot be imported: an engine that cannot say which
+    generator it is cannot refuse an entry for not matching it, and refusing
+    everything because the question is unanswerable is worse than serving.
+    """
+    try:
+        import triton
+    except Exception:
+        return None
+    name = "cuda"
+    try:
+        from neurobrix.kernels import nbx_tensor as _nt
+        name = getattr(_nt, "BACKEND_NAME", "cuda") or "cuda"
+    except Exception:
+        pass
+    return proof_backend({"backend": {"triton": str(triton.__version__), "name": name}})
+
+
+def entry_for_generator(entry: Optional[Dict[str, Any]],
+                        gen: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The certification proven under THIS generator — the entry when its own
+    proof names it, a variant that does, or None.
+
+    Symmetric with `entry_for_memory_class`. Register 56 established that an
+    entry serves only the memory class it was proven on; the same argument
+    applies to the compiler, and `entry_covers(..., need_generator=...)`
+    already encodes it for the CERTIFIER (`--reprove-generator`). Nothing asked
+    it at the serving side, which is the gap this closes: measured 2026-09-19,
+    all 9,655 NVIDIA entries on `main` carry `triton 3.6.0`, the production
+    stack runs 3.6.0 and the candidate stack runs 3.8.0, so a stack move would
+    have served every one of them under a generator none names.
+    """
+    if entry is None or gen is None:
+        return None
+    if proof_backend(entry.get("proof")) == gen:
+        return entry
+    for var in (entry.get("variants") or {}).values():
+        if proof_backend((var or {}).get("proof")) == gen:
+            return var
+    return None
+
+
+def generator_refusals() -> Dict[str, int]:
+    """How many keys each kernel was refused for, by generator. For a report."""
+    return dict(_GEN_REFUSED)
+
+
 def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) -> Optional[Dict[str, Any]]:
     """The certification that covers this memory class — the entry itself when
     its primary proof was made at that class, the variant filed under it
@@ -531,7 +583,37 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False,
     entry = entries.get(key_repr(key))
     if any_class:
         return entry
-    return entry_for_memory_class(entry, memory_class)
+    cert = entry_for_memory_class(entry, memory_class)
+    if cert is None:
+        return None
+    # THE GENERATOR, asked here for the same reason the memory class is: a
+    # setting is a property of the compiler that produced it as much as of the
+    # shape. `NBX_AUTOTUNE_ANY_GENERATOR=1` is the one opening, named so it
+    # reads as deliberate — it serves a setting proven under another compiler,
+    # which the owner's 2026-09-16 note allows as still CORRECT while no longer
+    # necessarily the FASTEST.
+    import os as _os_gen
+    if _os_gen.environ.get("NBX_AUTOTUNE_ANY_GENERATOR") == "1":
+        return cert
+    gen = running_generator()
+    if gen is None:
+        return cert                       # cannot ask: do not refuse
+    matched = entry_for_generator(cert, gen)
+    if matched is not None:
+        return matched
+    was = proof_backend(cert.get("proof"))
+    if was is None:
+        return cert                       # the proof does not say: not a mismatch
+    n = _GEN_REFUSED.get(kernel_qual, 0) + 1
+    _GEN_REFUSED[kernel_qual] = n
+    if n == 1:                            # once per kernel, not once per shape
+        print(f"[autotune] {kernel_qual}: the directory's settings were certified "
+              f"under {was} and this engine runs {gen}. They are not served: a "
+              f"configuration is a property of the compiler that produced it. "
+              f"These shapes sweep at runtime and land in the local replay cache. "
+              f"`neurobrix autotune certify --profile <p>` re-proves them; "
+              f"NBX_AUTOTUNE_ANY_GENERATOR=1 serves them anyway.", flush=True)
+    return None
 
 
 # A promotion flag that widens a pointer's tile on load: the kernel computes
