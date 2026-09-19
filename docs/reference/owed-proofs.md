@@ -705,5 +705,37 @@ differ by design: the Dell's harness HARD-TRIMS the halo, while
 should be at least as clean and a step at a boundary would be a ramp rather than
 an edge.
 
-**Not yet returned by the Dell**: the engine's own artefact for that request was
-still rendering when this entry was written. The harness's is judged and clean.
+### Returned by the Dell, 2026-09-19 01:31
+
+**The engine's own artefact is in and it is clean.** `GREEN_x8_1024_by_the_rung.png`,
+8192 x 8192, produced by the component-tiling rung at tile 565 / overlap 70, blended
+by accumulate-and-divide. Looked at whole and at full resolution across the join: a
+coherent apple at 8x, no grid, no visible seam. Against the harness's independently
+stitched artefact of the same request, `mean|d| 0.036` with 0.26% of 67 million
+pixels differing by more than two levels -- which is what blending versus trimming
+the overlap costs, and nothing more.
+
+**A warning about HOW to measure the seam, learned the hard way here.** Measure at
+the boundary THE ENGINE USES, not at the geometric midpoint. The engine's tile
+stride is 565 input px = 4520 output px; my harness cut at the midpoint. At the
+midpoint the engine reads +0.23 and +0.57 sigma and looks perfect; at 4520 it reads
+**+10.35 and +12.18 sigma** -- and there is still no line, because that region is
+smooth red and the local noise floor (0.247) collapses, so a small step reads as
+many sigma.
+
+**Use the ABSOLUTE step, which is what an eye sees:**
+
+| boundary | step, grey levels of 255 | typical elsewhere |
+|---|---|---|
+| vertical @ 4520 (the engine's own) | 1.047 = **0.41%** | 0.166 |
+| horizontal @ 4520 | 0.635 | 0.100 |
+| vertical @ 4096 (not a boundary here) | 0.377 | 0.166 |
+
+So the tile boundary is measurably elevated, about 6x the local step, and
+sub-visible. **A sigma is a ratio and does not travel between pictures** -- the
++2.07 sigma figure from Apple was measured on its own image, so compare the absolute
+step, and say which boundary it was taken at.
+
+**Two independent harness stitches on two different cards came out BIT-IDENTICAL**
+(same sha256, 0 differing pixels of 8192x8192x3), so the method is deterministic
+across cards and a single judged artefact is not a single lucky run.
