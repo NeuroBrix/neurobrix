@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The plan now keeps back a margin sized to the card, and says how much.** It
+  reserved a flat 3 GB whatever the hardware, while the free-memory reading it
+  budgets against moves by up to 12% of the card between identical runs — so on a
+  32 GB card the reserve was below the noise it was there to absorb. The margin is
+  now the larger of the two and `run --explain-plan` prints it. A refusal that
+  misses by less than the reading's own spread is not a decision, and this is what
+  stops the engine making one.
+
 - **A tuned kernel setting is now served only to the compiler that proved it.**
   Every certified setting records the code generator it was measured under, and
   nothing compared that with the one actually running. The engine now refuses a
