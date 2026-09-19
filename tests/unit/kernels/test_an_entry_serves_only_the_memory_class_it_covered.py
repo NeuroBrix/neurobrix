@@ -19,10 +19,12 @@ import pytest
 
 from neurobrix.kernels import autotune_certified as C
 
+from ._rig import running_backend
+
 
 def _proof(memory_mb=None, hardware_profile=None):
     p = {"date": "2026-09-13T22:00:00+00:00", "engine_version": "0.5.3",
-         "backend": {"name": "cuda", "triton": "3.6.0"}, "shape": [10, 1536, 1536],
+         "backend": running_backend(), "shape": [10, 1536, 1536],
          "deviation": 1e-6, "tolerance": 1e-4, "oracle": "fp64", "machine": {"hostname": "t"},
          "built": {"gpu": True}}
     if hardware_profile is not None:
