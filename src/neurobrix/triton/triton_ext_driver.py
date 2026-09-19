@@ -51,6 +51,7 @@ def _ext():
 
 _SYNC_TIMING = __import__("os").environ.get("NBX_SYNC_TIMING", "0") == "1"
 _SYNC_ACC = [0.0, 0.0, 0.0, 0]   # drain, submit, synchronize, count
+_SYNC_PER_KERNEL = {}            # name -> [calls, seconds inside synchronize]
 if _SYNC_TIMING:                                       # pragma: no cover
     import atexit as _ax
 
@@ -62,6 +63,16 @@ if _SYNC_TIMING:                                       # pragma: no cover
         print(f"[sync-timing] launches={n}  drain={d:.3f}s  submit={s_:.3f}s  "
               f"synchronize={y:.3f}s  (per launch: drain {1000*d/n:.3f}ms  "
               f"submit {1000*s_/n:.3f}ms  sync {1000*y/n:.3f}ms)", flush=True)
+        if not _SYNC_PER_KERNEL:
+            return
+        rows = sorted(_SYNC_PER_KERNEL.items(), key=lambda kv: -kv[1][1])
+        tot = sum(v[1] for v in _SYNC_PER_KERNEL.values()) or 1.0
+        print(f"[sync-timing] per operator, by time inside synchronize:", flush=True)
+        print(f"[sync-timing]   {'kernel':<44} {'calls':>7} {'sync s':>9} "
+              f"{'ms/call':>9} {'share':>7}", flush=True)
+        for name, (c, t) in rows[:18]:
+            print(f"[sync-timing]   {name[:44]:<44} {c:>7} {t:>9.3f} "
+                  f"{1000*t/max(c,1):>9.3f} {100*t/tot:>6.1f}%", flush=True)
 
 
 def _native():
@@ -299,6 +310,12 @@ class TritonExtDriver(Driver):
             _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
             _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
             _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
+            _kn = getattr(function, "name", None) or type(function).__name__
+            _row = _SYNC_PER_KERNEL.get(_kn)
+            if _row is None:
+                _SYNC_PER_KERNEL[_kn] = [1, _d - _c]
+            else:
+                _row[0] += 1; _row[1] += _d - _c
         else:
             _nbx_queue_drain()
             function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
