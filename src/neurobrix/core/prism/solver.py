@@ -365,6 +365,11 @@ class ExecutionPlan:
     #: places and read in none, so the reason existed only for someone who
     #: wrapped the method from outside to look at it.
     op_tiling_declined: Optional[str] = None
+    #: The band kept back from every card's capacity, and WHY it is that size.
+    #: A budget whose variance exceeds its own shortfall cannot decide anything,
+    #: so the plan states its margin rather than leaving a reader to discover it.
+    margin_mb: Optional[int] = None
+    margin_reason: Optional[str] = None
     # Component-level spatial tiling — per-component plan emitted when a
     # spatial component (4D/5D input + scale config) would NOT fit a GPU
     # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
@@ -536,6 +541,40 @@ class PrismSolver:
         # No literal default here — config/system.py is the single source
         # (a missing key is a config regression and must crash).
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
+        #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
+        #: FIXED computation — the same op of the same request, refused three
+        #: times, and what the driver said free each time:
+        #:
+        #:   live_tracked=8242MB   driver_free 5662 / 6586 / 7598 MB
+        #:                         spread 1936 MB = 12.0% of a 16151 MB card
+        #:   live_tracked=10073MB  driver_free 1390 / 2042 / 2350 MB
+        #:                         spread  960 MB =  5.9%
+        #:
+        #: The Mac measured 12598 -> 15248 MB on an idle machine, 21%, which is
+        #: what `plan_advice.READING_VOLATILITY` already carries for its advice
+        #: text. 0.12 is this rack's, and it is the one a CUDA plan is budgeted
+        #: against; the two are not averaged, because they are measurements of
+        #: different drivers.
+        #:
+        #: WHY IT IS A FRACTION. `oom_reserve_mb` is 3072 MB whatever the card.
+        #: On a 16151 MB card that is 19.0%, comfortably over the spread. On a
+        #: 32501 MB card it is 9.5%, UNDER it — an absolute reserve against a
+        #: proportional variance is adequate at one size and short at another.
+
+    #: Class-level so it survives a solver built without __init__ (several
+    #: cells construct one that way to test a single rung); an instance may
+    #: still override it.
+    reading_volatility = 0.12
+
+    def _margin_mb(self, capacity_mb: float) -> int:
+        """The band the plan keeps back, and says it keeps back.
+
+        A budget whose variance exceeds its own shortfall cannot decide
+        anything: the Mac's `real-esrgan-x8` refusal missed by 27 MB while the
+        reading beneath it moved by thousands. So the margin is the larger of
+        the flat reserve and the measured spread, and `explain_plan` prints it.
+        """
+        return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
         self._dtype_bytes = get_dtype_bytes()
 
     # =========================================================================
@@ -1158,6 +1197,22 @@ class PrismSolver:
         # module-level function that never sees the solver — which is why
         # `_op_tiling_declined` was written three times and read nowhere.
         plan.op_tiling_declined = getattr(self, "_op_tiling_declined", None)
+        try:
+            _caps = [d.memory_mb for d in profile.devices] if profile.devices else []
+            if _caps:
+                _cap = max(_caps)
+                plan.margin_mb = self._margin_mb(_cap)
+                _vol = int(_cap * self.reading_volatility)
+                plan.margin_reason = (
+                    f"the flat reserve {int(self.oom_reserve_mb)} MB"
+                    if plan.margin_mb >= _vol else "")
+                plan.margin_reason = (
+                    f"{int(self.oom_reserve_mb)} MB flat reserve"
+                    if self.oom_reserve_mb >= _vol
+                    else f"{self.reading_volatility:.0%} of {int(_cap)} MB, the measured"
+                         f" spread of this driver's own free-memory reading")
+        except Exception:
+            pass
         _from_rung = getattr(self, "_op_tiling_from_rung", None)
         if _from_rung:
             plan.runtime_op_tiling = {**(plan.runtime_op_tiling or {}), **_from_rung}
@@ -1230,6 +1285,18 @@ class PrismSolver:
                 vram_per_gpu_bytes=comp_vram,
                 mode="compiled",
                 safety=0.85,
+                # The component's weights sit on this card for the whole of its
+                # execution, so an op's transient has 0.85 of the card MINUS
+                # them, not 0.85 of the card. Kept in step with the placement
+                # estimate below, which passes its own `weight_bytes`: these are
+                # the only two call sites that compute overflow_ops, and the
+                # tiling-aware estimator derives which upsamples become
+                # zero-size proxies from that set. If one site subtracts the
+                # weights and the other does not, they disagree about which
+                # upsamples are free, which is the desync
+                # `_tiling_aware_zero_alloc_uids` was written to prevent.
+                resident_bytes=int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
+                if not isinstance(alloc, tuple) else 0,
             )
             # S5: residual chains are detected unconditionally — even
             # when no overflow_ops are reported on this hardware, the
@@ -1868,6 +1935,11 @@ class PrismSolver:
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
                         vram_per_gpu_bytes=smallest_gpu_bytes or None,
+                        # Same correction as the detector: an op's transient is
+                        # budgeted against what is LEFT of the card once this
+                        # component's weights are on it. Both sites must pass a
+                        # weights figure or neither -- see the note there.
+                        resident_bytes=weight_bytes or 0,
                         force_compute_dtype_for_fp=True,
                         # PLACEMENT estimate: no symbol binds below its
                         # witnessed trace extent (the audio-tower
@@ -2572,7 +2644,7 @@ class PrismSolver:
         # 4Kpx on 1× V100 16 GiB. The cascade can then fall through to
         # `lazy_sequential` (which routes VAE to CPU via Strategy 4
         # of `_place_component`) or `cpu_execution`.
-        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
+        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
         if total_required > effective_capacity:
             return None
 
@@ -2694,7 +2766,7 @@ class PrismSolver:
         # ~3 GiB eaten by CUDA context + workspaces + fragmentation. With
         # the reserve the cascade degrades to a multi-GPU strategy at
         # solve time, as designed.
-        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
+        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
         if peak > effective_capacity:
             return None
 
@@ -3656,7 +3728,7 @@ class PrismSolver:
         # prevents per-component placements that fit the estimator but
         # OOM at runtime, which then triggers Strategy 4 (CPU placement)
         # below. P-PRISM-NEVER-REFUSE v2 B.4 — 2026-05-12.
-        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
+        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
         if required <= effective_capacity * 0.92:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
@@ -4243,7 +4315,7 @@ class PrismSolver:
         if not devices:
             return None
         largest = devices[0]
-        effective_mb = largest.capacity_mb - self.oom_reserve_mb
+        effective_mb = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
         if effective_mb <= 0:
             return None
 
@@ -5152,8 +5224,34 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+    if plan.margin_mb:
+        lines.append(f"margin          {plan.margin_mb} MB held back per card"
+                     + (f"  ({plan.margin_reason})" if plan.margin_reason else ""))
     if plan.runtime_op_tiling:
-        lines.append("op-level tiling " + ", ".join(sorted(plan.runtime_op_tiling)))
+        # WHAT it tiles, not merely THAT it does. This line named the component
+        # and stopped, so a plan that tiled two ops and a plan that tiled two
+        # hundred printed the same four words -- and when `real-esrgan-x8` died
+        # at `aten.convolution::350` with `op-level tiling model` on the plan,
+        # the plan could not say whether that conv was in it. A rendering that
+        # cannot distinguish the working case from the broken one is the same
+        # silence as no rendering.
+        for _cname in sorted(plan.runtime_op_tiling):
+            _p = plan.runtime_op_tiling[_cname]
+            _parts = []
+            for _label, _attr in (("fused upsample+conv", "fusion_pairs"),
+                                  ("tiled ops", "tiled_ops"),
+                                  ("in-place adds", "inplace_adds"),
+                                  ("in-place activations", "inplace_unary"),
+                                  ("residual chains", "residual_chains")):
+                _v = getattr(_p, _attr, None)
+                if _v:
+                    _parts.append(f"{len(_v)} {_label}")
+            lines.append(f"op-level tiling {_cname}: "
+                         + (", ".join(_parts) if _parts else "nothing planned"))
+            for _u, _c, _f in (getattr(_p, "fusion_pairs", None) or [])[:6]:
+                lines.append(f"                  fuse {_u} -> {_c} in {_f} tiles")
+            for _u, _t, _f in (getattr(_p, "tiled_ops", None) or [])[:8]:
+                lines.append(f"                  tile {_u} ({_t}) in {_f} bands")
     for name, spec in (plan.component_tiling or {}).items():
         short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
         lines.append(f"component tiling {name}: {short}")

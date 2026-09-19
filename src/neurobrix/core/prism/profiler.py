@@ -297,6 +297,15 @@ class ActivationProfile:
     #: number can be attributed without re-deriving it, which is how the
     #: 944 GB estimate stayed unexplained for two days.
     symbol_map: Optional[Dict[str, int]] = None
+    #: Bytes ALREADY live on the card when each op begins, keyed by op_uid.
+    #: `overflow_ops` asks whether one op's own footprint clears 0.85 of the
+    #: card, which is a question about an empty card; this is what the card is
+    #: actually holding at that point in the schedule. Recorded by the
+    #: simulation loop because only that loop applies the zero-alloc, stride-0
+    #: and alias-lifetime rules -- a walk that re-derives it outside reads
+    #: `aten.t` and `aten.view` as allocations and reports hundreds of GB on a
+    #: graph that allocates none of it.
+    live_before_op: Optional[Dict[str, int]] = None
 
     @property
     def peak_mb(self) -> float:
@@ -620,6 +629,7 @@ class ActivationProfiler:
         input_config: Optional[InputConfig] = None,
         dtype_bytes: Optional[int] = None,
         vram_per_gpu_bytes: Optional[int] = None,
+        resident_bytes: int = 0,
         mode: str = "compiled",
         safety: float = 0.85,
         zero_alloc_uids: Optional[set] = None,
@@ -739,9 +749,20 @@ class ActivationProfiler:
         for tid, op_uid_l in last_uses_eff.items():
             frees_at.setdefault(op_uid_l, []).append(tid)
 
+        # What is ALREADY on the card when each op begins, by the same rules the
+        # rest of this loop uses -- zero-alloc proxies sized 0, stride-0
+        # broadcast views free, aliases freed at their effective last use.
+        # Reconstructing this outside the loop does not work: a walk that counts
+        # every output as an allocation reads `aten.t` and `aten.view` as real
+        # bytes and reports hundreds of GB resident on a graph that allocates
+        # none of it. The overflow scan below needs the number, so it is recorded
+        # here rather than recomputed there.
+        live_before_op: Dict[str, int] = {}
+
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
             op = self.ops.get(op_uid, {})
+            live_before_op[op_uid] = current_bytes
 
             # 1. ALLOCATE: Add output tensors
             output_tids = op.get("output_tensor_ids", [])
@@ -797,7 +818,26 @@ class ActivationProfiler:
         overflow_ops = []
         if vram_per_gpu_bytes is not None and vram_per_gpu_bytes > 0:
             from neurobrix.core.prism.memory_estimator import estimate_op_workspace_bytes
-            threshold = int(vram_per_gpu_bytes * safety)
+            # WHAT THE FOOTPRINT IS MEASURED AGAINST.
+            #
+            # `vram_per_gpu_bytes * safety` is 0.85 of an EMPTY card, and the
+            # card is not empty when the op runs. Two things are already on it:
+            # the component's weights, resident for the whole of its execution
+            # and known only to the caller, and the activations still live at
+            # this point in the schedule, which the simulation loop above
+            # recorded in `live_before_op`.
+            #
+            # Measured at trace extents over the 56 local containers, this moves
+            # ops on five components -- CogVideoX-2b and 5b-I2V's vae (one op
+            # each, 13,131 MB against a 13,736 MB line, 635 MB of it already
+            # resident), SANA-Video_2B_720p's vae (ten), and Sana_1600M_4Kpx's
+            # vae on both card sizes. Each is a narrow crossing, a few hundred
+            # megabytes, which is exactly the regime where asking about an empty
+            # card gives the wrong answer. It changes nothing on the case that
+            # motivated the rung: real-esrgan-x8 at 1024 has footprints of
+            # 20-45 GB against the same line and clears it with or without the
+            # resident term.
+            threshold = int(vram_per_gpu_bytes * safety) - max(0, int(resident_bytes))
             for op_uid in self.execution_order:
                 op = self.ops.get(op_uid, {})
                 op_type = op.get("op_type", "")
@@ -825,7 +865,13 @@ class ActivationProfiler:
                     largest_in_bytes = max(
                         largest_in_bytes, self._compute_size(sh, meta, dtype_bytes)
                     )
-                op_footprint = largest_in_bytes + out_bytes_total + ws_bytes
+                # `largest_in_bytes` stands in for an input the simulation
+                # never allocated -- a weight, or a graph input -- so it stays
+                # as the floor; `live_before_op` covers every activation input
+                # and everything else still live beside them.
+                resident_here = live_before_op.get(op_uid, 0)
+                op_footprint = (max(largest_in_bytes, resident_here)
+                                + out_bytes_total + ws_bytes)
                 if op_footprint > threshold:
                     overflow_ops.append(
                         (op_uid, op_type, out_bytes_total, ws_bytes, list(in_tids))
@@ -841,6 +887,7 @@ class ActivationProfiler:
             overflow_ops=overflow_ops,
             binding=binding,
             symbol_map=dict(symbol_map),
+            live_before_op=live_before_op,
         )
 
     def _resolve_shape(

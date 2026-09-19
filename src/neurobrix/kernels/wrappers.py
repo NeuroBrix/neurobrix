@@ -759,25 +759,46 @@ def _prepare_comparison(a, b):
 # ACTIVATION WRAPPERS
 # ===========================================================================
 
-def relu(x) :
+def relu(x, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     relu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
-def silu(x) :
+def silu(x, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     silu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
-def gelu(x, approximate: str = 'none') :
+def gelu(x, approximate: str = 'none', out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     gelu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), approximate=(approximate == 'tanh'),
@@ -809,17 +830,31 @@ def hardsigmoid(x) :
     return output
 
 
-def hardswish(x) :
+def hardswish(x, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     hardswish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
-def leaky_relu(x, negative_slope: float = 0.01) :
+def leaky_relu(x, negative_slope: float = 0.01, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     leaky_relu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), negative_slope,
@@ -827,17 +862,31 @@ def leaky_relu(x, negative_slope: float = 0.01) :
     return output
 
 
-def elu(x, alpha: float = 1.0) :
+def elu(x, alpha: float = 1.0, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     elu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
-def mish(x) :
+def mish(x, out=None) :
     x = x.contiguous()
-    output = NBXTensor.empty_like(x)
+    # `out` lets a caller that has PROVED this tensor's input dies here
+    # write the result into the input's own buffer. These kernels are
+    # strictly element-wise with matched offsets -- one load at
+    # `input_ptr + offset`, one store at `output_ptr + offset`, no
+    # cross-lane read -- so one pointer passed twice is correct by
+    # construction, not by luck. The liveness proof is the caller's:
+    # see `OpLevelTilingEngine._detect_inplace_unary_candidates`.
+    output = out if out is not None else NBXTensor.empty_like(x)
     _set_device(x)
     mish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output

@@ -3327,8 +3327,28 @@ class NBXTensor:
                 NBXDtype.int8: np.int8,
                 NBXDtype.uint8: np.uint8,
                 NBXDtype.bool_: np.uint8,
-            }.get(nbx_dt, np.float32)
-            arr = np.empty(shape, dtype=np_dtype_name)
+                NBXDtype.complex64: np.complex64,
+                NBXDtype.complex128: np.complex128,
+            }
+            # TOTAL, and it REFUSES what it does not know. `.get(nbx_dt,
+            # np.float32)` stood here with no complex entry, so the host buffer
+            # was allocated at four bytes an element while `to_cpu` copied
+            # `self._nbytes`, eight bytes an element, into it. Double the buffer,
+            # every complex readback, at every size: `malloc(): corrupted top
+            # size`. And not at the copy -- the first small probe printed a
+            # correct-looking array and the NEXT allocation died, which is how it
+            # survived. complex128 was the same bug at four times over.
+            #
+            # A default makes "a dtype I do not know" indistinguishable from
+            # "float32": a wrong-sized allocation waiting for that dtype to
+            # arrive. Every NBXDtype is named above; a new one that is not gets a
+            # refusal naming itself, not a corrupted heap.
+            if nbx_dt not in np_dtype_name:
+                raise RuntimeError(
+                    f"empty_cpu has no numpy backing for {nbx_dt}: add it to the "
+                    f"map above. Defaulting would size the host buffer for "
+                    f"another dtype and the copy that follows would write past it.")
+            arr = np.empty(shape, dtype=np_dtype_name[nbx_dt])
             return NBXTensor(arr.ctypes.data, shape,
                              _contiguous_strides(shape), nbx_dt, 'cpu',
                              owns_data=True, device_idx=0,

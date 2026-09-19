@@ -675,7 +675,7 @@ class OpLevelTilingPlan:
     """
 
     __slots__ = ("component_name", "fusion_pairs", "tiled_ops",
-                 "inplace_adds", "residual_chains")
+                 "inplace_adds", "inplace_unary", "residual_chains")
 
     def __init__(self, component_name: str):
         self.component_name = component_name
@@ -699,6 +699,12 @@ class OpLevelTilingPlan:
         # Detected from the DAG; populated at register-time by
         # `_detect_residual_chains`. P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
         self.residual_chains: List[Dict[str, Any]] = []
+        # Each entry: (op_uid, op_type) — element-wise UNARY ops whose only
+        # input has its last use at this op, so the result is written into
+        # that input's buffer instead of a second one of the same size.
+        # Detected at register-time from the DAG by
+        # `_detect_inplace_unary_candidates`.
+        self.inplace_unary: List[Tuple[str, str]] = []
 
     def add_upsample_conv_fusion(self, upsample_uid: str, conv_uid: str,
                                   tile_factor: int) -> None:
@@ -710,6 +716,9 @@ class OpLevelTilingPlan:
     def add_inplace_add(self, op_uid: str, reuse_input_index: int) -> None:
         self.inplace_adds.append((op_uid, int(reuse_input_index)))
 
+    def add_inplace_unary(self, op_uid: str, op_type: str) -> None:
+        self.inplace_unary.append((op_uid, str(op_type)))
+
     def add_residual_chain(self, spec: Dict[str, Any]) -> None:
         """Register a long-residual-chain spec. See `residual_chains`
         slot docstring for the expected dict shape."""
@@ -717,7 +726,8 @@ class OpLevelTilingPlan:
 
     def is_empty(self) -> bool:
         return (not self.fusion_pairs and not self.tiled_ops
-                and not self.inplace_adds and not self.residual_chains)
+                and not self.inplace_adds and not self.inplace_unary
+                and not self.residual_chains)
 
     def __repr__(self) -> str:
         return (
@@ -890,6 +900,107 @@ class OpLevelTilingEngine:
                 "upscale_factor": int(upscale_factor),
             })
         return chains
+
+    # aten op -> the wrapper that computes it. Every kernel behind these is
+    # strictly element-wise with MATCHED OFFSETS: one `tl.load(input_ptr +
+    # offset)`, one `tl.store(output_ptr + offset)`, no cross-lane read. That
+    # is what makes one pointer passed twice correct by construction rather
+    # than by luck, and it is the only property that admits an op to this map.
+    # An op that reduces, gathers, shifts or reads a neighbour does NOT belong
+    # here however element-wise it looks from outside; the gate at
+    # tests/unit/kernels/test_an_elementwise_op_can_write_into_its_input.py
+    # runs each one both ways and compares, rather than trusting this comment.
+    INPLACE_SAFE_UNARY = {
+        "aten::leaky_relu": "leaky_relu",
+        "aten::relu": "relu",
+        "aten::silu": "silu",
+        "aten::gelu": "gelu",
+        "aten::hardswish": "hardswish",
+        "aten::elu": "elu",
+        "aten::mish": "mish",
+    }
+
+    @staticmethod
+    def _detect_inplace_unary_candidates(
+        graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
+    ) -> "List[Tuple[str, str]]":
+        """Element-wise unary ops that can write into the buffer they consume.
+
+        An activation reads one tensor and writes another of identical shape.
+        Where the tensor it reads has NO other consumer and is not a graph
+        output, the second buffer is pure waste: it exists for the duration of
+        one kernel and the first is freed immediately after.
+
+        The case that motivated it: real-esrgan-x8 at 1024x1024 on a 16 GB
+        V100. `aten.convolution::349` produces [1, 64, 8192, 8192] fp16 --
+        8,589,934,592 bytes -- consumed by `aten.leaky_relu::278` and by
+        nothing else. The activation then asks for another 8,589,934,592 bytes
+        with 8,242 MB already live and 6,586 MB free, and the run dies there.
+        Writing into the input takes that pair's peak from 16.4 GB to 8.2 GB.
+
+        Same liveness rule as `_detect_inplace_add_candidates` and the same
+        DAG-static basis: a consumer map, no Prism profile and no runtime
+        state. Universal -- every convolutional decoder alternates conv and
+        activation, so the pattern belongs to no family, model or vendor.
+
+        Returns `(op_uid, op_type)` for every op whose input provably dies at
+        it. NOTE WHAT IS **NOT** DECIDED HERE: how many bytes the tensor holds.
+
+        The DAG carries the extents the model was TRACED at, and a request runs
+        at its own. `real-esrgan-x8`'s `aten.leaky_relu::278` has
+        `output_shapes = [[1, 64, 896, 640]]` -- 140 MB -- while the 1024x1024
+        request runs that same op at [1, 64, 8192, 8192], which is 8 GiB and the
+        allocation that kills the run. A byte threshold applied here rejected
+        exactly the op it was written to catch, and did so silently.
+
+        So: liveness is a property of the GRAPH and is settled here; size is a
+        property of the REQUEST and is settled in the interceptor, which holds
+        the real tensor. `threshold_bytes` is accepted and ignored, kept so the
+        signature matches `_detect_inplace_add_candidates` -- whose own
+        threshold has the same blind spot, unnoticed because Sana's trace
+        extents were already over a gigabyte.
+        """
+        dag = getattr(graph_executor, '_dag', None)
+        if dag is None:
+            return []
+        ops = dag.get("ops", {})
+        ops_by_uid = {o["op_uid"]: o for o in ops} if isinstance(ops, list) else ops
+        order = dag.get("execution_order", [])
+        output_ids = set(dag.get("output_tensor_ids", []))
+
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None:
+                continue
+            for tid in op.get("input_tensor_ids", []) or []:
+                consumers.setdefault(tid, []).append(op_uid)
+
+        out: List[Tuple[str, str]] = []
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None:
+                continue
+            op_type = op.get("op_type", "")
+            if op_type not in OpLevelTilingEngine.INPLACE_SAFE_UNARY:
+                continue
+            in_tids = op.get("input_tensor_ids", []) or []
+            oshapes = op.get("output_shapes", []) or []
+            ishapes = op.get("input_shapes", []) or []
+            # Exactly one input, and the output the SAME shape: an activation
+            # that broadcast or changed rank would write a different number of
+            # elements into the buffer it read.
+            if len(in_tids) != 1 or not oshapes or not ishapes:
+                continue
+            if list(ishapes[0]) != list(oshapes[0]):
+                continue
+            src = in_tids[0]
+            # The liveness proof. A tensor read by anything else, or handed
+            # back as a graph output, is still needed after this op.
+            if consumers.get(src, []) != [op_uid] or src in output_ids:
+                continue
+            out.append((op_uid, op_type))
+        return out
 
     @staticmethod
     def _detect_inplace_add_candidates(
@@ -1234,6 +1345,13 @@ class OpLevelTilingEngine:
         if not self.plan.inplace_adds:
             self.plan.inplace_adds = OpLevelTilingEngine._detect_inplace_add_candidates(
                 graph_executor)
+        # The same liveness question asked of element-wise activations, which
+        # is where the bytes actually are in a convolutional decoder: a conv
+        # and the activation reading it hold two buffers of identical size
+        # while only one is needed.
+        if not self.plan.inplace_unary:
+            self.plan.inplace_unary = OpLevelTilingEngine._detect_inplace_unary_candidates(
+                graph_executor)
 
         interceptors: Dict[str, Callable] = {}
 
@@ -1384,6 +1502,70 @@ class OpLevelTilingEngine:
 
             for op_uid, reuse_index in self.plan.inplace_adds:
                 interceptors[op_uid] = make_inplace_add_interceptor(reuse_index)
+
+        # Element-wise unary activations writing into the buffer they consume.
+        # NBX_DISABLE_INPLACE_UNARY=1 skips registration, to bisect whether
+        # this is the source of an unidentified numerical difference.
+        if _os_iadd.environ.get("NBX_DISABLE_INPLACE_UNARY", "0") == "1":
+            self.plan.inplace_unary = []
+        if self.plan.inplace_unary:
+            from neurobrix.kernels import wrappers as _w
+            from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
+
+            # One gigabyte, the same figure the in-place adds use. Read at call
+            # time from the tensor, never from the DAG -- see the detector's
+            # docstring for what happens when it is read from the DAG.
+            _MIN_INPLACE_BYTES = int(_os_iadd.environ.get(
+                "NBX_INPLACE_MIN_BYTES", 1024 * 1024 * 1024))
+
+            def make_inplace_unary_interceptor(_op_type):
+                _fn_name = OpLevelTilingEngine.INPLACE_SAFE_UNARY[_op_type]
+                _fn = getattr(_w, _fn_name)
+
+                def _inplace_unary(x, *args, **kwargs):
+                    # THE SIZE TEST, at the only moment it can be answered.
+                    # Below the threshold the buffer saved is not worth losing
+                    # the input for debugging, and the check is a couple of
+                    # integer multiplications against a kernel launch.
+                    try:
+                        _n = 1
+                        for _d in x.shape:
+                            _n *= int(_d)
+                        _bytes = _n * getattr(x, "itemsize", 2)
+                    except Exception:
+                        _bytes = 0
+                    if _bytes < _MIN_INPLACE_BYTES:
+                        return _fn(x, *args, **kwargs)
+                    if isinstance(x, _NBXT):
+                        # CONTIGUITY. The wrappers call `x.contiguous()` first,
+                        # and for a strided view that returns a DIFFERENT
+                        # buffer -- the kernel would then flat-index the result
+                        # into the original's memory and corrupt it. This is
+                        # the same hazard `add_inplace_nbx` guards, and the
+                        # same one the POINT 6 H2 fix was about. A
+                        # non-contiguous input simply takes the ordinary path.
+                        if x.is_contiguous():
+                            return _fn(x, *args, out=x, **kwargs)
+                        return _fn(x, *args, **kwargs)
+                    # Torch path (compiled / sequential modes).
+                    if is_torch_tensor(x):
+                        import torch.nn.functional as _F
+                        _tfn = getattr(_F, _fn_name, None)
+                        if _tfn is not None and x.is_contiguous():
+                            try:
+                                return _tfn(x, *args, inplace=True, **kwargs)
+                            except TypeError:
+                                # No `inplace` on this one (gelu): ordinary path.
+                                return _tfn(x, *args, **kwargs)
+                        if _tfn is not None:
+                            return _tfn(x, *args, **kwargs)
+                    return _fn(x, *args, **kwargs)
+
+                _inplace_unary.self_manages_dtype = True
+                return _inplace_unary
+
+            for op_uid, op_type in self.plan.inplace_unary:
+                interceptors[op_uid] = make_inplace_unary_interceptor(op_type)
 
         # Pixel-shuffle broadcast-aware fusion (P-SANA-4KPX-RUNTIME Fix F2,
         # Approche C). Detect `expand -> clone -> view -> pixel_shuffle`
