@@ -633,3 +633,77 @@ invisible on CUDA: `host_values()` (the bf16 branch — V100 is sm_70 with no na
 may simply not arise, in which case the claim stays Apple-only and this says so), the witness
 re-entrancy guard (a clock-lock rig never calls `_witness_ms()`), and the MoE capability row
 (`{"cuda": True}`, so the refusal cannot fire).
+
+---
+
+## 2026-09-19 — `0c824682`, the reshape rung reaches an upscaler: Apple's half owed
+
+* **owed by** the Dell (this machine) · **for** the Mac to confirm on Apple
+* **the commit** is on `main`, origin and gitlab.
+
+### What the Dell established
+
+The request-reshape rung was never missing. `_spatial_component_tiling` sizes a
+spatial cut, `plan.component_tiling` carries it and
+`core/runtime/executor.py:578` builds a `TilingEngine` from it, so residency is
+bounded by the PIECE — the property the op-level rung cannot give, because that one
+bounds the transient while the full output stays allocated for downstream
+consumers. `real-esrgan-x8` at 1024 px proved that twice on CUDA: it died at
+`aten.leaky_relu::278` and then at `aten.convolution::350` for 8 589 934 592 bytes
+**with `tile aten.convolution::350 in 64 bands` already in its plan.**
+
+It refused the ENTIRE upscaler family, for two reasons, each demanding a number the
+model does not have while the container already held the answer:
+
+1. **the scale factor.** `config.get("upscale")`, then a VAE block list, then
+   `if not scale_factor: return None`. Every upscaler in the Dell's cache ships an
+   EMPTY `config` — real-esrgan x2/x4/x8, swin2SR-classical-sr-x4-64, hat-l-x4 —
+   and each states its factor exactly in its own shapes. The function had already
+   read both shapes for its downsampler guard; it now derives the ratio from them
+   when the config is silent, requiring both axes to agree and the ratio to be
+   exact.
+2. **the latent grid.** `if not (vae_scale and _h and _w): raise
+   MissingRuntimeValue(...)` told the operator to declare a VAE scale for a model
+   with **no VAE**. `InputConfig`'s own docstring already said that absence is
+   legitimate for "a dimension the model does not have: no VAE, no vae_scale". An
+   upscaler reads pixels and writes pixels; its tiles cover the request's own grid.
+
+Measured after: `tile_size 565, overlap 70, scale_factor 8, tiled_activation
+5 230 MB` against **16 384 MB** whole, and the plan now says in its own words
+`dropped full-extent op-level tiling (component-level tiling active)`.
+
+### What the Dell could NOT establish, and is owed from Apple
+
+**That the same two guards were what stopped it there.** Both fixes are
+vendor-neutral by construction — they read the graph's own input/output ratio and
+the request's own extents, and name no backend — but "vendor-neutral by
+construction" is an argument, not a measurement.
+
+**What to run, and what each answer means:**
+
+```
+neurobrix run --model real-esrgan-x8 --input-image <1024px> --explain-plan
+```
+
+* **`component tiling model: {...}` appears** → the rung now reaches the upscaler on
+  Apple with no further change, and the remaining question is only whether the
+  artefact is clean.
+* **it does not appear** → the thing to report back is WHICH guard still bites.
+  `NBX_PRISM_TILE_DIAG=1` prints the sizing decision (`full_act`, `budget`, the
+  bound `InputConfig`, and TILE/native). A `MissingRuntimeValue` naming
+  `vae_scale` means fix 2 did not reach that path; a silent `None` before the diag
+  line means the scale factor was still not derivable, and then the useful datum is
+  that model's `profile.json` `config` and its graph's input/output shapes.
+
+**And the artefact, judged the way the Dell judged its own** — whole, and then a
+crop at FULL resolution centred exactly on an internal boundary. The Dell's
+harness stitch of the same request measured a seam of **+0.22 sigma vertical and
++1.27 sigma horizontal** against its own neighbourhood, below the Mac's
+hand-proved **+2.07 sigma**, and showed no discontinuity to the eye. Note the two
+differ by design: the Dell's harness HARD-TRIMS the halo, while
+`tiling_engine.py` blends by ACCUMULATE-AND-DIVIDE, so the engine's own artefact
+should be at least as clean and a step at a boundary would be a ramp rather than
+an edge.
+
+**Not yet returned by the Dell**: the engine's own artefact for that request was
+still rendering when this entry was written. The harness's is judged and clean.
