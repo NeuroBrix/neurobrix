@@ -17,7 +17,19 @@ def _round_half_even(x):
     r = tl.floor(x + 0.5)
     tie = (r - x) == 0.5
     odd = (r - tl.floor(r * 0.5) * 2.0) != 0.0
-    return tl.where(tie & odd, r - 1.0, r)
+    out = tl.where(tie & odd, r - 1.0, r)
+    # A zero result keeps the SIGN of its input: round(-0.5) is -0.0, and so are
+    # round(-0.3) and round(-0.0). `floor(x + 0.5)` cannot produce -0.0 at all —
+    # it maps every x in (-0.5, 0] to +0.0 — so the sign is restored here. The
+    # Dell measured this on CUDA against an fp64 oracle: round(-0.5) gave +0.0
+    # where main and the oracle give -0.0. The ties were already right; only the
+    # sign was lost, and a sign of zero is not cosmetic — it is what tells a
+    # downstream divide which infinity to produce.
+    #
+    # Read from the sign bit rather than from `x < 0`, which is false for -0.0:
+    # a bitcast to int32 is negative exactly when the sign bit is set.
+    neg = x.to(tl.int32, bitcast=True) < 0
+    return tl.where((out == 0.0) & neg, -0.0, out)
 
 
 # Triton's floor / ceil / trunc take fp32 or fp64 only ("Expected dtype
