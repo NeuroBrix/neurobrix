@@ -120,8 +120,9 @@ def get_component_flag(
 
     Precedence:
       1. env var (when env_override is provided and set in environment)
-      2. registry YAML lookup
-      3. default
+      2. registry YAML lookup (the developer's override)
+      3. the container's own declaration (nbx/component_flags.py)
+      4. default
 
     Returns default when the registry / model / component / flag is
     ABSENT (annotations are opt-in — legitimate absence). A registry
@@ -162,5 +163,16 @@ def get_component_flag(
         comp = comps.get(component_name)
         if not isinstance(comp, dict):
             continue
-        return comp.get(flag_name, default)
-    return default
+        if flag_name in comp:
+            return comp[flag_name]
+        break
+
+    # 3. The container's own declaration. The build writes every flag the
+    #    registry declares on a component into the container (topology
+    #    extracted_values), and the container records it when opened
+    #    (nbx/component_flags.py). This is what an installed engine, or a
+    #    checkout without the `.nbx_registry` pointer, runs on — measured
+    #    2026-09-20 on Wan2.1-T2V-1.3B, which rendered a lattice without it.
+    #    The registry above stays the developer's override.
+    from neurobrix.nbx import component_flags
+    return component_flags.get(model_name, component_name, flag_name, default)

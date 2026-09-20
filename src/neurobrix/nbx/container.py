@@ -469,6 +469,18 @@ class NBXContainer:
             with open(config_path) as f:
                 container._config = json.load(f)
 
+        # The flags the container carries per component (topology.json's
+        # extracted_values) are recorded here, the one door every open
+        # container passes through — Prism plans and the flows read them by
+        # model name, before a RuntimePackage exists (nbx/component_flags.py).
+        topology_path = cache_path / "topology.json"
+        if topology_path.exists() and container._manifest:
+            from neurobrix.nbx import component_flags
+            with open(topology_path) as f:
+                _topology = json.load(f)
+            component_flags.register(container._manifest.get("model_name"),
+                                     _topology.get("extracted_values"))
+
         # Index weight file paths (lazy loading - weights loaded by executor)
         components_dir = cache_path / "components"
         if components_dir.exists():
