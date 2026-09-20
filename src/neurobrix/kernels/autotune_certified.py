@@ -285,27 +285,48 @@ def running_generator() -> Optional[str]:
         import triton
     except Exception:
         return None
-    # The TRITON TARGET's backend name, because that is what the certifier
-    # stamps and a label only means something if reader and writer agree. It
-    # read `nbx_tensor.BACKEND_NAME` until 2026-09-19 — a symbol that does not
-    # exist anywhere in the tree, so it silently took its own "cuda" default.
-    # `proof_backend` omits the name when it IS cuda, so on Apple this produced
-    # `triton 3.8.0` against a directory stamped `triton 3.8.0 mps`, and the gate
-    # refused all 945 certified entries: every shape swept at runtime while the
-    # directory sat unserved and the census still called them certified.
-    #
-    # NOT the engine's name for the backend, which is `metal` here either way.
-    # The two diverge and `autotune_certify._current_backend()` documents why:
-    # the engine says `metal`, the Triton target says `metal` under the archived
-    # fork and `mps` under triton-ext. A GENERATOR is the compiler, so it is the
-    # target's name that belongs in this label.
+    return proof_backend({"backend": generator_identity()})
+
+
+def generator_identity() -> Dict[str, Any]:
+    """The compiler's identity, as ONE DOOR for the stamp writer and the gate.
+
+    Two halves, each chosen for a measured reason:
+
+    * **The version comes from the DISTRIBUTION metadata, not `__version__`.**
+      Moving the Triton pin 5a495ee2 -> 4a15f415 — 114 commits, 92 C++ files —
+      left `triton.__version__` at a bare `3.8.0` on BOTH sides, so a label
+      built from it served all 964 certified entries to a compiler that had
+      moved, and the gate never knew (measured 2026-09-20; the re-sweep found 0
+      oracle refusals and 562 rank changes, so the serving was correct and up
+      to 58% stale in rank — but the gate's job is to KNOW, not to be lucky).
+      `importlib.metadata.version("triton")` reads `3.8.0+git<pin>`, which
+      moves when the compiler does. `__version__` remains the fallback for an
+      install with no distribution metadata.
+
+    * **The name is the TRITON TARGET's backend** (`mps` under triton-ext,
+      `cuda` on the rack), not the engine's own name (`metal` here either way)
+      and not `nbx_tensor.BACKEND_NAME`, a symbol that never existed — reading
+      it defaulted every machine to "cuda" and refused all 945 Apple entries
+      (fixed 2026-09-19). `autotune_certify._current_backend()` documents the
+      metal/mps divergence at length.
+
+    `autotune_certify._backend()` writes this identity into every proof and
+    `running_generator()` reads it back: two hands, one spelling, because two
+    spellings is how each of those two defects happened.
+    """
+    try:
+        import importlib.metadata as _md
+        ver = _md.version("triton")
+    except Exception:
+        ver = str(triton.__version__)
     name = "cuda"
     try:
         from neurobrix.kernels.launcher import target as _target
         name = getattr(_target(), "backend", None) or "cuda"
     except Exception:
         pass
-    return proof_backend({"backend": {"triton": str(triton.__version__), "name": name}})
+    return {"triton": ver, "name": name}
 
 
 def entry_for_generator(entry: Optional[Dict[str, Any]],
