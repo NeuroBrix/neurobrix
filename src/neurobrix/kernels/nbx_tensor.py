@@ -1047,6 +1047,40 @@ class DeviceAllocator:
             return 0
 
     @staticmethod
+    def free_memory_mb(index: int) -> "Optional[float]":
+        """The driver's FREE memory on device `index`, in MB, or None when the
+        runtime cannot answer.
+
+        The planner's door to the machine as it IS. `DeviceState.free_mb` was
+        `capacity - used_mb` with `used_mb` the plan's own accounting — on a
+        discrete card nothing ever read what another process holds, so a plan
+        that fitted the card whole was accepted while a neighbour held 18 GB
+        of it, and died at its first allocation (five of five runs, V100-32GB,
+        2026-09-20). Same query as `most_free_device`, for ONE card, the
+        previously-current device restored: cudaMemGetInfo / hipMemGetInfo via
+        ctypes, no torch (R33).
+        """
+        try:
+            if int(index) < 0 or int(index) >= DeviceAllocator.device_count():
+                return None            # cudaSetDevice REPORTS a bad ordinal; it does not raise
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            prev = DeviceAllocator.get_device()
+            set_fn = backend["set_device"]
+            mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+            getattr(rt, set_fn)(ctypes.c_int(int(index)))
+            free_b = ctypes.c_size_t()
+            total_b = ctypes.c_size_t()
+            getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(prev))
+            except Exception:
+                pass
+            return free_b.value / (1024 * 1024)
+        except Exception:
+            return None
+
+    @staticmethod
     def most_free_device() -> int:
         """Return the GPU index with the most driver-free VRAM.
 
