@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A chat template that asks for today's date renders.** Templates written for
+  transformers may call `strftime_now` and `raise_exception`; the engine's renderer
+  now provides both, so a model such as IBM's Granite 3.1 no longer fails before its
+  first token.
+
 - **`x ** 2` is a square again.** The portable power kernel that replaced NVIDIA's
   device library computed every power as `exp(e * log|x|)`, which on CUDA lands up
   to 15 ulps from the float64 answer for a plain square. An integer exponent up to
