@@ -32,9 +32,9 @@ def main() -> int:
     from neurobrix.serving.engine import InferenceEngine
 
     # Optional pinned form: mask + MATCHING single-GPU hardware profile
-    # together (the bench closure-config pattern — autodetect
-    # enumerates via nvidia-smi and is blind to CUDA_VISIBLE_DEVICES:
-    # D-AUTODETECT-VISIBLE-MASK).
+    # together (the bench closure-config pattern). Autodetect has honoured
+    # the mask since acd14637 (measured 2026-09-20, register 79); the
+    # explicit profile stays as the closure-config's own contract.
     hardware = spec.get("hardware") or get_or_create_default_profile()
     engine = InferenceEngine(model, hardware, mode=mode)
     engine.load()

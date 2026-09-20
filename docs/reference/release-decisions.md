@@ -34,14 +34,14 @@ The second is cheap and honest and should ship regardless; the first is what mak
 upgrade free. Either way the **replay cache must record the compiler** it swept under and
 serve only to that one — the directory gate without the cache gate is half a door.
 
-### The engine under a `CUDA_VISIBLE_DEVICES` mask (2026-09-20, measurement pending)
+### The engine under a `CUDA_VISIBLE_DEVICES` mask (2026-09-20) — MEASURED, no release item
 
 A user in a container, on a shared server or under a scheduler runs masked as the normal
 case. Three regression guards (`test_serve_warm.py`, `warm_cell_runner.py`,
 `test_upscale_offtrace.py`, 2026-08-27) and debt entry D-AUTODETECT-VISIBLE-MASK say the
 engine mis-places under a mask; `_apply_visible_filter` (`acd14637`, 2026-09-03) re-indexes
 the visible set and the profile is keyed by it since. Whether a facet remains — the profile
-index against the runtime ordinal — is being measured with one pinned cell, red on the tree
-before the fix and then green on main. If a facet remains it is an engine defect that 0.5.5
-must close, not a harness inconvenience; if none does, the guards go to the vacuous-gates
-register and the skips come off.
+index against the runtime ordinal — was measured the same day: red on the tree before the
+guard for one card and for two, green on main for one card, for a 32 GB card as ordinal 0
+and for two cards with a card-spanning model. No facet remains; the guards and the debt are
+in the vacuous-gates register as entry 79 and the skips are off. Nothing for 0.5.5 to close.
