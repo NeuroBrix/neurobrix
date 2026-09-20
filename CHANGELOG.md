@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model's per-component runtime flags now travel inside the container, so an
+  installed engine behaves like the developer's checkout.** Six flags (pad-embedding
+  zeroing for T5-class encoders, image-to-video and control conditioning, image
+  padding to the frame count, and the two precision pins) were read at run time from
+  a file that only the build machine has; everywhere else they silently took their
+  defaults. Wan2.1-T2V-1.3B rendered a lattice of 16-pixel cells that way. The
+  container now declares them, the engine reads them when it opens the container,
+  and the build machine's file remains an override. Containers built before this
+  change need rebuilding to carry them.
+
 - **A plan is budgeted against the card's free memory as read when the request
   arrives, not against its capacity.** A neighbour holding part of a card made the
   planner promise memory it could not have: the ladder of whole-gigabyte rungs was
