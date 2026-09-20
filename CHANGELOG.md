@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plan is budgeted against the card's free memory as read when the request
+  arrives, not against its capacity.** A neighbour holding part of a card made the
+  planner promise memory it could not have: the ladder of whole-gigabyte rungs was
+  only ever reached when the request overflowed the whole card, so a 1024x1024
+  eight-times upscale on a 32 GB card shared with an 18 GB hold planned whole and
+  died on its first allocation, five runs out of five. The free reading now enters
+  the plan first, rounds down onto the ladder, and the tile budget follows from that
+  rung; nothing downstream is rounded again.
+
 - **A chat template that asks for today's date renders.** Templates written for
   transformers may call `strftime_now` and `raise_exception`; the engine's renderer
   now provides both, so a model such as IBM's Granite 3.1 no longer fails before its
