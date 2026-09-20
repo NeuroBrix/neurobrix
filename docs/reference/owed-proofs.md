@@ -927,3 +927,72 @@ not a rung to land today: with 2 the plan already refuses or reshapes before exe
 family that motivated it, and a re-entry after the plan was chosen is a change to the
 executor's contract that needs its own red-then-green case (an estimate wrong by enough to OOM
 under a plan that was already tiled).
+
+## 2026-09-20 — three things the CUDA side established for the Apple side
+
+### 1. Kokoro moved through the merge, twice, both times through `aten::pow`
+
+The zoo byte pair (A = main with the 3.8.0 directory, B = the merge head) left Kokoro-82M
+UNADJUDICATED: a seedless tts request cannot hold still (the family's `seed: 42` sits under
+`calibration:` only, so the Triton stream runs unseeded and the vocoder's `aten.rand::0` [1, 9]
+is the first op to differ between two runs of one tree). With `--seed 42` each tree holds
+still (A1 == A2, B1 == B2) and the two differ: SNR 24.8 dB between waveforms of identical
+length, whisper-large-v3-turbo transcribing both as "Hello.".
+
+`git bisect` on a 9-second row, autotune off, the floor measured before each lever:
+
+| lever | from → to | first bad commit |
+|---|---|---|
+| main → the Mac's branch | 8c4b4e1d… → 650f2eec… | **85c6426a** — kernels: stop calling NVIDIA's device library from portable kernels |
+| the branch → the merge head | 650f2eec… → 7dfe314b… | **9ddebd18** — pow takes the exact route for a small integer exponent |
+
+Kokoro calls `aten::pow` 49 times (e = 2 and 3); nothing else in the branch reached its
+bytes. The portable route moved it first (up to 15 ulps from the fp64 oracle on a square,
+recorded in `pow.py`), the exact route moved it back toward the oracle. Both are deliberate and
+in the CHANGELOG; the row is ADJUDICATED: moved, attributed, judged clean. On Apple the same two
+commits run the same kernel, so the same movement is expected there — a byte pair across the
+merge on Apple will show it and should not be read as a Metal regression.
+
+One instrument note: `NBX_OP_FINGERPRINT` hashes the first 8 192 bytes of a tensor by default,
+so its "first differing op" is the first op whose PREFIX differs (it named a layer-norm mean
+while the layer-norm's input already differed). Full hash: `NBX_OP_FINGERPRINT_MAX=0`.
+
+### 2. The ladder law, applied to the CUDA cards (4bd6a5e7)
+
+The law (2eeff74a): the budget rounds DOWN onto whole-GB rungs before anything downstream is
+computed; nothing downstream is rounded; never tuned so a supervising machine's ambient stops
+straddling a boundary. Applied here it had nothing to act on: on this rack the "reading" that
+reached the rung was capacity − margin, a constant per card, and the rung was reached only
+when a request overflowed the whole card. The plan never read the card's LIVE free memory.
+Measured on card 3 (32 GB) under a neighbour's 18–27 GB hold: real-esrgan-x8 at 1024 planned
+whole and died on its first allocation, 5 of 5.
+
+Now the free reading (one door, `DeviceAllocator.free_memory_mb`) enters the plan first, rounds
+down onto the ladder, and the tile budget follows from that rung. The ladder's rungs are the
+Mac's and are not tuned to this rack's ambient. First rows under the patch (autotune off, so the
+rows measure the plan and the fit, not a runtime sweep):
+
+| card | class | hold | reading | rung | budget | rc |
+|---|---|---|---|---|---|---|
+| 1 | 16 GB | 2 GB | 13.17 GB | 12288 MB | 4.80 GB | 0 |
+| 3 | 32 GB | 18 GB | 13.14 GB | 12288 MB | 4.80 GB | 0 |
+| 2 | 32 GB, 1536² | 0 / 2 GB | 30.40 / 29.14 GB | 24576 MB | 9.60 GB | 1 — CUDA 700 at `aten.convolution::351` |
+
+The 1536² rows are not the plan's failure: the rung and budget are right, and the fault is a
+sticky illegal address inside a 9.6 GB tile (conv2d's own indices are int64; the poisoning
+site is upstream of the first checked call). It is being pinned with `--mode triton-sequential`
+and `CUDA_LAUNCH_BLOCKING=1` on the same card; the remaining rows of all three series are in
+`nbx/campaigns/2026_09_20_ladder/`.
+
+### 3. A runtime flag read only from the build toolchain's registry — the Apple installs ran without it too
+
+`zero_pad_embeddings` (and five other per-component flags) were read at runtime through
+`.nbx_registry`, a gitignored pointer only a developer checkout carries. Every worktree and
+every `pip install` ran Wan2.1-T2V-1.3B with the flag at its default: a lattice of 16-px
+cells where the checkout rendered the sailboat (one judged run per arm, same commit; period-16
+column signature 0.1 with the pointer, 18.0 without; the rebuilt container without the pointer:
+0.1). If an Apple Wan measurement was taken from a worktree or an install, it was taken
+without the flag. Fixed in main 6fb35c3b: the build writes the six flags into the container's
+extracted values, the container records them when opened, the reader's order is env override →
+registry → container → default (`docs/reference/release-decisions.md` lists the thirteen hub
+containers that need a rebuild and a re-upload).
