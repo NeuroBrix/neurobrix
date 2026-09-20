@@ -221,3 +221,41 @@ That is also why the sweep-cost table above must never be read as a speed
 feature. The ratio it reports is the fraction of a run's budget that goes to
 finding kernels rather than to running the model — and when that fraction
 reaches 1, the run returns nothing at all.
+
+---
+
+## The stability regime: a clock LOCK or a WITNESS (2026-09-16, Apple)
+
+A certified entry claims two things: the configuration is CORRECT (the fp64
+oracle, which is clock-independent) and it is the FASTEST among the correct (the
+sweep's timer). The timer is only comparable if the machine held still across
+the sweep. On an NVIDIA rack that is asserted by a **clock lock**, read at entry
+(`rig_protocol.cuda.json`, `nvidia-smi -ac`, `rig_protocol_refusal`). Apple GPU
+clocks are OS-managed and NOT user-lockable — there is no `-ac` — so the lock
+cannot be asserted there.
+
+The lock was never the goal; it was the MEANS of making the timer comparable
+(the 1.176× of 2026-09-14 is what an un-regimed timer is worth). Where the lock
+is impossible, the means is **replaced by a witness, not removed**:
+
+* a fixed reference kernel — a same-shape matmul, always the same — is timed at
+  the START and the END of every sweep (`certify_key`, bracketing the bench);
+* if its time drifts past the tolerance READ FROM THE PROFILE
+  (`rig_protocol.metal.json`, `witness.drift_tolerance`), the GPU regime moved
+  while candidates were being compared, so their times are not comparable and
+  **the sweep is refused** — not a measurement;
+* if it holds, the ranking inside the sweep is comparable, and the entry records
+  the witness — its two times and their drift (`proof.stability_witness`) —
+  where the Dell records its frequency (`proof.machine.clocks_mhz`).
+
+The contract stays whole and single. `proof_records_regime` (the coverage gate,
+née `proof_records_clock`) accepts EITHER a recorded lock OR a recorded witness:
+both are proofs of the same fact — the sweep was comparable — and an entry with
+neither is not served, exactly as before. Stability is PROVEN by what was
+measured, not ASSUMED from what was set: no sudo, no lock, no constant. If a
+sudo-free Apple clock reading ever becomes possible, it is ADDED as a second
+witness; it does not replace the first.
+
+The protocol file is scoped by backend — `rig_protocol.<backend>.json` — because
+the un-suffixed name leaked one machine's regime to every other (a Mac inherited
+the Dell's V100 protocol and refused certification on clocks it cannot read).

@@ -278,31 +278,28 @@ def smem_bytes_for_config(config, dtype_bytes: int = 2) -> int:
     return (m * k + k * n) * dtype_bytes * stages
 
 
-def arch_smem_budget() -> Optional[int]:
-    """`memory.max_shared_memory_per_block` for the executing hardware.
+def _profiles_for(wanted: str):
+    """Match the hardware profiles against one arch string.
 
-    Read from the vendor YAML, never from the driver — the driver is asked
-    only WHICH profile applies, which is identification and not a hardware
-    parameter. Returns None when no profile matches, and the caller must then
-    leave the config space alone rather than guess a budget: filtering on an
-    invented number would silently delete working configs.
+    Lifted verbatim out of `arch_smem_budget` on 2026-09-17 so that the
+    profile can be resolved from an arch ALONE. It used to be reachable
+    only through `launcher.target()`, which also builds the selected Metal
+    backend's NAME — and the Metal seam reads its own declaration out of
+    the profile. Profile needs target, target needs backend, backend needs
+    profile: on a cold process the declaration therefore could not be read,
+    and the seam fell through to 'the single installed backend' and
+    INFERRED what it was supposed to be told. It agreed with the
+    declaration only while exactly one backend was installed.
+
+    The cycle was spurious: a profile is matched on the ARCH, and the arch
+    is the device's, not the backend's.
     """
-    try:
-        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
-        arch = _nbx_target().arch
-    except Exception:
-        return None
+    import yaml
 
     # NVIDIA reports capability x 10 (sm_70 -> 70); the profiles spell it
     # "7.0". AMD and Apple report the profile's string form directly.
-    wanted = (f"{arch // 10}.{arch % 10}" if isinstance(arch, int)
-              else str(arch).strip().lower())
 
     vendors = Path(__file__).resolve().parents[2] / "config" / "vendors"
-    try:
-        import yaml
-    except ImportError:                                   # pragma: no cover
-        return None
 
     exact, same_family = None, None
     for path in sorted(vendors.glob("*/*.yml")):
@@ -355,6 +352,80 @@ def arch_smem_budget() -> Optional[int]:
     if exact is None and same_family is not None:
         _announce_family_fallback(wanted)
     return exact if exact is not None else same_family
+
+
+def vendor_profile_for_arch(arch) -> dict:
+    """The hardware profile for an arch string, resolved WITHOUT a Triton
+    target — so a caller the target itself depends on can still read it.
+
+    The Metal seam is that caller: it must read `metal_backend:` out of the
+    profile, and building the target asks the seam which backend is in
+    force. Added 2026-09-17 with `_profiles_for`, which see.
+    """
+    _profiles_for(str(arch).strip().lower())
+    return dict(_ACTIVE_PROFILE)
+
+
+def arch_smem_budget() -> Optional[int]:
+    """`memory.max_shared_memory_per_block` for the executing hardware.
+
+    Read from the vendor YAML, never from the driver — the driver is asked
+    only WHICH profile applies, which is identification and not a hardware
+    parameter. Returns None when no profile matches, and the caller must then
+    leave the config space alone rather than guess a budget: filtering on an
+    invented number would silently delete working configs.
+    """
+    # yaml FIRST, before anything touches the launcher. Measured 2026-09-16 on
+    # M4 Pro: resolving the target imports the Metal backend's compiler, which is
+    # re-entrant with Triton's backend discovery ("Found 0 concrete subclasses of
+    # BaseBackend in triton_msl.backend.compiler") and leaves partially
+    # (that string is quoted from the 2026-09-16 measurement, on the fork that
+    # was archived on 2026-09-17; the ORDERING it describes is a property of
+    # resolving the target, not of that backend, and still holds)
+    # initialised modules behind; a LATER `import yaml` then dies inside the
+    # libyaml C extension with "partially initialized module 'yaml' has no
+    # attribute 'error'". That exception is not an ImportError, so it escaped the
+    # guard below, `arch_smem_budget` returned nothing and `_ACTIVE_PROFILE` was
+    # CACHED EMPTY — the Apple profile's `metal_backend`,
+    # `autotune_screen_max_bytes` and smem budget silently unread, and
+    # `selected_metal_backend()` inferring the backend instead of reading the
+    # declaration. Importing yaml first removes the order dependency outright.
+    try:
+        import yaml
+    except ImportError:                                   # pragma: no cover
+        return None
+
+    try:
+        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
+    except Exception as exc:
+        # A machine with no Triton target has no profile, and None says so.
+        # But a DELIBERATE refusal is not that, and swallowing it here is how a
+        # loud correct stop became a quiet wrong answer: measured 2026-09-17,
+        # the moment the Apple profile declared a backend this venv did not
+        # have, the Metal seam's refusal was caught here, the whole profile
+        # resolved EMPTY and was cached empty — smem budget, screen bytes and
+        # the declared backend all silently unread — and the seam's next
+        # refusal then reported "the profile declares none" about a profile
+        # that declares one. A circle of silence, each half explaining the
+        # other.
+        #
+        # Asked BY TYPE, never by message: the seam names its refusal
+        # (`metal_backend.BackendSelectionRefused`) precisely so this does not
+        # become text matching. Inert on CUDA and on any machine without a
+        # Metal backend — the import below fails there and the old behaviour
+        # stands exactly as it was.
+        try:
+            from neurobrix.triton.metal_backend import BackendSelectionRefused
+        except Exception:                                 # pragma: no cover
+            return None
+        if isinstance(exc, BackendSelectionRefused):
+            raise
+        return None
+
+    wanted = (f"{arch // 10}.{arch % 10}" if isinstance(arch, int)
+              else str(arch).strip().lower())
+    return _profiles_for(wanted)
 
 
 #: (target, profile) pairs already announced, so the notice is said once per

@@ -62,12 +62,26 @@ def _driver(rows):
     return run
 
 
+_CUDA_PROTOCOL = Path(__file__).resolve().parents[3] / "tools" / "rig_protocol.cuda.json"
+
+
 @pytest.fixture(autouse=True)
 def _fresh_reading(monkeypatch):
-    """The engine memoises the clocks for the run; each test gets its own reading."""
+    """The engine memoises the clocks AND the regime for the run; each test gets
+    its own reading.
+
+    These tests exercise the CUDA clock-LOCK door, so they force the cuda
+    protocol regardless of the host backend: the protocol became backend-scoped
+    (2026-09-16, so one machine's V100 protocol stops leaking to a Mac), which
+    means the default on this Apple host is the METAL WITNESS regime — a
+    different door. Forcing the cuda file here keeps the lock door under test on
+    any machine."""
     monkeypatch.setattr(AC._clocks_mhz, "cached", AC._UNREAD)
+    monkeypatch.setattr(AC, "_REGIME", AC._UNREAD)
+    monkeypatch.setattr(AC, "_protocol_file", lambda backend=None: _CUDA_PROTOCOL)
     yield
     monkeypatch.setattr(AC._clocks_mhz, "cached", AC._UNREAD)
+    monkeypatch.setattr(AC, "_REGIME", AC._UNREAD)
 
 
 def test_every_card_at_the_protocol_clock_passes(monkeypatch):
@@ -134,6 +148,13 @@ def test_a_named_protocol_that_does_not_read_is_a_refusal(monkeypatch, tmp_path)
     """
     monkeypatch.setattr(subprocess, "run", _driver(ON_PROTOCOL))
     monkeypatch.setenv(AC._PROTOCOL_ENV, str(tmp_path / "absent.json"))
+    # Undo the autouse fixture's cuda-file patch: this test is about the REAL
+    # selector honouring the env pointer (which the real `_protocol_file` returns
+    # first, absent or not, so a missing named file refuses rather than falls
+    # back to an invented value).
+    import os as _os
+    monkeypatch.setattr(AC, "_protocol_file",
+                        lambda backend=None: Path(_os.environ[AC._PROTOCOL_ENV]))
     with pytest.raises(RuntimeError):
         AC.rig_protocol_refusal(say=lambda *a: None)
 
@@ -211,10 +232,21 @@ def test_the_two_doors_agree_on_the_same_reading(monkeypatch):
             f"{'refused' if workshop_refused else 'passed'}")
 
 
-def test_the_protocol_authority_is_the_workshops_own_file():
-    """Discovery, not a shipped copy: one file, so the values cannot drift."""
-    found = AC._protocol_file()
-    assert found is not None and found.name == "rig_protocol.json"
-    clock = json.loads(found.read_text(encoding="utf-8"))["clock"]
+def test_the_protocol_authority_is_the_workshops_own_backend_scoped_file():
+    """Discovery, not a shipped copy — and scoped by backend so it cannot leak.
+
+    The un-suffixed `rig_protocol.json` was the leak (2026-09-16: a Mac inherited
+    the V100 protocol and refused certification on clocks it cannot read). Each
+    backend now has its own file, and neither carries the other's `_backend`."""
+    tools = Path(__file__).resolve().parents[3] / "tools"
+    cuda = tools / "rig_protocol.cuda.json"
+    metal = tools / "rig_protocol.metal.json"
+    assert cuda.is_file() and metal.is_file()
+    assert AC._protocol_backend(cuda) == "cuda"
+    assert AC._protocol_backend(metal) == "metal"
+    assert not (tools / "rig_protocol.json").exists(), (
+        "the un-suffixed protocol file is back — it leaks one machine's regime "
+        "to every other backend")
+    clock = json.loads(cuda.read_text(encoding="utf-8"))["clock"]
     assert int(clock["application_graphics_mhz"]) == RC.protocol_clock()[0]
     assert int(clock["application_memory_mhz"]) == RC.protocol_clock()[1]

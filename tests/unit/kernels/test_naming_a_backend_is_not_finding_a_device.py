@@ -60,8 +60,35 @@ def test_the_machine_has_a_device_at_all():
     assert count > 0
 
 
+def _backend_has_a_visibility_mask() -> bool:
+    """Whether this backend HAS a way to hide its device from a child.
+
+    `CUDA_VISIBLE_DEVICES` is CUDA's mask, and the asymmetry below is shown by
+    setting it empty in a child. Metal has no equivalent: the device is the
+    machine's and nothing hides it, so `device_count()` answers 1 however the
+    environment is set, and the test failed on Apple asserting a premise the
+    platform cannot supply.
+
+    It is asked of the ENGINE, not of a vendor tool, and it SKIPS BY NAME rather
+    than pretending the door was checked.
+    """
+    import pytest
+
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    try:
+        return nbx._detect_gpu_backend() == "cuda"
+    except Exception:
+        return False
+
+
 def test_naming_a_backend_survives_what_finding_a_device_does_not():
     """The door that makes the two answers separable: no device visible, runtime still loadable."""
+    if not _backend_has_a_visibility_mask():
+        import pytest
+        pytest.skip("this backend has no device-visibility mask — "
+                    "CUDA_VISIBLE_DEVICES is CUDA's, and Metal's device cannot "
+                    "be hidden from a child, so the asymmetry cannot be shown "
+                    "from here")
     have, _ = _ask(None)
     if have.startswith("raised"):
         pytest.skip("no GPU visible to this host")

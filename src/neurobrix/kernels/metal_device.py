@@ -737,6 +737,25 @@ class MetalRuntime:
             self._await(command_buffer)
         return _OK
 
+    def has_pending_gpu_writes(self) -> bool:
+        """True when this queue holds work that could still be writing memory.
+
+        The launch path's drain exists for ONE crossing: our queue writes and
+        triton-ext's kernel reads. Only two things on this queue write memory a
+        kernel could read — a blit still being encoded (an open stream), and a
+        buffer already committed and not yet retired (`_pending`). Both are
+        counted here.
+
+        `event_record` and `stream_wait_event` also commit buffers and are NOT
+        counted, deliberately: they encode a signal and a wait, and neither
+        writes device memory. They are also not tracked in `_pending`, so a
+        caller that needs to wait for them must not use this — which is why this
+        is named for GPU WRITES and not for emptiness, and why `sync()` below is
+        left alone with its full device-synchronize semantics.
+        """
+        with self._lock:
+            return bool(self._open) or any(self._pending.values())
+
     def sync(self) -> int:
         """`cudaDeviceSynchronize()` on the allocator's own queue.
 
@@ -1126,8 +1145,10 @@ def reset_runtime_for_tests() -> None:
     # perfectly good address with "which the Metal allocator did not hand
     # out". Measured 2026-09-05 as an order-dependent failure of
     # `test_cumsum_is_correct[128]` in the full kernels suite.
-    from ..triton import metal_driver
-    metal_driver.clear_cache()
+    # The fork's driver held a kernel/library cache that pinned the device;
+    # it was archived 2026-09-17 and the cache went with it. triton-ext
+    # holds its compiled functions in Triton's own cache, which this
+    # function's callers already clear.
 
     # The launcher caches a driver-produced handle per specialisation — a
     # Metal pipeline here — so it holds the runtime as surely as the driver

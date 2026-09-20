@@ -186,9 +186,22 @@ def flash_attention_forward_kernel(
         l_ij = tl.sum(p, 1)
 
         # Scale accumulator
+        # A store to global TMP followed immediately by a load of the same
+        # addresses, inside one program and with NO barrier between them, is a
+        # race: lanes reach the store and the load at different times, so a lane
+        # can read a slot another lane has not written yet. It was a workaround
+        # for an old NVIDIA compiler bug in the reference flash-attention and it
+        # is not needed to compute this value at all.
+        #
+        # Measured on M4 Pro / triton-ext, whisper's encoder shape
+        # (H=20, S=1500, D=64), 25 identical calls with unchanged Q/K/V:
+        #   with the round-trip : 25 distinct results, max |diff| 7.0e-03
+        #   without it          : see the test beside this file
+        # The output was FULLY written either way (a sentinel poked into Out
+        # immediately before the launch left 0 survivors), so this was never
+        # unwritten memory — it was a read of memory not yet written BY THIS
+        # KERNEL.
         acc_o_scale = tl.exp(m_i - m_ij)
-        tl.store(t_ptrs, acc_o_scale)
-        acc_o_scale = tl.load(t_ptrs)
         acc_o = acc_o * acc_o_scale[:, None]
 
         # Load V and accumulate
@@ -212,9 +225,7 @@ def flash_attention_forward_kernel(
         lse_i = m_ij + tl.log(l_i_new)
 
     # Final output scaling
-    o_scale = tl.exp(m_i - lse_i)
-    tl.store(t_ptrs, o_scale)
-    o_scale = tl.load(t_ptrs)
+    o_scale = tl.exp(m_i - lse_i)          # same unbarriered round-trip, removed
     acc_o = acc_o * o_scale[:, None]
 
     # Store LSE and output

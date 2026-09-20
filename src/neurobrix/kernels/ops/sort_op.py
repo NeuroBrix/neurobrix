@@ -164,40 +164,46 @@ def radix_sort_histogram_kernel(
 # --------------------------------------------------------------------------- #
 
 @triton.jit
-def radix_sort_sweep_kernel(
+def radix_sort_tile_counts_kernel(
     arr_ptr,
-    associate_arr_ptr,
-    out_ptr,
-    associate_out_ptr,
-    excumsum_bins_ptr,
-    status_ptr,
-    n_passes,
-    pass_id,
-    bit_offset,
+    counts_ptr,
     m,
     N,
     OUT_N,
     TILE_N: tl.constexpr,
     TILE_R: tl.constexpr,
     k_bits: tl.constexpr,
+    bit_offset,
     descending: tl.constexpr,
 ):
-    """Scatter elements to their sorted positions using exclusive prefix sums.
+    """How many elements of each bin this TILE holds. Stage 1 of three.
 
-    Uses decoupled lookback for inter-CTA prefix sum communication.
+    This and `radix_sort_scatter_kernel` replace a single kernel that carried a
+    DECOUPLED LOOKBACK: each tile published its count and then spun on its
+    predecessors' flags to learn how many of its bin came before it.
+
+    That construction needs forward progress across CTAs and cross-CTA
+    visibility for a `.cg` store, and Triton promises neither — inside a kernel
+    it promises nothing about other programs at all. Measured 2026-09-17 on
+    triton-ext: correct to exactly 2048 elements (one tile) and wrong from 2049,
+    with elements LOST rather than misordered (9 absent at n=2049, 1726 at
+    n=4096) — two tiles computing the same destinations and overwriting each
+    other, which is what a lookback reading stale flags produces.
+
+    The replacement is not a new design. `cumsum_wrapper` in this same tree does
+    its cross-tile scan as SEPARATE LAUNCHES (`scan_part_sum_kernel`, then
+    `add_base_sum_kernel` when there is more than one part) and is correct at
+    eight tiles, measured the same day. Triton guarantees ordering BETWEEN
+    launches; that is the guarantee this needs.
     """
     pid = tl.program_id(0).to(tl.int64)
     pid_m = pid % m
     pid_n = pid // m
     pid_r = tl.program_id(1).to(tl.int64)
 
-    aggregate_mask: tl.constexpr = 1 << 30
-    inclusive_prefix_mask: tl.constexpr = 1 << 31
-    v_mask: tl.constexpr = (1 << 30) - 1
     bfe_mask: tl.constexpr = (1 << k_bits) - 1
-
     r: tl.constexpr = 2 ** k_bits
-    cta_r_start = (pid_r * TILE_R).to(tl.int32)   # loop bounds are 32-bit counts: the Metal lowering refuses a 64-bit scf.for bound (addressing stays 64-bit through the program ids)
+    cta_r_start = (pid_r * TILE_R).to(tl.int32)
     cta_r_end = (tl.minimum(cta_r_start + TILE_R, r)).to(tl.int32)
 
     n_offsets = pid_n * TILE_N + tl.arange(0, TILE_N)
@@ -209,25 +215,78 @@ def radix_sort_sweep_kernel(
     for bin_index in range(cta_r_start, cta_r_end):
         matches = tl.where(mask, key == bin_index, False)
         local_sum = tl.sum(matches.to(tl.uint32), axis=0)
-        pack0 = aggregate_mask | local_sum
-        status_offset = pid_m * (r * OUT_N) + bin_index * OUT_N + pid_n
-        tl.store(status_ptr + status_offset, pack0, cache_modifier=".cg")
+        tl.store(counts_ptr + pid_m * (r * OUT_N) + bin_index * OUT_N + pid_n,
+                 local_sum)
 
-        # Decoupled lookback
-        exclusive_prefix = tl.zeros((), dtype=tl.uint32)
-        i_lookback = (pid_n - 1).to(tl.int32)      # a loop-carried counter keeps one type (the 64-bit pid is an address, this is a count)
-        while i_lookback >= 0:
-            flag_offset_i = pid_m * (r * OUT_N) + bin_index * OUT_N + i_lookback
-            pack1 = tl.load(status_ptr + flag_offset_i, volatile=True)
-            while pack1 == 0:
-                pack1 = tl.load(status_ptr + flag_offset_i, volatile=True)
-            exclusive_prefix += pack1 & v_mask
-            if (pack1 & aggregate_mask) == aggregate_mask:
-                i_lookback -= 1
-            else:
-                i_lookback = -1
-        pack2 = inclusive_prefix_mask | (exclusive_prefix + local_sum)
-        tl.store(status_ptr + status_offset, pack2, cache_modifier=".cg")
+
+@triton.jit
+def radix_sort_tile_prefix_kernel(
+    counts_ptr,
+    prefix_ptr,
+    num_tiles,
+    OUT_N,
+    TILES_POW2: tl.constexpr,
+):
+    """Exclusive scan of the per-tile counts, along the TILE axis. Stage 2.
+
+    One program per (batch, bin) row — the rows are independent, and the row is
+    `num_tiles` long, which is `cdiv(n, 2048)`: small. This is the step the
+    lookback was doing inside the scatter, done where Triton actually orders it.
+    """
+    row = tl.program_id(0).to(tl.int64)
+    offs = tl.arange(0, TILES_POW2)
+    mask = offs < num_tiles
+    counts = tl.load(counts_ptr + row * OUT_N + offs, mask=mask, other=0)
+    prefix = tl.cumsum(counts, axis=0) - counts          # exclusive
+    tl.store(prefix_ptr + row * OUT_N + offs, prefix, mask=mask)
+
+
+@triton.jit
+def radix_sort_scatter_kernel(
+    arr_ptr,
+    associate_arr_ptr,
+    out_ptr,
+    associate_out_ptr,
+    excumsum_bins_ptr,
+    tile_prefix_ptr,
+    n_passes,
+    pass_id,
+    bit_offset,
+    m,
+    N,
+    OUT_N,
+    TILE_N: tl.constexpr,
+    TILE_R: tl.constexpr,
+    k_bits: tl.constexpr,
+    descending: tl.constexpr,
+):
+    """Scatter elements to their sorted positions. Stage 3.
+
+    Identical to the old `radix_sort_sweep_kernel` except that
+    `exclusive_prefix` — how many of this bin lie in EARLIER tiles — is READ
+    from the scan of stage 2 instead of being discovered by spinning on other
+    programs' flags.
+    """
+    pid = tl.program_id(0).to(tl.int64)
+    pid_m = pid % m
+    pid_n = pid // m
+    pid_r = tl.program_id(1).to(tl.int64)
+
+    bfe_mask: tl.constexpr = (1 << k_bits) - 1
+    r: tl.constexpr = 2 ** k_bits
+    cta_r_start = (pid_r * TILE_R).to(tl.int32)
+    cta_r_end = (tl.minimum(cta_r_start + TILE_R, r)).to(tl.int32)
+
+    n_offsets = pid_n * TILE_N + tl.arange(0, TILE_N)
+    mask = n_offsets < N
+    arr = tl.load(arr_ptr + pid_m * N + n_offsets, mask=mask)
+    arr_u = convert_to_uint_preserve_order(arr, descending)
+    key = (arr_u >> bit_offset) & bfe_mask
+
+    for bin_index in range(cta_r_start, cta_r_end):
+        matches = tl.where(mask, key == bin_index, False)
+        exclusive_prefix = tl.load(
+            tile_prefix_ptr + pid_m * (r * OUT_N) + bin_index * OUT_N + pid_n)
 
         local_ex_cumsum = tl.cumsum(matches.to(tl.uint32), axis=0) - matches
         ex_cumsum_in_bin = exclusive_prefix + local_ex_cumsum

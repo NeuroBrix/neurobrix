@@ -1,0 +1,14 @@
+{
+  "_backend": "metal",
+  "_": "The measurement protocol for Apple Silicon (Metal). Apple GPU clocks are OS-managed and NOT user-lockable (there is no `nvidia-smi -ac` equivalent), so the stability of a sweep cannot be ASSERTED by a clock lock. It is PROVEN by a witness instead: a fixed reference kernel timed at the start and end of every sweep. If the witness time drifts beyond the tolerance below, the regime moved while candidates were being compared and the sweep is invalid. READ, never retyped.",
+  "regime": "witness",
+  "witness": {
+    "kernel": "matmul",
+    "M": 2048, "N": 2048, "K": 2048,
+    "dtype": "fp16",
+    "reps": 50,
+    "drift_tolerance": 0.08,
+    "why_tolerance": "0.08 = 8%: the witness brackets a sweep of many candidate launches, and a same-shape matmul re-timed after that span must land within 8% of its opening time or the OS moved the GPU regime under us. Tighter than the throttle step that made the 1.175x on the NVIDIA side. It reads from HERE, not a constant in code. UNCHANGED on 2026-09-17: the tolerance was never the problem.",
+    "why_shape": "2048^3 fp16 (~4.6 ms). CHANGED from 512^3 on 2026-09-17, by measurement, and the reason is worth keeping. The original rationale was right in kind and wrong in degree: it asked for a shape 'large enough that its time is GPU-bound, not launch-bound', and 512^3 runs in ~0.6 ms, which is not large enough for that on this machine. The first certification run that ever reached this file refused 8 of 16 matmul sweeps for drifts of 38-42% against an 8% tolerance, always with the close slower than the open, which looked like a real regime change. It was not. Twelve readings back to back, GPU continuously busy and nothing else changing, spanned 0.5556-0.7262 ms: about 31%. The witness's own repeatability was worse than the thing it was asked to detect, so the check could not distinguish a moving GPU from its own noise, and its verdicts were near-arbitrary. Repeatability measured against duration, 12 readings each, two dropped as warm-up: 512^3 ~31% worst-pair; 1024^3 (0.87 ms) 13.0%, CoV 3.5%; 1536^3 (2.19 ms) 5.0%, CoV 1.4%; 2048^3 (4.58 ms) 2.1%, CoV 0.7%. 2048^3 leaves roughly a 4x margin under the 8% tolerance, which is what makes a drift verdict mean something. Cost is ~4.6 ms twice per sweep and ~25 MB of operands: negligible against a sweep of ten candidates. The SAME shape every time, so its two timings stay comparable by construction."
+  }
+}

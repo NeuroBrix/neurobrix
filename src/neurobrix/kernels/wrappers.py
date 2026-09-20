@@ -249,7 +249,10 @@ from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
 from .ops.index_add import index_add_gather_kernel
 from .ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
-from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
+from .ops.sort_op import (radix_sort_histogram_kernel,
+                          radix_sort_scatter_kernel,
+                          radix_sort_tile_counts_kernel,
+                          radix_sort_tile_prefix_kernel)
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
 
@@ -2180,9 +2183,29 @@ def mm(a, b, _epilogue: int = 0) :
     #   3. Anything else (fp32 × bf16, bf16 × fp16, etc.) → widen to the
     #      common dtype. Rare; typically a downstream force_fp32 bmm feeding
     #      the next matmul.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_eff == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
+    # A NARROW WEIGHT IS PROMOTED IN THE KERNEL, NOT MATERIALISED.
+    #
+    # `PROMOTE_B` makes the kernel do `b = b.to(a.dtype)` on the loaded tile —
+    # it is dtype-agnostic (matmul.py:243) and has always been able to take
+    # bf16. The `not _NBX_HAS_NATIVE_BF16` guard is a pre-Ampere CUDA
+    # condition, and it excluded every machine that HAS native bf16 from a path
+    # that has nothing to do with bf16 arithmetic: here `a_eff` is fp32, so the
+    # math is fp32 either way and the only question is whether the weight is
+    # widened in memory first.
+    #
+    # It was being widened, on EVERY call, for a weight that never changes.
+    # Measured on an M4 Pro (TinyLlama-1.1B, 120 tokens, 2026-09-18):
+    # `strided_copy_nd_kernel` was 1408 calls and 11.86 s of a 19.74 s decode —
+    # 60% — and its four dominant shapes are weight-sized with transposing
+    # strides, e.g. shape (2048, 5632) src (1, 2048) -> dst (5632, 1) at
+    # ~5.5 GB/s against the 80.97 GB/s a contiguous copy reaches. Every one came
+    # from this line via `b.to(widest)`.
+    #
+    # bf16 -> fp32 is lossless, so promoting per tile yields the same fp32
+    # values the materialised cast did; the outputs are expected to be
+    # bit-identical and that is checked, not assumed.
+    promote_b = (a_eff == NBXDtype.float32
+                 and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16))
     if a_eff != b_nbx and not promote_b:
         if promote_a:                       # widened for real when the pair needs the widest
             a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
@@ -6029,7 +6052,9 @@ def sort_wrapper(x, dim: int = -1,
     from .ops.sort_op import (
         convert_to_uint_preserve_order,
         radix_sort_histogram_kernel,
-        radix_sort_sweep_kernel,
+        radix_sort_tile_counts_kernel,
+        radix_sort_tile_prefix_kernel,
+        radix_sort_scatter_kernel,
     )
     import math as _math
 
@@ -6091,7 +6116,11 @@ def sort_wrapper(x, dim: int = -1,
     grid_r = triton.cdiv(num_bins, TILE_R)
     SWEEP_TILE = 2048
     sweep_grid_n = triton.cdiv(n, SWEEP_TILE)
+    # `status` holds each tile's per-bin COUNT; `tile_prefix` the exclusive scan
+    # of those counts along the tile axis. Two buffers of the same shape, and
+    # the second is what the scatter reads instead of spinning on the first.
     status = NBXTensor.empty((m, num_bins, sweep_grid_n), device=x.device, dtype=NBXDtype.int32)
+    tile_prefix = NBXTensor.empty((m, num_bins, sweep_grid_n), device=x.device, dtype=NBXDtype.int32)
 
     # Stage 2: sweep per radix pass. OUT_N is the STATUS row stride the
     # kernel indexes with pid_n ∈ [0, sweep_grid_n) — it must be the CTA
@@ -6100,9 +6129,21 @@ def sort_wrapper(x, dim: int = -1,
     for i in range(n_passes):
         status.fill_(0)
         _set_device(arr_in)
-        radix_sort_sweep_kernel[(m * sweep_grid_n, grid_r)](
+        # THREE launches, not one. The single-kernel form carried a decoupled
+        # lookback — a cross-CTA spin — which Triton does not order and Metal
+        # does not make co-resident: measured wrong from n=2049 (the first size
+        # past one 2048 tile), losing elements. `cumsum_wrapper` in this file
+        # already does its cross-tile scan as separate launches and is correct
+        # at eight tiles; this follows it.
+        radix_sort_tile_counts_kernel[(m * sweep_grid_n, grid_r)](
+            arr_in, status, m, n, sweep_grid_n,
+            SWEEP_TILE, TILE_R, k_bits, i * k_bits, descending)
+        radix_sort_tile_prefix_kernel[(m * num_bins,)](
+            status, tile_prefix, sweep_grid_n, sweep_grid_n,
+            TILES_POW2=triton.next_power_of_2(sweep_grid_n))
+        radix_sort_scatter_kernel[(m * sweep_grid_n, grid_r)](
             arr_in, indices_in, arr_out, indices_out,
-            ex_cumsum, status,
+            ex_cumsum, tile_prefix,
             n_passes, i, i * k_bits, m, n, sweep_grid_n,
             SWEEP_TILE, TILE_R, k_bits, descending)
         arr_in, arr_out = arr_out, arr_in

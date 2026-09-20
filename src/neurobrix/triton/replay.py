@@ -1,5 +1,13 @@
 """Frozen-plan replayer for the triton hot loop (Phase 4a: E1+E2+E6).
 
+ONE-SHOT REQUESTS: recording is opt-in, off by default, and should stay off for
+a single request — the plan does not outlive this process (only the slab SIZE
+cache is written; there is no plan serialiser and no loader). Measured on an
+M4 Pro, 120 tokens, byte-identical output: **+7.6% at a short prompt, 8.0x at
+~480 tokens of context**. The cost is context-dependent; a single number
+misstates it. Full record and the reasoning:
+docs/reference/replay-recording-in-a-one-shot-request.md
+
 Removes the per-launch Python band (wrapper dtype protocol, arg
 resolvers, allocation, autotune lookup, triton's Python launcher —
 measured ~0.57 ms/launch on the Ming denoiser) by recording the FINAL
@@ -46,6 +54,43 @@ from typing import Any, Dict, List, Optional, Tuple
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 
 ENABLED = os.environ.get("NBX_TRITON_REPLAY") == "1"
+
+# A RECORDED PLAN DOES NOT OUTLIVE ITS PROCESS, and enabling this for a single
+# request pays for something nothing will read.
+#
+# Plans live on the sequence object (`seq.__dict__["_replay_plans"]`), so they
+# are reused across the decode steps of ONE generation and discarded at exit.
+# The only thing this module writes to disk is the slab SIZE cache
+# (`_store_slab_size`); there is no plan serialiser and no loader.
+#
+# Measured on an M4 Pro, TinyLlama-1.1B, 120 tokens, byte-identical output in
+# every arm (2026-09-18):
+#
+#     short prompt (~6 tok)     plain  19.71 s   replay  21.20 s   +7.6%
+#     long prompt (~480 tok)    plain 282.05 s   replay 2257.70 s  +8.0x
+#
+# and within the long run replay DID engage — 87.5% of sequence runs took the
+# fast path — so the cost is not a failure to replay. It is what recording and
+# replaying cost at that context, and it is paid again by the next process.
+#
+# This is opt-in and OFF by default, which is the right default and is left
+# alone. The note below exists so that turning it on for a one-shot request is a
+# visible choice rather than a silent 8x.
+def _one_shot_note() -> None:
+    """Say once, on stderr, that a recorded plan will not outlive this process."""
+    global _SAID_ONE_SHOT
+    if not ENABLED or _SAID_ONE_SHOT:
+        return
+    _SAID_ONE_SHOT = True
+    import sys as _sys
+    print("[replay] recording is ON. The plan lives in THIS process only — "
+          "nothing is written to disk and the next process records again. "
+          "Measured cost on one request: +7.6% at a short prompt, 8.0x at ~480 "
+          "tokens of context. Worth it for a process that serves many requests; "
+          "not for one.", file=_sys.stderr, flush=True)
+
+
+_SAID_ONE_SHOT = False
 
 # Multi-device replay is LOCKED by default and this flag is how the lock is
 # exercised for its equivalence proof — it is not a feature switch.
@@ -515,7 +560,8 @@ _ACTIVE_SLABS: List["SlabAllocator"] = []
 class _NBXLaunch:
     """One prepared kernel, called the way `CompiledKernel.run` is called."""
 
-    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata")
+    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata",
+                 "names", "types")
 
     def __init__(self, prep, kinds):
         self.prep = prep
@@ -523,15 +569,35 @@ class _NBXLaunch:
         self.name = prep.name
         self.function = prep.function
         self.packed_metadata = None
+        # The launcher hands a driver the parameter NAMES and TYPES beside the
+        # values, and a backend that packs its scalars into one buffer computes
+        # the field offsets FROM THOSE TYPES. The recorded tuple carries only
+        # `(kind, value)`, so replay used to drop both — which on triton-ext is
+        # a refusal by name ("Launching without them would pack to the wrong
+        # offsets WITHOUT failing"), and the replay path simply could not drive
+        # that backend. The fork's driver did not need them, so nothing said so.
+        #
+        # They do not belong in the RECORD: they are a property of the
+        # compilation, identical for every launch of this specialisation, and
+        # `prep.signature` already holds them. Derived here, once per adapter.
+        runtime = [(n, t) for n, t in prep.signature.items() if t != "constexpr"]
+        self.names = [n for n, _t in runtime]
+        self.types = [t for _n, t in runtime]
 
     def run(self, g0, g1, g2, stream, function, packed_metadata,
             launch_md, enter_hook, exit_hook, *vals):
         # The stream is the CALLER's: the graph capture hands its own capture stream
         # because the recorded one may be the uncapturable legacy stream.
         from neurobrix.kernels.launcher import active_driver
+        # `trailing` travels with the PREPARATION, not with the recorded tuple:
+        # it is what the compiled kernel declares beyond the call, so dropping
+        # it here would replay a launch that binds fewer buffers than the kernel
+        # has — the silent class this seam exists to end.
         active_driver().launch(self.prep.function, (g0, g1, g2), self.prep.block,
                                self.prep.shared, stream,
-                               list(zip(self.kinds, vals)))
+                               list(zip(self.kinds, vals)),
+                               names=self.names, types=self.types,
+                               trailing=self.prep.trailing)
 
 
 _NBX_ADAPTERS: Dict[int, "_NBXLaunch"] = {}
@@ -1171,6 +1237,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     plan machine directly: the B1 stabilizer stays OFF (the recording
     slab is the address-pinning authority) and the interceptor
     registration contract in signature() decides eligibility."""
+    _one_shot_note()
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
         if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":

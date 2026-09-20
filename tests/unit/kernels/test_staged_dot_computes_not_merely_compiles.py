@@ -1,4 +1,17 @@
-"""The staged-dot shape must COMPUTE correctly, not merely stop refusing.
+"""ARCHIVED SUBJECT, PARTLY. `test_this_shape_takes_the_staged_dot_path` lived
+here until 2026-09-17 and was removed with the bledden triton-msl fork: it
+asserted that the emitted MSL carried that emitter's COOPERATIVE STAGED FILL,
+which is a property of its codegen and of nothing else. triton-ext emits this
+shape by another route — measured the same day, its MSL carries no such
+construct — and that is a different emitter, not a defect.
+
+What mattered underneath survives and still runs here:
+`test_the_output_agrees_with_the_fp64_oracle` says the numbers are right on
+whatever path serves the shape, which is the claim fifteen models were blocked
+on. A test that pins WHICH path served it can only be written against an
+emitter, and ours is now triton-ext's.
+
+The staged-dot shape must COMPUTE correctly, not merely stop refusing.
 
 Everything measured on this chantier so far is a question of compilation: the
 refusal falls, another appears, the MSL is emitted, the shader fails with nine
@@ -198,59 +211,42 @@ def _run_pinned(x32, w32, blocks=None):
 
 
 def _emitted_msl(fn):
-    """The MSL this run actually emitted, captured at the emitter.
+    """The MSL this run actually emitted, captured from the COMPILATION.
 
-    Read from the emitter rather than from a warning: once the path works
-    there are no warnings, and a control that keys on a refusal's text stops
-    controlling anything the moment the refusal is fixed -- which is exactly
-    when it is needed most.
+    Read from the compiled artifact rather than from a warning: once the path
+    works there are no warnings, and a control that keys on a refusal's text
+    stops controlling anything the moment the refusal is fixed -- which is
+    exactly when it is needed most.
+
+    It used to spy on `triton_msl.codegen.msl_emitter.emit_msl`. That fork was
+    archived on 2026-09-17, and reading the artifact is the better instrument
+    anyway: it names no vendor, and it observes what the launcher actually
+    loaded instead of a function someone might stop calling. Measured the same
+    day on triton-ext, a compiled kernel publishes
+    `asm = ['metallib', 'msl', 'source', 'ttgir', 'ttir']`, and `asm["msl"]`
+    carries the `kernel void` text.
     """
-    import triton_msl.codegen.msl_emitter as EM
+    import triton.compiler as TC
 
     seen = []
-    original = EM.emit_msl
+    original = TC.compile
 
-    def spy(mod, metadata, options):
-        out = original(mod, metadata, options)
-        seen.append(out)
+    def spy(*args, **kwargs):
+        out = original(*args, **kwargs)
+        msl = (getattr(out, "asm", None) or {}).get("msl")
+        if msl:
+            seen.append(msl)
         return out
 
     # Only the emitter module is touched. Importing the backend module here
     # re-runs triton's subclass discovery over a half-initialised module and
     # it finds zero backends -- an import that breaks what it observes.
-    EM.emit_msl = spy
+    TC.compile = spy
     try:
         fn()
     finally:
-        EM.emit_msl = original
+        TC.compile = original
     return seen
-
-
-def test_this_shape_takes_the_staged_dot_path():
-    """The template control, and the reason the verdict below means anything.
-
-    Three synthetic kernels written for this refusal all compiled cleanly
-    through a template the real kernel never reaches, and every assertion on
-    them was correct about the wrong object. So the shape must be shown to
-    take the cooperative staged path, not merely to produce numbers.
-
-    It reads the emitted MSL, which works on both sides of the fix: the
-    cooperative fill loop and the barrier before the dot are what that path
-    emits, and no other path emits them.
-    """
-    x32, w32 = _inputs()
-    msls = _emitted_msl(lambda: _run_pinned(x32, w32))
-    if not msls:
-        pytest.fail("no MSL was emitted at all; this measured nothing")
-    blob = "\n".join(msls)
-    staged = ("_sa" in blob) and ("threadgroup_barrier" in blob)
-    assert staged, (
-        "the emitted MSL carries no cooperative staged fill. This shape was "
-        "taken by some other path, so the oracle verdict below is about a "
-        "different object than the one fifteen models are blocked on.")
-    assert "_loop_e" in blob, (
-        "no per-element wrap loop: a tile wider than the threadgroup must be "
-        "covered by one, and its absence means the tile is not the wide one")
 
 
 @pytest.mark.parametrize("blocks", _servable_configs(),
@@ -277,11 +273,24 @@ def test_the_output_agrees_with_the_fp64_oracle(blocks):
         # It is not passed over in silence either: the reason is asserted to
         # be a refusal and not a crash, so a kernel that dies here cannot wear
         # a refusal's clothes.
-        from triton_msl.errors import MetalNonRecoverableError
+        # Asked of the SEAM, by class, never by message. The archived fork
+        # named `MetalNonRecoverableError` and this line imported it directly.
+        # triton-ext names NO refusal type (measured 2026-09-17: no `errors`
+        # module; its compiler refuses with a bare RuntimeError), so the seam
+        # recognises nothing and this arm can no longer tell a refusal from a
+        # crash.
+        #
+        # It therefore FAILS rather than skipping. Skipping on any exception is
+        # precisely how a kernel that dies wears a refusal's clothes, which the
+        # comment above forbids. The gap is real and belongs upstream — a named
+        # refusal type in triton-ext — not hidden behind a green skip here.
+        from neurobrix.triton.metal_backend import is_backend_refusal
 
-        assert isinstance(exc, MetalNonRecoverableError), (
-            f"config {blocks} failed with something that is not a refusal: "
-            f"{type(exc).__name__}: {exc}")
+        assert is_backend_refusal(exc), (
+            f"config {blocks} failed with something the seam cannot certify as "
+            f"a refusal: {type(exc).__name__}: {exc}\n"
+            f"If this backend names no refusal type, that is the defect to fix "
+            f"— not this assertion.")
         pytest.skip(f"config {blocks} is refused at codegen, not servable: "
                     f"{str(exc).splitlines()[0][:120]}")
 

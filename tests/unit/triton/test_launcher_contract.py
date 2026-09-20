@@ -33,9 +33,10 @@ def _metal_driver():
             return None
     except Exception:
         return None
-    # Past this point the backend SAYS metal, so its driver module must exist:
+    # Past this point the backend SAYS metal, so its driver module must exist.
+    # That module is triton-ext's since the fork was archived on 2026-09-17.
     # an absent one is a broken install, not "no Apple GPU", and says so.
-    from neurobrix.triton.metal_driver import driver
+    from neurobrix.triton.triton_ext_driver import driver
     try:
         return driver()
     except Exception:
@@ -161,33 +162,66 @@ def test_driver_satisfies_the_launcher_contract(driver):
         expected=expected,
     )
     assert not failures, (
-        f"{driver.backend} does not satisfy the launcher contract:\n  "
+        f"{driver.target().backend} does not satisfy the launcher contract:\n  "
         + "\n  ".join(failures))
 
 
 def test_the_contract_declares_a_backend_name(driver):
-    assert isinstance(driver.backend, str) and driver.backend
+    """Through `target()`, which is what the launcher asks.
+
+    This read `driver.backend` until 2026-09-17. That attribute belonged to the
+    archived fork's driver object; the launcher has never used it — it calls
+    `target()` and reads `.backend` off the GPUTarget. A test asserting an
+    attribute the engine does not use certifies a surface nobody drives."""
+    backend = driver.target().backend
+    assert isinstance(backend, str) and backend
+
+
+def _compiled(driver):
+    """Compile as the LAUNCHER does and return (metadata, artifact, slots).
+
+    Both tests below called `driver.compile(...)`, an entry point the archived
+    fork's driver object carried and the launcher never used: `prepare()`
+    compiles with Triton's own compiler against `driver.target()` and then calls
+    `driver.load(...)`. Asking a driver for a compile method is asking it for a
+    surface the engine does not drive, which is the fault this whole file
+    exists to prevent.
+    """
+    import triton
+    from triton.compiler.compiler import ASTSource
+
+    compiled = triton.compile(
+        ASTSource(fn=_add_one_kernel(), signature=_SIGNATURE,
+                  constexprs=_CONSTEXPRS),
+        target=driver.target(), options={"num_warps": 4})
+    slots = [ArgSlot(index=i, name=name, is_pointer=str(ty).startswith("*"),
+                     dtype=str(ty))
+             for i, (name, ty) in enumerate(
+                 (n, t) for n, t in _SIGNATURE.items() if t != "constexpr")]
+    return compiled, slots
 
 
 def test_pointer_slots_carry_addresses_not_containers(driver):
     """The launcher passes integers. A driver that wants a tensor object has
     put the container back in the interface, and with it the framework the
     container belongs to."""
-    kernel = driver.compile(_add_one_kernel(), _SIGNATURE, _CONSTEXPRS,
-                            num_warps=4)
-    pointer_slots = [s for s in kernel.binding if s.is_pointer]
+    _compiled_kernel, slots = _compiled(driver)
+    pointer_slots = [s for s in slots if s.is_pointer]
     assert len(pointer_slots) == 2
-    assert all(isinstance(s, ArgSlot) for s in kernel.binding)
+    assert all(isinstance(s, ArgSlot) for s in slots)
     assert [s.name for s in pointer_slots] == ["src_ptr", "dst_ptr"]
 
 
 def test_the_artifact_declares_what_it_is(driver):
     """A cache that cannot tell a metallib from a cubin will eventually load
     one into the other."""
-    kernel = driver.compile(_add_one_kernel(), _SIGNATURE, _CONSTEXPRS,
-                            num_warps=4)
-    assert kernel.binary_kind in ("cubin", "metallib", "msl", "hsaco")
-    assert isinstance(kernel.binary, (bytes, bytearray)) and kernel.binary
+    compiled, _slots = _compiled(driver)
+    assert driver.artifact_kind in ("cubin", "metallib", "msl", "hsaco")
+    artifact = compiled.asm.get(driver.artifact_kind)
+    assert artifact is not None, (
+        f"the driver takes {driver.artifact_kind!r} and the compiler produced "
+        f"{sorted(compiled.asm)}")
+    assert isinstance(artifact, (bytes, bytearray, str)) and artifact
 
 
 def test_no_torch_is_pulled_by_compiling_or_launching(driver):
