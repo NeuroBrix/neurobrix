@@ -67,7 +67,7 @@ def conv1d_forward_kernel(
         c = (lc % BLOCK_CI_COUNT) * BLOCK_CI
         k = lc // BLOCK_CI_COUNT
 
-        input_c_offset = c + tl.arange(0, BLOCK_CI)
+        input_c_offset = (c + tl.arange(0, BLOCK_CI)).to(tl.int64)   # the channel-plane product must not wrap at 2^31 (conv2d, 2026-09-20)
         input_l_offset = k * dilation_l - padding_l + stride_l * out_l_point
 
         curr_input_pointer = (
