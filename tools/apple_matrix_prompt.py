@@ -15,7 +15,10 @@ PROMPT_TTS = "The quick brown fox jumps over the lazy dog."
 
 MODELS = [
     ("Kokoro-82M", PROMPT_TTS, "wav"),
-    ("TinyLlama-1.1B-Chat", PROMPT_LLM, "txt"),
+    # TinyLlama-1.1B-Chat (no suffix) was deleted from the cache 2026-09-20: byte-
+    # identical to -v1.0 in weights digest, manifest and profile (measured), and
+    # the cache ceiling needed the 2.1 G for a mixture-of-experts container. It
+    # remains re-importable from the mounted Super-NeuroBrix-Cache.
     ("TinyLlama-1.1B-Chat-v1.0", PROMPT_LLM, "txt"),
 ]
 MARGIN = 1.25

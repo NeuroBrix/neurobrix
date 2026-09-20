@@ -74,13 +74,15 @@ def running_backend(triton_version=None) -> dict:
 
     `triton_version` is left settable because the STALE-generator cells vary it
     deliberately; the NAME is the part that must follow the machine.
+
+    Delegates to `generator_identity()` — the one door — rather than carrying a
+    third spelling of the identity. This fixture WAS a second spelling reading
+    `triton.__version__`, and it turned red the moment the door moved to the
+    distribution metadata (2026-09-20), which is the behaviour a copy always
+    buys.
     """
-    import triton
-    name = "cuda"
-    try:
-        from neurobrix.kernels.launcher import target
-        name = getattr(target(), "backend", None) or "cuda"
-    except Exception:
-        pass
-    return {"name": name,
-            "triton": str(triton_version or triton.__version__)}
+    from neurobrix.kernels.autotune_certified import generator_identity
+    ident = dict(generator_identity())
+    if triton_version is not None:
+        ident["triton"] = str(triton_version)
+    return ident
