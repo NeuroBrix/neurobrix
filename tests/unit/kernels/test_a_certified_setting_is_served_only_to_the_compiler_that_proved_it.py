@@ -151,6 +151,14 @@ def test_lookup_itself_refuses_the_mismatched_entry(monkeypatch, capsys):
         pass
 
     key = (10, 1024, 1024, True, True, "fp32", "fp16", "fp32")
+    # The one opening that serves a setting to any generator is an environment
+    # variable, and this cell inherited it from the shell that ran the suite: the
+    # 2026-09-19 kernels gate on card 3 was queued with NBX_AUTOTUNE_ANY_GENERATOR=1
+    # (so a 3.6.0 directory would serve under 3.8.0 and the gate would measure
+    # correctness rather than coverage), and arm (b) below then read "served" and
+    # went red — a test that reads the process environment answers for the shell,
+    # not for the code. The opening is closed here whatever the shell did.
+    monkeypatch.delenv("NBX_AUTOTUNE_ANY_GENERATOR", raising=False)
     monkeypatch.setattr(C, "enabled", lambda: True)
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
     monkeypatch.setattr(C, "output_dtype", lambda tuner, k: "fp32")
