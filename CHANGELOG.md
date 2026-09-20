@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Apple Silicon support, with its numbers.** Measured on an M4 Pro, 24 GB
+  unified memory, macOS 26.6, torch 2.14.0, Triton built from source at pin
+  `4a15f415` with the `triton-apple-backend` plugin. Every figure below is a
+  run on that machine, not an inference from another mode.
+
+  **Three modes, ten catalogue cells each, judged outside the engine.** The
+  same ten cells — six upscalers (swin2SR x2/x4-realworld, swinir x2/x4,
+  real-esrgan x2/x4), whisper-large-v3-turbo, Kokoro-82M, TinyLlama-1.1B,
+  chatterbox — run under a 4 GB free-memory floor and are judged by
+  instruments the engine does not own: speech-to-text reads the two TTS
+  wavs back and must return the exact sentence, the whisper transcript must
+  match its recording, the LLM text is compared literally, and images pass
+  an external degeneracy judge.
+
+  - `--compiled` (plain PyTorch on mps): 10 attempted, 10 passing.
+    `Engine: COMPILED` in every log, planned on `mps:0`, zero fallback lines.
+  - `--triton`: 10 attempted, 10 passing, 0 autotune misses. The two text
+    cells are byte-identical to the compiled arm's output.
+  - `--triton-sequential`: 10 attempted, 10 passing, 0 misses, same judges.
+
+  **The certified kernel directory.** 974 witnessed keys at
+  `src/neurobrix/config/autotune/apple/apple_m4_pro/`, every entry stamped
+  with the generator that proved it (`triton 3.8.0+git4a15f415 mps`) and
+  refused to any other. Service is at zero miss: the catalogue cells above
+  demand nothing uncertified, and the full unit suite (155 files, 1366
+  tests) passes with every file at rc=0.
+
+  **What an Apple user installs, and what it costs.** PyPI publishes no
+  macOS Triton wheel, so the triton path is built from source: roughly
+  40 minutes and ~8 GB (1.7 GB LLVM toolkit, 4.3 GB build tree, ~1 GB
+  build venv) with Xcode present, plus the `triton-apple-backend` package
+  and torch 2.14.0. The build tree can be trimmed by 0.55 GB afterwards
+  with `-DTRITON_BUILD_UT=OFF` and deleted entirely once installed; the
+  runtime kernel cache grows with use (~0.9 GB after a month). The
+  `--compiled` mode needs none of this — torch alone carries it.
+
+  **Two things this release refuses to claim, each with its reason.**
+
+  - **Mixture-of-experts stays refused on Apple.** `execute_moe_fused`
+    refuses rather than runs. The kernel-level mechanism — the expert
+    pointer table read through a pinned address scope — is proven against
+    an fp64 oracle, but this project does not call a path supported until
+    a real model's request produces an artefact judged outside the engine,
+    and no mixture-of-experts model has run end to end here yet. The
+    refusal lifts when the designated model
+    (`granite-3.1-1b-a400m-instruct`) runs in all three modes and is
+    judged.
+  - **`real-esrgan-x8` at 1024 px is owed, not shipped.** Its tiled run
+    retains ~740 MB per tile inside per-tile graph execution — measured by
+    a per-tile allocation census (`NBX_TILE_CENSUS=1`), attributed to
+    execution rather than to the tile blender — and dies under the memory
+    floor before the last tile stage. The defect is named and handed to
+    the engine's runtime owners; until it returns fixed, 512 px completes
+    and is judged, 1024 px is refused with its figures, and one certified
+    directory key (the last-stage conv at 3656²) remains deliberately
+    absent because the run that would demand it cannot yet finish.
+
 ### Fixed
 
 - **A request too large for the card is now cut into pieces and stitched, instead
