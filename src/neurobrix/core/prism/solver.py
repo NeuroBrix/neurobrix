@@ -3327,10 +3327,12 @@ class PrismSolver:
         # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
         tensors = graph.get("tensors", {})
         trace_size = None
+        in_spatial_w = None          # the W beside it, for the scale derivation below
         for iid in graph.get("input_tensor_ids", []):
             shape = tensors.get(str(iid), {}).get("shape", [])
             if isinstance(shape, list) and len(shape) in (4, 5):
                 trace_size = shape[-2]
+                in_spatial_w = shape[-1]
                 break
         if not trace_size:
             return None
@@ -3347,10 +3349,12 @@ class PrismSolver:
         # decode-side activation — exactly what would (wrongly) trip the budget
         # test below. Mirror of the TilingEngine.from_component_config guard.
         out_spatial = None
+        out_spatial_w = None         # likewise: a uniform upscale must agree on both
         for oid in graph.get("output_tensor_ids", []):
             osh = tensors.get(str(oid), {}).get("shape", [])
             if isinstance(osh, list) and len(osh) in (4, 5):
                 out_spatial = osh[-2]
+                out_spatial_w = osh[-1]
                 break
         if out_spatial is not None and out_spatial < trace_size:
             # D2-ENCODER: the guard is lifted ONLY for the class the engine
@@ -3377,6 +3381,32 @@ class PrismSolver:
                   or config.get("block_out_channels"))
             if db:
                 scale_factor = 2 ** (len(db) - 1)
+        if scale_factor is None and out_spatial and trace_size:
+            # THE GRAPH SAYS IT, so ask the graph. Every upscaler in this
+            # machine's cache carries an EMPTY `config` in profile.json --
+            # real-esrgan x2/x4/x8, swin2SR-x4, hat-l-x4, all of them -- and
+            # each states its factor exactly in its own shapes:
+            #
+            #   real-esrgan-x8   in [1,3,112,80] -> out [1,3,896,640]   8 and 8
+            #   real-esrgan-x4   in [1,3,112,80] -> out [1,3,448,320]   4 and 4
+            #   swin2SR-x4       in [1,3,112,80] -> out [1,3,448,320]   4 and 4
+            #
+            # Without this the rung refused the ENTIRE upscaler family at its
+            # first line, for want of a number the container already held, and
+            # `real-esrgan-x8` at 1024 px went to the host instead of being cut
+            # into pieces it fits in. A constant that answers a live question
+            # belongs to the authority that knows it, and here that is the
+            # graph, not a config field the builder never wrote.
+            #
+            # Both axes must agree and the ratio must be exact: a component
+            # that scales H and W differently, or by a fraction, is not a
+            # uniform spatial upscale and this sizing does not describe it.
+            _ih, _iw = trace_size, in_spatial_w
+            _oh, _ow = out_spatial, out_spatial_w
+            if _ih and _iw and _oh and _ow and _oh % _ih == 0 and _ow % _iw == 0:
+                _rh, _rw = _oh // _ih, _ow // _iw
+                if _rh == _rw and _rh > 1:
+                    scale_factor = _rh
         if not scale_factor:
             return None
 
@@ -3398,15 +3428,29 @@ class PrismSolver:
         # cannot size a tile and says so.
         vae_scale = getattr(ic, "vae_scale", None)
         _h, _w = getattr(ic, "height", None), getattr(ic, "width", None)
-        if not (vae_scale and _h and _w):
+        if not (_h and _w):
             from neurobrix.core.runtime_values import MissingRuntimeValue
             raise MissingRuntimeValue(
-                f"tiling was required for this component but its latent extent "
-                f"cannot be derived: vae_scale={vae_scale!r}, height={_h!r}, "
-                f"width={_w!r}. Declare them in the container's "
-                f"runtime/defaults.json or the family config.")
-        latent_h = max(1, _h // vae_scale)
-        latent_w = max(1, _w // vae_scale)
+                f"tiling was required for this component but the request's "
+                f"extent is not known: height={_h!r}, width={_w!r}. Declare them "
+                f"in the container's runtime/defaults.json or the family config.")
+        if vae_scale:
+            latent_h = max(1, _h // vae_scale)
+            latent_w = max(1, _w // vae_scale)
+        else:
+            # NO VAE, SO NO LATENT GRID -- and that is legitimate, not missing.
+            # `InputConfig`'s own docstring says so: "absent is legitimate only
+            # for a dimension the model does not have: no VAE, no vae_scale."
+            # An upscaler reads pixels and writes pixels; the space its tiles
+            # cover IS the request's own, at scale 1.
+            #
+            # Demanding a vae_scale here refused every upscaler in the cache.
+            # `real-esrgan-x8` at 1024x1024 raised MissingRuntimeValue from this
+            # line telling the operator to declare a VAE scale for a model that
+            # has no VAE -- and the request went to the host instead of being
+            # cut into pieces it fits in. A refusal that asks for a thing the
+            # model cannot have is not a refusal, it is a wrong question.
+            latent_h, latent_w = _h, _w
 
         window_alignment = config.get("window_size", 1) or 1
         frac = budget_bytes / full_act
