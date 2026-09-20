@@ -56,11 +56,49 @@ def test_the_running_label_names_the_triton_target_backend():
 
 
 def test_the_running_label_round_trips_through_proof_backend():
-    """Reader and writer must agree, which is the whole contract."""
+    """Reader and writer must agree, which is the whole contract — and the
+    version they agree on is the DISTRIBUTION's, which carries the pin."""
     name = _target_or_skip()
-    import triton
-    written = proof_backend({"backend": {"triton": str(triton.__version__),
-                                         "name": name}})
+    import importlib.metadata as md
+    try:
+        ver = md.version("triton")
+    except md.PackageNotFoundError:
+        import triton
+        ver = str(triton.__version__)
+    written = proof_backend({"backend": {"triton": ver, "name": name}})
     assert running_generator() == written, (
         f"running_generator() is {running_generator()!r} but a proof stamped on "
         f"this machine reads {written!r}")
+
+
+def test_the_label_sees_a_pin_move_when_the_metadata_does():
+    """5a495ee2 -> 4a15f415 left `__version__` at a bare 3.8.0 on BOTH pins,
+    so a label built from it served 964 entries to a compiler that had moved
+    114 commits — measured 2026-09-20, and the gate never knew. The
+    distribution version (`3.8.0+git<pin>`) is the identity that moves."""
+    _target_or_skip()
+    import importlib.metadata as md
+    import triton
+    try:
+        ver = md.version("triton")
+    except md.PackageNotFoundError:
+        pytest.skip("no distribution metadata for triton on this install")
+    if ver == str(triton.__version__):
+        pytest.skip("this install's metadata adds nothing over __version__ — "
+                    "the label cannot be finer than its sources")
+    gen = running_generator()
+    assert ver in gen, (
+        f"the distribution says {ver!r} but the label reads {gen!r}: a pin "
+        f"move is invisible to the gate again")
+
+
+def test_the_writer_stamps_the_same_identity_the_reader_expects():
+    """One door: `certify._backend()` writes what `running_generator()` reads.
+    Two hands and two spellings is how ec938641's gate refused all 945."""
+    _target_or_skip()
+    from neurobrix.kernels.autotune_certify import _backend
+    written = proof_backend({"backend": _backend()})
+    assert written == running_generator(), (
+        f"the certifier stamps {written!r} but the gate expects "
+        f"{running_generator()!r}: every fresh proof would be refused on the "
+        f"machine that just made it")
