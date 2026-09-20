@@ -978,11 +978,15 @@ rows measure the plan and the fit, not a runtime sweep):
 | 3 | 32 GB | 18 GB | 13.14 GB | 12288 MB | 4.80 GB | 0 |
 | 2 | 32 GB, 1536² | 0 / 2 GB | 30.40 / 29.14 GB | 24576 MB | 9.60 GB | 1 — CUDA 700 at `aten.convolution::351` |
 
-The 1536² rows are not the plan's failure: the rung and budget are right, and the fault is a
-sticky illegal address inside a 9.6 GB tile (conv2d's own indices are int64; the poisoning
-site is upstream of the first checked call). It is being pinned with `--mode triton-sequential`
-and `CUDA_LAUNCH_BLOCKING=1` on the same card; the remaining rows of all three series are in
-`nbx/campaigns/2026_09_20_ladder/`.
+The 1536² rows were not the plan's failure: the rung and budget are right by the law. Pinned
+with `--mode triton-sequential` and `CUDA_LAUNCH_BLOCKING=1`: the x8 network's LAST conv
+(64 → 3 channels at a 6344² tile) has a small output — under the 4 GiB band-streaming
+threshold, so it ran whole — and an input of 2 576 000 000 elements, and its loop-derived
+int32 channel offset wrapped past channel 53. Widened to int64 in conv2d and conv1d
+(d95be536, register 80, a 2.3-billion-element cell seen red then green). The five-row series on
+both classes (5/5 rc=0 each, identical rungs row by row) and the 1536² re-run are in
+`nbx/campaigns/2026_09_20_ladder/LADDER.md`. On Apple the same kernel runs the same offset
+form, so a tile whose input crosses 2^31 elements would have faulted there too.
 
 ### 3. A runtime flag read only from the build toolchain's registry — the Apple installs ran without it too
 
