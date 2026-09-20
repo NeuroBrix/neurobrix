@@ -791,6 +791,15 @@ def _trace_routing_ops(
         "aten::index_put", "aten::scatter_add", "aten::index_add",
         # V2 aggregation pattern: cat + scatter (NOT aten::add — escapes via residuals)
         "aten::cat", "aten::scatter",
+        # Stacked-expert pattern (granite-3.1, 2026-09-20): the routing weights
+        # are a softmax OVER the selected k (after topk, so reached from it),
+        # the gathered tokens are split per expert by data-dependent sizes, and
+        # each expert's fused input projection is chunked into gate and up.
+        # None of these was admitted, so the walk stopped at the split and the
+        # layer was never fused — the trace-frozen sizes then ran and failed
+        # at any other prompt length.
+        "aten::_softmax", "aten::softmax",
+        "aten::split_with_sizes", "aten::split", "aten::chunk",
         # Accumulation setup (buffers for expert outputs)
         "aten::zeros_like", "aten::zeros", "aten::full",
         "aten::empty_like", "aten::empty",
@@ -980,6 +989,38 @@ def _trace_expert_blocks(
                         if expert_id not in expert_weights:
                             expert_weights[expert_id] = {}
                         expert_weights[expert_id][proj_type] = t_input
+                        continue
+                    # STACKED EXPERTS. A vendor may keep each projection as ONE
+                    # parameter of shape [E, out, in] and read expert e through
+                    # `select(param, 0, e)` — granite-3.1's ParallelExperts
+                    # (2026-09-20): `input_linear` [E, 2I, H] holds the gate
+                    # rows then the up rows of every expert, `output_linear`
+                    # [E, H, I] the down projection. The pattern above sees no
+                    # per-expert name here and the layer fell through to the
+                    # trace-frozen split_with_sizes, which fails at any other
+                    # prompt length. The projection is told by the slab's
+                    # shape against the hidden size, never by a name.
+                    sel_uid = producer_map.get(t_input)
+                    sel = ops.get(sel_uid, {}) if sel_uid else {}
+                    if sel.get("op_type") != "aten::select":
+                        continue
+                    stacked = _get_input_tensor_id(sel, 0)
+                    if not stacked or not stacked.startswith("param::"):
+                        continue
+                    sel_args = [a for a in sel.get("attributes", {}).get("args", [])
+                                if a.get("type") == "scalar"]
+                    if len(sel_args) < 2 or int(sel_args[0].get("value", 0)) != 0:
+                        continue
+                    expert_id = int(sel_args[1]["value"])
+                    slab = (sel.get("output_shapes") or [[]])[0]
+                    if len(slab) != 2 or hidden_states_tid is None:
+                        continue
+                    hidden = (tensors.get(hidden_states_tid, {}).get("shape") or [0])[-1]
+                    proj_type = "stacked_in" if slab[1] == hidden else "down"
+                    if expert_id not in expert_weights:
+                        expert_weights[expert_id] = {}
+                    expert_weights[expert_id][proj_type] = t_input
+                    expert_weights[expert_id].setdefault("_select_uids", {})[proj_type] = sel_uid
 
         # Find hidden_states: input to an index op that gathers expert tokens
         # Must be float (not int64 routing tensors), large hidden_dim,
@@ -997,6 +1038,50 @@ def _trace_expert_blocks(
                         and "int" not in dtype
                         and producer_map.get(input_tid) not in moe_op_uids):
                     hidden_states_tid = input_tid
+
+    # Stacked experts: the fused op wants a gate view and an up view per expert.
+    # Both are ROW SLICES of the expert's input slab — [0, I) and [I, 2I) of the
+    # `select` output — inserted into the DAG as `aten::slice` ops right after
+    # that select. A slice is a metadata op on both engines (a torch view; an
+    # NBXTensor offset + strides), so the pointer tables read each expert's
+    # data_ptr and strides exactly as they read a named expert's parameter,
+    # and the kernels do not change.
+    for expert_id, projs in list(expert_weights.items()):
+        sel_out = projs.pop("stacked_in", None)
+        sel_uids = projs.pop("_select_uids", {})
+        if sel_out is None:
+            continue
+        sel_uid = sel_uids.get("stacked_in")
+        slab = (ops.get(sel_uid, {}).get("output_shapes") or [[]])[0]
+        two_i, hidden = int(slab[0]), int(slab[1])
+        inter = two_i // 2
+        dtype = tensors.get(sel_out, {}).get("dtype", "float32")
+        for proj_type, lo, hi in (("gate", 0, inter), ("up", inter, two_i)):
+            view_uid = f"moe_view::{sel_uid}::{proj_type}"
+            view_tid = f"{view_uid}::out_0"
+            ops[view_uid] = {
+                "op_type": "aten::slice",
+                "input_tensor_ids": [sel_out],
+                "output_tensor_ids": [view_tid],
+                "input_shapes": [[two_i, hidden]],
+                "output_shapes": [[inter, hidden]],
+                "attributes": {
+                    "args": [{"type": "tensor", "tensor_id": sel_out},
+                             {"type": "scalar", "value": 0},
+                             {"type": "scalar", "value": lo},
+                             {"type": "scalar", "value": hi},
+                             {"type": "scalar", "value": 1}],
+                    "kwargs": {},
+                },
+                "parent_module": ops.get(sel_uid, {}).get("parent_module", ""),
+            }
+            tensors[view_tid] = {"shape": [inter, hidden], "dtype": dtype}
+            producer_map[view_tid] = view_uid
+            if sel_uid in execution_order:
+                execution_order.insert(execution_order.index(sel_uid) + 1, view_uid)
+            else:
+                execution_order.append(view_uid)
+            projs[proj_type] = view_tid
 
     # Build ordered weight ID lists (0..num_experts-1)
     num_experts_found = len(expert_weights)
