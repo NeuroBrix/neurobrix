@@ -517,6 +517,43 @@ PipelineExecutionPlan = ExecutionPlan
 # PRISM SOLVER - Enterprise Grade
 # =============================================================================
 
+#: The memory ladder: fine at the bottom, coarse at the top. A uniform 2 GB
+#: step discards half of an 8 GB machine and hands a 128 GB machine sixty-four
+#: rungs — sixty-four certified key families — for nothing. Whole gigabytes;
+#: the 4096 MB floor is the lowest USABLE rung.
+_MEMORY_LADDER_GB = (4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
+
+
+def memory_ladder_rung_mb(free_mb) -> int:
+    """Round a FREE-memory reading DOWN onto the ladder. Never the total, and
+    never anything derived — the tile, the overlap and the band count are then
+    computed from the rung, exactly, with nothing downstream rounded.
+
+    Why the reading and not the tile (owner, 2026-09-20): the reading is the
+    ONLY noisy input to the tiling derivation. Measured on one request
+    (real-esrgan-x8 at 1024 px, four ambient states): the live figure dragged
+    the tile through four conv-extent families — 405 / 429 / 510 / 520 — each
+    demanding ~7 fresh autotune keys that one-shot runs never persist, so the
+    certified directory chased a set it could not enumerate. Quantising the
+    reading removes the noise at its source and leaves every derivation exact.
+
+    Rounding DOWN is a property, not a convenience: the difference between the
+    reading and the rung is headroom the plan never asks for — the room the
+    autotuner's sweep transients at (8 x tile)^2 had been taking from nowhere.
+    And the rule is vendor-neutral: unified memory here, CUDA free VRAM on the
+    rack, one ladder, no coordination.
+
+    A reading below the lowest usable rung passes through untouched: there is
+    nothing to size against down there, and the 4096 MB floor machinery owns
+    that refusal in its own words.
+    """
+    rung = None
+    for g in _MEMORY_LADDER_GB:
+        if g * 1024 <= free_mb:
+            rung = g * 1024
+    return rung if rung is not None else int(free_mb)
+
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -3286,7 +3323,7 @@ class PrismSolver:
 
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
-        mem: ComponentMemory, budget_bytes: int,
+        mem: ComponentMemory, free_reading_bytes: int,
     ) -> Optional[Dict[str, Any]]:
         """Return a TilingEngine spec when a spatial component (4D/5D input +
         scale config) overflows `budget_bytes` untiled but fits when its
@@ -3411,9 +3448,18 @@ class PrismSolver:
             return None
 
         full_act = mem.activation_bytes
+        # THE LADDER: the free reading rounds DOWN onto a whole-gigabyte rung
+        # and the tile budget is 0.40 OF THE RUNG (0.40 is the CogVideoX-
+        # measured transient allowance documented at the call site). Sizing
+        # from the rung is what makes the tile a pure function of the request;
+        # the LIVE reading keeps the feasibility check at the call site — the
+        # rung sizes, the truth validates.
+        rung_mb = memory_ladder_rung_mb(free_reading_bytes / (1024 * 1024))
+        budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
         import os as _os_diag
         if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
             print(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
+                  f"reading={free_reading_bytes/1024**3:.2f}GB rung={rung_mb}MB "
                   f"budget={budget_bytes/1024**3:.2f}GB "
                   f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
                   f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
@@ -3525,6 +3571,9 @@ class PrismSolver:
             "window_alignment": int(window_alignment),
             "trace_size": int(trace_size),
             "tiled_activation_bytes": int(tiled_act),
+            # the rung this sizing stood on, so the plan's own record says
+            # which one and a reader can rederive every number above
+            "budget_rung_mb": int(rung_mb),
         }
         if t_spec is not None:
             spec.update(t_spec)
@@ -3661,6 +3710,7 @@ class PrismSolver:
             "window_alignment": int(window_alignment),
             "trace_size": int(trace_size),
             "tiled_activation_bytes": int(tiled_act),
+            "budget_rung_mb": int(rung_mb),
             "downscale": True,
             "t_axis_out": int(t_axis_out),
         }
@@ -3806,9 +3856,11 @@ class PrismSolver:
         # for the same tile. CogVideoX-5b at 0.85 sized tile=39 → 24 GB
         # compiled (fit) but 31 GB+ triton (OOM at conv::90); 0.40 sizes a
         # tile that fits both. tiled_activation re-checked below.
-        tile_budget = int(effective_capacity * 0.40 * 1024 * 1024)
+        # The READING goes in whole; the rung and the 0.40 fraction are
+        # derived inside (`memory_ladder_rung_mb`), so the tile is a pure
+        # function of (request, rung) and the spec names the rung it stood on.
         tiling = self._spatial_component_tiling(
-            container, comp_name, mem, tile_budget)
+            container, comp_name, mem, int(effective_capacity * 1024 * 1024))
         if tiling is not None:
             tiled_total_mb = real_weight + tiling["tiled_activation_bytes"] / (1024 * 1024)
             if tiled_total_mb <= effective_capacity * 0.92:
