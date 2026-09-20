@@ -9,6 +9,7 @@ def pow_forward_kernel(
     n_elements,
     exponent,
     BLOCK_SIZE: tl.constexpr,
+    INT_EXP: tl.constexpr = 0,
 ):
     pid = tl.program_id(0).to(tl.int64)
     offset = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit from the program id: the product itself wraps past 2^31 elements (register 58)
@@ -61,6 +62,39 @@ def pow_forward_kernel(
                               _zsign * 0.0,               # +-0
                               _zsign * float("inf")))     # +-inf
     out = tl.where(x_fp32 > 0, _mag, tl.where(x_fp32 < 0, _neg, _zero))
+    # THE EXACT ROUTE FOR A SMALL INTEGER EXPONENT — the branch the comment
+    # below records as "available rather than taken". Taken on 2026-09-20,
+    # because the Dell measured the general route on CUDA against the fp64
+    # oracle and it is not a rounding footnote: x**2 lands up to 15 ulps from
+    # the oracle where main's libdevice call sat within 2 (38 147 lanes, |x| a
+    # standard normal with zero lanes), x**0.5 at 5 vs 2, x**-1 at 7 vs 2. A
+    # square computed as exp(2 log|x|) is not a square. Repeated multiplication
+    # is correctly rounded at e=2 and within two roundings at e=3, needs no
+    # vendor library, and carries IEEE's own sign rules for free: (-0)**2 is
+    # +0, (-0)**3 is -0, 1/(+-0) is +-inf, so none of the select logic above is
+    # needed on this route. The wrapper sets INT_EXP when the exponent is an
+    # integer-valued scalar with 1 <= |e| <= 8; INT_EXP == 0 keeps the general
+    # route, which still owns e == 0, non-integers and large integers.
+    if INT_EXP != 0:
+        _n: tl.constexpr = INT_EXP if INT_EXP > 0 else -INT_EXP
+        _p = x_fp32
+        if _n >= 2:
+            _p = _p * x_fp32
+        if _n >= 3:
+            _p = _p * x_fp32
+        if _n >= 4:
+            _p = _p * x_fp32
+        if _n >= 5:
+            _p = _p * x_fp32
+        if _n >= 6:
+            _p = _p * x_fp32
+        if _n >= 7:
+            _p = _p * x_fp32
+        if _n >= 8:
+            _p = _p * x_fp32
+        if INT_EXP < 0:
+            _p = 1.0 / _p
+        out = _p
     # ---------------------------------------------------------------------
     # THE ACCURACY COST OF THIS ROUTE, AND WHAT IT IS AND IS NOT INHERENT TO.
     #
