@@ -46,7 +46,15 @@ from neurobrix.core.prism.profiler import InputConfig
 from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
 
 MB = 1024 * 1024
-CACHE = Path("/home/mlops/.neurobrix/cache")
+# The engine's own door, not a literal: this file carried the Dell's absolute
+# path (/home/mlops/...) and its two unguarded cells failed on the first Apple
+# run with FileNotFoundError — and, worse, the no-extents cell failed for the
+# WRONG reason (an unreadable container returns None before the extents guard
+# can raise). `core.paths.cache_dir()` is the door 7f340b02 built for exactly
+# this; the per-cell "not in this machine's cache" skip stays in force.
+from neurobrix.core.paths import cache_dir
+
+CACHE = cache_dir()
 MODEL = "real-esrgan-x8"
 
 
@@ -87,7 +95,10 @@ def test_the_esrgan_case_is_now_sized():
 
 def test_the_scale_comes_from_the_graph_when_the_config_is_silent():
     """And the config really is silent — checked, not assumed."""
-    prof = json.load(open(CACHE / MODEL / "components" / "model" / "profile.json"))
+    pj = CACHE / MODEL / "components" / "model" / "profile.json"
+    if not pj.exists():
+        pytest.skip(f"{MODEL} is not in this machine's cache")
+    prof = json.load(open(pj))
     assert not (prof.get("config") or {}).get("upscale"), (
         "this container now declares an upscale, so this cell no longer tests "
         "the derivation it was written for")
@@ -126,6 +137,8 @@ def test_no_vae_means_the_requests_own_grid():
 def test_a_request_without_extents_still_refuses():
     """The guard that remains is the one that should: no height, no decision."""
     from neurobrix.core.runtime_values import MissingRuntimeValue
+    if not (CACHE / MODEL).exists():
+        pytest.skip(f"{MODEL} is not in this machine's cache")
     s = _solver(h=None, w=None)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
     with pytest.raises(MissingRuntimeValue):
