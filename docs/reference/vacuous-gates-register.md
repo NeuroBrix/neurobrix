@@ -2035,3 +2035,39 @@ Two rules:
 
 The same shape hides behind `&&` chains ending in a formatter, `| head` on a build
 log, and any `set -e` script whose final command is a printer.
+
+### 78 — a battery labelled with the stack under test, whose every model ran on the other stack
+
+**Where.** `tests/regression/conftest.py::pytest_configure`, this rack, 2026-09-17 (the
+"battery candidate stack t38", flightrec `20260917_041647`) and again 2026-09-20 14:17
+(`20260920_141742_battery-candidate-stack-9000b7aa`, killed at 14:33 once seen).
+
+**What was believed.** `5 failed, 79 passed` on 09-17 was read as the candidate stack —
+torch 2.14.0+cu126, Triton 3.8.0 — running the model zoo, and the switch case was built on
+it ("the candidate stack runs the V100s: 79 passed").
+
+**What was measured.** `ps` during the 09-20 run: the pytest process was the candidate's
+interpreter; its child was `/home/mlops/ml/venv/bin/python -u -m neurobrix run ...` — the
+PRODUCTION interpreter, torch 2.5.1+cu121, Triton 3.6.0. `_runtime_python()` returns
+`NEUROBRIX_PYTHON` or `sys.executable`; the conftest hook, written so a system-python pytest
+would find a working venv, sets `NEUROBRIX_PYTHON = $VIRTUAL_ENV/bin/python` whenever that
+variable is exported and the venv imports `neurobrix` — and every shell on this machine
+exports the production venv from `.bashrc`. `test_serve_warm.py` spawns `sys.executable`
+directly, so ITS cells did run on the candidate — and those were the three reds
+(`vlm/multimodal/image-compiled`). The one file that measured the candidate was red; the one
+that was green measured production.
+
+**Why the gate looked green.** Nothing in the record names the interpreter a model ran
+under. The label was written by the launcher from the pytest interpreter; the runs chose
+another; the two agree in every line the log keeps.
+
+**The rule.** *A measurement's label is written from the process that does the measuring,
+not from the one that launches it.* A battery that spawns engines records, per run, the
+interpreter path AND its stack versions, and the launcher refuses when they differ from
+what the label says. Here: `NEUROBRIX_PYTHON` is exported explicitly, `VIRTUAL_ENV` is
+cleared, the door prints `sys.executable torch triton` from the interpreter that will run,
+and a census of `ps` during the run lists every interpreter that ran a model; a battery
+whose census names two interpreters has measured nothing attributable.
+
+**Consequence for the switch case.** No green battery of the candidate stack exists as of
+14:35 UTC on 2026-09-20; the case's "79 passed" column is withdrawn.
