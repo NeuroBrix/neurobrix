@@ -804,18 +804,14 @@ def _witness_entry_refusal(proto: Dict[str, Any], path: Path, say) -> None:
 
 
 def _backend() -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+    """The proof's generator stamp — C.generator_identity(), the ONE DOOR the
+    gate reads back. Writing a different spelling here is how ec938641's gate
+    refused all 945 Apple entries once, and how a pin move stayed invisible to
+    it once more; both are documented on the door itself."""
     try:
-        import triton
-        out["triton"] = triton.__version__
+        return dict(C.generator_identity())
     except Exception:
-        pass
-    try:
-        from neurobrix.kernels.launcher import target
-        out["name"] = target().backend
-    except Exception:
-        out["name"] = "?"
-    return out
+        return {"name": "?"}
 
 
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None) -> Dict[str, Any]:

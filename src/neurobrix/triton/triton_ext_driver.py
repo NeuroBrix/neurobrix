@@ -376,6 +376,82 @@ _PTR_NP = {
 }
 
 
+#: Wraps pinned by an open `pinned_addresses` scope: (addr, np_dtype) -> the
+#: MetalBuffer every launch inside the scope reuses for that pointer. Keeping
+#: ONE wrap per (address, element type) is what keeps a captured GPU address
+#: meaning the same storage from one launch to the next.
+_PINNED_WRAPS: dict = {}
+#: How many open scopes pin each address. A wrap is dropped only when the last
+#: scope holding its address exits.
+_PIN_COUNTS: dict = {}
+
+
+class pinned_addresses:
+    """Pin the Metal wraps behind these tensors, so an address a kernel CAPTURES
+    stays valid for every launch inside the scope.
+
+    The contract this makes enforceable: a kernel may store the bitcast of a
+    pointer it was handed (``tl.cast(ptr, tl.int64, bitcast=True)``) into a
+    table, and a later kernel inside the same scope may load that table entry
+    and read through it. That is how a mixture-of-experts band addresses its
+    per-expert weights.
+
+    Why a scope and not a convention. ``_buffer_for`` builds a NEW
+    ``metal_native.wrap`` for every launch, so without this an address captured
+    in one launch names a buffer that is RELEASED before the next launch runs.
+    What the read then returns is UNDEFINED, and both outcomes were measured:
+    0/256 in one ordering (verify_wrap_lifetime.py, 2026-09-19) and, when Metal
+    happened to hand a re-wrap of the same region the same GPU address,
+    256/256 that LOOK correct (2026-09-20, in test ordering). With one wrap
+    kept alive it is 256/256 by contract rather than by accident:
+
+        wrap created fresh per launch (as shipped)     undefined — an accident
+        the same wrap kept alive                       256/256, by contract
+
+    The scope holds two things, because the lifetime has two halves and both
+    were measured:
+
+    * **the wraps** — Metal keeps the GPU address mapped to this buffer for as
+      long as the MetalBuffer object lives;
+    * **the tensors** — so the engine's allocator cannot free and reissue the
+      storage underneath. On MPS the FIRST same-size allocation after a free
+      reissued the exact address, and the stale table then read the newcomer's
+      bytes with nothing raised (repro_130_mps_reissue.py). A stale table does
+      not fail loudly in either direction, which is why this is a scope in code
+      and not a caution in a comment.
+
+    Nests: an address pinned by two scopes stays pinned until both exit.
+    """
+
+    def __init__(self, *tensors):
+        if not tensors:
+            raise RuntimeError(
+                "pinned_addresses with nothing to pin would promise a lifetime "
+                "it does not hold; pass the tensors whose addresses kernels "
+                "will capture")
+        self._tensors = tuple(tensors)   # the allocator half of the lifetime
+        self._addrs = []
+
+    def __enter__(self):
+        for t in self._tensors:
+            addr = int(t.data_ptr())
+            _PIN_COUNTS[addr] = _PIN_COUNTS.get(addr, 0) + 1
+            self._addrs.append(addr)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        for addr in self._addrs:
+            n = _PIN_COUNTS.get(addr, 0) - 1
+            if n > 0:
+                _PIN_COUNTS[addr] = n
+                continue
+            _PIN_COUNTS.pop(addr, None)
+            for key in [k for k in _PINNED_WRAPS if k[0] == addr]:
+                _PINNED_WRAPS.pop(key, None)
+        self._addrs.clear()
+        return False
+
+
 def _buffer_for(addr: int, ty: str):
     """Alias the NBXTensor allocation containing `addr` as a MetalBuffer.
 
@@ -438,10 +514,20 @@ def _buffer_for(addr: int, ty: str):
             f"the triton-ext driver cannot bind pointer 0x{addr:x}: the "
             f"allocation leaves {size - offset} bytes from it, less than one "
             f"{np_dtype} element")
+    # A launch inside a `pinned_addresses` scope must reuse the scope's wrap:
+    # a fresh wrap would be a fresh GPU address, and the table the scope exists
+    # for would go stale mid-scope.
+    _pin_key = (addr, np_dtype)
+    _pinned = _PINNED_WRAPS.get(_pin_key)
+    if _pinned is not None:
+        return _pinned
     raw = (ctypes.c_byte * span).from_address(addr)
     view = np.frombuffer(memoryview(raw), dtype=np_dtype)
     try:
-        return _native().wrap(view)
+        _buf = _native().wrap(view)
+        if addr in _PIN_COUNTS:
+            _PINNED_WRAPS[_pin_key] = _buf
+        return _buf
     except Exception as exc:
         raise RuntimeError(
             f"the triton-ext driver could not bind pointer 0x{addr:x} "
