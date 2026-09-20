@@ -49,7 +49,12 @@ import repo_env  # noqa: E402  — the repository's .env, loaded the way the bui
 
 repo_env.load()
 
-PY = "/home/mlops/ml/venv/bin/python"
+PY = "/home/mlops/ml/venv/bin/python"          # the BUILD TOOLCHAIN's interpreter (trace, build, local, replace)
+# The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
+# one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
+# moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
+# triton 3.8 switch: the directory is stamped 3.8.0 and the gate serves it only to that compiler).
+ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
 VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
@@ -1006,7 +1011,7 @@ class Model:
             if outp.exists() and (self.dir / f"{tag}_{arm}.log").exists() and sha(outp):
                 res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True}
                 continue
-            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
+            cmd = [ENGINE_PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
             t0 = time.time()
             # One precision policy on both arms (POLICY above).
             env = self.env(); env.update(POLICY_ENV)
