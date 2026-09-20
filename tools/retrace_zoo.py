@@ -503,6 +503,16 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
                    and dims[pos].get("id") == a.get("id") for dims in out_dims):
                 sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
                 continue
+        # And with an EXPRESSION the old tracer had computed into the inferred slot — hat-s-x4,
+        # 2026-09-20: five views `[σ·(s1//16)·(s2//16), 64, 8, 8, C]` spelled by June's tracer as the
+        # product, by today's as the vendor's -1 — the op's own output carries an equivalent
+        # expression at that position, so the view is the same at every length and PyTorch infers
+        # it; bytes were identical on both arms and the gate read FAIL over sixty of these.
+        if b == -1 and isinstance(a, dict) and _is_dim_node(a) and path and isinstance(path[-1], int):
+            pos = path[-1]
+            if any(len(dims) > pos and isinstance(dims[pos], dict) and equivalent_dims(a, dims[pos]) for dims in out_dims):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
+                continue
         if not path or not isinstance(path[-1], int):
             return None
         pos = path[-1]
