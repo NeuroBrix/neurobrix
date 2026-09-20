@@ -319,6 +319,35 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
     return None
 
 
+def host_values(t) -> np.ndarray:
+    """A kernel's output as NUMBERS, whatever dtype the tensor carries.
+
+    `NBXTensor.numpy()` hands bf16 back as a 2-byte VOID array (`|V2`): numpy
+    has no bfloat16, so the bits are correct and nothing can read them as
+    numbers. `np.asarray(that, dtype=np.float64)` raises "setting an array
+    element with a sequence", and that is how EVERY bf16 shape failed
+    certification — reported as "no config could run (10 of 10)" on kernels
+    that had in fact run correctly and produced the right answer. Measured
+    2026-09-17: `mm` on a (22,2048)x(2048,2048) bf16 pair returns a bf16
+    tensor of the right shape, and only the READING of it failed.
+
+    The input half of this defect was found and fixed earlier (`_NP` mapped
+    bf16 to fp32, so a bf16 census key was handed an fp32 tensor and the
+    wrapper recomputed an fp32 key). This is the output half of the same
+    thing, and on Apple it is the more expensive half: 58 of the 84 shapes the
+    seven proven cells demand are bf16, conv2d alone accounting for 53.
+
+    Decoded through `bf16_bits_to_f32`, which is exact — a bf16 value is
+    exactly representable in fp32 — so the comparison against the fp64 oracle
+    loses nothing here.
+    """
+    host = t.numpy()
+    dt = getattr(host, "dtype", None)
+    if dt is not None and dt.kind == "V" and dt.itemsize == 2:
+        return bf16_bits_to_f32(np.ascontiguousarray(host).view(np.uint16))
+    return host
+
+
 def oracle_deviation(out: np.ndarray, oracle) -> float:
     """max |out - oracle| relative to the oracle's own magnitude; inf when one
     side is not finite where the other is. A windowed oracle is measured on
@@ -495,29 +524,90 @@ _PROTOCOL_ENV = "NEUROBRIX_RIG_PROTOCOL"
 OFF_PROTOCOL_OPT = "--allow-off-protocol-clock"
 
 
-def _protocol_file() -> Optional[Path]:
-    """The machine's declared measurement protocol, or None when it declares none.
+def _current_backend() -> Optional[str]:
+    """The backend this machine targets (`cuda`, `metal`, `hip`), or None.
 
-    A protocol is a property of the MACHINE, not of the engine: it records what
-    frequency this particular rack decided its numbers are taken at, and an
-    installed NeuroBrix carries no such decision. So it is DISCOVERED and never
-    shipped, and there is no built-in value to fall back on — an engine that
-    invents the number stops citing the protocol, and the divergence between the
-    two is silent by construction.
+    A protocol is scoped to a backend, so selecting the file needs the backend
+    name — and it must be the ENGINE's name for the backend, not the Triton
+    target's.
 
-    Order: an explicit env pointer, then the workshop's own file in a source
-    checkout, then the machine's dotfile. The checkout case is what closes this
-    door on the rig that needs it without anyone having to remember a variable.
+    This used to read `launcher.target().backend`. Those two agree on NVIDIA
+    (both say `cuda`), which is why the difference stayed invisible, and they
+    diverge on Apple: `_detect_gpu_backend()` says `metal` while the Triton
+    target says whatever the installed Triton backend calls itself — `metal`
+    under the archived fork, `mps` under triton-ext.
+
+    So swapping the Triton backend silently renamed the thing the protocol is
+    scoped by, `rig_protocol.metal.json` stopped being found, and certify ran on
+    2026-09-17 reporting "this machine declares no measurement protocol for
+    backend 'mps' — the regime is RECORDED in every proof but checked against
+    nothing". Six shapes were certified that way. **The witness is the whole
+    reason Apple certification is trustworthy** (the clocks cannot be locked, so
+    stability is proven by re-timing a reference kernel), and it was not being
+    checked.
+
+    A measurement regime is a property of the MACHINE AND ITS GPU — "Apple GPU
+    clocks are OS-managed" is true whatever Triton calls the target — so it is
+    scoped by the engine's own vendor name, which is stable across Triton
+    backend swaps. The old proofs agree: they record `backend.name = "metal"`
+    and `target = "metal-apple-m4-pro"`.
     """
+    try:
+        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        return _detect_gpu_backend()
+    except Exception:
+        return None
+
+
+def _protocol_file(backend: Optional[str] = None) -> Optional[Path]:
+    """The machine's declared measurement protocol FOR ITS BACKEND, or None.
+
+    A protocol is a property of the MACHINE AND ITS BACKEND, not of the engine:
+    it records the regime this rack's numbers are taken under (a clock lock on
+    an NVIDIA rack, a witness on Apple Silicon where the clock cannot be
+    locked). It is DISCOVERED, never shipped with a built-in value.
+
+    SCOPED BY BACKEND so it cannot LEAK across machines: the file is
+    `rig_protocol.<backend>.json`, and a Mac (metal) never reads the Dell's
+    `rig_protocol.cuda.json`. The un-suffixed `rig_protocol.json` was a leak by
+    construction — the checkout carried one machine's V100 protocol and every
+    other machine inherited it (2026-09-16: a Mac refused certification because
+    it could not read the NVIDIA clocks the Dell's committed protocol named).
+
+    Order: an explicit env pointer, then the backend file in a source checkout,
+    then the machine's dotfile. A legacy un-suffixed file is honoured ONLY if it
+    declares this backend, never blindly — the leak does not come back.
+    """
+    backend = backend or _current_backend()
     env = os.environ.get(_PROTOCOL_ENV)
     if env:
         return Path(env)                      # named, so a missing one refuses below
-    for parent in Path(__file__).resolve().parents:
-        cand = parent / "tools" / "rig_protocol.json"
+    names = [f"rig_protocol.{backend}.json"] if backend else []
+    for name in names:
+        for parent in Path(__file__).resolve().parents:
+            cand = parent / "tools" / name
+            if cand.is_file():
+                return cand
+        cand = Path.home() / ".neurobrix" / name
         if cand.is_file():
             return cand
+    # A legacy un-suffixed file counts only if it names THIS backend.
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / "tools" / "rig_protocol.json"
+        if cand.is_file() and _protocol_backend(cand) == backend:
+            return cand
     cand = Path.home() / ".neurobrix" / "rig_protocol.json"
-    return cand if cand.is_file() else None
+    if cand.is_file() and _protocol_backend(cand) == backend:
+        return cand
+    return None
+
+
+def _protocol_backend(path: Path) -> Optional[str]:
+    """The backend a protocol file declares (`_backend`), or None if unreadable."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")).get("_backend")
+    except Exception:
+        return None
 
 
 def rig_protocol_refusal(allow_off_protocol: bool = False, say=print) -> None:
@@ -555,14 +645,39 @@ def rig_protocol_refusal(allow_off_protocol: bool = False, say=print) -> None:
     """
     path = _protocol_file()
     if path is None:
-        say("[certify] this machine declares no measurement protocol "
-            f"(no {_PROTOCOL_ENV}, no tools/rig_protocol.json, no "
-            f"~/.neurobrix/rig_protocol.json) — the clocks are RECORDED in every "
-            f"proof but checked against nothing.")
+        be = _current_backend()
+        say(f"[certify] this machine declares no measurement protocol for backend "
+            f"{be!r} (no {_PROTOCOL_ENV}, no tools/rig_protocol.{be}.json, no "
+            f"~/.neurobrix/rig_protocol.{be}.json) — the regime is RECORDED in "
+            f"every proof but checked against nothing.")
         return
 
     try:
-        clock = json.loads(Path(path).read_text(encoding="utf-8"))["clock"]
+        proto = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError(
+            f"cannot read the protocol from {path} ({exc}). The protocol is not "
+            f"optional and has no default: restore the file rather than "
+            f"certifying without it.")
+
+    # The stability regime: a recorded LOCK (NVIDIA, clocks held to a protocol
+    # and read at entry) or a recorded WITNESS (Apple, where the clock cannot be
+    # locked, so stability is PROVEN per-sweep by a reference kernel's drift —
+    # checked in `certify_key`, not here). The contract stays whole and single:
+    # both are proofs, both are recorded, an entry without a recorded regime is
+    # not served.
+    regime = proto.get("regime", "clock_lock")
+    if regime == "witness":
+        _witness_entry_refusal(proto, path, say)
+        return
+    if regime != "clock_lock":
+        raise RuntimeError(
+            f"protocol {path} declares an unknown regime {regime!r}: the regimes "
+            f"are 'clock_lock' (a held clock, read at entry) and 'witness' (a "
+            f"reference kernel's drift, proven per sweep).")
+
+    try:
+        clock = proto["clock"]
         want_gfx = int(clock["application_graphics_mhz"])
         want_mem = int(clock["application_memory_mhz"])
     except Exception as exc:
@@ -616,6 +731,76 @@ def rig_protocol_refusal(allow_off_protocol: bool = False, say=print) -> None:
     raise RuntimeError("\n".join(lines) +
                        f"\n\n  To certify off protocol deliberately, pass "
                        f"{OFF_PROTOCOL_OPT} — the run then says so in its own output.")
+
+
+_REGIME = _UNREAD
+
+
+def _regime():
+    """(regime_str, protocol_dict) for this machine's backend, read once.
+
+    ('clock_lock', proto) on an NVIDIA rack, ('witness', proto) on Apple,
+    (None, None) when the machine declares no protocol for its backend.
+    """
+    global _REGIME
+    if _REGIME is not _UNREAD:
+        return _REGIME
+    path = _protocol_file()
+    if path is None:
+        _REGIME = (None, None)
+        return _REGIME
+    try:
+        proto = json.loads(Path(path).read_text(encoding="utf-8"))
+        _REGIME = (proto.get("regime", "clock_lock"), proto)
+    except Exception:
+        _REGIME = (None, None)
+    return _REGIME
+
+
+def _witness_time_ms(proto: Dict[str, Any]) -> float:
+    """Time the protocol's witness kernel — a fixed-shape matmul, always the
+    same — with the sweep's own timer (`L.do_bench`). The one number whose only
+    variable across a sweep's open and close is the GPU regime: same shape, same
+    inputs, same timer, so a change in it is a change in the machine."""
+    from neurobrix.kernels import launcher as L
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    spec = proto["witness"]
+    if spec.get("kernel", "matmul") != "matmul":
+        raise RuntimeError(f"witness kernel {spec.get('kernel')!r} not supported "
+                           f"(only 'matmul')")
+    M, N, K = int(spec["M"]), int(spec["N"]), int(spec["K"])
+    dtype = spec.get("dtype", "fp16")
+    npd = _NP.get(dtype, np.float16)
+    rng = np.random.default_rng(0)                      # fixed inputs, every time
+    a = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((M, K)) * 0.1).astype(npd)))
+    b = NBXTensor.from_numpy(np.ascontiguousarray((rng.standard_normal((K, N)) * 0.1).astype(npd)))
+    return float(L.do_bench(lambda: W.mm(a, b), warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
+
+
+def _witness_entry_refusal(proto: Dict[str, Any], path: Path, say) -> None:
+    """Entry condition for the witness regime: the reference kernel must RUN, so
+    the per-sweep drift check has a baseline it can take. It does NOT read or
+    hold a clock — Apple's clock is OS-managed and unlockable; stability is
+    proven per sweep in `certify_key`, not asserted here."""
+    if "witness" not in proto:
+        raise RuntimeError(
+            f"protocol {path} declares regime 'witness' but carries no 'witness' "
+            f"spec (shape, dtype, drift_tolerance): a witness regime with no "
+            f"witness is a door with no hinge.")
+    try:
+        t = _witness_time_ms(proto)
+    except Exception as exc:
+        raise RuntimeError(
+            f"the witness kernel from {path} could not be timed ({exc}). A "
+            f"certification whose stability cannot be measured is not a "
+            f"measurement — the same rule the clock lock enforces, by its own "
+            f"means on this backend.")
+    spec = proto["witness"]
+    say(f"[certify] regime WITNESS ({path}): reference {spec.get('kernel','matmul')} "
+        f"{spec['M']}x{spec['N']}x{spec['K']} {spec.get('dtype','fp16')} opens at "
+        f"{t:.4f} ms; each sweep is bracketed and refused if it drifts past "
+        f"{float(spec['drift_tolerance'])*100:.0f}%.")
 
 
 def _backend() -> Dict[str, Any]:
@@ -698,7 +883,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
                 run_s = time.time() - t_one                # the run every config makes anyway, timed
-                dev = oracle_deviation(out_tensor.numpy(), oracle)
+                dev = oracle_deviation(host_values(out_tensor), oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
                 continue
@@ -717,9 +902,64 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         timed: List[Tuple[Any, float, float]] = []
         t_bench = time.time()
         contenders = _contenders(results)
+        # STABILITY REGIME. The candidate timings below decide `best_ms` by
+        # comparison, so they are only comparable if the machine held still
+        # across them. On an NVIDIA rack that is the clock lock, read at entry.
+        # On Apple the clock is OS-managed and unlockable, so stability is
+        # PROVEN, not asserted: a fixed reference kernel is timed just before and
+        # just after this sweep, and if it drifts past the profile's tolerance
+        # the regime moved while we compared and the sweep is refused.
+        _regime_kind, _proto = _regime()
+
+        def _witness_ms():
+            """Time the witness on the UNPATCHED path.
+
+            `certifying_run` IS the sweep, and it is installed AS `tuner.run`.
+            The witness is itself a matmul (`W.mm`), so on a matmul
+            certification it re-enters this very function: the nested call
+            computes the witness's own key and compares it to the candidate's.
+
+            Measured 2026-09-17, the first run after the protocol became
+            findable at all: every fp16 matmul shape came back "UNREACHABLE —
+            the wrapper computed key (512, 512, 512)", which is the witness's
+            shape and not the census's, and the (512,512,512) shape itself
+            FAILED with all ten configs "diverging from the fp64 oracle"
+            because the witness's own launches were being taken for candidate
+            runs. 0 certified where the unwitnessed run had certified 6.
+
+            Suspending the patch keeps the witness on the real path — it must
+            measure the same machine the candidates are measured on — while
+            stopping it from being mistaken for one of them.
+            """
+            tuner.run = saved_run
+            try:
+                return _witness_time_ms(_proto)
+            finally:
+                tuner.run = certifying_run
+
+        _w_open = _witness_ms() if _regime_kind == "witness" else None
         for cfg, dev, _run_s in contenders:
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
+        if _regime_kind == "witness":
+            _w_close = _witness_ms()
+            _tol = float(_proto["witness"]["drift_tolerance"])
+            _drift = abs(_w_close - _w_open) / max(_w_open, 1e-9)
+            if _drift > _tol:
+                raise RuntimeError(
+                    f"{qual} at {key!r}: the witness drifted {_drift*100:.1f}% "
+                    f"across the sweep ({_w_open:.4f} -> {_w_close:.4f} ms, "
+                    f"tolerance {_tol*100:.0f}%): the GPU regime moved while "
+                    f"candidates were being compared, so their times are not "
+                    f"comparable. Sweep refused — not a measurement.")
+            state["stability_witness"] = {"open_ms": round(_w_open, 4),
+                                          "close_ms": round(_w_close, 4),
+                                          "drift": round(_drift, 4),
+                                          "tolerance": _tol,
+                                          "kernel": _proto["witness"].get("kernel", "matmul"),
+                                          "shape": [int(_proto["witness"]["M"]),
+                                                    int(_proto["witness"]["N"]),
+                                                    int(_proto["witness"]["K"])]}
         state["t_bench"] = round(time.time() - t_bench, 3)
         timed.sort(key=lambda t: t[2])
         best, dev, ms = timed[0]
@@ -776,6 +1016,12 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
              "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
              "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")},
+             # The stability regime this sweep was measured under: the machine's
+             # clock is in `machine.clocks_mhz` (a held lock, NVIDIA), and the
+             # witness is here (a proven drift, Apple). One of the two is present
+             # whenever a protocol was declared; `proof_records_regime` reads
+             # either, and an entry with neither is not served.
+             "stability_witness": state.get("stability_witness"),
              "built": {"gpu": not fell_back,
                        "how": "no backend compilation fallback was raised during "
                               "the certifying run",

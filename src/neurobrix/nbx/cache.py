@@ -37,10 +37,15 @@ class NBXCache:
     - safetensors can load directly to GPU via mmap
     """
 
-    DEFAULT_CACHE_DIR = Path.home() / ".neurobrix" / "cache"
+    #: The machine's cache location, from the one door (`core.paths`).
+    #: This was a second literal for the same thing until 2026-09-17.
+    @staticmethod
+    def _default_cache_dir():
+        from neurobrix.core.paths import cache_dir
+        return cache_dir()
 
     def __init__(self, cache_dir: Optional[Path] = None):
-        self.cache_dir = Path(cache_dir) if cache_dir else self.DEFAULT_CACHE_DIR
+        self.cache_dir = Path(cache_dir) if cache_dir else self._default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_cache_path(self, nbx_path: Path) -> Path:

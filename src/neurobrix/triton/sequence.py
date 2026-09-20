@@ -263,6 +263,37 @@ class CompiledOp:
 # TRITON COMPILED SEQUENCE
 # ============================================================================
 
+
+def _fingerprint(t):
+    """A few deterministic samples of a tensor, cheap enough to print per op.
+
+    Shape and dtype alone cannot separate two runs that diverge in VALUE, which
+    is the only thing a two-arm comparison is looking for.
+    """
+    if t is None:
+        return "None"
+    try:
+        import numpy as _np
+        a = t.numpy() if getattr(t, "_device", "cpu") == "cpu" else t.to_cpu().numpy()
+        a = _np.asarray(a).reshape(-1)
+        if a.dtype == _np.uint16:                      # bf16 bits
+            a = ((a.astype(_np.uint32) << 16).view(_np.float32))
+        n = a.size
+        if n == 0:
+            return "empty"
+        # A HASH over every byte, not a handful of samples. Sampling five
+        # positions made two tensors that differ elsewhere look identical, and
+        # the first "divergence" it reported was simply the first place the
+        # difference reached a sampled index (2026-09-17, whisper: it named
+        # aten.native_layer_norm::12, and that kernel proved deterministic in
+        # isolation over 40 launches).
+        import hashlib as _h
+        digest = _h.blake2b(_np.ascontiguousarray(a).tobytes(), digest_size=8).hexdigest()
+        return f"n={n}#{digest}"
+    except Exception as e:                             # noqa: BLE001
+        return f"<{type(e).__name__}>"
+
+
 class TritonSequence:
     """Compiled execution sequence for triton mode.
 
@@ -3410,7 +3441,10 @@ class TritonSequence:
             self._prof_call_idx += 1
         # ===========================================
 
+        import os as _os_vd
+        _vdump = int(_os_vd.environ.get("NBX_VALUE_DUMP_EVERY", "0") or "0")
         for op_idx, op in enumerate(self._ops):
+            _in_fp = ""          # set when NBX_VALUE_DUMP_EVERY >= 2
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
@@ -3514,6 +3548,14 @@ class TritonSequence:
                         except Exception as _wm_e:
                             print(f"[LIVE_WATERMARK_TRACE error] {_wm_e}",
                                   flush=True)
+                if _vdump >= 2:
+                    # The inputs AS THE OP CONSUMES THEM. An output that differs
+                    # while every earlier output hashes the same can only mean
+                    # the input changed between being produced and being read —
+                    # a race on the buffer, not a nondeterministic kernel.
+                    _in_fp = " in=" + ",".join(
+                        _fingerprint(a) if hasattr(a, "data_ptr") else "-"
+                        for a in args[:4])
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
@@ -3902,7 +3944,6 @@ class TritonSequence:
                     if _cat == "elem":
                         _elem_timings[op.op_type] = _elem_timings.get(op.op_type, 0.0) + _dt
                         _elem_counts[op.op_type] = _elem_counts.get(op.op_type, 0) + 1
-
             # Defer old slot tensors before overwriting — cudaFree is
             # synchronous so immediate release while a kernel may still
             # be reading the memory would UAF. The deferred list is
@@ -3936,6 +3977,17 @@ class TritonSequence:
                     arena[s] = result[i] if i < len(result) else None
             else:
                 arena[op.output_slots[0]] = result
+
+            # Op-by-op value fingerprint on the FUSED single-device path,
+            # gated by NBX_VALUE_DUMP_EVERY. Placed AFTER the arena writes:
+            # in this method the defer-old-slots block runs BEFORE the write,
+            # so printing there read the PREVIOUS value (or None) and the
+            # output half of the trace was useless.
+            if _vdump and op.output_slots:
+                print(f"[VALUE_TRACE path=tritonfused op_idx={op_idx} "
+                      f"op_uid={op.op_uid} "
+                      f"samp={_fingerprint(arena[op.output_slots[0]])}"
+                      f"{_in_fp if _vdump >= 2 else ''}]", flush=True)
 
             # === TEMP NBX_TRITON_TRACE_NAN=1 : log first Inf/NaN op ===
             # Gate hoisted to run start (C1).

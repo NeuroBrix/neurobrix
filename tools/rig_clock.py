@@ -51,7 +51,13 @@ import json
 import subprocess
 from pathlib import Path
 
-PROTOCOL_FILE = Path(__file__).resolve().parent / "rig_protocol.json"
+# This tool holds an NVIDIA rack to its clock via `nvidia-smi -ac`, so it reads
+# the CUDA protocol specifically. The protocol file is scoped by backend now —
+# `rig_protocol.<backend>.json` — because the un-suffixed name leaked one
+# machine's protocol to every other (2026-09-16: a Mac inherited this V100
+# protocol and refused certification on clocks it cannot read). This workshop
+# door is the cuda one by construction.
+PROTOCOL_FILE = Path(__file__).resolve().parent / "rig_protocol.cuda.json"
 OPT_OUT = "--allow-off-protocol-clock"
 
 

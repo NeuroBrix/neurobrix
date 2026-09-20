@@ -21,7 +21,17 @@ from pathlib import Path
 from .analyzer import GraphAnalyzer
 from .policy import PASS_REGISTRY
 
-DEFAULT_ROOT = Path.home() / ".neurobrix" / "cache"
+def _default_root() -> Path:
+    """The machine's model cache, from the one door (`core.paths`).
+
+    A fifth statement of the same location lived here as
+    `DEFAULT_ROOT = Path.home() / ".neurobrix" / "cache"`, found
+    2026-09-17 after the other four were unified. It is a function, not a
+    module constant, because the answer can be configured and a constant
+    resolved at import cannot be.
+    """
+    from neurobrix.core.paths import cache_dir
+    return cache_dir()
 
 
 def discover_models(root: Path, only: set[str] | None) -> list[Path]:
@@ -199,7 +209,7 @@ def write_summary(rows: list[dict], out_dir: Path, date: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    ap.add_argument("--root", type=Path, default=_default_root())
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--models", type=str, default="")
     ap.add_argument("--date", type=str, required=True)

@@ -61,6 +61,32 @@ def _policy():
     return R
 
 
+def _a_refusal_type(monkeypatch):
+    """A backend refusal type, supplied to the seam rather than imported.
+
+    This used to `importorskip("triton_msl.errors")`. That fork was archived on
+    2026-09-17, and the backend that replaced it names NO refusal type at all:
+    checked the same day in the installed `triton_apple_backend`, it has no
+    `errors` module and its compiler refuses with a bare `RuntimeError`. So
+    there is no vendor type left to import, and importing one was never what
+    this file is about — it tests the ENGINE's policy, which asks the seam by
+    class and must work for whatever a backend names.
+
+    The consequence of the empty set is recorded where it belongs (the seam's
+    `backend_refusal_types`, and item 6 as an upstream candidate): with nothing
+    to recognise, a config triton-ext refuses ends a sweep instead of being
+    excluded. That is a real gap and it is not this test's to hide.
+    """
+    class _BackendRefusal(RuntimeError):
+        def __init__(self, msg, op_name=None):
+            super().__init__(msg)
+            self.op_name = op_name
+
+    from neurobrix.triton import metal_backend as MB
+    monkeypatch.setattr(MB, "backend_refusal_types", lambda: (_BackendRefusal,))
+    return _BackendRefusal
+
+
 def test_the_policy_module_exists_and_is_installed_by_the_launcher():
     """The exclusion must be installed by the engine, not by this test.
 
@@ -77,9 +103,9 @@ def test_the_policy_module_exists_and_is_installed_by_the_launcher():
     assert hasattr(R, "install"), "the policy must expose install()"
 
 
-def test_a_refused_config_scores_infinite_and_the_sweep_survives():
+def test_a_refused_config_scores_infinite_and_the_sweep_survives(monkeypatch):
     R = _policy()
-    MetalNonRecoverableError = pytest.importorskip("triton_msl.errors", reason="the Metal Triton binder is not installed here").MetalNonRecoverableError
+    MetalNonRecoverableError = _a_refusal_type(monkeypatch)
 
     calls = []
 
@@ -111,9 +137,9 @@ def test_a_refusal_that_is_not_about_this_config_still_propagates():
         guarded("any")
 
 
-def test_the_exclusion_is_announced_once_per_reason():
+def test_the_exclusion_is_announced_once_per_reason(monkeypatch):
     R = _policy()
-    MetalNonRecoverableError = pytest.importorskip("triton_msl.errors", reason="the Metal Triton binder is not installed here").MetalNonRecoverableError
+    MetalNonRecoverableError = _a_refusal_type(monkeypatch)
 
     said = []
     guarded = R.exclude_refused_configs(

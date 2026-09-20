@@ -42,10 +42,25 @@ import numpy as np
 
 
 def _gpu_available() -> bool:
-    import subprocess
-    r = subprocess.run(["nvidia-smi", "--query-gpu=count",
-                        "--format=csv,noheader"], capture_output=True)
-    return r.returncode == 0 and r.stdout.strip() != b""
+    """Whether the ENGINE has a GPU, asked of the engine.
+
+    This shelled out to `nvidia-smi`, which is not a question about whether the
+    engine has a GPU — it is a question about whether one vendor's tool is
+    installed. On an Apple machine it does not return False, it raises
+    FileNotFoundError, and the test fails rather than adapting. The same
+    correction was already written into
+    `tests/unit/triton/test_lazy_bind_bucket_boundary.py`; it is applied here
+    because the fault is the same one, and a fault fixed in one file and left in
+    another is not fixed.
+    """
+    import pytest
+
+    nbx = pytest.importorskip("neurobrix.kernels.nbx_tensor")
+    detect = nbx._detect_gpu_backend   # a renamed probe raises here, loudly
+    try:
+        return detect() is not None
+    except Exception:
+        return False
 
 
 def _download(t) -> bytes:
