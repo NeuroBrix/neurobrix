@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A convolution whose input exceeds two billion elements no longer faults.** The
+  8x upscaler's final layer at a large tile (64 channels of 6344x6344) read its
+  input channels through a 32-bit product and hit an illegal address once the plan
+  handed it a 9.6 GB tile; the channel offset is now 64-bit in the 2-D and 1-D
+  convolutions, proven on a 2.3-billion-element input.
+
 - **A model's per-component runtime flags now travel inside the container, so an
   installed engine behaves like the developer's checkout.** Six flags (pad-embedding
   zeroing for T5-class encoders, image-to-video and control conditioning, image

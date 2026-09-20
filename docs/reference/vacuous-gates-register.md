@@ -2105,3 +2105,35 @@ skipping on a sentence.
 same cell that made it red.* A skip is a claim about the engine; once the engine moves, the
 claim is either re-proven or removed. Entry 78's other half again: a sentence inherited from
 a run, kept after the run stopped being true.
+
+### 80 — a conv whose output is small, whose input is not, and a channel term the 09-14 promotion never reached
+
+**Where.** `src/neurobrix/kernels/ops/conv2d.py` (`inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)`,
+int32, multiplied by `input_in_feat_stride`), the same form in `conv1d.py`; the band-streaming
+predicate `_conv2d_should_band_stream` (output bytes only).
+
+**What was believed.** Register 58/59 (2026-09-14) widened every offset a kernel derives from a
+program id, 129 flat-indexed kernels, and a boundary test crosses 2^31 for three of them. A conv
+was covered "by construction": its program-id offsets are int64, and any conv large enough to
+cross 2^31 is band-streamed by the wrapper.
+
+**What was measured, 2026-09-20 (`nbx/campaigns/2026_09_20_ladder/`).** The ladder law, once
+the plan read the card's live memory, handed the 8x upscaler a 9.6 GB tile at 1536² (rung 24576).
+Four runs of four died with `cudaMemcpy failed rc=700`; `--mode triton-sequential` with
+`CUDA_LAUNCH_BLOCKING=1` pinned the launch: `conv2d_forward_kernel` at 1×64×6344×6344 → 3
+channels — the network's LAST conv. Its output (3 channels, 241 MB) is far under the 4 GiB
+band-streaming threshold, so it ran whole; its INPUT is 2 576 000 000 elements, and the
+input-channel offset term — a loop-derived int32 arange times a 40 247 936-element channel plane —
+wraps past channel 53. The 64 → 64 convs at the same tile were saved by band-streaming (bands of
+2 115 rows), which is why the fault sat at the one conv the predicate does not see.
+
+**The gate, seen failing.** `tests/unit/kernels/test_a_conv_input_beyond_two_billion_elements.py`:
+64 channels of 6000² fp16 (2 304 000 000 elements), channels 60–63 (entirely past 2^31) hold 2.0,
+the rest 1.0, a 3×3 mean kernel; interior output must read 1.0625. RED on the kernel as it stood
+(CUDA 700 at the first checked call), GREEN after widening the channel offset to int64 in both
+convs; the 56 existing conv cells still pass. (The expected value was first written as 1.125 —
+an arithmetic slip caught by the green run's own figure.)
+
+**The lesson, in one line.** A predicate on the output's size is not a guard on the input's
+index; every loop-derived offset that multiplies a plane is 64-bit, not only the ones born from a
+program id.
