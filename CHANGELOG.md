@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mixture-of-experts models whose experts are stacked in one tensor per
+  projection run through the fused expert dispatch**, in every execution mode.
+  IBM's Granite 3.1 MoE (32 experts, 8 per token) is the first: it writes correct
+  code and answers questions here, where before its first forward stopped on a
+  token split frozen at trace time.
+
 ### Fixed
 
 - **A chat template that asks for today's date renders.** Templates written for
