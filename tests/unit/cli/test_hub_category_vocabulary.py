@@ -139,10 +139,17 @@ def test_a_real_transport_failure_still_says_cannot_connect(monkeypatch, capsys)
     """The opposite error must not be swallowed by the new branch."""
     from neurobrix.cli.commands import registry as reg
 
-    def raise_urlerror(*_a, **_kw):
-        raise urllib.error.URLError("Name or service not known")
+    # The registry speaks through `requests` (b58ab485: one HTTP client, TLS no
+    # longer reported as connectivity); a urlopen patch no longer intercepts it —
+    # measured on the merged tree 2026-09-20: the LAN registry answered and this
+    # cell read DID NOT RAISE. The transport failure is raised at that seam.
+    import requests as _requests
 
-    monkeypatch.setattr(urllib.request, "urlopen", raise_urlerror)
+    def raise_connection_error(*_a, **_kw):
+        raise _requests.ConnectionError("Name or service not known")
+
+    # `requests` is imported inside the command, so the seam is the library itself.
+    monkeypatch.setattr(_requests, "get", raise_connection_error)
 
     class Args:
         registry = None
