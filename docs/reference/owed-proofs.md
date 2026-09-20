@@ -906,3 +906,24 @@ step, and say which boundary it was taken at.
 **Two independent harness stitches on two different cards came out BIT-IDENTICAL**
 (same sha256, 0 differing pixels of 8192x8192x3), so the method is deterministic
 across cards and a single judged artefact is not a single lucky run.
+## 2026-09-20 — the Mac's adaptive-memory proposal, reviewed on CUDA
+
+`docs/reference/adaptive-memory-a-runtime-controller.md` (metal-first-light) names four
+additions. Measured against what main holds today:
+
+| addition | on main | by |
+|---|---|---|
+| 1. a truthful estimate | the denominator: an op is budgeted against what is LEFT of the card (`live_before_op`, `resident_bytes`), and the plan states the margin it keeps (`max(3072 MB, 12 % of capacity)`) | `79558447`, `77848eee` |
+| 2. a plan that can say "not whole", entering the tiling rung deliberately | the request-reshape rung `_spatial_component_tiling` reaches the upscaler family (scale derived from the graph's in/out ratio; no `vae_scale` demanded); judged green at x2/x4/x8 on 16 GB and 32 GB cards, engine artefact 8192² with a sub-visible seam of 1.047/255 at the engine's own boundary | `0c824682`, item 1 closed by the owner 09-20 |
+| 3. a runtime controller at the allocation failure — ONE re-entry into the tiling rung with the allocator's real figures | **not landed anywhere**; the document itself says the re-entry is "the next step, named rather than assumed small" | — |
+| 4. the refusal names what would have fit | `kernels/oom_advice.py` | `66ed17af` |
+
+**Verdict.** The request-reshape rung the proposal asks for is in main and proven (item 1).
+Additions 1, 2 and 4 hold on this side; nothing to land for them beyond what landed. Addition 3
+is design: it is the right seam (a wrapper cannot change its own output contract — the Mac's
+measurement that band-streaming at 4 GiB and 16 GiB dies identically is reproduced by our
+four OOMs at 8 589 934 592 bytes, the second WITH a 64-band plan). It stays a named follow-up,
+not a rung to land today: with 2 the plan already refuses or reshapes before execution for the
+family that motivated it, and a re-entry after the plan was chosen is a change to the
+executor's contract that needs its own red-then-green case (an estimate wrong by enough to OOM
+under a plan that was already tiled).
