@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x ** 2` is a square again.** The portable power kernel that replaced NVIDIA's
+  device library computed every power as `exp(e * log|x|)`, which on CUDA lands up
+  to 15 ulps from the float64 answer for a plain square. An integer exponent up to
+  8 now multiplies instead: exact for a square, within 1 ulp for a reciprocal.
+- **`round(-0.5)` is `-0.0` again.** The portable round kernel restored the sign of a
+  zero result with a floating select that the CUDA compiler was allowed to fold
+  away; the sign is now copied as a bit.
+
 - **A request too large for the card is now cut into pieces and stitched, instead
   of being refused or pushed to system memory.** The engine could already do this —
   it sizes overlapping spatial tiles, runs them and joins the result — but it never
