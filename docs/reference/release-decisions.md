@@ -45,3 +45,25 @@ index against the runtime ordinal — was measured the same day: red on the tree
 guard for one card and for two, green on main for one card, for a 32 GB card as ordinal 0
 and for two cards with a card-spanning model. No facet remains; the guards and the debt are
 in the vacuous-gates register as entry 79 and the skips are off. Nothing for 0.5.5 to close.
+
+### A runtime flag read from the build toolchain's registry is absent in every installed engine (2026-09-20)
+
+**Measured.** Wan2.1-T2V-1.3B rendered a lattice of 16-px cells from every worktree and, by
+the same mechanism, from every `pip install`; from the developer checkout it rendered the
+sailboat. One judged run per arm on the same commit settled it: the checkout carries
+`.nbx_registry`, a gitignored pointer to the build toolchain's `model_registry.yml`, and the
+flows read `zero_pad_embeddings` through it (`registry_flags.get_component_flag`). Without
+the pointer the flag defaults to false, the UMT5's non-zero pad embeddings (212 of 226
+positions for a short prompt) enter cross-attention unmasked, and the video is noise. This is
+0.5.4's "degenerate Wan, cause not found".
+
+**What ships in 0.5.5.** The builder now writes `zero_pad_embeddings` into the container
+(tokenizer extracted values), so the engine reads it from the `.nbx`; the runtime registry
+read remains the developer's override. The four hub containers that declare the flag
+(Wan2.1-T2V-1.3B, Wan2.1-I2V-14B-480P, Wan2.1-VACE-1.3B, Wan2.2-I2V-A14B) must be rebuilt and
+re-uploaded — no re-trace, the graphs are unchanged. **Not yet closed, same class:** five other
+readers take a flag only from the registry — `i2v_latent_conditioning`,
+`vace_control_conditioning` (both engines), two Prism placement flags in `solver.py`, and the
+vision `input_processor`'s VAE-encoder flag. Each is a container that behaves differently for
+its author and for its users until the flag rides in the `.nbx`. The rule: an engine decision
+that depends on a file only the build toolchain has is a build-side value, written at build.
