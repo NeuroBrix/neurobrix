@@ -2071,3 +2071,37 @@ whose census names two interpreters has measured nothing attributable.
 
 **Consequence for the switch case.** No green battery of the candidate stack exists as of
 14:35 UTC on 2026-09-20; the case's "79 passed" column is withdrawn.
+
+### 79 — three guards and a debt that outlived their premise by seventeen days
+
+**Where.** `tests/regression/test_serve_warm.py` (module guard, `ba34c374`, 2026-08-27),
+`tests/regression/test_upscale_offtrace.py` (the same guard ported, 2026-08-29),
+`tests/regression/warm_cell_runner.py` (the comment), and `DETTE.md`
+D-AUTODETECT-VISIBLE-MASK (filed 2026-08-26, fourth facet 2026-09-01).
+
+**What was believed.** "Autodetect is blind to CUDA_VISIBLE_DEVICES": a masked run plans
+against the whole machine and dies on "invalid device ordinal", so every suite that shells
+out to the engine must skip under a mask, and a masked engine is broken for a user in a
+container. Repeated by this session on 2026-09-20 14:5x as a fact about the engine.
+
+**What was measured, 2026-09-20 (`nbx/campaigns/2026_09_20_mask_guard/`).**
+
+| tree | mask | detected | placed | result |
+|---|---|---|---|---|
+| `ecebbebe` (the commit before the guard) | 1 | auto-4xv100-16gb-96.0g | cuda:2 | `CUDA error: invalid device ordinal` |
+| `ecebbebe` | 0,2 with DeepSeek-Coder-V2-Lite (spans cards) | the whole machine | pipeline_parallel → cuda:2 | invalid device ordinal |
+| main `f2da479a` | 1 | auto-v100-16gb-16g | cuda:0 | rc=0, real-esrgan-x4 and TinyLlama |
+| main | 2 (a 32 GB card as ordinal 0) | auto-v100-32gb-32g | cuda:0 | rc=0 — the fourth facet: the budget reads the masked card's own memory |
+| main | 0,2 with DeepSeek-Coder-V2-Lite | auto-2xv100-16gb-48.0g | component_placement cuda:0 + cuda:1, 33 238 MB planned | rc=0 |
+
+Red seen on the tree the guard was written against; green on main for every facet the debt
+named. The repair is `_apply_visible_filter` (`acd14637`, 2026-09-03: the visible set is
+re-indexed the way CUDA renumbers it) and the profile keyed by the visible set (`6efc8c3c`,
+2026-09-05); `_describes_the_whole_machine` keeps a masked process from writing the shared
+`default.yml`. Nothing re-measured the guards after either landed, and four modules kept
+skipping on a sentence.
+
+**The rule.** *A guard that names a debt is re-measured when the debt's fix lands, by the
+same cell that made it red.* A skip is a claim about the engine; once the engine moves, the
+claim is either re-proven or removed. Entry 78's other half again: a sentence inherited from
+a run, kept after the run stopped being true.
