@@ -800,3 +800,109 @@ invisible on CUDA: `host_values()` (the bf16 branch — V100 is sm_70 with no na
 may simply not arise, in which case the claim stays Apple-only and this says so), the witness
 re-entrancy guard (a clock-lock rig never calls `_witness_ms()`), and the MoE capability row
 (`{"cuda": True}`, so the refusal cannot fire).
+
+---
+
+## 2026-09-19 — `0c824682`, the reshape rung reaches an upscaler: Apple's half owed
+
+* **owed by** the Dell (this machine) · **for** the Mac to confirm on Apple
+* **the commit** is on `main`, origin and gitlab.
+
+### What the Dell established
+
+The request-reshape rung was never missing. `_spatial_component_tiling` sizes a
+spatial cut, `plan.component_tiling` carries it and
+`core/runtime/executor.py:578` builds a `TilingEngine` from it, so residency is
+bounded by the PIECE — the property the op-level rung cannot give, because that one
+bounds the transient while the full output stays allocated for downstream
+consumers. `real-esrgan-x8` at 1024 px proved that twice on CUDA: it died at
+`aten.leaky_relu::278` and then at `aten.convolution::350` for 8 589 934 592 bytes
+**with `tile aten.convolution::350 in 64 bands` already in its plan.**
+
+It refused the ENTIRE upscaler family, for two reasons, each demanding a number the
+model does not have while the container already held the answer:
+
+1. **the scale factor.** `config.get("upscale")`, then a VAE block list, then
+   `if not scale_factor: return None`. Every upscaler in the Dell's cache ships an
+   EMPTY `config` — real-esrgan x2/x4/x8, swin2SR-classical-sr-x4-64, hat-l-x4 —
+   and each states its factor exactly in its own shapes. The function had already
+   read both shapes for its downsampler guard; it now derives the ratio from them
+   when the config is silent, requiring both axes to agree and the ratio to be
+   exact.
+2. **the latent grid.** `if not (vae_scale and _h and _w): raise
+   MissingRuntimeValue(...)` told the operator to declare a VAE scale for a model
+   with **no VAE**. `InputConfig`'s own docstring already said that absence is
+   legitimate for "a dimension the model does not have: no VAE, no vae_scale". An
+   upscaler reads pixels and writes pixels; its tiles cover the request's own grid.
+
+Measured after: `tile_size 565, overlap 70, scale_factor 8, tiled_activation
+5 230 MB` against **16 384 MB** whole, and the plan now says in its own words
+`dropped full-extent op-level tiling (component-level tiling active)`.
+
+### What the Dell could NOT establish, and is owed from Apple
+
+**That the same two guards were what stopped it there.** Both fixes are
+vendor-neutral by construction — they read the graph's own input/output ratio and
+the request's own extents, and name no backend — but "vendor-neutral by
+construction" is an argument, not a measurement.
+
+**What to run, and what each answer means:**
+
+```
+neurobrix run --model real-esrgan-x8 --input-image <1024px> --explain-plan
+```
+
+* **`component tiling model: {...}` appears** → the rung now reaches the upscaler on
+  Apple with no further change, and the remaining question is only whether the
+  artefact is clean.
+* **it does not appear** → the thing to report back is WHICH guard still bites.
+  `NBX_PRISM_TILE_DIAG=1` prints the sizing decision (`full_act`, `budget`, the
+  bound `InputConfig`, and TILE/native). A `MissingRuntimeValue` naming
+  `vae_scale` means fix 2 did not reach that path; a silent `None` before the diag
+  line means the scale factor was still not derivable, and then the useful datum is
+  that model's `profile.json` `config` and its graph's input/output shapes.
+
+**And the artefact, judged the way the Dell judged its own** — whole, and then a
+crop at FULL resolution centred exactly on an internal boundary. The Dell's
+harness stitch of the same request measured a seam of **+0.22 sigma vertical and
++1.27 sigma horizontal** against its own neighbourhood, below the Mac's
+hand-proved **+2.07 sigma**, and showed no discontinuity to the eye. Note the two
+differ by design: the Dell's harness HARD-TRIMS the halo, while
+`tiling_engine.py` blends by ACCUMULATE-AND-DIVIDE, so the engine's own artefact
+should be at least as clean and a step at a boundary would be a ramp rather than
+an edge.
+
+### Returned by the Dell, 2026-09-19 01:31
+
+**The engine's own artefact is in and it is clean.** `GREEN_x8_1024_by_the_rung.png`,
+8192 x 8192, produced by the component-tiling rung at tile 565 / overlap 70, blended
+by accumulate-and-divide. Looked at whole and at full resolution across the join: a
+coherent apple at 8x, no grid, no visible seam. Against the harness's independently
+stitched artefact of the same request, `mean|d| 0.036` with 0.26% of 67 million
+pixels differing by more than two levels -- which is what blending versus trimming
+the overlap costs, and nothing more.
+
+**A warning about HOW to measure the seam, learned the hard way here.** Measure at
+the boundary THE ENGINE USES, not at the geometric midpoint. The engine's tile
+stride is 565 input px = 4520 output px; my harness cut at the midpoint. At the
+midpoint the engine reads +0.23 and +0.57 sigma and looks perfect; at 4520 it reads
+**+10.35 and +12.18 sigma** -- and there is still no line, because that region is
+smooth red and the local noise floor (0.247) collapses, so a small step reads as
+many sigma.
+
+**Use the ABSOLUTE step, which is what an eye sees:**
+
+| boundary | step, grey levels of 255 | typical elsewhere |
+|---|---|---|
+| vertical @ 4520 (the engine's own) | 1.047 = **0.41%** | 0.166 |
+| horizontal @ 4520 | 0.635 | 0.100 |
+| vertical @ 4096 (not a boundary here) | 0.377 | 0.166 |
+
+So the tile boundary is measurably elevated, about 6x the local step, and
+sub-visible. **A sigma is a ratio and does not travel between pictures** -- the
++2.07 sigma figure from Apple was measured on its own image, so compare the absolute
+step, and say which boundary it was taken at.
+
+**Two independent harness stitches on two different cards came out BIT-IDENTICAL**
+(same sha256, 0 differing pixels of 8192x8192x3), so the method is deterministic
+across cards and a single judged artefact is not a single lucky run.

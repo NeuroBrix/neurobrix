@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A request too large for the card is now cut into pieces and stitched, instead
+  of being refused or pushed to system memory.** The engine could already do this —
+  it sizes overlapping spatial tiles, runs them and joins the result — but it never
+  did it for an upscaler, because it asked each model for two numbers an upscaler
+  does not have: a declared scale factor (every upscaler ships without one) and a
+  latent grid (an upscaler has no VAE, so it has no latent). Both now come from
+  what the model itself already states. `real-esrgan-x8` at 1024x1024 on a 16 GB
+  card needs 16,384 MB of working memory whole and 5,220 MB in pieces.
+
 - **The plan now keeps back a margin sized to the card, and says how much.** It
   reserved a flat 3 GB whatever the hardware, while the free-memory reading it
   budgets against moves by up to 12% of the card between identical runs — so on a
