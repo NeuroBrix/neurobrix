@@ -285,10 +285,24 @@ def running_generator() -> Optional[str]:
         import triton
     except Exception:
         return None
+    # The TRITON TARGET's backend name, because that is what the certifier
+    # stamps and a label only means something if reader and writer agree. It
+    # read `nbx_tensor.BACKEND_NAME` until 2026-09-19 — a symbol that does not
+    # exist anywhere in the tree, so it silently took its own "cuda" default.
+    # `proof_backend` omits the name when it IS cuda, so on Apple this produced
+    # `triton 3.8.0` against a directory stamped `triton 3.8.0 mps`, and the gate
+    # refused all 945 certified entries: every shape swept at runtime while the
+    # directory sat unserved and the census still called them certified.
+    #
+    # NOT the engine's name for the backend, which is `metal` here either way.
+    # The two diverge and `autotune_certify._current_backend()` documents why:
+    # the engine says `metal`, the Triton target says `metal` under the archived
+    # fork and `mps` under triton-ext. A GENERATOR is the compiler, so it is the
+    # target's name that belongs in this label.
     name = "cuda"
     try:
-        from neurobrix.kernels import nbx_tensor as _nt
-        name = getattr(_nt, "BACKEND_NAME", "cuda") or "cuda"
+        from neurobrix.kernels.launcher import target as _target
+        name = getattr(_target(), "backend", None) or "cuda"
     except Exception:
         pass
     return proof_backend({"backend": {"triton": str(triton.__version__), "name": name}})
@@ -338,12 +352,24 @@ def entry_for_memory_class(entry: Optional[Dict[str, Any]], cls: Optional[int]) 
     return None
 
 
-def proof_records_clock(proof: Optional[Dict[str, Any]]) -> bool:
-    """True when the proof says the clock every card ran at (`machine.clocks_mhz`).
-    5 628 proofs of 2026-09-07 do not: made before the clock door, at a frequency
-    nothing recorded — their timings read 1.176× those of a proof at the protocol
-    clock (2026-09-14, register 56, adjudicated paragraph)."""
-    return bool(((proof or {}).get("machine") or {}).get("clocks_mhz"))
+def proof_records_regime(proof: Optional[Dict[str, Any]]) -> bool:
+    """True when the proof records the stability regime its timings were measured
+    under — EITHER the clock every card was held to (`machine.clocks_mhz`, an
+    NVIDIA lock) OR the witness that proved the GPU held still across the sweep
+    (`stability_witness`, Apple, where the clock cannot be locked).
+
+    5 628 proofs of 2026-09-07 record neither: made before the door, at a regime
+    nothing recorded — their timings read 1.176× those of a proof taken under a
+    known one (2026-09-14, register 56). A witness and a lock are two proofs of
+    the same fact — the sweep was comparable — so either satisfies this.
+    """
+    p = proof or {}
+    return bool((p.get("machine") or {}).get("clocks_mhz") or p.get("stability_witness"))
+
+
+# Back-compat alias: the check used to ask only about the clock, before the
+# regime became clock-or-witness. Callers that named the clock keep working.
+proof_records_clock = proof_records_regime
 
 
 def entry_covers(entries: Dict[str, Dict[str, Any]], ktext: str, cls: Optional[int],

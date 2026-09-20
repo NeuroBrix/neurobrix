@@ -100,11 +100,16 @@ def test_hub_speaks_one_record_from_the_registry_answer(monkeypatch):
                                       "license": "apache-2.0", "downloadCount": 3, "visibility": "PUBLIC"}],
                           "total": 1}).encode()
 
-    class _Resp(io.BytesIO):
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def getcode(self): return 200
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _Resp(payload))
+    # The registry speaks through `requests` (b58ab485); the answer is handed to
+    # that seam, not to urlopen, which the command no longer calls.
+    from neurobrix.cli.commands import registry as reg
+
+    class _Resp:
+        status_code = 200
+        def raise_for_status(self): return None
+        def json(self): return json.loads(payload)
+    import requests as _requests            # imported inside the command: the library is the seam
+    monkeypatch.setattr(_requests, "get", lambda *a, **k: _Resp())
     rec, err, _ = _record(["hub", "--json"], "hub")
     assert rec["total"] == 1 and rec["models"][0]["slug"] == "acme/tiny"
     assert rec["models"][0]["installed"] is False

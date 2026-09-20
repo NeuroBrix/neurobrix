@@ -3,9 +3,14 @@
 Triton's autotuner already has this semantics: `_bench` catches
 `OutOfResources`, `CompileTimeAssertionFailure` and `PTXASError`, scores that
 config `inf`, and carries on. A backend refusal says the same thing -- this
-config cannot be compiled here -- but `MetalNonRecoverableError` descends from
+config cannot be compiled here -- but a backend's refusal type descends from
 `RuntimeError` rather than `TritonError`, so nothing catches it and it ends
 the run.
+
+This module names NO backend and NO vendor: it asks the Metal seam
+(`triton.metal_backend`) whether an exception is a backend refusal. The seam is
+the only place an implementation is named, because this file is shared -- the
+CUDA rack runs it too, where the answer is simply False.
 
 Measured 2026-09-12: hat-s-x4 and real-esrgan-x2 both died inside the sweep on
 
@@ -53,12 +58,19 @@ def _is_backend_refusal(exc: BaseException) -> bool:
 
     Asked by class, not by message: matching on the text would make every
     reworded refusal a run-ending error again, silently.
+
+    This SHARED module names NO backend vendor: it asks the Metal seam
+    (`triton.metal_backend.is_backend_refusal`), which knows the selectable
+    backends (the bledden fork, triton-ext). On a machine with no Metal backend
+    — the Dell on CUDA — the seam returns False, exactly as this did when it
+    imported one vendor by name. One seam decides which backend runs; the engine
+    does not branch to a vendor, here or anywhere else.
     """
     try:
-        from triton_msl.errors import MetalNonRecoverableError
-    except Exception:                      # the backend is not installed
+        from neurobrix.triton.metal_backend import is_backend_refusal
+    except Exception:                      # the seam is not importable here
         return False
-    return isinstance(exc, MetalNonRecoverableError)
+    return is_backend_refusal(exc)
 
 
 def exclude_refused_configs(bench: Callable, say: Callable[[str], None] | None = None):

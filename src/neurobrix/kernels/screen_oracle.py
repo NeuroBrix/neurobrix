@@ -188,6 +188,27 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
         announce_no_oracle(name, key, why="its operands could not be read here")
         return None
 
+    # A reference built from non-finite operands vouches for nothing. NaN
+    # compares unequal to everything including itself, so every candidate
+    # "disagrees" and the screen either refuses the whole space or — worse, when
+    # the deviation is computed on bf16 bits — lets a wrong configuration
+    # through wearing a `screened: true` stamp. Measured on swin2SR (M4 Pro,
+    # 2026-09-17): a conv whose input carried 63181 NaN and 356 Inf produced
+    # "the fp64 oracle contradicts EVERY candidate (18 of 18)".
+    #
+    # Refusing here routes the key through `_seat_unscreened`, which records it
+    # `screened: false` with this reason and keeps it out of the certified
+    # directory. The engine still runs; it just stops claiming the run was
+    # validated.
+    bad = int(np.count_nonzero(~np.isfinite(reference)))
+    if bad:
+        set_last_refusal(
+            f"the fp64 reference is not finite ({bad} of {reference.size} "
+            f"elements NaN or Inf), so it cannot adjudicate any candidate — "
+            f"the operands read for this key were themselves not finite")
+        announce_no_oracle(name, key, why=last_refusal())
+        return None
+
     # Every live tensor by its address, so an INPUT is read through the copy
     # path like everything else. The line this replaces read the device
     # pointer with `ctypes.string_at` and justified it as "an input,
@@ -266,6 +287,21 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
 #: like `_SCREEN_CACHE`: the budget protects a sweep that runs in this very
 #: process, so persisting these would only let a stale machine state speak.
 _ORACLE_MS: dict = {}
+
+
+#: Why the oracle last declined, so the record can say it instead of "no
+#: reference". Set immediately before returning None; read by the launcher when
+#: it stamps the key unscreened.
+_LAST_REFUSAL: Optional[str] = None
+
+
+def set_last_refusal(why: str) -> None:
+    global _LAST_REFUSAL
+    _LAST_REFUSAL = why
+
+
+def last_refusal() -> Optional[str]:
+    return _LAST_REFUSAL
 
 
 def record_oracle_ms(key, ms: float) -> None:

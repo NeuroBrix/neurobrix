@@ -26,6 +26,7 @@ import numpy as np
 
 from neurobrix.kernels import wrappers as w
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
+from neurobrix.kernels.nbx_tensor import backend_loads_pointers_from_memory
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
 # environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
@@ -348,6 +349,29 @@ def execute_moe_fused(
     """
     if hidden_states is None:
         raise RuntimeError("MoE fused: hidden_states is None")
+
+    # EVERY path below reaches an expert's weights through the [E] int64
+    # pointer table built by _build_ptr_tables: the SIMT decode band at STEP 2b
+    # (moe_decode_vec.py:94) and the grouped GEMM at STEP 4 (fused_moe.py:74)
+    # both load an address and bitcast it to a pointer. A backend that cannot
+    # read through such a pointer returns ZEROS with no exception and no
+    # warning — measured on triton-ext, where the gateup stage wrote nothing and
+    # the two stages after it faithfully combined nothing, so the band produced
+    # an answer that was entirely zero and called it an answer.
+    #
+    # The gate sits here, above the path choice, because both paths share the
+    # defect; gating only the decode band would have left the fused path free to
+    # produce the same silent zeros by the other route.
+    if not backend_loads_pointers_from_memory():
+        raise RuntimeError(
+            "NeuroBrix MoE: this backend cannot read through a pointer loaded "
+            "from a tensor, and every MoE path addresses its experts that way "
+            "(an [E] int64 table of device addresses). Refusing rather than "
+            "returning the zeros it would otherwise produce in silence. "
+            "Measured with a one-variable control: an address passed AS a "
+            "pointer reads correctly, while the same address loaded from a "
+            "table reads all zeros in both Triton spellings and raises "
+            "nothing.")
 
     _blended = topk_indices is not None or topk_weights is not None
     if _blended and (topk_indices is None or topk_weights is None):

@@ -381,6 +381,16 @@ class TritonRNNTEngine:
             if tensor is None:
                 continue
             k = key.lower()
+            # Decide from the KEY before converting. The weight map holds
+            # entries that are not tensors at all (parakeet-tdt-1.1b carries two
+            # dicts among them), and converting everything just to find out
+            # meant they had to be coerced into SOMETHING — which is how
+            # `np.array(dict)` ended up producing a 0-d object array that
+            # travelled on as weights. Now nothing is converted unless this
+            # function wants it, and `_to_numpy` refuses what it cannot read.
+            if not ("embed" in k or "weight_ih_l" in k or "weight_hh_l" in k
+                    or "bias_ih_l" in k or "bias_hh_l" in k):
+                continue
             arr = _to_numpy_f32(tensor)
             if "embed" in k and arr.ndim == 2:
                 embedding = arr
@@ -415,9 +425,17 @@ class TritonRNNTEngine:
         executor = self.ctx.executors["joint"]
         w = executor._weights
 
+        _WANTED = ("enc.weight", "enc.bias", "pred.weight", "pred.bias",
+                   "joint.2.weight", "joint.2.bias")
         result = {}
         for key, tensor in w.items():
             if tensor is None:
+                continue
+            # Same rule as the decoder's map, and for the same reason: decide
+            # from the KEY, convert only what is wanted. This map also holds
+            # non-tensor entries, and converting them first is what required a
+            # coercion that could not fail.
+            if not key.endswith(_WANTED):
                 continue
             arr = _to_numpy_f32(tensor)
             if key.endswith("enc.weight"):
@@ -499,19 +517,46 @@ class TritonRNNTEngine:
 # -----------------------------------------------------------------
 
 def _to_numpy(tensor) -> np.ndarray:
-    """Convert any tensor to numpy array."""
+    """Convert a TENSOR to a numpy array, and refuse anything that is not one.
+
+    The last line used to be `np.array(tensor)`, which accepts absolutely
+    anything: a dict became a 0-d object array and travelled on as though it
+    were weights. Measured on parakeet-tdt-1.1b, the decoder's weight map holds
+    two dicts among its tensors and both were silently converted that way. They
+    happened to match no key pattern downstream, so nothing visibly broke —
+    which is the problem with a silent conversion, not a defence of it.
+    """
     if isinstance(tensor, np.ndarray):
         return tensor
     if isinstance(tensor, NBXTensor):
         return tensor.numpy()
     if hasattr(tensor, 'detach'):
         return tensor.detach().cpu().numpy()
-    return np.array(tensor)
+    raise TypeError(
+        f"ZERO FALLBACK: {type(tensor).__name__} is not a tensor this flow can "
+        f"read (expected numpy.ndarray, NBXTensor, or something with .detach). "
+        f"It used to be coerced with np.array(), which turns a dict into a 0-d "
+        f"object array and calls it weights.")
 
 
 def _to_numpy_f32(tensor) -> np.ndarray:
-    """Convert any tensor to float32 numpy array."""
-    arr = _to_numpy(tensor)
+    """Convert a tensor to a float32 numpy array — bf16 included.
+
+    bf16 arrives from `.numpy()` as a 2-byte VOID array, because numpy has no
+    bfloat16. It is not `float16` or `float64`, so the old test skipped it, the
+    array travelled on as `|V2`, and the pipeline died far away at
+    `np.ascontiguousarray(w, dtype=np.float32)` with "setting an array element
+    with a sequence" — an error that names neither bf16 nor the weight.
+
+    That is not a corner case here. Measured on parakeet-tdt-1.1b: FIFTEEN of
+    the tensors this function is handed are bf16, including every LSTM weight
+    and bias, because the machine reports native bf16 and the dtype policy casts
+    an F32 checkpoint accordingly. The decode is exact — a bf16 value is the top
+    sixteen bits of an fp32 — and lives in `nbx_tensor`, beside the table that
+    creates the carrier.
+    """
+    from neurobrix.kernels.nbx_tensor import bf16_carrier_to_float32
+    arr = bf16_carrier_to_float32(_to_numpy(tensor))
     if arr.dtype in (np.float16, np.float64):
         arr = arr.astype(np.float32)
     return arr

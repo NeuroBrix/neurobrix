@@ -178,13 +178,26 @@ def test_shader_compiler_probe_reads_the_return_code(monkeypatch):
 def test_backend_probe_accepts_the_plugin_env_var(monkeypatch):
     """Triton 3.7 loads out-of-tree backends via TRITON_PLUGIN_PATHS, so a
     backend can be present without an importable package name we know."""
-    monkeypatch.setenv("TRITON_PLUGIN_PATHS", "/opt/somewhere/libtriton_msl.so")
+    monkeypatch.setenv("TRITON_PLUGIN_PATHS", "/opt/somewhere/libtriton_apple.so")
     assert metal_backend.triton_metal_available() is True
+
+
+def _no_metal_backend_present(monkeypatch):
+    """Close EVERY door the probe opens, not just the import one.
+
+    These two tests patched `find_spec` alone and passed while no Metal backend
+    was installed. Run in a venv that HAS one, they failed: the probe also asks
+    Triton's plugin registry, where triton-ext registers as `apple`, so it
+    answered True for a real reason and the tests read as broken. A control that
+    closes some of the doors controls none of them."""
+    monkeypatch.setattr(metal_backend.importlib.util, "find_spec", lambda _n: None)
+    import triton.backends
+    monkeypatch.setattr(triton.backends, "backends", {}, raising=False)
 
 
 def test_backend_probe_is_negative_on_an_unrelated_plugin(monkeypatch):
     monkeypatch.setenv("TRITON_PLUGIN_PATHS", "/opt/somewhere/libutlx.so")
-    monkeypatch.setattr(metal_backend.importlib.util, "find_spec", lambda _n: None)
+    _no_metal_backend_present(monkeypatch)
     assert metal_backend.triton_metal_available() is False
 
 
@@ -195,6 +208,9 @@ def test_backend_probe_survives_a_broken_module_name(monkeypatch):
         raise ValueError("bad module name")
 
     monkeypatch.setattr(metal_backend.importlib.util, "find_spec", boom)
+    # Same reason as above: the registry is a door too.
+    import triton.backends
+    monkeypatch.setattr(triton.backends, "backends", {}, raising=False)
     monkeypatch.delenv("TRITON_PLUGIN_PATHS", raising=False)
     assert metal_backend.triton_metal_available() is False
 
@@ -211,12 +227,32 @@ def test_known_gaps_are_declared_in_one_place():
 
 
 def test_metal_backend_imports_no_torch():
-    """R33: the triton tree stays sealed against torch, boundary included."""
+    """R33: the triton tree stays sealed against torch, boundary included.
+
+    Read from the AST, not from the text. The first version grepped the source
+    for "import torch" and, on 2026-09-17, matched a DOCSTRING — `metal_target`
+    moved into this module when the fork's driver was archived, and its
+    docstring explains that upstream's AMD probe does `import torch` in its
+    `is_active()`, which is precisely why the target is built from the Metal
+    device instead. A guard that fails on the sentence explaining why it exists
+    is not reading what it claims to read.
+    """
+    import ast
     import inspect
 
-    source = inspect.getsource(metal_backend)
-    assert "import torch" not in source
-    assert "torch." not in source
+    tree = ast.parse(inspect.getsource(metal_backend))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "torch" not in imported, f"the Metal seam imports torch: {sorted(imported)}"
+
+    # And no attribute access on a name called `torch`, however it arrived.
+    used = {n.value.id for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+    assert "torch" not in used
 
 
 def test_cpu_gate_still_refuses_with_its_install_path():

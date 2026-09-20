@@ -11,10 +11,24 @@ from neurobrix import __version__
 # Package root for accessing bundled config (hardware/, vendors/)
 PACKAGE_ROOT = Path(__file__).parent.parent
 
-# User home cache for registry-installed models
-NEUROBRIX_HOME = Path.home() / ".neurobrix"
-STORE_DIR = NEUROBRIX_HOME / "store"    # Downloaded .nbx files
-CACHE_DIR = NEUROBRIX_HOME / "cache"    # Extracted models (runtime)
+# Where this machine keeps its containers and its extracted models.
+#
+# These were literals under ~/.neurobrix until 2026-09-17, and this file's own
+# docstring called itself the single source of truth for paths while three other
+# places answered the same question their own way (`nbx/cache.py`'s
+# DEFAULT_CACHE_DIR, and two readers of $NEUROBRIX_CACHE). They come from
+# `core.paths` now, which resolves environment -> ~/.neurobrix/paths.json ->
+# default and REFUSES a configured location that does not exist.
+#
+# Resolved at import, as they always were, so every `from .utils import CACHE_DIR`
+# keeps working. `core.paths.cache_dir()` is the live call.
+from neurobrix.core.paths import cache_dir as _cache_dir
+from neurobrix.core.paths import neurobrix_home as _home
+from neurobrix.core.paths import store_dir as _store_dir
+
+NEUROBRIX_HOME = _home()
+STORE_DIR = _store_dir()               # Downloaded .nbx files
+CACHE_DIR = _cache_dir()               # Extracted models (runtime)
 
 # Registry.
 #

@@ -220,6 +220,38 @@ _FLOATING_DTYPES = frozenset({
     NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64,
 })
 
+
+def bf16_carrier_to_float32(arr):
+    """Decode numpy's stand-in for bfloat16 into real float32 values.
+
+    numpy has no bfloat16, so `_DTYPE_TYPESTR` maps it to `'<V2'` and a bf16
+    tensor's `.numpy()` is a 2-byte VOID array: the bits are correct and nothing
+    can read them as numbers. `np.asarray(that, dtype=np.float32)` does not
+    fail usefully either — it raises "setting an array element with a
+    sequence", which names neither bf16 nor the tensor.
+
+    That error has now been met twice in two unrelated places, which is why the
+    decode lives HERE, once, beside the table that creates the carrier:
+
+      * certification read every bf16 kernel output through it and reported "no
+        config could run (10 of 10)" on kernels that had run correctly;
+      * the RNNT decoder read every LSTM weight through it and the whole
+        parakeet-tdt-1.1b pipeline died at `np.ascontiguousarray(w,
+        dtype=np.float32)`.
+
+    Widening is exact: a bf16 value is the top 16 bits of an fp32, so shifting
+    them back up loses nothing and the result is the number the kernel had.
+
+    Anything that is not the 2-byte void carrier is returned untouched, so this
+    is safe to apply to an array of unknown dtype.
+    """
+    import numpy as np
+    a = np.asarray(arr)
+    if a.dtype.kind != 'V' or a.dtype.itemsize != 2:
+        return a
+    bits = np.ascontiguousarray(a).view(np.uint16).astype(np.uint32)
+    return (bits << np.uint32(16)).view(np.float32).reshape(a.shape)
+
 _COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
 
 
@@ -291,6 +323,30 @@ _TORCH_SHARES_DEVICE_HEAP = {"cuda": True, "hip": True, "metal": False}
 # This is a capability, not a vendor test — adding a backend is adding a row.
 _BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
 
+# Whether a kernel can load a device ADDRESS out of a tensor and then read
+# through it — the [E] int64 pointer table that lets one launch reach every
+# expert's weights instead of one launch per expert.
+#
+# Measured 2026-09-17 on triton-ext (M4 Pro, Toolchain 27) with a control that
+# differs by the one variable — whether the address arrives AS a pointer or as
+# an integer to be converted — and in BOTH Triton spellings, because they are
+# different constructs and cannot be assumed to share a fate:
+#
+#     control  (pointer as a pointer)       : nonzero 256/256   correct
+#     subject  (.to(pointer_type))          : nonzero   0/256   ALL ZEROS
+#     subject  (tl.cast bitcast=True)       : nonzero   0/256   ALL ZEROS
+#
+# The second subject is the spelling our own kernels use, which is what makes
+# the engine's zeros attributable to this and not to us. Nothing is raised: the
+# kernel compiles, launches and writes zeros. The reproducer contains none of
+# our code (`repro_ext_pointer_from_table.py`) and is drafted for upstream.
+#
+# It is recorded HERE because the engine cannot catch what is never raised: a
+# band that cannot address its experts has to refuse by name, and a refusal
+# needs a fact to stand on. This is a capability, not a vendor test — adding a
+# backend is adding a row.
+_BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "metal": False}
+
 # Whether this backend's device memory is directly readable at its own
 # `data_ptr()` from the host. The fault channel below reads its status word
 # that way — after a flush that has already happened, so no copy and no
@@ -350,6 +406,13 @@ def _backend_capability(table, name: str, what: str) -> bool:
             f"({name}, rows: {sorted(table)}). Adding a backend is adding a "
             f"row, not guessing.")
     return value
+
+
+def backend_loads_pointers_from_memory() -> bool:
+    """True where a kernel may dereference an address it LOADED from a tensor."""
+    return _backend_capability(
+        _BACKEND_LOADS_POINTERS_FROM_MEMORY, "_BACKEND_LOADS_POINTERS_FROM_MEMORY",
+        "whether a kernel can read through a pointer loaded from memory")
 
 
 def backend_traps_on_device_assert() -> bool:
@@ -2841,12 +2904,30 @@ class NBXTensor:
         except Exception:
             pass
 
-        if self._owns_data and self._data_ptr:
+        # A tensor built by `NBXTensor.__new__` without `__init__` has NO
+        # slot set at all — `copy`, `pickle`, the routing-contract test in
+        # test_prefill_determinism, and any `__init__` that raises part-way
+        # all leave one. Reading `_owns_data` there raises AttributeError, and
+        # Python does not propagate an exception out of `__del__`: it prints an
+        # unraisable exception and ABANDONS THE REST OF THIS METHOD — which is
+        # the free below. So the one case the old line could not survive is the
+        # one where failing silently would leak a device buffer.
+        #
+        # Returning early is correct and not a papered-over free: `__init__` is
+        # pure assignment and allocates nothing, so a tensor that did not finish
+        # it cannot own device memory. Ownership is recorded FROM the
+        # `owns_data` argument, never established inside the tensor.
+        try:
+            owns, ptr = self._owns_data, self._data_ptr
+        except AttributeError:
+            return
+
+        if owns and ptr:
             if self._device == 'cuda':
-                DeviceAllocator.free_cuda(self._data_ptr)
+                DeviceAllocator.free_cuda(ptr)
             elif self._device == 'cpu' and self._pinned:
                 # Pinned host memory allocated via cudaMallocHost.
-                DeviceAllocator.free_host_pinned(self._data_ptr)
+                DeviceAllocator.free_host_pinned(ptr)
             # Unpinned CPU: backed by self._base (numpy array) — Python
             # GC drops it automatically when self goes out of scope.
 
