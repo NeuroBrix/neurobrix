@@ -52,6 +52,23 @@ def _selectable_drivers():
     return (L.Driver, L.CudaDriver, triton_ext_driver.TritonExtDriver)
 
 
+def _backend_of(cls) -> str:
+    """The backend a driver needs to answer at all — `TritonExtDriver` reads
+    triton-ext's metadata through `triton_apple_backend`, which is not installed
+    on a CUDA rig, so its `trailing_buffers` raises ModuleNotFoundError there
+    rather than answering. Measured on the Dell 2026-09-20 (merged tree, card 1):
+    the protocol cells below raised on that import and read as the driver
+    inventing a buffer. A driver for a backend that is absent is skipped by name,
+    never counted red for the absence."""
+    return {"TritonExtDriver": "triton_apple_backend"}.get(cls.__name__, "")
+
+
+def _installed_or_skip(cls):
+    mod = _backend_of(cls)
+    if mod:
+        pytest.importorskip(mod, reason=f"{cls.__name__} needs {mod}, not installed here")
+
+
 def test_every_driver_answers_the_whole_launcher_protocol():
     """Not just `launch(..., trailing=)` — every method the launcher calls.
 
@@ -91,6 +108,11 @@ def test_every_driver_declares_nothing_by_default():
     """`trailing_buffers` must be answerable for a kernel that declares no
     extra buffer — the overwhelmingly common case — without touching a GPU."""
     for cls in _selectable_drivers():
+        if _backend_of(cls):
+            try:
+                __import__(_backend_of(cls))
+            except ImportError:
+                continue                       # an absent backend's driver cannot answer; not a red
         if cls is L.Driver:
             inst = cls()
         else:
@@ -127,11 +149,17 @@ def test_a_driver_that_cannot_bind_a_declared_buffer_refuses():
 # --------------------------------------------------------------------------
 
 def _ext_or_skip():
-    from neurobrix.triton.metal_backend import nbx_driver_module
-    mod = nbx_driver_module()
+    # The import comes FIRST: on a rig with no Metal backend, `nbx_driver_module()`
+    # REFUSES (BackendSelectionRefused) before the skip below could fire, and the
+    # three behavioural cells read as red on CUDA (Dell, 2026-09-20).
+    pytest.importorskip("triton_apple_backend")
+    from neurobrix.triton.metal_backend import nbx_driver_module, BackendSelectionRefused
+    try:
+        mod = nbx_driver_module()
+    except BackendSelectionRefused as exc:
+        pytest.skip(f"no Metal backend selectable here: {exc}")
     if "triton_ext" not in mod:
         pytest.skip(f"the declared-buffer ABI is triton-ext's; driver here is {mod}")
-    pytest.importorskip("triton_apple_backend")
 
 
 def test_triton_ext_reports_a_failing_device_assert():

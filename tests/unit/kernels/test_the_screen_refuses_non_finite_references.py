@@ -90,7 +90,16 @@ def test_a_non_finite_reference_is_refused_with_its_reason(poison):
 def test_the_launcher_records_that_reason_rather_than_a_generic_one():
     """The record has to say WHY, or `screened: false` reads as "no oracle"."""
     from neurobrix.kernels import launcher as L
-    SO.set_last_refusal("the fp64 reference is not finite (7 of 12 elements "
-                        "NaN or Inf), so it cannot adjudicate any candidate")
-    reason = L._no_oracle_reason(object())          # an oracle WAS present
+    # A provider must be INSTALLED for the launcher to consult the oracle's own
+    # refusal: with none, it answers "no oracle provider is installed" first —
+    # which is what a CUDA rig reads at import (the provider is installed by the
+    # certifier's run, not at import). Measured 2026-09-20 on the merged tree.
+    _before = L._SCREEN_ORACLE
+    L.set_screen_oracle(SO.provider)
+    try:
+        SO.set_last_refusal("the fp64 reference is not finite (7 of 12 elements "
+                            "NaN or Inf), so it cannot adjudicate any candidate")
+        reason = L._no_oracle_reason(object())          # an oracle WAS present
+    finally:
+        L.set_screen_oracle(_before)
     assert "not finite" in reason, reason
