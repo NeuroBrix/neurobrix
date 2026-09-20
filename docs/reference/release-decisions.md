@@ -61,9 +61,21 @@ positions for a short prompt) enter cross-attention unmasked, and the video is n
 (tokenizer extracted values), so the engine reads it from the `.nbx`; the runtime registry
 read remains the developer's override. The four hub containers that declare the flag
 (Wan2.1-T2V-1.3B, Wan2.1-I2V-14B-480P, Wan2.1-VACE-1.3B, Wan2.2-I2V-A14B) must be rebuilt and
-re-uploaded — no re-trace, the graphs are unchanged. **Not yet closed, same class:** five other
-readers take a flag only from the registry — `i2v_latent_conditioning`,
-`vace_control_conditioning` (both engines), two Prism placement flags in `solver.py`, and the
-vision `input_processor`'s VAE-encoder flag. Each is a container that behaves differently for
-its author and for its users until the flag rides in the `.nbx`. The rule: an engine decision
-that depends on a file only the build toolchain has is a build-side value, written at build.
+re-uploaded — no re-trace, the graphs are unchanged.
+
+**The class, closed in the engine and the build the same day (6fb35c3b).** Five other readers
+took a flag only from the registry — `i2v_latent_conditioning`, `vace_control_conditioning`
+(both engines), the two precision pins Prism reads in `solver.py` (`requires_fp32_compute`,
+`fp16_conv_cascade_safe`), and the vision input processor's `pad_image_to_num_frames`. The build
+now writes every one of the six into the container's extracted values under the component that
+declares it; the container records them when opened (`nbx/component_flags.py`, before Prism
+plans); the reader's order is env override → registry (the developer's override) → the
+container → default. The rule: an engine decision that depends on a file only the build
+toolchain has is a build-side value, written at build.
+
+**What 0.5.5 owes the hub (public, the owner's act):** thirteen registry entries declare at least
+one of the six flags and all thirteen are on the hub (listing of 2026-09-20, 47 models): the four
+Wan containers above, Allegro-TI2V, CogVideoX-5b-I2V, SANA-Video-2B-720p, PixArt-XL-1024 and
+PixArt-Sigma-XL-1024 (`fp16_conv_cascade_safe`), HAT-L-x4, HAT-S-x4, SwinIR-Classical-x2 and -x4
+(`requires_fp32_compute`). Each is a rebuild (no re-trace) and a re-upload under the same slug.
+Until then every one of them runs at its author's settings only in the author's checkout.
