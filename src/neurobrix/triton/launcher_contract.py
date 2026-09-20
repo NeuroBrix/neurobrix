@@ -230,8 +230,12 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
     It exercises the driver **exactly as `kernels/launcher.py` does**: Triton
     compiles for the target the driver names, the driver loads the artifact
     it declared, and the driver launches it with the launcher's own
-    `(kind, value)` parameter list. A checker that used a private path of its
-    own would certify a driver the engine cannot actually drive.
+    `(kind, value)` parameter list AND everything that travels beside it —
+    `names`, `types`, and the `trailing` buffers the driver itself declared
+    from the compile metadata. A checker that used a private path of its own
+    would certify a driver the engine cannot actually drive; until 2026-09-17
+    this one omitted all three, so a driver that needs any of them could not be
+    certified here at all.
 
     The callables are the caller's, because allocation is the allocator's job
     and this module must not grow one:
@@ -304,7 +308,36 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
         if driver.wants_scratch_params:
             params = params + [("ptr", 0), ("ptr", 0)]
 
-        driver.launch(function, grid, block, metadata.shared, 0, params)
+        # Everything `kernels/launcher.py` hands a driver, because that is what
+        # this function claims to do. Omitting any of it certifies a driver
+        # against a call the engine never makes: a backend that packs its
+        # scalars into one buffer needs `types` to place the fields, one that
+        # binds by name needs `names`, and one whose emitter appends its own
+        # buffers needs `trailing` — without which the checker would bless a
+        # launch that binds fewer buffers than the kernel declares.
+        #
+        # `names` and `types` cover the SIGNATURE's runtime parameters and stop
+        # there. The launcher appends the two scratch pointers to `params` and
+        # to nothing else, so this must not "helpfully" extend them either: the
+        # point is to make the launcher's call, divergences included.
+        names = [name for name, _ty in ordered]
+        types = [ty for _name, ty in ordered]
+        trailing = driver.trailing_buffers(metadata)
+
+        # THREE extents, because that is what the launcher hands a driver:
+        # `launch()` pads with `+ (1,) * (3 - len(grid))` before the call. This
+        # checker passed the caller's grid through unpadded, and a driver that
+        # unpacks `gx, gy, gz = grid` — as triton-ext's does — raised
+        # ValueError on an ordinary one-dimensional launch. The archived fork's
+        # driver tolerated a short tuple, so the gap sat here unseen until the
+        # backend changed.
+        padded = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
+
+        def _launch(p):
+            driver.launch(function, padded, block, metadata.shared, 0, p,
+                          names=names, types=types, trailing=trailing)
+
+        _launch(params)
         got = read_buffer(pointers[args_builder.output_index],
                           args_builder.output_bytes)
         check(got == expected,
@@ -314,8 +347,7 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
 
         # A wrong-length argument list must be refused, not padded.
         try:
-            driver.launch(function, grid, block, metadata.shared, 0,
-                          params[:-1])
+            _launch(params[:-1])
             failures.append("launch() accepted an argument list of the wrong "
                             "length instead of refusing it")
         except Exception:
@@ -331,7 +363,7 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
                 foreign[i] = ("ptr", 0x1000)
                 break
         try:
-            driver.launch(function, grid, block, metadata.shared, 0, foreign)
+            _launch(foreign)
             failures.append("launch() accepted a device address the "
                             "allocator never handed out")
         except Exception:
@@ -341,6 +373,31 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
             free_buffer(address)
 
     # -- events --------------------------------------------------------------
+    # A DIFFERENT PROTOCOL, and not every backend puts it on the driver. The
+    # launcher calls none of these — it uses `load`, `launch`, `block_for`,
+    # `target`, `artifact_kind`, `wants_scratch_params`, `trailing_buffers` and
+    # `max_shared_memory_per_block`, and nothing else. On Apple the streams and
+    # events belong to the ALLOCATOR (`kernels/metal_device.py`), so
+    # `TritonExtDriver` implements the launch half only. Measured 2026-09-17,
+    # when archiving the fork replaced a driver that carried both halves on one
+    # object and hid the distinction.
+    #
+    # A driver that does not claim this half is NOT failed here: certifying it
+    # against an API the engine never calls would be this checker inventing a
+    # contract, which is the fault it exists to prevent. It is SAID instead, so
+    # the gap stays visible.
+    _ordering_api = ("create_event", "record_event", "synchronize_event",
+                     "create_stream", "wait_event", "synchronize_stream",
+                     "destroy_event", "destroy_stream", "elapsed_ms")
+    _absent = [m for m in _ordering_api if not hasattr(driver, m)]
+    if _absent:
+        print(f"  note: {driver.__class__.__name__} implements the LAUNCH half "
+              f"of this contract and not the ordering half "
+              f"({', '.join(_absent)}); on this backend streams and events "
+              f"belong to the allocator. Not certified here, not a failure.",
+              flush=True)
+        return failures
+
     ordering = driver.create_event(timing=False)
     timing_a = driver.create_event(timing=True)
     timing_b = driver.create_event(timing=True)

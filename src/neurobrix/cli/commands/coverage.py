@@ -59,9 +59,15 @@ _OP_TYPE = re.compile(rb'"op_type"\s*:\s*"([^"]+)"')
 
 
 def _cache_root() -> Path:
-    import os
-    return Path(os.environ.get("NEUROBRIX_CACHE",
-                               Path.home() / ".neurobrix" / "cache"))
+    """The machine's cache, from the one door.
+
+    This read $NEUROBRIX_CACHE with its own ~/.neurobrix default until
+    2026-09-17 — a third answer to a question `cli/utils.py` already claimed to
+    be the single source of truth for. `core.paths` still honours that variable;
+    it also honours ~/.neurobrix/paths.json, and refuses a configured location
+    that is not there instead of silently reading the local disk."""
+    from neurobrix.core.paths import cache_dir
+    return cache_dir()
 
 
 def _containers(root: Path):

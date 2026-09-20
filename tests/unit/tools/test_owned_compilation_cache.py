@@ -51,10 +51,12 @@ def test_a_path_inside_the_shared_cache_is_refused():
     shared = Path.home() / ".triton" / "cache" / "run42"
     problems = owned_cache_problems({
         "TRITON_CACHE_DIR": str(shared),
-        "TRITON_MSL_CACHE_DIR": str(Path.home() / ".cache" / "triton_msl"),
         "NEUROBRIX_REPLAY_CACHE": str(Path.home() / ".neurobrix" / "replay_cache"),
     })
-    assert len(problems) == 3, f"expected all three refused, got {problems}"
+    assert len(problems) == 2, (
+        f"expected both layers refused, got {problems}. There were three\n"
+        f"until 2026-09-17: TRITON_MSL_CACHE_DIR went with the archived fork,\n"
+        f"and triton-ext reads no cache variable of its own.")
 
 
 def test_the_replay_cache_is_one_of_the_layers():

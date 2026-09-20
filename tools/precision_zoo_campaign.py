@@ -38,13 +38,49 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-NBX = "/home/mlops/ml/venv/bin/neurobrix"
+_LEGACY_NBX = "/home/mlops/ml/venv/bin/neurobrix"
+_LEGACY_PY = "/home/mlops/ml/venv/bin/python"
+
+
+def zoo_python() -> str:
+    """The interpreter the arms run under.
+
+    This was the rig's absolute venv path and nothing else. That is correct on
+    the rig and does not exist anywhere else, so the tool — and with it the
+    audio gate's transcript fallback — could not run off that one machine.
+    Measured on Apple 2026-09-18: the gate returned
+    `transcribe: [Errno 2] No such file or directory:
+    '/home/mlops/ml/venv/bin/neurobrix'`, i.e. it reported a stochastic
+    synthesis as FAILING the gate when what had actually failed was locating a
+    recognizer.
+
+    The rig keeps exactly what it had — the legacy path is preferred whenever it
+    exists — so this changes nothing there.
+    """
+    return os.environ.get("NBX_ZOO_PYTHON") or (
+        _LEGACY_PY if os.path.exists(_LEGACY_PY) else sys.executable)
+
+
+def nbx_cmd() -> list:
+    """The `neurobrix` entry point, as a command LIST.
+
+    `python -m neurobrix` is the portable spelling of the console script, and it
+    is what the console script does; the rig's own binary is still preferred
+    where it exists.
+    """
+    env = os.environ.get("NBX_ZOO_NEUROBRIX")
+    if env:
+        return [env]
+    if os.path.exists(_LEGACY_NBX):
+        return [_LEGACY_NBX]
+    return [zoo_python(), "-m", "neurobrix"]
 
 
 from rig_devices import visible_card, gate_card   # the one brick, not a third copy
 
 
-PY = "/home/mlops/ml/venv/bin/python"
+PY = zoo_python()
+NBX_CMD = nbx_cmd()          # a LIST: `python -m neurobrix` where the rig's binary is absent
 CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
 ASSETS = REPO / "benchmarks" / "assets"
 OUT_DEFAULT = REPO / "validation_outputs" / "precision_zoo_2026_09_05"
@@ -251,7 +287,7 @@ def _transcribe(path: Path) -> str:
     env = {**os.environ}
     env.pop("NBX_ACTIVATIONS_FP16_SAFE", None)
     env["CUDA_VISIBLE_DEVICES"] = gate_card()   # never the condemned card, and never outside a pin
-    r = subprocess.run([NBX, "run", "--model", "whisper-large-v3-turbo", "--audio", str(path), "--output", str(out)],
+    r = subprocess.run([*NBX_CMD, "run", "--model", "whisper-large-v3-turbo", "--audio", str(path), "--output", str(out)],
                        env=env, capture_output=True, text=True, timeout=900)
     if r.returncode != 0 or not out.exists():
         raise RuntimeError(f"whisper exit {r.returncode}: {r.stdout[-200:]} {r.stderr[-200:]}")
@@ -347,7 +383,7 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
         base_env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     res = {"model": model, "family": fam, "model_name": manifest(model).get("model_name"), "request": req,
            "weight_gb": round(weight_gb(model), 2), "config": "machine" if gpu is None else f"pinned:{gpu}"}
-    rc, wall = run([NBX, "calibrate", "--model", model] + req, base_env, d / "calibrate.log", timeout)
+    rc, wall = run([*NBX_CMD, "calibrate", "--model", model] + req, base_env, d / "calibrate.log", timeout)
     res["calibrate"] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / "calibrate.log")}
     if rc:
         # No record → the arms would both run the conservative path and the
@@ -373,7 +409,7 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
             outp = d / f"{arm}{ext}"
             if rep == 1:
                 outp = d / f"{arm}.run1{ext}"
-            rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env,
+            rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env,
                            d / f"{arm}.run{rep}.log", timeout)
             e = exec_time(d / f"{arm}.run{rep}.log")
             prev = res.get(arm)
@@ -422,7 +458,7 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "launcher"}
     for arm, env in (("A", {**base_env, "NBX_LAUNCHER": "triton"}), ("B", {**base_env, "NBX_LAUNCHER": "nbx"})):
         outp = d / f"{arm}{ext}"
-        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
         res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp)}
     a, b = d / f"A{ext}", d / f"B{ext}"
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
@@ -683,7 +719,7 @@ def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     else:
         env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     outp = d / f"sweep{ext}"
-    rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
+    rc, wall = run([*NBX_CMD, "run", "--model", model] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
     text = (d / "sweep.log").read_text(errors="replace")
     m = re.search(r"\[autotune\] \S+: sweep artifact written (\S+) \((\d+) measured shape", text)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
@@ -712,7 +748,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
         env = {**env, "PYTHONPATH": str(Path(src).resolve())}
         cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "drift", "--model", model]
     else:
-        cmd = [NBX, "drift", "--model", model]
+        cmd = [*NBX_CMD, "drift", "--model", model]
     rc, wall = run(cmd + ["--out", str(d), "--bound", str(bound)] + req, env, d / "drift.log", timeout)
     oracle_log = (d / "oracle.log").read_text(errors="replace") if (d / "oracle.log").exists() else ""
     triton_only = "UNSUPPORTED PATH" in oracle_log and "encoding" in oracle_log
@@ -909,7 +945,7 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
                 env = {**env, "PYTHONPATH": str(Path(src).resolve())}
                 cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
             else:
-                cmd = [NBX, "run", "--model", model]
+                cmd = [*NBX_CMD, "run", "--model", model]
             # One log per REPETITION. It used to be one per arm, opened "w"
             # each time, so only the LAST repetition survived on disk — and the
             # repetition that actually measured left no trace. That is what made

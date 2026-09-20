@@ -60,3 +60,27 @@ def a_free_rig():
     reason = rig_reason()
     if reason:
         pytest.skip(reason)
+
+
+def running_backend(triton_version=None) -> dict:
+    """A proof's `backend` stamp for THIS machine, for fixtures that must be served.
+
+    A fixture that hardcodes `{"name": "cuda"}` and then asserts its entry IS
+    SERVED can only pass on a CUDA box. That was invisible while
+    `running_generator()` read `nbx_tensor.BACKEND_NAME` — a symbol that does not
+    exist — and silently defaulted to cuda, so every machine looked like a CUDA
+    box to the gate. The moment that was fixed (2026-09-19; Apple reports
+    `triton 3.8.0 mps`), three such fixtures turned red at once.
+
+    `triton_version` is left settable because the STALE-generator cells vary it
+    deliberately; the NAME is the part that must follow the machine.
+    """
+    import triton
+    name = "cuda"
+    try:
+        from neurobrix.kernels.launcher import target
+        name = getattr(target(), "backend", None) or "cuda"
+    except Exception:
+        pass
+    return {"name": name,
+            "triton": str(triton_version or triton.__version__)}

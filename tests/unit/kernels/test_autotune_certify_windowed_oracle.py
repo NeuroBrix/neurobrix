@@ -51,7 +51,19 @@ def test_a_windowed_oracle_measures_its_windows_and_the_proof_names_them():
     full = Z._conv2d_oracle(x, w, (1, 1), (1, 1), (1, 1), 1)
     wins = [(0, 0, 3, 0, 3), (1, 9, 12, 9, 12)]
     wo = Z.WindowedOracle([(win, Z._conv2d_oracle(x, w, (1, 1), (1, 1), (1, 1), 1, window=win)) for win in wins], 12, 12, 2)
-    assert Z.oracle_deviation(full, wo) == 0.0
+    # NOT `== 0.0`. `oracle_deviation` is a RELATIVE deviation
+    # (max|out-oracle| / max|oracle|), and the two sides here are the same
+    # float64 convolution accumulated by two different routes — the whole array
+    # at once, and window by window. Different summation order, different last
+    # bits: measured 2026-09-17, the deviation is 6.4e-17, which is 0.29 x
+    # `np.finfo(float64).eps` — BELOW one unit in the last place.
+    #
+    # Demanding exact zero asserted something float64 arithmetic does not
+    # promise, and it failed on this machine for that reason alone. The real
+    # claim is "indistinguishable at float64 precision", and the bound is the
+    # machine's own epsilon rather than a tuned constant. The test keeps all its
+    # power: the injected fault on the next line is fifteen orders above it.
+    assert Z.oracle_deviation(full, wo) <= np.finfo(np.float64).eps
     bad = full.copy(); bad[1, :, 11, 11] *= 3                                            # a fault in the last corner is seen
     assert Z.oracle_deviation(bad, wo) > 0.5
     assert "2 window(s)" in wo.describe and "batch 1 rows 9-12 cols 9-12" in wo.describe

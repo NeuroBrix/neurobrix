@@ -3,7 +3,8 @@
 Three caches hold the Metal runtime:
 
 * `metal_device._RUNTIME` itself,
-* the compiled kernels in `metal_driver`, which hold the device and the
+* the compiled kernels the LAUNCHER holds, which carry a driver-produced
+  handle bound to the device and the
   pipelines they were built on,
 * `nbx_tensor._gpu_runtime`, an `lru_cache` the allocator resolves every
   malloc through.
@@ -67,8 +68,8 @@ def test_a_launch_still_works_after_the_runtime_is_reset():
 
 def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     """The invariant itself, stated rather than inferred from behaviour."""
+    from neurobrix.kernels import launcher as L
     from neurobrix.kernels import metal_device, nbx_tensor
-    from neurobrix.triton import metal_driver
 
     # Populate all three.
     x = nbx_tensor.NBXTensor.from_numpy(np.ones(64, dtype=np.float32))
@@ -80,15 +81,20 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
     # exercises upstream Triton's launch path instead of the engine's.
     launcher.install()
     add(x, x)
-    assert metal_driver._KERNEL_CACHE, "no compiled kernel to invalidate"
+    # The archived fork's driver held its own kernel/library caches and this
+    # test read them. It went with the fork on 2026-09-17; the invariant did
+    # not. What holds a driver-produced handle now is the LAUNCHER's binder
+    # cache — one `_Prepared` per specialisation, each carrying a Metal
+    # function bound to the runtime that built it.
+    assert L._binders, "no compiled kernel to invalidate"
     assert nbx_tensor._gpu_runtime.cache_info().currsize == 1
 
     metal_device.reset_runtime_for_tests()
 
-    assert not metal_driver._KERNEL_CACHE, (
+    assert not L._binders, (
         "compiled kernels outlived the runtime they were built on")
-    assert not metal_driver._LIBRARY_CACHE, (
-        "compiled libraries outlived the device they were built on")
+    assert L._TARGET is None, (
+        "the compile target outlived the runtime that named it")
     assert nbx_tensor._gpu_runtime.cache_info().currsize == 0, (
         "the allocator still resolves mallocs through the old runtime")
 

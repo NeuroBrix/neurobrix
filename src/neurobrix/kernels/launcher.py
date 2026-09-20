@@ -182,21 +182,32 @@ class Driver:
         raise NotImplementedError
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
-               names=None) -> None:  # pragma: no cover
+               names=None, types=None, trailing=None) -> None:  # pragma: no cover
         raise NotImplementedError
 
-    def block_for(self, metadata):
-        """Threads per block, from the compiled metadata.
+    def trailing_buffers(self, metadata):
+        """Buffers the COMPILED kernel declares after the caller's arguments,
+        which only this backend knows how to build and read.
 
-        `num_warps * warp_size` on CUDA. Not universal: triton-msl documents
-        that its C++ path can overwrite `metadata.block_size` with a value
-        meant for a different launch shape, so the Metal driver reads the
-        emitted kernel's own size instead of computing one.
+        A backend whose emitter appends parameters of its own — a device-print
+        record area, a device-assert status area — declares them in the compile
+        metadata, and a driver that binds only the caller's arguments leaves
+        those slots unbound. Metal does not complain: `packArguments` binds the
+        tuple it is given at indices 0..n-1 and nothing checks the count, so a
+        `tl.device_assert` the author explicitly kept writes into a slot nobody
+        bound and the failure is LOST (measured 2026-09-17, triton-ext,
+        `probe_ki19_driver_protections.py`: a failing assert ran to completion
+        and raised nothing). CUDA has had the matching protection since this
+        launcher existed — `CudaDriver.launch` refuses when the parameter count
+        is not exactly what the cubin declares.
+
+        This is the seam for that: `prepare` asks the driver ONCE per
+        compilation what the kernel declares beyond the call, and `launch`
+        hands the answer back. The value is opaque to the launcher — naming
+        what is in it would put a backend's ABI in a file that must not know
+        one. CUDA declares nothing and returns None.
         """
-        return (32 * int(metadata.num_warps), 1, 1)
-
-    def target(self):  # pragma: no cover - interface
-        raise NotImplementedError
+        return None
 
     def block_for(self, metadata):
         """Threads per block, from the compiled metadata.
@@ -332,7 +343,16 @@ class CudaDriver(Driver):
         return function
 
     def launch(self, function, grid, block, shared: int, stream: int, params,
-               names=None) -> None:
+               names=None, types=None, trailing=None) -> None:
+        # `types` is for a backend that packs its scalars into one buffer and
+        # needs the field offsets; CUDA binds each parameter to its own slot and
+        # has no use for it.
+        if trailing is not None:
+            raise RuntimeError(
+                "NeuroBrix launcher: trailing buffers were computed for this "
+                f"kernel ({trailing!r}) and the CUDA driver cannot bind them. "
+                "It declares none, so this is a driver/metadata mismatch, not "
+                "something to launch past.")
         # Two refusals BEFORE anything reaches the device (the launcher
         # contract's ownership rules, checked by `verify_driver_contract`):
         # the argument list must be exactly what the cubin declares, and
@@ -508,10 +528,6 @@ class CudaDriver(Driver):
 
 _DRIVER: Optional[Driver] = None
 
-#: backend name (as the allocator seam resolves it) -> module exposing
-#: `driver()`. CUDA is absent because it is the built-in default, which is
-#: what keeps the CUDA path byte-identical to before this registry existed.
-_DRIVER_MODULES = {"metal": "neurobrix.triton.metal_driver"}
 
 
 def register_driver(driver: Optional[Driver]) -> None:
@@ -535,11 +551,20 @@ def _resolve_driver() -> Driver:
         name = _detect_gpu_backend()
     except Exception:
         return CudaDriver.instance()
-    path = _DRIVER_MODULES.get(name)
-    if path is None:
-        return CudaDriver.instance()
-    from importlib import import_module
-    return import_module(path).driver()
+    if name == "metal":
+        # WHICH Metal backend is a profile selection, and a driver implements ONE
+        # backend's launch ABI (ours reads the fork's MSL conventions for scalar
+        # binding). So the SEAM answers which module launches, or refuses by
+        # name. A static {"metal": <the fork's driver>} table was the previous
+        # answer, and it is what launched triton-ext-compiled kernels through the
+        # fork's ABI: scalars after the first arrived as 0, every mask went
+        # false, and the kernel returned exact zeros without failing.
+        from neurobrix.triton.metal_backend import nbx_driver_module
+        from importlib import import_module
+        return import_module(nbx_driver_module()).driver()
+    # CUDA is the built-in default, which keeps the Dell's path byte-identical
+    # to before this seam existed.
+    return CudaDriver.instance()
 
 
 def _unsupported(kind):
@@ -595,15 +620,23 @@ def _pack_param(ty: str, value: Any) -> Tuple[str, Any]:
 # ---------------------------------------------------------------------------
 
 class _Prepared:
-    __slots__ = ("function", "signature", "shared", "num_warps", "block", "name")
+    __slots__ = ("function", "signature", "shared", "num_warps", "block", "name",
+                 "trailing")
 
-    def __init__(self, function, signature, shared, num_warps, name, block=None):
+    def __init__(self, function, signature, shared, num_warps, name, block=None,
+                 trailing=None):
         self.function = function
         self.signature = signature
         self.shared = shared
         self.num_warps = num_warps
         self.block = block if block is not None else (32 * num_warps, 1, 1)
         self.name = name
+        #: What the compiled kernel declares AFTER the caller's arguments, as
+        #: only its own driver can describe it (`Driver.trailing_buffers`).
+        #: Computed once per compilation, because it is a property of the
+        #: compilation and reading it per launch would cost a metadata walk on
+        #: the hot path.
+        self.trailing = trailing
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +858,7 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
                 f"{drv.artifact_kind!r}")
         function = drv.load(artifact, md.name, md.shared)
         prep = _Prepared(function, signature, md.shared, md.num_warps, md.name,
-                         drv.block_for(md))
+                         drv.block_for(md), trailing=drv.trailing_buffers(md))
         kernel_cache[key] = prep
     kernel_cache[fast_key] = prep
     return prep, bound_args
@@ -874,8 +907,13 @@ def launch(kernel, grid, *args, **kwargs):
         params.append(("ptr", 0))    # profile scratch
     if _RECORDER is not None:
         _RECORDER(prep, grid, params)
+    # The Triton TYPE of every runtime parameter, in the same order. A backend
+    # that packs its scalars into one buffer computes the field offsets from
+    # these; our `(kind, value)` pairs have already lost the distinction between
+    # an i16 and a bf16, and packing to the wrong offset is silent.
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
-               names=names)
+               names=names, types=[ty for _name, ty in runtime],
+               trailing=prep.trailing)
 
 
 def _stream() -> int:
@@ -975,7 +1013,12 @@ def _no_oracle_reason(oracle) -> str:
         return ("the oracle provider covers no oracle for this kernel "
                 "(the GEMM class and, since 2026-09-13, the convolution family "
                 "are covered; anything else is decided by the bare vote)")
-    return "the oracle produced no reference"
+    try:
+        from neurobrix.kernels.screen_oracle import last_refusal
+        why = last_refusal()
+    except Exception:                                  # noqa: BLE001
+        why = None
+    return why or "the oracle produced no reference"
 
 
 def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
@@ -1233,12 +1276,16 @@ _BENCH_FLUSH_BYTES = 256 * 1024 * 1024
 def bench_would_swap(total_bytes: int):
     """(True, available_mb) when timing candidates would measure the swap.
 
-    The comparison is constant-free: when the live arguments ALONE exceed what
-    the machine has available, paging during the sweep is certain, and every
-    number produced is a number about the swap. `available_mb` comes from
-    `core.host_memory` -- our own authority for this quantity, never
-    `Pages free` -- and is read live, never cached: pressure is a state of the
-    moment, not of the process.
+    The comparison carries NO TUNING MARGIN, and that is a different claim from
+    "no constant at all" -- it used to say the latter, and stopped being true
+    when `_BENCH_FLUSH_BYTES` was added (2026-09-17, after hat-s-x4 reached
+    SIGKILL with the door open). What is added is not a cushion: it is the
+    scratch `do_bench` REALLY ALLOCATES on every call, at the same name it
+    allocates it with, so the two cannot drift. Nothing here is free to tune.
+
+    `available_mb` comes from `core.host_memory` -- our own authority for this
+    quantity, never `Pages free` -- and is read live, never cached: pressure is
+    a state of the moment, not of the process.
 
     An unreadable platform (available_mb None) gates nothing and says nothing
     here: `memory_state` already names why it could not read.
@@ -1748,8 +1795,12 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype
     fn()
     DeviceAllocator.stream_synchronize(0)
-    # an L2-sized scratch flushed before every timed call, as upstream does
-    flush = NBXTensor.empty((256 * 1024 * 1024 // 4,), dtype=NBXDtype.float32, device="cuda")
+    # an L2-sized scratch flushed before every timed call, as upstream does.
+    # The SIZE is `_BENCH_FLUSH_BYTES`, not a literal repeated here:
+    # `bench_would_swap` counts this allocation when it decides whether a sweep
+    # would measure the swap, and a gate counting a different number from the
+    # one actually allocated is a gate about nothing.
+    flush = NBXTensor.empty((_BENCH_FLUSH_BYTES // 4,), dtype=NBXDtype.float32, device="cuda")
     # ONE probing launch before the four that finish the estimate. The
     # estimate used to be five blind launches -- so a pathologically slow
     # candidate (2.5 min a launch was measured on a bf16 matmul sweep) cost
