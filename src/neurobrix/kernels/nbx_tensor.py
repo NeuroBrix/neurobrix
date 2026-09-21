@@ -409,7 +409,25 @@ def _backend_capability(table, name: str, what: str) -> bool:
 
 
 def backend_loads_pointers_from_memory() -> bool:
-    """True where a kernel may dereference an address it LOADED from a tensor."""
+    """True where a kernel may dereference an address it LOADED from a tensor.
+
+    On Metal the answer is a property of the LAUNCHER, not the silicon: a
+    loaded address reads correctly exactly when the driver keeps the captured
+    address alive across launches, which `triton_ext` does through
+    `pinned_addresses` (proven against an fp64 oracle,
+    test_the_moe_table_reads_through_a_pinned_scope, 2026-09-20; the archived
+    fork had no such scope and the same load returned zeros with nothing
+    raised — the measured defect this gate refuses). So the metal row is a
+    SELECTION read, not a constant: any other metal backend answers False
+    until it proves its own lifetime contract.
+    """
+    backend = _detect_gpu_backend()
+    if backend == "metal":
+        try:
+            from neurobrix.triton.metal_backend import selected_metal_backend
+            return selected_metal_backend() == "triton_ext"
+        except Exception:                              # noqa: BLE001
+            return False
     return _backend_capability(
         _BACKEND_LOADS_POINTERS_FROM_MEMORY, "_BACKEND_LOADS_POINTERS_FROM_MEMORY",
         "whether a kernel can read through a pointer loaded from memory")
