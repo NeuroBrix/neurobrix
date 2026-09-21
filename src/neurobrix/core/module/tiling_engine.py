@@ -954,6 +954,74 @@ class OpLevelTilingEngine:
     }
 
     @staticmethod
+    def build_inplace_unary_interceptor(op_type, min_bytes):
+        """Return the runtime interceptor for one in-place-safe unary.
+
+        The type dispatch is the OUTER decision and the size test the inner
+        one — the ordering the crash of 2026-09-21 turned on. A torch
+        tensor BELOW the threshold used to fall to the early
+        `return _fn(x, ...)` and hand the NBX/triton wrapper a torch
+        tensor, which has no `_device_idx`: real-esrgan-x8 compiled died
+        at `aten.leaky_relu::0` (`'Tensor' object has no attribute
+        '_device_idx'`) for exactly this. Each tensor kind now takes its
+        own path first; in-place (the shared-buffer optimisation) is
+        applied only when the tensor is BIG enough to be worth it AND
+        contiguous, and otherwise the ordinary out-of-place op of the
+        correct kind runs.
+        """
+        from neurobrix.kernels import wrappers as _w
+        from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
+
+        fn_name = OpLevelTilingEngine.INPLACE_SAFE_UNARY[op_type]
+        fn = getattr(_w, fn_name)
+
+        def _inplace_unary(x, *args, **kwargs):
+            try:
+                _n = 1
+                for _d in x.shape:
+                    _n *= int(_d)
+                _bytes = _n * getattr(x, "itemsize", 2)
+            except Exception:
+                _bytes = 0
+            big = _bytes >= min_bytes
+
+            if isinstance(x, _NBXT):
+                # CONTIGUITY: the wrappers call `x.contiguous()` first, and
+                # for a strided view that is a DIFFERENT buffer — an in-place
+                # write would flat-index into the original's memory and
+                # corrupt it (the POINT 6 H2 / add_inplace_nbx hazard). Only
+                # a big, contiguous tensor takes the shared-buffer path.
+                if big and x.is_contiguous():
+                    return fn(x, *args, out=x, **kwargs)
+                return fn(x, *args, **kwargs)
+
+            if is_torch_tensor(x):
+                import torch.nn.functional as _F
+                _tfn = getattr(_F, fn_name, None)
+                if _tfn is not None:
+                    if big and x.is_contiguous():
+                        try:
+                            return _tfn(x, *args, inplace=True, **kwargs)
+                        except TypeError:
+                            # no `inplace` kwarg on this one (gelu)
+                            return _tfn(x, *args, **kwargs)
+                    return _tfn(x, *args, **kwargs)
+                # torch tensor but no torch.nn.functional.<name>: all
+                # seven registered ops HAVE one, so this is unreachable in
+                # practice — refuse by name rather than hand a torch tensor
+                # to a triton wrapper (the crash this method exists to end).
+                raise RuntimeError(
+                    f"ZERO FALLBACK: in-place-unary interceptor for "
+                    f"{op_type!r} has no torch.nn.functional.{fn_name} for a "
+                    f"torch tensor, and the NBX wrapper cannot take one. "
+                    f"Register a torch route before marking it in-place safe.")
+
+            return fn(x, *args, **kwargs)
+
+        _inplace_unary.self_manages_dtype = True
+        return _inplace_unary
+
+    @staticmethod
     def _detect_inplace_unary_candidates(
         graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
     ) -> "List[Tuple[str, str]]":
@@ -1552,50 +1620,8 @@ class OpLevelTilingEngine:
                 "NBX_INPLACE_MIN_BYTES", 1024 * 1024 * 1024))
 
             def make_inplace_unary_interceptor(_op_type):
-                _fn_name = OpLevelTilingEngine.INPLACE_SAFE_UNARY[_op_type]
-                _fn = getattr(_w, _fn_name)
-
-                def _inplace_unary(x, *args, **kwargs):
-                    # THE SIZE TEST, at the only moment it can be answered.
-                    # Below the threshold the buffer saved is not worth losing
-                    # the input for debugging, and the check is a couple of
-                    # integer multiplications against a kernel launch.
-                    try:
-                        _n = 1
-                        for _d in x.shape:
-                            _n *= int(_d)
-                        _bytes = _n * getattr(x, "itemsize", 2)
-                    except Exception:
-                        _bytes = 0
-                    if _bytes < _MIN_INPLACE_BYTES:
-                        return _fn(x, *args, **kwargs)
-                    if isinstance(x, _NBXT):
-                        # CONTIGUITY. The wrappers call `x.contiguous()` first,
-                        # and for a strided view that returns a DIFFERENT
-                        # buffer -- the kernel would then flat-index the result
-                        # into the original's memory and corrupt it. This is
-                        # the same hazard `add_inplace_nbx` guards, and the
-                        # same one the POINT 6 H2 fix was about. A
-                        # non-contiguous input simply takes the ordinary path.
-                        if x.is_contiguous():
-                            return _fn(x, *args, out=x, **kwargs)
-                        return _fn(x, *args, **kwargs)
-                    # Torch path (compiled / sequential modes).
-                    if is_torch_tensor(x):
-                        import torch.nn.functional as _F
-                        _tfn = getattr(_F, _fn_name, None)
-                        if _tfn is not None and x.is_contiguous():
-                            try:
-                                return _tfn(x, *args, inplace=True, **kwargs)
-                            except TypeError:
-                                # No `inplace` on this one (gelu): ordinary path.
-                                return _tfn(x, *args, **kwargs)
-                        if _tfn is not None:
-                            return _tfn(x, *args, **kwargs)
-                    return _fn(x, *args, **kwargs)
-
-                _inplace_unary.self_manages_dtype = True
-                return _inplace_unary
+                return OpLevelTilingEngine.build_inplace_unary_interceptor(
+                    _op_type, _MIN_INPLACE_BYTES)
 
             for op_uid, op_type in self.plan.inplace_unary:
                 interceptors[op_uid] = make_inplace_unary_interceptor(op_type)
