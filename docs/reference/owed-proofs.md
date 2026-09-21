@@ -1074,9 +1074,10 @@ write the unit into `apple_m4_pro.yml` beside its numbers.
 ## 2026-09-21 — Apple's answer on the reshape rung's OUTPUT: the runtime fold is broken (both machines)
 
 The Dell (`f91d4596`) owed Apple the confirmation that the request-reshape rung, having
-sized an upscaler's tile correctly, produces a CORRECT stitched image — noting its own
-seam figures came from a TEST HARNESS stitch, not the engine's runtime fold. **Measured on
-Apple, 2026-09-21: the engine's own runtime fold does not stitch.**
+sized an upscaler's tile correctly, produces a CORRECT stitched image — **Measured on Apple, 2026-09-21: the engine's runtime fold does not stitch.**
+(CORRECTION 2026-09-21, Hocine: the Dell's green 8192² artefact WAS the engine's own
+component-tiling rung, as its report stated — not a harness stitch. My earlier claim here
+was wrong.)
 
 `real-esrgan-x2 --input-image apple_448.png` (traced `[1,3,64,64] -> [1,3,128,128]`):
 * **output is 128x128, not 896x896** — a single tile, upscaled. Confirmed by pixel match:
@@ -1089,11 +1090,13 @@ Apple, 2026-09-21: the engine's own runtime fold does not stitch.**
   `'Tensor' object has no attribute '_device_idx'` (a torch tensor reaching `wrappers.leaky_relu:857`) — the compiled tiled path handing an ATen tensor to an NBX wrapper.
 
 **Attribution.** `git bisect` (good `2eeff74a`, bad `origin/main`) → first-bad `78784abe`,
-the Mac-branch merge. The merge did NOT touch `tiling_engine.py` or the input synthesizer;
-it changed only `_spatial_component_tiling`'s scale derivation (the scale-from-shapes commit),
-which newly makes upscalers ELIGIBLE for a runtime fold path neither machine had exercised
-end-to-end. So the fold defect is pre-existing and vendor-neutral, not Apple-specific — the
-merge exposed it. It regresses the ENTIRE delivered upscaler family (x2/x4/x8, swin2SR,
+the Mac-branch merge. CORRECTION (Hocine, 2026-09-21): a bisect that lands on a MERGE does
+NOT assign a parent side until each parent is tested — I did not test the parents, so the
+side is unattributed. And `solver.py` has NO diff across this merge; `_spatial_component_tiling`
+is byte-identical at solver.py:3287 on both sides, so my "only the scale derivation changed"
+claim was wrong. The cause is one of the 119 files the merge brought, not yet isolated. What
+STANDS is the symptom and the good/bad endpoints: whole-image (correct 896) at `2eeff74a`,
+batch-49-unfolded (128px) at `origin/main`. It regresses the ENTIRE delivered upscaler family (x2/x4/x8, swin2SR,
 swinir) at any request larger than the 64px trace, which is every real request.
 
 **A compounding second-order effect worth the Dell's eye:** at 448px the model fits WHOLE
