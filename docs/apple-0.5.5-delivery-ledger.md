@@ -64,18 +64,24 @@ readback; image external degeneracy judge; video judged by eye.
   object by ten megabytes. Re-verify when the retention moves.
 - **real-esrgan-x8 @1024** — CONDITIONAL on the same object.
 
-## BLOCKED: the upscaler family regressed by the merge (2026-09-21)
+## RESOLVED: the upscaler "regression" was a STALE LOCAL CONTAINER (2026-09-21)
 
-`git bisect` → `78784abe` (the Mac merge) enabled the reshape rung for upscalers,
-whose ENGINE runtime fold does not stitch: `real-esrgan-x2 @448` emits one 64px
-tile upscaled to 128px (both modes; pixel-matched), space-to-batch 49 tiles never
-folded to 896. x8 compiled hits `leaky_relu _device_idx` (torch tensor in NBX
-wrapper). Vendor-neutral, core/prism/runtime — handed to the rack side in
-`docs/reference/owed-proofs.md` (2026-09-21 entry) with the bisect and datum.
-Every previously-delivered upscaler (x2/x4/x8, swin2SR-x2/x4, swinir-x2/x4) now
-FAILS VERIFICATION under the doctrine at any request larger than its 64px trace;
-they are moved from delivered to **BLOCKED — merge regression** until the fold
-lands. Their CERTIFIED keys stand; only VERIFIED is withdrawn.
+Not the engine, not the merge. real-esrgan-x2's graph is frozen at the trace
+size (pixel-unshuffle H/2 frozen at 32 → the batch symbol inflates to 49 →
+`final_as_array` keeps tile 0 → 128px). My engine diagnosis of the defect was
+exact — but it is the defect the RETRACE fixed. The Dell retraced the
+real-esrgan family on 2026-09-20 (x2 graph `74a2d7ea`, view::0 now
+`floordiv(s1, 2)` — SYMBOLIC), and that container lives on the shared cache
+(`Super-NeuroBrix-Cache` = 10.0.0.20:/nvme/neurobrix_cache). My local copy was
+`626f2e07` — the OLD frozen graph, identical to the hub object because the store
+stopped accepting writes, so the hub is behind every retrace.
+
+PROVEN: refreshed x2 from the shared cache (74a2d7ea) → `neurobrix run
+real-esrgan-x2 @448 --triton` → **896×896, rc=0**. The engine was never at
+fault. ACTION: all verification copies come from the shared cache, never the
+hub; the hub is stale for every retraced container. The real-esrgan family is
+unblocked; swinir/swin2SR/hat were already symbolic (census harvests their
+keys). No Dell datum needed — the correction was the owner's, checked.
 
 
 ## Catalogue fit arithmetic (VM off, 24 GB unified, ~22 GB usable) — 2026-09-21
