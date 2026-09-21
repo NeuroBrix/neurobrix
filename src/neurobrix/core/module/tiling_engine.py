@@ -1535,6 +1535,15 @@ class OpLevelTilingEngine:
                     except Exception:
                         _bytes = 0
                     if _bytes < _MIN_INPLACE_BYTES:
+                        # Below the threshold: the ORDINARY path of the engine that
+                        # owns the tensor. `_fn` is the NBX wrapper; handed a torch
+                        # tensor it died in `NBXTensor.empty_like` (Wan T2V, ATen
+                        # sequential arm under component tiling, 2026-09-21).
+                        if is_torch_tensor(x):
+                            import torch.nn.functional as _F
+                            _tfn = getattr(_F, _fn_name, None)
+                            if _tfn is not None:
+                                return _tfn(x, *args, **kwargs)
                         return _fn(x, *args, **kwargs)
                     if isinstance(x, _NBXT):
                         # CONTIGUITY. The wrappers call `x.contiguous()` first,
