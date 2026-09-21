@@ -122,6 +122,12 @@ def _announce_first_sweep(tuned):
     if cache is None:                 # not an Autotuner — nothing to watch
         return tuned
     original = tuned.run
+    # A census shadow (kernels/census.py, installed before this kernel was defined)
+    # keeps this wrapper — it is the one door where the key is formed and recorded —
+    # and drops what stands behind it: no bench, no launch, no device.
+    from neurobrix.kernels import census as _census
+    if _census.active():
+        original = _census.shadow_run
 
     def run_with_notice(*args, **kwargs):
         # The engine's artifact is the ONLY persistence of a sweep since
@@ -147,6 +153,11 @@ def _announce_first_sweep(tuned):
             key = _atc.key_of(tuned, args, kwargs)
         except Exception:
             key = None
+        # THE KEY RECORD (2026-09-21, the census doctrine): every key this call forms — served
+        # from the directory, swept, or replayed — written as the certifier reads it, one door
+        # for the live proof target and for the shadow census. NBX_KEY_RECORD=<path>.
+        if key is not None:
+            _census.record(tuned, key)     # `_census`: imported once in the enclosing scope
         if key is not None and key not in cache:
             from neurobrix.kernels import autotune_certified as _cert
             qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
@@ -172,6 +183,15 @@ def _announce_first_sweep(tuned):
         before = len(cache)
         result = original(*args, **kwargs)
         if len(cache) > before:
+            if _census.active():
+                # THE DOOR: a shadow benches nothing, so a grown tuner cache here means a
+                # kernel was defined before the census installed and ran a bench on events
+                # that answer 0 ms — its config must never reach the machine's live replay
+                # cache. Refused, never captured.
+                raise RuntimeError(
+                    "census shadow: the autotuner cache grew during a shadow run — a kernel "
+                    f"defined before kernels/census.py installed ({_atc._qual_of(tuned)!r}); "
+                    "nothing is captured. Install the census before the engine imports.")
             if key is not None:
                 try:                       # the bench this call just ran: best, second-best, margin
                     _atc.note_timings(tuned, key, getattr(tuned, "configs_timings", None))

@@ -420,7 +420,13 @@ class GraphExecutor:
         if self._dag:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
-                    op.setdefault("attributes", {})["norm_topk_prob"] = norm_topk_prob
+                    _a = op.setdefault("attributes", {})
+                    if _a.get("routing_rewritten"):
+                        # A fused op whose rewrite moved the softmax past the top-k
+                        # (softmax-after-topk block shape) OWNS its renormalisation:
+                        # the registry's flag would change the math it proved.
+                        continue
+                    _a["norm_topk_prob"] = norm_topk_prob
 
     def _load_what_the_rewrite_added(self) -> None:
         """After a DAG rewrite that adds consumers (the declared MoE fusion),

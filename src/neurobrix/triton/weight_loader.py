@@ -322,14 +322,7 @@ def _target_nbytes(info: dict, compute_dtype: NBXDtype,
     # for fp32-shipping weights (T5 text_encoder in PixArt: 19 GB vs the
     # 9.5 GB the load loop actually writes → OOM on a 32 GB V100 even
     # though the data fits).
-    target = nbx_dtype
-    if nbx_dtype == NBXDtype.bfloat16 and compute_dtype == NBXDtype.float16:
-        target = NBXDtype.float16
-    elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
-        target = NBXDtype.bfloat16
-    elif (nbx_dtype == NBXDtype.float32
-          and compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16)):
-        target = compute_dtype
+    target = stored_dtype_in_compute(nbx_dtype, compute_dtype)
 
     if upcast_fp16_to_fp32 and target == NBXDtype.float16:
         return numel * 4  # pre-Ampere overflow protection path
@@ -504,18 +497,8 @@ def _load_shard_into_arenas(
             f.seek(data_offset + start)
             raw = f.read(nbytes)
 
-            # Determine target dtype after remap
-            target_dtype = nbx_dtype
-            if nbx_dtype == NBXDtype.bfloat16 and compute_dtype == NBXDtype.float16:
-                target_dtype = NBXDtype.float16
-            elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
-                target_dtype = NBXDtype.bfloat16
-            elif (nbx_dtype == NBXDtype.float32
-                  and compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16)):
-                # fp32 on disk + half-precision compute → downcast at load
-                # time. Mirrors native's WeightLoader(torch_dtype=fp16).
-                # Required for T5 text_encoders (shipped fp32, used fp16).
-                target_dtype = compute_dtype
+            # Determine target dtype after remap — the one rule, `stored_dtype_in_compute`
+            target_dtype = stored_dtype_in_compute(nbx_dtype, compute_dtype)
 
             # Zero3 CPU offload — skip the GPU arena entirely and
             # allocate pinned host memory for this weight. The numpy
@@ -606,3 +589,24 @@ def _load_shard_into_arenas(
             nbx = NBXTensor(ptr, shape, strides, final_dtype, 'cuda',
                             owns_data=False, device_idx=target_dev)
             weights[key] = nbx
+
+def stored_dtype_in_compute(nbx_dtype, compute_dtype):
+    """The dtype a stored weight takes in memory under a compute dtype — THE rule, in one place.
+
+    A half weight follows the compute half (bf16 on disk runs fp16 on Volta and the other way
+    round); fp32 on disk under a half compute is downcast at load (mirrors the ATen branch's
+    WeightLoader(torch_dtype=fp16); T5 text encoders ship fp32 and run fp16); anything else
+    keeps its stored dtype. The loader applies it to every weight of a shard, param or buffer
+    alike; the certification census (kernels/census.py) applies the same rule to shape its
+    shadow weights, so the keys it records are the keys the loaded weights form — a second
+    copy of this rule drifted once (2026-09-21: the shadow kept fp32 weights fp32 and recorded
+    addmm keys the live launcher never forms).
+    """
+    if nbx_dtype == NBXDtype.bfloat16 and compute_dtype == NBXDtype.float16:
+        return NBXDtype.float16
+    if nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
+        return NBXDtype.bfloat16
+    if nbx_dtype == NBXDtype.float32 and compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+        return compute_dtype
+    return nbx_dtype
+

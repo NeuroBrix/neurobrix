@@ -85,10 +85,20 @@ def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
     doc = json.loads(path.read_text())
     assert C.validate(doc, path, matmul_kernel) == []
 
-    # served at load, without a sweep
+    # served at load, without a sweep — FOR THE CARD THE PROOF WAS TAKEN ON. An entry
+    # serves only the memory class it was proven on (register 56); the launch site
+    # passes the executing tensor's card, and this test passes the proof's own class.
+    # On a heterogeneous rig run unpinned the class is otherwise None and the entry is
+    # refused: that refusal was this cell's red for days (2026-09-21), not a defect of
+    # the directory — and it is pinned below as the rule it is.
     matmul_kernel.cache.pop(key, None)
     C.reset()
-    assert C.apply(qual, matmul_kernel, key) is True
+    mcls = C.proof_memory_class(entry["proof"])
+    assert mcls is not None, "the proof names the card's memory class"
+    if C.executing_memory_class() is None:
+        assert C.apply(qual, matmul_kernel, key) is False, "no class known: served nothing (register 56)"
+        C.reset()
+    assert C.apply(qual, matmul_kernel, key, memory_class=mcls) is True
     assert matmul_kernel.cache[key].kwargs == entry["config"]["kwargs"]
 
 

@@ -1069,46 +1069,121 @@ kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at on
 write the unit into `apple_m4_pro.yml` beside its numbers.
 
 
+
 ---
 
-## 2026-09-21 — Apple's answer on the reshape rung's OUTPUT: the runtime fold is broken (both machines)
+## 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
 
-The Dell (`f91d4596`) owed Apple the confirmation that the request-reshape rung, having
-sized an upscaler's tile correctly, produces a CORRECT stitched image — **Measured on Apple, 2026-09-21: the engine's runtime fold does not stitch.**
-(CORRECTION 2026-09-21, Hocine: the Dell's green 8192² artefact WAS the engine's own
-component-tiling rung, as its report stated — not a harness stitch. My earlier claim here
-was wrong.)
+My earlier entry here handed the reshape-rung fold breakage to the rack side. **That was
+wrong, and the correction is the owner's, checked:** the Dell ran `real-esrgan-x2` at 448 in
+BOTH modes on main HEAD and on BOTH parents of the merge `78784abe` — **896×896 every time,
+the 49 tiles accumulated.** So the engine's fold is correct on CUDA; the single-tile output
+is Apple-specific. The merge's engine-side files are the launcher, the Metal backend and
+driver, the certifier, the tensor library, and the Triton sequence — the cause is in one of
+those, on my side. A bisect landing on a merge assigns no parent side without testing each;
+the Dell tested them and they are green, which is the datum I owed and did not produce.
 
-`real-esrgan-x2 --input-image apple_448.png` (traced `[1,3,64,64] -> [1,3,128,128]`):
-* **output is 128x128, not 896x896** — a single tile, upscaled. Confirmed by pixel match:
-  `mean|Δ|=1.0` against `crop(0,0,64,64).resize(128)`, `74.3` against the whole downscaled.
-* the run space-to-batches 448 into a **batch of 49** 64px tiles (7x7) — the autotune keys
-  carry `batch_dim=49` through every conv — runs the graph once at batch 49, and **never
-  folds `[49,3,128,128]` back to `[1,3,896,896]`**; the output extractor takes tile 0.
-* **BOTH modes** (compiled and triton), so it is not a Triton-runtime fault.
-* `real-esrgan-x8` at 448 hits a DIFFERENT face of the same routing: `aten.leaky_relu::0`
-  `'Tensor' object has no attribute '_device_idx'` (a torch tensor reaching `wrappers.leaky_relu:857`) — the compiled tiled path handing an ATen tensor to an NBX wrapper.
-
-**Attribution.** `git bisect` (good `2eeff74a`, bad `origin/main`) → first-bad `78784abe`,
-the Mac-branch merge. CORRECTION (Hocine, 2026-09-21): a bisect that lands on a MERGE does
-NOT assign a parent side until each parent is tested — I did not test the parents, so the
-side is unattributed. And `solver.py` has NO diff across this merge; `_spatial_component_tiling`
-is byte-identical at solver.py:3287 on both sides, so my "only the scale derivation changed"
-claim was wrong. The cause is one of the 119 files the merge brought, not yet isolated. What
-STANDS is the symptom and the good/bad endpoints: whole-image (correct 896) at `2eeff74a`,
-batch-49-unfolded (128px) at `origin/main`. It regresses the ENTIRE delivered upscaler family (x2/x4/x8, swin2SR,
-swinir) at any request larger than the 64px trace, which is every real request.
-
-**A compounding second-order effect worth the Dell's eye:** at 448px the model fits WHOLE
-(278 MB); the rung tiled it anyway to a 64px tile because tonight's fallen ambient gave a
-tiny budget rung. A fully-convolutional upscaler run whole is size-agnostic and needs no
-tiling until it genuinely overflows — the pre-merge behavior. Whether the rung should fire
-at all when the whole component fits is the sizing question upstream of the fold.
-
-**Owner.** The runtime fold and the reshape-rung sizing are core/prism/runtime, the rack
-side's domain; this is the measurement the doc asked Apple for, handed back with the bisect
-and the exact datum. Apple's verification of the upscaler family is BLOCKED on it — recorded
-as such in the delivery ledger, not counted delivered.
+**What stands as the symptom:** `real-esrgan-x2 --input-image apple_448.png` (traced
+`[1,3,64,64] -> [1,3,128,128]`) emits 128×128 on Apple — one tile, upscaled (pixel-matched:
+`mean|Δ|=1.0` vs `crop(0,0,64,64).resize(128)`, `74.3` vs whole-downscaled), BOTH modes; the
+run forms a batch of 49 (`batch_dim=49` in the autotune keys) and only tile 0 survives to the
+output. The whole upscaler family's verification is blocked on it. **Owner: me. Finding the
+Apple-side accumulate/fold defect is the current work; the family is BLOCKED, not delivered.**
+The `real-esrgan-x8 @448` `leaky_relu _device_idx` face was already fixed (the interceptor
+dispatches by kind before size, 329ab4a9-line).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01HgxLbUbkxogC87ppc4tQ5H
+
+---
+
+## 2026-09-21 — zero3 selection on unified memory (cafaf799): the CUDA inertness arm
+
+**The change.** Strategy 3 no longer selects `zero3:` where `_device_is_unified` says the
+offload frees nothing; zero3's torch path refuses by name on a non-CUDA device.
+
+**Inert on this rack, three ways.** (1) The door: `_device_is_unified("cuda:0" / "cuda:1",
+<this rack's own profile>)` answers False, so the new condition cannot fire on a discrete card.
+(2) The cells: from cafaf799 frozen in a worktree, every prism cell main carries passes here
+(232); the discrete arm of the Mac's own cell passes. (3) The catalogue: a Prism plan census
+of the 59 installed containers on this rack's four-card profile, main against cafaf799 — 56
+planned, 3 refused identically ("cannot run on this machine"), 0 plans differ; strategies
+single_gpu 35, lazy_sequential 9, block_scatter 6, pipeline_parallel 2, weight_sharding 2; no
+zero3 placement on a four-card rack at all, so the branch it guards is not even reached.
+(The census recorded strategies; the per-component device list came back empty from my
+reader and is not claimed.)
+
+**What the branch owes its own cells.** Three of them called `load_profile("default")` and
+read the machine that wrote them: on the Dell the file is `default-<hash>.yml` and they raised
+FileNotFoundError. Fixed on branch `zero3-cells-any-machine` (57f1a739, on both remotes, from
+cafaf799): the live cell asks the autodetect door and skips on a host without a device, the two
+that declare a unified device do so on a fixture the tree carries (`a10-24g`). Measured here:
+5 passed with a card, 2 passed 1 skipped masked. Merge it with the commit.
+
+**The granite MoE cell** (`test_the_granite_moe_block_is_fused_not_replayed`) fails on the
+Dell for a different reason: it asserts the branch's rewrite (no `split_with_sizes` survives)
+against a container that main's fusion (9f5e0f5b: the stacked-expert views, the traced splits
+kept) runs — and on the merged tree main's walk matches granite first, so the branch's matcher
+is never reached on CUDA. The A/B is below.
+
+## 2026-09-21 — the granite fusion, measured on CUDA: main's walk against the branch's matcher
+
+On the merged tree the branch's granite matcher (`_fuse_one_granite_layer`, be4bd421) runs only
+when main's general walk returns None, and main's walk (9f5e0f5b, stacked-expert views) matches
+granite first — so on CUDA the branch's matcher is unreachable and the two arms of a plain A/B
+are the same code (fact and code outputs byte-identical, peak 2 707–2 711 MB). Branch
+`granite-fusion-ab` (from cafaf799) carries a lever, `NBX_MOE_FUSION_MATCHER=granite`, that skips
+the walk so the branch's matcher is the one that runs. Triton mode, one 16 GB card each, two
+requests, each twice (both arms hold still):
+
+| arm | fact ("capital of France", 16 tokens) | code (is_palindrome, 160 tokens) | peak driver | wall, code, cold |
+|---|---|---|---|---|
+| main's walk (card 0) | "Paris." — sha bdff8c41… | sha 5a52cc92…, 431 chars, **8/8 cases pass** | 2 707–2 711 MB | 23.1–23.8 s |
+| branch's matcher (card 1) | "Paris." — sha bdff8c41… (identical) | sha e7725da9…, 556 chars, **8/8 cases pass** | 2 733–2 738 MB | 21.3–21.5 s |
+
+**Judged outputs:** identical on the short request; DIFFERENT text on the long one and both
+correct on every case the code never saw. The two fusions are therefore two valid numerics of
+one block, not one right and one wrong. **Figures:** peak favours main by 27–31 MB (about 1 %);
+wall favours the branch's matcher by 1.6–2.5 s (7–10 %) on the cold code request and by 2–4 s on
+the warm fact request (7.0–7.4 against 9.4–11.2 s — different cards, so the warm figure is
+indicative). The two measurements point in different directions and both go to the owner, as
+asked. The Apple half — the same table on M4 Pro — is the branch's to add; the lever is on the
+branch for it.
+
+### The arbiter (the owner, 14:24): which fusion reproduces the UNFUSED ATen arm on the code request
+
+The unfused ATen arm cannot run from the container: the traced MoE routing carries
+`split_with_sizes` sizes frozen at the trace — on the code request the op refuses (`split_sizes
+must sum exactly to 760`, 95 prompt tokens × top-k 8), twice `rc=1` in `--sequential` with
+`NBX_DISABLE_MOE_FUSION=1` on card 0. The frozen sizes are the reason the fusion exists (the
+branch's own comment says so); they are also a frozen-dimension defect of the container, listed
+as such for the retrace queue. The vendor forward IS the unfused computation, so the arbiter
+ran it: transformers 5.2.0, greedy, the container's own embedded tokenizer and chat template
+(95 prompt tokens = 760/8), fp16, card 0, twice —
+
+| arm | code request, 160 tokens greedy | prompt tokens | wall |
+|---|---|---|---|
+| vendor forward (unfused, transformers) ×2 | sha **e7725da9d641**, both runs | 95 | 6.9–7.5 s warm |
+| branch's matcher (`_fuse_one_granite_layer`) ×2 | sha **e7725da9d641** — byte-identical to the vendor | 95 | 21.3–21.5 s cold |
+| main's walk (9f5e0f5b stacked-expert views) ×2 | sha 5a52cc921133 — differs from the vendor | 95 | 23.1–23.8 s cold |
+
+**Verdict:** only the branch's matcher reproduces the unfused arm; it wins regardless of speed
+(and happens to be the faster one). Main's stacked-expert handling in the general walk leaves
+the tree — a targeted port of the branch's matcher and its dispatcher resolution
+(`expert_weight_lists`) onto main, gated on granite's three modes, since the branch carries the
+Mac's whole 0.5.5 delivery and the merge is the convergence's. Script and outputs:
+`nbx/campaigns/2026_09_21_granite_fusion/` (`vendor_oracle.py`, `RESULTS.md`).
+
+**The port, judged (15:22, card 2, branch `granite-matcher-on-main`):** the branch's matcher and
+its dispatcher resolution on main's tree, main's walk handling reverted — the code request in
+the three served modes, twice each:
+
+| mode | run 1 | run 2 | wall, cold |
+|---|---|---|---|
+| sequential | e7725da9d641 | e7725da9d641 | 32.2–32.8 s |
+| compiled | e7725da9d641 | e7725da9d641 | 20.2–21.5 s |
+| triton | e7725da9d641 | e7725da9d641 | 22.1–22.9 s, peak 2 738 MB |
+
+Every mode reproduces the vendor's unfused forward byte for byte. `triton/moe.py` was not
+taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
+granite content. The Mac's matcher is now the only granite fusion in the tree.
