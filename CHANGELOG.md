@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   members over HTTP Range (no container is downloaded), and publishes the ones that are newer
   and verified through the toolchain; the table is written to `docs/reference/hub-cache-diff.md`.
 
+### Fixed
+
+- **A kernel census records its keys under the vendor profile its hardware names.** Behind the
+  census door no card is visible, so the engine could not tell which vendor profile applied:
+  the bucket ladder, the shared-memory budget and the kernel config spaces went unread and every
+  recorded key came out in the exact form. The census now binds its target from the hardware
+  profile it is taken for (the device's brand and compute capability), so the keys it records
+  are the keys the launcher forms when it serves; a profile naming no device is refused.
+
 ### Changed
 
 - **A request-dependent dimension of a matrix kernel's autotune key is bucketed.** A prompt's
