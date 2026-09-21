@@ -148,6 +148,24 @@ def _flush_malloc_trace() -> None:
 import atexit as _atexit
 _atexit.register(_flush_malloc_trace)
 
+# The floor watchdog stops a run with SIGTERM (5 s grace before SIGKILL),
+# and Python's default SIGTERM action skips atexit — so a floor-stopped
+# traced run died with an EMPTY trace (measured: x8@1024, 2026-09-21).
+# When, and only when, the trace is armed, convert SIGTERM to SystemExit
+# so the flush runs inside the grace window. Unarmed runs keep the
+# default signal behavior untouched.
+if _MALLOC_TRACE_FILE:
+    import signal as _signal_mt
+
+    def _flush_on_term(_signum, _frame):
+        raise SystemExit(143)
+
+    try:
+        _signal_mt.signal(_signal_mt.SIGTERM, _flush_on_term)
+    except (ValueError, OSError):
+        pass                       # non-main thread or exotic host: trace
+                                   # stays best-effort, behavior unchanged
+
 
 # ============================================================================
 # DTYPE SYSTEM
