@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The kernel census shadows more of the catalogue.** Under the shadow an integer read
+  answers one and a value written from the host is read back as written, a lazily placed
+  component resolves its device, the device utilities are inert in every module that bound
+  them, and a sampler draws token 0 — Kokoro, CogVideoX, orpheus and openaudio are censused
+  where they failed before.
 - **A kernel census records its keys under the vendor profile its hardware names.** Behind the
   census door no card is visible, so the engine could not tell which vendor profile applied:
   the bucket ladder, the shared-memory budget and the kernel config spaces went unread and every
