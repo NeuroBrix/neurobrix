@@ -226,11 +226,19 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         except Exception:  # noqa: BLE001
             return None
 
+    # Only SMALL host values are kept: the ones a flow reads back as values (a grid, a token id
+    # list, a frame count, a timestep table). A large array (weights, features) is never read
+    # by value — keeping every one made a chatterbox shadow hold 17 GB of host memory and a dozen
+    # shadows filled the swap (2026-09-21 23:45).
+    _HOST_VALUE_CAP_BYTES = 1 << 20
+
     def _from_numpy_shadow(arr, dtype=None):
         t = _from_numpy(arr, dtype)
         try:
             import numpy as np
-            _HOST_VALUES[int(t.data_ptr())] = np.array(arr, copy=True)
+            a = np.asarray(arr)
+            if a.nbytes <= _HOST_VALUE_CAP_BYTES:
+                _HOST_VALUES[int(t.data_ptr())] = np.array(a, copy=True)
         except Exception:  # noqa: BLE001 — a value without a pointer is a device value
             pass
         return t

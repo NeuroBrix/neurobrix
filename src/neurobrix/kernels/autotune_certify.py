@@ -1125,12 +1125,31 @@ def _tolerance(vendor: str, profile: str, dtype: str) -> float:
 
 
 def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, entries: Dict[str, Dict]) -> None:
+    """Write the kernel's file with this writer's entries MERGED into what the file holds.
+
+    Two certifiers write one kernel's file at once — one per memory class, pinned to two cards
+    of one profile (2026-09-21: the 16 GB and 32 GB matrix rounds). Each held its own `entries`
+    from the start and rewrote the whole file after every key, so each rewrite dropped the
+    other's proofs, and their fixed `.json.tmp` collided (`os.replace` found the other's rename
+    gone, rc 1). The file is written under an exclusive lock, from the union of what is on disk
+    and what this writer proved, through a temp file only this process names; the caller's
+    `entries` learns the union so its next write carries both classes."""
+    import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
-    doc = {"format": C.format_for(entries), "vendor": vendor, "profile": profile, "kernel": qual, "dtype": dtype,
-           "entries": dict(sorted(entries.items()))}     # the stamp is what every entry satisfies, never the writer's era
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
-    os.replace(tmp, path)
+    lock = path.with_suffix(".json.lock")
+    with open(lock, "a+") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            if path.exists():
+                for k, v in _read_file(path).items():
+                    entries.setdefault(k, v)
+            doc = {"format": C.format_for(entries), "vendor": vendor, "profile": profile, "kernel": qual, "dtype": dtype,
+                   "entries": dict(sorted(entries.items()))}     # the stamp is what every entry satisfies, never the writer's era
+            tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 def _read_file(path: Path) -> Dict[str, Dict]:
