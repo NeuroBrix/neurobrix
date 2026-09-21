@@ -55,8 +55,9 @@ def _spec(budget_mb):
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
+    # the tile derives from the RUNG (Hocine's tiling standard): a reading is rounded first
     return s._spatial_component_tiling(
-        _Container(CACHE / MODEL), "model", mem, budget_mb * MB)
+        _Container(CACHE / MODEL), "model", mem, memory_ladder_rung_mb(budget_mb))
 
 
 def test_the_ladder_rounds_free_down_and_never_up():
@@ -65,10 +66,10 @@ def test_the_ladder_rounds_free_down_and_never_up():
     assert memory_ladder_rung_mb(8192) == 8 * 1024
     assert memory_ladder_rung_mb(10330) == 8 * 1024
     assert memory_ladder_rung_mb(130 * 1024) == 128 * 1024
-    # the 4096 MB floor is the lowest USABLE rung: below it there is nothing
-    # to size against, and the reading passes through untouched for the floor
-    # machinery to refuse in its own words
-    assert memory_ladder_rung_mb(3900) == 3900
+    # under the lowest rung there is nothing to size against: the answer is 0, never the
+    # reading itself (a value off the ladder reached the plan exactly where standard rungs
+    # matter most — the memory doctrine, 2026-09-21)
+    assert memory_ladder_rung_mb(3900) == 0
 
 
 def test_two_readings_on_one_rung_size_one_tile():
