@@ -381,6 +381,74 @@ _PTR_NP = {
 #: ONE wrap per (address, element type) is what keeps a captured GPU address
 #: meaning the same storage from one launch to the next.
 _PINNED_WRAPS: dict = {}
+
+# Residency wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
+# tensor, registered with metal_native.retain_resident so every dispatch
+# declares it (useResource). This is the half of the pin that makes a LOADED
+# address readable: Metal only guarantees residency for bound resources, so a
+# kernel reading through a pointer-table entry gets zeros unless a covering
+# buffer is declared. Measured 2026-09-21 (granite): per-expert cover wraps
+# also worked but Metal declined the ~480th GB-scale alias — one wrap per
+# allocation is the shape that scales. base -> [wrap, refcount].
+_RESIDENT_WRAPS: dict = {}
+
+
+def _resident_acquire(addr: int) -> int:
+    """Make the whole allocation containing `addr` resident; returns base."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+
+    size = DeviceAllocator._cuda_ptr_size.get(addr)
+    base = addr
+    if size is None:
+        base, size = _containing_allocation(addr)
+    ent = _RESIDENT_WRAPS.get(base)
+    if ent is not None:
+        ent[1] += 1
+        return base
+    raw = (ctypes.c_byte * size).from_address(base)
+    view = np.frombuffer(memoryview(raw), dtype=np.uint8)
+    buf = _native().wrap(view)
+    gpu_va = int(_native().retain_resident(buf))
+    _RESIDENT_WRAPS[base] = [buf, 1, gpu_va]
+    return base
+
+
+def pinned_gpu_address(addr: int) -> int:
+    """The address a SHADER may read at `addr`, valid while its pin is held.
+
+    Every MTLBuffer has its own GPU virtual address — a no-copy wrap of the
+    same memory is a DIFFERENT VA, which is why an address captured through a
+    transient launch wrap reads zeros once that wrap dies (measured,
+    probe_read_through 2026-09-21). The pin's whole-allocation resident wrap
+    is therefore the one address authority: its gpu_address plus the CPU
+    offset inside the allocation, computable on the host with no launch.
+    """
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    size = DeviceAllocator._cuda_ptr_size.get(addr)
+    base = addr
+    if size is None:
+        base, size = _containing_allocation(addr)
+    ent = _RESIDENT_WRAPS.get(base)
+    if ent is None:
+        raise RuntimeError(
+            f"pinned_gpu_address(0x{addr:x}): its allocation is not under any "
+            f"pinned_addresses scope — an address handed out without a pin "
+            f"would go stale silently, which is the defect this refuses")
+    return ent[2] + (addr - base)
+
+
+def _resident_release(base: int) -> None:
+    ent = _RESIDENT_WRAPS.get(base)
+    if ent is None:
+        return
+    ent[1] -= 1
+    if ent[1] <= 0:
+        try:
+            _native().release_resident(ent[0])
+        except Exception:                              # noqa: BLE001
+            pass
+        _RESIDENT_WRAPS.pop(base, None)
 #: How many open scopes pin each address. A wrap is dropped only when the last
 #: scope holding its address exits.
 _PIN_COUNTS: dict = {}
@@ -433,10 +501,12 @@ class pinned_addresses:
         self._addrs = []
 
     def __enter__(self):
+        self._resident_bases = []
         for t in self._tensors:
             addr = int(t.data_ptr())
             _PIN_COUNTS[addr] = _PIN_COUNTS.get(addr, 0) + 1
             self._addrs.append(addr)
+            self._resident_bases.append(_resident_acquire(addr))
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -448,6 +518,9 @@ class pinned_addresses:
             _PIN_COUNTS.pop(addr, None)
             for key in [k for k in _PINNED_WRAPS if k[0] == addr]:
                 _PINNED_WRAPS.pop(key, None)
+        for base in getattr(self, "_resident_bases", ()):
+            _resident_release(base)
+        self._resident_bases = []
         self._addrs.clear()
         return False
 
