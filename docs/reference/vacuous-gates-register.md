@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-77 entries, of which five are placeholders and 72 carry a site. Two
+82 entries, of which five are placeholders and 77 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2160,3 +2160,26 @@ green restored. A third cell pins that the default path installs no shadow.
 
 **The lesson, in one line.** A test of a seam must run through the seam and nothing that can
 answer in its place; the injection that proves it is the first thing to run, not the last.
+
+### 82 — the generator identity that did not see the out-of-tree backend move
+
+**Where.** `generator_identity` (the replay/compile identity of a generated kernel), the Mac
+(Apple, Metal), 2026-09-21; the finding is the Mac's, written in full in its owed-proofs entry;
+numbered here so both machines cite one number.
+
+**What it did.** The identity that names a compiled kernel carried nothing of the out-of-tree
+backend that compiled it. Moving `triton-ext` changed the compiled Metal kernels while the
+identity stayed put, so a cache keyed on it served kernels compiled by another backend as if
+nothing had changed. Beneath it, the backend name was resolved inside a bare `except` whose
+silent default was `"cuda"` — on a Metal machine, a wrong answer that read as an answer.
+
+**What would it have done if the code were wrong?** Served a stale kernel under an unchanged
+identity, and named the wrong backend without a word.
+
+**The fix (the Mac's).** `generator_identity` now carries the out-of-tree backend's own hash
+through Triton's `backend.hash()`, so a moved or rebuilt backend changes the identity; the bare
+`except` is gone and a backend that cannot be named is an error, never `"cuda"`.
+
+**The lesson, in one line.** An identity that leaves out one of the things that can change the
+artefact is not an identity; a default behind a bare `except` is the wrong answer that never
+raises.
