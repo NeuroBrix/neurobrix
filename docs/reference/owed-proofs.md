@@ -1510,3 +1510,19 @@ Cell: `tests/unit/kernels/test_the_census_shadow_carries_the_profiles_target.py`
 **b23105fe** (never offload to the host for memory on a unified device): the CUDA inertness proof
 is owed once the certification rounds free a card; the unified outcome changing from a refusal to
 a streaming strategy is the Mac's to prove.
+
+## 2026-09-21 21:55 — b23105fe on main: the CUDA inertness proof
+
+Merged from a worktree carrying the machine's ignored pointers (`.nbx_registry`,
+`config/hardware/default*.yml`, `forge/`). Three ways: (1) the door — `_device_is_unified`
+answers False for every card of every profile here, so the guard cannot fire; (2) the Mac's
+cells pass on this tree (2 passed, the discrete arm keeps the host offload); (3) a Prism plan
+census of the 59 installed containers on the four-card profile and both one-card profiles, main
+against main + b23105fe, each run twice: **0 plans differ** (48 planned, 11 video containers
+refused identically by the census script's own request naming no frame count). A first pass
+read TWO moved plans (the old PixArt containers, `single_gpu` → `single_gpu_lifecycle`) — the
+worktree had no `.nbx_registry`, the registry-flag lookup resolved nothing, PixArt's VAE lost
+its `fp16_conv_cascade_safe` and planned fp32. The difference was the harness, run one side
+twice before naming a culprit, and the pointer is now part of every worktree here. The unified
+outcome (a refusal becoming a streaming strategy, since the engine never refuses for memory)
+is the Mac's to prove. Records: `nbx/campaigns/2026_09_21_mac_proofs/`.
