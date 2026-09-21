@@ -99,9 +99,16 @@ def test_lazy_sequential_offers_no_host_placement_on_a_unified_device():
                 f"route the component to layer_streaming instead")
 
 
-def test_lazy_sequential_still_offloads_to_host_on_a_discrete_device():
+def test_lazy_sequential_still_offloads_to_host_on_a_discrete_device(monkeypatch):
     """Inertness: on a discrete card the offload frees real device memory, so it
-    stays available and lazy_sequential uses it."""
+    stays available and lazy_sequential uses it. The host-fit check reads live
+    host memory (memory_budget._host_budget_mb) — pin it large so the arm proves
+    the GUARD's inertness, not the test machine's current free RAM."""
+    from neurobrix.core import host_memory as _hm
+    from neurobrix.core.host_memory import MemoryState
+    monkeypatch.setattr(_hm, "memory_state",
+                        lambda: MemoryState(total_mb=65536, available_mb=60000,
+                                            source="test"))
     result = _lazy(unified=False)
     assert result is not None, (
         "on a discrete card the too-big component's weights belong on the host; "
