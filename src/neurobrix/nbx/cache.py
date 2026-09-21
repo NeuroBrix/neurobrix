@@ -140,6 +140,25 @@ class NBXCache:
         LARGE_BUFFER_SIZE = 8 * 1024 * 1024     # 8MB for safetensors
         SMALL_BUFFER_SIZE = 256 * 1024          # 256KB for small files
 
+        # ONE ZipFile PER THREAD. Eight workers reading members through a
+        # single shared ZipFile race on the underlying handle's seek/read —
+        # CPython's zipfile does not support concurrent member reads on one
+        # object — and the corruption is real, not theoretical: Sana 4Kpx's
+        # transformer shard_001 failed its CRC-32 twice through this pool
+        # (2026-09-21, over NFS, where latency widens the window) while a
+        # single-reader `unzip -t` of the same member over the same mount
+        # passed. The CRC caught it; the race owned it.
+        _tl = threading.local()
+
+        def _zf_for_thread():
+            z = getattr(_tl, "zf", None)
+            if z is None:
+                z = zipfile.ZipFile(nbx_path, 'r')
+                _tl.zf = z
+                _all_zfs.append(z)
+            return z
+
+        _all_zfs = []
         with zipfile.ZipFile(nbx_path, 'r') as zf:
             members = zf.namelist()
             total = len(members)
@@ -163,11 +182,12 @@ class NBXCache:
                 member_path.parent.mkdir(parents=True, exist_ok=True)
 
                 # Get file size to choose optimal buffer
-                file_size = zf.getinfo(member).file_size
+                zft = _zf_for_thread()
+                file_size = zft.getinfo(member).file_size
                 buffer_size = LARGE_BUFFER_SIZE if file_size > LARGE_FILE_THRESHOLD else SMALL_BUFFER_SIZE
 
                 # Extract file with optimized buffer
-                with zf.open(member) as src:
+                with zft.open(member) as src:
                     with open(member_path, 'wb') as dst:
                         shutil.copyfileobj(src, dst, length=buffer_size)
 
@@ -201,6 +221,11 @@ class NBXCache:
                     except Exception as e:
                         print(f"[Cache] ERROR extracting {member}: {e}")
                         raise
+            for _z in _all_zfs:
+                try:
+                    _z.close()
+                except Exception:                      # noqa: BLE001
+                    pass
 
         # Write cache metadata
         cache_meta = {
