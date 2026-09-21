@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A video decoder receives its latent in its own space.** A VAE trained on a
+  normalised latent declares its statistics, and the vendor maps the latent back per
+  channel before decoding; both engines now apply that step from the container's own
+  declaration. `NBX_LOOP_STATE_DIAG=1` prints the loop state, the model prediction and
+  the conditioning statistics per step, the differential against a vendor callback.
 - **A video request that names no resolution is planned at the container's own.** The
   plan for such a request was budgeted at the VAE's trace extent while the run rendered
   at the size the container implies (its backbone's traced latent times the VAE scale),
