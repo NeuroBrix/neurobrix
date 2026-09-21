@@ -215,19 +215,29 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     # answering ones there built Wan 2.2's image encoder for a negative frame count
     # (2026-09-21). Values computed on the device stay unknown and answer as below.
     _from_numpy = T.from_numpy
+    # The host copies live in a table keyed by the shadow allocation's pointer: the tensor
+    # class carries no spare attribute (a copy hung on the instance was silently dropped, and
+    # every grid read answered ones — the VLM census refused on `grid_thw // 2 = 0`, 2026-09-21).
+    _HOST_VALUES: Dict[int, Any] = {}
+
+    def _host_of(t):
+        try:
+            return _HOST_VALUES.get(int(t.data_ptr()))
+        except Exception:  # noqa: BLE001
+            return None
 
     def _from_numpy_shadow(arr, dtype=None):
         t = _from_numpy(arr, dtype)
         try:
             import numpy as np
-            t._shadow_host = np.array(arr, copy=True)
-        except Exception:  # noqa: BLE001 — a host copy that cannot be kept is a device value
+            _HOST_VALUES[int(t.data_ptr())] = np.array(arr, copy=True)
+        except Exception:  # noqa: BLE001 — a value without a pointer is a device value
             pass
         return t
     T.from_numpy = staticmethod(_from_numpy_shadow)
 
     def _item(self):
-        h = getattr(self, "_shadow_host", None)
+        h = _host_of(self)
         if h is not None and h.size == 1:
             v = h.reshape(-1)[0]
             return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
@@ -241,9 +251,10 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         return 1 if "int" in d else 0.0
 
     def _numpy(self):
-        h = getattr(self, "_shadow_host", None)
-        if h is not None and tuple(h.shape) == tuple(self._shape):
-            return h
+        import numpy as np
+        h = _host_of(self)
+        if h is not None and h.size == int(np.prod(self._shape)):
+            return h.reshape(tuple(self._shape))
         # Host reads of an integer tensor answer ONES for the same reason `_item` does: a
         # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
         # after a frame count read 0, 2026-09-21). Float reads stay zero.
@@ -253,9 +264,9 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         return np.zeros(tuple(self._shape), dtype=np.float32)
 
     def _tolist(self):
-        h = getattr(self, "_shadow_host", None)
-        if h is not None and tuple(h.shape) == tuple(self._shape):
-            return h.tolist()
+        h = _host_of(self)
+        if h is not None and h.size == __import__("numpy").prod(self._shape):
+            return h.reshape(tuple(self._shape)).tolist()
         import numpy as np
         return np.ones(tuple(self._shape), dtype=np.int64).tolist()
 
@@ -307,14 +318,20 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     # imports run first): orpheus's cleanup reached the original through the manager's name.
     import sys as _sys
     from neurobrix.core import device_utils as _du
-    for _name in ("device_sync", "device_empty_cache", "device_seed"):
+    def _multinomial_zero(probs, num_samples=1):
+        # A draw from probabilities the shadow cannot make (NaN after the filters on zero
+        # logits — chatterbox, 2026-09-21): token 0, the same shapes as any other.
+        import numpy as _np
+        return _np.zeros((num_samples,), dtype=_np.int64)
+    for _name, _rep in (("device_sync", _noop), ("device_empty_cache", _noop), ("device_seed", _noop),
+                        ("device_multinomial", _multinomial_zero)):
         _orig = getattr(_du, _name, None)
         if _orig is None:
             continue
-        setattr(_du, _name, _noop)
+        setattr(_du, _name, _rep)
         for _mod in list(_sys.modules.values()):
             if _mod is not None and getattr(_mod, _name, None) is _orig:
-                setattr(_mod, _name, _noop)
+                setattr(_mod, _name, _rep)
     # A sampler draws from probabilities the shadow cannot make (zero logits, NaN after the
     # filters — openaudio, 2026-09-21): under the shadow every draw is token 0.
     try:

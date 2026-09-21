@@ -201,6 +201,12 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                 res = shadow(model, req, mode, hardware, _device_count(hardware), timeout, log_dir, rung_mb=rung,
                              tag=("probe" if ri else ""))
                 res["request"] = "probe" if ri else "ordinary"
+                if ri and res["rc"] != 0 and "cannot run on this machine" in (res.get("error") or ""):
+                    # A tiling probe the plan refuses at this rung (a 4 096-pixel request on a
+                    # 4 GB rung) is a legitimate arithmetic answer, not a failed shadow: no key
+                    # exists for it, and the model's own request is unaffected.
+                    res["rc"] = 0
+                    res["refused_at_rung"] = True
                 row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
                 keys.update(res["keys"])
                 if res["rc"] != 0:
