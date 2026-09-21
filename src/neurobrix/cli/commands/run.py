@@ -256,15 +256,21 @@ def cmd_run(args):
             TritonMetalNotInstalledError, ensure_triton_metal_or_raise,
         )
         try:
-            # Apple GPUs: upstream Triton has no Metal target, but an
-            # out-of-tree backend exists. This replaced a hardcoded
-            # "supported in a future version" message that was already
-            # out of date.
-            ensure_triton_metal_or_raise()
-            # CPU-only profile: triton-cpu is a separate upstream package.
-            # Previously TRITON_CPU_BACKEND was set without checking it was
-            # installed, so the run died in the driver a step later.
-            ensure_triton_cpu_or_raise()
+            # A census shadow (NBX_CENSUS=1, kernels/census.py) launches nothing: it
+            # runs with NO visible device on purpose — the door that proves it cannot
+            # touch a card — so the backend-presence gates below, which answer for a
+            # process that WILL launch, do not apply to it.
+            from neurobrix.kernels import census as _census
+            if not _census.active():
+                # Apple GPUs: upstream Triton has no Metal target, but an
+                # out-of-tree backend exists. This replaced a hardcoded
+                # "supported in a future version" message that was already
+                # out of date.
+                ensure_triton_metal_or_raise()
+                # CPU-only profile: triton-cpu is a separate upstream package.
+                # Previously TRITON_CPU_BACKEND was set without checking it was
+                # installed, so the run died in the driver a step later.
+                ensure_triton_cpu_or_raise()
         except (TritonMetalNotInstalledError, TritonCPUNotInstalledError) as exc:
             print(f"\n[ERROR] {exc}")
             return 1
@@ -767,6 +773,11 @@ def cmd_run(args):
         save_output,
     )
 
+    from neurobrix.kernels import census as _census_out
+    if _census_out.active():
+        # A shadow run has no artefact to write: its product is the key record.
+        print("\n[census] shadow run complete — keys recorded, no output written", flush=True)
+        return 0
     fmt = get_output_format(family)
 
     # Text-output families: print to stdout; only write file if --output given.

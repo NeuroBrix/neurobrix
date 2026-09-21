@@ -35,47 +35,26 @@ CACHE_ROOT = Path(os.path.expanduser("~/.neurobrix/cache"))
 
 
 def pytest_configure(config):
-    """Auto-detect an active venv for neurobrix subprocesses.
+    """The engine python the cells spawn is NAMED, never guessed.
 
-    `test_all_models.py::_run_neurobrix` spawns `[_runtime_python(), "-m",
-    "neurobrix", ...]` in a subprocess. `_runtime_python()` returns
-    `NEUROBRIX_PYTHON` (if set) else `sys.executable`. When pytest itself
-    runs under `/usr/bin/python3` (as happens when `pytest` is installed
-    at `~/.local/bin/pytest` with a system-python shebang), `sys.executable`
-    points at that system Python, whose user-site packages are often a
-    different version from the developer's working venv — notably:
-
-      - `transformers` at user-site may pin `tokenizers<0.20` while the
-        real tokenizers install is 0.21+.
-      - `mistral_common` may be installed only in the venv.
-      - `neurobrix` may not be installed in the system site at all.
-
-    The result is a pile of spurious `::native` audio failures that
-    every session re-diagnoses from scratch. If the user has a
-    VIRTUAL_ENV exported and that venv's python can import both
-    `neurobrix` and `transformers`, prefer it. The existing
-    `NEUROBRIX_PYTHON` env override always wins — this hook only sets
-    a default when nothing was chosen explicitly.
-
-    Single session-scope probe (~500 ms), not called per test.
+    `test_all_models.py::_run_neurobrix` spawns `[NEUROBRIX_PYTHON, "-m",
+    "neurobrix", ...]`. This hook used to fill `NEUROBRIX_PYTHON` from
+    `$VIRTUAL_ENV` when it was unset — a guess, and it put a battery on the
+    wrong stack twice: a shell whose `VIRTUAL_ENV` predates the 2026-09-20
+    stack switch launched the two-phase battery with the candidate's pytest
+    while every cell ran the engine under the previous venv (2026-09-21,
+    caught by `ps` before a cell was judged; the day before, the same class
+    filled register entry 78). A row attributed to the wrong engine is worse
+    than no row. ZERO FALLBACK: the harness refuses at entry with the exact
+    line that satisfies it.
     """
     if os.environ.get("NEUROBRIX_PYTHON"):
-        return  # user explicitly chose an interpreter — respect it
-    venv = os.environ.get("VIRTUAL_ENV")
-    if not venv:
         return
-    candidate = Path(venv) / "bin" / "python"
-    if not candidate.exists():
-        return
-    try:
-        probe = subprocess.run(
-            [str(candidate), "-c", "import neurobrix, transformers"],
-            capture_output=True, timeout=10,
-        )
-    except Exception:
-        return
-    if probe.returncode == 0:
-        os.environ["NEUROBRIX_PYTHON"] = str(candidate)
+    raise pytest.UsageError(
+        "tests/regression refuses to start: NEUROBRIX_PYTHON is not set. The engine "
+        "python the cells spawn is named, never guessed from VIRTUAL_ENV — export it: "
+        "NEUROBRIX_PYTHON=/path/to/venv/bin/python pytest tests/regression/ ..."
+    )
 
 
 # Per-family heuristics for how long a single greedy run is expected to

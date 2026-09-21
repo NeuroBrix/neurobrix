@@ -571,6 +571,13 @@ def main():
     """Main entry point."""
     parser = create_parser()
     args = parser.parse_args()
+    import os as _os_census
+    if _os_census.environ.get("NBX_CENSUS") == "1":
+        # The certification census (kernels/census.py): this process becomes a shadow —
+        # no device memory, no launch, no value, no weight file — and records every key
+        # the dispatch would hand the launcher. Installed before any engine import.
+        from neurobrix.kernels import census as _census
+        _census.install()
 
     try:
         if args.command == 'autotune':

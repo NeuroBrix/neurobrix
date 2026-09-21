@@ -2049,6 +2049,8 @@ class TritonSequence:
         _dw = tuple(down_w_slots)
         _stacked_attrs = dict(attrs) if stacked else None
         _in_slot_c, _out_slot_c = _in_slot, _out_slot
+        _weight_slots = ([_in_slot, _out_slot] if stacked
+                         else list(gate_w_slots) + list(up_w_slots) + list(down_w_slots))
         _k = top_k
         _ne = num_experts
         _norm = norm_topk_prob
@@ -2061,9 +2063,10 @@ class TritonSequence:
         def moe_fused_dispatch(arena):
             if _moe_slot_diag:
                 import sys as _sys_md
-                _g0 = arena[_gw[0]]
+                _g0_slot = _in_slot_c if _in_slot_c is not None else _gw[0]
+                _g0 = arena[_g0_slot]
                 _h0 = arena[_hs_slot]
-                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_gw[0]} "
+                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} "
                       f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
                       f"gw0_dev={None if _g0 is None else _g0._device_idx} "
                       f"hs_slot={_hs_slot} "
@@ -2115,10 +2118,13 @@ class TritonSequence:
             kwargs_resolver=kwargs_resolver,
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
-            weight_input_slots=tuple(list(_gw) + list(_uw) + list(_dw)),
+            # The op's weight slots: the E x 3 per-expert slots, or the TWO stacked
+            # slots — the device derivation, the zero3 check and the block partition
+            # read these tuples (R30: the compiled mirror lists the same two).
+            weight_input_slots=tuple(_weight_slots),
             all_input_slots=tuple(
                 ([_gs_slot] if _gs_slot is not None else [_ti_slot, _tw_slot])
-                + [_hs_slot] + list(_gw) + list(_uw) + list(_dw)),
+                + [_hs_slot] + _weight_slots),
         )
 
     # ========================================================================
