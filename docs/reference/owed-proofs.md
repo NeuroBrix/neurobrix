@@ -1263,3 +1263,58 @@ cells pass on CUDA; the two arms then render: sequential rc 0 in 18.9 s, compile
 The census re-run after the refusal merge (main c7ef4fa4) holds both proofs: TinyLlama 6 = 6,
 Sana 1024 58 = 58, under the one-card profiles — no key was harvested through a symbol that
 fell back to its trace value on those two.
+
+### Sana 1024, step by step from one initial latent (17:51, card 2)
+
+| step | t | NeuroBrix triton mean / std | vendor mean / std |
+|---|---|---|---|
+| 0 | 999 | 0.0044 / 0.9756 | 0.0043 / 0.9757 |
+| 5 | 899 | 0.0100 / 0.8804 | 0.0088 / 0.8807 |
+| 10 | 749 | 0.0171 / 0.7711 | 0.0145 / 0.7706 |
+| 15 | 499 | 0.0293 / 0.7365 | 0.0248 / 0.7365 |
+| 19 | 136 | 0.0499 / 1.0384 | 0.0415 / 1.0420 |
+
+PSNR vendor(seed 42) vs NeuroBrix(seed 42): 14.60 dB; vendor FROM NeuroBrix's initial latent
+vs NeuroBrix: 24.58 dB; NeuroBrix twice: 94.60 dB. The loop tracks the vendor at every step
+within 1e-3 on the state's std and a mean that drifts by 8e-3 over twenty steps — the
+signature of two numeric paths (fp16 kernels, different accumulation orders) walking the same
+schedule, not of a stage that diverges. Ten of the seventeen dB were the noise class (a seed
+is not a noise); the remaining gap accumulates smoothly. Under the drift-origin rule the
+origin class is KERNEL/SCALE, not policy or discrete: no single op to name. Both artefacts
+are coherent apples. What would close the item as a judged replacement: this table and the
+two artefacts beside the deprecated container's on the hub — the publish decision is Hocine's.
+
+### The convolution's width, swept (card 0, 16 GB): the ladder costs 37 % in two buckets of thirty
+
+conv2d_forward_kernel, [1, 128, 256, W] x [128, 128, 3, 3], fp16, 37 widths 64..1024. The
+16-step ladder (Lmix = L16 here, no width under 64) loses 0.0 % in 28 buckets and 37.4 % /
+35.9 % in the buckets whose top is 128 and 144: at those tops the optimum flips to
+BLOCK_SIZE_OUTF=32 while every interior width prefers OUTF=64, so the width 120 served the
+top's setting pays 37 %. Powers of two lose the same 37.4 %. Two more facts from the same
+sweep: (1) widths that are multiples of 16 are FAST and widths ≡ 8 mod 16 are slow by
+40–60 % under their own optimum (72: 1.47 ms against 80: 0.99 ms; 88: 1.82 against 96:
+1.21) — the tile lattice law read from the kernel's side; (2) above 160 the optimum is stable
+(OUTF=64 to 512, 32 at 1024) and the ladder costs nothing. What the measurement says: for a
+convolution's spatial extent the bucket's TOP is not always the bucket's best representative;
+the two losing buckets sit exactly where the optimum flips. Options, for the owner: keep the
+ladder and certify a convolution bucket at the setting that minimises the loss over the
+bucket's ends (two synthetic sweeps per bucket instead of one), or keep the convolution's
+spatial keys exact below 160 (tiled extents are 16-multiples by the lattice law and rarely
+land there; the untiled latents of the video VAEs do). The branch applies the profile's
+default ladder to every dimension until that is decided; a profile may declare `height` and
+`width` ladders of their own.
+
+## 2026-09-21 — the Mac's branch merged on a worktree and its engine changes proven on CUDA (the two-way merge rule)
+
+`merge-metal-first-light` = main 688b86be + origin/metal-first-light f3828311, merged clean
+(the interceptor fix was already cherry-picked). Its five new cells: 7 passed, 4 skipped on
+CUDA (conv bias in place, the interceptor, the MoE table) and 3 passed, 1 skipped without a
+card (zero3 selection on unified memory, the Apple lattice). Judged, card 0 (16 GB):
+
+| engine change | proof on CUDA | result |
+|---|---|---|
+| triton/moe.py Metal pinned-address tables and block size | granite code request, triton, bytes | sha e7725da9d641 = the vendor's unfused forward — inert |
+| kernels/ops/conv2d.py + wrappers: the conv bias rides in place (one output per biased conv) | Sana 1024 triton, bytes and wall | sha 9a1fc0589057 = main's bytes; 47.0 s against 57.7 s — inert on bytes, beneficial on wall |
+| core/flow/audio_llm.py: context embeds join the context device | Voxtral, jfk 11 s, compiled | rc 0, the transcript exact ("And so, my fellow Americans, ask not what your country can do for you…") — inert |
+| core/prism/solver.py + strategies/zero3.py: zero3 never selected where its offload frees nothing | the branch's cell + the catalogue census of 09-21 (59/59 plans identical) | inert on this rack (no zero3 placement on four cards) |
+| apple_m4_pro.yml lattice unit 16 + Apple certified directories | Apple data; the CUDA solver reads volta.yml's own lattice | no CUDA path reads them |
