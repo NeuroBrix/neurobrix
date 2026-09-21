@@ -25,6 +25,9 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.host_memory import MemoryState, memory_state
+from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
+                                                rung_down_mb, describe as _describe_budget, read_device_sharing,
+                                                host_budget_mb as _host_budget_mb_read)
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.runtime_values import MissingRuntimeValue
 
@@ -276,6 +279,13 @@ class DeviceState:
     #: taken into account. Kept beside `capacity_mb` rather than replacing it,
     #: because a refusal that names only one of the two teaches nothing.
     recommended_mb: float = 0.0
+    #: The law's answer for this pool (core/prism/memory_budget.py), computed once at
+    #: `_prepare_devices` from the reading: what a plan is budgeted against, and the rung a
+    #: tiled component sizes its tile from. 0 = no reading was taken (a cell's hand-built
+    #: state): the door then derives both from the state itself.
+    budget_mb: float = 0.0
+    tile_rung_mb: int = 0
+    budget_note: str = ""
     #: The machine as it was when this plan was made. None where the plan was
     #: built without reading it (a discrete card, or an unreadable platform).
     host_memory: Optional["MemoryState"] = None
@@ -527,37 +537,14 @@ PipelineExecutionPlan = ExecutionPlan
 #: step discards half of an 8 GB machine and hands a 128 GB machine sixty-four
 #: rungs — sixty-four certified key families — for nothing. Whole gigabytes;
 #: the 4096 MB floor is the lowest USABLE rung.
-_MEMORY_LADDER_GB = (4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
-
-
 def memory_ladder_rung_mb(free_mb) -> int:
-    """Round a FREE-memory reading DOWN onto the ladder. Never the total, and
-    never anything derived — the tile, the overlap and the band count are then
-    computed from the rung, exactly, with nothing downstream rounded.
-
-    Why the reading and not the tile (owner, 2026-09-20): the reading is the
-    ONLY noisy input to the tiling derivation. Measured on one request
-    (real-esrgan-x8 at 1024 px, four ambient states): the live figure dragged
-    the tile through four conv-extent families — 405 / 429 / 510 / 520 — each
-    demanding ~7 fresh autotune keys that one-shot runs never persist, so the
-    certified directory chased a set it could not enumerate. Quantising the
-    reading removes the noise at its source and leaves every derivation exact.
-
-    Rounding DOWN is a property, not a convenience: the difference between the
-    reading and the rung is headroom the plan never asks for — the room the
-    autotuner's sweep transients at (8 x tile)^2 had been taking from nowhere.
-    And the rule is vendor-neutral: unified memory here, CUDA free VRAM on the
-    rack, one ladder, no coordination.
-
-    A reading below the lowest usable rung passes through untouched: there is
-    nothing to size against down there, and the 4096 MB floor machinery owns
-    that refusal in its own words.
-    """
-    rung = None
-    for g in _MEMORY_LADDER_GB:
-        if g * 1024 <= free_mb:
-            rung = g * 1024
-    return rung if rung is not None else int(free_mb)
+    """A reading rounded DOWN onto the commercial ladder — the ladder is configuration
+    (`PRISM_DEFAULTS["memory_ladder_gb"]`, 4 GB to 512 GB) and the law is
+    `core/prism/memory_budget.py`. Never a value off the ladder: a reading under the lowest
+    rung answers 0, and the caller refuses or streams in its own words. (Until 2026-09-21 the
+    ladder was a literal here that stopped at 128 GB and any reading under 4 GB passed through
+    untouched — exactly where standard rungs matter most.)"""
+    return rung_down_mb(free_mb)
 
 
 class PrismSolver:
@@ -635,8 +622,12 @@ class PrismSolver:
         the same request sees 5-14 GB, is bounded by the 4-12 GB rungs, and
         descends to the tiling rung by itself.
         """
-        return min(dev.capacity_mb - self._margin_mb(dev.capacity_mb),
-                   float(memory_ladder_rung_mb(dev.free_mb)))
+        if dev.budget_mb > 0:
+            return float(dev.budget_mb)
+        # A state built by hand (a cell testing one rung): the law from the state itself —
+        # dedicated when nothing external holds it, shared otherwise.
+        return float(_budget_mb(DeviceReading(kind="device", capacity_mb=dev.capacity_mb, free_mb=dev.free_mb,
+                                              held_by_others_mb=dev.external_used_mb)))
         self._dtype_bytes = get_dtype_bytes()
 
     # =========================================================================
@@ -1071,7 +1062,7 @@ class PrismSolver:
                     # Use 0.7 × ram_mb (matches `_try_cpu_execution`'s
                     # budget formula, R34 generic).
                     if profile.cpu and profile.cpu.ram_mb > 0:
-                        total_capacity = int(profile.cpu.ram_mb * 0.7 * 1024 * 1024)
+                        total_capacity = int(self._host_budget_mb(profile) * 1024 * 1024)
                     else:
                         # No CPU stats — accept unconditionally (runtime
                         # will fail clean if RAM truly insufficient).
@@ -2602,6 +2593,47 @@ class PrismSolver:
     # DEVICE PREPARATION
     # =========================================================================
 
+    def _device_reading(self, dev, capacity: float, host) -> "DeviceReading":
+        """The one reading the law is applied to, for this device (memory_budget.py).
+
+        A unified device is shared with the host by its nature: its free figure is the host's
+        available memory. A discrete card is asked, through the vendor seam, whether it drives
+        a display and what other processes hold on it; a card the seam cannot read is treated
+        as shared. A census shadow (`kernels/census.py`) sees no card and carries the machine's
+        plan, not the room's: its reading is the profile's capacity as a dedicated card, or the
+        rung the NBX_PRISM_BUDGET_MB door names (the census enumerating every rung)."""
+        try:
+            from neurobrix.kernels import census as _census
+            shadow = _census.active()
+        except Exception:  # noqa: BLE001
+            shadow = False
+        if shadow:
+            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(dev.memory_mb),
+                                 source="census shadow: the profile's capacity")
+        if dev.has_unified_memory:
+            free = float(host.available_mb) if getattr(host, "measured", False) else float(capacity)
+            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=free, unified=True,
+                                 measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
+        try:
+            r = read_device_sharing(dev.index)
+            if r.capacity_mb <= 0:
+                r = DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=r.free_mb or float(dev.memory_mb),
+                                  display_active=r.display_active, held_by_others_mb=r.held_by_others_mb,
+                                  own_context_mb=r.own_context_mb, measured=r.measured, source=r.source)
+            return r
+        except Exception as exc:  # noqa: BLE001 — a reading that cannot be taken is a shared pool, said
+            return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=float(capacity),
+                                 measured=False, source=f"no reading: {type(exc).__name__}")
+
+    def _host_budget_mb(self, profile) -> float:
+        """Host RAM through the same law: the free reading rounded down onto the ladder; without a
+        reading, the installed figure rounded down (never the raw figure, never a fraction of it)."""
+        installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+        from neurobrix.core.prism.memory_budget import host_reading
+        r = host_reading()
+        figure = min(r.free_mb, installed) if (r.measured and installed > 0) else (r.free_mb if r.measured else installed)
+        return float(rung_down_mb(figure))
+
     def _prepare_devices(self, profile: PrismProfile) -> List[DeviceState]:
         """Prepare GPUs sorted by capacity DESC.
 
@@ -2657,10 +2689,16 @@ class PrismSolver:
                     free_live = None
                 if free_live is not None:
                     used = max(0.0, capacity - free_live)
+            reading = self._device_reading(dev, capacity, host)
+            note = _describe_budget(reading)
+            logging.getLogger(__name__).info("%s: memory budget — %s", dev.get_device_string(), note)
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
                 capacity_mb=capacity,
                 external_used_mb=used,
+                budget_mb=float(_budget_mb(reading)),
+                tile_rung_mb=int(_tile_rung_mb(reading)),
+                budget_note=note,
                 spec=dev,
                 recommended_mb=recommended,
                 host_memory=host,
@@ -2680,6 +2718,9 @@ class PrismSolver:
                 spec=d.spec,
                 recommended_mb=d.recommended_mb,
                 host_memory=d.host_memory,
+                budget_mb=d.budget_mb,
+                tile_rung_mb=d.tile_rung_mb,
+                budget_note=d.budget_note,
             )
             for d in devices
         ]
@@ -3397,7 +3438,7 @@ class PrismSolver:
 
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
-        mem: ComponentMemory, free_reading_bytes: int,
+        mem: ComponentMemory, tile_rung_mb: int,
     ) -> Optional[Dict[str, Any]]:
         """Return a TilingEngine spec when a spatial component (4D/5D input +
         scale config) overflows `budget_bytes` untiled but fits when its
@@ -3528,12 +3569,16 @@ class PrismSolver:
         # from the rung is what makes the tile a pure function of the request;
         # the LIVE reading keeps the feasibility check at the call site — the
         # rung sizes, the truth validates.
-        rung_mb = memory_ladder_rung_mb(free_reading_bytes / (1024 * 1024))
+        # HOCINE'S TILING STANDARD (2026-09-21): the tile is derived from the RUNG by a fixed
+        # rule, never from a raw reading — a dedicated card's nominal rung, a shared pool's free
+        # rung (memory_budget.tile_rung_mb) — so the tile is a pure function of (component, rung)
+        # and a census can enumerate every rung up to a card's capacity.
+        rung_mb = int(tile_rung_mb)
         budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
         import os as _os_diag
         if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
             print(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
-                  f"reading={free_reading_bytes/1024**3:.2f}GB rung={rung_mb}MB "
+                  f"rung={rung_mb}MB "
                   f"budget={budget_bytes/1024**3:.2f}GB "
                   f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
                   f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
@@ -3573,8 +3618,13 @@ class PrismSolver:
             latent_h, latent_w = _h, _w
 
         window_alignment = config.get("window_size", 1) or 1
+        # The fixed rule: the activation per latent pixel is the component's own constant (the
+        # estimate at this request divided by its latent area), and the tile is the largest
+        # square whose activation fits the rung's tile budget — independent of the request's
+        # extent, which only clamps a request smaller than the tile to its native size.
         frac = budget_bytes / full_act
-        tile_size = int(math.sqrt(latent_h * latent_w * frac))
+        bytes_per_pixel = full_act / float(max(1, latent_h * latent_w))
+        tile_size = int(math.sqrt(budget_bytes / bytes_per_pixel))
         if window_alignment > 1:
             tile_size = (tile_size // window_alignment) * window_alignment
         # THE LADDER'S OTHER HALF (2026-09-21): the extent handed to the kernels is snapped
@@ -3955,7 +4005,7 @@ class PrismSolver:
         # The live reading itself: the rung inside rounds it ONCE (the law
         # forbids a second rounding of an already-quantised figure).
         tiling = self._spatial_component_tiling(
-            container, comp_name, mem, int(largest.free_mb * 1024 * 1024))
+            container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
         if tiling is not None:
             tiled_total_mb = real_weight + tiling["tiled_activation_bytes"] / (1024 * 1024)
             if tiled_total_mb <= effective_capacity * 0.92:
@@ -3979,7 +4029,7 @@ class PrismSolver:
         # truly insufficient, with a clearer signal than an OOM-at-conv.
         # P-PRISM-NEVER-REFUSE v2 B.4 — Doctrine R35 cascade per-component.
         if profile.cpu and profile.cpu.ram_mb > 0:
-            if mem.total_mb <= profile.cpu.ram_mb * 0.7:
+            if mem.total_mb <= self._host_budget_mb(profile):
                 shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
                 return ("cpu", shard_map)
             # RAM accounted and insufficient → genuinely can't place
@@ -4404,7 +4454,7 @@ class PrismSolver:
         # (reserve 30% for OS, activations, PyTorch overhead)
         if profile.cpu and profile.cpu.ram_mb > 0:
             total_weight_mb = sum(mem.weight_mb for _, mem in sorted_comps)
-            available_ram_mb = profile.cpu.ram_mb * 0.7
+            available_ram_mb = self._host_budget_mb(profile)
             if total_weight_mb > available_ram_mb:
                 return None
 
@@ -4451,7 +4501,7 @@ class PrismSolver:
         # Validate CPU RAM if a cpu config is present
         if profile.cpu and profile.cpu.ram_mb > 0:
             total_required_mb = sum(mem.total_mb for _, mem in sorted_comps)
-            available_ram_mb = profile.cpu.ram_mb * 0.7
+            available_ram_mb = self._host_budget_mb(profile)
             if total_required_mb > available_ram_mb:
                 # Genuinely insufficient RAM. Return None so the cascade
                 # can emit a clear error message at _fail_error level —
@@ -4729,7 +4779,7 @@ class PrismSolver:
         peak_mb = max((mem.total_mb for _, mem in sorted_comps), default=0.0)
 
         if profile.cpu and profile.cpu.ram_mb > 0:
-            available_ram_mb = profile.cpu.ram_mb * 0.7
+            available_ram_mb = self._host_budget_mb(profile)
             if peak_mb > available_ram_mb:
                 # The largest single component does not fit even alone. This
                 # is the real bottom of the ladder.
