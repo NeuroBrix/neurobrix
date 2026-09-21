@@ -1232,3 +1232,34 @@ needs from the Mac to go further: the exact SHA it measured, its plan's strategy
 `[OpTiling]` lines for that run, and whether a tree without the merge's Metal-side files
 (`metal_backend.py`, `triton_ext_driver.py`, `launcher.py`) still shows it — the tiled path
 those touch is Metal's. Script and logs: `nbx/campaigns/2026_09_21_upscaler_regression/`.
+
+## 2026-09-21 — Sana-1600M-MultiLing at 1024, the drift item, R29 first
+
+The retrace gate read 17.66 dB (old container) and 17.25 dB (new) against the vendor at the
+calibration request. Both artefacts, looked at: the vendor's render (vendored diffusers
+0.36.0, fp16, seed 42, 20 steps) and NeuroBrix's triton render (seed 42, 20 steps, 57.7 s on a
+16 GB card) are each a coherent, well-lit red apple on a wooden table — different
+compositions (the vendor's on a plain dark-red backdrop, NeuroBrix's against dark planks with
+a greener stem). Under R29 neither is degenerate; 17 dB between two different valid
+compositions is the signature of the same-seed-is-not-the-same-noise class (the vendor draws
+its initial noise in fp16 through its own generator, NeuroBrix in its own dtype and stream),
+not of a corrupted stage. The measurement that decides it is queued: the vendor started from
+NeuroBrix's own initial latent (the pipeline accepts `latents=`), PSNR against NeuroBrix's
+render from that latent — high means the engine reproduces the vendor and the item is the
+noise's; low means a stage diverges and the per-stage boundary walk follows. Sana's two ATen
+arms could not be judged on main until d47c5e0d: the in-place-unary interceptor handed a
+torch tensor to the NBX wrapper at aten.relu::0 (the Mac's fix f154dc39, cherry-picked and
+proven by its four cells on CUDA).
+
+## 2026-09-21 — the Mac's interceptor fix (f154dc39) proven on CUDA: Sana's two ATen arms, red then green
+
+On main before it, Sana-1600M 1024 in `--sequential` and in compiled mode both died at
+`aten.relu::0` — `'Tensor' object has no attribute '_device_idx'` — the in-place-unary
+interceptor handing a torch tensor to the NBX wrapper below its size threshold (the same
+class Wan T2V's ATen arm met under component tiling). Cherry-picked as d47c5e0d; its four
+cells pass on CUDA; the two arms then render: sequential rc 0 in 18.9 s, compiled rc 0 in
+20.3 s (card 2, 16 GB). Per the two-way merge rule: beneficial on CUDA, measured.
+
+The census re-run after the refusal merge (main c7ef4fa4) holds both proofs: TinyLlama 6 = 6,
+Sana 1024 58 = 58, under the one-card profiles — no key was harvested through a symbol that
+fell back to its trace value on those two.
