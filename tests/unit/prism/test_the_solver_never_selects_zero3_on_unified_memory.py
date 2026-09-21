@@ -46,7 +46,7 @@ def _place(profile, device_string):
 
 
 def test_zero3_is_not_selected_on_a_unified_device():
-    profile = load_profile("default")
+    profile = load_profile("a10-24g")                # a fixture in the tree, not this machine's file
     profile.devices[0].unified_memory = True
     result = _place(profile, "mps:0")
     if result is not None:
