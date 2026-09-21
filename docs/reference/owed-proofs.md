@@ -1083,6 +1083,35 @@ driver, the certifier, the tensor library, and the Triton sequence — the cause
 those, on my side. A bisect landing on a merge assigns no parent side without testing each;
 the Dell tested them and they are green, which is the datum I owed and did not produce.
 
+**ROOT CAUSE, precisely characterized on Apple (2026-09-21):** real-esrgan-x2 is a
+PIXEL-UNSHUFFLE upscaler. `aten.view::0` targets `[s0, 3, 32, 2, 32, 2]` (32 = trace_H/2)
+and `aten._unsafe_view::0` targets `[s0, 12, 32, 32]` — the spatial dims enter as H/2, W/2
+at the pixel-unshuffle positions, NOT as H, W. The census confirms s1/s2 (height/width) are
+`never_carried`, first broken here. The spatial-promotion pass
+(`triton/promotion._spatial_promotion_pass`) matches H/W at shape positions [-1]/[-2]
+against the TRACE H/W (64); the pixel-unshuffle `32` (=64/2) matches neither, so it is left
+frozen (MEASURED: view::0 args byte-identical before and after the pass). With the spatial
+frozen at 32, the batch symbol `s0` (trace 1) inflates to 49 to absorb the runtime
+448×448 → the graph runs `[49,3,64,64] → [49,3,128,128]`, and `output_dispatch.final_as_array`
+takes `np.take(arr, 0, axis=batch_axis)` — batch index 0 — yielding the single 128px tile.
+
+**The unresolved contradiction (needs the Dell):** the hub x2 and my cached x2 graphs are
+BYTE-IDENTICAL (same frozen view::0), the promotion pass is shared across all modes and
+platforms, and it PROVABLY leaves the 32 frozen on Apple. Yet the Dell reports 896×896 on
+CUDA in both modes "with the 49 tiles accumulated." So on CUDA the identical frozen graph
+either (a) has `s0` resolved to 1 with the spatial promoted to 224 — which the shared pass
+does NOT do here — or (b) reassembles the 49-batch `[49,3,128,128] → [1,3,896,896]` in an
+engine step I could not locate in the flow, output_dispatch, or the graph. I need the Dell's
+answer to ONE question: on CUDA, what is `GraphExecutor.run`'s OUTPUT shape for
+`real-esrgan-x2 @448` — `[1,3,896,896]` or `[49,3,128,128]`? That single datum says whether
+the divergence is at symbol resolution (before the graph) or at reassembly (after it).
+
+**The clean resolution regardless: RETRACE.** The census (now working on Apple) marks x2 —
+and every pixel-unshuffle upscaler — for retrace: a symbolic-spatial retrace removes the
+frozen 32 and the batch inflation entirely, and the family verifies natively at any size on
+both platforms. That is the doctrine's own prescription for a frozen container, and it does
+not wait on the engine-side contradiction above.
+
 **What stands as the symptom:** `real-esrgan-x2 --input-image apple_448.png` (traced
 `[1,3,64,64] -> [1,3,128,128]`) emits 128×128 on Apple — one tile, upscaled (pixel-matched:
 `mean|Δ|=1.0` vs `crop(0,0,64,64).resize(128)`, `74.3` vs whole-downscaled), BOTH modes; the
