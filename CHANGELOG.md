@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The kernel census no longer drops a model whose graph froze a dimension.** Such a model
+  is still shadowed and its keys harvested at the frozen extent, and it is queued for a
+  retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
+  no longer read as frozen.
 - **`tools/hub_cache_diff.py`** compares every container of the shared cache with the object
   the hub serves, graph by graph, by reading the hub object's central directory and JSON
   members over HTTP Range (no container is downloaded), and publishes the ones that are newer

@@ -163,6 +163,26 @@ def analyse(graph_path: Path) -> list:
         # locates the BREAK — for that, the question is which consumer dropped
         # the expression — but it may not decide whether the dimension lives.
         references_anywhere = sum(1 for uid, _ in ordered if facts.get(uid, (set(), []))[0] & group)
+        # A dimension also lives in the SHAPES the tracer wrote: an embedding's output carries
+        # `seq_len` without any operation naming it as an argument (canary's `embed_tokens`
+        # graph is one op, and the census called it frozen and harvested nothing, 2026-09-21).
+        # An operation whose output shape carries the symbol carries the dimension. A literal
+        # standing in an output shape is NOT read as a loss here: TinyLlama's RoPE table
+        # lookup (`aten.index`) emits the traced 23 and the runtime re-slices it by design
+        # (the seq-dependent constants of the compiled sequence) — chatterbox's `copy` into a
+        # buffer allocated at 314 is the same shape signature and a genuine freeze, and only a
+        # run at another length tells them apart.
+        def _shape_syms(tid):
+            out = set()
+            for d in ((tensors.get(str(tid)) or {}).get("symbolic_shape") or {}).get("dims") or []:
+                if isinstance(d, dict):
+                    if isinstance(d.get("id"), str):
+                        out.add(d["id"])
+                    for f in (d.get("factors") or []) + (d.get("terms") or []):
+                        if isinstance(f, str):
+                            out.add(f)
+            return out
+        shape_carriers = sum(1 for tid in tensors if not str(tid).startswith("input::") and _shape_syms(tid) & group)
         carriers = 0
         last_carrier = None
         first_break = None
@@ -172,7 +192,8 @@ def analyse(graph_path: Path) -> list:
             if not (ins & tainted):
                 continue
             s_here, lits = facts.get(uid, (set(), []))
-            if s_here & group:
+            out_carries = any(_shape_syms(o) & group for o in outs)
+            if s_here & group or out_carries:
                 carriers += 1
                 last_carrier = uid
             elif first_break is None:
@@ -202,7 +223,8 @@ def analyse(graph_path: Path) -> list:
                      "trace_value": v, "source": src, "aliases": sorted(group), "carriers": carriers,
                      "last_carrier": last_carrier, "first_break": first_break,
                      "references_anywhere": references_anywhere,
-                     "never_carried": references_anywhere == 0})
+                     "shape_carriers": shape_carriers,
+                     "never_carried": references_anywhere == 0 and shape_carriers == 0})
     return rows
 
 
