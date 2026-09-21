@@ -1072,7 +1072,17 @@ write the unit into `apple_m4_pro.yml` beside its numbers.
 
 ---
 
-## 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
+## 2026-09-21 — RESOLVED: the single-tile upscaler was a STALE LOCAL CONTAINER, not the engine
+
+**Superseded.** The Dell retraced real-esrgan-x2 on 09-20 (graph `74a2d7ea`, view::0 now
+`floordiv(s1,2)` — symbolic) and it is on the shared cache; my local copy was `626f2e07`,
+the old frozen graph, identical to the hub because the store stopped accepting writes.
+Refreshed from the shared cache → x2@448 → **896×896**. No engine bug, no Dell datum owed.
+The rule that stands: verification copies come from the shared cache (canonical), never the
+stale hub; and the Apple census now reads graphs from the shared cache, tagging each model's
+keys with its graph_sha so a later retrace invalidates exactly its own keys.
+
+### (historical, now moot) 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
 
 My earlier entry here handed the reshape-rung fold breakage to the rack side. **That was
 wrong, and the correction is the owner's, checked:** the Dell ran `real-esrgan-x2` at 448 in

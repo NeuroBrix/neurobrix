@@ -161,10 +161,24 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
             "command": " ".join(cmd[2:])}
 
 
+def _graph_sha(model: str) -> str:
+    """A stable hash over every component graph.json of this model, so a
+    retrace (which changes a graph) invalidates exactly the keys harvested
+    from it. Recorded per model in the census; a certifier or a later census
+    diff can drop keys whose source graph_sha no longer matches the cache."""
+    import hashlib
+    h = hashlib.sha256()
+    for gp in sorted((CACHE / model / "components").glob("*/graph.json")):
+        h.update(gp.name.encode())
+        h.update(gp.read_bytes())
+    return h.hexdigest()[:16]
+
+
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
                  log_dir: Path) -> dict:
     fam = _family(model)
-    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": []}
+    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [],
+           "graph_sha": _graph_sha(model)}
     frozen = frozen_dims(model)
     if any("unreadable" in r for r in frozen):
         row.update(status="unreadable", frozen=frozen)
