@@ -3285,8 +3285,7 @@ class GraphExecutor:
                         DeviceAllocator as _DA_fp_sq)
                     _fp_max_sq = int(
                         _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
-                    _cap_sq = int(
-                        _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                    from neurobrix.core.runtime.fingerprint import hashed_span as _span_sq
                     if not hasattr(self, "_fp_idx_sq"):
                         self._fp_idx_sq = 0
                     _recs_sq = []
@@ -3305,7 +3304,7 @@ class GraphExecutor:
                             _DA_fp_sq.set_device(_t._device_idx)
                         _c = _t.contiguous()
                         _nb = _c._nbytes
-                        _hb = _nb if _cap_sq == 0 else min(_nb, _cap_sq)
+                        _hb = _span_sq(_nb)           # the whole tensor unless NBX_OP_FINGERPRINT_CAP says fewer
                         _buf = (_ct_fp_sq.c_char * _hb)()
                         _DA_fp_sq.memcpy(_ct_fp_sq.addressof(_buf),
                                          _c.data_ptr(), _hb, kind=2)

@@ -3362,8 +3362,8 @@ class TritonSequence:
                 # leading bytes reflect any divergence while keeping
                 # 115k-op model traces feasible. NBX_OP_FINGERPRINT_CAP=0
                 # disables the cap (full hash).
-                cap = int(_os_f.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
-                hb = nb if cap == 0 else min(nb, cap)
+                from neurobrix.core.runtime.fingerprint import hashed_span
+                hb = hashed_span(nb)                  # the whole tensor unless NBX_OP_FINGERPRINT_CAP says fewer
                 buf = (_ct_f.c_char * hb)()
                 DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
                                        hb, kind=2)
