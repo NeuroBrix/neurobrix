@@ -18,6 +18,7 @@ from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass
 
 from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
+from neurobrix.core.runtime_values import MissingRuntimeValue
 
 
 @dataclass
@@ -475,7 +476,6 @@ class ActivationProfiler:
         if input_config.num_frames:
             tc = input_config.temporal_compression
             if not tc:
-                from neurobrix.core.runtime_values import MissingRuntimeValue
                 raise MissingRuntimeValue(
                     "this request carries num_frames, so a temporal axis exists, "
                     "but 'temporal_compression_ratio' is declared nowhere. The "
@@ -518,11 +518,23 @@ class ActivationProfiler:
                 symbol_map[sid] = trace if isinstance(trace, int) else (
                     input_config.batch_size)
             elif name == "time":
-                symbol_map[sid] = latent_t if latent_t is not None else (
-                    trace if isinstance(trace, int) else 1)
+                if latent_t is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no frame count for symbol {sid} (time) of "
+                        f"this graph: the trace extent {trace} is a witnessed stimulus, not the request")
+                symbol_map[sid] = latent_t
             elif name == "height":
+                if latent_h is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no height for symbol {sid} (height) of "
+                        f"this graph: the trace extent {trace} is a witnessed stimulus, not the "
+                        "request (Wan T2V planned 1.74 GiB for a 35 GiB decode this way)")
                 symbol_map[sid] = latent_h
             elif name == "width":
+                if latent_w is None:
+                    raise MissingRuntimeValue(
+                        f"the plan's request names no width for symbol {sid} (width) of this "
+                        f"graph: the trace extent {trace} is a witnessed stimulus, not the request")
                 symbol_map[sid] = latent_w
             elif name in ("seq_len", "sequence_length"):
                 symbol_map[sid] = input_config.seq_len or (
