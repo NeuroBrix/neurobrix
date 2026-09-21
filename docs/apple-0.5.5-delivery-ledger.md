@@ -55,6 +55,14 @@ readback; image external degeneracy judge; video judged by eye.
 
 ## Arithmetic re-reads of the standing refusals (doctrine, 2026-09-21)
 
+**Superseded framing (owner, 2026-09-21):** "refusal STANDS" for a MEMORY reason
+is no longer doctrine — NeuroBrix never refuses for lack of memory (see the fit
+arithmetic below). hat-l-x4 / hat-s-x4 (floor stop / Prism estimate) become
+SCHEDULED under tiling + weight streaming, not refused. canary-qwen and
+Voxtral remain as written: canary is an ENGINE DEFECT (no allocation for a
+component), not a memory refusal; Voxtral T/S is a CONDITIONAL on a retention
+object, not memory. Re-verify all four under the adaptive-memory cascade.
+
 - **hat-l-x4** — refusal STANDS, and it was never ambient: floor stop at
   1567 MB available with 0 misses after its 8 shapes were certified, in both
   triton modes, on the settled machine. The figure is the model's own
@@ -112,18 +120,30 @@ tile boundary is present — the across-a-seam look is owed at x8@1024.
 ## Catalogue fit arithmetic (VM off, 24 GB unified, ~22 GB usable) — 2026-09-21
 Measured from each container's weight footprint on the hub. No downloads.
 
-**Refused by arithmetic (11, weights exceed 22 GB usable — never fit this machine):**
-- Allegro — 23.6 GB weights > 22 GB
-- Flex.1-alpha — 24.5 GB weights > 22 GB
-- Wan2.1-T2V-1.3B-Diffusers — 27.0 GB weights > 22 GB
-- DeepSeek-Coder-V2-Lite-Instruct — 30.7 GB weights > 22 GB
-- mochi-1-preview — 38.2 GB weights > 22 GB
-- Open-Sora-v2 — 42.5 GB weights > 22 GB
-- Qwen3-Coder-30B-A3B-Instruct — 57.1 GB weights > 22 GB
-- Qwen3-30B-A3B-Thinking-2507 — 57.1 GB weights > 22 GB
-- Qwen3-VL-30B-A3B-Thinking — 57.9 GB weights > 22 GB
-- Wan2.1-I2V-14B-480P-Diffusers — 84.4 GB weights > 22 GB
-- Wan2.2-I2V-A14B-Diffusers — 118.1 GB weights > 22 GB
+**DOCTRINE CORRECTION (owner, 2026-09-21):** NeuroBrix never refuses a model for
+lack of memory — a Mac with 4 GB free must run any model, slowly if it must,
+never refuse and never crash. So there is NO "refused by arithmetic" class. On a
+unified device the Prism cascade must end in a strategy that streams weights
+block by block from storage, so resident memory is ONE block rather than the
+whole component. The 11 models below are therefore **SCHEDULED**, not refused:
+they run by weight block-streaming, throughput bounded by the storage read
+(local NVMe / shared cache, not the 7–9 MB/s hub link). Implementing that
+cascade tail on unified is the adaptive-memory chantier (this branch; the
+`return None` guard in `b23105fe` is the placeholder it replaces).
+
+**Scheduled — weight block-streaming on unified (11, weights exceed 22 GB usable
+so they cannot be resident; resident cost = one streamed block):**
+- Allegro — 23.6 GB weights
+- Flex.1-alpha — 24.5 GB weights
+- Wan2.1-T2V-1.3B-Diffusers — 27.0 GB weights
+- DeepSeek-Coder-V2-Lite-Instruct — 30.7 GB weights
+- mochi-1-preview — 38.2 GB weights
+- Open-Sora-v2 — 42.5 GB weights
+- Qwen3-Coder-30B-A3B-Instruct — 57.1 GB weights
+- Qwen3-30B-A3B-Thinking-2507 — 57.1 GB weights
+- Qwen3-VL-30B-A3B-Thinking — 57.9 GB weights
+- Wan2.1-I2V-14B-480P-Diffusers — 84.4 GB weights
+- Wan2.2-I2V-A14B-Diffusers — 118.1 GB weights
 
 **Batched for one VM-off verification session (12, 12–22 GB — fit only with the Parallels VM off; memory matters at verification, not certification):**
 - Sana_1600M_4Kpx_BF16 — 12.1 GB
