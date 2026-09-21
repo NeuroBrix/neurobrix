@@ -220,11 +220,16 @@ def test_resolver_binds_last_position_plus_one():
     assert r.resolve(ref) == 41
 
 
-def test_unbound_ref_falls_back_to_trace_length():
+def test_an_unbound_ref_refuses_by_name():
+    """An unbound rope-length symbol used to answer its trace length plus the offset;
+    the trace value is a witnessed extent, not a value (2026-09-21) — it refuses."""
+    import pytest
+    from neurobrix.triton.symbols import UnboundSymbolError
     r = SymbolResolver({"symbols": {}})
     ref = {"type": "symbol", "id": "nbx_rope_len", "offset": 1,
            "trace": TRACE - 1}
-    assert r.resolve(ref) == TRACE
+    with pytest.raises(UnboundSymbolError, match="nbx_rope_len"):
+        r.resolve(ref)
 
 
 def test_compiled_binder_parses_negative_val_index():
