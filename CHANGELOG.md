@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two diagnostic doors for a guided denoiser.** `NBX_CFG_SEQUENTIAL=1` runs the two halves of
+  classifier-free guidance as two batch-1 forwards instead of one batch-2 forward, and
+  `NBX_DUMP_STEP0=<dir>` writes the denoiser's step-0 inputs and prediction as `.npy` files,
+  so a vendor's own module can be run on identical inputs. Both default off.
 - **A video decoder receives its latent in its own space.** A VAE trained on a
   normalised latent declares its statistics, and the vendor maps the latent back per
   channel before decoding; both engines now apply that step from the container's own

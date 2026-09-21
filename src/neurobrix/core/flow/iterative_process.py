@@ -761,6 +761,21 @@ class IterativeProcessHandler(FlowHandler):
                     # init supplies the scheduler's stochastic draws, in order;
                     # see VariableResolver.sampling_generator). Deterministic
                     # schedulers ignore it.
+                    _dump_dir = os.environ.get("NBX_DUMP_STEP0")
+                    if _dump_dir and step_idx == 0 and isinstance(model_output, torch.Tensor):
+                        # NBX_DUMP_STEP0=<dir> (default off): the denoiser's step-0 inputs and
+                        # output as .npy — the latent it saw, the timestep, the text states it
+                        # was conditioned on, its prediction — so the vendor's own module can be
+                        # run on the SAME inputs (P-WAN-DIT-STEP0, 2026-09-21).
+                        import numpy as _np
+                        os.makedirs(_dump_dir, exist_ok=True)
+                        _np.save(os.path.join(_dump_dir, "latent_in.npy"), current_state.detach().float().cpu().numpy())
+                        _ts0 = timestep.item() if hasattr(timestep, "item") else timestep
+                        _np.save(os.path.join(_dump_dir, "timestep.npy"), _np.asarray([float(_ts0)]))
+                        for _k, _v in list(self.ctx.variable_resolver.resolved.items()):
+                            if isinstance(_v, torch.Tensor) and str(_k).endswith((".last_hidden_state", ".negative_hidden_state")):
+                                _np.save(os.path.join(_dump_dir, str(_k).replace("/", "_") + ".npy"), _v.detach().float().cpu().numpy())
+                        _np.save(os.path.join(_dump_dir, "pred.npy"), model_output.detach().float().cpu().numpy())
                     if _LOOP_STATE_DIAG and isinstance(model_output, torch.Tensor):
                         _mo = model_output.detach().float()
                         _axm = [d for d in range(_mo.dim()) if d != 1]

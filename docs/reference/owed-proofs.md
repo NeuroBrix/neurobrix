@@ -1347,3 +1347,29 @@ card (zero3 selection on unified memory, the Apple lattice). Judged, card 0 (16 
 | core/flow/audio_llm.py: context embeds join the context device | Voxtral, jfk 11 s, compiled | rc 0, the transcript exact ("And so, my fellow Americans, ask not what your country can do for you…") — inert |
 | core/prism/solver.py + strategies/zero3.py: zero3 never selected where its offload frees nothing | the branch's cell + the catalogue census of 09-21 (59/59 plans identical) | inert on this rack (no zero3 placement on four cards) |
 | apple_m4_pro.yml lattice unit 16 + Apple certified directories | Apple data; the CUDA solver reads volta.yml's own lattice | no CUDA path reads them |
+
+## 2026-09-21 — the doctrine end to end on the bucketed keys, and the DiT at step 0
+
+**Census → certification → served, on branch `bucketed-autotune-keys`, card 2 (32 GB):** the
+census of TinyLlama at the family's calibration request (33 tokens; no card) — 6 keys;
+`neurobrix autotune certify --profile volta --census …` into a private directory pinned to the
+card: 6 shapes certified, 0 excluded, 0 failed, 0 unreachable, every file re-reads; the served
+run at a DIFFERENT request (19 tokens) swept all six — correctly: under 64 the key is exact and
+33 does not serve 19. Verification serves the request the census covered, by construction;
+the served run at the census's own request follows.
+
+**Wan T2V, the DiT at step 0 (card 3):** the vendor's `WanTransformer3DModel` run on NeuroBrix's
+exact step-0 inputs (the latent, t = 999, the positive text states) against NeuroBrix's own
+prediction without guidance:
+
+| | mean | std | absmax | channel means [:4] |
+|---|---|---|---|---|
+| vendor cond prediction | -0.0029 | 1.0813 | 4.594 | -0.078, -0.521, -0.448, -0.126 |
+| NeuroBrix prediction, guidance 1 | -0.0035 | 1.0802 | 4.582 | -0.055, -0.525, -0.444, -0.134 |
+
+max |diff| 0.128, relative L2 0.0135, cosine 0.99991 — the DiT forward is faithful at batch 1
+(fp16 numerics). NeuroBrix's guided prediction at batch 2 is not (std 1.32, channel means of
+±1, the field), so the batched [uncond, cond] forward is the suspect on a graph traced at
+batch 1 (the 08-29 class); `NBX_CFG_SEQUENTIAL=1` runs the two halves as batch-1 forwards and
+decides it on the next free card. The conditioning length (226, the graph's) stands as the
+vendor's contract.
