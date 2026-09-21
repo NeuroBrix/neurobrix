@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A kernel census without a card.** `NBX_CENSUS=1 neurobrix run ... --hardware <profile>`
+  with no visible device runs a model as a shadow — no device memory, no kernel launch, no
+  weight file read — and records every autotune key the launcher would form for that
+  profile (`NBX_KEY_RECORD=<file>`); it refuses to start while a device is visible.
+  `tools/certified_census.py` takes the census over the whole model cache for one profile,
+  marks a container whose trace froze a dimension for a retrace instead of harvesting it,
+  and writes the file `neurobrix autotune certify --census` reads. Proven on two models
+  against their live replay sets: 6 of 6 and 58 of 58 keys, identical.
 - **Mixture-of-experts models whose experts are stacked in one tensor per
   projection run through the fused expert dispatch**, in every execution mode.
   IBM's Granite 3.1 MoE (32 experts, 8 per token) is the first: it writes correct

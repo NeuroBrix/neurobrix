@@ -2137,3 +2137,26 @@ an arithmetic slip caught by the green run's own figure.)
 **The lesson, in one line.** A predicate on the output's size is not a guard on the input's
 index; every loop-derived offset that multiplies a plane is 64-bit, not only the ones born from a
 program id.
+
+### 81 — a census test green with its only seam removed, because the shadow recorded on a second path
+
+**Where.** `tests/unit/kernels/test_the_census_shadow_records_the_launchers_key.py`, 2026-09-21,
+metatron, main (the census's first hour).
+
+**What it did.** The test drove one matmul through the census shadow and asserted the key
+record held its key. It passed. The record seam under test — the `record` call in
+`_configs.run_with_notice`, the only writer a LIVE run has — was then commented out as the
+injection, and the test STILL PASSED: the shadow's own replacement of `Autotuner.run` recorded
+the key on its way to skipping the launch, so the cell proved the shadow's recorder, never the
+launcher's seam, and would have stayed green with the live path blind.
+
+**What would it have done if the code were wrong?** Passed — the exact question this register
+exists to ask, asked one injection late.
+
+**The fix.** One recorder: the shadow keeps `run_with_notice` in place and puts `shadow_run`
+behind it, so the seam is the single door for the live record and the shadow alike; with the
+seam injected out the cell reads `the shadow formed no key: the record seam is gone` (red),
+green restored. A third cell pins that the default path installs no shadow.
+
+**The lesson, in one line.** A test of a seam must run through the seam and nothing that can
+answer in its place; the injection that proves it is the first thing to run, not the last.
