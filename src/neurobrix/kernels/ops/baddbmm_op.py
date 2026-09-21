@@ -33,7 +33,7 @@ from neurobrix.kernels.ops.matmul import _MATMUL_AUTOTUNE_CONFIGS
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B',
+                 key=['M_BUCKET', 'N_BUCKET', 'K_BUCKET', 'IEEE_PRECISION', 'PROMOTE_B',
                       'HAS_BIAS'],
                  cache_results=True)
 @triton.jit
@@ -44,7 +44,7 @@ def baddbmm_kernel(
     bias_ptr,
     alpha,
     beta,
-    M, N, K,
+    M, N, K, M_BUCKET, N_BUCKET, K_BUCKET,
     stride_ab, stride_am, stride_ak,
     stride_bb, stride_bk, stride_bn,
     stride_ob, stride_om, stride_on,

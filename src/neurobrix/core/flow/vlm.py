@@ -36,6 +36,7 @@ ZERO FALLBACK: missing schema fields raise.
 
 import os
 import time
+import os as _os_vlm
 import torch
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -519,6 +520,9 @@ class VLMEngine(FlowHandler):
             else:
                 position_ids = base_positions
 
+            if _os_vlm.environ.get("NBX_DEBUG") == "1":
+                print(f"[vlm] handing the LM inputs_embeds {tuple(context_embeds.shape)} "
+                      f"position_ids {tuple(position_ids.shape)} (step {step})", flush=True)
             resolved["global.inputs_embeds"] = context_embeds
             resolved["inputs_embeds"] = context_embeds
             resolved["global.position_ids"] = position_ids

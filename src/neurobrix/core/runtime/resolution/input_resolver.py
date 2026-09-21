@@ -1,3 +1,5 @@
+import os as _os_ir
+_RESOLVE_DEBUG = _os_ir.environ.get("NBX_DEBUG") == "1"
 """
 Input Resolver
 
@@ -144,7 +146,14 @@ class InputResolver:
         last_error = None
         for source in sources:
             try:
-                return self.resolve_source(source)
+                value = self.resolve_source(source)
+                if _RESOLVE_DEBUG:
+                    # NBX_DEBUG=1: which source of the chain won, and the shape it carried —
+                    # the datum for an input that reaches the executor at a length the flow
+                    # never handed it (Qwen3-Omni's thinker, 2026-09-21: 213 handed, 23 bound).
+                    _shape = tuple(getattr(value, "shape", ())) if hasattr(value, "shape") else type(value).__name__
+                    print(f"[InputResolver] {sources} -> {source} {_shape}", flush=True)
+                return value
             except (RuntimeError, KeyError) as e:
                 last_error = e
                 continue

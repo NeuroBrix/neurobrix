@@ -474,6 +474,38 @@ class InputSynthesizer:
 
         return remapped
 
+    def _symbolic_dims(self, comp_name: str, input_name: str) -> set:
+        """The dimensions of a component input that its graph binds as symbols.
+
+        Two readings of the container, both authoritative: the symbol table's sources
+        (`input::<name>::dim_<i>` names the input a symbol binds from) and the input tensor
+        specs' `symbolic_shape.dims` (a symbol shared by several inputs is named at one
+        source only), the specs mapped to input names by the topology's input order and
+        trusted only where the spec's concrete shape equals the topology's.
+        """
+        executor = self._executors.get(comp_name) if self._executors else None
+        dag = getattr(executor, "_dag", None) if executor is not None else None
+        if not dag:
+            return set()
+        dims: set = set()
+        prefix = f"input::{input_name}::dim_"
+        for sym in ((dag.get("symbolic_context") or {}).get("symbols") or {}).values():
+            src = str(sym.get("source", ""))
+            if src.startswith(prefix):
+                try:
+                    dims.add(int(src[len(prefix):]))
+                except ValueError:
+                    pass
+        shapes = self._topology.get("components", {}).get(comp_name, {}).get("shapes", {}) or {}
+        names, ids = list(shapes), list(dag.get("input_tensor_ids") or [])
+        if len(names) == len(ids) and input_name in names:
+            spec = (dag.get("tensors") or {}).get(str(ids[names.index(input_name)])) or {}
+            if list(spec.get("shape") or []) == list(shapes.get(input_name) or []):
+                for i, d in enumerate(((spec.get("symbolic_shape") or {}).get("dims")) or []):
+                    if isinstance(d, dict) and d.get("type") == "symbol":
+                        dims.add(i)
+        return dims
+
     def apply_shape_transforms(
         self,
         comp_name: str,
@@ -561,7 +593,19 @@ class InputSynthesizer:
                     actual_shape[seq_dim_idx + 1:] == expected_shape[seq_dim_idx + 1:]
                 )
 
+                # A dimension the graph binds as a SYMBOL runs at any length: the topology's
+                # `shapes` carry the trace's concrete extents, and cutting a 213-token
+                # `inputs_embeds` down to the trace's 23 handed Qwen3-Omni's thinker a
+                # prompt it never composed (2026-09-21: `shape '[-1, 1, 23]' is invalid for
+                # input of size 639`). Only a LITERAL extent — a frozen dimension, a trace
+                # defect at the source — is still cut, the only way that graph runs, and the
+                # cut is said in clear.
+                if needs_slice and seq_dim_idx in self._symbolic_dims(comp_name, input_name):
+                    continue
                 if needs_slice:
+                    print(f"[InputSynthesizer] {comp_name}.{input_name}: {actual_shape} cut to the traced "
+                          f"{expected_shape} — the graph carries this extent as a literal (a frozen dimension, "
+                          f"a trace defect to fix at the source)", flush=True)
                     # Check for Sana-style complex_human_instruction pattern
                     tokenizer_vals = self._topology.get("extracted_values", {}).get("tokenizer", {})
                     complex_human_instruction = tokenizer_vals.get("complex_human_instruction")

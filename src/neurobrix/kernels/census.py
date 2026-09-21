@@ -43,10 +43,25 @@ def key_line(tuned, key: tuple) -> Optional[str]:
     return f"{qual}::{key_repr(tuple(key))}"
 
 
+_SAID: Set[str] = set()
+
+
+def _say_once(msg: str) -> None:
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(msg, flush=True)
+
+
 def record(tuned, key: tuple) -> None:
     """Called where the launch-time key is formed (kernels/ops/_configs.run_with_notice)."""
     path = os.environ.get("NBX_KEY_RECORD")
     if not path:
+        return
+    if any(isinstance(k, int) and not isinstance(k, bool) and k < 0 for k in key):
+        # A negative extent is a shadow artefact, never a request (Wan 2.2's image encoder
+        # reached a batch of -2 after a frame expression went negative, 2026-09-21); such a key
+        # is refused here, said once, and the run's failure names the op.
+        _say_once(f"[census] key with a negative extent refused: {key_line(tuned, key)}")
         return
     line = key_line(tuned, key)
     if line is None:
@@ -87,21 +102,25 @@ def _shadow_item_value(dtype):
     """The benign scalar a value-read (`.item()`) answers in shadow mode.
 
     In a census shadow no VALUE means anything — a `.item()` is only ever a
-    guard or a token index. A guard's `all(isfinite(x))` (a bool tensor) must
-    read healthy, or a loop's step-boundary NaN gate refuses the shadow (Sana
-    at step 1, and PixArt/CogVideoX once Prism stopped mis-placing on the
-    host); an integer token id answers 0 (the same shapes run for any id —
-    UNVERIFIED where a model's eos id is 0); anything else answers 0.0.
+    guard or a token/size index. A guard's `all(isfinite(x))` (a bool tensor)
+    must read healthy, or a loop's step-boundary NaN gate refuses the shadow
+    (Sana at step 1, and PixArt/CogVideoX once Prism stopped mis-placing on the
+    host). An integer read answers ONE, not zero (main's rationale, 9ea81cd2):
+    a read that is a SIZE — a duration, a frame count, a length derived from
+    data — shaped an empty tensor at zero (Kokoro's index_select divided by
+    zero, Allegro's group norm met (0,…)), while a token id 1 runs the same
+    shapes as 0. Anything else answers 0.0.
 
     Read the dtype by NAME. NBXDtype is an IntEnum, so `str(<NBXDtype.bool_: 9>)`
     is "9", not "bool_": the previous `"bool" in str(dtype)` never matched, so
     every diffusion shadow died at step 1 on a finite gate reading falsy, and
-    every integer read answered 0.0 (float) instead of 0 (int). Same defect
-    class as the input-synth dtype read (ac10eddf)."""
+    every integer read answered 0.0 (float) instead of an int. Same defect class
+    as the input-synth dtype read (ac10eddf). This is the fallback for a value
+    with no host-born `_shadow_host`."""
     name = getattr(dtype, "name", str(dtype)).lower()
     if "bool" in name:
         return True                     # a guard's `all(isfinite(x))`: healthy
-    return 0 if "int" in name else 0.0
+    return 1 if "int" in name else 0.0
 
 
 def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
@@ -131,8 +150,13 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     return out
 
 
-def install() -> None:
-    """Turn this process into a shadow: no device memory, no launch, no value, no weight file."""
+def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = None) -> None:
+    """Turn this process into a shadow: no device memory, no launch, no value, no weight file.
+
+    `hardware` names the hardware profile the census is taken for (the run's `--hardware`);
+    `hardware_profile` is its loaded YAML (tests). One of them is how the shadow learns which
+    VENDOR profile its keys are composed under — see `_bind_target`.
+    """
     if _ACTIVE["census"]:
         return
     from neurobrix.kernels import nbx_tensor as _nt
@@ -210,16 +234,54 @@ def install() -> None:
     # replay set (none in the catalogue today; TinyLlama's eos is 2).
     T = _nt.NBXTensor
 
+    # A value born on the HOST is known to the shadow: `from_numpy` keeps the array it was
+    # given beside the tensor, and every host read answers from it. The flows compose their
+    # requests from such tensors (a frame count, a token id list, a timestep table); a shadow
+    # answering ones there built Wan 2.2's image encoder for a negative frame count
+    # (2026-09-21). Values computed on the device stay unknown and answer as below.
+    _from_numpy = T.from_numpy
+
+    def _from_numpy_shadow(arr, dtype=None):
+        t = _from_numpy(arr, dtype)
+        try:
+            import numpy as np
+            t._shadow_host = np.array(arr, copy=True)
+        except Exception:  # noqa: BLE001 — a host copy that cannot be kept is a device value
+            pass
+        return t
+    T.from_numpy = staticmethod(_from_numpy_shadow)
+
     def _item(self):
+        # A host-born value (main's `_shadow_host`) answers with its REAL value.
+        # Otherwise the benign read, keyed on the dtype NAME via
+        # `_shadow_item_value` — NBXDtype is an IntEnum, so `str(self._dtype)`
+        # is a number and `"int"/"bool" in str(...)` never matched, leaving the
+        # fallback answering 0.0 for every dtype (the CogVideoX/Sana finite-gate
+        # and integer-read failures). One door for the fallback.
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and h.size == 1:
+            v = h.reshape(-1)[0]
+            return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
         return _shadow_item_value(self._dtype)
 
     def _numpy(self):
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and tuple(h.shape) == tuple(self._shape):
+            return h
+        # Host reads of an integer tensor answer ONES for the same reason `_item` does: a
+        # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
+        # after a frame count read 0, 2026-09-21). Float reads stay zero.
         import numpy as np
+        if "int" in str(self._dtype).lower():
+            return np.ones(tuple(self._shape), dtype=np.int64)
         return np.zeros(tuple(self._shape), dtype=np.float32)
 
     def _tolist(self):
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and tuple(h.shape) == tuple(self._shape):
+            return h.tolist()
         import numpy as np
-        return np.zeros(tuple(self._shape), dtype=np.int64).tolist()
+        return np.ones(tuple(self._shape), dtype=np.int64).tolist()
 
     T.item = _item
     T.numpy = _numpy
@@ -251,6 +313,77 @@ def install() -> None:
     GE = _ge.GraphExecutor if hasattr(_ge, "GraphExecutor") else None
     if GE is not None:
         def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
+            # A CPU-staged lazy component's plan device is a staging location; the live
+            # loader resolves the GPU and persists it on the executor. The shadow does the
+            # same, or the strategy refuses "no GPU execution device" (CogVideoX on the
+            # 16 GB profile, 2026-09-21).
+            dev_s = str(getattr(self, "device", "") or "")
+            if not dev_s.startswith(("cuda", "hip", "mps")):
+                self.device = f"cuda:{_cur['dev']}"
             self._weights = _shadow_params_for(self, nbx_path, component)
             return self._weights
         GE._load_weights_triton = _load_weights_triton
+
+    # The torch-side device utilities a shared flow path reaches (orpheus: device_sync →
+    # torch.cuda.synchronize → "No CUDA GPUs are available"): no-ops in the shadow.
+    # Rebound in every module already loaded that imported them BY NAME (the memory manager,
+    # the strategies, the serving engine import before the shadow installs — the CLI's own
+    # imports run first): orpheus's cleanup reached the original through the manager's name.
+    import sys as _sys
+    from neurobrix.core import device_utils as _du
+    for _name in ("device_sync", "device_empty_cache", "device_seed"):
+        _orig = getattr(_du, _name, None)
+        if _orig is None:
+            continue
+        setattr(_du, _name, _noop)
+        for _mod in list(_sys.modules.values()):
+            if _mod is not None and getattr(_mod, _name, None) is _orig:
+                setattr(_mod, _name, _noop)
+    # A sampler draws from probabilities the shadow cannot make (zero logits, NaN after the
+    # filters — openaudio, 2026-09-21): under the shadow every draw is token 0.
+    try:
+        from neurobrix.triton.flow import dual_ar as _dual_ar
+        if hasattr(_dual_ar, "_sample_token_np"):
+            _dual_ar._sample_token_np = lambda *a, **k: 0
+    except Exception:  # noqa: BLE001 — a tree without that flow has nothing to shadow
+        pass
+
+    _bind_target(hardware, hardware_profile)
+
+
+def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
+    """The shadow's launcher target, from the hardware profile the census names.
+
+    Behind the door (`CUDA_VISIBLE_DEVICES=`) no driver answers which vendor profile applies:
+    `arch_smem_budget` resolved EMPTY, the bucket ladder went unread and every recorded key was
+    composed in the exact form (2026-09-21: the catalogue censuses recorded matmul M = 226 and
+    3 136 where the served launcher keys 240 and 3 200), the SMEM budget and the config spaces
+    unread with it. The hardware profile names its device's brand and compute capability; the
+    target is bound from them, so the keys a census records are the keys the launcher forms when
+    it serves. A profile that names no device is refused: a census under no vendor profile is a
+    census of nothing. A device whose capability is not a number (Apple: the arch is a device
+    name) keeps its own driver's answer.
+    """
+    if profile is None and hardware:
+        import yaml
+        from neurobrix.core.prism.loader import HARDWARE_DIR
+        path = HARDWARE_DIR / f"{hardware}.yml"
+        if not path.exists():
+            raise RuntimeError(f"census: the hardware profile {hardware!r} is not at {path}; the shadow cannot choose a vendor profile")
+        profile = yaml.safe_load(path.read_text())
+    if not profile:
+        return
+    devices = profile.get("devices") or []
+    if not devices:
+        raise RuntimeError("census: the hardware profile names no device; the shadow cannot choose a vendor profile")
+    dev = devices[0]
+    brand = str(dev.get("brand") or "").strip().lower()
+    cc = str(dev.get("compute_capability") or "").strip()
+    if brand not in ("nvidia", "amd") or not cc.replace(".", "").isdigit():
+        return
+    major, minor = (cc.split(".") + ["0"])[:2]
+    from triton.backends.compiler import GPUTarget
+    from neurobrix.kernels import launcher as _launcher
+    _launcher._TARGET = GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64)
+    from neurobrix.kernels.ops import _configs
+    _configs._ACTIVE_PROFILE.clear()     # a profile resolved empty before the bind is read again

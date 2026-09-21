@@ -66,7 +66,14 @@ def test_the_live_profile_answers_from_its_own_device_and_a_discrete_one_is_not(
     device declares, and the assertion is that the predicate agrees with the
     device — on either kind of machine.
     """
-    live = load_profile("default")
+    # THE MACHINE'S OWN profile through the door every run uses (autodetect), never the
+    # literal "default": on the Dell the file is default-<hash>.yml and load_profile("default")
+    # raised FileNotFoundError (2026-09-21) — a cell that reads the host must ask the host.
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    live = load_profile(get_or_create_default_profile())
+    if not live.devices:
+        import pytest
+        pytest.skip("this host has no device in its live profile (a masked or CPU-only run)")
     dev = live.devices[0]
     assert dev.has_unified_memory == _device_is_unified(f"zero3:x:{dev.index}", live), (
         "the budget's predicate must read the same answer as the device itself"
@@ -85,8 +92,8 @@ def test_zero3_offload_frees_memory_only_on_a_discrete_device():
     accounting is byte-unchanged by this, because the branch it guards is
     only ever taken where the device says it shares memory with the host.
     """
-    unified = load_profile("default")
-    unified.devices[0].unified_memory = True          # a unified device, whatever this machine is
+    unified = load_profile("a10-24g")                # a FIXTURE in the tree, the same on every machine
+    unified.devices[0].unified_memory = True          # declared unified by the test, whatever the file says
     a100 = load_profile("a100-80g")
 
     assert _device_is_unified("zero3:mps:0", unified) is True

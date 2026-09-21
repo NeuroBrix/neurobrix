@@ -3423,16 +3423,17 @@ class GraphExecutor:
                 # fallback and conflated a bound value of 0 with unbound
                 # (get() defaults to 0).
                 if sym_resolver:
-                    return sym_resolver.resolve(arg)
-                return (arg.get("trace_value", arg.get("trace", 0))
-                        + arg.get("offset", 0))
+                    return sym_resolver.resolve(arg)       # unbound: refuses by name inside
+                raise RuntimeError(
+                    f"ZERO FALLBACK: symbolic argument {arg.get('id')} met with no symbol "
+                    f"resolver; its trace value {arg.get('trace_value', arg.get('trace'))} "
+                    "is a witnessed extent, not a value")
             if atype in ("mul", "add", "sub", "floordiv", "mod", "neg", "product"):
                 if sym_resolver:
-                    try:
-                        return sym_resolver.resolve(arg)
-                    except Exception:
-                        pass
-                return arg.get("trace", arg.get("trace_value", 0))
+                    return sym_resolver.resolve(arg)       # an unbound factor refuses inside
+                raise RuntimeError(
+                    f"ZERO FALLBACK: symbolic expression of type {atype!r} met with no symbol "
+                    "resolver; its trace value is a witnessed extent, not a value")
             if atype == "list":
                 items = arg.get("value", [])
                 return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
