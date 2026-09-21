@@ -96,6 +96,13 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             norm_topk_prob=norm_topk_prob,
             blend=blend,
         )
+        if result is None and blend is None:
+            # The granite shape: softmax AFTER topk, sorted-index dispatch,
+            # stacked expert parameters. Structurally disjoint from the walk
+            # above, so it gets its own matcher (and its own refusals).
+            result = _fuse_one_granite_layer(
+                dag, ops, execution_order, tensors,
+                consumer_map, producer_map, topk_uid)
         if result is not None:
             removed_count, fused_uid, fused_op, dead_outputs_count = result
             fused_count += 1
@@ -791,15 +798,6 @@ def _trace_routing_ops(
         "aten::index_put", "aten::scatter_add", "aten::index_add",
         # V2 aggregation pattern: cat + scatter (NOT aten::add — escapes via residuals)
         "aten::cat", "aten::scatter",
-        # Stacked-expert pattern (granite-3.1, 2026-09-20): the routing weights
-        # are a softmax OVER the selected k (after topk, so reached from it),
-        # the gathered tokens are split per expert by data-dependent sizes, and
-        # each expert's fused input projection is chunked into gate and up.
-        # None of these was admitted, so the walk stopped at the split and the
-        # layer was never fused — the trace-frozen sizes then ran and failed
-        # at any other prompt length.
-        "aten::_softmax", "aten::softmax",
-        "aten::split_with_sizes", "aten::split", "aten::chunk",
         # Accumulation setup (buffers for expert outputs)
         "aten::zeros_like", "aten::zeros", "aten::full",
         "aten::empty_like", "aten::empty",
@@ -989,38 +987,6 @@ def _trace_expert_blocks(
                         if expert_id not in expert_weights:
                             expert_weights[expert_id] = {}
                         expert_weights[expert_id][proj_type] = t_input
-                        continue
-                    # STACKED EXPERTS. A vendor may keep each projection as ONE
-                    # parameter of shape [E, out, in] and read expert e through
-                    # `select(param, 0, e)` — granite-3.1's ParallelExperts
-                    # (2026-09-20): `input_linear` [E, 2I, H] holds the gate
-                    # rows then the up rows of every expert, `output_linear`
-                    # [E, H, I] the down projection. The pattern above sees no
-                    # per-expert name here and the layer fell through to the
-                    # trace-frozen split_with_sizes, which fails at any other
-                    # prompt length. The projection is told by the slab's
-                    # shape against the hidden size, never by a name.
-                    sel_uid = producer_map.get(t_input)
-                    sel = ops.get(sel_uid, {}) if sel_uid else {}
-                    if sel.get("op_type") != "aten::select":
-                        continue
-                    stacked = _get_input_tensor_id(sel, 0)
-                    if not stacked or not stacked.startswith("param::"):
-                        continue
-                    sel_args = [a for a in sel.get("attributes", {}).get("args", [])
-                                if a.get("type") == "scalar"]
-                    if len(sel_args) < 2 or int(sel_args[0].get("value", 0)) != 0:
-                        continue
-                    expert_id = int(sel_args[1]["value"])
-                    slab = (sel.get("output_shapes") or [[]])[0]
-                    if len(slab) != 2 or hidden_states_tid is None:
-                        continue
-                    hidden = (tensors.get(hidden_states_tid, {}).get("shape") or [0])[-1]
-                    proj_type = "stacked_in" if slab[1] == hidden else "down"
-                    if expert_id not in expert_weights:
-                        expert_weights[expert_id] = {}
-                    expert_weights[expert_id][proj_type] = t_input
-                    expert_weights[expert_id].setdefault("_select_uids", {})[proj_type] = sel_uid
 
         # Find hidden_states: input to an index op that gathers expert tokens
         # Must be float (not int64 routing tensors), large hidden_dim,
@@ -1038,50 +1004,6 @@ def _trace_expert_blocks(
                         and "int" not in dtype
                         and producer_map.get(input_tid) not in moe_op_uids):
                     hidden_states_tid = input_tid
-
-    # Stacked experts: the fused op wants a gate view and an up view per expert.
-    # Both are ROW SLICES of the expert's input slab — [0, I) and [I, 2I) of the
-    # `select` output — inserted into the DAG as `aten::slice` ops right after
-    # that select. A slice is a metadata op on both engines (a torch view; an
-    # NBXTensor offset + strides), so the pointer tables read each expert's
-    # data_ptr and strides exactly as they read a named expert's parameter,
-    # and the kernels do not change.
-    for expert_id, projs in list(expert_weights.items()):
-        sel_out = projs.pop("stacked_in", None)
-        sel_uids = projs.pop("_select_uids", {})
-        if sel_out is None:
-            continue
-        sel_uid = sel_uids.get("stacked_in")
-        slab = (ops.get(sel_uid, {}).get("output_shapes") or [[]])[0]
-        two_i, hidden = int(slab[0]), int(slab[1])
-        inter = two_i // 2
-        dtype = tensors.get(sel_out, {}).get("dtype", "float32")
-        for proj_type, lo, hi in (("gate", 0, inter), ("up", inter, two_i)):
-            view_uid = f"moe_view::{sel_uid}::{proj_type}"
-            view_tid = f"{view_uid}::out_0"
-            ops[view_uid] = {
-                "op_type": "aten::slice",
-                "input_tensor_ids": [sel_out],
-                "output_tensor_ids": [view_tid],
-                "input_shapes": [[two_i, hidden]],
-                "output_shapes": [[inter, hidden]],
-                "attributes": {
-                    "args": [{"type": "tensor", "tensor_id": sel_out},
-                             {"type": "scalar", "value": 0},
-                             {"type": "scalar", "value": lo},
-                             {"type": "scalar", "value": hi},
-                             {"type": "scalar", "value": 1}],
-                    "kwargs": {},
-                },
-                "parent_module": ops.get(sel_uid, {}).get("parent_module", ""),
-            }
-            tensors[view_tid] = {"shape": [inter, hidden], "dtype": dtype}
-            producer_map[view_tid] = view_uid
-            if sel_uid in execution_order:
-                execution_order.insert(execution_order.index(sel_uid) + 1, view_uid)
-            else:
-                execution_order.append(view_uid)
-            projs[proj_type] = view_tid
 
     # Build ordered weight ID lists (0..num_experts-1)
     num_experts_found = len(expert_weights)
@@ -1287,3 +1209,280 @@ def _collect_input_tids(op_data: Dict[str, Any]) -> List[str]:
         if tid not in tids:
             tids.append(tid)
     return tids
+
+
+# ============================================================================
+# GRANITE-STYLE MoE (sorted-index dispatch, stacked expert parameters)
+# ============================================================================
+#
+# granitemoe traces a DIFFERENT block than the qwen/deepseek family this
+# pass was built on (measured on granite-3.1-1b-a400m-instruct, 24 layers):
+#
+#     topk(logits[T,E], k) -> softmax OVER THE TOP-K   (softmax AFTER topk)
+#     view/sort/div/index  -> a sorted-assignment gather of hidden [T*k, H]
+#     split_with_sizes     -> per-expert pieces, sizes BAKED AT TRACE TIME
+#     E x (select(W_in[E,2F,H], e) -> t -> mm)          stacked input_linear
+#     cat -> split -> silu -> mul                       fused gate|up halves
+#     split_with_sizes -> E x (select(W_out[E,H,F], e) -> t -> mm) -> cat
+#     mul by sorted routing weights -> zeros -> index_add[T,H]
+#
+# The baked sizes are trace-time ROUTING — any other prompt routes
+# differently and the graph refuses (split_with_sizes sums mismatch). The
+# fusion below replaces the whole block with custom::moe_fused, exactly as
+# the main pass does for the qwen shape, with two extensions:
+#
+#   * gate scores: granite's softmax(topk(logits)) equals
+#     softmax(logits) -> topk -> renormalize EXACTLY (exp(x_i)/sum_top exp
+#     is invariant to the full-softmax denominator), so the rewrite inserts
+#     one aten::_softmax on the logits and sets norm_topk_prob=True — no
+#     dispatcher learns new routing math.
+#   * stacked experts: per-expert weights do not exist as graph tensors, so
+#     the fused op carries a `stacked_experts` spec and every dispatcher
+#     resolves its weight lists through `expert_weight_lists` below —
+#     zero-copy select/narrow views into the two stacked parameters.
+
+
+def expert_weight_lists(attrs: Dict[str, Any], fetch):
+    """Resolve the fused op's per-expert (gate, up, down) weight lists.
+
+    `fetch(tid)` returns the tensor for a tensor id (torch or NBXTensor —
+    both carry select/narrow views). Stacked layout (granite):
+    W_in[E, 2F, H] rows 0:F are the gate half, F:2F the up half (the traced
+    block splits the mm output at F on the last dim); W_out[E, H, F].
+    """
+    st = attrs.get("stacked_experts")
+    if not st:
+        return ([fetch(t) for t in attrs["expert_gate_weight_ids"]],
+                [fetch(t) for t in attrs["expert_up_weight_ids"]],
+                [fetch(t) for t in attrs["expert_down_weight_ids"]])
+    w_in = fetch(st["input_linear_tid"])
+    w_out = fetch(st["output_linear_tid"])
+    if w_in is None or w_out is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: stacked expert parameters "
+            f"{st['input_linear_tid']!r} / {st['output_linear_tid']!r} not "
+            "loaded — the fused op declared them as inputs; a loader that "
+            "dropped them is a defect, not a fallback.")
+    F = int(st["ffn_dim"])
+    E = int(attrs["num_experts"])
+    gate = [w_in.select(0, e).narrow(0, 0, F) for e in range(E)]
+    up = [w_in.select(0, e).narrow(0, F, F) for e in range(E)]
+    down = [w_out.select(0, e) for e in range(E)]
+    return gate, up, down
+
+
+def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
+                            consumer_map, producer_map, topk_uid):
+    """Match and fuse one granite-style MoE layer. Returns like
+    `_fuse_one_moe_layer`, or None when this is not that block — every
+    check below REFUSES to fuse rather than guessing, and an unfused
+    granite graph then fails loudly at its baked split sizes."""
+    topk_data = ops[topk_uid]
+    k = _extract_topk_k(topk_data)
+    if k is None or k <= 1:
+        return None
+    logits_tid = _get_input_tensor_id(topk_data, 0)
+    lsh = _tensor_shape(tensors, logits_tid)
+    if not lsh or len(lsh) != 2:
+        return None
+    num_experts = int(lsh[1])
+    outs = topk_data.get("output_tensor_ids", [])
+    if len(outs) < 2:
+        return None
+    scores_tid, idx_tid = outs[0], outs[1]
+
+    # The granite marker: softmax CONSUMES the topk scores. (The qwen shape
+    # has softmax BEFORE topk and is the main pass's business.)
+    sm = [u for u in consumer_map.get(scores_tid, [])
+          if ops.get(u, {}).get("op_type") == "aten::_softmax"]
+    if len(sm) != 1:
+        return None
+
+    # Forward walk from the routing outputs to the index_add join.
+    interior = {topk_uid}
+    join_uid = None
+    frontier = [scores_tid, idx_tid]
+    seen = set()
+    while frontier:
+        tid = frontier.pop()
+        if tid in seen:
+            continue
+        seen.add(tid)
+        for cu in consumer_map.get(tid, []):
+            if cu in interior:
+                continue
+            cop = ops.get(cu)
+            if cop is None:
+                return None
+            interior.add(cu)
+            if cop.get("op_type") == "aten::index_add":
+                if join_uid is not None and join_uid != cu:
+                    return None
+                join_uid = cu
+                continue
+            for ot in cop.get("output_tensor_ids", []):
+                frontier.append(ot)
+            if len(interior) > 4000:
+                return None
+    if join_uid is None:
+        return None
+
+    # Backward absorption: producers of interior inputs that are pure
+    # weight-side chains (select/t of a parameter) plus the zeros seed.
+    hidden_tid = None
+    stacked_tids = []
+    changed = True
+    while changed:
+        changed = False
+        for uid in list(interior):
+            for tid in _collect_input_tids(ops[uid]):
+                pu = producer_map.get(tid)
+                if pu is None or pu in interior:
+                    continue
+                pop_ = ops.get(pu, {})
+                pt = pop_.get("op_type")
+                if pt in ("aten::t", "aten::select", "aten::zeros"):
+                    interior.add(pu)
+                    changed = True
+                    if pt == "aten::select":
+                        src = _get_input_tensor_id(pop_, 0)
+                        if src is not None and src not in stacked_tids:
+                            stacked_tids.append(src)
+
+    # The gather that brings hidden states in names the block's activation
+    # input: an aten::index whose first input is rank-2 and NOT interior.
+    for uid in interior:
+        if ops[uid].get("op_type") != "aten::index":
+            continue
+        cand = _get_input_tensor_id(ops[uid], 0)
+        csh = _tensor_shape(tensors, cand)
+        if csh and len(csh) == 2 and producer_map.get(cand) not in interior:
+            hidden_tid = cand
+            break
+    if hidden_tid is None:
+        return None
+
+    # Two stacked parameters: [E, 2F, H] (input_linear) and [E, H, F].
+    if len(stacked_tids) != 2:
+        return None
+    sh = {t: _tensor_shape(tensors, t) for t in stacked_tids}
+    if any(v is None or len(v) != 3 or v[0] != num_experts
+           for v in sh.values()):
+        return None
+    hsh = _tensor_shape(tensors, hidden_tid)
+    H = int(hsh[1])
+    in_tid = out_tid_p = None
+    for t, v in sh.items():
+        if v[2] == H:
+            in_tid = t
+        elif v[1] == H:
+            out_tid_p = t
+    if in_tid is None or out_tid_p is None or in_tid == out_tid_p:
+        return None
+    F = int(sh[out_tid_p][2])
+    if int(sh[in_tid][1]) != 2 * F:
+        return None
+
+    # Every remaining external input must be the hidden states or the
+    # routing logits — anything else means this is not the block we know.
+    for uid in interior:
+        for tid in _collect_input_tids(ops[uid]):
+            pu = producer_map.get(tid)
+            if pu in interior:
+                continue
+            if tid in (hidden_tid, logits_tid, in_tid, out_tid_p):
+                continue
+            if pu is None and tensors.get(tid, {}).get("is_parameter"):
+                return None      # an unexpected parameter — refuse
+            if pu is not None:
+                return None      # a live external activation — refuse
+
+    join_out = ops[join_uid]["output_tensor_ids"][0]
+
+    # --- the inserted softmax (granite's exact math, see header) ---
+    sm_uid = f"moe_softmax::{topk_uid}"
+    sm_out = f"{sm_uid}::out_0"
+    ldt = tensors.get(logits_tid, {}).get("dtype", "bfloat16")
+    ops[sm_uid] = {
+        "op_uid": sm_uid, "op_type": "aten::_softmax",
+        "input_tensor_ids": [logits_tid],
+        "output_tensor_ids": [sm_out],
+        "input_shapes": [list(lsh)], "output_shapes": [list(lsh)],
+        "input_dtypes": [ldt], "output_dtypes": [ldt],
+        "device": ops[topk_uid].get("device", "cuda"),
+        "attributes": {"args": [
+            {"type": "tensor", "tensor_id": logits_tid},
+            {"type": "scalar", "value": -1},
+            {"type": "scalar", "value": False},
+        ], "kwargs": {}, "dim": -1, "half_to_float": False},
+    }
+    tensors[sm_out] = {
+        "tensor_id": sm_out, "shape": list(lsh), "dtype": ldt,
+        "device": tensors.get(logits_tid, {}).get("device", "cuda"),
+        "producer_op_uid": sm_uid, "output_index": 0,
+        "consumer_op_uids": [],
+    }
+
+    # --- the fused op, stacked spec ---
+    fused_uid = f"moe_fused::{topk_uid}"
+    syn = lambda half, e: f"{in_tid}::stacked::{half}::{e}"
+    syn_down = lambda e: f"{out_tid_p}::stacked::down::{e}"
+    gate_ids = [syn("gate", e) for e in range(num_experts)]
+    up_ids = [syn("up", e) for e in range(num_experts)]
+    down_ids = [syn_down(e) for e in range(num_experts)]
+    for e in range(num_experts):
+        tensors.setdefault(gate_ids[e], {
+            "tensor_id": gate_ids[e], "shape": [F, H], "dtype": ldt,
+            "is_parameter": True})
+        tensors.setdefault(up_ids[e], {
+            "tensor_id": up_ids[e], "shape": [F, H], "dtype": ldt,
+            "is_parameter": True})
+        tensors.setdefault(down_ids[e], {
+            "tensor_id": down_ids[e], "shape": [H, F], "dtype": ldt,
+            "is_parameter": True})
+
+    all_input_tids = [hidden_tid, sm_out, in_tid, out_tid_p]
+    fused_op = {
+        "op_uid": fused_uid,
+        "op_type": "custom::moe_fused",
+        "output_tensor_ids": [join_out],
+        "input_tensor_ids": all_input_tids,
+        "output_shapes": [tensors.get(join_out, {}).get("shape", [])],
+        "attributes": {
+            "args": [{"type": "tensor", "tensor_id": t}
+                     for t in all_input_tids],
+            "kwargs": {},
+            "gate_scores_tid": sm_out,
+            "hidden_states_tid": hidden_tid,
+            "expert_gate_weight_ids": gate_ids,
+            "expert_up_weight_ids": up_ids,
+            "expert_down_weight_ids": down_ids,
+            "stacked_experts": {"input_linear_tid": in_tid,
+                                "output_linear_tid": out_tid_p,
+                                "ffn_dim": F},
+            "top_k": k,
+            "num_experts": num_experts,
+            # The rewrite's own math: softmax(topk(x)) == renormalised topk(softmax(x)),
+            # so this op REQUIRES the renormalisation; it is owned by the rewrite, not
+            # by the registry's declaration, and the executor's patch loop leaves it.
+            "norm_topk_prob": True,
+            "routing_rewritten": "softmax_after_topk",
+        },
+    }
+    ops[fused_uid] = fused_op
+
+    # --- rebuild order: softmax + fused op sit where the topk sat ---
+    new_order = []
+    for uid in execution_order:
+        if uid == topk_uid:
+            new_order.append(sm_uid)
+            new_order.append(fused_uid)
+            continue
+        if uid in interior:
+            continue
+        new_order.append(uid)
+    removed = [u for u in interior]
+    for u in removed:
+        ops.pop(u, None)
+    execution_order[:] = new_order
+    return (len(removed), fused_uid, fused_op, 0)

@@ -1004,6 +1004,10 @@ class CompiledSequence:
         for op_data in ops_metadata.values():
             if op_data.get("op_type") == "custom::moe_fused":
                 attrs = op_data.get("attributes", {})
+                _st = (op_data.get("attributes") or {}).get("stacked_experts")
+                if _st:
+                    moe_weight_ids.add(_st["input_linear_tid"])
+                    moe_weight_ids.add(_st["output_linear_tid"])
                 for key in ("expert_gate_weight_ids", "expert_up_weight_ids", "expert_down_weight_ids"):
                     moe_weight_ids.update(attrs.get(key, []))
 
@@ -2379,24 +2383,38 @@ class CompiledSequence:
         hidden_states_slot = self._tensor_id_to_slot[hidden_states_tid]
 
         # Resolve all expert weight slots (compile-time, zero-copy lists at runtime)
+        stacked = attrs.get("stacked_experts")
         gate_w_slots = []
         up_w_slots = []
         down_w_slots = []
         all_weight_slots = []
 
-        for i in range(num_experts):
-            gs = self._tensor_id_to_slot.get(gate_weight_ids[i])
-            us = self._tensor_id_to_slot.get(up_weight_ids[i])
-            ds = self._tensor_id_to_slot.get(down_weight_ids[i])
-            if gs is None or us is None or ds is None:
+        if stacked:
+            # Stacked expert parameters (granite): two slots; the dispatch
+            # builds per-expert views from the LIVE arena tensors.
+            _in_slot = self._tensor_id_to_slot.get(stacked["input_linear_tid"])
+            _out_slot = self._tensor_id_to_slot.get(stacked["output_linear_tid"])
+            if _in_slot is None or _out_slot is None:
                 raise RuntimeError(
-                    f"[MoE Fusion] Missing weight slot for expert {i} in {op_uid}. "
-                    f"gate={gate_weight_ids[i]} up={up_weight_ids[i]} down={down_weight_ids[i]}"
-                )
-            gate_w_slots.append(gs)
-            up_w_slots.append(us)
-            down_w_slots.append(ds)
-            all_weight_slots.extend([gs, us, ds])
+                    f"[MoE Fusion] Missing stacked expert slot in {op_uid}: "
+                    f"in={stacked['input_linear_tid']} "
+                    f"out={stacked['output_linear_tid']}")
+            all_weight_slots.extend([_in_slot, _out_slot])
+        else:
+            _in_slot = _out_slot = None
+            for i in range(num_experts):
+                gs = self._tensor_id_to_slot.get(gate_weight_ids[i])
+                us = self._tensor_id_to_slot.get(up_weight_ids[i])
+                ds = self._tensor_id_to_slot.get(down_weight_ids[i])
+                if gs is None or us is None or ds is None:
+                    raise RuntimeError(
+                        f"[MoE Fusion] Missing weight slot for expert {i} in {op_uid}. "
+                        f"gate={gate_weight_ids[i]} up={up_weight_ids[i]} down={down_weight_ids[i]}"
+                    )
+                gate_w_slots.append(gs)
+                up_w_slots.append(us)
+                down_w_slots.append(ds)
+                all_weight_slots.extend([gs, us, ds])
 
         # Freeze slot lists for closure capture
         gate_w_slots = tuple(gate_w_slots)
@@ -2430,6 +2448,8 @@ class CompiledSequence:
         _gate_w_slots = gate_w_slots
         _up_w_slots = up_w_slots
         _down_w_slots = down_w_slots
+        _stacked_attrs = dict(attrs) if stacked else None
+        _in_slot_c, _out_slot_c = _in_slot, _out_slot
         _cached_w_dtype = [None]  # Mutable container for closure — resolved once on first call
 
         def moe_fused_dispatch(arena):
@@ -2473,10 +2493,23 @@ class CompiledSequence:
 
             def _dnat(_label, _tensor): pass
 
+            # Stacked expert parameters (granite): per-expert views from the
+            # live arena tensors — metadata only, rebuilt each call so a
+            # weight rebind is followed.
+            if _stacked_attrs is not None:
+                from .moe_fusion import expert_weight_lists as _ewl
+                _st = _stacked_attrs["stacked_experts"]
+                _lut = {_st["input_linear_tid"]: arena[_in_slot_c],
+                        _st["output_linear_tid"]: arena[_out_slot_c]}
+                _gv, _uv, _dv = _ewl(_stacked_attrs, _lut.get)
+            else:
+                _gv = _uv = _dv = None
+
             # DTYPE CONTRACT: resolve weight dtype once, cache for all subsequent calls
             w_dtype = _cached_w_dtype[0]
             if w_dtype is None:
-                w_dtype = arena[_gate_w_slots[0]].dtype
+                w_dtype = (_gv[0] if _gv is not None
+                           else arena[_gate_w_slots[0]]).dtype
                 _cached_w_dtype[0] = w_dtype
             if hidden_states.dtype != w_dtype:
                 hidden_states = hidden_states.to(w_dtype)
@@ -2541,9 +2574,14 @@ class CompiledSequence:
                 expert_input = hidden_states[expert_token_ids]
 
                 # SwiGLU FFN — weights accessed by slot index (O(1), zero copy)
-                gate_w = arena[_gate_w_slots[expert_id]]
-                up_w = arena[_up_w_slots[expert_id]]
-                down_w = arena[_down_w_slots[expert_id]]
+                if _gv is not None:
+                    gate_w = _gv[expert_id]
+                    up_w = _uv[expert_id]
+                    down_w = _dv[expert_id]
+                else:
+                    gate_w = arena[_gate_w_slots[expert_id]]
+                    up_w = arena[_up_w_slots[expert_id]]
+                    down_w = arena[_down_w_slots[expert_id]]
 
                 # Multi-device alignment: move ALL operands to hidden_states device
                 _dev = hidden_states.device

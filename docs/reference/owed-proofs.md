@@ -1144,3 +1144,17 @@ the tree — a targeted port of the branch's matcher and its dispatcher resoluti
 (`expert_weight_lists`) onto main, gated on granite's three modes, since the branch carries the
 Mac's whole 0.5.5 delivery and the merge is the convergence's. Script and outputs:
 `nbx/campaigns/2026_09_21_granite_fusion/` (`vendor_oracle.py`, `RESULTS.md`).
+
+**The port, judged (15:22, card 2, branch `granite-matcher-on-main`):** the branch's matcher and
+its dispatcher resolution on main's tree, main's walk handling reverted — the code request in
+the three served modes, twice each:
+
+| mode | run 1 | run 2 | wall, cold |
+|---|---|---|---|
+| sequential | e7725da9d641 | e7725da9d641 | 32.2–32.8 s |
+| compiled | e7725da9d641 | e7725da9d641 | 20.2–21.5 s |
+| triton | e7725da9d641 | e7725da9d641 | 22.1–22.9 s, peak 2 738 MB |
+
+Every mode reproduces the vendor's unfused forward byte for byte. `triton/moe.py` was not
+taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
+granite content. The Mac's matcher is now the only granite fusion in the tree.
