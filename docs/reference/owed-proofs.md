@@ -1155,6 +1155,80 @@ the three served modes, twice each:
 | compiled | e7725da9d641 | e7725da9d641 | 20.2–21.5 s |
 | triton | e7725da9d641 | e7725da9d641 | 22.1–22.9 s, peak 2 738 MB |
 
-Every mode reproduces the vendor's unfused forward byte for byte. `triton/moe.py` was not
+Every mode reproduces the vendor's unfused forward byte for byte. Landed on main as c514b87b (both remotes) after the doctrine review's two HIGHs were closed: the triton fused op now carries the two stacked slots (R30), and the rewrite owns its renormalisation flag. `triton/moe.py` was not
 taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
 granite content. The Mac's matcher is now the only granite fusion in the tree.
+
+## 2026-09-21 — a plan is budgeted at the request the flow executes (Wan2.1-T2V-1.3B, CUDA)
+
+The estimator-against-ATen gap the owner named (11.6 GiB asked, 24.1 GiB held, 19.7 GB planned)
+was not an estimator error at the shapes it was given: it was given the wrong shapes. The
+executor renders a video whose request names no resolution at the CONTAINER's own output size
+(the backbone's traced latent [1, 16, 2, 60, 104] times the VAE scale 8 = 480x832), while the
+plan's `InputConfig` carried height=None, width=None — so the profiler bound the VAE's spatial
+symbols to nothing, fell back to the trace extent (112x176), and estimated 1.74 GiB for a
+decode whose first conv input alone is 81 x 192 x 480 x 832 x 4 B = 24.84 GB (the exact
+allocation torch refused). Measured with the new default-off `NBX_PRISM_ESTIMATE_DIAG=1`:
+
+| tree | plan request | VAE symbols | VAE first-pass peak | overflow ops | strategy, planned |
+|---|---|---|---|---|---|
+| main | height=None width=None vae_scale=None | s2=None s3=None (trace) | 1.74 GiB | 0 | single_gpu, 19 683 MB — OOMed |
+| fixed | height=480 width=832 vae_scale=8 | s2=60 s3=104 | 35.07 GiB | 61 | lazy_sequential + component-level VAE tiling |
+
+**The law:** one authority for the container's own spatial answers — `core/runtime/resolution/
+container_size.py` (`vae_scale_factor`, `container_output_size`), the executor's own walk
+extracted; the executor, the CLI's plan request and the serving engine's plan request read it.
+A plan is budgeted under the request the flow executes; a request-side fact still outranks
+the container. For the Mac: the same two functions apply on Metal unchanged (they read the
+topology and the manifest, never a device); the Apple plan for any video container whose
+request names no resolution was budgeted at the VAE's trace extent until this lands.
+Branch `prism-plans-at-the-containers-resolution`; the judged run follows.
+
+## 2026-09-21 — bucketed request-dependent key dimensions: the ladder chosen by measurement (CUDA, 16 GB class)
+
+The owner's decision (15:40): request-dependent dimensions are bucketed in the launcher's
+key; the bucket selects the configuration, the kernel runs the true size with its masks.
+`tools/bucket_loss.py`: one full autotune sweep per size (the engine's own bench with the
+consensus screen, directory off, private replay cache, the hardware profile bound so the
+keys are the live ones), then each ladder evaluated offline — every size served the
+configuration certified for its bucket's TOP, loss = time(bucket config) / time(per-size
+optimum) - 1. Card 0 (Tesla V100 16 GB), 1290/877 MHz.
+
+| kernel, fixed shape | sizes swept | ladder | buckets | median loss | max loss |
+|---|---|---|---|---|---|
+| matmul M, N=K=2048 fp16→fp32 (TinyLlama's prefill key form) | 88 (M 5..4096) | exact | 88 | 0.0 % | 0.0 % |
+| | | **L16**: 16-step to 256, 32 to 1024, 128 to 8192 | 31 | 0.0 % | **0.0 %** |
+| | | powers of two (64-step 64..512) | 14 | 0.0 % | 26.9 % |
+| bmm M (=N), B=32, K=64 fp32 (the SDPA math scores) | 88 | exact | 88 | 0.0 % | 0.0 % |
+| | | L16 | 31 | 0.0 % | 10.5 % (all of it in the buckets 16, 32, 48, 64) |
+| | | **Lmix**: exact below 64, L16 above | 87 | 0.0 % | **0.0 %** |
+| | | powers of two | 14 | 0.0 % | 15.0 % |
+
+**What decides it:** above 64 the 16/32/128-step ladder costs nothing measurable on either
+kernel; below 64 the batched GEMM's optimum moves with every size (5.6–10.5 % lost inside a
+16-wide bucket), the plain GEMM's does not. The ladder retained for the branch is Lmix:
+exact under 64 (where the GEMV path already serves M ≤ 4 unkeyed), then L16. Owed: the
+convolutions' H/W at the tile lattice, and the 32 GB class. Raw sweeps:
+`nbx/campaigns/2026_09_21_bucketed_keys/*.json`.
+
+## 2026-09-21 — the upscaler "single tile" regression, checked on CUDA: it does not reproduce
+
+The Mac's report (16:43): the whole upscaler family emits one tile — real-esrgan-x2 at 448
+returns one 64 px tile upscaled to 128 instead of 896², in both modes; bisect names the merge
+78784abe. The owner's instruction: test the merge's two parents separately.
+
+| tree | mode | rc | output |
+|---|---|---|---|
+| main HEAD e3823004 | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| 9000b7aa (main's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| 6f2cd5b7 (the Mac's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+
+Card 1 (V100 16 GB), the 448² asset (`benchmarks/assets/apple_448.png`), single_gpu plan, the
+component-level tiling engine at the 64 px trace tile (49 tiles, accumulated). Not
+reproducible on CUDA on either side of the merge. The merge's 119 files touch none of
+`core/module/tiling_engine.py`, `core/runtime/executor.py`, `resolution/output_extractor.py`
+or `core/prism/solver.py`; the word "fold" names nothing in the engine. What the CUDA side
+needs from the Mac to go further: the exact SHA it measured, its plan's strategy and
+`[OpTiling]` lines for that run, and whether a tree without the merge's Metal-side files
+(`metal_backend.py`, `triton_ext_driver.py`, `launcher.py`) still shows it — the tiled path
+those touch is Metal's. Script and logs: `nbx/campaigns/2026_09_21_upscaler_regression/`.
