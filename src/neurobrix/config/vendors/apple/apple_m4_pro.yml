@@ -384,3 +384,28 @@ metal_backend: triton_ext
 # swin2SR's keys with room; the oracle's fp64 reference roughly doubles the
 # operand bytes, which this machine has (12.2 GB free when measured).
 autotune_screen_max_bytes: 1073741824
+
+# The tile-extent lattice — the unit a rung's computed tile is snapped DOWN to
+# before it reaches the conv kernels. An unaligned extent runs the kernel
+# masked at every scale (partial blocks) and is ~3x slower; snapping to the
+# lattice loses a little tile area and buys the cliff. Measured on Metal the
+# way volta.yml measured it for the V100, with a FIXED conv config
+# (NBX_DISABLE_AUTOTUNE=1) so alignment is the only variable — conv 64->64
+# 3x3 pad1 bf16, two tile bands, ms per call:
+#
+#   band ~457 (rung 8192):  457(odd) 20.9 · 456(÷8) 21.3 · 448(÷16) 7.9 ·
+#                           432(÷16) 7.3 · 400(÷16) 6.3 · 416(÷32) 7.7 ·
+#                           384(÷32) 6.6   -> ÷16 is the plateau, ÷8 is not
+#   band ~200:              201(odd) 4.6 · 200(÷8) 4.5 · 208(÷16) 2.08 ·
+#                           192(÷16) 1.88 · 176(÷16) 1.62 · 224(÷32) 2.35 ·
+#                           192(÷32) 1.82  -> same plateau, rung-independent
+#
+# The unit is 16, NOT 32: multiples of 16 that are not multiples of 32 sit on
+# the fast plateau, and ÷32 buys nothing per unit area (192 measured 1.88 as
+# ÷16 and 1.82 as ÷32 — within the drift; 448 repeated 7.86/8.09, <3%). Metal
+# has a 32-wide SIMD and its answer is still 16, so this could not be inferred
+# from the warp/SIMD width — it is the conv kernel's inner blocking, measured.
+# Same unit as Volta; a coincidence of value, not of derivation. Snapping
+# 457->448 spends 3.9% of the tile's area for the 2.7x cliff.
+tiling:
+  extent_lattice: 16
