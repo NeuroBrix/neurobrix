@@ -4,10 +4,14 @@
 download-and-run loop this ledger began under):** three stages, three
 columns, never one.
 
-- **CENSUS** — the keys the catalogue demands for this profile, enumerated
-  by passing the containers' GRAPHS (never weights) through the engine's own
-  dispatch. Until the census tool lands on main, today's census is the
-  runtime replay cache, and every census figure below says which.
+- **CENSUS** — the keys the catalogue demands for this profile, kernel x
+  BUCKETED-shape x dtype, enumerated by passing the containers' GRAPHS (never
+  weights, never model runs) through the engine's dispatch in shadow mode
+  (`NBX_CENSUS=1`), from the SHARED CACHE (`Super-NeuroBrix-Cache`, canonical),
+  never the hub. The census tool is on main (`tools/certified_census.py`);
+  each model's keys are tagged with its graph_sha. NOTE: the launcher key is
+  still EXACT on main — the bucketed key is on the Dell's branch; request-
+  dependent keys are held until it lands.
 - **CERTIFIED** — those keys swept and oracle-proven on synthetic tensors
   under the stability witness (which already refuses a perturbed sweep, so
   the VM may run).
