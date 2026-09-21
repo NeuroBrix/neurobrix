@@ -79,3 +79,25 @@ Wan containers above, Allegro-TI2V, CogVideoX-5b-I2V, SANA-Video-2B-720p, PixArt
 PixArt-Sigma-XL-1024 (`fp16_conv_cascade_safe`), HAT-L-x4, HAT-S-x4, SwinIR-Classical-x2 and -x4
 (`requires_fp32_compute`). Each is a rebuild (no re-trace) and a re-upload under the same slug.
 Until then every one of them runs at its author's settings only in the author's checkout.
+
+### Sana-1600M-MultiLing does not reproduce the vendor at 1024² (2026-09-21)
+
+**Measured.** The retrace gate's vendor arm (the vendor pipeline rendered at the exact prompt,
+seed, steps and guidance) against both containers at 1024×1024, sequential oracle: the hub's
+container (traced 2026-06-05) at **17.66 dB** (SSIM 0.800), today's retrace at **17.25 dB**
+(SSIM 0.783). Neither reproduces the vendor; the two containers agree with each other no better
+(23.7 dB, 75 % of pixels off by more than 8). PixArt-Sigma under the same arm the same morning:
+old 13.09 dB, retrace 30.03 dB — so the arm, the seed protocol and the request are sound; the
+divergence is Sana's, predates the retrace and survives it.
+
+**What it means.** The public container renders a different picture from the vendor's for a
+user's prompt, with no warning. The gate refused the retrace's upload (an artefact that fails the
+gate is a chantier, not an upload); the hub keeps the June object until a judged replacement
+exists. The 09-09 vendor-correctness cell read "image agrees" from Sana at another request — the
+disagreement is at this one (1024², the family protocol's prompt, seed 42), so the next step is
+the drift walk on THIS request: the compiled oracle against the vendor per stage boundary (text
+encoder → transformer step 0 → decoder), the first over-bound op classified by origin
+(kernel / policy / discrete / carrier / scale), never localised from the layout.
+
+**Release consequence.** 0.5.5 does not ship a Sana-MultiLing container as correct; the hub entry
+is marked or unlisted until then (see the session record of 2026-09-21 for what the hub offers).
