@@ -109,7 +109,13 @@ def scrub_provenance(node):
     return node
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
-REGISTRY = "https://neurobrix.es"
+# The hub's entry point, read through the door every chain on this rack declares (nbx/env.sh:
+# NEUROBRIX_REGISTRY=http://10.0.0.39:3000). The public name is Cloudflare's shared address, which
+# Spanish ISPs block on LaLiga match days under a court order — 2026-09-20 was one: three gated
+# uploads read "503 SlowDownWrite" from the public name while the store at 10.0.0.36 held write
+# quorum all evening. A publish path that dies every football weekend is a defect; this constant
+# was it.
+REGISTRY = os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
 
 # The precision policy BOTH arms of the gate run under. A retraced graph carries a new
 # signature, so the calibration record embedded in the container (measured on the old graph)

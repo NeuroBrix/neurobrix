@@ -3544,6 +3544,16 @@ class PrismSolver:
         tile_size = int(math.sqrt(latent_h * latent_w * frac))
         if window_alignment > 1:
             tile_size = (tile_size // window_alignment) * window_alignment
+        # MEASUREMENT LEVER (2026-09-21, the ladder's other half): the extent handed to the
+        # kernels is snapped DOWN to a multiple of NBX_PRISM_TILE_ALIGN when set. The ladder
+        # measured a 25x wall-clock cliff between tiles of 560 (multiples of 16 at every
+        # scale) and 457 (odd at every scale) under static kernel configs; alignment buys
+        # back what rounding the memory reading bought in determinism. The unit is chosen
+        # by measurement (unused tile area against the cliff) and then becomes a profile
+        # value, not this env. Diagnostic only; unset = the extent as computed.
+        _align = int(os.environ.get("NBX_PRISM_TILE_ALIGN", "0") or 0)
+        if _align > 1:
+            tile_size = max(_align, (tile_size // _align) * _align)
         tile_size = max(window_alignment if window_alignment > 1 else 8,
                         min(tile_size, latent_h, latent_w))
 

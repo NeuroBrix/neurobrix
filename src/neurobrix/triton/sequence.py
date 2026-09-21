@@ -2988,6 +2988,16 @@ class TritonSequence:
         _w.set_compute_dtype(self._compute_dtype)
         _w.set_activations_fp16_safe(self._activations_fp16_safe)
         _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
+        # RETENTION INSTRUMENT (NBX_RUN_LIVE_DIAG=1, 2026-09-21): what this device holds at the
+        # entry and the exit of every invocation — live NBX bytes and bytes parked in the pool —
+        # so a per-invocation growth at constant shape (the Apple x8 retention object: +410 MB
+        # live, +332 MB parked per tile) is read as a series, not inferred from an OOM.
+        _live_diag = os.environ.get("NBX_RUN_LIVE_DIAG", "0") == "1"
+        if _live_diag:
+            self._run_live_n = getattr(self, "_run_live_n", 0) + 1
+            print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} entry "
+                  f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
+                  f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
         try:
             # Phase 4a frozen-plan replay (opt-in NBX_TRITON_REPLAY=1):
             # 1st run per bucket = warmup (autotune fires), 2nd =
@@ -3024,6 +3034,10 @@ class TritonSequence:
         finally:
             _w.set_compute_dtype(_prev_dt)
             _w.set_activations_fp16_safe(_prev_safe)
+            if _live_diag:
+                print(f"[NBX_RUN_LIVE] {self.dag.get('component_name')} run#{self._run_live_n} exit  "
+                      f"live={DeviceAllocator._cuda_live_bytes.get(self.device_idx, 0) / 2**20:.0f}MB "
+                      f"pool={DeviceAllocator._pool_cached_bytes.get(self.device_idx, 0) / 2**20:.0f}MB", flush=True)
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on

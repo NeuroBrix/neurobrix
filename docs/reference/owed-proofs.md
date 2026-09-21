@@ -1000,3 +1000,37 @@ without the flag. Fixed in main 6fb35c3b: the build writes the six flags into th
 extracted values, the container records them when opened, the reader's order is env override →
 registry → container → default (`docs/reference/release-decisions.md` lists the thirteen hub
 containers that need a rebuild and a re-upload).
+
+## 2026-09-21 — the Apple x8 retention object, the CUDA arm
+
+**The object as named (the Mac, 2026-09-20):** `TritonSequence.run()` retains 410 MB live and
+parks 332 MB in the pool per invocation at constant tile shape, `skip_kills` false and kills
+firing — the class its own docstring warns about. Real-esrgan-x8 at 1024 px is owed on it.
+
+**The instrument, landed for both backends:** `NBX_RUN_LIVE_DIAG=1` prints, at the entry and the
+exit of every `run()`, the device's driver-held bytes (`_cuda_live_bytes`, which counts
+pool-parked blocks until they are returned to the driver) and the pool-parked bytes; live
+proper is their difference. A series, not an inference from an OOM.
+
+**CUDA, the same request (x8 at 1024², rung 8192 by a 20 GB neighbour, tile 448, nine
+invocations at one shape, static kernel configs):**
+
+| arm | run#1 entry → exit | run#2 entry → exit | runs #3–#9 (each) | peak driver |
+|---|---|---|---|---|
+| pool on | 45 → 9 968 MB (9 849 parked) | 10 097 → 10 489 (9 777 parked) | 10 489 → 10 489, parked 9 777 → 9 703 | 10 489 MB |
+| pool off | 45 → 119 MB | 631 → 704 MB | 704 → 778 MB, back to 704 at the next entry | 6 976 MB |
+
+So on CUDA nothing is retained per invocation: with the pool off, every invocation from the
+third on enters at 704 MB and exits at 778 MB, and the 74 MB it takes are released before the
+next entry. The one step that exists — +512 MB between the exit of the first invocation and
+the entry of the second — is taken OUTSIDE `run()`, by the caller between tiles (the tiling
+engine's output canvas: 8192² × 3 channels in fp16 is 402 MB), once. With the pool on the same
+series reads as a constant 9.7–9.8 GB parked (peak 10 053 MB, three flushes, 8.2 GB of
+smallest-fit slack over 12 544 exact and 420 fit hits) and no growth either.
+
+**What that says for Apple.** The growth the Mac measured is not in `run()`'s CUDA path at
+this request; the same instrument on Apple, at the same request, will show whether the step
+is per invocation there (then it is the Metal driver's allocator or the pool's Metal path —
+`kernels/metal_device.py`, the pool's free-list on that backend) or between invocations (then
+the caller, as here, and the number should be one canvas, not one per tile). The series is
+the handover; the 410/332 figures need their entry/exit pairs before a kernel is named.
