@@ -208,13 +208,22 @@ class AudioLLMEngine(FlowHandler):
             # lookup across devices (calibration campaign, 2026-09-05).
             prefix_tensor = torch.tensor([prefix_ids], dtype=torch.long, device=embed_weight.device)
             with torch.no_grad():
-                prefix_embeds = torch.nn.functional.embedding(prefix_tensor, embed_weight).to(dtype=dtype)
+                # Look up where the table lives, then JOIN the context where
+                # the context lives: the lookup's result inherits the table's
+                # device, and torch.cat refuses mixed devices — measured on
+                # Voxtral-Mini-3B (mps), "Passed CPU tensor to MPS op",
+                # 2026-09-21. The .to is a no-op when the devices agree.
+                prefix_embeds = torch.nn.functional.embedding(
+                    prefix_tensor, embed_weight).to(
+                        device=audio_embeds.device, dtype=dtype)
             parts.append(prefix_embeds)
         parts.append(audio_embeds)
         if suffix_ids:
             suffix_tensor = torch.tensor([suffix_ids], dtype=torch.long, device=embed_weight.device)
             with torch.no_grad():
-                suffix_embeds = torch.nn.functional.embedding(suffix_tensor, embed_weight).to(dtype=dtype)
+                suffix_embeds = torch.nn.functional.embedding(
+                    suffix_tensor, embed_weight).to(
+                        device=audio_embeds.device, dtype=dtype)
             parts.append(suffix_embeds)
 
         context_embeds = torch.cat(parts, dim=1) if len(parts) > 1 else audio_embeds
