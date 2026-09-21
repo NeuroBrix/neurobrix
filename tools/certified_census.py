@@ -107,6 +107,26 @@ def frozen_dims(model: str) -> list:
     return rows
 
 
+def _profile_backend(hardware: str) -> str:
+    """The backend a hardware profile is for, from its architecture — so the
+    census names the backend without opening a device. apple_silicon -> metal;
+    otherwise the vendor runtime's own probe names it (cuda/hip)."""
+    import yaml
+    for base in (REPO / "src/neurobrix/config/hardware", REPO / "config/hardware"):
+        f = base / f"{hardware}.yml"
+        if f.exists():
+            doc = yaml.safe_load(f.read_text()) or {}
+            # vendor is the top-level, reliable field (the top-level
+            # `architecture` is the CPU's — arm64 — while the GPU's
+            # apple_silicon sits nested under the device).
+            vendor = str(doc.get("vendor", "")).lower()
+            arch = str(doc.get("architecture", "")).lower()
+            blob = (vendor + " " + arch + " " + str(doc)).lower()
+            return "metal" if ("apple" in vendor or "metal" in blob
+                               or "apple_silicon" in blob) else ""
+    return ""
+
+
 def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, timeout: int, log_dir: Path) -> dict:
     """One shadow run; returns its keys and its fate. A failure is reported, never folded."""
     rec = log_dir / f"{model}.{mode}.keys"
@@ -116,6 +136,13 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": str(n_dev),
                 "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src")})
+    # A Metal profile has no `CUDA_VISIBLE_DEVICES` to hide its one card, and
+    # the backend name cannot come from a device the census refuses to open.
+    # Name it from the profile so keys form as metal without a probe; the
+    # device stays unreachable (metal_device.runtime refuses under NBX_CENSUS).
+    _bk = _profile_backend(hardware)
+    if _bk == "metal":
+        env["NBX_GPU_BACKEND"] = "metal"
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *request, *MODES[mode], "--hardware", hardware]
     t0 = time.time()
     with open(log, "w") as fh:
