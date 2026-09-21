@@ -156,13 +156,31 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
 
 
 def directory_idents(vendor_profile: str) -> set:
-    """Every ident the certified directory holds for `<vendor>/<profile>` — the coverage the
-    census is measured against."""
+    """Every ident the certified directory SERVES for `<vendor>/<profile>` — read through the
+    engine's own loader and lookup, never the raw files: the loader drops an entry whose proof
+    names no card (register 56 — a legacy proof serves no memory class until re-proven), and a
+    coverage counted from the raw files read 6 served for a model the directory holds nothing
+    for (TinyLlama, 2026-09-21). `any_class=True`: served on SOME memory class of the profile."""
+    from neurobrix.kernels import autotune_certified as C
+    from neurobrix.triton.autotune_cache import _autotuners
     out = set()
     root = REPO / "src" / "neurobrix" / "config" / "autotune" / vendor_profile
+    tuners = {qual: at for qual, at in _autotuners()}
     for p in root.glob("*.json"):
         doc = json.loads(p.read_text())
-        out.update(f"{doc.get('kernel')}::{k}" for k in (doc.get("entries") or {}))
+        qual = doc.get("kernel")
+        at = tuners.get(qual)
+        if at is None:
+            continue
+        for ktext in (doc.get("entries") or {}):
+            key = C.parse_key(ktext)
+            if key is None:
+                continue
+            try:
+                if C.lookup(qual, at, key, any_class=True) is not None:
+                    out.add(f"{qual}::{ktext}")
+            except Exception:
+                continue
     return out
 
 
