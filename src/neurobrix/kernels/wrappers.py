@@ -11,6 +11,9 @@ Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 
 import os
 import triton
+# The bucket of a request-dependent key dimension (kernels/autotune_bucket.py): the key
+# carries the bucket's top, the kernel runs the true size (the owner's decision, 2026-09-21).
+from neurobrix.kernels.autotune_bucket import bucket_of as _bucket_of
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
@@ -2284,7 +2287,7 @@ def mm(a, b, _epilogue: int = 0) :
     _set_device(a)
     _autotune_headroom_guard(matmul_kernel[grid])(
         a, b, c,
-        M, N, K,
+        M, N, K, _bucket_of("M", M),
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
@@ -2395,7 +2398,7 @@ def bmm(a, b, allow_strided_b: bool = False) :
         _autotune_headroom_guard(baddbmm_kernel[grid])(
             a_z, b_z, c_z, c_z,
             1.0, 0.0,
-            M, N, K,
+            M, N, K, _bucket_of("M", M), _bucket_of("N", N),
             a.stride(0), a.stride(1), a.stride(2),
             b.stride(0), b.stride(1), b.stride(2),
             c.stride(0), c.stride(1), c.stride(2),
@@ -2646,7 +2649,7 @@ def addmm(bias, a, b,
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     _autotune_headroom_guard(addmm_kernel[grid])(
         a, b, bias, c,
-        M, N, K,
+        M, N, K, _bucket_of("M", M),
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
@@ -4146,6 +4149,7 @@ def conv2d_wrapper(
         x_c, w_c, output,
         N, in_c, in_h, in_w,
         out_c, out_h, out_w,
+        _bucket_of("batch", N), _bucket_of("height", in_h), _bucket_of("width", in_w), _bucket_of("height", out_h), _bucket_of("width", out_w),
         *x_c.stride(), *w_c.stride(), *output.stride(),
         kernel_height=kh, kernel_width=kw,
         stride_height=stride_h, stride_width=stride_w,
@@ -4184,6 +4188,7 @@ def _depthwise_conv2d_dispatch(
         x_c, w_c, output,
         N, C,
         IH, IW, out_h, out_w,
+        _bucket_of("height", IH), _bucket_of("width", IW), _bucket_of("height", out_h), _bucket_of("width", out_w),
         *x_c.stride(), *w_c.stride()[:1], *w_c.stride()[2:],
         *output.stride(),
         kh=kh, kw=kw,
@@ -5075,7 +5080,7 @@ def baddbmm_wrapper(
         _autotune_headroom_guard(baddbmm_kernel[grid])(
             b1_z, b2_z, out_z, bias_z,
             alpha, beta,
-            M, N, K,
+            M, N, K, _bucket_of("M", M), _bucket_of("N", N),
             batch1.stride(0), batch1.stride(1), batch1.stride(2),
             batch2.stride(0), batch2.stride(1), batch2.stride(2),
             output.stride(0), output.stride(1), output.stride(2),
