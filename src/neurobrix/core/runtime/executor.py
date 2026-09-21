@@ -1541,88 +1541,19 @@ class RuntimeExecutor:
         return height, width
 
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
-        """(height, width) in pixels from the container: the last two extents
-        of a traced LATENT input times the VAE scale.
-
-        Two things the container already declares were not being read, and two
-        video models died for it on 2026-09-11 (`Key 'latent_height' not found`):
-
-        * **the flow type was a second gate, and it refused a legitimate case.**
-          The real discriminator is the SHAPE test below — rank 4 or 5 with two
-          integer trailing extents — which no text or audio component satisfies
-          (an LLM's `hidden_states` is rank 3). The flow check sat in front of it
-          and refused `Wan2.2-I2V-A14B`, whose flow is `static_graph` and whose
-          backbone carries `hidden_states [1, 36, 5, 10, 12]`. It is gone; the
-          shape test is what decides, and it is narrower.
-        * **the VAE was not consulted.** `Open-Sora-v2`'s backbone takes a
-          FLATTENED latent (`img [1, 60, 64]`, rank 3) and cannot answer — but
-          its VAE declares `z [1, 16, 9, 14, 22]`, which IS the latent, in the
-          same container. Reading it is reading the container, not inventing
-          anything: a decoder's input extents are latent extents by definition.
-
-        Returns None for a container that declares no spatial latent anywhere, or
-        whose VAE scale cannot be determined. It never guesses a resolution — a
-        family constant was the last resort here and was removed for cause
-        (video 512², colour bands on every arm, 2026-09-05).
-        """
-        scale = self._get_vae_scale_factor(comp_configs)
-        if not scale:
-            return None
-        components = self.pkg.topology.get("components", {}) or {}
-        # The backbone first: its latent is the one the request scales.
-        # The VAE second: its input is the same latent, and it answers when a
-        # backbone consumes a flattened one.
-        for name, keys in (("transformer", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
-                           ("unet", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
-                           ("dit", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
-                           ("transformer_2", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
-                           ("vae", ("z", "latents", "sample", "hidden_states")),
-                           ("vae_decoder", ("z", "latents", "sample", "hidden_states"))):
-            shapes = (components.get(name) or {}).get("shapes") or {}
-            for key in keys:
-                shape = shapes.get(key)
-                if isinstance(shape, (list, tuple)) and len(shape) in (4, 5) and all(isinstance(v, int) for v in shape[-2:]):
-                    h, w = int(shape[-2]), int(shape[-1])
-                    if h > 0 and w > 0:
-                        return h * int(scale), w * int(scale)
-        return None
+        """(height, width) in pixels from the container — `resolution.container_size`,
+        the one authority the plan reads too (2026-09-21: the flow rendered Wan T2V at
+        480x832 from the backbone's traced latent while the plan was budgeted at the
+        VAE's trace extent; both now read the same module). Never guesses."""
+        from .resolution.container_size import container_output_size
+        return container_output_size(self.pkg.manifest, self.pkg.defaults,
+                                     self.pkg.topology.get("components", {}) or {}, comp_configs)
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
-        """Determine VAE spatial compression factor.
-
-        The container's own declaration first, in both the names it uses. Video
-        containers carry `spatial_compression_ratio` where image ones carry
-        `vae_scale_factor` — the same quantity under two vendor spellings — and
-        reading only the second sent Open-Sora-v2 (which declares
-        `spatial_compression_ratio: 8` and nothing else) past its own answer and
-        into the guess below. The same shape as the `latent_frames` defect above:
-        the container held the value and the code did not look.
-        """
-        manifest_scale = self.pkg.manifest.get("vae_scale_factor")
-        if manifest_scale is not None:
-            return int(manifest_scale)
-
-        for key in ("vae_scale_factor", "spatial_compression_ratio"):
-            declared = self.pkg.defaults.get(key)
-            if declared:
-                return int(declared)
-
-        transformer_data = comp_configs.get("transformer", {})
-        transformer_attrs = transformer_data.get("attributes", {})
-        trace_latent_extent = transformer_attrs.get("state_extent_0")
-
-        if trace_latent_extent:
-            trace_pixel_res = self.pkg.manifest.get("trace_resolution")
-            if trace_pixel_res:
-                scale = int(trace_pixel_res) // int(trace_latent_extent)
-                return scale
-
-            state_channels = transformer_attrs.get("state_channels", 4)
-            if state_channels >= 32:
-                return 32
-            return 8
-
-        return None
+        """The VAE's spatial compression — `resolution.container_size.vae_scale_factor`,
+        the container's declaration in both its spellings, then the trace."""
+        from .resolution.container_size import vae_scale_factor
+        return vae_scale_factor(self.pkg.manifest, self.pkg.defaults, comp_configs)
 
     def _replace_with_state_variable(self, comp_name: str, comp_inputs: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -608,6 +608,23 @@ class Zero3Strategy(ExecutionStrategy):
                 transfer_stream = 0
         else:
             import torch
+            # The torch path's machinery IS CUDA: streams, events,
+            # set_device, memory stats — none of it exists for mps and the
+            # first prefetch dies at torch.cuda.set_device (Sana 4Kpx
+            # compiled, 2026-09-21). The solver no longer selects zero3 on
+            # a unified device (Strategy 3 consults _device_is_unified),
+            # so reaching this on a non-CUDA torch device means a stale
+            # plan or a forced strategy — refuse by name rather than
+            # AttributeError three calls later. The triton branch above is
+            # untouched: its primitives are DeviceAllocator-dispatched and
+            # verified on Metal.
+            if not self.exec_device.startswith("cuda"):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: zero3's torch path is CUDA machinery "
+                    f"(streams/events/set_device) and cannot run on "
+                    f"{self.exec_device!r}. On a unified device zero3 frees "
+                    f"nothing (measured 2026-09-09) and the solver refuses "
+                    f"to select it — re-plan rather than forcing it.")
             try:
                 transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
             except Exception:

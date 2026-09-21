@@ -2080,6 +2080,25 @@ class PrismSolver:
                             peak_op_uid = ap.peak_op_uid
                             peak_step = ap.peak_step
                     activation_profiled = True
+                    if os.environ.get("NBX_PRISM_ESTIMATE_DIAG") == "1":
+                        # The estimate as the plan consults it, said per component: the
+                        # symbol map the profiler bound for this request, the first-pass
+                        # peak and its op, every overflow op, and the figure retained
+                        # after the tiling-aware pass. The instrument for an
+                        # estimator-against-ATen gap (Wan T2V, 2026-09-21: 19.7 GB
+                        # planned, 24.8 GB asked at one conv). Default off, one env read.
+                        try:
+                            _smap = profiler.build_symbol_map(input_config, placement_floor=True)
+                        except Exception as _e:   # diagnostic only: say it, never hide it
+                            _smap = f"<build_symbol_map failed: {type(_e).__name__}: {_e}>"
+                        print(f"[PrismEstimate] {comp.name}: request={input_config} symbols={_smap} dtype_bytes={dtype_bytes} "
+                              f"weights={weight_bytes / 2**20:.0f} MB budget={smallest_gpu_bytes / 2**20:.0f} MB", flush=True)
+                        print(f"[PrismEstimate] {comp.name}: first pass peak={ap.peak_bytes / 2**30:.2f} GiB "
+                              f"at {ap.peak_op_uid} (step {ap.peak_step}); overflow ops={len(ap.overflow_ops or [])}; "
+                              f"retained activation={activation_bytes / 2**30:.2f} GiB at {peak_op_uid}", flush=True)
+                        for _ov in (ap.overflow_ops or [])[:12]:
+                            print(f"[PrismEstimate]   overflow {_ov[0]} ({_ov[1]}) out={_ov[2] / 2**30:.2f} GiB "
+                                  f"ws={_ov[3] / 2**30:.2f} GiB", flush=True)
                 except MissingRuntimeValue:
                     raise
                 except Exception as exc:
@@ -3902,8 +3921,16 @@ class PrismSolver:
 
         # Strategy 3: zero3 — CPU offload of weights, GPU for compute only.
         # Works only when activations fit on the largest GPU (with the
-        # same driver-overhead reserve as Strategy 1).
-        if mem.activation_mb <= effective_capacity * 0.92:
+        # same driver-overhead reserve as Strategy 1) — AND only where the
+        # offload frees anything: on a unified device host and device are
+        # the same bytes, the budget already counts the weights
+        # (_device_is_unified, 2026-09-09), and SELECTING zero3 there is a
+        # plan accepted under one memory model and executed under another —
+        # it then dies in zero3's CUDA machinery before an op runs
+        # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
+        # Selection consults the same device door the budget does.
+        if (mem.activation_mb <= effective_capacity * 0.92
+                and not _device_is_unified(largest.device_string, profile)):
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
 
