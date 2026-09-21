@@ -59,6 +59,7 @@ def main(argv=None):
     ap.add_argument("--cards", default="0,1,2,3")
     ap.add_argument("--fit-gb", type=float, default=14.0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--only-phase", type=int, choices=(1, 2), default=0, help="run one phase only (the other rig half may be busy)")
     ap.add_argument("rest", nargs="*", help="extra pytest arguments after --")
     a = ap.parse_args(argv)
     cards = [c.strip() for c in a.cards.split(",") if c.strip()]
@@ -73,7 +74,7 @@ def main(argv=None):
         return 0
     base = [sys.executable, "-m", "pytest", "tests/regression/test_all_models.py", "-q", "-p", "no:cacheprovider", "-rf", "-rs"] + a.rest
     procs = []
-    for c in cards:
+    for c in (cards if a.only_phase != 2 else []):
         if not plan[c]:
             continue
         env = {**os.environ, "CUDA_VISIBLE_DEVICES": c}
@@ -82,7 +83,7 @@ def main(argv=None):
     rcs = {c: p.wait() for c, p in procs}
     print("phase 1 rc per card:", rcs)
     rc2 = 0
-    if whole:
+    if whole and a.only_phase != 1:
         env = {**os.environ}
         env.pop("CUDA_VISIBLE_DEVICES", None)
         rc2 = subprocess.call(base + ["-k", _k_expr(whole)], env=env, cwd=str(REPO))
