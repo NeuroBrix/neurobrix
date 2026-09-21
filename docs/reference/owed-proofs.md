@@ -1067,3 +1067,32 @@ measurement), a four-cell file, and the model-level green (no override: 39.7 s a
 rung). **Owed from Apple:** the same table on M4 Pro — the lattice there is the Metal conv
 kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at one rung and
 write the unit into `apple_m4_pro.yml` beside its numbers.
+
+## 2026-09-21 — zero3 selection on unified memory (cafaf799): the CUDA inertness arm
+
+**The change.** Strategy 3 no longer selects `zero3:` where `_device_is_unified` says the
+offload frees nothing; zero3's torch path refuses by name on a non-CUDA device.
+
+**Inert on this rack, three ways.** (1) The door: `_device_is_unified("cuda:0" / "cuda:1",
+<this rack's own profile>)` answers False, so the new condition cannot fire on a discrete card.
+(2) The cells: from cafaf799 frozen in a worktree, every prism cell main carries passes here
+(232); the discrete arm of the Mac's own cell passes. (3) The catalogue: a Prism plan census
+of the 59 installed containers on this rack's four-card profile, main against cafaf799 — 56
+planned, 3 refused identically ("cannot run on this machine"), 0 plans differ; strategies
+single_gpu 35, lazy_sequential 9, block_scatter 6, pipeline_parallel 2, weight_sharding 2; no
+zero3 placement on a four-card rack at all, so the branch it guards is not even reached.
+(The census recorded strategies; the per-component device list came back empty from my
+reader and is not claimed.)
+
+**What the branch owes its own cells.** Three of them called `load_profile("default")` and
+read the machine that wrote them: on the Dell the file is `default-<hash>.yml` and they raised
+FileNotFoundError. Fixed on branch `zero3-cells-any-machine` (57f1a739, on both remotes, from
+cafaf799): the live cell asks the autodetect door and skips on a host without a device, the two
+that declare a unified device do so on a fixture the tree carries (`a10-24g`). Measured here:
+5 passed with a card, 2 passed 1 skipped masked. Merge it with the commit.
+
+**The granite MoE cell** (`test_the_granite_moe_block_is_fused_not_replayed`) fails on the
+Dell for a different reason: it asserts the branch's rewrite (no `split_with_sizes` survives)
+against a container that main's fusion (9f5e0f5b: the stacked-expert views, the traced splits
+kept) runs — and on the merged tree main's walk matches granite first, so the branch's matcher
+is never reached on CUDA. The A/B is below.
