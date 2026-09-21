@@ -156,7 +156,21 @@ def _expr_symbols_in_input(expr, in_sym_dims: list) -> bool:
 # ARGUMENT TYPES (compile-time only, never seen at runtime)
 # ============================================================================
 
+def _refuse_unbound(resolver, symbol_id, trace_value) -> None:
+    """ZERO FALLBACK for a symbol the runtime did not bind (the ATen compiled path)."""
+    from neurobrix.core.runtime.shape_resolver import ShapeResolutionError
+    info = {}
+    if resolver is not None:
+        info = getattr(resolver, "_symbols", {}).get(symbol_id) or {}
+    bound = sorted(resolver.get_bound_symbols()) if resolver is not None else "no resolver"
+    raise ShapeResolutionError(
+        f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
+        f"{info.get('source')}) is not bound at runtime; its trace value {trace_value} is a "
+        f"witnessed extent, not a value. Bound: {bound}.")
+
+
 @dataclass(frozen=True)
+
 class TensorSlot:
     """Reference to a tensor in the memory arena by index."""
     slot: int
@@ -2787,11 +2801,14 @@ class CompiledSequence:
             Closure that resolves symbol at runtime
         """
         def resolve_symbol(_arena: TensorArena) -> int:
-            if self._shape_resolver is not None:
-                runtime_vals = self._shape_resolver.get_bound_symbols()
+            # A bound symbol answers (0 included); an unbound one refuses by name — the
+            # trace value is a witnessed extent of one stimulus, never a value.
+            r = self._shape_resolver
+            if r is not None:
+                runtime_vals = r.get_bound_symbols()
                 if symbol_id in runtime_vals:
                     return runtime_vals[symbol_id] + offset
-            return trace_value
+            _refuse_unbound(r, symbol_id, trace_value)
         return resolve_symbol
 
     def _make_product_resolver(self, factors: Tuple[Any, ...], trace_value: int) -> Callable[[TensorArena], int]:
@@ -2808,19 +2825,21 @@ class CompiledSequence:
             Closure that computes product at runtime
         """
         def resolve_product(_arena: TensorArena) -> int:
-            if self._shape_resolver is not None:
-                runtime_vals = self._shape_resolver.get_bound_symbols()
-                result = 1
-                for f in factors:
-                    if isinstance(f, str) and f in runtime_vals:
-                        result *= runtime_vals[f]
-                    elif isinstance(f, int):
-                        result *= f
-                    else:
-                        # Symbol not bound - fallback to trace value
-                        return trace_value
-                return result
-            return trace_value  # Fallback for graphs without resolver
+            r = self._shape_resolver
+            runtime_vals = r.get_bound_symbols() if r is not None else {}
+            result = 1
+            for f in factors:
+                if isinstance(f, str):
+                    if f not in runtime_vals:
+                        _refuse_unbound(r, f, trace_value)
+                    result *= runtime_vals[f]
+                elif isinstance(f, int):
+                    result *= f
+                else:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
+                        f"resolved at runtime (trace value {trace_value})")
+            return result
         return resolve_product
 
     def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable[[TensorArena], int]:
@@ -2841,12 +2860,10 @@ class CompiledSequence:
             Closure that evaluates expression at runtime
         """
         def resolve_expr(_arena: TensorArena) -> int:
-            if self._shape_resolver is not None:
-                try:
-                    return self._shape_resolver._resolve_symint_dict(expr_dict)
-                except Exception:
-                    return trace_value
-            return trace_value  # Fallback for graphs without resolver
+            r = self._shape_resolver
+            if r is None:
+                _refuse_unbound(None, str(expr_dict)[:80], trace_value)
+            return r._resolve_symint_dict(expr_dict)   # an unbound symbol refuses by name inside
         return resolve_expr
 
     # ========================================================================

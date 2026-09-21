@@ -444,8 +444,12 @@ class TensorResolver:
 
                 return resolved
 
-            # Fallback to trace value if no shape resolver
-            return trace_value
+            # A symbolic argument with no shape resolver: the graph declares symbols the
+            # executor did not arm — refuse by name, never the trace value.
+            raise RuntimeError(
+                f"ZERO FALLBACK: symbolic argument {symbol_id!r} met with symbolic shapes "
+                f"disabled or no shape resolver; its trace value {trace_value} is a witnessed "
+                "extent, not a value")
 
         elif arg_type in ("add", "sub", "mul", "floordiv", "div", "mod", "neg"):
             # Symbolic ARITHMETIC expression as a scalar arg — e.g. the

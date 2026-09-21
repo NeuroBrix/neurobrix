@@ -147,7 +147,21 @@ _BLOCK_RE = re.compile(
 # Ported from compiled_sequence.py (pure Python, no torch)
 # ============================================================================
 
+def _refuse_unbound(resolver, symbol_id, trace_value) -> None:
+    """ZERO FALLBACK for a symbol the runtime did not bind (R33: no torch)."""
+    from neurobrix.triton.symbols import UnboundSymbolError
+    info = {}
+    if resolver is not None:
+        info = getattr(resolver, "_symbols", {}).get(symbol_id) or {}
+    bound = sorted(resolver.bindings) if resolver is not None else "no resolver"
+    raise UnboundSymbolError(
+        f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
+        f"{info.get('source')}) is not bound at runtime; its trace value {trace_value} is a "
+        f"witnessed extent, not a value. Bound: {bound}.")
+
+
 @dataclass(frozen=True)
+
 class TensorSlot:
     """Reference to a tensor in the arena by index."""
     slot: int
@@ -2743,43 +2757,42 @@ class TritonSequence:
                               offset: int = 0) -> Callable:
         """Closure that resolves a symbol at runtime via SymbolResolver."""
         def resolve(_arena):
-            if self._symbol_resolver is not None:
-                v = self._symbol_resolver.get(symbol_id)
-                if v > 0:
-                    return v + offset
-            return trace_value + offset
+            # A bound symbol answers, INCLUDING one bound to 0 (a cache length at its
+            # first step); an unbound one refuses by name — the trace value is a
+            # witnessed extent of one stimulus, never a value (2026-09-21).
+            r = self._symbol_resolver
+            if r is not None and r.is_bound(symbol_id):
+                return r.get(symbol_id) + offset
+            _refuse_unbound(r, symbol_id, trace_value)
         return resolve
 
     def _make_product_resolver(self, factors: Tuple[Any, ...],
                                trace_value: int) -> Callable:
         """Closure that computes product of symbolic factors at runtime."""
         def resolve(_arena):
-            if self._symbol_resolver is not None:
-                result = 1
-                for f in factors:
-                    if isinstance(f, str):
-                        v = self._symbol_resolver.get(f)
-                        if v > 0:
-                            result *= v
-                        else:
-                            return trace_value
-                    elif isinstance(f, (int, float)):
-                        result *= int(f)
-                    else:
-                        return trace_value
-                return result
-            return trace_value
+            r = self._symbol_resolver
+            result = 1
+            for f in factors:
+                if isinstance(f, str):
+                    if r is None or not r.is_bound(f):
+                        _refuse_unbound(r, f, trace_value)
+                    result *= r.get(f)
+                elif isinstance(f, (int, float)):
+                    result *= int(f)
+                else:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
+                        f"resolved at runtime (trace value {trace_value})")
+            return result
         return resolve
 
     def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable:
         """Closure that evaluates expression tree at runtime."""
         def resolve(_arena):
-            if self._symbol_resolver is not None:
-                try:
-                    return self._symbol_resolver.resolve(expr_dict)
-                except Exception:
-                    return trace_value
-            return trace_value
+            r = self._symbol_resolver
+            if r is None:
+                _refuse_unbound(None, str(expr_dict)[:80], trace_value)
+            return r.resolve(expr_dict)     # an unbound factor refuses by name inside
         return resolve
 
     # ========================================================================
