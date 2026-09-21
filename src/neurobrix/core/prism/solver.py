@@ -3953,6 +3953,24 @@ class PrismSolver:
         # on GPU. Validates that the component fits in 70% of host RAM
         # (matches `_try_cpu_execution`'s budget formula).
         #
+        # NEVER on a UNIFIED device (2026-09-21): host and device are the
+        # same bytes, so moving a component to the host frees no device
+        # memory — the same finding as zero3-on-unified (cafaf799). The
+        # trigger measured on CogVideoX/PixArt was asymmetric accounting:
+        # the GPU checked against the live-free reading (~10.7 GB, VM up)
+        # while the CPU checked against the profile's 24 GB, so the
+        # text_encoder "fit CPU" though it "did not fit GPU" on ONE pool,
+        # and was offloaded to a host that could not run the GPU-only
+        # kernels (the census shadow died there). On unified the honest
+        # outcomes are TILE (tried just above) or REFUSE; the caller
+        # (lazy_sequential / the model cascade) then refuses by arithmetic,
+        # which is what a model too big for this machine's memory IS.
+        # Discrete cards are byte-unchanged (the offload frees real device
+        # memory there). Selection consults the same device door the budget
+        # and zero3 do.
+        if _device_is_unified(largest.device_string, profile):
+            return None
+        #
         # When `profile.cpu` is missing (some older or hand-written
         # profile YAMLs without a `cpu:` section), accept unconditionally
         # per Doctrine R35 — Prism never refuses on hardware that exposes
