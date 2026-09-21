@@ -577,7 +577,7 @@ def main():
         # no device memory, no launch, no value, no weight file — and records every key
         # the dispatch would hand the launcher. Installed before any engine import.
         from neurobrix.kernels import census as _census
-        _census.install()
+        _census.install(hardware=getattr(args, "hardware", None))
 
     try:
         if args.command == 'autotune':
