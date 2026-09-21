@@ -930,6 +930,15 @@ class Model:
 
     def done(self, step):
         st = self.state["steps"].get(step) or {}
+        if step == "old_outputs" and st.get("ok") is not True and getattr(self.args, "accept_old_failure", False):
+            # The old arm's failure IS the defect this retrace closes (Qwen3-Omni, 2026-09-21: a
+            # view carrying the trace length as a literal). Accepted by name, recorded, never
+            # silent: the gate then judges the new arm against the vendor or the judged modes.
+            if not st.get("accepted"):
+                self.mark("old_outputs", False, accepted=True, error=st.get("error"),
+                          reason="the old container cannot run this request; accepted by --accept-old-failure")
+                log(f"{self.name}: old_outputs FAILED and ACCEPTED by name (--accept-old-failure): {str(st.get('error'))[:120]}")
+            return True
         if st.get("ok") is not True:
             return False
         if step in ("old_outputs", "new_outputs", "gate"):
@@ -1782,6 +1791,8 @@ def main():
     ap.add_argument("--vendor-on-diff", action="store_true",
                     help="when the two sequential arms differ (image families): render the request with the vendor's own "
                          "pipeline at the exact prompt/seed/steps/guidance and let the container that reproduces it pass")
+    ap.add_argument("--accept-old-failure", action="store_true",
+                    help="proceed past an old arm that cannot run the request (its failure is the defect the retrace closes); recorded in the state, never silent")
     ap.add_argument("--only-upload", action="store_true",
                     help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
                          "(an upload loop must never trace or build — a reset state once made one trace Kokoro beside a pass)")
