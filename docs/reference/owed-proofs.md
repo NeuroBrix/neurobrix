@@ -1067,3 +1067,45 @@ measurement), a four-cell file, and the model-level green (no override: 39.7 s a
 rung). **Owed from Apple:** the same table on M4 Pro — the lattice there is the Metal conv
 kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at one rung and
 write the unit into `apple_m4_pro.yml` beside its numbers.
+
+
+---
+
+## 2026-09-21 — Apple's answer on the reshape rung's OUTPUT: the runtime fold is broken (both machines)
+
+The Dell (`f91d4596`) owed Apple the confirmation that the request-reshape rung, having
+sized an upscaler's tile correctly, produces a CORRECT stitched image — noting its own
+seam figures came from a TEST HARNESS stitch, not the engine's runtime fold. **Measured on
+Apple, 2026-09-21: the engine's own runtime fold does not stitch.**
+
+`real-esrgan-x2 --input-image apple_448.png` (traced `[1,3,64,64] -> [1,3,128,128]`):
+* **output is 128x128, not 896x896** — a single tile, upscaled. Confirmed by pixel match:
+  `mean|Δ|=1.0` against `crop(0,0,64,64).resize(128)`, `74.3` against the whole downscaled.
+* the run space-to-batches 448 into a **batch of 49** 64px tiles (7x7) — the autotune keys
+  carry `batch_dim=49` through every conv — runs the graph once at batch 49, and **never
+  folds `[49,3,128,128]` back to `[1,3,896,896]`**; the output extractor takes tile 0.
+* **BOTH modes** (compiled and triton), so it is not a Triton-runtime fault.
+* `real-esrgan-x8` at 448 hits a DIFFERENT face of the same routing: `aten.leaky_relu::0`
+  `'Tensor' object has no attribute '_device_idx'` (a torch tensor reaching `wrappers.leaky_relu:857`) — the compiled tiled path handing an ATen tensor to an NBX wrapper.
+
+**Attribution.** `git bisect` (good `2eeff74a`, bad `origin/main`) → first-bad `78784abe`,
+the Mac-branch merge. The merge did NOT touch `tiling_engine.py` or the input synthesizer;
+it changed only `_spatial_component_tiling`'s scale derivation (the scale-from-shapes commit),
+which newly makes upscalers ELIGIBLE for a runtime fold path neither machine had exercised
+end-to-end. So the fold defect is pre-existing and vendor-neutral, not Apple-specific — the
+merge exposed it. It regresses the ENTIRE delivered upscaler family (x2/x4/x8, swin2SR,
+swinir) at any request larger than the 64px trace, which is every real request.
+
+**A compounding second-order effect worth the Dell's eye:** at 448px the model fits WHOLE
+(278 MB); the rung tiled it anyway to a 64px tile because tonight's fallen ambient gave a
+tiny budget rung. A fully-convolutional upscaler run whole is size-agnostic and needs no
+tiling until it genuinely overflows — the pre-merge behavior. Whether the rung should fire
+at all when the whole component fits is the sizing question upstream of the fold.
+
+**Owner.** The runtime fold and the reshape-rung sizing are core/prism/runtime, the rack
+side's domain; this is the measurement the doc asked Apple for, handed back with the bisect
+and the exact datum. Apple's verification of the upscaler family is BLOCKED on it — recorded
+as such in the delivery ledger, not counted delivered.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HgxLbUbkxogC87ppc4tQ5H
