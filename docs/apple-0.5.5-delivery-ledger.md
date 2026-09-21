@@ -29,6 +29,7 @@ exact; image = external degeneracy judge (std, distinct values).
 | upscaler/real-esrgan-x8 | 67 MB | **DELIVERED at ≤512 px** 2026-09-20 | C/T/S rc=0 at 448/512 px, judged. 1024 px OWED on the per-tile retention defect (handed to the runtime owners); refused with figures until it returns. |
 | upscaler/swinir-classical-x2 | 99 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | upscaler/swinir-classical-x4 | 92 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| stt/parakeet-tdt-1.1b | 4.2 GB | **DELIVERED** 2026-09-21 | C/T/S all rc=0 (7 s / 22 s / 15 s), JFK transcript exact in each mode (STT judge), 0 misses both triton modes. Extract from hub 350 s (~12 MB/s sequential). Local copy deleted after judgment. |
 | upscaler/hat-s-x4 | 51 MB | **REFUSED** (standing) | Blocked by the Prism estimate; stays refused rather than closed by invented demand. |
 | upscaler/hat-l-x4 | 182 MB | **REFUSED** (standing) | Floor stop in both triton modes at 1567 MB available with 0 misses after its 8 shapes were certified — the machine genuinely cannot hold it. |
 
