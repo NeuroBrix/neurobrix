@@ -906,3 +906,164 @@ step, and say which boundary it was taken at.
 **Two independent harness stitches on two different cards came out BIT-IDENTICAL**
 (same sha256, 0 differing pixels of 8192x8192x3), so the method is deterministic
 across cards and a single judged artefact is not a single lucky run.
+## 2026-09-20 — the Mac's adaptive-memory proposal, reviewed on CUDA
+
+`docs/reference/adaptive-memory-a-runtime-controller.md` (metal-first-light) names four
+additions. Measured against what main holds today:
+
+| addition | on main | by |
+|---|---|---|
+| 1. a truthful estimate | the denominator: an op is budgeted against what is LEFT of the card (`live_before_op`, `resident_bytes`), and the plan states the margin it keeps (`max(3072 MB, 12 % of capacity)`) | `79558447`, `77848eee` |
+| 2. a plan that can say "not whole", entering the tiling rung deliberately | the request-reshape rung `_spatial_component_tiling` reaches the upscaler family (scale derived from the graph's in/out ratio; no `vae_scale` demanded); judged green at x2/x4/x8 on 16 GB and 32 GB cards, engine artefact 8192² with a sub-visible seam of 1.047/255 at the engine's own boundary | `0c824682`, item 1 closed by the owner 09-20 |
+| 3. a runtime controller at the allocation failure — ONE re-entry into the tiling rung with the allocator's real figures | **not landed anywhere**; the document itself says the re-entry is "the next step, named rather than assumed small" | — |
+| 4. the refusal names what would have fit | `kernels/oom_advice.py` | `66ed17af` |
+
+**Verdict.** The request-reshape rung the proposal asks for is in main and proven (item 1).
+Additions 1, 2 and 4 hold on this side; nothing to land for them beyond what landed. Addition 3
+is design: it is the right seam (a wrapper cannot change its own output contract — the Mac's
+measurement that band-streaming at 4 GiB and 16 GiB dies identically is reproduced by our
+four OOMs at 8 589 934 592 bytes, the second WITH a 64-band plan). It stays a named follow-up,
+not a rung to land today: with 2 the plan already refuses or reshapes before execution for the
+family that motivated it, and a re-entry after the plan was chosen is a change to the
+executor's contract that needs its own red-then-green case (an estimate wrong by enough to OOM
+under a plan that was already tiled).
+
+## 2026-09-20 — three things the CUDA side established for the Apple side
+
+### 1. Kokoro moved through the merge, twice, both times through `aten::pow`
+
+The zoo byte pair (A = main with the 3.8.0 directory, B = the merge head) left Kokoro-82M
+UNADJUDICATED: a seedless tts request cannot hold still (the family's `seed: 42` sits under
+`calibration:` only, so the Triton stream runs unseeded and the vocoder's `aten.rand::0` [1, 9]
+is the first op to differ between two runs of one tree). With `--seed 42` each tree holds
+still (A1 == A2, B1 == B2) and the two differ: SNR 24.8 dB between waveforms of identical
+length, whisper-large-v3-turbo transcribing both as "Hello.".
+
+`git bisect` on a 9-second row, autotune off, the floor measured before each lever:
+
+| lever | from → to | first bad commit |
+|---|---|---|
+| main → the Mac's branch | 8c4b4e1d… → 650f2eec… | **85c6426a** — kernels: stop calling NVIDIA's device library from portable kernels |
+| the branch → the merge head | 650f2eec… → 7dfe314b… | **9ddebd18** — pow takes the exact route for a small integer exponent |
+
+Kokoro calls `aten::pow` 49 times (e = 2 and 3); nothing else in the branch reached its
+bytes. The portable route moved it first (up to 15 ulps from the fp64 oracle on a square,
+recorded in `pow.py`), the exact route moved it back toward the oracle. Both are deliberate and
+in the CHANGELOG; the row is ADJUDICATED: moved, attributed, judged clean. On Apple the same two
+commits run the same kernel, so the same movement is expected there — a byte pair across the
+merge on Apple will show it and should not be read as a Metal regression.
+
+One instrument note: `NBX_OP_FINGERPRINT` hashes the first 8 192 bytes of a tensor by default,
+so its "first differing op" is the first op whose PREFIX differs (it named a layer-norm mean
+while the layer-norm's input already differed). Full hash: `NBX_OP_FINGERPRINT_MAX=0`.
+
+### 2. The ladder law, applied to the CUDA cards (4bd6a5e7)
+
+The law (2eeff74a): the budget rounds DOWN onto whole-GB rungs before anything downstream is
+computed; nothing downstream is rounded; never tuned so a supervising machine's ambient stops
+straddling a boundary. Applied here it had nothing to act on: on this rack the "reading" that
+reached the rung was capacity − margin, a constant per card, and the rung was reached only
+when a request overflowed the whole card. The plan never read the card's LIVE free memory.
+Measured on card 3 (32 GB) under a neighbour's 18–27 GB hold: real-esrgan-x8 at 1024 planned
+whole and died on its first allocation, 5 of 5.
+
+Now the free reading (one door, `DeviceAllocator.free_memory_mb`) enters the plan first, rounds
+down onto the ladder, and the tile budget follows from that rung. The ladder's rungs are the
+Mac's and are not tuned to this rack's ambient. First rows under the patch (autotune off, so the
+rows measure the plan and the fit, not a runtime sweep):
+
+| card | class | hold | reading | rung | budget | rc |
+|---|---|---|---|---|---|---|
+| 1 | 16 GB | 2 GB | 13.17 GB | 12288 MB | 4.80 GB | 0 |
+| 3 | 32 GB | 18 GB | 13.14 GB | 12288 MB | 4.80 GB | 0 |
+| 2 | 32 GB, 1536² | 0 / 2 GB | 30.40 / 29.14 GB | 24576 MB | 9.60 GB | 1 — CUDA 700 at `aten.convolution::351` |
+
+The 1536² rows were not the plan's failure: the rung and budget are right by the law. Pinned
+with `--mode triton-sequential` and `CUDA_LAUNCH_BLOCKING=1`: the x8 network's LAST conv
+(64 → 3 channels at a 6344² tile) has a small output — under the 4 GiB band-streaming
+threshold, so it ran whole — and an input of 2 576 000 000 elements, and its loop-derived
+int32 channel offset wrapped past channel 53. Widened to int64 in conv2d and conv1d
+(d95be536, register 80, a 2.3-billion-element cell seen red then green). The five-row series on
+both classes (5/5 rc=0 each, identical rungs row by row) and the 1536² re-run are in
+`nbx/campaigns/2026_09_20_ladder/LADDER.md`. On Apple the same kernel runs the same offset
+form, so a tile whose input crosses 2^31 elements would have faulted there too.
+
+### 3. A runtime flag read only from the build toolchain's registry — the Apple installs ran without it too
+
+`zero_pad_embeddings` (and five other per-component flags) were read at runtime through
+`.nbx_registry`, a gitignored pointer only a developer checkout carries. Every worktree and
+every `pip install` ran Wan2.1-T2V-1.3B with the flag at its default: a lattice of 16-px
+cells where the checkout rendered the sailboat (one judged run per arm, same commit; period-16
+column signature 0.1 with the pointer, 18.0 without; the rebuilt container without the pointer:
+0.1). If an Apple Wan measurement was taken from a worktree or an install, it was taken
+without the flag. Fixed in main 6fb35c3b: the build writes the six flags into the container's
+extracted values, the container records them when opened, the reader's order is env override →
+registry → container → default (`docs/reference/release-decisions.md` lists the thirteen hub
+containers that need a rebuild and a re-upload).
+
+## 2026-09-21 — the Apple x8 retention object, the CUDA arm
+
+**The object as named (the Mac, 2026-09-20):** `TritonSequence.run()` retains 410 MB live and
+parks 332 MB in the pool per invocation at constant tile shape, `skip_kills` false and kills
+firing — the class its own docstring warns about. Real-esrgan-x8 at 1024 px is owed on it.
+
+**The instrument, landed for both backends:** `NBX_RUN_LIVE_DIAG=1` prints, at the entry and the
+exit of every `run()`, the device's driver-held bytes (`_cuda_live_bytes`, which counts
+pool-parked blocks until they are returned to the driver) and the pool-parked bytes; live
+proper is their difference. A series, not an inference from an OOM.
+
+**CUDA, the same request (x8 at 1024², rung 8192 by a 20 GB neighbour, tile 448, nine
+invocations at one shape, static kernel configs):**
+
+| arm | run#1 entry → exit | run#2 entry → exit | runs #3–#9 (each) | peak driver |
+|---|---|---|---|---|
+| pool on | 45 → 9 968 MB (9 849 parked) | 10 097 → 10 489 (9 777 parked) | 10 489 → 10 489, parked 9 777 → 9 703 | 10 489 MB |
+| pool off | 45 → 119 MB | 631 → 704 MB | 704 → 778 MB, back to 704 at the next entry | 6 976 MB |
+
+So on CUDA nothing is retained per invocation: with the pool off, every invocation from the
+third on enters at 704 MB and exits at 778 MB, and the 74 MB it takes are released before the
+next entry. The one step that exists — +512 MB between the exit of the first invocation and
+the entry of the second — is taken OUTSIDE `run()`, by the caller between tiles (the tiling
+engine's output canvas: 8192² × 3 channels in fp16 is 402 MB), once. With the pool on the same
+series reads as a constant 9.7–9.8 GB parked (peak 10 053 MB, three flushes, 8.2 GB of
+smallest-fit slack over 12 544 exact and 420 fit hits) and no growth either.
+
+**What that says for Apple.** The growth the Mac measured is not in `run()`'s CUDA path at
+this request; the same instrument on Apple, at the same request, will show whether the step
+is per invocation there (then it is the Metal driver's allocator or the pool's Metal path —
+`kernels/metal_device.py`, the pool's free-list on that backend) or between invocations (then
+the caller, as here, and the number should be one canvas, not one per tile). The series is
+the handover; the 410/332 figures need their entry/exit pairs before a kernel is named.
+
+## 2026-09-21 — the ladder's other half, sent as the ladder rule was received: the tile lattice
+
+**The law, in the same words as the ladder's:** the tiled extent handed to the kernels is
+snapped DOWN onto the vendor profile's lattice (`tiling.extent_lattice`) after the budget
+chose it and before the overlap and stride are derived from it; nothing else downstream is
+rounded; the lattice is a property of the backend's kernels, measured on that backend, never
+tuned to a picture or a card's ambient. The ladder bought determinism by rounding the memory
+reading down; the lattice buys back the performance determinism alone does not.
+
+**Measured on CUDA (V100, real-esrgan-x8 at 1024², rung 8192, budget 3.20 GB, one card):**
+
+| tile | lattice | unused area vs 457 | static configs | production, cold | production, warm |
+|---|---|---|---|---|---|
+| 457 | none | 0 | 717.9 s | 2 065.8 s (11 shapes swept) | 31.9 s |
+| 456 | 8 | 0.4 % | 544.7 s | 1 286.6 s (11 swept) | 28.4 s |
+| 448 | 16 (and 32, 64) | 3.9 % | 40.9 s | 20.4 s (certified) | 19.5 s |
+| 432 | 16, not 32 | 10.6 % | 37.4 s | — | — |
+| 416 | 32, not 64 | 17.1 % | 35.0 s | — | — |
+| 384 | 128 | 29.4 % | 31.5 s | 905.6 s (9 swept) | 15.4 s |
+
+The unit is 16 on Volta: every multiple of 16 sits on one plateau (31.5–40.9 s static) whether
+or not it is a multiple of 32 or 64, a multiple of 8 does not, and a coarser unit only spends
+tile area (384 loses 29 % of the tile for 23 % of the time). Under production autotune the
+warm cliff is 1.6× (31.9 against 19.5 s) but the cold one is a hundredfold, because an aligned
+extent lands on shapes the directory already certifies while an odd one sweeps eleven
+unscreened shapes for 34 minutes — alignment also shrinks the set of shapes a backend has to
+certify. Landed: `volta.yml` `tiling.extent_lattice: 16` with the table beside it, read through
+one door in `PrismSolver._tile_extent_lattice` (env `NBX_PRISM_TILE_ALIGN` overrides for a
+measurement), a four-cell file, and the model-level green (no override: 39.7 s at the 8192
+rung). **Owed from Apple:** the same table on M4 Pro — the lattice there is the Metal conv
+kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at one rung and
+write the unit into `apple_m4_pro.yml` beside its numbers.

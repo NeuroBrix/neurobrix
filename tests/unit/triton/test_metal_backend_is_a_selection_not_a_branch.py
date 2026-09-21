@@ -45,6 +45,15 @@ def profile(monkeypatch):
     # else in the engine reads `active_vendor_profile`.
     monkeypatch.setattr(C, "active_vendor_profile", lambda: dict(box))
     monkeypatch.setattr(C, "vendor_profile_for_arch", lambda arch: dict(box))
+    # The seam reads `vendor_profile_for_arch(runtime().arch_name)`, and off
+    # Apple `runtime()` raises, so the declaration was never consulted and every
+    # refusal read "the profile declares none" — four cells red on CUDA, 2026-09-20.
+    # A declared profile is the subject of these cells, not the machine's Metal
+    # runtime: give the seam an arch name to ask the (patched) profile with.
+    import neurobrix.kernels.metal_device as MD
+    class _Runtime:
+        arch_name = "test-arch"
+    monkeypatch.setattr(MD, "runtime", lambda: _Runtime())
     return declare
 
 
@@ -185,6 +194,13 @@ def test_the_declaration_is_READ_never_inferred(monkeypatch):
     monkeypatch.setattr(C, "active_vendor_profile", _cycle)
     monkeypatch.setattr(C, "vendor_profile_for_arch",
                         lambda arch: {"metal_backend": "triton_ext"})
+    # The door is asked with the Metal runtime's arch name; off Apple that runtime
+    # raises before the door is reached and the declaration reads as none (CUDA,
+    # 2026-09-20). The runtime is not this cell's subject — the door is.
+    import neurobrix.kernels.metal_device as MD
+    class _Runtime:
+        arch_name = "test-arch"
+    monkeypatch.setattr(MD, "runtime", lambda: _Runtime())
     _installed(monkeypatch)                 # declared, and NOT installed
 
     with pytest.raises(MB.BackendSelectionRefused) as e:

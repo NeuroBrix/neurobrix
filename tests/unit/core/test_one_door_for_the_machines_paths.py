@@ -41,8 +41,15 @@ def test_every_reader_in_the_engine_asks_the_same_door(clean_env, monkeypatch):
 
     from neurobrix.cli.commands.coverage import _cache_root
     from neurobrix.nbx.cache import NBXCache
-    import neurobrix.cli.utils as U
-    importlib.reload(U)
+    # Ask for the module by name and make sure the registry holds it before the
+    # reload: inside the whole suite this cell read "module neurobrix.cli.utils
+    # not in sys.modules" (another cell had popped it and left the package
+    # attribute behind), and passed alone — an order-dependent red, measured on
+    # the merged tree 2026-09-20 (alone: 10 passed).
+    import sys
+    U = importlib.import_module("neurobrix.cli.utils")
+    sys.modules.setdefault("neurobrix.cli.utils", U)
+    U = importlib.reload(U)
 
     assert P.cache_dir() == where
     assert NBXCache().cache_dir == where

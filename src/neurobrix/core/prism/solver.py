@@ -264,6 +264,12 @@ class DeviceState:
     device_string: str
     capacity_mb: float
     used_mb: float = 0.0
+    #: What the MACHINE holds on this card outside this plan — the driver's
+    #: free reading subtracted from the capacity at `_prepare_devices`. Kept
+    #: apart from `used_mb`, which is the plan's own accounting and is reset
+    #: by every fresh copy a strategy tests against; the machine's figure is
+    #: not the plan's to reset.
+    external_used_mb: float = 0.0
     components: List[str] = field(default_factory=list)
     spec: Optional[DeviceSpec] = None
     #: What the DEVICE recommends, before the machine's real availability is
@@ -276,7 +282,7 @@ class DeviceState:
 
     @property
     def free_mb(self) -> float:
-        return self.capacity_mb - self.used_mb
+        return self.capacity_mb - self.used_mb - self.external_used_mb
 
     @property
     def utilization_pct(self) -> float:
@@ -612,6 +618,25 @@ class PrismSolver:
         the flat reserve and the measured spread, and `explain_plan` prints it.
         """
         return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
+
+    def _effective_capacity_mb(self, dev: "DeviceState") -> float:
+        """What a whole plan may be budgeted against on `dev`: the card's
+        capacity less the margin, AND never more than the ladder rung of the
+        live free reading.
+
+        The second bound is the ladder law at the plan's ENTRY (owner,
+        2026-09-20: the budget is what gets quantised, before anything is
+        derived). Until it stood here, the rung was consulted only once a
+        plan overflowed the card's CAPACITY, and `free_mb` was the plan's own
+        accounting — so a request that fitted a V100-32GB whole was accepted
+        while a neighbour held 18-27 GB of the card, never tiled, and died at
+        its first allocation: five of five runs, real-esrgan-x8 at 1024,
+        2026-09-20. With the reading in `free_mb` (see `_prepare_devices`)
+        the same request sees 5-14 GB, is bounded by the 4-12 GB rungs, and
+        descends to the tiling rung by itself.
+        """
+        return min(dev.capacity_mb - self._margin_mb(dev.capacity_mb),
+                   float(memory_ladder_rung_mb(dev.free_mb)))
         self._dtype_bytes = get_dtype_bytes()
 
     # =========================================================================
@@ -2599,9 +2624,24 @@ class PrismSolver:
                     "device's recommendation alone, which is what gets a "
                     "render killed mid-execution when the machine is busy",
                     dev.get_device_string(), host.source)
+            # A DISCRETE card is measured here too — the driver's free figure,
+            # read through the tensor library's own door (no torch, R33). What
+            # another process holds becomes `used_mb`, so `free_mb` is the
+            # reading the ladder rounds and the picker compares. Unreadable
+            # (no runtime, a CPU host) → the recommendation alone, as before.
+            used = 0.0
+            if not dev.has_unified_memory:
+                try:
+                    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+                    free_live = DeviceAllocator.free_memory_mb(dev.index)
+                except Exception:
+                    free_live = None
+                if free_live is not None:
+                    used = max(0.0, capacity - free_live)
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
                 capacity_mb=capacity,
+                external_used_mb=used,
                 spec=dev,
                 recommended_mb=recommended,
                 host_memory=host,
@@ -2616,6 +2656,7 @@ class PrismSolver:
                 device_string=d.device_string,
                 capacity_mb=d.capacity_mb,
                 used_mb=0.0,
+                external_used_mb=d.external_used_mb,
                 components=[],
                 spec=d.spec,
                 recommended_mb=d.recommended_mb,
@@ -2681,7 +2722,7 @@ class PrismSolver:
         # 4Kpx on 1× V100 16 GiB. The cascade can then fall through to
         # `lazy_sequential` (which routes VAE to CPU via Strategy 4
         # of `_place_component`) or `cpu_execution`.
-        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
+        effective_capacity = self._effective_capacity_mb(largest)
         if total_required > effective_capacity:
             return None
 
@@ -2803,7 +2844,7 @@ class PrismSolver:
         # ~3 GiB eaten by CUDA context + workspaces + fragmentation. With
         # the reserve the cascade degrades to a multi-GPU strategy at
         # solve time, as designed.
-        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
+        effective_capacity = self._effective_capacity_mb(largest)
         if peak > effective_capacity:
             return None
 
@@ -2881,7 +2922,7 @@ class PrismSolver:
             DeviceState(
                 device_string=d.device_string,
                 capacity_mb=d.capacity_mb,
-                used_mb=0.0, components=[], spec=d.spec
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
             )
             for d in devices
         ]
@@ -3037,7 +3078,7 @@ class PrismSolver:
             DeviceState(
                 device_string=d.device_string,
                 capacity_mb=d.capacity_mb,
-                used_mb=0.0, components=[], spec=d.spec
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
             )
             for d in devices
         ]
@@ -3321,6 +3362,20 @@ class PrismSolver:
     # RECURSIVE CASCADE — Component & Block Level
     # =========================================================================
 
+    @staticmethod
+    def _tile_extent_lattice() -> int:
+        """The unit a tiled spatial extent is snapped down onto before the kernels see it:
+        the vendor profile's `tiling.extent_lattice` (data, R7/R24), or the
+        NBX_PRISM_TILE_ALIGN override for a measurement; 0 when neither says."""
+        env = os.environ.get("NBX_PRISM_TILE_ALIGN")
+        if env:
+            return int(env)
+        try:
+            from neurobrix.kernels.ops._configs import active_vendor_profile
+            return int(((active_vendor_profile() or {}).get("tiling") or {}).get("extent_lattice") or 0)
+        except Exception:
+            return 0
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, free_reading_bytes: int,
@@ -3503,6 +3558,17 @@ class PrismSolver:
         tile_size = int(math.sqrt(latent_h * latent_w * frac))
         if window_alignment > 1:
             tile_size = (tile_size // window_alignment) * window_alignment
+        # THE LADDER'S OTHER HALF (2026-09-21): the extent handed to the kernels is snapped
+        # DOWN onto the vendor profile's tile lattice (`tiling.extent_lattice`, 16 on Volta —
+        # the measurement is beside the value in volta.yml: 457 → 717.9 s, 448 → 40.9 s under
+        # static configs, and 2 066 s of sweeps against 20 s cold under production autotune).
+        # The memory reading rounds down onto whole-GB rungs for determinism; alignment buys
+        # back the performance determinism alone does not, for 3.9 % of the tile's area.
+        # Nothing else downstream is rounded. A profile without the value keeps the extent as
+        # computed; NBX_PRISM_TILE_ALIGN overrides it for a measurement.
+        _align = self._tile_extent_lattice()
+        if _align > 1:
+            tile_size = max(_align, (tile_size // _align) * _align)
         tile_size = max(window_alignment if window_alignment > 1 else 8,
                         min(tile_size, latent_h, latent_w))
 
@@ -3822,7 +3888,7 @@ class PrismSolver:
         # prevents per-component placements that fit the estimator but
         # OOM at runtime, which then triggers Strategy 4 (CPU placement)
         # below. P-PRISM-NEVER-REFUSE v2 B.4 — 2026-05-12.
-        effective_capacity = largest.capacity_mb - self._margin_mb(largest.capacity_mb)
+        effective_capacity = self._effective_capacity_mb(largest)
         if required <= effective_capacity * 0.92:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
@@ -3859,8 +3925,10 @@ class PrismSolver:
         # The READING goes in whole; the rung and the 0.40 fraction are
         # derived inside (`memory_ladder_rung_mb`), so the tile is a pure
         # function of (request, rung) and the spec names the rung it stood on.
+        # The live reading itself: the rung inside rounds it ONCE (the law
+        # forbids a second rounding of an already-quantised figure).
         tiling = self._spatial_component_tiling(
-            container, comp_name, mem, int(effective_capacity * 1024 * 1024))
+            container, comp_name, mem, int(largest.free_mb * 1024 * 1024))
         if tiling is not None:
             tiled_total_mb = real_weight + tiling["tiled_activation_bytes"] / (1024 * 1024)
             if tiled_total_mb <= effective_capacity * 0.92:
@@ -3919,7 +3987,7 @@ class PrismSolver:
             DeviceState(
                 device_string=d.device_string,
                 capacity_mb=d.capacity_mb * fgp_target,
-                used_mb=0.0, components=[], spec=d.spec
+                used_mb=0.0, external_used_mb=getattr(d, "external_used_mb", 0.0), components=[], spec=d.spec
             )
             for d in self._fresh_devices(devices)
         ]

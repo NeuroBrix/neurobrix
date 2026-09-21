@@ -103,7 +103,14 @@ def conv2d_forward_kernel(
     for h in range(kernel_height):
         for w in range(kernel_width):
             for c in range(0, in_group_dim, BLOCK_SIZE_INF):
-                inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
+                # 64-bit like every offset above it: `input_in_feat_stride *
+                # inf_offset` is a product of the channel plane (36 000 000
+                # elements at 6000x6000) and the channel index, and past channel
+                # 59 it exceeds 2^31 — the 8x upscaler's last conv (64 -> 3, a
+                # 6344x6344 tile) faulted with an illegal address, four of four,
+                # 2026-09-20 (register 58's class; the output being small, the
+                # band-streaming that saves the 64 -> 64 convs never engaged).
+                inf_offset = (c + tl.arange(0, BLOCK_SIZE_INF)).to(tl.int64)
                 ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
                 iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
 

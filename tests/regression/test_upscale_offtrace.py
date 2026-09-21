@@ -44,18 +44,9 @@ from pathlib import Path
 
 import pytest
 
-# Guard: refuse a restricted parent environment loudly-but-kindly, the
-# same brick test_serve_warm.py carries. A false "invalid device
-# ordinal" is worse than a skip: it accuses the artifact.
-if os.environ.get("CUDA_VISIBLE_DEVICES") not in (None, ""):
-    pytest.skip(
-        "test_upscale_offtrace requires the FULL unmasked rig: the cells "
-        "shell out to `nbx upscale`, whose autodetect is blind to "
-        "CUDA_VISIBLE_DEVICES (D-AUTODETECT-VISIBLE-MASK), so a "
-        "restricted mask yields false 'invalid device ordinal' failures "
-        "that look like model defects. Unset CUDA_VISIBLE_DEVICES and "
-        "re-run.",
-        allow_module_level=True)
+# The mask guard that stood here (2026-08-29 → 2026-09-20) is gone with its
+# premise: measured on 2026-09-20, `nbx upscale` under CUDA_VISIBLE_DEVICES=1 and
+# =2 places on cuda:0 with the visible card's own profile (register entry 79).
 
 REPO = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".neurobrix" / "cache"
