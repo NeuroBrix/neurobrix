@@ -776,6 +776,13 @@ class IterativeProcessHandler(FlowHandler):
                             if isinstance(_v, torch.Tensor) and str(_k).endswith((".last_hidden_state", ".negative_hidden_state")):
                                 _np.save(os.path.join(_dump_dir, str(_k).replace("/", "_") + ".npy"), _v.detach().float().cpu().numpy())
                         _np.save(os.path.join(_dump_dir, "pred.npy"), model_output.detach().float().cpu().numpy())
+                    if _dump_dir and isinstance(model_output, torch.Tensor):
+                        # Every step's prediction and the state it saw, so the vendor's scheduler
+                        # can be stepped on NeuroBrix's own predictions (the scheduler differential).
+                        import numpy as _np
+                        os.makedirs(_dump_dir, exist_ok=True)
+                        _np.save(os.path.join(_dump_dir, f"state_{step_idx}.npy"), current_state.detach().float().cpu().numpy())
+                        _np.save(os.path.join(_dump_dir, f"pred_{step_idx}.npy"), model_output.detach().float().cpu().numpy())
                     if _LOOP_STATE_DIAG and isinstance(model_output, torch.Tensor):
                         _mo = model_output.detach().float()
                         _axm = [d for d in range(_mo.dim()) if d != 1]
