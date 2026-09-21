@@ -205,6 +205,8 @@ def measure(a):
             B = fixed.get("B", 32)
             if a.dim == "M":            # prefill scores: M = N = the request's length, K = head dim
                 row = sweep_bmm(B, s, fixed.get("N", s) if "N" in fixed else s, fixed["K"], a.dtype)
+            elif a.dim == "K":          # probs @ V: the CONTRACTION is the key length (openaudio's
+                row = sweep_bmm(B, fixed["M"], fixed["N"], s, a.dtype)   # 2 049 distinct K, 2026-09-21)
             else:                       # the key length grows, the query length fixed
                 row = sweep_bmm(B, fixed["M"], s, fixed["K"], a.dtype)
             row["size"] = s

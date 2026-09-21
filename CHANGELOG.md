@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is still shadowed and its keys harvested at the frozen extent, and it is queued for a
   retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
   no longer read as frozen.
+- **Publication verifies bytes, never sizes.** `tools/hub_cache_diff.py --verify-all` reads every
+  member of every hub object and checks it by checksum against the shared cache; a published
+  container is read back whole and verified against the uploaded file before it counts, and
+  `--hide-corrupt` withdraws an object that fails. Under `NBX_DEBUG=1` the CLI prints the
+  image clip it built and the frame count it resolved.
 - **`tools/hub_cache_diff.py`** compares every container of the shared cache with the object
   the hub serves, graph by graph, by reading the hub object's central directory and JSON
   members over HTTP Range (no container is downloaded), and publishes the ones that are newer

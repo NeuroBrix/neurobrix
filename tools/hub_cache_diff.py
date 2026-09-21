@@ -225,6 +225,24 @@ def cache_index(cdir: Path) -> dict:
     return out
 
 
+def cache_all_files(cdir: Path) -> Dict[str, str]:
+    """Every file of the cache container, sha256 by its arcname — the SOURCE a hub object is verified against."""
+    return {str(p.relative_to(cdir)): sha_bytes(p.read_bytes()) for p in sorted(x for x in cdir.rglob("*") if x.is_file())}
+
+
+def verify_members(source: Dict[str, str], hub: Dict[str, str]) -> List[str]:
+    """The members whose bytes differ between the source and the hub object, or exist on one side only."""
+    return sorted(k for k in set(source) | set(hub) if source.get(k) != hub.get(k))
+
+
+def hide_on_hub(slug: str, reason: str, logdir: Path) -> int:
+    org, mname = slug.split("/", 1)
+    cmd = [TOOLCHAIN_PY, str(FORGE), "visibility", "--org", org, "--name", mname, "--state", "hidden", "--reason", reason]
+    with open(logdir / "hide.log", "a") as fh:
+        fh.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')} {slug}: {reason}\n"); fh.flush()
+        return subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=str(REPO / "forge"), timeout=600)
+
+
 # ----------------------------------------------------------------------------- hub side
 class HubObjectCorrupt(RuntimeError):
     """The hub serves bytes that are not the recorded container."""
@@ -248,11 +266,15 @@ def hub_read_url(registry: str, key: str, token: str) -> str:
     return v.json()["url"]                            # a signed read URL: used, never written
 
 
-def hub_index(registry: str, rec: dict, token: str, memo: dict, memo_path: Path) -> dict:
-    """The hub object's interesting members and their hashes, memoised on (key, updatedAt, object size)."""
+def hub_index(registry: str, rec: dict, token: str, memo: dict, memo_path: Path, full: bool = False) -> dict:
+    """The hub object's interesting members and their hashes, memoised on (key, updatedAt, object size).
+
+    `full`: EVERY member is read and hashed — the checksum verification of the whole object
+    against its source (the owner, 2026-09-21: three checks read a size where the bytes were
+    gone; a size never passes for a file again)."""
     key = rec["fileUrl"]
     src = RangeSource(url=hub_read_url(registry, key, token))
-    memo_key = f"{key}|{rec.get('updatedAt')}|{src.size}"
+    memo_key = f"{key}|{rec.get('updatedAt')}|{src.size}|{'full' if full else 'json'}"
     if memo_key in memo:
         return memo[memo_key]
     head = src.read(0, 4)
@@ -267,7 +289,7 @@ def hub_index(registry: str, rec: dict, token: str, memo: dict, memo_path: Path)
     out = {"object_size": src.size, "record_size": int(rec.get("fileSize") or 0), "members": {}, "created_at": None,
            "n_members": len(members)}
     for name, m in members.items():
-        if interesting(name):
+        if full or interesting(name):
             data = zip_member_bytes(src, m)
             out["members"][name] = sha_bytes(data)
             if name == "manifest.json":
@@ -411,6 +433,8 @@ def main() -> int:
     ap.add_argument("--stage", type=Path, default=Path("/home/mlops/nbx/stage/hub_diff"), help="where a cache container is re-packed when no staged .nbx exists")
     ap.add_argument("--upload-mbps", type=float, default=10.0)
     ap.add_argument("--self-test", type=Path, help="run the range parser on a local .nbx and compare with zipfile")
+    ap.add_argument("--verify-all", action="store_true", help="read EVERY member of every hub object and verify it by checksum against the cache container (its source)")
+    ap.add_argument("--hide-corrupt", action="store_true", help="with --verify-all or --publish: set a hub object that fails its checksum to hidden, with the reason")
     args = ap.parse_args()
 
     if args.self_test:
@@ -445,12 +469,20 @@ def main() -> int:
                 if rec is None:
                     row.update({"verdict": "HUB_RECORD_MISSING", "differs": [], "same": []})
                 else:
-                    hub = hub_index(registry, rec, token, memo, memo_path)
+                    hub = hub_index(registry, rec, token, memo, memo_path, full=args.verify_all)
                     row.update(verdict(cache, hub, rec))
+                    if args.verify_all and row["verdict"] == "IDENTICAL":
+                        bad = verify_members(cache_all_files(cdir), hub["members"])
+                        if bad:
+                            raise HubObjectCorrupt(f"{len(bad)} member(s) differ from the source by checksum: {', '.join(bad[:4])}")
+                        row["checksum"] = f"every member verified ({len(hub['members'])})"
             else:
                 row.update(verdict(cache, None, None))
         except HubObjectCorrupt as exc:
             row.update({"verdict": f"HUB_OBJECT_CORRUPT: {exc}", "differs": [], "same": []})
+            if args.hide_corrupt and slug and (rec or {}).get("visibility") != "HIDDEN":
+                hide_on_hub(slug, f"checksum verification failed on {datetime.now(timezone.utc):%Y-%m-%d}: {exc}", args.out)
+                row["hidden"] = True
         except Exception as exc:  # noqa: BLE001 — named per container, the diff goes on
             row.update({"verdict": f"ERROR: {type(exc).__name__}: {str(exc)[:160]}", "differs": [], "same": []})
         row["rec"] = {k: rec.get(k) for k in ("updatedAt", "fileSize", "fileUrl")} if rec else None
@@ -507,6 +539,25 @@ def main() -> int:
             if probe != 200:
                 log(f"{name}: publish deferred — the store's write probe answers {probe}"); deferred.append(name); continue
         rc = publish_one(name, r["slug"], nbx, args.upload_mbps, args.out)
+        if rc == 0:
+            # The bytes the hub now serves are read back whole and verified against the file
+            # that was uploaded, member by member: a publication counts only once verified.
+            slug = r["slug"] or (json.loads(NEW_ENTRIES.read_text()).get(name) or {})
+            slug = slug if isinstance(slug, str) else f"{slug.get('org')}/{slug.get('name')}"
+            rec2 = hub_record(registry, slug)
+            local = {i.filename: sha_bytes(zipfile.ZipFile(nbx).read(i)) for i in zipfile.ZipFile(nbx).infolist()}
+            try:
+                hub2 = hub_index(registry, rec2, token, memo, memo_path, full=True)
+                bad = verify_members(local, hub2["members"])
+            except HubObjectCorrupt as exc:
+                bad = [f"object: {exc}"]
+            if bad:
+                log(f"{name}: the hub serves bytes that are NOT the uploaded container ({len(bad)} member(s): {', '.join(bad[:4])}) — hidden")
+                if args.hide_corrupt:
+                    hide_on_hub(slug, f"the uploaded bytes failed their checksum on read-back {datetime.now(timezone.utc):%Y-%m-%d}", args.out)
+                rc = 5
+            else:
+                log(f"{name}: read back and verified by checksum, {len(local)} member(s)")
         (published if rc == 0 else deferred).append(name)
     log(f"published: {published or '—'}; deferred: {deferred or '—'}")
     return 0 if not deferred else 4
