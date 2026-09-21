@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
+  into tiles, the tile's edge is now rounded down to a multiple of 16 on Volta (a profile
+  value, measured), instead of whatever the memory budget computed. An odd tile edge ran the
+  kernels masked at every scale: an eight-times upscale at 1024x1024 on a shared 32 GB card
+  took 718 s with a 457-pixel tile and takes 40 s with a 448-pixel one, for 4 % less tile
+  area. Cards without a measured lattice keep the computed edge.
+
 ### Added
 
 - **Mixture-of-experts models whose experts are stacked in one tensor per

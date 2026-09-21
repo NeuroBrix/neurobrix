@@ -3362,6 +3362,20 @@ class PrismSolver:
     # RECURSIVE CASCADE — Component & Block Level
     # =========================================================================
 
+    @staticmethod
+    def _tile_extent_lattice() -> int:
+        """The unit a tiled spatial extent is snapped down onto before the kernels see it:
+        the vendor profile's `tiling.extent_lattice` (data, R7/R24), or the
+        NBX_PRISM_TILE_ALIGN override for a measurement; 0 when neither says."""
+        env = os.environ.get("NBX_PRISM_TILE_ALIGN")
+        if env:
+            return int(env)
+        try:
+            from neurobrix.kernels.ops._configs import active_vendor_profile
+            return int(((active_vendor_profile() or {}).get("tiling") or {}).get("extent_lattice") or 0)
+        except Exception:
+            return 0
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, free_reading_bytes: int,
@@ -3544,14 +3558,15 @@ class PrismSolver:
         tile_size = int(math.sqrt(latent_h * latent_w * frac))
         if window_alignment > 1:
             tile_size = (tile_size // window_alignment) * window_alignment
-        # MEASUREMENT LEVER (2026-09-21, the ladder's other half): the extent handed to the
-        # kernels is snapped DOWN to a multiple of NBX_PRISM_TILE_ALIGN when set. The ladder
-        # measured a 25x wall-clock cliff between tiles of 560 (multiples of 16 at every
-        # scale) and 457 (odd at every scale) under static kernel configs; alignment buys
-        # back what rounding the memory reading bought in determinism. The unit is chosen
-        # by measurement (unused tile area against the cliff) and then becomes a profile
-        # value, not this env. Diagnostic only; unset = the extent as computed.
-        _align = int(os.environ.get("NBX_PRISM_TILE_ALIGN", "0") or 0)
+        # THE LADDER'S OTHER HALF (2026-09-21): the extent handed to the kernels is snapped
+        # DOWN onto the vendor profile's tile lattice (`tiling.extent_lattice`, 16 on Volta —
+        # the measurement is beside the value in volta.yml: 457 → 717.9 s, 448 → 40.9 s under
+        # static configs, and 2 066 s of sweeps against 20 s cold under production autotune).
+        # The memory reading rounds down onto whole-GB rungs for determinism; alignment buys
+        # back the performance determinism alone does not, for 3.9 % of the tile's area.
+        # Nothing else downstream is rounded. A profile without the value keeps the extent as
+        # computed; NBX_PRISM_TILE_ALIGN overrides it for a measurement.
+        _align = self._tile_extent_lattice()
         if _align > 1:
             tile_size = max(_align, (tile_size // _align) * _align)
         tile_size = max(window_alignment if window_alignment > 1 else 8,
