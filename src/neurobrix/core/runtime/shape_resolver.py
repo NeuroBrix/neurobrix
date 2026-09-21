@@ -351,58 +351,20 @@ class SymbolicShapeResolver:
             if value in self._runtime_values:
                 return self._runtime_values[value]
 
-            # Check if it's a symbol we know but haven't bound
+            # A symbol the container declares and the runtime did not bind REFUSES,
+            # by name. The trace value is a witnessed extent of one stimulus, not a
+            # value; answering it here hid two defects in one day (2026-09-21): a plan
+            # bound a VAE's spatial symbols to nothing and estimated 1.74 GiB for a
+            # 35 GiB decode; an ATen sequential run evaluated `s1` at 23 on a
+            # 213-token context and died a dozen ops later on a view. NBX_STRICT_SYMBOLS
+            # is no longer a door: strict is the only behaviour.
             if value in self._symbols:
-                # STRICT MODE: No fallback allowed
-                if self._strict:
-                    raise ShapeResolutionError(
-                        f"ZERO FALLBACK: Symbol '{value}' not bound at runtime (strict mode). "
-                        f"Ensure all dynamic dimensions are resolved from actual inputs."
-                    )
-
-                # Non-strict: the trace value stands in — said OUT LOUD, once per
-                # symbol, on stdout: a `logger.warning` reached no run log, and a
-                # symbol resolved to its trace extent is exactly the frozen-dim
-                # class the doctrine forbids (Qwen3-Omni's fresh container,
-                # 2026-09-16: `view [-1, 1, 23]` on 639 elements — s1 fell back to
-                # 23 and nothing said so). `NBX_STRICT_SYMBOLS=1` refuses instead.
-                trace_val = self._symbols[value].get("trace_value")
-                if trace_val is not None:
-                    import os
-                    if os.environ.get("NBX_STRICT_SYMBOLS") == "1":
-                        raise ShapeResolutionError(
-                            f"ZERO FALLBACK: Symbol '{value}' ({self._symbols[value].get('name')}, "
-                            f"binds from {self._symbols[value].get('source')}) is not bound at runtime "
-                            f"and NBX_STRICT_SYMBOLS=1 refuses its trace value {trace_val}")
-                    if value not in self._fallbacks_said:
-                        self._fallbacks_said.add(value)
-                        print(f"[SymShape] FALLBACK: symbol {value} ({self._symbols[value].get('name')}, binds from "
-                              f"{self._symbols[value].get('source')}) is not bound by any fed input — its TRACE "
-                              f"value {trace_val} stands in. A dimension frozen at the trace is a defect, not a "
-                              f"limit; NBX_STRICT_SYMBOLS=1 refuses it.", flush=True)
-                    logger.warning(
-                        f"Symbol {value} not bound, using trace_value={trace_val}"
-                    )
-                    return trace_val
+                info = self._symbols[value]
                 raise ShapeResolutionError(
-                    f"Symbol {value} not bound and no trace_value available"
-                )
-
-            # Expression reference (e0, e1, ...)
-            if value in self._expressions:
-                return self._evaluate_expression(self._expressions[value])
-
-            # Try to parse as int
-            try:
-                return int(value)
-            except ValueError:
-                pass
-
-            # Check if it's an inline expression (e.g., "s0 * s1")
-            if any(sym_id in value for sym_id in self._runtime_values):
-                return self._evaluate_expression(value)
-
-            # Unknown - return as-is (might be a string literal)
+                    f"ZERO FALLBACK: symbol '{value}' ({info.get('name')}, binds from "
+                    f"{info.get('source')}) is not bound at runtime; its trace value "
+                    f"{info.get('trace_value')} is a witnessed extent, not a value. Bound: "
+                    f"{sorted(self._runtime_values)}.")
             return value
 
         # Unknown type - return as-is
@@ -429,16 +391,12 @@ class SymbolicShapeResolver:
             symbol_id = data.get("id") or data.get("symbol_id")
             if symbol_id in self._runtime_values:
                 return self._runtime_values[symbol_id]
-            # Fallback to trace value (both formats)
-            trace = data.get("trace") if data.get("trace") is not None else data.get("trace_value")
-            if trace is not None:
-                if self._strict:
-                    raise ShapeResolutionError(
-                        f"ZERO FALLBACK: Symbol '{symbol_id}' not bound (strict mode)"
-                    )
-                logger.warning(f"Symbol {symbol_id} not bound, using trace={trace}")
-                return trace
-            raise ShapeResolutionError(f"Symbol {symbol_id} not bound")
+            info = self._symbols.get(symbol_id) or {}
+            raise ShapeResolutionError(
+                f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
+                f"{info.get('source')}) is not bound at runtime; its trace value "
+                f"{data.get('trace', data.get('trace_value'))} is a witnessed extent, not a "
+                f"value. Bound: {sorted(self._runtime_values)}.")
 
         # Unary: neg
         if type_str == "neg":
@@ -465,7 +423,7 @@ class SymbolicShapeResolver:
         if type_str == "product":
             factors = data.get("factors", [])
             if not factors:
-                return data.get("trace_value", 0)
+                raise ShapeResolutionError("ZERO FALLBACK: a product expression with no factors")
             result = 1
             for factor in factors:
                 result *= self._resolve_single(factor)
@@ -486,7 +444,7 @@ class SymbolicShapeResolver:
                 val = self._resolve_single(factors[0])
                 return scale_h * scale_w * val
             else:
-                return data.get("trace_value", 0)
+                raise ShapeResolutionError("ZERO FALLBACK: a scaled product with no factors")
 
         # Scaled symbol: scale * symbol_value
         if type_str == "scaled_symbol":
@@ -494,11 +452,8 @@ class SymbolicShapeResolver:
             scale = data.get("scale", 1)
             if symbol_id in self._runtime_values:
                 return scale * self._runtime_values[symbol_id]
-            # Fallback to trace
-            trace = data.get("trace_value") or data.get("trace")
-            if trace is not None:
-                return trace
-            raise ShapeResolutionError(f"Scaled symbol {symbol_id} not bound")
+            raise ShapeResolutionError(
+                f"ZERO FALLBACK: symbol '{symbol_id}' is not bound at runtime (scaled symbol)")
 
         raise ShapeResolutionError(f"Unknown SymInt type: {type_str}")
 

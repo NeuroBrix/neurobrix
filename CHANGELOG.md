@@ -746,6 +746,15 @@ avoid leaves satisfied and one who finds out alone does not.
 
 ### Fixed
 
+- **A dimension the runtime could not bind refuses by name instead of answering its trace
+  value.** Every path — the ATen resolver, the Triton resolver, the compiled closures on
+  both engines, the sequential argument resolver and the planner — used to fall back to
+  the extent seen at trace time when a symbol was unbound, and a video plan was budgeted
+  at a 112x176 decode for a 480x832 request that way. The refusal names the symbol, the
+  input it binds from and the values that were bound. A symbol bound to zero (a cache at
+  its first step) still answers zero. `NBX_STRICT_SYMBOLS` is gone: strict is the only
+  behaviour.
+
 - **Some models failed to load, or loaded corrupted weights, when part of the
   model was staged through system memory.** Weights whose stored precision
   differed from the precision the model runs at were copied at their original
