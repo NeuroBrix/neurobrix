@@ -1060,7 +1060,26 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def runtime() -> MetalRuntime:
-    """The process-wide Metal runtime. Raises if Metal is unusable."""
+    """The process-wide Metal runtime. Raises if Metal is unusable.
+
+    Under NBX_CENSUS=1 the Metal device is deliberately UNREACHABLE — the
+    honest analogue of the census's `CUDA_VISIBLE_DEVICES=` on a discrete
+    card. The census forms the keys the launcher WOULD form for a profile
+    (shapes, dtypes, block sizes, all data), and must touch no device; a
+    path that reaches for the real Metal device inside a shadow is one the
+    census does not cover, and it fails LOUDLY here rather than succeeding in
+    silence on the one card an Apple host always has. `device_count()` reads
+    0 through this (its own except path), so the census gate passes; the
+    backend NAME still resolves via NBX_GPU_BACKEND=metal, which needs no
+    device (`_pin_triton_backend`).
+    """
+    import os as _os_c
+    if _os_c.environ.get("NBX_CENSUS") == "1":
+        raise RuntimeError(
+            "census shadow: the Metal device is deliberately unreachable "
+            "(NBX_CENSUS=1). Key formation is pure data and needs no device; "
+            "a path that opened the Metal runtime here is uncovered by the "
+            "census and must be made pure.")
     global _RUNTIME
     if _RUNTIME is None:
         with _RUNTIME_LOCK:
