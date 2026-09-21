@@ -1373,3 +1373,48 @@ max |diff| 0.128, relative L2 0.0135, cosine 0.99991 — the DiT forward is fait
 batch 1 (the 08-29 class); `NBX_CFG_SEQUENTIAL=1` runs the two halves as batch-1 forwards and
 decides it on the next free card. The conditioning length (226, the graph's) stands as the
 vendor's contract.
+
+## 2026-09-21 — the shared cache against the hub, container by container (the owner's 18:19 rule; for the Mac)
+
+**The instrument.** `tools/hub_cache_diff.py` (main be835369, both remotes): every container of
+the shared cache (`~/.neurobrix/cache`, 59 with a manifest) against the object the hub serves
+under its slug — sha256 of each `components/*/graph.json` and of `topology.json`, and the build
+time in `manifest.json` on each side. The hub side is read without downloading a container: the
+store honours HTTP Range (206), the `.nbx` is a STORED zip64, so the central directory and the
+JSON members are fetched by byte range (self-test on the 21.9 GB PixArt build: 34 members, 67.7 MB
+read, every hash equal to `zipfile`'s; the store dropped one 1.5 GB member stream at 0 B/s, so
+reads are 8 MB chunks, retried). The page: `docs/reference/hub-cache-diff.md` (every hash, both
+sides). Re-run the tool rather than trusting the page's date.
+
+**Measured 19:20 UTC.** 36 IDENTICAL · 12 CACHE_NEWER (CogVideoX-2b, Flex.1-alpha, MiniCPM-o-4_5,
+PixArt-Sigma-XL-2-1024-MS, PixArt-XL-2-1024-MS, Qwen3-Omni, Sana_1600M_1024px_MultiLing,
+Wan2.1-T2V-1.3B, Wan2.1-VACE-1.3B, hat-l-x4, orpheus-3b-0.1-ft-snac, swinir-classical-x4) ·
+2 HUB_NEWER (PixArt-XL-1024: the cache's old 05-20 copy beside the 09-21 build; Wan2.1-I2V-14B:
+the hub's 06-26 build, the cache's 06-15 — the download is queued after the TRIM) · 7 NOT_ON_HUB
+(local variants: TinyLlama-v1.0 ×3 incl. int4, Qwen3-Coder int4g128, orpheus-3b-0.1-ft,
+real-esrgan-x2, real-esrgan-x8) · **2 HUB_OBJECT_CORRUPT**: `XPixelGroup/HAT-S-x4` serves
+55 653 412 bytes of ZEROS against a 54 654 466-byte record, and
+`ibm-granite/granite-3.1-1b-a400m-instruct` serves 2 523 531 200 bytes against a 2 791 966 656-byte
+record whose first bytes are not a zip header. Neither installs. On real-esrgan-x2: the internal
+and the public hub list the same 48 models and NEITHER has an x2 entry under any slug — the stale
+copy the Mac diagnosed did not come from the hub's catalogue as it stands; `74a2d7ea` is the
+sha256 of the cache's `components/model/graph.json` (the 20 September retrace).
+
+**Verified and therefore published at the first window** (`--verified`, by hand from the judged
+records; the tool never decides): PixArt-Sigma-XL-2-1024-MS (30.03 dB vs vendor), PixArt-XL-2-1024-MS
+(gate PASS; 41.35 dB on 09-07), hat-l-x4, hat-s-x4, swinir-classical-x4 (gates PASS 2026-09-21),
+granite-3.1-1b-a400m-instruct (battery goldens native + triton on the served stack). **Not
+published, and why**: CogVideoX-2b (09-07 gate NEEDS_EXPLANATION: both arms within the vendor
+gate, the old arm closer), Flex.1-alpha and MiniCPM-o-4_5 (09-07 gates FAIL — the cache holds
+those failed builds; the hub's older objects are the last judged ones), Qwen3-Omni (one mode
+judged so far), Sana_1600M_1024px_MultiLing (the drift item, the owner's decision), Wan T2V
+and VACE (no gate on record; Wan T2V's tiled VAE seams are a stage-three item), orpheus-snac
+(no gate on record), real-esrgan-x2/x8 (new entries written, no fidelity gate on record).
+The publication runs from `after_trim_v2.sh` at 01:05 UTC: a 5-byte then a 50 MB write probe
+through the internal entry point, then `hub_cache_diff.py --publish --verified` (a corrupt hub
+object is replaced like a stale one; a container without a staged `.nbx` is re-packed from the
+cache and its members re-hashed against the cache before the upload).
+
+**Until then the shared cache is canonical for both machines**; the Mac reads its graphs from
+there. The doctrine that governs everything from 19:07 today is in this rack's CLAUDE.md
+(certified autotune, three stages) and `docs/internal/_session_current.md`.
