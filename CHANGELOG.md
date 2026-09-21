@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   took 718 s with a 457-pixel tile and takes 40 s with a 448-pixel one, for 4 % less tile
   area. Cards without a measured lattice keep the computed edge.
 
+### Fixed
+
+- **A video request that names no resolution is planned at the container's own.** The
+  plan for such a request was budgeted at the VAE's trace extent while the run rendered
+  at the size the container implies (its backbone's traced latent times the VAE scale),
+  so a 1.3B text-to-video decode asked 24.8 GB of a card planned at 19.7 GB. The plan,
+  the CLI and the server now read the same answer the executor renders at; on the same
+  card the plan sees the decode overflow and tiles it. `NBX_PRISM_ESTIMATE_DIAG=1`
+  prints, per component, the request the plan was budgeted under, the symbols it bound
+  and every overflow op.
+
 ### Added
 
 - **A kernel census without a card.** `NBX_CENSUS=1 neurobrix run ... --hardware <profile>`
