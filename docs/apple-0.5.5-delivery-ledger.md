@@ -33,9 +33,9 @@ readback; image external degeneracy judge; video judged by eye.
 | upscaler/swin2SR-classical-sr-x2-64 | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged non-degenerate (std ~104). |
 | upscaler/swin2SR-classical-sr-x4-64 | 58 MB | **DELIVERED** 2026-09-20 | same battery, same judge. |
 | upscaler/swin2SR-realworld-sr-x4-64-bsrgan-psnr | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x2 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x4 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x8 | 67 MB | **DELIVERED at ≤512 px** 2026-09-20 | C/T/S rc=0 at 448/512 px, judged. 1024 px OWED on the per-tile retention defect (handed to the runtime owners); refused with figures until it returns. |
+| upscaler/real-esrgan-x2 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 896², rc=0, **0 misses**, std 103.9, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x4 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 1792², rc=0, **0 misses**, std 104.5, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x8 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 3584², rc=0, **0 misses**, std 104.1, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
 | upscaler/swinir-classical-x2 | 99 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | upscaler/swinir-classical-x4 | 92 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | stt/parakeet-tdt-1.1b | 4.2 GB | **DELIVERED** 2026-09-21 | C/T/S all rc=0 (7 s / 22 s / 15 s), JFK transcript exact in each mode (STT judge), 0 misses both triton modes. Extract from hub 350 s (~12 MB/s sequential). Local copy deleted after judgment. |
