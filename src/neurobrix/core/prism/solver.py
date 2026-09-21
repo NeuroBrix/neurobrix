@@ -3902,8 +3902,16 @@ class PrismSolver:
 
         # Strategy 3: zero3 — CPU offload of weights, GPU for compute only.
         # Works only when activations fit on the largest GPU (with the
-        # same driver-overhead reserve as Strategy 1).
-        if mem.activation_mb <= effective_capacity * 0.92:
+        # same driver-overhead reserve as Strategy 1) — AND only where the
+        # offload frees anything: on a unified device host and device are
+        # the same bytes, the budget already counts the weights
+        # (_device_is_unified, 2026-09-09), and SELECTING zero3 there is a
+        # plan accepted under one memory model and executed under another —
+        # it then dies in zero3's CUDA machinery before an op runs
+        # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
+        # Selection consults the same device door the budget does.
+        if (mem.activation_mb <= effective_capacity * 0.92
+                and not _device_is_unified(largest.device_string, profile)):
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
 
