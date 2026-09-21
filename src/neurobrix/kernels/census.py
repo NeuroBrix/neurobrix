@@ -194,19 +194,55 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     # replay set (none in the catalogue today; TinyLlama's eos is 2).
     T = _nt.NBXTensor
 
+    # A value born on the HOST is known to the shadow: `from_numpy` keeps the array it was
+    # given beside the tensor, and every host read answers from it. The flows compose their
+    # requests from such tensors (a frame count, a token id list, a timestep table); a shadow
+    # answering ones there built Wan 2.2's image encoder for a negative frame count
+    # (2026-09-21). Values computed on the device stay unknown and answer as below.
+    _from_numpy = T.from_numpy
+
+    def _from_numpy_shadow(arr, dtype=None):
+        t = _from_numpy(arr, dtype)
+        try:
+            import numpy as np
+            t._shadow_host = np.array(arr, copy=True)
+        except Exception:  # noqa: BLE001 — a host copy that cannot be kept is a device value
+            pass
+        return t
+    T.from_numpy = staticmethod(_from_numpy_shadow)
+
     def _item(self):
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and h.size == 1:
+            v = h.reshape(-1)[0]
+            return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
         d = str(self._dtype).lower()
         if "bool" in d:
             return True                 # a guard's `all(isfinite(x))`: the shadow is healthy
-        return 0 if "int" in d else 0.0
+        # An integer read answers ONE, not zero: a read that is a SIZE (a duration, a frame
+        # count, a length derived from data) shaped an empty tensor at zero — Kokoro's
+        # index_select divided by zero, Allegro's group norm met (0, …), Wan 2.2's div met a
+        # negative extent (2026-09-21) — while a token id 1 runs the same shapes as 0.
+        return 1 if "int" in d else 0.0
 
     def _numpy(self):
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and tuple(h.shape) == tuple(self._shape):
+            return h
+        # Host reads of an integer tensor answer ONES for the same reason `_item` does: a
+        # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
+        # after a frame count read 0, 2026-09-21). Float reads stay zero.
         import numpy as np
+        if "int" in str(self._dtype).lower():
+            return np.ones(tuple(self._shape), dtype=np.int64)
         return np.zeros(tuple(self._shape), dtype=np.float32)
 
     def _tolist(self):
+        h = getattr(self, "_shadow_host", None)
+        if h is not None and tuple(h.shape) == tuple(self._shape):
+            return h.tolist()
         import numpy as np
-        return np.zeros(tuple(self._shape), dtype=np.int64).tolist()
+        return np.ones(tuple(self._shape), dtype=np.int64).tolist()
 
     T.item = _item
     T.numpy = _numpy
@@ -238,9 +274,40 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     GE = _ge.GraphExecutor if hasattr(_ge, "GraphExecutor") else None
     if GE is not None:
         def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
+            # A CPU-staged lazy component's plan device is a staging location; the live
+            # loader resolves the GPU and persists it on the executor. The shadow does the
+            # same, or the strategy refuses "no GPU execution device" (CogVideoX on the
+            # 16 GB profile, 2026-09-21).
+            dev_s = str(getattr(self, "device", "") or "")
+            if not dev_s.startswith(("cuda", "hip", "mps")):
+                self.device = f"cuda:{_cur['dev']}"
             self._weights = _shadow_params_for(self, nbx_path, component)
             return self._weights
         GE._load_weights_triton = _load_weights_triton
+
+    # The torch-side device utilities a shared flow path reaches (orpheus: device_sync →
+    # torch.cuda.synchronize → "No CUDA GPUs are available"): no-ops in the shadow.
+    # Rebound in every module already loaded that imported them BY NAME (the memory manager,
+    # the strategies, the serving engine import before the shadow installs — the CLI's own
+    # imports run first): orpheus's cleanup reached the original through the manager's name.
+    import sys as _sys
+    from neurobrix.core import device_utils as _du
+    for _name in ("device_sync", "device_empty_cache", "device_seed"):
+        _orig = getattr(_du, _name, None)
+        if _orig is None:
+            continue
+        setattr(_du, _name, _noop)
+        for _mod in list(_sys.modules.values()):
+            if _mod is not None and getattr(_mod, _name, None) is _orig:
+                setattr(_mod, _name, _noop)
+    # A sampler draws from probabilities the shadow cannot make (zero logits, NaN after the
+    # filters — openaudio, 2026-09-21): under the shadow every draw is token 0.
+    try:
+        from neurobrix.triton.flow import dual_ar as _dual_ar
+        if hasattr(_dual_ar, "_sample_token_np"):
+            _dual_ar._sample_token_np = lambda *a, **k: 0
+    except Exception:  # noqa: BLE001 — a tree without that flow has nothing to shadow
+        pass
 
     _bind_target(hardware, hardware_profile)
 
