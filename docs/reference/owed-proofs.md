@@ -1557,3 +1557,55 @@ default ladder (main, with this commit). The loss is confined to a few 16-step b
 BLOCK_K's optimum flips; every other bucket costs nothing, and the alternative is a key nobody
 can certify. Records: `nbx/campaigns/2026_09_21_bucketed_keys/bmm_K_M1_N64_{16g,32g}.json`.
 The Mac's profile needs the same measurement before its census in bucketed form.
+
+## 2026-09-21 21:20 — the memory law and the tiling standard on main (f5a88bff): for the Mac
+
+**The law** is one brick, `core/prism/memory_budget.py`: a SHARED pool (unified memory, a
+device driving a display, a card another process holds memory on, a reading that could not be
+taken, host RAM) is budgeted at its free reading rounded DOWN onto the commercial ladder —
+configuration, `PRISM_DEFAULTS["memory_ladder_gb"]`, 4 GB to 512 GB — never a value off the
+ladder; a DEDICATED card nothing else uses is used whole, less only the runtime's own context.
+The decision is read from the device (`autodetect.device_sharing`: display activity, other
+processes' memory, own context; the profile's `has_unified_memory` for the pool kind). The tile a
+plan cuts derives from the RUNG by a fixed rule — a dedicated card's nominal rung, a shared pool's
+free rung — and is a pure function of (component, rung): the same 2 048-pixel upscale cuts 320 px
+tiles at 4 GB and 640 px at 16 GB, edge tiles padded to the canonical size. Cells:
+`tests/unit/prism/test_the_memory_budget_is_one_law_for_every_device_kind.py` (14 red on main
+before the brick: idle 16 GB and 32 GB, partly held, a display, unified 18 186 / 10 099 MB,
+unreadable, host RAM; the door). **The Mac proves the unified side**: on the M4 Pro
+`is_shared` must answer from `has_unified_memory` and the budget must read the host's available
+figure rounded down (the `_device_reading` branch for a unified device). Measured here before the
+brick: an idle V100-16GB was budgeted at 12 288 MB and an idle V100-32GB at 24 576 MB.
+
+**The census enumerates rungs**: `tools/certified_census.py --rungs ladder` (default) runs every
+model's shadow at every rung up to the profile's card capacity through the
+`NBX_PRISM_BUDGET_MB` door; a spatial family's tiling probe (its family YAML, `census.tiling_probe`)
+is the request large enough to tile. The Mac's census in bucketed form should run with the same
+flag once the Apple profile declares its ladder.
+
+**Where the shadow's value-reading fixes live** (the Mac aligns on them, never rewrites):
+`src/neurobrix/kernels/census.py::install` — an integer read answers 1 and a host read ones; a
+value born on the host (`NBXTensor.from_numpy`) is kept and read back as written; the lazy
+strategy's execution device resolves to the shadow's card; `device_utils` rebound to no-ops in
+every loaded module; the dual-AR sampler draws token 0; a key with a negative extent is refused.
+Cell: `tests/unit/kernels/test_the_census_shadow_carries_the_profiles_target.py`.
+
+**b23105fe** (never offload to the host for memory on a unified device): the CUDA inertness proof
+is owed once the certification rounds free a card; the unified outcome changing from a refusal to
+a streaming strategy is the Mac's to prove.
+
+## 2026-09-21 21:55 — b23105fe on main: the CUDA inertness proof
+
+Merged from a worktree carrying the machine's ignored pointers (`.nbx_registry`,
+`config/hardware/default*.yml`, `forge/`). Three ways: (1) the door — `_device_is_unified`
+answers False for every card of every profile here, so the guard cannot fire; (2) the Mac's
+cells pass on this tree (2 passed, the discrete arm keeps the host offload); (3) a Prism plan
+census of the 59 installed containers on the four-card profile and both one-card profiles, main
+against main + b23105fe, each run twice: **0 plans differ** (48 planned, 11 video containers
+refused identically by the census script's own request naming no frame count). A first pass
+read TWO moved plans (the old PixArt containers, `single_gpu` → `single_gpu_lifecycle`) — the
+worktree had no `.nbx_registry`, the registry-flag lookup resolved nothing, PixArt's VAE lost
+its `fp16_conv_cascade_safe` and planned fp32. The difference was the harness, run one side
+twice before naming a culprit, and the pointer is now part of every worktree here. The unified
+outcome (a refusal becoming a streaming strategy, since the engine never refuses for memory)
+is the Mac's to prove. Records: `nbx/campaigns/2026_09_21_mac_proofs/`.

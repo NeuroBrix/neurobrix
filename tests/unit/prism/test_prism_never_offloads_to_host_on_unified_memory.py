@@ -71,8 +71,15 @@ def test_no_host_offload_for_memory_on_a_unified_device():
             f"and breaks the GPU-only kernels; tile or refuse instead")
 
 
-def test_host_offload_stays_available_on_a_discrete_device():
-    """Inertness: the discrete card still offloads to host as before."""
+def test_host_offload_stays_available_on_a_discrete_device(monkeypatch):
+    """Inertness: the discrete card still offloads to host as before. The
+    host-fit check reads live host memory (memory_budget._host_budget_mb) — pin
+    it large so this proves the guard's inertness, not the machine's free RAM."""
+    from neurobrix.core import host_memory as _hm
+    from neurobrix.core.host_memory import MemoryState
+    monkeypatch.setattr(_hm, "memory_state",
+                        lambda: MemoryState(total_mb=65536, available_mb=60000,
+                                            source="test"))
     result = _place(unified=False)
     assert result is not None and str(result[0]).startswith("cpu"), (
         f"expected the host offload on the discrete card, got {result!r} — "

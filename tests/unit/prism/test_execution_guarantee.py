@@ -70,17 +70,17 @@ def test_streaming_accepts_what_cpu_execution_refuses(solver):
     """The exact gap that produced 'No strategy can fit'.
 
     Four components of 3 GB each: 12 GB total, so `cpu_execution` refuses on
-    an 8 GB machine (budget 0.7 x 8 = 5.6 GB). But the largest single
+    an 8 GB machine (budget: the 6 GB rung of the machine's own reading capped by its installed 8 GB). But the largest single
     component is 3 GB, which fits — so streaming runs it."""
     comps = [(f"c{i}", _Mem(3000)) for i in range(4)]
     profile = _profile(ram_mb=8000)
 
     assert solver._try_cpu_execution(comps, {}, [], {}, profile, None) is None, (
-        "precondition: sum(12000MB) exceeds the 5600MB budget"
+        "precondition: sum(12000MB) exceeds the 6144MB budget"
     )
 
     result = solver._try_cpu_streaming(comps, {}, [], {}, profile, None)
-    assert result is not None, "streaming must accept: max(3000MB) fits in 5600MB"
+    assert result is not None, "streaming must accept: max(3000MB) fits in 6144MB"
     allocations, _devices = result
     assert set(allocations) == {"c0", "c1", "c2", "c3"}
     assert all(dev == "cpu" for dev, _shards in allocations.values())

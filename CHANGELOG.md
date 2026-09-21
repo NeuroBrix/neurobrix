@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values in one request); it now enters the autotune key as its bucket's top on the same
   ladder, measured on both V100 classes at 0.0 % median loss and up to 10.5 % / 20.0 % in
   a few 16-step buckets where the block optimum flips.
+- **A video request that names no frame count runs at the container's.** The CLI now hands the
+  flow the frame count it resolved (request, then the container's defaults, then the family),
+  not only the raw argument; Allegro-TI2V and CogVideoX-5b-I2V refused every request without
+  `--num-frames` while their containers declared 88 and 49.
+- **The kernel census enumerates every memory rung.** Each model is shadowed at every rung of
+  the ladder up to its card's capacity, and a spatial family declares in its configuration
+  the request large enough to tile (`census.tiling_probe`), so the certified directory holds
+  the canonical tile of every rung a user of that card model can meet, and a change to the
+  budget rule never asks for a new census.
 - **The kernel census no longer drops a model whose graph froze a dimension.** Such a model
   is still shadowed and its keys harvested at the frozen extent, and it is queued for a
   retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
@@ -54,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are the keys the launcher forms when it serves; a profile naming no device is refused.
 
 ### Changed
+
+- **The memory budget is one law for every device kind.** A shared pool — unified memory, a
+  device driving a display, a card another process holds memory on, host RAM — is budgeted at
+  its free reading rounded DOWN onto the commercial memory ladder (now configuration, 4 GB to
+  512 GB), never a value off the ladder; a dedicated compute card nothing else uses is used
+  whole, less only the runtime's own context. The dedicated-or-shared decision is read from
+  the device itself. Before, an idle 16 GB card was budgeted at 12 GB and an idle 32 GB card
+  at 24 GB (a margin stacked on the rounding), readings under 4 GB passed through unrounded,
+  and host RAM never met the ladder. The tile a plan cuts now derives from the rung by a fixed
+  rule — a dedicated card's nominal rung, a shared pool's free rung — so a census can enumerate
+  every rung up to a card's capacity and a change of budget never asks for a new census.
 
 - **A request-dependent dimension of a matrix kernel's autotune key is bucketed.** A prompt's
   token count and a decode's key length now enter the matmul and batched-matmul autotune keys

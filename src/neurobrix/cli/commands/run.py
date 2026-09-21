@@ -575,8 +575,12 @@ def cmd_run(args):
         inputs["global.height"] = args.height
     if args.width is not None:
         inputs["global.width"] = args.width
-    if getattr(args, 'num_frames', None) is not None:
-        inputs["global.num_frames"] = args.num_frames
+    if num_frames is not None:
+        # The frame count the CLI RESOLVED (request → container defaults → family), not only the
+        # raw argument: a video flow reading `global.num_frames` for its image conditioning
+        # refused every request that named none (Allegro-TI2V, CogVideoX-5b-I2V in the
+        # census, 2026-09-21) while the container declared 88 and 49.
+        inputs["global.num_frames"] = int(num_frames)
     if getattr(args, 'fps', None) is not None:
         inputs["global.fps"] = args.fps
     if getattr(args, 'input_image', None):
