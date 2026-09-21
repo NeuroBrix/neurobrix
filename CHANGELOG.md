@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values in one request); it now enters the autotune key as its bucket's top on the same
   ladder, measured on both V100 classes at 0.0 % median loss and up to 10.5 % / 20.0 % in
   a few 16-step buckets where the block optimum flips.
+- **A video request that names no frame count runs at the container's.** The CLI now hands the
+  flow the frame count it resolved (request, then the container's defaults, then the family),
+  not only the raw argument; Allegro-TI2V and CogVideoX-5b-I2V refused every request without
+  `--num-frames` while their containers declared 88 and 49.
 - **The kernel census enumerates every memory rung.** Each model is shadowed at every rung of
   the ladder up to its card's capacity, and a spatial family declares in its configuration
   the request large enough to tile (`census.tiling_probe`), so the certified directory holds
