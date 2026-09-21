@@ -25,7 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A hub object whose bytes are not the recorded container (wrong length, no zip header) is
   reported as its own verdict, `HUB_OBJECT_CORRUPT`, and is replaced like a stale one.
 
+### Fixed
+
+- **A kernel census records its keys under the vendor profile its hardware names.** Behind the
+  census door no card is visible, so the engine could not tell which vendor profile applied:
+  the bucket ladder, the shared-memory budget and the kernel config spaces went unread and every
+  recorded key came out in the exact form. The census now binds its target from the hardware
+  profile it is taken for (the device's brand and compute capability), so the keys it records
+  are the keys the launcher forms when it serves; a profile naming no device is refused.
+
 ### Changed
+
+- **A request-dependent dimension of a matrix kernel's autotune key is bucketed.** A prompt's
+  token count and a decode's key length now enter the matmul and batched-matmul autotune keys
+  as the top of their bucket while the kernel still runs the true size: exact under 64, then
+  in steps of 16 to 256, 32 to 1024, 128 to 8192, 512 beyond, a ladder chosen by measurement
+  on both V100 classes (0.0 % median and maximum loss against the per-size optimum where
+  powers of two lost up to 26.9 %). A certified setting therefore serves every request in its
+  bucket, and a prompt length nobody certified no longer sweeps. The convolutions keep exact
+  spatial and batch keys: the same ladder measured on a convolution's width loses 37–40 % in
+  the two buckets where the kernel's optimum flips, and a convolution's extents are bounded by
+  resolutions and tile edges rather than by prompts. The ladder is a profile value; a profile
+  without one keeps the exact key. The previously certified matrix entries whose extents are
+  not bucket tops no longer serve and are re-certified.
 
 - **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
   into tiles, the tile's edge is now rounded down to a multiple of 16 on Volta (a profile

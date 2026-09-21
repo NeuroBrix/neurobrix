@@ -110,8 +110,13 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     return out
 
 
-def install() -> None:
-    """Turn this process into a shadow: no device memory, no launch, no value, no weight file."""
+def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = None) -> None:
+    """Turn this process into a shadow: no device memory, no launch, no value, no weight file.
+
+    `hardware` names the hardware profile the census is taken for (the run's `--hardware`);
+    `hardware_profile` is its loaded YAML (tests). One of them is how the shadow learns which
+    VENDOR profile its keys are composed under — see `_bind_target`.
+    """
     if _ACTIVE["census"]:
         return
     from neurobrix.kernels import nbx_tensor as _nt
@@ -236,3 +241,43 @@ def install() -> None:
             self._weights = _shadow_params_for(self, nbx_path, component)
             return self._weights
         GE._load_weights_triton = _load_weights_triton
+
+    _bind_target(hardware, hardware_profile)
+
+
+def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
+    """The shadow's launcher target, from the hardware profile the census names.
+
+    Behind the door (`CUDA_VISIBLE_DEVICES=`) no driver answers which vendor profile applies:
+    `arch_smem_budget` resolved EMPTY, the bucket ladder went unread and every recorded key was
+    composed in the exact form (2026-09-21: the catalogue censuses recorded matmul M = 226 and
+    3 136 where the served launcher keys 240 and 3 200), the SMEM budget and the config spaces
+    unread with it. The hardware profile names its device's brand and compute capability; the
+    target is bound from them, so the keys a census records are the keys the launcher forms when
+    it serves. A profile that names no device is refused: a census under no vendor profile is a
+    census of nothing. A device whose capability is not a number (Apple: the arch is a device
+    name) keeps its own driver's answer.
+    """
+    if profile is None and hardware:
+        import yaml
+        from neurobrix.core.prism.loader import HARDWARE_DIR
+        path = HARDWARE_DIR / f"{hardware}.yml"
+        if not path.exists():
+            raise RuntimeError(f"census: the hardware profile {hardware!r} is not at {path}; the shadow cannot choose a vendor profile")
+        profile = yaml.safe_load(path.read_text())
+    if not profile:
+        return
+    devices = profile.get("devices") or []
+    if not devices:
+        raise RuntimeError("census: the hardware profile names no device; the shadow cannot choose a vendor profile")
+    dev = devices[0]
+    brand = str(dev.get("brand") or "").strip().lower()
+    cc = str(dev.get("compute_capability") or "").strip()
+    if brand not in ("nvidia", "amd") or not cc.replace(".", "").isdigit():
+        return
+    major, minor = (cc.split(".") + ["0"])[:2]
+    from triton.backends.compiler import GPUTarget
+    from neurobrix.kernels import launcher as _launcher
+    _launcher._TARGET = GPUTarget("cuda" if brand == "nvidia" else "hip", int(major) * 10 + int(minor), 32 if brand == "nvidia" else 64)
+    from neurobrix.kernels.ops import _configs
+    _configs._ACTIVE_PROFILE.clear()     # a profile resolved empty before the bind is read again
