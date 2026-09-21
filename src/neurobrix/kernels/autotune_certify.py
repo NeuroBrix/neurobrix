@@ -250,6 +250,70 @@ class WindowedOracle:
             yield out[ni:ni + 1, :, r0:r1, c0:c1], ref
 
 
+class RowWindowedOracle:
+    """The float64 oracle on row windows of a matrix product's output (matmul, addmm, batched
+    matmul); the deviation is measured on those rows only, and the proof names them.
+
+    Why (measured 2026-09-21 23:32 on metatron): the certifier computed the whole fp64 oracle on
+    the HOST — a 44 544 x 3 072 x 8 192 product in numpy, 2.2 TFLOP of fp64 through OpenBLAS's
+    thread pool — so four certifiers saturated eighty cores (load 74, swap full, 155 GB of host
+    RSS in one of them) while their cards read 0 %. A window of rows carries the same per-element
+    bound; the first and last rows are the masked edges a wrong tiling shows at, the middle rows
+    the interior."""
+
+    def __init__(self, blocks, m):
+        self.blocks = blocks                              # [((r0, r1), float64 array [..., r1-r0, N])]
+        self.describe = (f"on {len(blocks)} row window(s) of the output (" +
+                         "; ".join(f"rows {r0}-{r1}" for (r0, r1), _ in blocks) + f") of {m} rows")
+
+    def slices(self, out):
+        for (r0, r1), ref in self.blocks:
+            yield out[..., r0:r1, :], ref
+
+
+def _row_windows(m, n, k, cap=None):
+    """None when the whole product fits the cap; else the row windows the oracle is computed
+    on — the first rows, the middle rows, the last rows — each of at most cap/3 multiply-adds."""
+    cap = ORACLE_MAX_MACS if cap is None else cap
+    if m * n * k <= cap:
+        return None
+    rows = max(1, min(m, int(cap / 3 // max(1, n * k))))
+    wins = [(0, rows), ((m - rows) // 2, (m - rows) // 2 + rows), (m - rows, m)]
+    seen, out = set(), []
+    for w in wins:
+        if w not in seen:
+            seen.add(w); out.append(w)
+    return out
+
+
+def _matmul_oracle_fn(a, b, bias=None):
+    """The fp64 oracle of a (..., M, K) x (..., K, N) product (+ bias over N), whole under the
+    cap, row-windowed above it."""
+    m, k = a.shape[-2], a.shape[-1]
+    n = b.shape[-1]
+    batch = int(np.prod(a.shape[:-2])) if a.ndim > 2 else 1
+    wins = _row_windows(m * batch, n, k)
+
+    def whole():
+        r = a.astype(np.float64) @ b.astype(np.float64)
+        return r if bias is None else r + bias.astype(np.float64)
+    if wins is None:
+        return whole
+    rows = wins[0][1] - wins[0][0]
+    wins = _row_windows(m, n, k, cap=max(1, ORACLE_MAX_MACS // batch)) or [(0, m)]
+
+    def windowed():
+        blocks = []
+        for (r0, r1) in wins:
+            r = a[..., r0:r1, :].astype(np.float64) @ b.astype(np.float64)
+            if bias is not None:
+                bb = bias.astype(np.float64)
+                r = r + (bb[..., r0:r1, :] if bb.ndim >= 2 and bb.shape[-2] == m else bb)
+            blocks.append(((r0, r1), r))
+        return RowWindowedOracle(blocks, m)
+    return windowed
+
+
 def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     n, ci, h, wd = x.shape
     co, ci_g, kh, kw = wt.shape
@@ -288,10 +352,9 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
         a = _arr(rng, (M, K), dts[0] if dts else "fp16")
         b = _arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
-            return (lambda: W.mm(to(a), to(b))), (lambda: a.astype(np.float64) @ b.astype(np.float64)), "c_ptr"
+            return (lambda: W.mm(to(a), to(b))), _matmul_oracle_fn(a, b), "c_ptr"
         bias = _arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
-        return ((lambda: W.addmm(to(bias), to(a), to(b))),
-                (lambda: bias.astype(np.float64)[None, :] + a.astype(np.float64) @ b.astype(np.float64)), "c_ptr")
+        return ((lambda: W.addmm(to(bias), to(a), to(b))), _matmul_oracle_fn(a, b, bias[None, :]), "c_ptr")
     if short == "baddbmm_kernel":
         M, N, K = int(key[0]), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
@@ -301,9 +364,8 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
         if has_bias:
             bias_dt = dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16")
             bias = _arr(rng, (B, M, N), bias_dt)
-            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))),
-                    (lambda: a.astype(np.float64) @ b.astype(np.float64) + bias.astype(np.float64)), "out_ptr")
-        return (lambda: W.bmm(to(a), to(b))), (lambda: a.astype(np.float64) @ b.astype(np.float64)), "out_ptr"
+            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), _matmul_oracle_fn(a, b, bias), "out_ptr")
+        return (lambda: W.bmm(to(a), to(b))), _matmul_oracle_fn(a, b), "out_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         x = _arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
@@ -352,7 +414,7 @@ def oracle_deviation(out: np.ndarray, oracle) -> float:
     """max |out - oracle| relative to the oracle's own magnitude; inf when one
     side is not finite where the other is. A windowed oracle is measured on
     its windows, the largest deviation among them."""
-    if isinstance(oracle, WindowedOracle):
+    if hasattr(oracle, "slices"):                       # a windowed oracle of either kind
         return max(oracle_deviation(piece, ref) for piece, ref in oracle.slices(np.asarray(out)))
     x = np.asarray(out, dtype=np.float64).reshape(-1)
     y = np.asarray(oracle, dtype=np.float64).reshape(-1)
@@ -844,7 +906,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
             oracle = oracle_box["v"] = oracle_fn()
         state["t_oracle"] = round(time.time() - t_or, 3)
-        state["oracle"] = ORACLE + (" " + oracle.describe if isinstance(oracle, WindowedOracle) else "")
+        state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
         configs = list(upstream_prune(tuner, kwargs))
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
