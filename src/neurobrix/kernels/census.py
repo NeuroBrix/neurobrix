@@ -43,10 +43,25 @@ def key_line(tuned, key: tuple) -> Optional[str]:
     return f"{qual}::{key_repr(tuple(key))}"
 
 
+_SAID: Set[str] = set()
+
+
+def _say_once(msg: str) -> None:
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(msg, flush=True)
+
+
 def record(tuned, key: tuple) -> None:
     """Called where the launch-time key is formed (kernels/ops/_configs.run_with_notice)."""
     path = os.environ.get("NBX_KEY_RECORD")
     if not path:
+        return
+    if any(isinstance(k, int) and not isinstance(k, bool) and k < 0 for k in key):
+        # A negative extent is a shadow artefact, never a request (Wan 2.2's image encoder
+        # reached a batch of -2 after a frame expression went negative, 2026-09-21); such a key
+        # is refused here, said once, and the run's failure names the op.
+        _say_once(f"[census] key with a negative extent refused: {key_line(tuned, key)}")
         return
     line = key_line(tuned, key)
     if line is None:
