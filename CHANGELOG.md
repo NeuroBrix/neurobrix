@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An input the graph binds symbolically is handed to it whole.** The runtime cut any
+  component input longer than the container's traced extent down to that extent, even where
+  the graph binds the dimension as a symbol and runs at any length: Qwen3-Omni's thinker
+  received the trace's 23 tokens instead of the 213 it composed and failed on the first
+  reshape. Only an extent the graph carries as a literal is still cut, and the cut is now
+  said in clear as a trace defect to fix at the source.
+
+### Added
+
+- **`tools/hub_cache_diff.py`** compares every container of the shared cache with the object
+  the hub serves, graph by graph, by reading the hub object's central directory and JSON
+  members over HTTP Range (no container is downloaded), and publishes the ones that are newer
+  and verified through the toolchain; the table is written to `docs/reference/hub-cache-diff.md`.
+
 ### Changed
 
 - **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
