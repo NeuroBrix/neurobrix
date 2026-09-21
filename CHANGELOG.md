@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow the frame count it resolved (request, then the container's defaults, then the family),
   not only the raw argument; Allegro-TI2V and CogVideoX-5b-I2V refused every request without
   `--num-frames` while their containers declared 88 and 49.
+- **Certification costs the host nothing it does not need.** The fp64 oracle of the matmul family
+  is computed on row windows above the multiply-add cap (first, middle and last rows), never
+  whole on the host: a 44 544 × 3 072 × 8 192 product's whole oracle held one certifier at
+  155 GB of host memory with its card idle. A census shadow runs its host math on one thread;
+  a BLAS pool spinning behind one shadow took 42 cores.
 - **The kernel census enumerates every memory rung.** Each model is shadowed at every rung of
   the ladder up to its card's capacity, and a spatial family declares in its configuration
   the request large enough to tile (`census.tiling_probe`), so the certified directory holds
