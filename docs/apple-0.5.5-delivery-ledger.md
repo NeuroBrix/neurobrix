@@ -118,6 +118,27 @@ Measured from each container's weight footprint on the hub. No downloads.
 
 ## Census and certification state
 
+**First-stage catalogue census — DONE 2026-09-21, from the CANONICAL shared cache**
+(`Super-NeuroBrix-Cache`, not the stale hub), 30 fitting models, `apple_m4_pro`:
+
+- **11,079 keys harvested** (kernel × bucketed-shape × dtype), each model tagged with
+  its `graph_sha` so a retrace invalidates exactly its own keys. Directory before:
+  154 served → **10,925 to certify**.
+- **13 OK** (harvest keys): the WHOLE upscaler family (real-esrgan x2/x4/x8, swin2SR
+  x2/x4/realworld, swinir x2/x4, hat-l/s — all symbolic on the shared cache),
+  TinyLlama (2560), parakeet (16), orpheus-snac (8400).
+- **8 RETRACE** (frozen on the shared cache, handed to the Dell's Forge with graph_sha —
+  `apple_retrace_queue.md`): GLM-4.1V, Janus-Pro-7B, Sana-4Kpx, VibeVoice, Wan-VACE,
+  canary-qwen, chatterbox, granite-speech.
+- **9 FAILED** (census request gaps / partial): CogVideoX×2 and PixArt×2 (need a
+  resolution in the request), Kokoro/Voxtral/openaudio/orpheus-ft (one mode succeeded,
+  one failed — partial), Qwen3-int4 (quantized path). To fix in the request map, not
+  keys to sweep.
+
+**Second stage in flight:** certifying the 2,648 keys of the verifiable-now set
+(upscalers + TinyLlama + parakeet + hat) on synthetic tensors under the witness, VM
+tolerant. Orpheus's 8,400 keys and the larger models batch after.
+
 - Census basis today: the runtime replay cache (the census tool is being
   built once on main, hardware profile as input; the Apple inputs it needs
   are handed in `census_requirements_apple.md`). Replay-derived and
