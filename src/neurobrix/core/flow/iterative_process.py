@@ -45,6 +45,9 @@ def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
         )
 
 
+_LOOP_STATE_DIAG = os.environ.get("NBX_LOOP_STATE_DIAG") == "1"
+
+
 def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
                             comp_name: str) -> None:
     """Always-on NaN/Inf gate on the diffusion loop state.
@@ -56,6 +59,17 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
     the former DEBUG-gated print-and-continue (engine audit #2
     2026-07-05, P-ZERO-FALLBACK-SWEEP).
     """
+    if _LOOP_STATE_DIAG and isinstance(state, torch.Tensor):
+        # NBX_LOOP_STATE_DIAG=1 (default off): the state's statistics after every
+        # scheduler step, the differential against the vendor's own callback
+        # (Wan T2V rendered a field the vendor does not, 2026-09-21).
+        _f = state.detach().float()
+        _ts = timestep.item() if hasattr(timestep, "item") else timestep
+        print(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean().item():.4f} "
+              f"std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f} "
+              f"ch-mean[:4] {[round(v, 3) for v in _f.mean(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]} "
+              f"ch-std[:4] {[round(v, 3) for v in _f.std(dim=[d for d in range(_f.dim()) if d != 1]).tolist()[:4]]}", flush=True)
+
     if not isinstance(state, torch.Tensor) or not state.is_floating_point():
         return
     if bool(torch.isfinite(state).all()):
@@ -240,6 +254,18 @@ class IterativeProcessHandler(FlowHandler):
                 if self._output_extractor.produces_encoder_hidden_states(comp_name):
                     # Flow control for negative encoding belongs in the handler
                     self._execute_negative_encoding(comp_name)
+                    if _LOOP_STATE_DIAG:
+                        # The conditioning the loop will guide between: rows of the
+                        # positive and negative encodings that are non-zero (a trimmed,
+                        # zero-padded T5 sequence has exactly the prompt's rows non-zero).
+                        _pos = self.ctx.variable_resolver.get(f"{comp_name}.output_0")
+                        _neg = self.ctx.variable_resolver.get(f"{comp_name}.negative_hidden_state")
+                        for _lbl, _t in (("pos", _pos), ("neg", _neg)):
+                            if isinstance(_t, torch.Tensor):
+                                _f = _t.detach().float()
+                                _rows = int((_f.abs().sum(dim=-1) > 0).sum().item())
+                                print(f"[CondDiag] {comp_name} {_lbl} shape {tuple(_f.shape)} nonzero rows {_rows} "
+                                      f"mean {_f.mean().item():.4f} std {_f.std().item():.4f} absmax {_f.abs().max().item():.3f}", flush=True)
 
             if DEBUG:
                 for suffix in ("output_0", "last_hidden_state"):
@@ -735,6 +761,13 @@ class IterativeProcessHandler(FlowHandler):
                     # init supplies the scheduler's stochastic draws, in order;
                     # see VariableResolver.sampling_generator). Deterministic
                     # schedulers ignore it.
+                    if _LOOP_STATE_DIAG and isinstance(model_output, torch.Tensor):
+                        _mo = model_output.detach().float()
+                        _axm = [d for d in range(_mo.dim()) if d != 1]
+                        print(f"[LoopPred] step {step_idx} mean {_mo.mean().item():.4f} std {_mo.std().item():.4f} "
+                              f"absmax {_mo.abs().max().item():.3f} shape {tuple(_mo.shape)} "
+                              f"ch-mean[:4] {[round(v, 3) for v in _mo.mean(dim=_axm).tolist()[:4]]} "
+                              f"ch-std[:4] {[round(v, 3) for v in _mo.std(dim=_axm).tolist()[:4]]}", flush=True)
                     step_result = driver.step(
                         model_output, timestep, current_state,
                         generator=self.ctx.variable_resolver.sampling_generator())
@@ -946,6 +979,26 @@ class IterativeProcessHandler(FlowHandler):
         from neurobrix.core.flow.step_cache import StepCache
         return StepCache.setup(self.ctx, num_steps)
 
+    def _apply_latent_affine(self, state_key: str, decoder_name: str) -> None:
+        """latent * std + mean, per channel (dim 1), when the decoder's profile declares
+        the statistics — the vendor's own step before `vae.decode` (Wan), torch branch."""
+        from neurobrix.core.runtime.resolution.latent_statistics import latent_affine, decoder_profile
+        affine = latent_affine(decoder_profile(self.ctx.pkg, decoder_name))
+        if affine is None:
+            return
+        std, mean = affine
+        state = self.ctx.variable_resolver.get(state_key)
+        if not isinstance(state, torch.Tensor) or state.dim() < 2:
+            return
+        if state.shape[1] != len(std):
+            raise RuntimeError(
+                f"ZERO FALLBACK: the latent has {state.shape[1]} channels and the decoder "
+                f"declares statistics for {len(std)}: the affine cannot be applied.")
+        view = [1, len(std)] + [1] * (state.dim() - 2)
+        std_t = torch.tensor(std, dtype=state.dtype, device=state.device).view(*view)
+        mean_t = torch.tensor(mean, dtype=state.dtype, device=state.device).view(*view)
+        self.ctx.variable_resolver.set(state_key, state * std_t + mean_t)
+
     def _execute_post_loop(self, post_loop: List[str], loop_components: List[str]) -> None:
         """
         Execute post-loop components (e.g., VAE decoder).
@@ -1028,6 +1081,12 @@ class IterativeProcessHandler(FlowHandler):
                     lambda: current_state.detach().to(
                         torch.float32 if current_state.dtype == torch.bfloat16
                         else current_state.dtype).cpu().numpy())
+
+        # The decoder's input space: a VAE trained on a normalised latent declares its
+        # statistics, and the vendor maps the latent back per channel before decoding —
+        # a step no decode graph can carry (`resolution.latent_statistics`).
+        if state_key and post_loop:
+            self._apply_latent_affine(state_key, post_loop[0])
 
         # Execute post-loop components
         for comp_name in post_loop:
