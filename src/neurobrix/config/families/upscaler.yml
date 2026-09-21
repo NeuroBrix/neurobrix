@@ -33,3 +33,11 @@ modes:
 output:
   default_extension_per_mode:
     image: ".png"
+
+# Kernel census (tools/certified_census.py)
+census:
+  # A request large enough to TILE on every rung of the memory ladder (Hocine's tiling standard,
+  # 2026-09-21): the census runs it at each rung so the certified directory holds the canonical
+  # tile of every rung a user of this card model can meet. An input image of this many pixels a side.
+  tiling_probe:
+    image_px: 2048
