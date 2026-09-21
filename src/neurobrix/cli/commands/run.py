@@ -10,6 +10,7 @@ DATA-DRIVEN DESIGN:
 ZERO HARDCODE: Defaults cascade from CLI > runtime/defaults.json > family config
 """
 
+import os as _os_dbg
 import sys
 import json
 import time
@@ -598,6 +599,10 @@ def cmd_run(args):
             # on one frame. height/width stay on the raw argument on purpose:
             # absent, the processor keeps the source image's own size.
             num_frames=int(num_frames or 0)))
+        if _os_dbg.environ.get("NBX_DEBUG") == "1":
+            _img = inputs.get("global.image")
+            print(f"   [Inputs] image clip {tuple(getattr(_img, 'shape', ()))} from num_frames={num_frames!r} "
+                  f"(request {getattr(args, 'num_frames', None)!r}, container {cached_defaults.get('num_frames')!r})", flush=True)
         # Upscaler metadata key, not a runtime input (the dedicated
         # `nbx upscale` path owns the exact-size crop on this side).
         inputs.pop("_upscale_orig_hw", None)
