@@ -1096,3 +1096,27 @@ Dell for a different reason: it asserts the branch's rewrite (no `split_with_siz
 against a container that main's fusion (9f5e0f5b: the stacked-expert views, the traced splits
 kept) runs — and on the merged tree main's walk matches granite first, so the branch's matcher
 is never reached on CUDA. The A/B is below.
+
+## 2026-09-21 — the granite fusion, measured on CUDA: main's walk against the branch's matcher
+
+On the merged tree the branch's granite matcher (`_fuse_one_granite_layer`, be4bd421) runs only
+when main's general walk returns None, and main's walk (9f5e0f5b, stacked-expert views) matches
+granite first — so on CUDA the branch's matcher is unreachable and the two arms of a plain A/B
+are the same code (fact and code outputs byte-identical, peak 2 707–2 711 MB). Branch
+`granite-fusion-ab` (from cafaf799) carries a lever, `NBX_MOE_FUSION_MATCHER=granite`, that skips
+the walk so the branch's matcher is the one that runs. Triton mode, one 16 GB card each, two
+requests, each twice (both arms hold still):
+
+| arm | fact ("capital of France", 16 tokens) | code (is_palindrome, 160 tokens) | peak driver | wall, code, cold |
+|---|---|---|---|---|
+| main's walk (card 0) | "Paris." — sha bdff8c41… | sha 5a52cc92…, 431 chars, **8/8 cases pass** | 2 707–2 711 MB | 23.1–23.8 s |
+| branch's matcher (card 1) | "Paris." — sha bdff8c41… (identical) | sha e7725da9…, 556 chars, **8/8 cases pass** | 2 733–2 738 MB | 21.3–21.5 s |
+
+**Judged outputs:** identical on the short request; DIFFERENT text on the long one and both
+correct on every case the code never saw. The two fusions are therefore two valid numerics of
+one block, not one right and one wrong. **Figures:** peak favours main by 27–31 MB (about 1 %);
+wall favours the branch's matcher by 1.6–2.5 s (7–10 %) on the cold code request and by 2–4 s on
+the warm fact request (7.0–7.4 against 9.4–11.2 s — different cards, so the warm figure is
+indicative). The two measurements point in different directions and both go to the owner, as
+asked. The Apple half — the same table on M4 Pro — is the branch's to add; the lever is on the
+branch for it.
