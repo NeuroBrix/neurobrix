@@ -1,0 +1,48 @@
+# Apple 0.5.5 — delivery ledger
+
+One line per hub-catalogue container. The delivery criterion: every container
+that physically fits this machine (M4 Pro, 24 GB unified, disk trigger
+22 GiB) runs in all three modes with artefacts judged by an instrument
+outside the engine, and the keys those runs demand are certified under the
+current pin (`triton 3.8.0+git4a15f415 mps`); every container that does not
+fit is refused in writing with the figure that refuses it. A refusal with a
+number is a delivery; a model silently skipped is not.
+
+Modes: C = --compiled (plain PyTorch on mps), T = --triton,
+S = --triton-sequential. Every run under the 4 GB memory floor, Parallels
+VM running. Instruments: LLM = literal text comparison; STT = transcript
+against the recording; TTS = speech-to-text reads the wav back, sentence
+exact; image = external degeneracy judge (std, distinct values).
+
+| container | size | verdict | figures |
+|---|---|---|---|
+| llm/granite-3.1-1b-a400m-instruct | 2.7 GB | **DELIVERED** 2026-09-21 | C/T/S all rc=0, "The capital of France is **Paris.**" (LLM judge, exact), 0 autotune misses in all three modes — its shapes were already covered by the 974-key directory; MoE kernels run fixed configs by design. First mixture-of-experts delivery on Apple; the standing MoE refusal lifted through the driver-selection door on this run's judgment, not on a probe. |
+| tts/Kokoro-82M | 366 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, ASR reads the sentence exactly in each mode. |
+| tts/chatterbox | 2.1 GB | **DELIVERED** 2026-09-20 | C/T/S rc=0, ASR exact; byte-reproducible under NBX_FORCE_RAND_SEED. |
+| llm/TinyLlama-1.1B-Chat-v1.0 | 2.1 GB | **DELIVERED** 2026-09-20 | C/T/S rc=0, "Paris." exact, text byte-identical across C and T. |
+| stt/whisper-large-v3-turbo | 1.6 GB local | **DELIVERED** 2026-09-20 | C/T/S rc=0, JFK transcript exact. NOTE: the hub's stt/ directory for it is EMPTY — the local copy is the only reachable one; flagged, not evicted. |
+| upscaler/swin2SR-classical-sr-x2-64 | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged non-degenerate (std ~104). |
+| upscaler/swin2SR-classical-sr-x4-64 | 58 MB | **DELIVERED** 2026-09-20 | same battery, same judge. |
+| upscaler/swin2SR-realworld-sr-x4-64-bsrgan-psnr | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| upscaler/real-esrgan-x2 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| upscaler/real-esrgan-x4 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| upscaler/real-esrgan-x8 | 67 MB | **DELIVERED at ≤512 px** 2026-09-20 | C/T/S rc=0 at 448/512 px, judged. 1024 px OWED on the per-tile retention defect (handed to the runtime owners); refused with figures until it returns. |
+| upscaler/swinir-classical-x2 | 99 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| upscaler/swinir-classical-x4 | 92 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
+| upscaler/hat-s-x4 | 51 MB | **REFUSED** (standing) | Blocked by the Prism estimate; stays refused rather than closed by invented demand. |
+| upscaler/hat-l-x4 | 182 MB | **REFUSED** (standing) | Floor stop in both triton modes at 1567 MB available with 0 misses after its 8 shapes were certified — the machine genuinely cannot hold it. |
+
+## Anomalies
+
+- Nine hub entries are empty or unreadable directories (no model.nbx, du=0):
+  image/Sana_1600M_1024px_MultiLing(+_diffusers), llm/deepseek-moe-16b-chat,
+  multimodal/Ming-Lite-Omni-1.5, multimodal/MiniCPM-o-4_5,
+  multimodal/Qwen3-Omni-30B-A3B-Instruct, stt/whisper-large-v3-turbo,
+  video/Allegro-TI2V, video/SANA-Video_2B_720p_diffusers. A container that
+  is not there can be neither run nor refused by arithmetic; these are
+  listed as absent, not skipped.
+
+## Link measurement
+
+Hub-mount transfer measured 2026-09-21: 2663 MB in 340 s = **7 MB/s**
+(owner's own figure 8.9 MB/s; no cable yet). Re-planned against 7-9 MB/s.

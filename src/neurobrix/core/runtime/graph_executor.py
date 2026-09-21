@@ -3441,9 +3441,7 @@ class GraphExecutor:
         """Execute MoE fused op in triton sequential mode — delegates to triton/moe.py."""
         from neurobrix.triton.moe import execute_moe_fused
 
-        gate_weight_ids = attrs["expert_gate_weight_ids"]
-        up_weight_ids = attrs["expert_up_weight_ids"]
-        down_weight_ids = attrs["expert_down_weight_ids"]
+        from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
 
         # Multi-gate blend: routing was computed in-graph by N gates and a
         # per-token modality mask blend (see moe_fusion._detect_gate_blends).
@@ -3452,13 +3450,15 @@ class GraphExecutor:
         w_tid = attrs.get("topk_weights_tid")
         blended = idx_tid is not None and w_tid is not None
 
+        gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+
         cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
         return execute_moe_fused(
             gate_scores=None if blended else store.get(attrs["gate_scores_tid"]),
             hidden_states=store.get(attrs["hidden_states_tid"]),
-            gate_weights=[store.get(wid) for wid in gate_weight_ids],
-            up_weights=[store.get(wid) for wid in up_weight_ids],
-            down_weights=[store.get(wid) for wid in down_weight_ids],
+            gate_weights=gate_ws,
+            up_weights=up_ws,
+            down_weights=down_ws,
             top_k=attrs["top_k"],
             num_experts=attrs["num_experts"],
             norm_topk_prob=attrs.get("norm_topk_prob", True),
@@ -4824,12 +4824,22 @@ class GraphExecutor:
         # resolved yet since the original ops that referenced them were removed by fusion)
         tensors_meta = self._ctx.tensors_metadata
         weights = self._ctx.weights
-        for wid_list in (gate_weight_ids, up_weight_ids, down_weight_ids):
-            for wid in wid_list:
-                if wid not in store:
-                    wname = tensors_meta.get(wid, {}).get("weight_name")
-                    if wname and wname in weights:
-                        store[wid] = weights[wname]
+        _stacked = attrs.get("stacked_experts")
+        _resolve_ids = ([_stacked["input_linear_tid"], _stacked["output_linear_tid"]]
+                        if _stacked else
+                        list(gate_weight_ids) + list(up_weight_ids) + list(down_weight_ids))
+        for wid in _resolve_ids:
+            if wid not in store:
+                wname = tensors_meta.get(wid, {}).get("weight_name")
+                if wname and wname in weights:
+                    store[wid] = weights[wname]
+        if _stacked:
+            from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists
+            _gv, _uv, _dv = expert_weight_lists(attrs, store.get)
+            for e in range(num_experts):
+                store[gate_weight_ids[e]] = _gv[e]
+                store[up_weight_ids[e]] = _uv[e]
+                store[down_weight_ids[e]] = _dv[e]
 
         # Handle 3D tensors [batch, seq, dim] → flatten to 2D [batch*seq, dim]
         orig_shape = hidden_states.shape

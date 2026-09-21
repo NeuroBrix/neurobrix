@@ -892,6 +892,13 @@ class HFTokenizer:
         # trim_blocks=True:   strip newline after {% %} tags
         # Without these, every {% if %}/{% for %} emits spurious newlines that corrupt the prompt.
         env = Environment(lstrip_blocks=True, trim_blocks=True)
+        # HF-compatible template globals. transformers injects `strftime_now`
+        # into every chat-template render (templates use it for a dated system
+        # line — granite-3.1's does); a render without it dies at
+        # "'strftime_now' is undefined". Same signature as HF's: the format
+        # string in, the CURRENT local time out.
+        from datetime import datetime as _dt
+        env.globals["strftime_now"] = lambda fmt: _dt.now().strftime(fmt)
         template = env.from_string(self._chat_template)
         formatted = template.render(
             messages=messages,

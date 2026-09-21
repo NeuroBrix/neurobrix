@@ -896,6 +896,10 @@ class TritonSequence:
         moe_weight_ids: set = set()
         for op_data in ops_metadata.values():
             if op_data.get("op_type") == "custom::moe_fused":
+                _st = (op_data.get("attributes") or {}).get("stacked_experts")
+                if _st:
+                    moe_weight_ids.add(_st["input_linear_tid"])
+                    moe_weight_ids.add(_st["output_linear_tid"])
                 attrs = op_data.get("attributes", {})
                 for key in ("expert_gate_weight_ids",
                             "expert_up_weight_ids",
@@ -2007,19 +2011,33 @@ class TritonSequence:
             topk_weights_slot = None
         hidden_states_slot = self._tid_to_slot[hidden_states_tid]
 
+        stacked = attrs.get("stacked_experts")
         gate_w_slots = []
         up_w_slots = []
         down_w_slots = []
-        for i in range(num_experts):
-            gs = self._tid_to_slot.get(gate_weight_ids[i])
-            us = self._tid_to_slot.get(up_weight_ids[i])
-            ds = self._tid_to_slot.get(down_weight_ids[i])
-            if gs is None or us is None or ds is None:
+        if stacked:
+            # Stacked expert parameters (granite): two slots, per-expert
+            # views built in the dispatch from the LIVE arena tensors so a
+            # weight rebind is followed automatically.
+            _in_slot = self._tid_to_slot.get(stacked["input_linear_tid"])
+            _out_slot = self._tid_to_slot.get(stacked["output_linear_tid"])
+            if _in_slot is None or _out_slot is None:
                 raise RuntimeError(
-                    f"[MoE Triton] Missing weight slot for expert {i} in {op_uid}")
-            gate_w_slots.append(gs)
-            up_w_slots.append(us)
-            down_w_slots.append(ds)
+                    f"[MoE Triton] Missing stacked expert slot in {op_uid}: "
+                    f"in={stacked['input_linear_tid']} "
+                    f"out={stacked['output_linear_tid']}")
+        else:
+            _in_slot = _out_slot = None
+            for i in range(num_experts):
+                gs = self._tid_to_slot.get(gate_weight_ids[i])
+                us = self._tid_to_slot.get(up_weight_ids[i])
+                ds = self._tid_to_slot.get(down_weight_ids[i])
+                if gs is None or us is None or ds is None:
+                    raise RuntimeError(
+                        f"[MoE Triton] Missing weight slot for expert {i} in {op_uid}")
+                gate_w_slots.append(gs)
+                up_w_slots.append(us)
+                down_w_slots.append(ds)
 
         # Freeze for closure
         _gs_slot = gate_scores_slot
@@ -2029,6 +2047,8 @@ class TritonSequence:
         _gw = tuple(gate_w_slots)
         _uw = tuple(up_w_slots)
         _dw = tuple(down_w_slots)
+        _stacked_attrs = dict(attrs) if stacked else None
+        _in_slot_c, _out_slot_c = _in_slot, _out_slot
         _k = top_k
         _ne = num_experts
         _norm = norm_topk_prob
@@ -2049,12 +2069,22 @@ class TritonSequence:
                       f"hs_slot={_hs_slot} "
                       f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}",
                       file=_sys_md.stderr, flush=True)
+            if _stacked_attrs is not None:
+                from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists as _ewl
+                _st = _stacked_attrs["stacked_experts"]
+                _lut = {_st["input_linear_tid"]: arena[_in_slot_c],
+                        _st["output_linear_tid"]: arena[_out_slot_c]}
+                _g, _u, _d = _ewl(_stacked_attrs, _lut.get)
+            else:
+                _g = [arena[s] for s in _gw]
+                _u = [arena[s] for s in _uw]
+                _d = [arena[s] for s in _dw]
             return _moe_exec(
                 gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
-                gate_weights=[arena[s] for s in _gw],
-                up_weights=[arena[s] for s in _uw],
-                down_weights=[arena[s] for s in _dw],
+                gate_weights=_g,
+                up_weights=_u,
+                down_weights=_d,
                 top_k=_k, num_experts=_ne, norm_topk_prob=_norm,
                 cache_key=_cache_key,
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
