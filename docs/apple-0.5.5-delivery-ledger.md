@@ -121,7 +121,9 @@ Measured from each container's weight footprint on the hub. No downloads.
 **First-stage catalogue census — DONE 2026-09-21, from the CANONICAL shared cache**
 (`Super-NeuroBrix-Cache`, not the stale hub), 30 fitting models, `apple_m4_pro`:
 
-- **11,079 keys harvested** (kernel × bucketed-shape × dtype), each model tagged with
+- **11,079 keys harvested** (kernel x EXACT-shape x dtype -- the key is exact today; the
+  bucketing key change lives on the Dell's origin/bucketed-autotune-keys, NOT main), each
+  model tagged with
   its `graph_sha` so a retrace invalidates exactly its own keys. Directory before:
   154 served → **10,925 to certify**.
 - **13 OK** (harvest keys): the WHOLE upscaler family (real-esrgan x2/x4/x8, swin2SR
@@ -135,9 +137,17 @@ Measured from each container's weight footprint on the hub. No downloads.
   one failed — partial), Qwen3-int4 (quantized path). To fix in the request map, not
   keys to sweep.
 
-**Second stage in flight:** certifying the 2,648 keys of the verifiable-now set
-(upscalers + TinyLlama + parakeet + hat) on synthetic tensors under the witness, VM
-tolerant. Orpheus's 8,400 keys and the larger models batch after.
+**Second stage, CORRECTED (2026-09-21):** the keys are EXACT, not bucketed. TinyLlama's
+2,560 and orpheus's 8,400 are per-decode-step exact prompt/cache lengths -- the explosion
+the buckets collapse (~6 for a short request). Certifying them now unserves them the day
+the bucketed key lands on main. So:
+- CERTIFIED NOW (request-INDEPENDENT, stable): 31 new keys (+41 served = 72) for the
+  upscalers' and hat's convolutions/attention, deriving from the memory ladder and tile
+  lattice the bucketing does not touch (conv2d 45, addmm 13, baddbmm 11, matmul 3).
+- HELD (request-DEPENDENT, 10,976): every prefill/decode/audio-length family. Re-census
+  under the bucketed form and certify ONCE when bucketed-autotune-keys reaches main.
+- Request gaps (video/PixArt resolutions, partial audio) fixed in the request map
+  meanwhile -- needed under either key form.
 
 - Census basis today: the runtime replay cache (the census tool is being
   built once on main, hardware profile as input; the Apple inputs it needs
