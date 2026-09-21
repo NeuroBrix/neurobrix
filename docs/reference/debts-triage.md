@@ -119,7 +119,7 @@ from the review of the memory-class door: a seed evicted at load is not put back
 launch site cannot compute the key; and two unlocked writers of a directory file) · D-THIRTY-THREE-RED-UNIT-TESTS (21 on
 09-13, classified; rerun from a frozen tree pending) · D-TEST-PINNED-ORDINAL ·
 D-OBSERVABILITY-BLIND-SITES-ACROSS-FAMILIES · D-RENDER-RESUME-NOT-BIT-IDENTICAL
-· D-TSEQ-ORPHEUS-STEP110 · D-AUTODETECT-VISIBLE-MASK · D-CUDA-DEVICE-ORDER-UNPINNED
+· D-TSEQ-ORPHEUS-STEP110 · ~~D-AUTODETECT-VISIBLE-MASK~~ (closed 2026-09-20, register 79) · D-CUDA-DEVICE-ORDER-UNPINNED
 · D-VACE-DEGENERATE-MERGE / D-VACE-UNROLLED-CHUNKS (enriches A's VACE entries;
 the correction is the same trace) · MAINT-HUB-STORAGE-V3-FILENAME ·
 D-AUDIOLLM-LONGFORM (Voxtral class delivered, gate pending).

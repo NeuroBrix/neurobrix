@@ -49,7 +49,12 @@ import repo_env  # noqa: E402  — the repository's .env, loaded the way the bui
 
 repo_env.load()
 
-PY = "/home/mlops/ml/venv/bin/python"
+PY = "/home/mlops/ml/venv/bin/python"          # the BUILD TOOLCHAIN's interpreter (trace, build, local, replace)
+# The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
+# one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
+# moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
+# triton 3.8 switch: the directory is stamped 3.8.0 and the gate serves it only to that compiler).
+ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
 VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
@@ -104,7 +109,13 @@ def scrub_provenance(node):
     return node
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
-REGISTRY = "https://neurobrix.es"
+# The hub's entry point, read through the door every chain on this rack declares (nbx/env.sh:
+# NEUROBRIX_REGISTRY=http://10.0.0.39:3000). The public name is Cloudflare's shared address, which
+# Spanish ISPs block on LaLiga match days under a court order — 2026-09-20 was one: three gated
+# uploads read "503 SlowDownWrite" from the public name while the store at 10.0.0.36 held write
+# quorum all evening. A publish path that dies every football weekend is a defect; this constant
+# was it.
+REGISTRY = os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
 
 # The precision policy BOTH arms of the gate run under. A retraced graph carries a new
 # signature, so the calibration record embedded in the container (measured on the old graph)
@@ -496,6 +507,16 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
             pos = path[-1]
             if any(len(dims) > pos and isinstance(dims[pos], dict) and dims[pos].get("type") == "symbol"
                    and dims[pos].get("id") == a.get("id") for dims in out_dims):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
+                continue
+        # And with an EXPRESSION the old tracer had computed into the inferred slot — hat-s-x4,
+        # 2026-09-20: five views `[σ·(s1//16)·(s2//16), 64, 8, 8, C]` spelled by June's tracer as the
+        # product, by today's as the vendor's -1 — the op's own output carries an equivalent
+        # expression at that position, so the view is the same at every length and PyTorch infers
+        # it; bytes were identical on both arms and the gate read FAIL over sixty of these.
+        if b == -1 and isinstance(a, dict) and _is_dim_node(a) and path and isinstance(path[-1], int):
+            pos = path[-1]
+            if any(len(dims) > pos and isinstance(dims[pos], dict) and equivalent_dims(a, dims[pos]) for dims in out_dims):
                 sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
                 continue
         if not path or not isinstance(path[-1], int):
@@ -1006,7 +1027,7 @@ class Model:
             if outp.exists() and (self.dir / f"{tag}_{arm}.log").exists() and sha(outp):
                 res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True}
                 continue
-            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
+            cmd = [ENGINE_PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
             t0 = time.time()
             # One precision policy on both arms (POLICY above).
             env = self.env(); env.update(POLICY_ENV)

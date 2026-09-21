@@ -1021,9 +1021,15 @@ def pow_wrapper(x, exponent) :
         x = x.contiguous()
         output = NBXTensor.empty_like(x)
         _set_device(x)
+        # A small integer exponent takes the exact multiplication route at
+        # compile time (kernels/ops/pow.py, INT_EXP); everything else the
+        # general exp/log route. Measured 2026-09-20 on CUDA: x**2 by exp/log is
+        # up to 15 ulps from the fp64 oracle, by multiplication within 1.
+        _e = float(exponent)
+        _int_exp = int(_e) if (_e == int(_e) and 1 <= abs(_e) <= 8) else 0
         pow_forward_kernel[_1d_grid(x.numel())](
-            x, output, x.numel(), float(exponent),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+            x, output, x.numel(), _e,
+            BLOCK_SIZE=_EW_BLOCK, INT_EXP=_int_exp, num_warps=_EW_WARPS)
         return output
     if (not x_is_t) and e_is_t:
         # scalar ** tensor = exp(exponent · ln(scalar))

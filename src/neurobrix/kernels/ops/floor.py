@@ -28,8 +28,17 @@ def _round_half_even(x):
     #
     # Read from the sign bit rather than from `x < 0`, which is false for -0.0:
     # a bitcast to int32 is negative exactly when the sign bit is set.
-    neg = x.to(tl.int32, bitcast=True) < 0
-    return tl.where((out == 0.0) & neg, -0.0, out)
+    # Restored through the INTEGER view, not a floating select: on CUDA the
+    # Dell measured `tl.where(zero & neg, -0.0, out)` returning +0.0 for -0.5,
+    # -0.0 and -1e-7 (2026-09-20, against main and the fp64 oracle). Triton
+    # compiles floating arithmetic with no-signed-zeros permitted, so a -0.0
+    # constant selected into a zero is a value the compiler may write as +0.0.
+    # The sign bit copied as a bit is not arithmetic and is never folded.
+    xb = x.to(tl.int32, bitcast=True)
+    sign_bits = (xb >> 31) << 31                      # 0x80000000 when x is negative, else 0
+    ob = out.to(tl.int32, bitcast=True)
+    ob = tl.where(out == 0.0, ob | sign_bits, ob)
+    return ob.to(tl.float32, bitcast=True)
 
 
 # Triton's floor / ceil / trunc take fp32 or fp64 only ("Expected dtype

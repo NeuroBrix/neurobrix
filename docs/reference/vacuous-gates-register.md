@@ -2035,3 +2035,105 @@ Two rules:
 
 The same shape hides behind `&&` chains ending in a formatter, `| head` on a build
 log, and any `set -e` script whose final command is a printer.
+
+### 78 — a battery labelled with the stack under test, whose every model ran on the other stack
+
+**Where.** `tests/regression/conftest.py::pytest_configure`, this rack, 2026-09-17 (the
+"battery candidate stack t38", flightrec `20260917_041647`) and again 2026-09-20 14:17
+(`20260920_141742_battery-candidate-stack-9000b7aa`, killed at 14:33 once seen).
+
+**What was believed.** `5 failed, 79 passed` on 09-17 was read as the candidate stack —
+torch 2.14.0+cu126, Triton 3.8.0 — running the model zoo, and the switch case was built on
+it ("the candidate stack runs the V100s: 79 passed").
+
+**What was measured.** `ps` during the 09-20 run: the pytest process was the candidate's
+interpreter; its child was `/home/mlops/ml/venv/bin/python -u -m neurobrix run ...` — the
+PRODUCTION interpreter, torch 2.5.1+cu121, Triton 3.6.0. `_runtime_python()` returns
+`NEUROBRIX_PYTHON` or `sys.executable`; the conftest hook, written so a system-python pytest
+would find a working venv, sets `NEUROBRIX_PYTHON = $VIRTUAL_ENV/bin/python` whenever that
+variable is exported and the venv imports `neurobrix` — and every shell on this machine
+exports the production venv from `.bashrc`. `test_serve_warm.py` spawns `sys.executable`
+directly, so ITS cells did run on the candidate — and those were the three reds
+(`vlm/multimodal/image-compiled`). The one file that measured the candidate was red; the one
+that was green measured production.
+
+**Why the gate looked green.** Nothing in the record names the interpreter a model ran
+under. The label was written by the launcher from the pytest interpreter; the runs chose
+another; the two agree in every line the log keeps.
+
+**The rule.** *A measurement's label is written from the process that does the measuring,
+not from the one that launches it.* A battery that spawns engines records, per run, the
+interpreter path AND its stack versions, and the launcher refuses when they differ from
+what the label says. Here: `NEUROBRIX_PYTHON` is exported explicitly, `VIRTUAL_ENV` is
+cleared, the door prints `sys.executable torch triton` from the interpreter that will run,
+and a census of `ps` during the run lists every interpreter that ran a model; a battery
+whose census names two interpreters has measured nothing attributable.
+
+**Consequence for the switch case.** No green battery of the candidate stack exists as of
+14:35 UTC on 2026-09-20; the case's "79 passed" column is withdrawn.
+
+### 79 — three guards and a debt that outlived their premise by seventeen days
+
+**Where.** `tests/regression/test_serve_warm.py` (module guard, `ba34c374`, 2026-08-27),
+`tests/regression/test_upscale_offtrace.py` (the same guard ported, 2026-08-29),
+`tests/regression/warm_cell_runner.py` (the comment), and `DETTE.md`
+D-AUTODETECT-VISIBLE-MASK (filed 2026-08-26, fourth facet 2026-09-01).
+
+**What was believed.** "Autodetect is blind to CUDA_VISIBLE_DEVICES": a masked run plans
+against the whole machine and dies on "invalid device ordinal", so every suite that shells
+out to the engine must skip under a mask, and a masked engine is broken for a user in a
+container. Repeated by this session on 2026-09-20 14:5x as a fact about the engine.
+
+**What was measured, 2026-09-20 (`nbx/campaigns/2026_09_20_mask_guard/`).**
+
+| tree | mask | detected | placed | result |
+|---|---|---|---|---|
+| `ecebbebe` (the commit before the guard) | 1 | auto-4xv100-16gb-96.0g | cuda:2 | `CUDA error: invalid device ordinal` |
+| `ecebbebe` | 0,2 with DeepSeek-Coder-V2-Lite (spans cards) | the whole machine | pipeline_parallel → cuda:2 | invalid device ordinal |
+| main `f2da479a` | 1 | auto-v100-16gb-16g | cuda:0 | rc=0, real-esrgan-x4 and TinyLlama |
+| main | 2 (a 32 GB card as ordinal 0) | auto-v100-32gb-32g | cuda:0 | rc=0 — the fourth facet: the budget reads the masked card's own memory |
+| main | 0,2 with DeepSeek-Coder-V2-Lite | auto-2xv100-16gb-48.0g | component_placement cuda:0 + cuda:1, 33 238 MB planned | rc=0 |
+
+Red seen on the tree the guard was written against; green on main for every facet the debt
+named. The repair is `_apply_visible_filter` (`acd14637`, 2026-09-03: the visible set is
+re-indexed the way CUDA renumbers it) and the profile keyed by the visible set (`6efc8c3c`,
+2026-09-05); `_describes_the_whole_machine` keeps a masked process from writing the shared
+`default.yml`. Nothing re-measured the guards after either landed, and four modules kept
+skipping on a sentence.
+
+**The rule.** *A guard that names a debt is re-measured when the debt's fix lands, by the
+same cell that made it red.* A skip is a claim about the engine; once the engine moves, the
+claim is either re-proven or removed. Entry 78's other half again: a sentence inherited from
+a run, kept after the run stopped being true.
+
+### 80 — a conv whose output is small, whose input is not, and a channel term the 09-14 promotion never reached
+
+**Where.** `src/neurobrix/kernels/ops/conv2d.py` (`inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)`,
+int32, multiplied by `input_in_feat_stride`), the same form in `conv1d.py`; the band-streaming
+predicate `_conv2d_should_band_stream` (output bytes only).
+
+**What was believed.** Register 58/59 (2026-09-14) widened every offset a kernel derives from a
+program id, 129 flat-indexed kernels, and a boundary test crosses 2^31 for three of them. A conv
+was covered "by construction": its program-id offsets are int64, and any conv large enough to
+cross 2^31 is band-streamed by the wrapper.
+
+**What was measured, 2026-09-20 (`nbx/campaigns/2026_09_20_ladder/`).** The ladder law, once
+the plan read the card's live memory, handed the 8x upscaler a 9.6 GB tile at 1536² (rung 24576).
+Four runs of four died with `cudaMemcpy failed rc=700`; `--mode triton-sequential` with
+`CUDA_LAUNCH_BLOCKING=1` pinned the launch: `conv2d_forward_kernel` at 1×64×6344×6344 → 3
+channels — the network's LAST conv. Its output (3 channels, 241 MB) is far under the 4 GiB
+band-streaming threshold, so it ran whole; its INPUT is 2 576 000 000 elements, and the
+input-channel offset term — a loop-derived int32 arange times a 40 247 936-element channel plane —
+wraps past channel 53. The 64 → 64 convs at the same tile were saved by band-streaming (bands of
+2 115 rows), which is why the fault sat at the one conv the predicate does not see.
+
+**The gate, seen failing.** `tests/unit/kernels/test_a_conv_input_beyond_two_billion_elements.py`:
+64 channels of 6000² fp16 (2 304 000 000 elements), channels 60–63 (entirely past 2^31) hold 2.0,
+the rest 1.0, a 3×3 mean kernel; interior output must read 1.0625. RED on the kernel as it stood
+(CUDA 700 at the first checked call), GREEN after widening the channel offset to int64 in both
+convs; the 56 existing conv cells still pass. (The expected value was first written as 1.125 —
+an arithmetic slip caught by the green run's own figure.)
+
+**The lesson, in one line.** A predicate on the output's size is not a guard on the input's
+index; every loop-derived offset that multiplies a plane is 64-bit, not only the ones born from a
+program id.

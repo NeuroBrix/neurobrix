@@ -892,13 +892,21 @@ class HFTokenizer:
         # trim_blocks=True:   strip newline after {% %} tags
         # Without these, every {% if %}/{% for %} emits spurious newlines that corrupt the prompt.
         env = Environment(lstrip_blocks=True, trim_blocks=True)
-        # HF-compatible template globals. transformers injects `strftime_now`
-        # into every chat-template render (templates use it for a dated system
-        # line — granite-3.1's does); a render without it dies at
-        # "'strftime_now' is undefined". Same signature as HF's: the format
-        # string in, the CURRENT local time out.
+        # The two helpers transformers injects into every chat-template
+        # environment and a vendor template may call by name. Without them the
+        # render raises UndefinedError before the model runs — granite-3.1's
+        # template asks for today's date through `strftime_now` (measured
+        # 2026-09-20, all three modes: "'strftime_now' is undefined").
+        # `raise_exception` is the template's own refusal (a role it does not
+        # accept), surfaced as a TemplateError so it reads as the vendor's word.
         from datetime import datetime as _dt
+        from jinja2.exceptions import TemplateError as _TemplateError
+
+        def _raise_exception(message):
+            raise _TemplateError(message)
+
         env.globals["strftime_now"] = lambda fmt: _dt.now().strftime(fmt)
+        env.globals["raise_exception"] = _raise_exception
         template = env.from_string(self._chat_template)
         formatted = template.render(
             messages=messages,

@@ -34,17 +34,14 @@ from pathlib import Path
 
 import pytest
 
-# Guard: refuse a restricted parent environment loudly-but-kindly.
-# (The pinned rows set their own mask inside their subprocess env —
-# the parent process must stay unmasked.)
-if os.environ.get("CUDA_VISIBLE_DEVICES") not in (None, ""):
-    pytest.skip(
-        "test_serve_warm requires the FULL unmasked rig: autodetect is "
-        "blind to CUDA_VISIBLE_DEVICES (D-AUTODETECT-VISIBLE-MASK) and "
-        "a restricted mask yields false 'invalid device ordinal' "
-        "failures (supervisor spot-check 2026-08-27). Unset "
-        "CUDA_VISIBLE_DEVICES and re-run.",
-        allow_module_level=True)
+# A module guard stood here from 2026-08-27 to 2026-09-20 refusing any
+# CUDA_VISIBLE_DEVICES mask, because autodetect enumerated the whole machine and
+# a masked run placed on an ordinal the process could not address. Measured on
+# 2026-09-20 (vacuous-gates register, entry 79): red on the tree before the guard
+# (invalid device ordinal under mask=1 and mask=0,2), green on main for both — the
+# masked process reads the visible set's own profile and places on the renumbered
+# ordinals. The guard's premise is repaired, so the guard is gone; a masked run
+# is the normal case for a user in a container or under a scheduler.
 
 REPO = Path(__file__).resolve().parents[2]
 

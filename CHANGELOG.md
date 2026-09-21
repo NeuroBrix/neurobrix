@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
+  into tiles, the tile's edge is now rounded down to a multiple of 16 on Volta (a profile
+  value, measured), instead of whatever the memory budget computed. An odd tile edge ran the
+  kernels masked at every scale: an eight-times upscale at 1024x1024 on a shared 32 GB card
+  took 718 s with a 457-pixel tile and takes 40 s with a 448-pixel one, for 4 % less tile
+  area. Cards without a measured lattice keep the computed edge.
+
 ### Added
+
+
+- **Mixture-of-experts models whose experts are stacked in one tensor per
+  projection run through the fused expert dispatch**, in every execution mode.
+  IBM's Granite 3.1 MoE (32 experts, 8 per token) is the first: it writes correct
+  code and answers questions here, where before its first forward stopped on a
+  token split frozen at trace time.
+
 
 - **Apple Silicon support, with its numbers.** Measured on an M4 Pro, 24 GB
   unified memory, macOS 26.6, torch 2.14.0, Triton built from source at pin
@@ -67,6 +84,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     absent because the run that would demand it cannot yet finish.
 
 ### Fixed
+
+- **A convolution whose input exceeds two billion elements no longer faults.** The
+  8x upscaler's final layer at a large tile (64 channels of 6344x6344) read its
+  input channels through a 32-bit product and hit an illegal address once the plan
+  handed it a 9.6 GB tile; the channel offset is now 64-bit in the 2-D and 1-D
+  convolutions, proven on a 2.3-billion-element input.
+
+- **A model's per-component runtime flags now travel inside the container, so an
+  installed engine behaves like the developer's checkout.** Six flags (pad-embedding
+  zeroing for T5-class encoders, image-to-video and control conditioning, image
+  padding to the frame count, and the two precision pins) were read at run time from
+  a file that only the build machine has; everywhere else they silently took their
+  defaults. Wan2.1-T2V-1.3B rendered a lattice of 16-pixel cells that way. The
+  container now declares them, the engine reads them when it opens the container,
+  and the build machine's file remains an override. Containers built before this
+  change need rebuilding to carry them.
+
+- **A plan is budgeted against the card's free memory as read when the request
+  arrives, not against its capacity.** A neighbour holding part of a card made the
+  planner promise memory it could not have: the ladder of whole-gigabyte rungs was
+  only ever reached when the request overflowed the whole card, so a 1024x1024
+  eight-times upscale on a 32 GB card shared with an 18 GB hold planned whole and
+  died on its first allocation, five runs out of five. The free reading now enters
+  the plan first, rounds down onto the ladder, and the tile budget follows from that
+  rung; nothing downstream is rounded again.
+
+- **A chat template that asks for today's date renders.** Templates written for
+  transformers may call `strftime_now` and `raise_exception`; the engine's renderer
+  now provides both, so a model such as IBM's Granite 3.1 no longer fails before its
+  first token.
+
+- **`x ** 2` is a square again.** The portable power kernel that replaced NVIDIA's
+  device library computed every power as `exp(e * log|x|)`, which on CUDA lands up
+  to 15 ulps from the float64 answer for a plain square. An integer exponent up to
+  8 now multiplies instead: exact for a square, within 1 ulp for a reciprocal.
+- **`round(-0.5)` is `-0.0` again.** The portable round kernel restored the sign of a
+  zero result with a floating select that the CUDA compiler was allowed to fold
+  away; the sign is now copied as a bit.
 
 - **A request too large for the card is now cut into pieces and stitched, instead
   of being refused or pushed to system memory.** The engine could already do this —

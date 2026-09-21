@@ -109,6 +109,12 @@ prose.
 
 ---
 
+## Release decisions
+
+Items that shape a specific release — an upgrade path, a placement rule, a directory the
+release must carry — are recorded in `docs/reference/release-decisions.md`, one dated entry
+each with the measurement that raised it, and move to the CHANGELOG when closed.
+
 ## Phase 5 — A graphical interface
 
 The engine is driven from a terminal today, and that is a floor on who can
