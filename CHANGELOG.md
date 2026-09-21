@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The batched GEMM's contraction is bucketed too.** In the attention's second product the
+  contraction is the key length, which a decode walks one by one (openaudio: 2 049 distinct
+  values in one request); it now enters the autotune key as its bucket's top on the same
+  ladder, measured on both V100 classes at 0.0 % median loss and up to 10.5 % / 20.0 % in
+  a few 16-step buckets where the block optimum flips.
 - **The kernel census no longer drops a model whose graph froze a dimension.** Such a model
   is still shadowed and its keys harvested at the frozen extent, and it is queued for a
   retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
