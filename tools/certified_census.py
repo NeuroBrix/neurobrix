@@ -62,7 +62,12 @@ sys.path.insert(0, str(REPO / "src"))
 import precision_zoo_campaign as _zoo                       # noqa: E402  (request_args, CACHE)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
-CACHE = _zoo.CACHE
+# Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
+# redirected graph-only cache — the whole hub catalogue, extracted without
+# weights — not only what sits in the default ~/.neurobrix/cache. _zoo.CACHE
+# is hardcoded to the default and does not see the env.
+from neurobrix.core.paths import cache_dir as _cache_dir
+CACHE = _cache_dir()
 FORMAT = "nbx-census/1"
 #: The engine modes that hand keys to the Triton launcher — the served modes a census covers.
 #: The ATen modes (compiled, sequential) launch no NeuroBrix kernel and form no key.
