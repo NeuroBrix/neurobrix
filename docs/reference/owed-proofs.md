@@ -1034,3 +1034,36 @@ is per invocation there (then it is the Metal driver's allocator or the pool's M
 `kernels/metal_device.py`, the pool's free-list on that backend) or between invocations (then
 the caller, as here, and the number should be one canvas, not one per tile). The series is
 the handover; the 410/332 figures need their entry/exit pairs before a kernel is named.
+
+## 2026-09-21 — the ladder's other half, sent as the ladder rule was received: the tile lattice
+
+**The law, in the same words as the ladder's:** the tiled extent handed to the kernels is
+snapped DOWN onto the vendor profile's lattice (`tiling.extent_lattice`) after the budget
+chose it and before the overlap and stride are derived from it; nothing else downstream is
+rounded; the lattice is a property of the backend's kernels, measured on that backend, never
+tuned to a picture or a card's ambient. The ladder bought determinism by rounding the memory
+reading down; the lattice buys back the performance determinism alone does not.
+
+**Measured on CUDA (V100, real-esrgan-x8 at 1024², rung 8192, budget 3.20 GB, one card):**
+
+| tile | lattice | unused area vs 457 | static configs | production, cold | production, warm |
+|---|---|---|---|---|---|
+| 457 | none | 0 | 717.9 s | 2 065.8 s (11 shapes swept) | 31.9 s |
+| 456 | 8 | 0.4 % | 544.7 s | 1 286.6 s (11 swept) | 28.4 s |
+| 448 | 16 (and 32, 64) | 3.9 % | 40.9 s | 20.4 s (certified) | 19.5 s |
+| 432 | 16, not 32 | 10.6 % | 37.4 s | — | — |
+| 416 | 32, not 64 | 17.1 % | 35.0 s | — | — |
+| 384 | 128 | 29.4 % | 31.5 s | 905.6 s (9 swept) | 15.4 s |
+
+The unit is 16 on Volta: every multiple of 16 sits on one plateau (31.5–40.9 s static) whether
+or not it is a multiple of 32 or 64, a multiple of 8 does not, and a coarser unit only spends
+tile area (384 loses 29 % of the tile for 23 % of the time). Under production autotune the
+warm cliff is 1.6× (31.9 against 19.5 s) but the cold one is a hundredfold, because an aligned
+extent lands on shapes the directory already certifies while an odd one sweeps eleven
+unscreened shapes for 34 minutes — alignment also shrinks the set of shapes a backend has to
+certify. Landed: `volta.yml` `tiling.extent_lattice: 16` with the table beside it, read through
+one door in `PrismSolver._tile_extent_lattice` (env `NBX_PRISM_TILE_ALIGN` overrides for a
+measurement), a four-cell file, and the model-level green (no override: 39.7 s at the 8192
+rung). **Owed from Apple:** the same table on M4 Pro — the lattice there is the Metal conv
+kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at one rung and
+write the unit into `apple_m4_pro.yml` beside its numbers.

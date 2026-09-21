@@ -120,6 +120,21 @@ sdpa_thresholds:
 # kernels that need it. Flash-attention is exactly such a kernel —
 # our wrapper sizes its tile against the opt-in value. PixArt VAE
 # head_dim=512 needs the full 96 KB; the 48 KB default crashes.
+# The lattice a tiled extent is snapped down onto before it reaches the kernels — the
+# ladder's other half (2026-09-21). The memory reading rounds DOWN onto whole-GB rungs for
+# determinism; the tile extent that rung yields is then handed to conv2d as computed, and an
+# odd extent runs the kernels masked at every scale. Measured on real-esrgan-x8 at 1024², rung
+# 8192 (budget 3.20 GB): tile 457 → 717.9 s under static configs, 456 (a multiple of 8) →
+# 544.7 s, 448 / 432 / 416 / 384 (multiples of 16) → 31.5–40.9 s; under production autotune the
+# odd tile sweeps 11 unscreened shapes for 2 066 s cold and runs 31.9 s warm, the 448 tile
+# lands on certified shapes (20.4 s cold, 19.5 s warm). The unit is 16: multiples of 16 that
+# are not multiples of 32 or 64 sit on the same plateau, so a coarser unit only spends tile
+# area (384 loses 29 % of the tile for 23 % of the time). 3.9 % of the tile's area buys the
+# cliff back whole. Nothing else downstream is rounded (the Mac's ladder law, 2eeff74a).
+# Absent on a profile = the extent as computed (unmeasured there).
+tiling:
+  extent_lattice: 16
+
 memory:
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
   max_registers_per_block: 65536
