@@ -152,3 +152,20 @@ def conv2d_forward_kernel(
                 (ow_offset < out_width)[:, None])
 
     tl.store(out_ptr, accum, mask=out_mask)
+
+
+@triton.jit
+def conv2d_bias_inplace_kernel(out_ptr, bias_ptr, n, HW, C, BLOCK: tl.constexpr):
+    """out[i] += bias[(i // HW) % C], in place, flat over a CONTIGUOUS NCHW
+    output. The conv wrapper's bias epilogue: the out-of-place `add` here
+    allocated a second full-size output per biased convolution — 2450 MB of
+    the measured 8008 MB tile peak on real-esrgan-x8 @1024 (malloc trace,
+    2026-09-21). Elementwise same-offset read/write, so aliasing the input
+    as the output is exact by construction. Fixed launch config — this
+    kernel takes no autotune key and adds nothing to any census."""
+    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    m = i < n
+    c = (i // HW) % C
+    v = tl.load(out_ptr + i, mask=m)
+    b = tl.load(bias_ptr + c, mask=m)
+    tl.store(out_ptr + i, v + b, mask=m)
