@@ -1068,6 +1068,35 @@ rung). **Owed from Apple:** the same table on M4 Pro — the lattice there is th
 kernel's, not 16 by inheritance; measure 457 / 456 / 448 / 432 / 416 / 384 at one rung and
 write the unit into `apple_m4_pro.yml` beside its numbers.
 
+
+
+---
+
+## 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
+
+My earlier entry here handed the reshape-rung fold breakage to the rack side. **That was
+wrong, and the correction is the owner's, checked:** the Dell ran `real-esrgan-x2` at 448 in
+BOTH modes on main HEAD and on BOTH parents of the merge `78784abe` — **896×896 every time,
+the 49 tiles accumulated.** So the engine's fold is correct on CUDA; the single-tile output
+is Apple-specific. The merge's engine-side files are the launcher, the Metal backend and
+driver, the certifier, the tensor library, and the Triton sequence — the cause is in one of
+those, on my side. A bisect landing on a merge assigns no parent side without testing each;
+the Dell tested them and they are green, which is the datum I owed and did not produce.
+
+**What stands as the symptom:** `real-esrgan-x2 --input-image apple_448.png` (traced
+`[1,3,64,64] -> [1,3,128,128]`) emits 128×128 on Apple — one tile, upscaled (pixel-matched:
+`mean|Δ|=1.0` vs `crop(0,0,64,64).resize(128)`, `74.3` vs whole-downscaled), BOTH modes; the
+run forms a batch of 49 (`batch_dim=49` in the autotune keys) and only tile 0 survives to the
+output. The whole upscaler family's verification is blocked on it. **Owner: me. Finding the
+Apple-side accumulate/fold defect is the current work; the family is BLOCKED, not delivered.**
+The `real-esrgan-x8 @448` `leaky_relu _device_idx` face was already fixed (the interceptor
+dispatches by kind before size, 329ab4a9-line).
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HgxLbUbkxogC87ppc4tQ5H
+
+---
+
 ## 2026-09-21 — zero3 selection on unified memory (cafaf799): the CUDA inertness arm
 
 **The change.** Strategy 3 no longer selects `zero3:` where `_device_is_unified` says the
