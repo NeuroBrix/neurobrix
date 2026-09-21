@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A request-dependent dimension of an autotune key is bucketed.** A prompt's token count,
+  a decode's key length, a convolution's batch and spatial extents now enter the kernel's
+  autotune key as the top of their bucket while the kernel still runs the true size: exact
+  under 64, then in steps of 16 to 256, 32 to 1024, 128 to 8192, 512 beyond, a ladder chosen
+  by measurement on both V100 classes (0.0 % median and maximum loss against the per-size
+  optimum where powers of two lost up to 26.9 %). A certified setting therefore serves every
+  request in its bucket, and a prompt length nobody certified no longer sweeps. The ladder is
+  a profile value; a profile without one keeps the exact key. The previously certified
+  entries whose extents are not bucket tops no longer serve and are re-certified.
+
 - **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
   into tiles, the tile's edge is now rounded down to a multiple of 16 on Volta (a profile
   value, measured), instead of whatever the memory budget computed. An odd tile edge ran the

@@ -162,12 +162,12 @@ _MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
+                 key=['M_BUCKET', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
                  cache_results=True)
 @triton.jit
 def matmul_kernel(
     a_ptr, b_ptr, c_ptr,
-    M, N, K,
+    M, N, K, M_BUCKET,
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
@@ -277,12 +277,12 @@ def matmul_kernel(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
+                 key=['M_BUCKET', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
                  cache_results=True)
 @triton.jit
 def addmm_kernel(
     a_ptr, b_ptr, bias_ptr, c_ptr,
-    M, N, K,
+    M, N, K, M_BUCKET,
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
