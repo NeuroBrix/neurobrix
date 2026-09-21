@@ -896,6 +896,10 @@ class TritonSequence:
         moe_weight_ids: set = set()
         for op_data in ops_metadata.values():
             if op_data.get("op_type") == "custom::moe_fused":
+                _st = (op_data.get("attributes") or {}).get("stacked_experts")
+                if _st:
+                    moe_weight_ids.add(_st["input_linear_tid"])
+                    moe_weight_ids.add(_st["output_linear_tid"])
                 attrs = op_data.get("attributes", {})
                 for key in ("expert_gate_weight_ids",
                             "expert_up_weight_ids",
@@ -2007,19 +2011,33 @@ class TritonSequence:
             topk_weights_slot = None
         hidden_states_slot = self._tid_to_slot[hidden_states_tid]
 
+        stacked = attrs.get("stacked_experts")
         gate_w_slots = []
         up_w_slots = []
         down_w_slots = []
-        for i in range(num_experts):
-            gs = self._tid_to_slot.get(gate_weight_ids[i])
-            us = self._tid_to_slot.get(up_weight_ids[i])
-            ds = self._tid_to_slot.get(down_weight_ids[i])
-            if gs is None or us is None or ds is None:
+        if stacked:
+            # Stacked expert parameters (granite): two slots, per-expert
+            # views built in the dispatch from the LIVE arena tensors so a
+            # weight rebind is followed automatically.
+            _in_slot = self._tid_to_slot.get(stacked["input_linear_tid"])
+            _out_slot = self._tid_to_slot.get(stacked["output_linear_tid"])
+            if _in_slot is None or _out_slot is None:
                 raise RuntimeError(
-                    f"[MoE Triton] Missing weight slot for expert {i} in {op_uid}")
-            gate_w_slots.append(gs)
-            up_w_slots.append(us)
-            down_w_slots.append(ds)
+                    f"[MoE Triton] Missing stacked expert slot in {op_uid}: "
+                    f"in={stacked['input_linear_tid']} "
+                    f"out={stacked['output_linear_tid']}")
+        else:
+            _in_slot = _out_slot = None
+            for i in range(num_experts):
+                gs = self._tid_to_slot.get(gate_weight_ids[i])
+                us = self._tid_to_slot.get(up_weight_ids[i])
+                ds = self._tid_to_slot.get(down_weight_ids[i])
+                if gs is None or us is None or ds is None:
+                    raise RuntimeError(
+                        f"[MoE Triton] Missing weight slot for expert {i} in {op_uid}")
+                gate_w_slots.append(gs)
+                up_w_slots.append(us)
+                down_w_slots.append(ds)
 
         # Freeze for closure
         _gs_slot = gate_scores_slot
@@ -2029,6 +2047,10 @@ class TritonSequence:
         _gw = tuple(gate_w_slots)
         _uw = tuple(up_w_slots)
         _dw = tuple(down_w_slots)
+        _stacked_attrs = dict(attrs) if stacked else None
+        _in_slot_c, _out_slot_c = _in_slot, _out_slot
+        _weight_slots = ([_in_slot, _out_slot] if stacked
+                         else list(gate_w_slots) + list(up_w_slots) + list(down_w_slots))
         _k = top_k
         _ne = num_experts
         _norm = norm_topk_prob
@@ -2041,20 +2063,31 @@ class TritonSequence:
         def moe_fused_dispatch(arena):
             if _moe_slot_diag:
                 import sys as _sys_md
-                _g0 = arena[_gw[0]]
+                _g0_slot = _in_slot_c if _in_slot_c is not None else _gw[0]
+                _g0 = arena[_g0_slot]
                 _h0 = arena[_hs_slot]
-                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_gw[0]} "
+                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_g0_slot} "
                       f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
                       f"gw0_dev={None if _g0 is None else _g0._device_idx} "
                       f"hs_slot={_hs_slot} "
                       f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}",
                       file=_sys_md.stderr, flush=True)
+            if _stacked_attrs is not None:
+                from neurobrix.core.runtime.graph.moe_fusion import expert_weight_lists as _ewl
+                _st = _stacked_attrs["stacked_experts"]
+                _lut = {_st["input_linear_tid"]: arena[_in_slot_c],
+                        _st["output_linear_tid"]: arena[_out_slot_c]}
+                _g, _u, _d = _ewl(_stacked_attrs, _lut.get)
+            else:
+                _g = [arena[s] for s in _gw]
+                _u = [arena[s] for s in _uw]
+                _d = [arena[s] for s in _dw]
             return _moe_exec(
                 gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
-                gate_weights=[arena[s] for s in _gw],
-                up_weights=[arena[s] for s in _uw],
-                down_weights=[arena[s] for s in _dw],
+                gate_weights=_g,
+                up_weights=_u,
+                down_weights=_d,
                 top_k=_k, num_experts=_ne, norm_topk_prob=_norm,
                 cache_key=_cache_key,
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
@@ -2085,10 +2118,13 @@ class TritonSequence:
             kwargs_resolver=kwargs_resolver,
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
-            weight_input_slots=tuple(list(_gw) + list(_uw) + list(_dw)),
+            # The op's weight slots: the E x 3 per-expert slots, or the TWO stacked
+            # slots — the device derivation, the zero3 check and the block partition
+            # read these tuples (R30: the compiled mirror lists the same two).
+            weight_input_slots=tuple(_weight_slots),
             all_input_slots=tuple(
                 ([_gs_slot] if _gs_slot is not None else [_ti_slot, _tw_slot])
-                + [_hs_slot] + list(_gw) + list(_uw) + list(_dw)),
+                + [_hs_slot] + _weight_slots),
         )
 
     # ========================================================================
@@ -3362,8 +3398,8 @@ class TritonSequence:
                 # leading bytes reflect any divergence while keeping
                 # 115k-op model traces feasible. NBX_OP_FINGERPRINT_CAP=0
                 # disables the cap (full hash).
-                from neurobrix.core.runtime.fingerprint import hashed_span
-                hb = hashed_span(nb)                  # the whole tensor unless NBX_OP_FINGERPRINT_CAP says fewer
+                cap = int(_os_f.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                hb = nb if cap == 0 else min(nb, cap)
                 buf = (_ct_f.c_char * hb)()
                 DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
                                        hb, kind=2)
