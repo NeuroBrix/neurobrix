@@ -135,6 +135,21 @@ sdpa_thresholds:
 tiling:
   extent_lattice: 16
 
+# The bucket ladder of a request-dependent autotune-key dimension (kernels/autotune_bucket.py):
+# measured 2026-09-21 on both memory classes (tools/bucket_loss.py, owed-proofs): exact under
+# 64, then 16-step to 256, 32-step to 1024, 128-step to 8192, 512-step beyond — 0.0 % median
+# and maximum loss against the per-size optimum on matmul M and the SDPA scores' batched
+# GEMM, where powers of two lost up to 26.9 % and a 16-step ladder under 64 up to 16.7 %.
+# `default` serves every dimension that has no row of its own.
+autotune:
+  buckets:
+    default:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      - {up_to: null, step: 512}
+
 memory:
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
   max_registers_per_block: 65536

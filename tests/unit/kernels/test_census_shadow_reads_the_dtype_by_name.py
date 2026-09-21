@@ -30,12 +30,14 @@ def test_a_bool_guard_reads_healthy():
         f"reads falsy and refuses the shadow at step 1; read the dtype by name")
 
 
-def test_an_integer_read_answers_int_zero():
+def test_an_integer_read_answers_int_one():
+    # ONE, not zero, and an int not a float: a size read of 0 shapes an empty
+    # tensor (main's 9ea81cd2 rationale); a token id 1 runs the same shapes as 0.
     for dt in (NBXDtype.int64, NBXDtype.int32):
         v = _shadow_item_value(dt)
-        assert v == 0 and isinstance(v, int) and not isinstance(v, bool), (
-            f"{dt.name} read answered {v!r} ({type(v).__name__}); a token index "
-            f"must be int 0, not float 0.0")
+        assert v == 1 and isinstance(v, int) and not isinstance(v, bool), (
+            f"{dt.name} read answered {v!r} ({type(v).__name__}); a size/index "
+            f"read must be int 1, not 0 or float")
 
 
 def test_a_float_read_answers_float_zero():

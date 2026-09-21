@@ -1223,7 +1223,7 @@ the three served modes, twice each:
 | compiled | e7725da9d641 | e7725da9d641 | 20.2–21.5 s |
 | triton | e7725da9d641 | e7725da9d641 | 22.1–22.9 s, peak 2 738 MB |
 
-Every mode reproduces the vendor's unfused forward byte for byte. `triton/moe.py` was not
+Every mode reproduces the vendor's unfused forward byte for byte. Landed on main as c514b87b (both remotes) after the doctrine review's two HIGHs were closed: the triton fused op now carries the two stacked slots (R30), and the rewrite owns its renormalisation flag. `triton/moe.py` was not
 taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
 granite content. The Mac's matcher is now the only granite fusion in the tree.
 
@@ -1271,3 +1271,289 @@ holds 81 (`_entry_numbers` counts the ranges); `test_the_stated_count_matches_th
 fails on main today. The count was not updated when entries 78–81 landed. Fixing the count (and
 numbering the entry above) are main-side, so the Dell's — flagged here rather than edited from a
 branch 36 commits behind main, to honour the register's own rule that a number never moves.
+## 2026-09-21 — a plan is budgeted at the request the flow executes (Wan2.1-T2V-1.3B, CUDA)
+
+The estimator-against-ATen gap the owner named (11.6 GiB asked, 24.1 GiB held, 19.7 GB planned)
+was not an estimator error at the shapes it was given: it was given the wrong shapes. The
+executor renders a video whose request names no resolution at the CONTAINER's own output size
+(the backbone's traced latent [1, 16, 2, 60, 104] times the VAE scale 8 = 480x832), while the
+plan's `InputConfig` carried height=None, width=None — so the profiler bound the VAE's spatial
+symbols to nothing, fell back to the trace extent (112x176), and estimated 1.74 GiB for a
+decode whose first conv input alone is 81 x 192 x 480 x 832 x 4 B = 24.84 GB (the exact
+allocation torch refused). Measured with the new default-off `NBX_PRISM_ESTIMATE_DIAG=1`:
+
+| tree | plan request | VAE symbols | VAE first-pass peak | overflow ops | strategy, planned |
+|---|---|---|---|---|---|
+| main | height=None width=None vae_scale=None | s2=None s3=None (trace) | 1.74 GiB | 0 | single_gpu, 19 683 MB — OOMed |
+| fixed | height=480 width=832 vae_scale=8 | s2=60 s3=104 | 35.07 GiB | 61 | lazy_sequential + component-level VAE tiling |
+
+**The law:** one authority for the container's own spatial answers — `core/runtime/resolution/
+container_size.py` (`vae_scale_factor`, `container_output_size`), the executor's own walk
+extracted; the executor, the CLI's plan request and the serving engine's plan request read it.
+A plan is budgeted under the request the flow executes; a request-side fact still outranks
+the container. For the Mac: the same two functions apply on Metal unchanged (they read the
+topology and the manifest, never a device); the Apple plan for any video container whose
+request names no resolution was budgeted at the VAE's trace extent until this lands.
+Branch `prism-plans-at-the-containers-resolution`; the judged run follows.
+
+## 2026-09-21 — bucketed request-dependent key dimensions: the ladder chosen by measurement (CUDA, 16 GB class)
+
+The owner's decision (15:40): request-dependent dimensions are bucketed in the launcher's
+key; the bucket selects the configuration, the kernel runs the true size with its masks.
+`tools/bucket_loss.py`: one full autotune sweep per size (the engine's own bench with the
+consensus screen, directory off, private replay cache, the hardware profile bound so the
+keys are the live ones), then each ladder evaluated offline — every size served the
+configuration certified for its bucket's TOP, loss = time(bucket config) / time(per-size
+optimum) - 1. Card 0 (Tesla V100 16 GB), 1290/877 MHz.
+
+| kernel, fixed shape | sizes swept | ladder | buckets | median loss | max loss |
+|---|---|---|---|---|---|
+| matmul M, N=K=2048 fp16→fp32 (TinyLlama's prefill key form) | 88 (M 5..4096) | exact | 88 | 0.0 % | 0.0 % |
+| | | **L16**: 16-step to 256, 32 to 1024, 128 to 8192 | 31 | 0.0 % | **0.0 %** |
+| | | powers of two (64-step 64..512) | 14 | 0.0 % | 26.9 % |
+| bmm M (=N), B=32, K=64 fp32 (the SDPA math scores) | 88 | exact | 88 | 0.0 % | 0.0 % |
+| | | L16 | 31 | 0.0 % | 10.5 % (all of it in the buckets 16, 32, 48, 64) |
+| | | **Lmix**: exact below 64, L16 above | 87 | 0.0 % | **0.0 %** |
+| | | powers of two | 14 | 0.0 % | 15.0 % |
+
+**What decides it:** above 64 the 16/32/128-step ladder costs nothing measurable on either
+kernel; below 64 the batched GEMM's optimum moves with every size (5.6–10.5 % lost inside a
+16-wide bucket), the plain GEMM's does not. The ladder retained for the branch is Lmix:
+exact under 64 (where the GEMV path already serves M ≤ 4 unkeyed), then L16. Owed: the
+convolutions' H/W at the tile lattice, and the 32 GB class. Raw sweeps:
+`nbx/campaigns/2026_09_21_bucketed_keys/*.json`.
+
+## 2026-09-21 — the upscaler "single tile" regression, checked on CUDA: it does not reproduce
+
+The Mac's report (16:43): the whole upscaler family emits one tile — real-esrgan-x2 at 448
+returns one 64 px tile upscaled to 128 instead of 896², in both modes; bisect names the merge
+78784abe. The owner's instruction: test the merge's two parents separately.
+
+| tree | mode | rc | output |
+|---|---|---|---|
+| main HEAD e3823004 | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| 9000b7aa (main's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| 6f2cd5b7 (the Mac's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+
+Card 1 (V100 16 GB), the 448² asset (`benchmarks/assets/apple_448.png`), single_gpu plan, the
+component-level tiling engine at the 64 px trace tile (49 tiles, accumulated). Not
+reproducible on CUDA on either side of the merge. The merge's 119 files touch none of
+`core/module/tiling_engine.py`, `core/runtime/executor.py`, `resolution/output_extractor.py`
+or `core/prism/solver.py`; the word "fold" names nothing in the engine. What the CUDA side
+needs from the Mac to go further: the exact SHA it measured, its plan's strategy and
+`[OpTiling]` lines for that run, and whether a tree without the merge's Metal-side files
+(`metal_backend.py`, `triton_ext_driver.py`, `launcher.py`) still shows it — the tiled path
+those touch is Metal's. Script and logs: `nbx/campaigns/2026_09_21_upscaler_regression/`.
+
+## 2026-09-21 — Sana-1600M-MultiLing at 1024, the drift item, R29 first
+
+The retrace gate read 17.66 dB (old container) and 17.25 dB (new) against the vendor at the
+calibration request. Both artefacts, looked at: the vendor's render (vendored diffusers
+0.36.0, fp16, seed 42, 20 steps) and NeuroBrix's triton render (seed 42, 20 steps, 57.7 s on a
+16 GB card) are each a coherent, well-lit red apple on a wooden table — different
+compositions (the vendor's on a plain dark-red backdrop, NeuroBrix's against dark planks with
+a greener stem). Under R29 neither is degenerate; 17 dB between two different valid
+compositions is the signature of the same-seed-is-not-the-same-noise class (the vendor draws
+its initial noise in fp16 through its own generator, NeuroBrix in its own dtype and stream),
+not of a corrupted stage. The measurement that decides it is queued: the vendor started from
+NeuroBrix's own initial latent (the pipeline accepts `latents=`), PSNR against NeuroBrix's
+render from that latent — high means the engine reproduces the vendor and the item is the
+noise's; low means a stage diverges and the per-stage boundary walk follows. Sana's two ATen
+arms could not be judged on main until d47c5e0d: the in-place-unary interceptor handed a
+torch tensor to the NBX wrapper at aten.relu::0 (the Mac's fix f154dc39, cherry-picked and
+proven by its four cells on CUDA).
+
+## 2026-09-21 — the Mac's interceptor fix (f154dc39) proven on CUDA: Sana's two ATen arms, red then green
+
+On main before it, Sana-1600M 1024 in `--sequential` and in compiled mode both died at
+`aten.relu::0` — `'Tensor' object has no attribute '_device_idx'` — the in-place-unary
+interceptor handing a torch tensor to the NBX wrapper below its size threshold (the same
+class Wan T2V's ATen arm met under component tiling). Cherry-picked as d47c5e0d; its four
+cells pass on CUDA; the two arms then render: sequential rc 0 in 18.9 s, compiled rc 0 in
+20.3 s (card 2, 16 GB). Per the two-way merge rule: beneficial on CUDA, measured.
+
+The census re-run after the refusal merge (main c7ef4fa4) holds both proofs: TinyLlama 6 = 6,
+Sana 1024 58 = 58, under the one-card profiles — no key was harvested through a symbol that
+fell back to its trace value on those two.
+
+### Sana 1024, step by step from one initial latent (17:51, card 2)
+
+| step | t | NeuroBrix triton mean / std | vendor mean / std |
+|---|---|---|---|
+| 0 | 999 | 0.0044 / 0.9756 | 0.0043 / 0.9757 |
+| 5 | 899 | 0.0100 / 0.8804 | 0.0088 / 0.8807 |
+| 10 | 749 | 0.0171 / 0.7711 | 0.0145 / 0.7706 |
+| 15 | 499 | 0.0293 / 0.7365 | 0.0248 / 0.7365 |
+| 19 | 136 | 0.0499 / 1.0384 | 0.0415 / 1.0420 |
+
+PSNR vendor(seed 42) vs NeuroBrix(seed 42): 14.60 dB; vendor FROM NeuroBrix's initial latent
+vs NeuroBrix: 24.58 dB; NeuroBrix twice: 94.60 dB. The loop tracks the vendor at every step
+within 1e-3 on the state's std and a mean that drifts by 8e-3 over twenty steps — the
+signature of two numeric paths (fp16 kernels, different accumulation orders) walking the same
+schedule, not of a stage that diverges. Ten of the seventeen dB were the noise class (a seed
+is not a noise); the remaining gap accumulates smoothly. Under the drift-origin rule the
+origin class is KERNEL/SCALE, not policy or discrete: no single op to name. Both artefacts
+are coherent apples. What would close the item as a judged replacement: this table and the
+two artefacts beside the deprecated container's on the hub — the publish decision is Hocine's.
+
+### The convolution's width, swept (card 0, 16 GB): the ladder costs 37 % in two buckets of thirty
+
+conv2d_forward_kernel, [1, 128, 256, W] x [128, 128, 3, 3], fp16, 37 widths 64..1024. The
+16-step ladder (Lmix = L16 here, no width under 64) loses 0.0 % in 28 buckets and 37.4 % /
+35.9 % in the buckets whose top is 128 and 144: at those tops the optimum flips to
+BLOCK_SIZE_OUTF=32 while every interior width prefers OUTF=64, so the width 120 served the
+top's setting pays 37 %. Powers of two lose the same 37.4 %. Two more facts from the same
+sweep: (1) widths that are multiples of 16 are FAST and widths ≡ 8 mod 16 are slow by
+40–60 % under their own optimum (72: 1.47 ms against 80: 0.99 ms; 88: 1.82 against 96:
+1.21) — the tile lattice law read from the kernel's side; (2) above 160 the optimum is stable
+(OUTF=64 to 512, 32 at 1024) and the ladder costs nothing. What the measurement says: for a
+convolution's spatial extent the bucket's TOP is not always the bucket's best representative;
+the two losing buckets sit exactly where the optimum flips. Options, for the owner: keep the
+ladder and certify a convolution bucket at the setting that minimises the loss over the
+bucket's ends (two synthetic sweeps per bucket instead of one), or keep the convolution's
+spatial keys exact below 160 (tiled extents are 16-multiples by the lattice law and rarely
+land there; the untiled latents of the video VAEs do). The branch applies the profile's
+default ladder to every dimension until that is decided; a profile may declare `height` and
+`width` ladders of their own.
+
+## 2026-09-21 — the Mac's branch merged on a worktree and its engine changes proven on CUDA (the two-way merge rule)
+
+`merge-metal-first-light` = main 688b86be + origin/metal-first-light f3828311, merged clean
+(the interceptor fix was already cherry-picked). Its five new cells: 7 passed, 4 skipped on
+CUDA (conv bias in place, the interceptor, the MoE table) and 3 passed, 1 skipped without a
+card (zero3 selection on unified memory, the Apple lattice). Judged, card 0 (16 GB):
+
+| engine change | proof on CUDA | result |
+|---|---|---|
+| triton/moe.py Metal pinned-address tables and block size | granite code request, triton, bytes | sha e7725da9d641 = the vendor's unfused forward — inert |
+| kernels/ops/conv2d.py + wrappers: the conv bias rides in place (one output per biased conv) | Sana 1024 triton, bytes and wall | sha 9a1fc0589057 = main's bytes; 47.0 s against 57.7 s — inert on bytes, beneficial on wall |
+| core/flow/audio_llm.py: context embeds join the context device | Voxtral, jfk 11 s, compiled | rc 0, the transcript exact ("And so, my fellow Americans, ask not what your country can do for you…") — inert |
+| core/prism/solver.py + strategies/zero3.py: zero3 never selected where its offload frees nothing | the branch's cell + the catalogue census of 09-21 (59/59 plans identical) | inert on this rack (no zero3 placement on four cards) |
+| apple_m4_pro.yml lattice unit 16 + Apple certified directories | Apple data; the CUDA solver reads volta.yml's own lattice | no CUDA path reads them |
+
+## 2026-09-21 — the doctrine end to end on the bucketed keys, and the DiT at step 0
+
+**Census → certification → served, on branch `bucketed-autotune-keys`, card 2 (32 GB):** the
+census of TinyLlama at the family's calibration request (33 tokens; no card) — 6 keys;
+`neurobrix autotune certify --profile volta --census …` into a private directory pinned to the
+card: 6 shapes certified, 0 excluded, 0 failed, 0 unreachable, every file re-reads; the served
+run at a DIFFERENT request (19 tokens) swept all six — correctly: under 64 the key is exact and
+33 does not serve 19. Verification serves the request the census covered, by construction;
+the served run at the census's own request follows.
+
+**Wan T2V, the DiT at step 0 (card 3):** the vendor's `WanTransformer3DModel` run on NeuroBrix's
+exact step-0 inputs (the latent, t = 999, the positive text states) against NeuroBrix's own
+prediction without guidance:
+
+| | mean | std | absmax | channel means [:4] |
+|---|---|---|---|---|
+| vendor cond prediction | -0.0029 | 1.0813 | 4.594 | -0.078, -0.521, -0.448, -0.126 |
+| NeuroBrix prediction, guidance 1 | -0.0035 | 1.0802 | 4.582 | -0.055, -0.525, -0.444, -0.134 |
+
+max |diff| 0.128, relative L2 0.0135, cosine 0.99991 — the DiT forward is faithful at batch 1
+(fp16 numerics). NeuroBrix's guided prediction at batch 2 is not (std 1.32, channel means of
+±1, the field), so the batched [uncond, cond] forward is the suspect on a graph traced at
+batch 1 (the 08-29 class); `NBX_CFG_SEQUENTIAL=1` runs the two halves as batch-1 forwards and
+decides it on the next free card. The conditioning length (226, the graph's) stands as the
+vendor's contract.
+
+## 2026-09-21 — the shared cache against the hub, container by container (the owner's 18:19 rule; for the Mac)
+
+**The instrument.** `tools/hub_cache_diff.py` (main be835369, both remotes): every container of
+the shared cache (`~/.neurobrix/cache`, 59 with a manifest) against the object the hub serves
+under its slug — sha256 of each `components/*/graph.json` and of `topology.json`, and the build
+time in `manifest.json` on each side. The hub side is read without downloading a container: the
+store honours HTTP Range (206), the `.nbx` is a STORED zip64, so the central directory and the
+JSON members are fetched by byte range (self-test on the 21.9 GB PixArt build: 34 members, 67.7 MB
+read, every hash equal to `zipfile`'s; the store dropped one 1.5 GB member stream at 0 B/s, so
+reads are 8 MB chunks, retried). The page: `docs/reference/hub-cache-diff.md` (every hash, both
+sides). Re-run the tool rather than trusting the page's date.
+
+**Measured 19:20 UTC.** 36 IDENTICAL · 12 CACHE_NEWER (CogVideoX-2b, Flex.1-alpha, MiniCPM-o-4_5,
+PixArt-Sigma-XL-2-1024-MS, PixArt-XL-2-1024-MS, Qwen3-Omni, Sana_1600M_1024px_MultiLing,
+Wan2.1-T2V-1.3B, Wan2.1-VACE-1.3B, hat-l-x4, orpheus-3b-0.1-ft-snac, swinir-classical-x4) ·
+2 HUB_NEWER (PixArt-XL-1024: the cache's old 05-20 copy beside the 09-21 build; Wan2.1-I2V-14B:
+the hub's 06-26 build, the cache's 06-15 — the download is queued after the TRIM) · 7 NOT_ON_HUB
+(local variants: TinyLlama-v1.0 ×3 incl. int4, Qwen3-Coder int4g128, orpheus-3b-0.1-ft,
+real-esrgan-x2, real-esrgan-x8) · **2 HUB_OBJECT_CORRUPT**: `XPixelGroup/HAT-S-x4` serves
+55 653 412 bytes of ZEROS against a 54 654 466-byte record, and
+`ibm-granite/granite-3.1-1b-a400m-instruct` serves 2 523 531 200 bytes against a 2 791 966 656-byte
+record whose first bytes are not a zip header. Neither installs. On real-esrgan-x2: the internal
+and the public hub list the same 48 models and NEITHER has an x2 entry under any slug — the stale
+copy the Mac diagnosed did not come from the hub's catalogue as it stands; `74a2d7ea` is the
+sha256 of the cache's `components/model/graph.json` (the 20 September retrace).
+
+**Verified and therefore published at the first window** (`--verified`, by hand from the judged
+records; the tool never decides): PixArt-Sigma-XL-2-1024-MS (30.03 dB vs vendor), PixArt-XL-2-1024-MS
+(gate PASS; 41.35 dB on 09-07), hat-l-x4, hat-s-x4, swinir-classical-x4 (gates PASS 2026-09-21),
+granite-3.1-1b-a400m-instruct (battery goldens native + triton on the served stack). **Not
+published, and why**: CogVideoX-2b (09-07 gate NEEDS_EXPLANATION: both arms within the vendor
+gate, the old arm closer), Flex.1-alpha and MiniCPM-o-4_5 (09-07 gates FAIL — the cache holds
+those failed builds; the hub's older objects are the last judged ones), Qwen3-Omni (one mode
+judged so far), Sana_1600M_1024px_MultiLing (the drift item, the owner's decision), Wan T2V
+and VACE (no gate on record; Wan T2V's tiled VAE seams are a stage-three item), orpheus-snac
+(no gate on record), real-esrgan-x2/x8 (new entries written, no fidelity gate on record).
+The publication runs from `after_trim_v2.sh` at 01:05 UTC: a 5-byte then a 50 MB write probe
+through the internal entry point, then `hub_cache_diff.py --publish --verified` (a corrupt hub
+object is replaced like a stale one; a container without a staged `.nbx` is re-packed from the
+cache and its members re-hashed against the cache before the upload).
+
+**Until then the shared cache is canonical for both machines**; the Mac reads its graphs from
+there. The doctrine that governs everything from 19:07 today is in this rack's CLAUDE.md
+(certified autotune, three stages) and `docs/internal/_session_current.md`.
+
+## 2026-09-21 19:45 — the bucketed autotune key is on main (787796d3, both remotes): for the Mac
+
+**What landed.** `matmul_kernel` and `addmm_kernel` key on `M_BUCKET`; `baddbmm_kernel` on
+`M_BUCKET, N_BUCKET`; the kernel still runs the true size. The ladder is the vendor profile's
+`autotune.buckets.default` (`config/vendors/nvidia/volta.yml`): exact ≤ 64, step 16 to 256, 32
+to 1 024, 128 to 8 192, 512 beyond — measured 0.0 % median and maximum loss on both V100
+classes against the per-size optimum (`tools/bucket_loss.py`, tables above). A profile that
+declares no ladder keeps the exact key: the Apple profile must declare its own, measured, before
+its census is taken in bucketed form. **The convolutions keep exact spatial and batch keys**
+(`conv2d_forward_kernel`, `depthwise_conv2d_kernel` unchanged): the same ladder on a
+convolution's width lost 37.4 % / 40.2 % in the two buckets where the kernel's optimum flips
+(OUTF 64 → 32 at tops 128 and 144, C=128, H=256) and 0.0 % at C=256; a convolution's extents
+are bounded by resolutions and tile edges, not by prompts. Brick: `kernels/autotune_bucket.py`
+(`bucket`, `parse_ladder`, `ladder_for`, `bucket_of`); cells:
+`tests/unit/kernels/test_a_request_dimension_buckets_on_the_profiles_ladder.py`.
+
+**A census defect fixed with it, which the Mac's census may share.** Behind the census door no
+driver names the vendor profile; `active_vendor_profile()` resolved EMPTY and every key the
+shadow recorded was exact (matmul M 226 where the launcher keys 240), the SMEM budget and the
+config spaces unread, the shadows ten times slower. `census.install(hardware=…)` now binds the
+launcher target from the hardware profile's first device (brand + compute capability) and
+clears the cached vendor profile — an NVIDIA/AMD profile only; a device whose capability is
+not a number (Apple) keeps its driver's answer, so the Mac should check that its shadow sees
+`apple_silicon.yml` (one recorded key of a request-dependent kernel read against the
+launcher's form is the test). Cell: `tests/unit/kernels/test_the_census_shadow_carries_the_profiles_target.py`.
+
+**What the fixed census measured here** (from the shared cache, both classes, ~4 min each):
+16 GB — 34 ok, 8 failed shadows, 17 retrace, 675 entries, 268 to certify; 32 GB — 37 ok, 5
+failed, 17 retrace, 722 entries, 313 to certify. The retrace queue (symbolic graph only, stage
+one): the Mac's eight plus Flex.1-alpha, Ming-Lite-Omni-1.5, MiniCPM-o-4_5, PixArt-Sigma-XL-1024
+(the old container), Qwen3-Omni, Qwen3-VL, Sana-1600M-MultiLing (the old container),
+Wan2.1-I2V-14B, granite-3.1-1b-a400m. Certification of both classes runs now, pinned per card
+(`nbx/campaigns/2026_09_21_census/certify_class.sh`).
+
+## 2026-09-21 20:25 — the batched GEMM's contraction bucketed: the measurement (both classes)
+
+openaudio's census (the fixed shadow) recorded 2 135 `baddbmm` keys in one request: 85 distinct
+M buckets, 85 N buckets and **2 049 distinct K** — the contraction of the attention's second
+product is the key length, walked one value at a time by the decode. An exact K cannot be
+certified for a decode. Swept `bucket_loss.py --kernel bmm --dim K --fixed B=32,M=1,N=64`,
+135 sizes 1..4 096, `NBX_AUTOTUNE_CERTIFIED=off`, one card per class, alone on the card:
+
+| class | ladder | buckets | median loss | max loss | where |
+|---|---|---|---|---|---|
+| 16 GB (card 0) | Lmix (exact ≤ 64, 16/32/128/512) | 123 | 0.0 % | 20.0 % | tops 128 (K=120: 5.6 %), 176 (168: 20.0 %), 192 (184: 14.3 %) |
+| 16 GB | L16 | 64 | 0.0 % | 20.0 % | the same buckets |
+| 16 GB | powers of two | 16 | 0.0 % | 23.5 % | |
+| 32 GB (card 2) | Lmix | 123 | 0.0 % | 10.5 % | top 112 (K=104) |
+| 32 GB | powers of two | 16 | 0.0 % | 21.7 % | |
+
+Decision by measurement: K enters the `baddbmm_kernel` key as `K_BUCKET` on the profile's
+default ladder (main, with this commit). The loss is confined to a few 16-step buckets where
+BLOCK_K's optimum flips; every other bucket costs nothing, and the alternative is a key nobody
+can certify. Records: `nbx/campaigns/2026_09_21_bucketed_keys/bmm_K_M1_N64_{16g,32g}.json`.
+The Mac's profile needs the same measurement before its census in bucketed form.

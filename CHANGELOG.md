@@ -7,7 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An input the graph binds symbolically is handed to it whole.** The runtime cut any
+  component input longer than the container's traced extent down to that extent, even where
+  the graph binds the dimension as a symbol and runs at any length: Qwen3-Omni's thinker
+  received the trace's 23 tokens instead of the 213 it composed and failed on the first
+  reshape. Only an extent the graph carries as a literal is still cut, and the cut is now
+  said in clear as a trace defect to fix at the source.
+
+### Added
+
+- **The batched GEMM's contraction is bucketed too.** In the attention's second product the
+  contraction is the key length, which a decode walks one by one (openaudio: 2 049 distinct
+  values in one request); it now enters the autotune key as its bucket's top on the same
+  ladder, measured on both V100 classes at 0.0 % median loss and up to 10.5 % / 20.0 % in
+  a few 16-step buckets where the block optimum flips.
+- **The kernel census no longer drops a model whose graph froze a dimension.** Such a model
+  is still shadowed and its keys harvested at the frozen extent, and it is queued for a
+  retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
+  no longer read as frozen.
+- **Publication verifies bytes, never sizes.** `tools/hub_cache_diff.py --verify-all` reads every
+  member of every hub object and checks it by checksum against the shared cache; a published
+  container is read back whole and verified against the uploaded file before it counts, and
+  `--hide-corrupt` withdraws an object that fails. Under `NBX_DEBUG=1` the CLI prints the
+  image clip it built and the frame count it resolved.
+- **`tools/hub_cache_diff.py`** compares every container of the shared cache with the object
+  the hub serves, graph by graph, by reading the hub object's central directory and JSON
+  members over HTTP Range (no container is downloaded), and publishes the ones that are newer
+  and verified through the toolchain; the table is written to `docs/reference/hub-cache-diff.md`.
+  A hub object whose bytes are not the recorded container (wrong length, no zip header) is
+  reported as its own verdict, `HUB_OBJECT_CORRUPT`, and is replaced like a stale one.
+
+### Fixed
+
+- **The kernel census shadows more of the catalogue.** Under the shadow an integer read
+  answers one and a value written from the host is read back as written, a lazily placed
+  component resolves its device, the device utilities are inert in every module that bound
+  them, and a sampler draws token 0 — Kokoro, CogVideoX, orpheus and openaudio are censused
+  where they failed before.
+- **A kernel census records its keys under the vendor profile its hardware names.** Behind the
+  census door no card is visible, so the engine could not tell which vendor profile applied:
+  the bucket ladder, the shared-memory budget and the kernel config spaces went unread and every
+  recorded key came out in the exact form. The census now binds its target from the hardware
+  profile it is taken for (the device's brand and compute capability), so the keys it records
+  are the keys the launcher forms when it serves; a profile naming no device is refused.
+
 ### Changed
+
+- **A request-dependent dimension of a matrix kernel's autotune key is bucketed.** A prompt's
+  token count and a decode's key length now enter the matmul and batched-matmul autotune keys
+  as the top of their bucket while the kernel still runs the true size: exact under 64, then
+  in steps of 16 to 256, 32 to 1024, 128 to 8192, 512 beyond, a ladder chosen by measurement
+  on both V100 classes (0.0 % median and maximum loss against the per-size optimum where
+  powers of two lost up to 26.9 %). A certified setting therefore serves every request in its
+  bucket, and a prompt length nobody certified no longer sweeps. The convolutions keep exact
+  spatial and batch keys: the same ladder measured on a convolution's width loses 37–40 % in
+  the two buckets where the kernel's optimum flips, and a convolution's extents are bounded by
+  resolutions and tile edges rather than by prompts. The ladder is a profile value; a profile
+  without one keeps the exact key. The previously certified matrix entries whose extents are
+  not bucket tops no longer serve and are re-certified.
 
 - **A tiled upscale lands its tiles on the card's kernel lattice.** When a request is cut
   into tiles, the tile's edge is now rounded down to a multiple of 16 on Volta (a profile
@@ -15,6 +74,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernels masked at every scale: an eight-times upscale at 1024x1024 on a shared 32 GB card
   took 718 s with a 457-pixel tile and takes 40 s with a 448-pixel one, for 4 % less tile
   area. Cards without a measured lattice keep the computed edge.
+
+### Fixed
+
+- **Two diagnostic doors for a guided denoiser.** `NBX_CFG_SEQUENTIAL=1` runs the two halves of
+  classifier-free guidance as two batch-1 forwards instead of one batch-2 forward, and
+  `NBX_DUMP_STEP0=<dir>` writes the denoiser's step-0 inputs and prediction as `.npy` files,
+  so a vendor's own module can be run on identical inputs. Both default off.
+- **A video decoder receives its latent in its own space.** A VAE trained on a
+  normalised latent declares its statistics, and the vendor maps the latent back per
+  channel before decoding; both engines now apply that step from the container's own
+  declaration. `NBX_LOOP_STATE_DIAG=1` prints the loop state, the model prediction and
+  the conditioning statistics per step, the differential against a vendor callback.
+- **A video request that names no resolution is planned at the container's own.** The
+  plan for such a request was budgeted at the VAE's trace extent while the run rendered
+  at the size the container implies (its backbone's traced latent times the VAE scale),
+  so a 1.3B text-to-video decode asked 24.8 GB of a card planned at 19.7 GB. The plan,
+  the CLI and the server now read the same answer the executor renders at; on the same
+  card the plan sees the decode overflow and tiles it. `NBX_PRISM_ESTIMATE_DIAG=1`
+  prints, per component, the request the plan was budgeted under, the symbols it bound
+  and every overflow op.
 
 ### Added
 
@@ -804,6 +883,15 @@ avoid leaves satisfied and one who finds out alone does not.
   turn it off.
 
 ### Fixed
+
+- **A dimension the runtime could not bind refuses by name instead of answering its trace
+  value.** Every path — the ATen resolver, the Triton resolver, the compiled closures on
+  both engines, the sequential argument resolver and the planner — used to fall back to
+  the extent seen at trace time when a symbol was unbound, and a video plan was budgeted
+  at a 112x176 decode for a 480x832 request that way. The refusal names the symbol, the
+  input it binds from and the values that were bound. A symbol bound to zero (a cache at
+  its first step) still answers zero. `NBX_STRICT_SYMBOLS` is gone: strict is the only
+  behaviour.
 
 - **Some models failed to load, or loaded corrupted weights, when part of the
   model was staged through system memory.** Weights whose stored precision

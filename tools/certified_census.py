@@ -102,8 +102,11 @@ def frozen_dims(model: str) -> list:
                 rows.append({"component": gp.parent.name, "unreadable": r["error"]})
                 continue
             b = r.get("first_break")
+            # A literal standing in an output SHAPE where the input carried the symbol is a
+            # lost dimension whatever else that number is: a buffer allocated at the trace
+            # length is frozen even when a weight shares the extent (chatterbox's 314).
             lost = r.get("never_carried") or (
-                b and b.get("relation") == "v" and not b.get("literal_is_a_parameter_extent"))
+                b and b.get("relation") == "v" and (b.get("lost_in") == "shape" or not b.get("literal_is_a_parameter_extent")))
             if lost:
                 rows.append({"component": gp.parent.name, "symbol": r.get("symbol"), "name": r.get("name"),
                              "trace_value": r.get("trace_value"), "source": r.get("source"),
@@ -184,8 +187,11 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
         row.update(status="unreadable", frozen=frozen)
         return row
     if frozen:
+        # A frozen dimension is a retrace item for the queue — and STILL a census: the shadow
+        # runs and its keys are harvested (at the trace value of the frozen dimension), so the
+        # model is certified for what it can run today. Dropping it harvested nothing for 17
+        # of 59 containers (2026-09-21).
         row.update(status="retrace", frozen=frozen)
-        return row
     reqs = requests or [_zoo.request_args(model, fam, list(extra))]
     row["requests"] = [" ".join(r) for r in reqs]
     keys = set()
@@ -195,20 +201,38 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
             row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
             keys.update(res["keys"])
             if res["rc"] != 0:
-                row["status"] = "failed"
+                row["status"] = "failed" if row["status"] != "retrace" else "retrace+failed"
     row["keys"] = len(keys)
     row["_keys"] = sorted(keys)
     return row
 
 
 def directory_idents(vendor_profile: str) -> set:
-    """Every ident the certified directory holds for `<vendor>/<profile>` — the coverage the
-    census is measured against."""
+    """Every ident the certified directory SERVES for `<vendor>/<profile>` — read through the
+    engine's own loader and lookup, never the raw files: the loader drops an entry whose proof
+    names no card (register 56 — a legacy proof serves no memory class until re-proven), and a
+    coverage counted from the raw files read 6 served for a model the directory holds nothing
+    for (TinyLlama, 2026-09-21). `any_class=True`: served on SOME memory class of the profile."""
+    from neurobrix.kernels import autotune_certified as C
+    from neurobrix.triton.autotune_cache import _autotuners
     out = set()
     root = REPO / "src" / "neurobrix" / "config" / "autotune" / vendor_profile
+    tuners = {qual: at for qual, at in _autotuners()}
     for p in root.glob("*.json"):
         doc = json.loads(p.read_text())
-        out.update(f"{doc.get('kernel')}::{k}" for k in (doc.get("entries") or {}))
+        qual = doc.get("kernel")
+        at = tuners.get(qual)
+        if at is None:
+            continue
+        for ktext in (doc.get("entries") or {}):
+            key = C.parse_key(ktext)
+            if key is None:
+                continue
+            try:
+                if C.lookup(qual, at, key, any_class=True) is not None:
+                    out.add(f"{qual}::{ktext}")
+            except Exception:
+                continue
     return out
 
 

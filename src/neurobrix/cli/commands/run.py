@@ -10,6 +10,7 @@ DATA-DRIVEN DESIGN:
 ZERO HARDCODE: Defaults cascade from CLI > runtime/defaults.json > family config
 """
 
+import os as _os_dbg
 import sys
 import json
 import time
@@ -437,16 +438,33 @@ def cmd_run(args):
     # — the same over-reach as demanding a VAE scale from a model with no VAE.
     # Where a spatial request exists the image supplies them, so they are never
     # silently absent for the models that need them.
+    # The container's own output size — the SAME authority the executor renders at when
+    # the request names none (`resolution.container_size`, 2026-09-21): a plan budgeted
+    # at the VAE's trace extent while the flow decoded 81 frames at 480x832 asked 24.8 GB
+    # at one conv against a 19.7 GB plan. A request-side fact still outranks it.
+    from neurobrix.core.runtime.resolution.container_size import container_output_size
+    # The topology as the executor reads it: the cache path's own file (the container
+    # object answers an empty topology for an extracted directory).
+    _topo_path = cache_path / "topology.json"
+    _topo_components = (json.load(open(_topo_path)).get("components") or {}) if _topo_path.exists() else {}
+    _cos = container_output_size(manifest, cached_defaults, _topo_components)
     height = _rt("height", args, cached_defaults, _fam_defaults,
-                 extra=[("the input image's height", _img_hw[0] if _img_hw else None)],
+                 extra=[("the input image's height", _img_hw[0] if _img_hw else None),
+                        ("the container's own output height", _cos[0] if _cos else None)],
                  default=None)
     width = _rt("width", args, cached_defaults, _fam_defaults,
-                extra=[("the input image's width", _img_hw[1] if _img_hw else None)],
+                extra=[("the input image's width", _img_hw[1] if _img_hw else None),
+                       ("the container's own output width", _cos[1] if _cos else None)],
                 default=None)
     # OPTIONAL by nature: a model without a VAE has no scale factor, a model
     # without a temporal axis has no compression. Absent is a legitimate answer
     # for these two, and only for these two.
-    vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults, default=None)
+    # The VAE scale in the container's own spellings (manifest, defaults, trace), the
+    # same brick the executor reads: without it the plan's spatial symbols bind to nothing.
+    from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
+    vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
+                    extra=[("the container's own VAE scale", _vsf(manifest, cached_defaults, _topo_components))],
+                    default=None)
     num_frames = _rt("num_frames", args, cached_defaults, _fam_defaults, default=None)
     temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
                                _fam_defaults, default=None)
@@ -581,6 +599,10 @@ def cmd_run(args):
             # on one frame. height/width stay on the raw argument on purpose:
             # absent, the processor keeps the source image's own size.
             num_frames=int(num_frames or 0)))
+        if _os_dbg.environ.get("NBX_DEBUG") == "1":
+            _img = inputs.get("global.image")
+            print(f"   [Inputs] image clip {tuple(getattr(_img, 'shape', ()))} from num_frames={num_frames!r} "
+                  f"(request {getattr(args, 'num_frames', None)!r}, container {cached_defaults.get('num_frames')!r})", flush=True)
         # Upscaler metadata key, not a runtime input (the dedicated
         # `nbx upscale` path owns the exact-size crop on this side).
         inputs.pop("_upscale_orig_hw", None)

@@ -47,6 +47,9 @@ def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
         )
 
 
+_LOOP_STATE_DIAG = os.environ.get("NBX_LOOP_STATE_DIAG") == "1"
+
+
 def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
                             comp_name: str) -> None:
     """Always-on NaN/Inf gate on the diffusion loop state.
@@ -58,6 +61,17 @@ def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
     crash with op/step context instead of continuing to a silently
     corrupt output (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP).
     """
+    if _LOOP_STATE_DIAG and isinstance(state, NBXTensor):
+        # R30 mirror: NBX_LOOP_STATE_DIAG=1, the state's statistics after every step
+        # (a device-to-host copy through numpy — diagnostic only, R33-pure).
+        import numpy as _np
+        _f = _np.asarray(state.numpy(), dtype=_np.float32)
+        _ts = timestep.item() if hasattr(timestep, "item") else timestep
+        _ax = tuple(d for d in range(_f.ndim) if d != 1)
+        print(f"[LoopState] step {step_idx} t={float(_ts):.1f} mean {_f.mean():.4f} std {_f.std():.4f} "
+              f"absmax {_np.abs(_f).max():.3f} ch-mean[:4] {_np.round(_f.mean(axis=_ax)[:4], 3).tolist()} "
+              f"ch-std[:4] {_np.round(_f.std(axis=_ax)[:4], 3).tolist()}", flush=True)
+
     if not isinstance(state, NBXTensor) or state.nbx_dtype not in _FLOAT_NBX_DTYPES:
         return
     from neurobrix.kernels.wrappers import all_wrapper, isfinite_wrapper
@@ -1021,6 +1035,27 @@ class TritonIterativeProcessHandler:
         from neurobrix.triton.flow.step_cache import StepCache
         return StepCache.setup(self.ctx, num_steps)
 
+    def _apply_latent_affine(self, state_key: str, decoder_name: str) -> None:
+        import numpy as np
+        from neurobrix.core.runtime.resolution.latent_statistics import latent_affine, decoder_profile
+        from neurobrix.kernels.wrappers import add as _add, mul as _mul
+        affine = latent_affine(decoder_profile(self.ctx.pkg, decoder_name))
+        if affine is None:
+            return
+        std, mean = affine
+        state = self._resolve_as_nbx(state_key)
+        if not isinstance(state, NBXTensor) or state.dim() < 2:
+            return
+        if state.shape[1] != len(std):
+            raise RuntimeError(
+                f"ZERO FALLBACK: the latent has {state.shape[1]} channels and the decoder "
+                f"declares statistics for {len(std)}: the affine cannot be applied.")
+        view = [1, len(std)] + [1] * (state.dim() - 2)
+        np_dtype = np.float16 if state.nbx_dtype == NBXDtype.float16 else np.float32
+        std_t = NBXTensor.from_numpy(np.asarray(std, dtype=np_dtype).reshape(view))
+        mean_t = NBXTensor.from_numpy(np.asarray(mean, dtype=np_dtype).reshape(view))
+        self.ctx.variable_resolver.set(state_key, _add(_mul(state, std_t), mean_t))
+
     def _execute_post_loop(self, post_loop: List[str], loop_components: List[str]) -> None:
         """
         Execute post-loop components (e.g., VAE decoder).
@@ -1106,6 +1141,12 @@ class TritonIterativeProcessHandler:
                     )
 
         # Execute post-loop components
+        # The decoder's input space (R30 mirror of the torch flow, R33: NBXTensor +
+        # the mul/add wrappers): latent * std + mean per channel when the decoder's
+        # profile declares its statistics — the vendor's own step before decoding.
+        if state_key and post_loop:
+            self._apply_latent_affine(state_key, post_loop[0])
+
         for comp_name in post_loop:
             self._execute_component(comp_name, "post_loop", None)
             # R30 mirror of the compiled post-loop gate: refuse a decoder

@@ -88,6 +88,11 @@ FAMILY_TIMEOUT_S: Dict[str, int] = {
 # Per-model overrides (name → seconds). Use when a model needs more than
 # the family default (big MoE, 4K diffusion, etc.).
 MODEL_TIMEOUT_S: Dict[str, int] = {
+    # Janus-Pro-7B on a 16 GB card runs the ATen modes under lazy_sequential (7B fp16 does
+    # not fit beside its activations): 1 498 s measured on 2026-09-21 without a limit,
+    # rc 0, 0 sweeps; the triton mode plans single_gpu and takes 83 s. The budget is the
+    # measured cost with headroom, not the family's 300 s (two false timeouts on 09-21).
+    "Janus-Pro-7B": 2400,
     "TinyLlama-1.1B-Chat-v1.0":     60,
     "orpheus-3b-0.1-ft":            180,
     "Qwen3-30B-A3B-Thinking-2507":  420,

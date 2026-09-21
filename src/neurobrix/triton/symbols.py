@@ -8,6 +8,11 @@ Zero torch dependency.
 from typing import Dict
 
 
+class UnboundSymbolError(RuntimeError):
+    """A symbol the container declares that the runtime did not bind — refused by name.
+    The trace value is a witnessed extent of one stimulus, never a value (2026-09-21)."""
+
+
 class SymbolResolver:
     """Binds symbolic shape variables from actual input tensors."""
 
@@ -108,11 +113,8 @@ class SymbolResolver:
                 if tensor is not None and hasattr(tensor, 'shape'):
                     val = tensor.shape[dim]
                     self._bind(sym_id, val)
-                else:
-                    # Try trace_value as fallback
-                    tv = sym_info.get("trace_value")
-                    if tv is not None:
-                        self._bind(sym_id, tv)
+                # An input the flow did not provide binds NOTHING: the symbol stays
+                # unbound and refuses by name when it is used (never the trace value).
                 continue
 
             # Dict format: {"tensor_id": "...", "dim": 0}
@@ -160,8 +162,7 @@ class SymbolResolver:
             sym_id = expr.get("id") or expr.get("symbol_id")
             if sym_id and sym_id in self._bindings:
                 return self._bindings[sym_id] + expr.get("offset", 0)
-            trace = expr.get("trace") if expr.get("trace") is not None else expr.get("trace_value")
-            return (trace or 0) + expr.get("offset", 0)
+            self._refuse(sym_id, expr)
 
         # Unary: neg
         if type_str == "neg":
@@ -189,30 +190,43 @@ class SymbolResolver:
         if type_str == "product":
             factors = expr.get("factors", [])
             if not factors:
-                return expr.get("trace_value", 0)
+                raise UnboundSymbolError("ZERO FALLBACK: a product expression with no factors")
             result = 1
             for f in factors:
                 result *= self._resolve_val(f)
             return result
 
-        # Fallback: trace value
-        trace = expr.get("trace") if expr.get("trace") is not None else expr.get("trace_value")
-        if trace is not None:
-            return trace
-        return 0
+        raise UnboundSymbolError(
+            f"ZERO FALLBACK: expression of type {type_str!r} cannot be evaluated at runtime")
 
     def _resolve_val(self, val) -> int:
         """Resolve a single value — int, str symbol ref, or dict expression."""
         if isinstance(val, (int, float)):
             return int(val)
         if isinstance(val, str):
-            return self._bindings.get(val, 0)
+            if val in self._bindings:
+                return self._bindings[val]
+            self._refuse(val, None)
         if isinstance(val, dict):
             return self._eval_expr(val)
-        return 0
+        raise UnboundSymbolError(f"ZERO FALLBACK: cannot resolve {val!r} as a dimension")
+
+    def is_bound(self, sym_id: str) -> bool:
+        return sym_id in self._bindings
 
     def get(self, sym_id: str, default: int = 0) -> int:
+        """The bound value, or `default` — callers deciding on boundness use `is_bound`,
+        never a sentinel: a symbol legitimately bound to 0 (a cache length at its first
+        step) is bound."""
         return self._bindings.get(sym_id, default)
+
+    def _refuse(self, sym_id, expr) -> None:
+        info = self._symbols.get(sym_id) or {}
+        tv = (expr or {}).get("trace", (expr or {}).get("trace_value", info.get("trace_value")))
+        raise UnboundSymbolError(
+            f"ZERO FALLBACK: symbol '{sym_id}' ({info.get('name')}, binds from "
+            f"{info.get('source')}) is not bound at runtime; its trace value {tv} is a "
+            f"witnessed extent, not a value. Bound: {sorted(self._bindings)}.")
 
     @property
     def bindings(self) -> Dict[str, int]:
