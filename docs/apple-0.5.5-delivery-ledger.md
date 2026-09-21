@@ -64,6 +64,19 @@ readback; image external degeneracy judge; video judged by eye.
   object by ten megabytes. Re-verify when the retention moves.
 - **real-esrgan-x8 @1024** — CONDITIONAL on the same object.
 
+## BLOCKED: the upscaler family regressed by the merge (2026-09-21)
+
+`git bisect` → `78784abe` (the Mac merge) enabled the reshape rung for upscalers,
+whose ENGINE runtime fold does not stitch: `real-esrgan-x2 @448` emits one 64px
+tile upscaled to 128px (both modes; pixel-matched), space-to-batch 49 tiles never
+folded to 896. x8 compiled hits `leaky_relu _device_idx` (torch tensor in NBX
+wrapper). Vendor-neutral, core/prism/runtime — handed to the rack side in
+`docs/reference/owed-proofs.md` (2026-09-21 entry) with the bisect and datum.
+Every previously-delivered upscaler (x2/x4/x8, swin2SR-x2/x4, swinir-x2/x4) now
+FAILS VERIFICATION under the doctrine at any request larger than its 64px trace;
+they are moved from delivered to **BLOCKED — merge regression** until the fold
+lands. Their CERTIFIED keys stand; only VERIFIED is withdrawn.
+
 ## Census and certification state
 
 - Census basis today: the runtime replay cache (the census tool is being
