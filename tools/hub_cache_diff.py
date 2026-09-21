@@ -226,6 +226,10 @@ def cache_index(cdir: Path) -> dict:
 
 
 # ----------------------------------------------------------------------------- hub side
+class HubObjectCorrupt(RuntimeError):
+    """The hub serves bytes that are not the recorded container."""
+
+
 def hub_record(registry: str, slug: str):
     import requests
     r = requests.get(f"{registry}/api/models/{slug}", timeout=30)
@@ -251,6 +255,14 @@ def hub_index(registry: str, rec: dict, token: str, memo: dict, memo_path: Path)
     memo_key = f"{key}|{rec.get('updatedAt')}|{src.size}"
     if memo_key in memo:
         return memo[memo_key]
+    head = src.read(0, 4)
+    record_size = int(rec.get("fileSize") or 0)
+    if head != b"PK\x03\x04" or (record_size and record_size != src.size):
+        # The object the store serves is not the container the record describes: a zero-filled
+        # or truncated upload (HAT-S-x4: 55.65 MB of zeros against a 54.65 MB record; granite-3.1:
+        # a 2.52 GB object against a 2.79 GB record whose first bytes are not a zip header,
+        # 2026-09-21). Said as its own verdict, never as a read error.
+        raise HubObjectCorrupt(f"object {src.size} bytes (record {record_size}), first bytes {head!r}")
     members = zip_members(src)
     out = {"object_size": src.size, "record_size": int(rec.get("fileSize") or 0), "members": {}, "created_at": None,
            "n_members": len(members)}
@@ -312,7 +324,8 @@ def write_markdown(rows: List[dict], path: Path, registry_host: str, when: str, 
         "",
         "Verdicts: **IDENTICAL** (every graph and the topology hash equal) · **CACHE_NEWER** (they differ and the cache's build is later: "
         "a publication candidate once verified) · **HUB_NEWER** (they differ and the hub's build is later: the cache is behind) · "
-        "**NOT_ON_HUB** (no hub entry under any known slug) · **HUB_RECORD_MISSING** (the map names a slug the hub does not answer).",
+        "**NOT_ON_HUB** (no hub entry under any known slug) · **HUB_RECORD_MISSING** (the map names a slug the hub does not answer) · "
+        "**HUB_OBJECT_CORRUPT** (the bytes the store serves are not the recorded container: wrong length or no zip header — a verified local build must replace it).",
         "",
         "| container (cache) | hub slug | verdict | cache built | hub built | hub updated | differing members (cache → hub) | verified |",
         "|---|---|---|---|---|---|---|---|",
@@ -436,6 +449,8 @@ def main() -> int:
                     row.update(verdict(cache, hub, rec))
             else:
                 row.update(verdict(cache, None, None))
+        except HubObjectCorrupt as exc:
+            row.update({"verdict": f"HUB_OBJECT_CORRUPT: {exc}", "differs": [], "same": []})
         except Exception as exc:  # noqa: BLE001 — named per container, the diff goes on
             row.update({"verdict": f"ERROR: {type(exc).__name__}: {str(exc)[:160]}", "differs": [], "same": []})
         row["rec"] = {k: rec.get(k) for k in ("updatedAt", "fileSize", "fileUrl")} if rec else None
@@ -454,7 +469,7 @@ def main() -> int:
         counts[r["verdict"].split(":")[0]] = counts.get(r["verdict"].split(":")[0], 0) + 1
     log("verdicts: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 
-    candidates = [r for r in rows if r["verdict"] == "CACHE_NEWER"]
+    candidates = [r for r in rows if r["verdict"] == "CACHE_NEWER" or r["verdict"].startswith("HUB_OBJECT_CORRUPT")]
     for r in candidates:
         log(f"candidate: {r['name']} → {r['slug']} verified={'yes: ' + verified[r['name']] if r['name'] in verified else 'NO (not published)'}")
     if not args.publish:
