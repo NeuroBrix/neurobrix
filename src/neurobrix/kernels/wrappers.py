@@ -3805,7 +3805,7 @@ def conv_transpose_wrapper(
         BLOCK_SIZE=BLOCK,
     )
     if bias is not None:
-        output = add(output, bias.view(1, C_out, 1, 1))
+        output = _conv_bias_inplace(output, bias)
     if is_1d:
         output = output.squeeze(2)
     return output
@@ -3986,6 +3986,30 @@ def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
     return out
 
 
+def _conv_bias_inplace(output, bias):
+    """Per-channel conv bias, IN PLACE on the wrapper's own fresh output.
+
+    Every conv-family wrapper ended with `add(output, bias.view(1,-1,1,1))`
+    — an out-of-place broadcast allocating a SECOND full-size map per
+    biased convolution. Measured cost: 2450 MB of the 8008 MB tile peak on
+    real-esrgan-x8 @1024 (malloc trace, 2026-09-21). The in-place contract
+    holds by construction at all four call sites: `output` is the
+    wrapper's own fresh contiguous NCHW allocation with no other consumer.
+    The bias is cast to the output's dtype (the standard add's wider-dtype
+    rule would upcast the full map instead — the very copy this removes).
+    Fixed launch config: no autotune key, nothing for any census.
+    """
+    from neurobrix.kernels.ops.conv2d import conv2d_bias_inplace_kernel
+    bias_c = bias if bias._dtype == output._dtype else bias.to(output._dtype)
+    n = output.numel()
+    hw = int(output.shape[-2]) * int(output.shape[-1])
+    c = int(output.shape[1])
+    _set_device(output)
+    conv2d_bias_inplace_kernel[((n + 1023) // 1024,)](
+        output, bias_c.contiguous(), n, hw, c, BLOCK=1024, num_warps=4)
+    return output
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
@@ -4159,7 +4183,7 @@ def conv2d_wrapper(
     )
 
     if bias is not None:
-        output = add(output, bias.view(1, -1, 1, 1))
+        output = _conv_bias_inplace(output, bias)
 
     return output
 
@@ -4198,7 +4222,7 @@ def _depthwise_conv2d_dispatch(
     )
 
     if bias is not None:
-        output = add(output, bias.view(1, -1, 1, 1))
+        output = _conv_bias_inplace(output, bias)
 
     return output
 
@@ -4258,7 +4282,7 @@ def _conv2d_band_streamed(
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
 
     if bias is not None:
-        output = add(output, bias.view(1, -1, 1, 1))
+        output = _conv_bias_inplace(output, bias)
 
     return output
 
@@ -6352,7 +6376,7 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
         BLOCK_X=_BILINEAR_BX, BLOCK_Y=_BILINEAR_BY,
         num_warps=4)
     if bias is not None:
-        output = add(output, bias.view(1, -1, 1, 1))
+        output = _conv_bias_inplace(output, bias)
     return output
 
 

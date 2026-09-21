@@ -24,9 +24,13 @@ from collections import defaultdict, OrderedDict
 
 import numpy as np
 
+import triton
+import triton.language as tl
+
 from neurobrix.kernels import wrappers as w
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
 from neurobrix.kernels.nbx_tensor import backend_loads_pointers_from_memory
+from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
 
 # NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
 # environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
@@ -92,7 +96,8 @@ def _ptr_cache_put(fp: int, tables):
     _ptr_cache[fp] = tables
     _ptr_cache.move_to_end(fp)
     while len(_ptr_cache) > _PTR_CACHE_MAXSIZE:
-        _ptr_cache.popitem(last=False)
+        _fp, evicted = _ptr_cache.popitem(last=False)
+        evicted.release_pins()
 
 
 class PtrTables:
@@ -104,7 +109,7 @@ class PtrTables:
     __slots__ = ('gate_ptrs', 'gate_stride_bk', 'gate_stride_bn',
                  'up_ptrs', 'up_stride_bk', 'up_stride_bn',
                  'down_ptrs', 'down_stride_bk', 'down_stride_bn',
-                 'device_experts', 'quantized', 'q_tables')
+                 'device_experts', 'quantized', 'q_tables', 'pins')
 
     def __init__(self):
         self.gate_ptrs = {}       # {device → NBXTensor[E] int64}
@@ -122,6 +127,32 @@ class PtrTables:
         # the *_stride_bk/bn slots hold the PACKED int32 strides.
         self.quantized = False
         self.q_tables = {}
+        # Metal only: entered pinned_addresses scopes, one per device — the
+        # addresses in these tables are valid EXACTLY while these are held,
+        # so their lifetime is the table's cache lifetime (released on LRU
+        # eviction below), never a call's.
+        self.pins = []
+
+    def release_pins(self):
+        for pin in self.pins:
+            try:
+                pin.__exit__(None, None, None)
+            except Exception:                          # noqa: BLE001
+                pass
+        self.pins = []
+
+
+@triton.jit
+def _addr_capture_kernel(src_ptr, table_ptr, idx):
+    """Store the DEVICE address of src_ptr into table[idx].
+
+    The bitcast is the whole point: the launcher hands the kernel the address
+    a shader dereferences, and capturing it ON DEVICE is the one spelling that
+    is correct on every backend (verified bit-equal to the driver's own
+    address on triton_ext, #130, 2026-09-19). A host-side data_ptr() is the
+    CPU mapping on Metal, and a table of those reads as silent zeros.
+    """
+    tl.store(table_ptr + idx, tl.cast(src_ptr, tl.int64, bitcast=True))
 
 
 def _build_ptr_tables(gate_weights, up_weights, down_weights):
@@ -129,6 +160,10 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
 
     Stores each expert's data_ptr() as int64 in a GPU tensor. No offset math.
     Total GPU allocation: 3 × E × 8 bytes per device (~3KB for 128 experts).
+
+    On Metal the tables are built by DEVICE CAPTURE under a pinned scope
+    instead: the addresses a shader dereferences, kept alive for the table's
+    whole cache lifetime (PtrTables.pins, released on LRU eviction).
     """
     from neurobrix.kernels.quantized_tensor import QuantizedTensor
 
@@ -149,8 +184,60 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
         by_device[gate_weights[i]._device_idx].append(i)
     tables.device_experts = dict(by_device)
 
+    _metal = _detect_gpu_backend() == "metal"
+    if _metal and tables.quantized:
+        raise RuntimeError(
+            "ZERO FALLBACK: quantized (int4) expert tables are not proven on "
+            "Metal — the pinned-table contract was measured for the dense "
+            "bf16 grouped GEMM only. Adding the quantized path is proving "
+            "its triplet tables the same way, not assuming them.")
+
     for dev, expert_ids in by_device.items():
         DeviceAllocator.set_device(dev)
+
+        if _metal:
+            # Pin FIRST — the capture launches below store their wraps under
+            # the pin, which is what keeps the captured addresses mapped.
+            # Released when this table leaves the cache, never per call.
+            from neurobrix.triton.triton_ext_driver import pinned_addresses
+            pin = pinned_addresses(*(
+                ws[eid]
+                for ws in (gate_weights, up_weights, down_weights)
+                for eid in expert_ids))
+            pin.__enter__()
+            tables.pins.append(pin)
+
+            # The pin's whole-allocation resident wrap is the ONE address
+            # authority: every MTLBuffer has its own GPU VA, so an address
+            # captured through a transient launch wrap dies with that wrap
+            # (zeros, nothing raised — measured 2026-09-21), and per-expert
+            # kept wraps blow Metal's alias budget (declined at ~480,
+            # granite layer 15). Host-side arithmetic on the pinned wrap's
+            # gpu_address needs no launch and one wrap per allocation.
+            from neurobrix.triton.triton_ext_driver import pinned_gpu_address
+
+            def _capture_proj(weights):
+                ptrs = np.array(
+                    [pinned_gpu_address(weights[eid].data_ptr())
+                     for eid in expert_ids],
+                    dtype=np.int64)
+                tab = NBXTensor.from_numpy(ptrs)
+                base = weights[expert_ids[0]]
+                return tab, base.stride(1), base.stride(0)
+
+            gp, gbk, gbn = _capture_proj(gate_weights)
+            tables.gate_ptrs[dev] = gp
+            tables.gate_stride_bk[dev] = gbk
+            tables.gate_stride_bn[dev] = gbn
+            up, ubk, ubn = _capture_proj(up_weights)
+            tables.up_ptrs[dev] = up
+            tables.up_stride_bk[dev] = ubk
+            tables.up_stride_bn[dev] = ubn
+            dp, dbk, dbn = _capture_proj(down_weights)
+            tables.down_ptrs[dev] = dp
+            tables.down_stride_bk[dev] = dbk
+            tables.down_stride_bn[dev] = dbn
+            continue
 
         def _build_proj(weights):
             # Absolute pointers as int64
@@ -274,9 +361,15 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
     moe_align_stage2_kernel[(_tr.cdiv(max_total, BLK),)](
         offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total,
         BS=bs, BE=BE, E=num_experts, BLK=BLK, num_warps=4)
-    moe_align_stage3_kernel[(_tr.cdiv(n, 128),)](
+    # stage 3's rank matrix is [BLKT, BN] int32 in threadgroup memory:
+    # 128x128 = 64 KB fits CUDA's budget but is twice Metal's 32 KB limit
+    # (measured: granite triton, "Required: 65536, Hardware limit: 32768").
+    # The rank is a sum over j-chunks, so the chunk width changes nothing
+    # but the launch shape — 64x64 = 16 KB everywhere Metal runs.
+    _blkt, _bn = (64, 64) if _detect_gpu_backend() == "metal" else (128, 128)
+    moe_align_stage3_kernel[(_tr.cdiv(n, _blkt),)](
         ids, offsets_ws, sorted_ids, n,
-        E=num_experts, BLKT=128, BN=128, num_warps=4)
+        E=num_experts, BLKT=_blkt, BN=_bn, num_warps=4)
 
     return sorted_ids, expert_ids, num_post_pad
 

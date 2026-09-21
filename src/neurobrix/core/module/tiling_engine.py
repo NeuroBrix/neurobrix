@@ -28,6 +28,8 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 import json
 import logging
+import os
+import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
@@ -523,7 +525,35 @@ class TilingEngine:
             output[osl] = output[osl] + res[rsl]
             weight[osl] = weight[osl] + 1
 
+        # NBX_TILE_CENSUS=1: one line per tile boundary — tracked live bytes,
+        # pool-parked bytes, machine available. The three growth shapes name
+        # the three suspects for an in-process footprint: live growing
+        # linearly with tile count names the blend accumulator; pool bytes
+        # climbing in steps that never return names the arena; neither
+        # moving while the machine figure still falls names transient
+        # buffers (or something outside this accounting).
+        _census = os.environ.get("NBX_TILE_CENSUS") == "1"
+
+        def _census_line(n, phase: str = "boundary") -> None:
+            if not _census:
+                return
+            try:
+                from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+                live = sum(_DA._cuda_live_bytes.values())
+                pooled = sum(_DA._pool_cached_bytes.values())
+            except Exception:
+                live = pooled = -1
+            try:
+                import psutil
+                avail = psutil.virtual_memory().available
+            except Exception:
+                avail = -1
+            print(f"[TileCensus] tile={n} phase={phase} live_mb={live // (1 << 20)} "
+                  f"pool_mb={pooled // (1 << 20)} avail_mb={avail // (1 << 20)}",
+                  file=sys.stderr, flush=True)
+
         _accumulate(first_result, first_h, first_w, first_t)
+        _census_line(1)
 
         # Process remaining tiles
         tile_count = 1
@@ -533,9 +563,12 @@ class TilingEngine:
                     if t == first_t and y == first_h and x == first_w:
                         continue  # Already processed
                     tile = self._extract_tile(input_tensor, y, x, t)
+                    _census_line(tile_count + 1, "pre-exec")
                     result = execute_fn(tile)
+                    _census_line(tile_count + 1, "post-exec")
                     _accumulate(result, y, x, t)
                     tile_count += 1
+                    _census_line(tile_count, "post-accum")
 
         logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {output.shape}")
 

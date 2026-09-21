@@ -106,10 +106,19 @@ class InferenceEngine:
         # the serving path plan for a request nobody sent — and it is the SAME
         # InputConfig the CLI now fills from the request.
         from neurobrix.core.runtime_values import resolve as _resolve_runtime
-        height = _resolve_runtime("height", container=cached_defaults, default=None)
-        width = _resolve_runtime("width", container=cached_defaults, default=None)
-        vae_scale = _resolve_runtime("vae_scale_factor", container=cached_defaults,
-                                     default=None)
+        from neurobrix.core.runtime.resolution.container_size import container_output_size
+        # The container's own output size, as the executor renders it (one authority).
+        _topo_path = cache_path / "topology.json"
+        _topo_components = (json.load(open(_topo_path)).get("components") or {}) if _topo_path.exists() else {}
+        _cos = container_output_size(manifest, cached_defaults, _topo_components)
+        height = _resolve_runtime("height", container=cached_defaults, default=None,
+                                  extra=[("the container's own output height", _cos[0] if _cos else None)])
+        width = _resolve_runtime("width", container=cached_defaults, default=None,
+                                 extra=[("the container's own output width", _cos[1] if _cos else None)])
+        from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
+        vae_scale = _resolve_runtime("vae_scale_factor", container=cached_defaults, default=None,
+                                     extra=[("the container's own VAE scale",
+                                             _vsf(manifest, cached_defaults, _topo_components))])
 
         input_config = InputConfig(
             batch_size=2,
