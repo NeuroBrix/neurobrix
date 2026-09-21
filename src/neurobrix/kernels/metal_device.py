@@ -1094,7 +1094,21 @@ def metal_device_available() -> bool:
     A probe, so it answers False instead of raising — but it opens the real
     device rather than checking for the import, because a machine with the
     bindings and no usable GPU must not be reported as ready.
+
+    Under NBX_CENSUS the device is deliberately UNREACHABLE (`runtime()`
+    refuses), but the backend must still be NAMEABLE — the exact analogue of a
+    CUDA rack where `libcudart` loads and names the backend though
+    `CUDA_VISIBLE_DEVICES=` leaves no device visible. The backend resolver
+    (`nbx_tensor` `_resolve_backend`) calls this to decide whether to name
+    metal; answering False under census made every op that resolves the
+    backend — `aten::embedding` first — fail with "No GPU runtime found",
+    though the same census completes on CUDA (the Dell's 9ea81cd2 covers the
+    rack, not Apple). So answer True here (naming) while `runtime()` stays
+    unreachable (opening): keys are pure data and need no open device.
     """
+    import os as _os_a
+    if _os_a.environ.get("NBX_CENSUS") == "1":
+        return True
     try:
         runtime()
         return True
