@@ -83,6 +83,27 @@ def shadow_run(*_a, **_k):
     return None
 
 
+def _shadow_item_value(dtype):
+    """The benign scalar a value-read (`.item()`) answers in shadow mode.
+
+    In a census shadow no VALUE means anything — a `.item()` is only ever a
+    guard or a token index. A guard's `all(isfinite(x))` (a bool tensor) must
+    read healthy, or a loop's step-boundary NaN gate refuses the shadow (Sana
+    at step 1, and PixArt/CogVideoX once Prism stopped mis-placing on the
+    host); an integer token id answers 0 (the same shapes run for any id —
+    UNVERIFIED where a model's eos id is 0); anything else answers 0.0.
+
+    Read the dtype by NAME. NBXDtype is an IntEnum, so `str(<NBXDtype.bool_: 9>)`
+    is "9", not "bool_": the previous `"bool" in str(dtype)` never matched, so
+    every diffusion shadow died at step 1 on a finite gate reading falsy, and
+    every integer read answered 0.0 (float) instead of 0 (int). Same defect
+    class as the input-synth dtype read (ac10eddf)."""
+    name = getattr(dtype, "name", str(dtype)).lower()
+    if "bool" in name:
+        return True                     # a guard's `all(isfinite(x))`: healthy
+    return 0 if "int" in name else 0.0
+
+
 def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     """The weights a component would load, as metadata-only tensors: the graph's param
     and buffer shapes, each in the dtype the loader would give it under the component's
@@ -190,10 +211,7 @@ def install() -> None:
     T = _nt.NBXTensor
 
     def _item(self):
-        d = str(self._dtype).lower()
-        if "bool" in d:
-            return True                 # a guard's `all(isfinite(x))`: the shadow is healthy
-        return 0 if "int" in d else 0.0
+        return _shadow_item_value(self._dtype)
 
     def _numpy(self):
         import numpy as np
