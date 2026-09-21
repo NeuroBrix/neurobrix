@@ -2583,6 +2583,30 @@ class PrismSolver:
     # DEVICE PREPARATION
     # =========================================================================
 
+    @staticmethod
+    def _imposed_rung_mb() -> Optional[float]:
+        """The ladder rung the certification census imposes as the device
+        budget, from `NBX_CENSUS_RUNG_MB`, or None for an ordinary run.
+
+        The census sweeps this over every rung of the ladder up to the card's
+        capacity so its plan is a function of the RUNG alone, never the
+        machine's live free memory — which is what the tiling standard requires
+        and what makes the keys reproducible (owner 2026-09-22). The value is
+        rounded DOWN onto the ladder here too, so an imposed budget is never an
+        off-ladder value even if the caller passes a raw reading."""
+        raw = os.environ.get("NBX_CENSUS_RUNG_MB")
+        if not raw:
+            return None
+        try:
+            mb = float(raw)
+        except ValueError:
+            raise SystemExit(
+                f"NBX_CENSUS_RUNG_MB={raw!r} is not a number of MB")
+        if mb <= 0:
+            raise SystemExit(
+                f"NBX_CENSUS_RUNG_MB={raw!r} must be a positive MB budget")
+        return float(memory_ladder_rung_mb(mb))
+
     def _prepare_devices(self, profile: PrismProfile) -> List[DeviceState]:
         """Prepare GPUs sorted by capacity DESC.
 
@@ -2605,11 +2629,26 @@ class PrismSolver:
         `has_unified_memory` is the profile's own answer, already written.
         """
         host = memory_state()
+        imposed_mb = self._imposed_rung_mb()
         devices = []
         for dev in profile.devices:
             recommended = dev.memory_mb * self.safety_margin
             capacity = recommended
-            if dev.has_unified_memory and host.measured:
+            if imposed_mb is not None:
+                # THE CERTIFICATION CENSUS IMPOSES A LADDER RUNG and reads NO
+                # ambient. The census enumerates every rung of the ladder up to
+                # the card's capacity and plans each one, so the same model at
+                # the same rung yields the same plan and the same keys on any
+                # machine and in any memory weather — a user on any rung is then
+                # served from a certificate already made (the tiling standard,
+                # owner 2026-09-22). Reading live host/device memory here is what
+                # made the census a coin toss: on a unified device the plain path
+                # below sizes against `host.available_mb`, so the same model
+                # censused as lazy_sequential one minute and layer_streaming the
+                # next. Capacity IS the rung; the ladder-round at the plan entry
+                # leaves a rung value unchanged, so no budget is ever off-ladder.
+                capacity = float(imposed_mb)
+            elif dev.has_unified_memory and host.measured:
                 capacity = min(recommended, host.available_mb * self.safety_margin)
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
@@ -2630,7 +2669,7 @@ class PrismSolver:
             # reading the ladder rounds and the picker compares. Unreadable
             # (no runtime, a CPU host) → the recommendation alone, as before.
             used = 0.0
-            if not dev.has_unified_memory:
+            if imposed_mb is None and not dev.has_unified_memory:
                 try:
                     from neurobrix.kernels.nbx_tensor import DeviceAllocator
                     free_live = DeviceAllocator.free_memory_mb(dev.index)
