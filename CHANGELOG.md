@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the hub serves, graph by graph, by reading the hub object's central directory and JSON
   members over HTTP Range (no container is downloaded), and publishes the ones that are newer
   and verified through the toolchain; the table is written to `docs/reference/hub-cache-diff.md`.
+  A hub object whose bytes are not the recorded container (wrong length, no zip header) is
+  reported as its own verdict, `HUB_OBJECT_CORRUPT`, and is replaced like a stale one.
 
 ### Changed
 
