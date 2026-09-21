@@ -110,15 +110,31 @@ def frozen_dims(model: str) -> list:
     return rows
 
 
-def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, timeout: int, log_dir: Path) -> dict:
-    """One shadow run; returns its keys and its fate. A failure is reported, never folded."""
-    rec = log_dir / f"{model}.{mode}.keys"
-    log = log_dir / f"{model}.{mode}.log"
+def rungs_for(hardware: str) -> list:
+    """Every rung of the commercial ladder up to the profile's card capacity (Hocine's tiling
+    standard, 2026-09-21): the tile is a function of the rung, so a census that runs at every
+    rung records every conv key family a user of this card model can meet, whatever the room
+    reads when they run; a change of the budget rule never asks for a new census."""
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.core.prism.memory_budget import memory_ladder_mb
+    cap = max(int(d.memory_mb) for d in load_profile(hardware).devices)
+    return [r for r in memory_ladder_mb() if r <= cap]
+
+
+def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, timeout: int, log_dir: Path,
+           rung_mb: int = 0, tag: str = "") -> dict:
+    """One shadow run; returns its keys and its fate. A failure is reported, never folded.
+    `rung_mb` > 0 makes the plan budget itself at that rung (the NBX_PRISM_BUDGET_MB door)."""
+    suffix = (f".{tag}" if tag else "") + (f".r{rung_mb}" if rung_mb else "")
+    rec = log_dir / f"{model}.{mode}{suffix}.keys"
+    log = log_dir / f"{model}.{mode}{suffix}.log"
     if rec.exists():
         rec.unlink()
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": str(n_dev),
                 "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src")})
+    if rung_mb:
+        env["NBX_PRISM_BUDGET_MB"] = str(int(rung_mb))
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *request, *MODES[mode], "--hardware", hardware]
     t0 = time.time()
     with open(log, "w") as fh:
@@ -128,12 +144,39 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
     if rc != 0:
         lines = [l for l in log.read_text(errors="replace").splitlines() if "Error" in l or "ERROR" in l]
         tail = (lines[-1] if lines else "")[:300]
-    return {"mode": mode, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys, "error": tail,
+    return {"mode": mode, "rung_mb": rung_mb, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys, "error": tail,
             "command": " ".join(cmd[2:])}
 
 
+def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
+    """The family's request large enough to TILE (its YAML `census.tiling_probe`, Hocine's tiling
+    standard, 2026-09-21): an upscaler's input image resized to `image_px` a side, an image or
+    video request at `height` x `width`. None for a family that declares none."""
+    from neurobrix.core.runtime.output_dispatch import get_family_config
+    spec = ((get_family_config(fam) or {}).get("census") or {}).get("tiling_probe") or {}
+    if not spec:
+        return None
+    req = list(request)
+    if spec.get("image_px") and "--input-image" in req:
+        i = req.index("--input-image") + 1
+        from PIL import Image
+        px = int(spec["image_px"])
+        out = log_dir / f"_probe_{px}px.png"
+        if not out.exists():
+            Image.open(req[i]).convert("RGB").resize((px, px)).save(out)
+        req[i] = str(out)
+        return req
+    if spec.get("height") and spec.get("width"):
+        for flag in ("--height", "--width"):
+            if flag in req:
+                j = req.index(flag)
+                del req[j:j + 2]
+        return req + ["--height", str(int(spec["height"])), "--width", str(int(spec["width"]))]
+    return None
+
+
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
-                 log_dir: Path) -> dict:
+                 log_dir: Path, rungs: list = ()) -> dict:
     fam = _family(model)
     row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": []}
     frozen = frozen_dims(model)
@@ -147,15 +190,21 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
         # of 59 containers (2026-09-21).
         row.update(status="retrace", frozen=frozen)
     reqs = requests or [_zoo.request_args(model, fam, list(extra))]
+    probe = _tiling_probe(model, fam, reqs[0], log_dir)
+    if probe is not None:
+        reqs = list(reqs) + [probe]
     row["requests"] = [" ".join(r) for r in reqs]
     keys = set()
     for mode in modes:
-        for req in reqs:
-            res = shadow(model, req, mode, hardware, _device_count(hardware), timeout, log_dir)
-            row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
-            keys.update(res["keys"])
-            if res["rc"] != 0:
-                row["status"] = "failed" if row["status"] != "retrace" else "retrace+failed"
+        for ri, req in enumerate(reqs):
+            for rung in (list(rungs) or [0]):
+                res = shadow(model, req, mode, hardware, _device_count(hardware), timeout, log_dir, rung_mb=rung,
+                             tag=("probe" if ri else ""))
+                res["request"] = "probe" if ri else "ordinary"
+                row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
+                keys.update(res["keys"])
+                if res["rc"] != 0:
+                    row["status"] = "failed" if row["status"] != "retrace" else "retrace+failed"
     row["keys"] = len(keys)
     row["_keys"] = sorted(keys)
     return row
@@ -212,6 +261,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--hardware", required=True, help="the profile the census is taken for (config/hardware/<id>.yml)")
     ap.add_argument("--models", default=None, help="comma-separated; default: every container in the cache")
+    ap.add_argument("--rungs", default="ladder", help="'ladder' (default): every rung up to the profile's capacity; 'none': the profile's own budget only; or a comma-separated list of MB")
     ap.add_argument("--modes", default="triton", help="comma-separated served modes: triton, triton-sequential")
     ap.add_argument("--extra", nargs="*", default=[], help="flags appended to every request")
     ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model')
@@ -235,10 +285,18 @@ def main() -> int:
     log_dir = Path(a.logs) if a.logs else out.parent / (out.stem + "_runs")
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    if a.rungs == "none":
+        rungs = []
+    elif a.rungs == "ladder":
+        rungs = rungs_for(a.hardware)
+    else:
+        rungs = [int(x) for x in a.rungs.split(",") if x.strip()]
+    print(f"[census] rungs: {rungs or 'the profile budget only'}", flush=True)
+
     t0 = time.time()
     rows = {}
     with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir)
+        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs)
                 for m in models}
         for m, f in futs.items():
             rows[m] = f.result()
@@ -255,7 +313,7 @@ def main() -> int:
     from neurobrix import __version__ as engine_version
     census = {"format": FORMAT, "hardware": a.hardware, "engine_version": engine_version,
               "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-              "modes": modes, "wall_s": round(time.time() - t0, 1),
+              "modes": modes, "rungs_mb": rungs, "wall_s": round(time.time() - t0, 1),
               "models": rows, "retrace_queue": sorted(m for m, r in rows.items() if r["status"] == "retrace"),
               "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable")),
               "entries": entries}

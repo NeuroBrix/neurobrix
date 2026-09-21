@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values in one request); it now enters the autotune key as its bucket's top on the same
   ladder, measured on both V100 classes at 0.0 % median loss and up to 10.5 % / 20.0 % in
   a few 16-step buckets where the block optimum flips.
+- **The kernel census enumerates every memory rung.** Each model is shadowed at every rung of
+  the ladder up to its card's capacity, and a spatial family declares in its configuration
+  the request large enough to tile (`census.tiling_probe`), so the certified directory holds
+  the canonical tile of every rung a user of that card model can meet, and a change to the
+  budget rule never asks for a new census.
 - **The kernel census no longer drops a model whose graph froze a dimension.** Such a model
   is still shadowed and its keys harvested at the frozen extent, and it is queued for a
   retrace; a dimension that lives only in output shapes (an embedding's sequence length) is
