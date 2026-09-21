@@ -1120,3 +1120,27 @@ the warm fact request (7.0–7.4 against 9.4–11.2 s — different cards, so th
 indicative). The two measurements point in different directions and both go to the owner, as
 asked. The Apple half — the same table on M4 Pro — is the branch's to add; the lever is on the
 branch for it.
+
+### The arbiter (the owner, 14:24): which fusion reproduces the UNFUSED ATen arm on the code request
+
+The unfused ATen arm cannot run from the container: the traced MoE routing carries
+`split_with_sizes` sizes frozen at the trace — on the code request the op refuses (`split_sizes
+must sum exactly to 760`, 95 prompt tokens × top-k 8), twice `rc=1` in `--sequential` with
+`NBX_DISABLE_MOE_FUSION=1` on card 0. The frozen sizes are the reason the fusion exists (the
+branch's own comment says so); they are also a frozen-dimension defect of the container, listed
+as such for the retrace queue. The vendor forward IS the unfused computation, so the arbiter
+ran it: transformers 5.2.0, greedy, the container's own embedded tokenizer and chat template
+(95 prompt tokens = 760/8), fp16, card 0, twice —
+
+| arm | code request, 160 tokens greedy | prompt tokens | wall |
+|---|---|---|---|
+| vendor forward (unfused, transformers) ×2 | sha **e7725da9d641**, both runs | 95 | 6.9–7.5 s warm |
+| branch's matcher (`_fuse_one_granite_layer`) ×2 | sha **e7725da9d641** — byte-identical to the vendor | 95 | 21.3–21.5 s cold |
+| main's walk (9f5e0f5b stacked-expert views) ×2 | sha 5a52cc921133 — differs from the vendor | 95 | 23.1–23.8 s cold |
+
+**Verdict:** only the branch's matcher reproduces the unfused arm; it wins regardless of speed
+(and happens to be the faster one). Main's stacked-expert handling in the general walk leaves
+the tree — a targeted port of the branch's matcher and its dispatcher resolution
+(`expert_weight_lists`) onto main, gated on granite's three modes, since the branch carries the
+Mac's whole 0.5.5 delivery and the merge is the convergence's. Script and outputs:
+`nbx/campaigns/2026_09_21_granite_fusion/` (`vendor_oracle.py`, `RESULTS.md`).
