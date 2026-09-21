@@ -151,6 +151,39 @@ def sweep_bmm(B, M, N, K, dtype):
                            for c, t in timings.items() if t is not None}}
 
 
+def sweep_conv(B, C_in, C_out, H, W, k, dtype):
+    """conv2d_forward_kernel: [B, C_in, H, W] x [C_out, C_in, k, k], stride 1, padding k//2 —
+    the VAE decoder's 3x3 convolutions at a tile's extents. Request-dependent: B (frames as
+    batch), H, W (resolution, tile extent)."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels import wrappers as Wr
+    from neurobrix.kernels.ops.conv2d import conv2d_forward_kernel
+    from neurobrix.triton import autotune_cache as atc
+    rng = np.random.default_rng(H * 7919 + W)
+    x = NBXTensor.from_numpy((rng.standard_normal((B, C_in, H, W)) * 0.1).astype(dtype))
+    w = NBXTensor.from_numpy((rng.standard_normal((C_out, C_in, k, k)) * 0.1).astype(dtype))
+    seen = {}
+    saved = conv2d_forward_kernel.run
+
+    def spy(*args, **kwargs):
+        seen["key"] = atc.key_of(conv2d_forward_kernel, args, kwargs)
+        return saved(*args, **kwargs)
+    conv2d_forward_kernel.run = spy
+    try:
+        conv2d_forward_kernel.cache.clear()
+        Wr.conv2d_wrapper(x, w, None, stride=1, padding=k // 2)
+    finally:
+        conv2d_forward_kernel.run = saved
+    key = seen.get("key")
+    best = conv2d_forward_kernel.cache.get(key)
+    timings = getattr(conv2d_forward_kernel, "configs_timings", None) or {}
+    return {"key": atc.key_repr(key) if hasattr(atc, "key_repr") else repr(key),
+            "best": _cfg_repr(best) if best else None,
+            "timings_ms": {_cfg_repr(c): (float(t[0]) if isinstance(t, (list, tuple)) else float(t))
+                           for c, t in timings.items() if t is not None}}
+
+
 def measure(a):
     # The wrappers' dtype policy exactly as before a request (IEEE precision, operand
     # promotion, the store dtype): without it the tool sweeps a kernel variant no model
@@ -175,8 +208,14 @@ def measure(a):
             else:                       # the key length grows, the query length fixed
                 row = sweep_bmm(B, fixed["M"], s, fixed["K"], a.dtype)
             row["size"] = s
+        elif a.kernel == "conv2d":
+            B, C_in, C_out, k = fixed.get("B", 1), fixed.get("C_in", 128), fixed.get("C_out", 128), fixed.get("k", 3)
+            H = s if a.dim == "H" else fixed["H"]
+            W = s if a.dim == "W" else fixed["W"]
+            row = sweep_conv(B, C_in, C_out, H, W, k, a.dtype)
+            row["size"] = s
         else:
-            raise SystemExit(f"kernel {a.kernel!r}: not wired (matmul, bmm)")
+            raise SystemExit(f"kernel {a.kernel!r}: not wired (matmul, bmm, conv2d)")
         row["wall_s"] = round(time.time() - t1, 2)
         rows.append(row)
         n_cfg = len(row["timings_ms"])
