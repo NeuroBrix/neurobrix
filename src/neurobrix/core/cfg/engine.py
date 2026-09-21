@@ -1,3 +1,4 @@
+import os
 """
 CFGEngine — Unified Classifier-Free Guidance
 
@@ -177,6 +178,13 @@ class CFGEngine:
                     break
 
         mode = CFGMode.DISABLED if not do_cfg else CFGMode.BATCHED
+        if do_cfg and os.environ.get("NBX_CFG_SEQUENTIAL") == "1":
+            # Diagnostic door (default off): run cond and uncond as two batch-1 forwards
+            # instead of one batch-2 forward — the differential for a denoiser whose batch
+            # axis may not survive batch 2 (P-WAN-DIT-STEP0, 2026-09-21: the DiT forward
+            # matches the vendor at batch 1 to a cosine of 0.99991; the guided prediction
+            # at batch 2 does not).
+            mode = CFGMode.SEQUENTIAL
 
         engine = cls(
             ctx=ctx,

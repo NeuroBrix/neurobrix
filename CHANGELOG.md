@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An input the graph binds symbolically is handed to it whole.** The runtime cut any
+  component input longer than the container's traced extent down to that extent, even where
+  the graph binds the dimension as a symbol and runs at any length: Qwen3-Omni's thinker
+  received the trace's 23 tokens instead of the 213 it composed and failed on the first
+  reshape. Only an extent the graph carries as a literal is still cut, and the cut is now
+  said in clear as a trace defect to fix at the source.
+
+### Added
+
+- **`tools/hub_cache_diff.py`** compares every container of the shared cache with the object
+  the hub serves, graph by graph, by reading the hub object's central directory and JSON
+  members over HTTP Range (no container is downloaded), and publishes the ones that are newer
+  and verified through the toolchain; the table is written to `docs/reference/hub-cache-diff.md`.
+
 ### Changed
 
 - **A request-dependent dimension of a matrix kernel's autotune key is bucketed.** A prompt's
@@ -31,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two diagnostic doors for a guided denoiser.** `NBX_CFG_SEQUENTIAL=1` runs the two halves of
+  classifier-free guidance as two batch-1 forwards instead of one batch-2 forward, and
+  `NBX_DUMP_STEP0=<dir>` writes the denoiser's step-0 inputs and prediction as `.npy` files,
+  so a vendor's own module can be run on identical inputs. Both default off.
 - **A video decoder receives its latent in its own space.** A VAE trained on a
   normalised latent declares its statistics, and the vendor maps the latent back per
   channel before decoding; both engines now apply that step from the container's own
