@@ -45,7 +45,7 @@ _DEPTHWISE_CONV2D_CONFIGS = [
 
 @nbx_autotune(
     configs=maybe_pin_single(_DEPTHWISE_CONV2D_CONFIGS, is_depthwise_conv2d_pinned),
-    key=['C', 'H_in_bucket', 'W_in_bucket', 'H_out_bucket', 'W_out_bucket', 'kh', 'kw',
+    key=['C', 'H_in', 'W_in', 'H_out', 'W_out', 'kh', 'kw',
          'stride_h', 'stride_w', 'pad_h', 'pad_w', 'fp16'],
     cache_results=True,
 )
@@ -54,7 +54,6 @@ def depthwise_conv2d_kernel(
     x_ptr, w_ptr, out_ptr,
     N, C,
     H_in, W_in, H_out, W_out,
-    H_in_bucket, W_in_bucket, H_out_bucket, W_out_bucket,
     x_n_stride, x_c_stride, x_h_stride, x_w_stride,
     w_c_stride, w_kh_stride, w_kw_stride,
     out_n_stride, out_c_stride, out_h_stride, out_w_stride,
