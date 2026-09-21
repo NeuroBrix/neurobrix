@@ -162,6 +162,34 @@ Measured from each container's weight footprint on the hub. No downloads.
   one failed — partial), Qwen3-int4 (quantized path). To fix in the request map, not
   keys to sweep.
 
+**CogVideoX/PixArt "FAILED" root-caused — a chain of engine defects, not request gaps
+(2026-09-21):** the shadow was diverging from the real plan and dying, not missing a
+request field. Each fix let the shadow reach further and harvest more keys.
+- **Fix 1 — Prism host-offload on unified (`b23105fe`, red→green):** Strategy 4 placed
+  the text_encoder on `cpu` to "save memory" on a unified device, where host==device so
+  it frees nothing, and the Metal path then had nothing to trace. Root cause: asymmetric
+  accounting — GPU checked against live-free (~10.7 GB, VM up), CPU against the profile's
+  24 GB, on ONE physical pool. Same family as zero3-on-unified (`cafaf799`). Guarded:
+  on unified, Strategy 4 returns None → refuse-by-arithmetic. Keys: CogVideoX 0→8,
+  PixArt 0→5.
+- **Fix 2 — NBX dtype read by name (`ac10eddf`, red→green):** Triton input synthesis
+  read `str(val.nbx_dtype).split(".")[-1]`; NBXDtype is an IntEnum so this yielded the
+  VALUE ("0"), and `np.dtype("0")` raised `data type '' not understood`. Read
+  `.name` instead. Latent on ANY triton run that synthesizes an input. Keys:
+  PixArt 5→16, CogVideoX 8→10.
+- **WALL (open, doctrine call needed) — the census NaN gate blocks coverage:** the run
+  now reaches the diffusion main loop and the always-on `_gate_loop_state_finite`
+  aborts after step 1 (state NaN/Inf on SYNTHETIC inputs, no real weights). Per-step
+  kernels repeat, so step 0 harvested the transformer's keys, but the abort skips the
+  post-loop VAE decode → its keys are MISSED (a real census miss). The gate is right for
+  a real run and wrong for a census shadow (synthetic garbage is expected). A real run
+  can't confirm whether the NaN is synthetic-only: it dies EARLIER, at weight staging —
+  a missing `fp32→bf16` conversion in `_load_to_pinned_cpu` (shape 4096×10240). Options
+  for the owner: (a) skip/soften the NaN gate under `NBX_CENSUS` (census-mode-specific,
+  like `metal_device.runtime()`), so the shadow harvests VAE-decode keys; or (b) census
+  the VAE decode as a standalone component. NOT changed unilaterally — it is a
+  safety-critical gate.
+
 **Second stage, CORRECTED (2026-09-21):** the keys are EXACT, not bucketed. TinyLlama's
 2,560 and orpheus's 8,400 are per-decode-step exact prompt/cache lengths -- the explosion
 the buckets collapse (~6 for a short request). Certifying them now unserves them the day
