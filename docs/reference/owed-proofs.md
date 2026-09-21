@@ -1452,3 +1452,25 @@ one): the Mac's eight plus Flex.1-alpha, Ming-Lite-Omni-1.5, MiniCPM-o-4_5, PixA
 (the old container), Qwen3-Omni, Qwen3-VL, Sana-1600M-MultiLing (the old container),
 Wan2.1-I2V-14B, granite-3.1-1b-a400m. Certification of both classes runs now, pinned per card
 (`nbx/campaigns/2026_09_21_census/certify_class.sh`).
+
+## 2026-09-21 20:25 — the batched GEMM's contraction bucketed: the measurement (both classes)
+
+openaudio's census (the fixed shadow) recorded 2 135 `baddbmm` keys in one request: 85 distinct
+M buckets, 85 N buckets and **2 049 distinct K** — the contraction of the attention's second
+product is the key length, walked one value at a time by the decode. An exact K cannot be
+certified for a decode. Swept `bucket_loss.py --kernel bmm --dim K --fixed B=32,M=1,N=64`,
+135 sizes 1..4 096, `NBX_AUTOTUNE_CERTIFIED=off`, one card per class, alone on the card:
+
+| class | ladder | buckets | median loss | max loss | where |
+|---|---|---|---|---|---|
+| 16 GB (card 0) | Lmix (exact ≤ 64, 16/32/128/512) | 123 | 0.0 % | 20.0 % | tops 128 (K=120: 5.6 %), 176 (168: 20.0 %), 192 (184: 14.3 %) |
+| 16 GB | L16 | 64 | 0.0 % | 20.0 % | the same buckets |
+| 16 GB | powers of two | 16 | 0.0 % | 23.5 % | |
+| 32 GB (card 2) | Lmix | 123 | 0.0 % | 10.5 % | top 112 (K=104) |
+| 32 GB | powers of two | 16 | 0.0 % | 21.7 % | |
+
+Decision by measurement: K enters the `baddbmm_kernel` key as `K_BUCKET` on the profile's
+default ladder (main, with this commit). The loss is confined to a few 16-step buckets where
+BLOCK_K's optimum flips; every other bucket costs nothing, and the alternative is a key nobody
+can certify. Records: `nbx/campaigns/2026_09_21_bucketed_keys/bmm_K_M1_N64_{16g,32g}.json`.
+The Mac's profile needs the same measurement before its census in bucketed form.

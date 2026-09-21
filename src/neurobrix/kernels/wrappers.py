@@ -2398,7 +2398,7 @@ def bmm(a, b, allow_strided_b: bool = False) :
         _autotune_headroom_guard(baddbmm_kernel[grid])(
             a_z, b_z, c_z, c_z,
             1.0, 0.0,
-            M, N, K, _bucket_of("M", M), _bucket_of("N", N),
+            M, N, K, _bucket_of("M", M), _bucket_of("N", N), _bucket_of("K", K),
             a.stride(0), a.stride(1), a.stride(2),
             b.stride(0), b.stride(1), b.stride(2),
             c.stride(0), c.stride(1), c.stride(2),
@@ -5102,7 +5102,7 @@ def baddbmm_wrapper(
         _autotune_headroom_guard(baddbmm_kernel[grid])(
             b1_z, b2_z, out_z, bias_z,
             alpha, beta,
-            M, N, K, _bucket_of("M", M), _bucket_of("N", N),
+            M, N, K, _bucket_of("M", M), _bucket_of("N", N), _bucket_of("K", K),
             batch1.stride(0), batch1.stride(1), batch1.stride(2),
             batch2.stride(0), batch2.stride(1), batch2.stride(2),
             output.stride(0), output.stride(1), output.stride(2),
