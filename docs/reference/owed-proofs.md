@@ -1418,3 +1418,37 @@ cache and its members re-hashed against the cache before the upload).
 **Until then the shared cache is canonical for both machines**; the Mac reads its graphs from
 there. The doctrine that governs everything from 19:07 today is in this rack's CLAUDE.md
 (certified autotune, three stages) and `docs/internal/_session_current.md`.
+
+## 2026-09-21 19:45 — the bucketed autotune key is on main (787796d3, both remotes): for the Mac
+
+**What landed.** `matmul_kernel` and `addmm_kernel` key on `M_BUCKET`; `baddbmm_kernel` on
+`M_BUCKET, N_BUCKET`; the kernel still runs the true size. The ladder is the vendor profile's
+`autotune.buckets.default` (`config/vendors/nvidia/volta.yml`): exact ≤ 64, step 16 to 256, 32
+to 1 024, 128 to 8 192, 512 beyond — measured 0.0 % median and maximum loss on both V100
+classes against the per-size optimum (`tools/bucket_loss.py`, tables above). A profile that
+declares no ladder keeps the exact key: the Apple profile must declare its own, measured, before
+its census is taken in bucketed form. **The convolutions keep exact spatial and batch keys**
+(`conv2d_forward_kernel`, `depthwise_conv2d_kernel` unchanged): the same ladder on a
+convolution's width lost 37.4 % / 40.2 % in the two buckets where the kernel's optimum flips
+(OUTF 64 → 32 at tops 128 and 144, C=128, H=256) and 0.0 % at C=256; a convolution's extents
+are bounded by resolutions and tile edges, not by prompts. Brick: `kernels/autotune_bucket.py`
+(`bucket`, `parse_ladder`, `ladder_for`, `bucket_of`); cells:
+`tests/unit/kernels/test_a_request_dimension_buckets_on_the_profiles_ladder.py`.
+
+**A census defect fixed with it, which the Mac's census may share.** Behind the census door no
+driver names the vendor profile; `active_vendor_profile()` resolved EMPTY and every key the
+shadow recorded was exact (matmul M 226 where the launcher keys 240), the SMEM budget and the
+config spaces unread, the shadows ten times slower. `census.install(hardware=…)` now binds the
+launcher target from the hardware profile's first device (brand + compute capability) and
+clears the cached vendor profile — an NVIDIA/AMD profile only; a device whose capability is
+not a number (Apple) keeps its driver's answer, so the Mac should check that its shadow sees
+`apple_silicon.yml` (one recorded key of a request-dependent kernel read against the
+launcher's form is the test). Cell: `tests/unit/kernels/test_the_census_shadow_carries_the_profiles_target.py`.
+
+**What the fixed census measured here** (from the shared cache, both classes, ~4 min each):
+16 GB — 34 ok, 8 failed shadows, 17 retrace, 675 entries, 268 to certify; 32 GB — 37 ok, 5
+failed, 17 retrace, 722 entries, 313 to certify. The retrace queue (symbolic graph only, stage
+one): the Mac's eight plus Flex.1-alpha, Ming-Lite-Omni-1.5, MiniCPM-o-4_5, PixArt-Sigma-XL-1024
+(the old container), Qwen3-Omni, Qwen3-VL, Sana-1600M-MultiLing (the old container),
+Wan2.1-I2V-14B, granite-3.1-1b-a400m. Certification of both classes runs now, pinned per card
+(`nbx/campaigns/2026_09_21_census/certify_class.sh`).
