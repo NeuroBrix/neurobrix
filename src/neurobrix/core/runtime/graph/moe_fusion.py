@@ -90,7 +90,14 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             # Sibling gate of an already-handled multi-gate layer: its
             # routing tensors are consumed by the representative's fused op.
             continue
-        result = _fuse_one_moe_layer(
+        # A/B LEVER (2026-09-21, the granite fusion question): NBX_MOE_FUSION_MATCHER=granite
+        # skips the general walk so the granite matcher below is the one that runs — on the
+        # merged tree the general walk (main's stacked-expert views, 9f5e0f5b) matches granite
+        # first and the granite matcher is never reached, so the two fusions cannot be measured
+        # against each other without this. Diagnostic only; unset = the order as written.
+        import os as _os_ab
+        _force_granite = _os_ab.environ.get("NBX_MOE_FUSION_MATCHER", "") == "granite" and blend is None
+        result = None if _force_granite else _fuse_one_moe_layer(
             dag, ops, execution_order, tensors,
             consumer_map, producer_map, topk_uid,
             norm_topk_prob=norm_topk_prob,
