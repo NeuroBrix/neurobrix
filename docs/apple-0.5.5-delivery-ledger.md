@@ -77,6 +77,39 @@ FAILS VERIFICATION under the doctrine at any request larger than its 64px trace;
 they are moved from delivered to **BLOCKED — merge regression** until the fold
 lands. Their CERTIFIED keys stand; only VERIFIED is withdrawn.
 
+
+## Catalogue fit arithmetic (VM off, 24 GB unified, ~22 GB usable) — 2026-09-21
+Measured from each container's weight footprint on the hub. No downloads.
+
+**Refused by arithmetic (11, weights exceed 22 GB usable — never fit this machine):**
+- Allegro — 23.6 GB weights > 22 GB
+- Flex.1-alpha — 24.5 GB weights > 22 GB
+- Wan2.1-T2V-1.3B-Diffusers — 27.0 GB weights > 22 GB
+- DeepSeek-Coder-V2-Lite-Instruct — 30.7 GB weights > 22 GB
+- mochi-1-preview — 38.2 GB weights > 22 GB
+- Open-Sora-v2 — 42.5 GB weights > 22 GB
+- Qwen3-Coder-30B-A3B-Instruct — 57.1 GB weights > 22 GB
+- Qwen3-30B-A3B-Thinking-2507 — 57.1 GB weights > 22 GB
+- Qwen3-VL-30B-A3B-Thinking — 57.9 GB weights > 22 GB
+- Wan2.1-I2V-14B-480P-Diffusers — 84.4 GB weights > 22 GB
+- Wan2.2-I2V-A14B-Diffusers — 118.1 GB weights > 22 GB
+
+**Batched for one VM-off verification session (12, 12–22 GB — fit only with the Parallels VM off; memory matters at verification, not certification):**
+- Sana_1600M_4Kpx_BF16 — 12.1 GB
+- CogVideoX-2b — 13.2 GB
+- Janus-Pro-7B — 13.8 GB
+- orpheus-3b-0.1-ft — 14.1 GB
+- orpheus-3b-0.1-ft-snac — 14.2 GB
+- granite-speech-3.3-8b — 16.1 GB
+- Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly — 17.2 GB
+- Wan2.1-VACE-1.3B-diffusers — 18.3 GB
+- GLM-4.1V-9B-Thinking — 19.2 GB
+- PixArt-Sigma-XL-2-1024-MS — 20.3 GB
+- PixArt-XL-2-1024-MS — 20.4 GB
+- CogVideoX-5b-I2V — 21.5 GB
+
+**Fit with the VM running (18 ≤12 GB weights):** the delivered set plus the frozen upscalers (retrace-queued) and the small TTS/LLM/STT — census + certify + verify these first.
+
 ## Census and certification state
 
 - Census basis today: the runtime replay cache (the census tool is being
