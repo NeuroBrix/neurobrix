@@ -33,9 +33,9 @@ readback; image external degeneracy judge; video judged by eye.
 | upscaler/swin2SR-classical-sr-x2-64 | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged non-degenerate (std ~104). |
 | upscaler/swin2SR-classical-sr-x4-64 | 58 MB | **DELIVERED** 2026-09-20 | same battery, same judge. |
 | upscaler/swin2SR-realworld-sr-x4-64-bsrgan-psnr | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x2 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 896², rc=0, **0 misses**, std 103.9, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
-| upscaler/real-esrgan-x4 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 1792², rc=0, **0 misses**, std 104.5, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
-| upscaler/real-esrgan-x8 | 67 MB | **VERIFIED (doctrine)** 2026-09-21 | Retraced container from the shared cache (symbolic); @448 → 3584², rc=0, **0 misses**, std 104.1, non-degenerate. Census→certify→verify closed; zero miss = census completeness. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x2 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 896², rc=0, **0 misses**, std 103.9. **Looked at (R29):** coherent apple faithful to the input — sharp stem, preserved yellow crown, bright specular, fine lenticel speckle, base spot; no grid, no seam. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x4 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 1792², rc=0, **0 misses**, std 104.5. **Looked at (R29):** coherent, faithful — same features, crisp speckle; no grid, no seam. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x8 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 3584², rc=0, **0 misses**, std 104.1. **Looked at (R29):** looked at whole at full 3584² — coherent apple, forked textured stem, yellow crown, smooth specular, the GAN's own lenticel-speckle texture, rounded rim shading, base spot; NO grid, NO tile seam (untiled at 448), NO banding. x8@1024 (tiled) owed in a memory window. |
 | upscaler/swinir-classical-x2 | 99 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | upscaler/swinir-classical-x4 | 92 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | stt/parakeet-tdt-1.1b | 4.2 GB | **DELIVERED** 2026-09-21 | C/T/S all rc=0 (7 s / 22 s / 15 s), JFK transcript exact in each mode (STT judge), 0 misses both triton modes. Extract from hub 350 s (~12 MB/s sequential). Local copy deleted after judgment. |
@@ -83,6 +83,27 @@ hub; the hub is stale for every retraced container. The real-esrgan family is
 unblocked; swinir/swin2SR/hat were already symbolic (census harvests their
 keys). No Dell datum needed — the correction was the owner's, checked.
 
+
+## R29 verification of the fitting upscaler family — VIEWED 2026-09-21
+
+All 8 fitting upscalers run from their RETRACED shared-cache containers, @448, rc=0,
+**0 misses**, and each artefact was **looked at whole at full resolution** (R29 — std
+alone only proves not-blank). Every one is a coherent red apple faithful to the input
+(sharp forked stem, preserved yellow crown, smooth specular, natural lenticel-speckle
+texture, rounded 3D shading, base dark spot), on a clean white ground, with **no grid,
+no tile seam, no banding, no degeneracy**. None tiles at 448 (they fit untiled) so no
+tile boundary is present — the across-a-seam look is owed at x8@1024.
+
+| model | out | what I saw |
+|---|---|---|
+| real-esrgan-x2 | 896² | faithful apple, fine speckle |
+| real-esrgan-x4 | 1792² | faithful, crisp |
+| real-esrgan-x8 | 3584² | coherent at full res, GAN lenticel texture, sharp stem |
+| swinir-classical-x2 | 896² | clean, faithful |
+| swinir-classical-x4 | 1792² | clean, crisp white-pink speckle, radial crown streaks |
+| swin2SR-classical-sr-x2-64 | 896² | faithful, soft speckle |
+| swin2SR-classical-sr-x4-64 | 1792² | faithful, crisp |
+| swin2SR-realworld-...-bsrgan-psnr | 1792² | coherent, deeper red, natural speckle |
 
 ## Catalogue fit arithmetic (VM off, 24 GB unified, ~22 GB usable) — 2026-09-21
 Measured from each container's weight footprint on the hub. No downloads.
