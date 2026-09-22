@@ -2330,7 +2330,7 @@ it in the docs.
 or the first thing it blocks is the documentation of the rule it enforces — and possibly its
 own fix.
 
-### 88 — `neurobrix`'s exit status could not express failure, so every gate over it was empty
+### 500 (was 88 — renumbered, see note) — `neurobrix`'s exit status could not express failure, so every gate over it was empty
 
 **2026-09-23, Apple/Metal campaign.** `src/neurobrix/__main__.py` was:
 
@@ -2374,7 +2374,7 @@ as an error, turning a success into a failure on the way past).
 look at `$?` — and take it without a pipe, because `cmd | tail` reports *tail's* status and
 will show you a 0 that was never the command's.
 
-### 89 — the gate for the 2^31 GEMM defect asked CUDA whether Apple had memory, and skipped
+### 501 (was 89 — renumbered, see note) — the gate for the 2^31 GEMM defect asked CUDA whether Apple had memory, and skipped
 
 **2026-09-23, Apple/Metal campaign.**
 `tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py` exists for one defect: a GEMM
@@ -2428,3 +2428,19 @@ the configuration either.
 **The lesson, in one line.** A gate that probes the HOST with a vendor library is a gate that
 silently disappears on every other vendor — and it disappears with a message about memory,
 which is the most believable excuse there is.
+
+
+---
+
+## Numbering: a per-machine range, because sequential numbers collided twice in one day
+
+Two entries written on this Mac (88, 89) collided with two written on the rack the same day,
+which had to renumber them on merge. The register is append-only and both machines append; a
+single sequence cannot survive that, and the collision is the SCHEME's defect rather than
+either machine's.
+
+**Ranges from 2026-09-23: the rack takes 1-499, this Mac takes 500-999.**
+
+`88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
+before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
+are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
