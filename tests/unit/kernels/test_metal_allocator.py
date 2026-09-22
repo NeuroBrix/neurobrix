@@ -316,7 +316,7 @@ def test_memset_writes_the_low_byte():
 
 @metal_only
 def test_get_device_answers_where_it_used_to_refuse():
-    """The line this whole chantier is measured against.
+    """The line this whole workstream is measured against.
 
     Before the Metal implementation this raised
     `RuntimeError: No GPU runtime found (tried CUDA and ROCm/HIP)`."""

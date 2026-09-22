@@ -9,13 +9,13 @@ into three kinds, because they are not one list:
 * **B — blocks a certification.** A shape the certified directory cannot hold,
   a proof it cannot make, a cell that cannot finish. Closed in this loop.
 * **C — a declared limit, or work of another kind.** Stated in the catalogue
-  document beside the line it touches, or owned by another chantier
+  document beside the line it touches, or owned by another workstream
   (serving, build toolchain, owner decisions, instruments). Not a debt of the
   catalogue's; not forgotten either — each has its trigger recorded in
   `DETTE.md`.
 
 A debt marked **closed** in `DETTE.md` is listed once here for the count and
-not sorted. A section heading that is not a debt (the É7 pass, the "DEFERRED
+not sorted. A section heading that is not a debt (the E7 pass, the "DEFERRED
 items" umbrella, the five sub-headings of the CogVideoX temporal-pad analysis)
 is not counted.
 
@@ -25,7 +25,7 @@ is not counted.
 |---|---:|
 | A — blocks a catalogue line | 21 |
 | B — blocks a certification | 5 |
-| C — declared limit or another chantier's | 62 |
+| C — declared limit or another workstream's | 62 |
 | closed (recorded in DETTE.md) | 13 |
 | headings that are not debts | 8 |
 | **named in DETTE.md** | **113 headings** (of which 99 open debts, one filed 09-13 after the sort) |
@@ -67,7 +67,7 @@ is not counted.
 | D-SMEM-PRUNE-GAIN-UNMEASURABLE-HERE | the flash-attention tile guard's benefit cannot be measured on this rig | a card whose SMEM the compiler exceeds (A40 class) | filed 09-10; owed by whoever has the card |
 | *(new, 09-13)* register 56 — memory-class coverage | every entry proven on one memory class is served to no other: the 32 GB cards sweep until covered; 1 530 rig-proven entries serve no card until re-proven | certification of the 16 GB-proven keys on a 32 GB card (cards 2/3, behind the chain), re-proof of the 1 530 on a 16 GB card | door landed `d1def45`; re-proof on cards 0/1 DONE 09-14 01:39, the 5 628 clockless proofs of 09-07 re-proven at the protocol clock by 07:09, the 32 GB coverage DONE 09-14 21:01 on cards 3 and 2 (matmul 4 644, addmm+baddbmm 3 873, conv2d+depthwise 1 128; every checkpoint pushed to both remotes, last `d639a1b`): directory 9 655 entries — 9 554 covered on 16 GB, 9 593 on 32 GB, 9 492 on both, 19 085 of 19 147 proofs at a recorded clock, gate 0 refused; the catalogue's lines read their shapes per class in the document; the 16→32 sample was ADJUDICATED 09-14 01:47: the two SKUs agree at the locked clock (32/16 median 0.998, 39/50 same config); the 1.175× is the 09-07 proofs' unrecorded clock (5 628 proofs, likely boost, not proven) — re-proven at 1290 on the idle 16 GB cards from 09-14 02:00 (register 56, adjudicated paragraph) |
 
-## C — declared limits and other chantiers' (61)
+## C — declared limits and other workstreams' (61)
 
 Grouped by owner, one line each; the trigger to close is in `DETTE.md`.
 

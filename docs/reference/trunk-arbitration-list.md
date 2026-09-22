@@ -1,7 +1,7 @@
 # Bringing `metal-first-light` home: what needs a decision
 
 **Prepared 2026-09-12 on the Dell. Nothing is merged. Nothing may be merged from
-this file** — the other machine is mid-chantier, and this list exists so that when
+this file** — the other machine is mid-workstream, and this list exists so that when
 the merge happens it is an arbitration and not a discovery.
 
 **State**: `origin/metal-first-light` is **105 commits ahead** of `main` and **20
@@ -120,7 +120,7 @@ From the owner's own account, and not yet verified line by line on this machine:
 ## How this should be done, and by whom
 
 **Both agents and an owner's arbitration**, on a quiet rig, with the other
-machine's chantier finished. Not today.
+machine's workstream finished. Not today.
 
 The order that follows from the above: item 1 first (it is composition, not
 conflict, and it is the cheapest real gain), then item 3's four reads, then item 2

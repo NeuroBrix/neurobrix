@@ -4,7 +4,7 @@ From attorch (BobMcDear/attorch) conv_kernels.py — chosen over FlagGems
 for V100 compatibility (proper num_stages handling). Im2col approach
 with tl.dot, fp32 accumulation, groups support.
 
-Phase 1.5 conv2d Étape (b) (2026-05): @triton.autotune + cache_results=True
+Phase 1.5 conv2d Step (b) (2026-05): @triton.autotune + cache_results=True
 adoption — same pattern as mm/bmm/addmm/baddbmm (commits d514bdb +
 20ed765). Configs restricted to Volta-viable subspace (BLOCK_BHW ∈
 {32,64,128}, BLOCK_OUTF ∈ {32,64,128}, BLOCK_INF ∈ {16,32,64}, num_warps

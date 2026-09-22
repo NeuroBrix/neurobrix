@@ -100,7 +100,7 @@ class AudioEngine(FlowHandler):
                 # vendor oracle. The `execute_native_kokoro` band-aid is retained
                 # ONLY for the TRITON path (triton/flow/audio.py), which cannot
                 # yet run the LSTM forward graph (no Triton LSTM kernel) — a
-                # separate chantier (P-KOKORO-TRITON-LSTM-KERNEL + R33). The
+                # separate workstream (P-KOKORO-TRITON-LSTM-KERNEL + R33). The
                 # removal here is scoped to compiled so an untested triton path
                 # is not broken.
                 raise RuntimeError(

@@ -28,7 +28,7 @@ that copy gets a FRESH output tid nothing consumes. The engines execute
 storage, observable through the base tensor. Deleting it is the
 documented silent-corruption class (OpenAudio DAC codebook all-zero ->
 silence; the triton slice path records the same class as "washed-out
-VACE/Wan2.2, 2026-06-28"). The R19 chantier shipped that bug and had to
+VACE/Wan2.2, 2026-06-28"). The R19 workstream shipped that bug and had to
 withdraw it the same day.
 
 So the roots are: graph outputs, every tensor referenced by

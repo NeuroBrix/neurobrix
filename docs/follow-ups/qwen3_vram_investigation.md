@@ -23,7 +23,7 @@ Entry points for the investigation:
 Per `tests/scratch/matmul_item3/REPORT.md` Phase 3 Scenario 2, the
 ~10.8 GB peak on Qwen3-30B `v100-16g --triton --prompt "2+2=" --max-tokens 4`
 comes from (rough hierarchy, exact magnitudes TBD by instrumentation
-in this chantier):
+in this workstream):
 
 1. **Two block-windows of expert weights resident under zero3 ratchet
    pipelining.** `Zero3Strategy` (see `CHANGELOG.md` Added-section
@@ -80,7 +80,7 @@ Item 3 eliminated.
 
 3. **Identify the top-2 contributors** from task 1's histogram.
    Evaluate the following levers quantitatively — each a separate
-   mini-chantier with before/after measurements:
+   mini-workstream with before/after measurements:
 
    - **Zero3 sliding window size**: can it be reduced from 2 blocks
      to 1? Cost: per-block H2D transfer latency cannot be hidden by
@@ -98,7 +98,7 @@ Item 3 eliminated.
      flow handlers access non-block weights directly — requires flow
      handler redesign.
 
-4. **Each lever → scope into its own mini-chantier** with a decision
+4. **Each lever → scope into its own mini-workstream** with a decision
    tree (fix if measured gain > X GB and no correctness regression
    and no throughput regression > Y %).
 
@@ -127,7 +127,7 @@ anchor future work to it until task 2 (reproduce or reject) closes.
 
 - Re-opening Item 3 — the in-kernel tile promotion is correct and
   shipped. Do not revert or extend it here.
-- Quantization of weights (AWQ / GPTQ / int4) — separate chantier,
+- Quantization of weights (AWQ / GPTQ / int4) — separate workstream,
   not a zero3 / MoE residency concern.
 - Anything that touches hardware other than V100 16 GB — this
   investigation is bounded to that configuration.

@@ -67,7 +67,7 @@ def sample() -> str:
     available = free + inactive + purgeable + speculative
     return (f"{time.strftime('%H:%M:%S')} "
             f"dispo={available}Mo (libre={free} inactif={inactive} "
-            f"purgeable={purgeable} spéculatif={speculative}) "
+            f"purgeable={purgeable} speculative={speculative}) "
             f"swap={used.group(1) if used else '?'}Mo "
             f"{_residents(ps_out)}")
 

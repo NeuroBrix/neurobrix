@@ -2,7 +2,7 @@
 """
 PyTiktoken — pure-Python, stdlib-only replacement for the ``tiktoken`` library.
 
-Zero Outsider chantier (R34): the NeuroBrix runtime engine must not import any
+Zero Outsider workstream (R34): the NeuroBrix runtime engine must not import any
 vendor ML library at inference time. ``tiktoken`` is the byte-level BPE
 tokenizer used by openaudio-s1-mini (and other fish-speech / Qwen2-derived
 models). This module reproduces its ``encode`` / ``decode`` behaviour bit for

@@ -2,7 +2,7 @@
 
 Behavioural duplicate of core/strategies/cpu_execution.py. All components
 on host. NOTE: NBX Triton kernels are GPU-only; a true Triton-CPU compute
-backend is a separate chantier. This class preserves the strategy contract
+backend is a separate workstream. This class preserves the strategy contract
 (device routing to "cpu") torch-free so the triton branch is complete; the
 runtime surfaces a clear error if GPU-less NBX compute is actually invoked.
 """

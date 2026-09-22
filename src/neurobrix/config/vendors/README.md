@@ -34,7 +34,7 @@ Each file declares a `validation_status` in its top comment block:
 
 | status | meaning |
 |---|---|
-| `validated_empirical` | Values exercised end-to-end on real hardware; the comment lists the validated models + the chantier/commit. |
+| `validated_empirical` | Values exercised end-to-end on real hardware; the comment lists the validated models + the workstream/commit. |
 | `hand_curated_from_docs` | No such hardware available; values derived from vendor documentation or conservatively copied. NOT empirically validated. Refine when hardware access is obtained. |
 
 Only `nvidia/volta.yml` is `validated_empirical` (4× V100 is the only
@@ -44,7 +44,7 @@ hardware available). `ampere`, `hopper`, `cdna` are
 ## Per-key source annotation
 
 Every non-obvious key carries an inline comment with its rationale
-or source. Empirically-derived keys cite the chantier/commit;
+or source. Empirically-derived keys cite the workstream/commit;
 doc-derived keys cite the documentation basis. Never present a
 doc-derived or copied-conservative value as if it were validated.
 

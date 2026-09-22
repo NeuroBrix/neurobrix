@@ -56,7 +56,7 @@ EPILOGUE_GELU_TANH: int = 3
 # compute capability so each hardware explores ONLY its viable subspace).
 # Volta sm_70 has 96 KB SMEM/SM (vs 192 KB sm_80 / 228 KB sm_90); large
 # blocks (BM≥128 BK≥64 warps=8) saturate SMEM → register spill →
-# catastrophic perf (98-145 ms measured Phase 1.5 Étape 2 FlagGems
+# catastrophic perf (98-145 ms measured Phase 1.5 Step 2 FlagGems
 # bench). The Volta-viable subspace is restricted to BM∈{32,64},
 # BN∈{32,64,128}, BK∈{32,64}, warps∈{2,4}, stages∈{2..5} — ~20
 # combinations giving the autotuner a denser space of fitting configs.

@@ -1507,7 +1507,7 @@ class OpLevelTilingEngine:
         # Trade-off: striped output (completes, wrong values) vs OOM
         # crash. Keeping the original tiling = striped is the
         # current ⏳ state; fixing `_tiled_conv2d_spatial_nbx` at
-        # smaller scales is the actual close — separate sub-chantier
+        # smaller scales is the actual close — separate sub-workstream
         # `P-NBX-TILED-CONV2D-SMALL-SCALE`. Mandate v2 condition #2
         # legitimate escalation: structural root cause identified,
         # ≥3 web_search done with citations, ≥5 diagnostic
@@ -1744,12 +1744,12 @@ class OpLevelTilingEngine:
         # NBX dispatch path handles those ops via the standard
         # `conv2d_wrapper` / `rms_norm_wrapper` chain (memory may be
         # tighter but correctness is preserved). R33 zero-torch in
-        # triton/ preserved. R30 dualité: a future
+        # triton/ preserved. R30 duality: a future
         # `band_streamed_chain_nbx` would close this gap.
         # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: chain wrapper has
         # an NBX-pure variant (`band_streamed_chain_nbx`). Mode-aware
         # dispatcher selects nbx variant for triton/triton_sequential.
-        # R30 dualité fully restored.
+        # R30 duality fully restored.
         #
         # 2026-05-15 P-TRITON-CHAIN-CPU-POINTER C3d closure: with the
         # NBXTensor.__getitem__ negative-slice fix (commit 8a6daf2),

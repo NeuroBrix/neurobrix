@@ -3672,7 +3672,7 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # Spatial band-streaming threshold for conv2d. When the per-launch output
 # tensor would exceed this many bytes, conv2d_wrapper transparently splits
 # along the H dimension and streams band-by-band. This is the kernel-level
-# tiling lever (P-SANA-4KPX-RUNTIME, Étape 1 — internal to the wrapper, not
+# tiling lever (P-SANA-4KPX-RUNTIME, Step 1 — internal to the wrapper, not
 # a Prism op-level interceptor). 4 GiB default leaves headroom for weights,
 # activations and arena overhead on V100 32 GB. Override via env var
 # NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
@@ -3696,7 +3696,7 @@ _NBX_CONV3D_EAGER_FREE_BYTES = int(
     os.environ.get("NBX_CONV3D_EAGER_FREE_BYTES", str(1 * 1024 * 1024 * 1024)))
 
 # Conv3d temporal chunk-streaming — kernel-level tiling INSIDE the wrapper,
-# same lever as the conv2d band-streaming above (P-SANA-4KPX Étape 1 class).
+# same lever as the conv2d band-streaming above (P-SANA-4KPX Step 1 class).
 # Even with the #37 eager frees, the one-shot temporal decomposition needs
 # several FULL folded transients simultaneously (temporal pad copy, x2 fold,
 # conv2d output incl. band-streaming machinery, permuted copy, accumulator +
@@ -3722,7 +3722,7 @@ _NBX_CONV3D_CHUNK_BYTES = int(
 # Diagnostic trace — when set, every conv2d_wrapper call prints the
 # (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
 # spatial workload arriving in triton mode. Used by P-SANA-4KPX-RUNTIME
-# Étape 1 verification on Sana 4Kpx (was the wrapper-internal band-streaming
+# Step 1 verification on Sana 4Kpx (was the wrapper-internal band-streaming
 # triggered? what shapes are dominant?).
 _NBX_CONV2D_TRACE = os.environ.get("NBX_CONV2D_TRACE", "0") == "1"
 
@@ -4034,7 +4034,7 @@ def conv2d_wrapper(
     Routes to conv1d_wrapper for 3D inputs, and to conv_transpose_wrapper when
     transposed=True (1D or 2D).
 
-    Spatial band-streaming (P-SANA-4KPX-RUNTIME Étape 1): when the output
+    Spatial band-streaming (P-SANA-4KPX-RUNTIME Step 1): when the output
     tensor would exceed _NBX_CONV2D_BAND_BYTES (default 4 GiB), the wrapper
     splits along the H output dimension and streams band-by-band. Each band
     re-enters this same wrapper with a smaller H, so the recursion bottoms
@@ -4092,7 +4092,7 @@ def conv2d_wrapper(
     #
     # mm/bmm/addmm: deep matmul stacks risk fp16 accumulation overflow.
     #   Step 1 upcasts input fp16 → fp32 on pre-Ampere, output forced to
-    #   fp32 (force_fp32 in _matmul_out_dtype). Cible précision.
+    #   fp32 (force_fp32 in _matmul_out_dtype). Precision target.
     #
     # conv2d: spatial activation chain (VAE/UNet). The kernel already
     #   accumulates in fp32 internally (conv2d.py line 47:
@@ -4132,7 +4132,7 @@ def conv2d_wrapper(
     # Falls back to x.dtype when no TritonSequence is active.
     out_dtype = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
 
-    # P-SANA-4KPX-RUNTIME Étape 1 — kernel-level spatial band-streaming.
+    # P-SANA-4KPX-RUNTIME Step 1 — kernel-level spatial band-streaming.
     # When the output tensor would exceed the per-launch threshold (default
     # 4 GiB), split along H and stream band-by-band. Halo handling mirrors
     # _tiled_conv2d_spatial_nbx: each band re-enters this same wrapper with
@@ -4147,7 +4147,7 @@ def conv2d_wrapper(
         print(f"[CONV2D] in=({N},{in_c},{in_h},{in_w}) out=({N},{out_c},{out_h},{out_w}) "
               f"k=({kh},{kw}) g={groups} out={out_mb:.1f}MB", flush=True)
 
-    # P-SANA-4KPX-RUNTIME Étape 3 — depthwise specialization. The generic
+    # P-SANA-4KPX-RUNTIME Step 3 — depthwise specialization. The generic
     # im2col conv2d_forward_kernel is structurally inefficient for the
     # depthwise pattern (groups == in_c == out_c, weight (C,1,kh,kw)) on
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
@@ -4261,7 +4261,7 @@ def _conv2d_band_streamed(
     conv2d_wrapper call uses the original padding=(pad_h, pad_w), which
     inserts pad_h zeros on internal frontiers — same engineering trade
     used by `_tiled_conv2d_spatial_nbx` for compiled mode (faint seam at
-    band frontiers, accepted as a follow-up halo-correctness chantier).
+    band frontiers, accepted as a follow-up halo-correctness workstream).
     """
     # Choose tile_factor so each band's output bytes <= half the threshold;
     # the headroom covers transient input slice + kernel intermediate.

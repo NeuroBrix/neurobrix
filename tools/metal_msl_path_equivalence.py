@@ -27,7 +27,7 @@ If A == B the user does not need Xcode. If C == B a metallib built once here
 can be shipped, which is a different and also useful answer. Both are decided
 by comparing the bytes the GPU produced, not by reading documentation.
 
-Every buffer comes from the Metal `DeviceAllocator` this chantier delivered,
+Every buffer comes from the Metal `DeviceAllocator` this workstream delivered,
 bound through `buffer_for_pointer` — the accessor a launch path should use,
 rather than wrapping a raw address with `newBufferWithBytesNoCopy`.
 

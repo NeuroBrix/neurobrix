@@ -9,7 +9,7 @@ snapshot on the NAS**: the 76 MB snac blob was byte-identical
 (sha 4b8164cc…) to `hf_snapshots/snac_24khz/pytorch_model.bin`.
 
 The full R34 remedy — baking the codec into the container so no third-party
-package is imported at runtime — is its own chantier. This stops the duplication.
+package is imported at runtime — is its own workstream. This stops the duplication.
 """
 
 import ast

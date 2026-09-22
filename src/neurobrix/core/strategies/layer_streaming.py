@@ -237,9 +237,9 @@ class LayerStreamingStrategy(ExecutionStrategy):
                           f"type={type(out).__name__} repr={repr(out)[:160]}",
                           flush=True)
                     print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
-                          f"déclare {len(sub.get('output_tensor_ids') or [])} sorties, "
-                          f"rend {len(out)} clés; "
-                          f"rendues={sorted(out)[:4]}; "
+                          f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
+                          f"returns {len(out)} keys; "
+                          f"returned={sorted(out)[:4]}; "
                           f"ctx_out={sorted(getattr(getattr(seg_exec,'_ctx',None),'output_tensor_ids',[]) or [])[:4]}",
                           flush=True)
                 values.update(out)

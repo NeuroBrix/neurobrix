@@ -3,7 +3,7 @@
 This document records the open upstream issues in `triton-lang/triton-cpu`
 that block specific NeuroBrix code paths on the CPU triton backend, the
 NeuroBrix-side markers gating them (so we don't paper over them with
-silent fallbacks), and the follow-up chantier
+silent fallbacks), and the follow-up workstream
 `P-TRITON-CPU-FP16-UPSTREAM-FOLLOWUP` whose sole job is to monitor and
 re-test when these close.
 
@@ -34,7 +34,7 @@ and escalate.
   (issue #229).
 
 **Blocked upstream — escalated per P-PRISM-NEVER-REFUSE v2 mandate
-"épuisement technique" clause**:
+"technical exhaustion" clause**:
 
 - Sana 1600M 4Kpx fp16 (`Sana_1600M_4Kpx_BF16` configured at fp16) under
   `--triton` / `--triton-sequential` on a CPU-only profile. Requires

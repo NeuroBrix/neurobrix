@@ -57,7 +57,7 @@ pointer is never dereferenced — **this is not a correctness defect**. But the
 buffer is born, it is one `int32` per device, and the contract says it is **never
 freed** (a launch records the raw pointer and a frozen replay plan may hold it).
 
-Four bytes per device is not worth a chantier. The discrepancy between the claim
+Four bytes per device is not worth a workstream. The discrepancy between the claim
 and the artefact is, because "inert" is the whole argument for merging this into a
 path that never arms it. **The shape of the repair is one condition at the call
 site: take the buffer only when the code is non-zero.** That is the Mac's agent's
@@ -504,7 +504,7 @@ suite on the cuda path and confirm the clock door is unmoved. See
 Not verifiable on the Mac yet: matmul does not compile on Metal (a codegen bug,
 `r_55` used out of its declared scope, exposed once the `llvm.intr.assume` refusal
 was lifted), so the witness — a matmul — cannot yet run there and the Apple
-certification stays blocked on that fork codegen chantier. The contract is in
+certification stays blocked on that fork codegen workstream. The contract is in
 place for when it compiles.
 
 ---

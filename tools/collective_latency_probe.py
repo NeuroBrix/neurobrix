@@ -5,7 +5,7 @@ The tensor-parallelism study (`docs/internal/tensor_parallel_study_2026_09_03.md
 turns entirely on one number it did not have. Two all-reduces per layer x 48
 layers = **96 collectives per decoded token**, against a measured 25.1 ms token.
 At 10 us each that is 3.8 % overhead and TP4 is worth building; at 30 us it is
-11.5 % and marginal; above that the chantier is a documented wall. The study
+11.5 % and marginal; above that the workstream is a documented wall. The study
 said so itself and deferred the measurement to here, before any rewriter is
 written.
 

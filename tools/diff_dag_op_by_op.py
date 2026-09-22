@@ -28,7 +28,7 @@ ROOT = Path("/home/mlops/NeuroBrix_System")
 LOG_DIR = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
 
 # Variant selection: SANA_VARIANT=4kpx (default) or 1024.
-# 1024 path is the discriminant control (PNG cohérent for both backends);
+# 1024 path is the discriminant control (coherent PNG for both backends);
 # if Sana 1024 also shows ~50% "real" divergences, the threshold is
 # misclassifying noise rather than real bug.
 VARIANT = os.environ.get("SANA_VARIANT", "4kpx")

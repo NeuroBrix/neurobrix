@@ -1494,7 +1494,7 @@ class PrismSolver:
                 # Any other input rank crashes at dispatch:
                 #   - 5D conv3d (CogVideoX VAE): 'too many values to unpack'
                 #     in _tiled_conv2d_spatial_torch (waits on the 5D tiling
-                #     chantier; runs native, fits at proof sizes, OOMs visibly).
+                #     workstream; runs native, fits at proof sizes, OOMs visibly).
                 #   - 3D conv1d (Kokoro iSTFTNet vocoder noise_convs / the audio
                 #     decoders generally): _pair reads stride[1] on a 1-element
                 #     stride list -> IndexError. A 1D audio conv is never a
@@ -4510,7 +4510,7 @@ class PrismSolver:
 
         Wall-time is intentionally unbounded — the strategy may take
         minutes or hours for large diffusion models at high resolution.
-        Doctrine R35: perf libre, disponibilité first.
+        Doctrine R35: performance is free, availability comes first.
 
         R34 model-agnostic: discrimination only by hardware-profile
         (`cpu.ram_mb`) and graph-derived component memory. No model
@@ -4998,7 +4998,7 @@ class PrismSolver:
         Manual ⊕ auto by set union: manual entries always end up in the
         result (manual > auto by construction; no conflict surface). Both
         sources default-absent ⇒ empty set ⇒ ZERO behaviour change for
-        any model not matching the criteria (anti-régression guarantee).
+        any model not matching the criteria (anti-regression guarantee).
 
         ZERO FALLBACK (engine audit #2 2026-07-05): read failures
         PROPAGATE. The former blanket try/excepts silently returned an
