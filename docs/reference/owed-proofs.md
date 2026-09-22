@@ -1609,3 +1609,95 @@ its `fp16_conv_cascade_safe` and planned fp32. The difference was the harness, r
 twice before naming a culprit, and the pointer is now part of every worktree here. The unified
 outcome (a refusal becoming a streaming strategy, since the engine never refuses for memory)
 is the Mac's to prove. Records: `nbx/campaigns/2026_09_21_mac_proofs/`.
+
+## 2026-09-22 — OWED TO THE DELL (core/prism): Prism partitions a graph the executor no longer runs
+
+Established on this Mac, **not implemented** — `core/prism` is the Dell's, and this lands on main
+only with a CUDA plan-census (no plan change except named ones) and a byte-identical battery. The
+`layer_streaming` refactor is stopped here; what follows is the whole of what was established.
+
+### The defect
+
+Prism partitions the **raw** graph. Each sequence then transforms that graph **in place**, before
+the executor runs it:
+
+| site | transform |
+|---|---|
+| `src/neurobrix/triton/sequence.py:646` | `_eliminate_detach_ops` |
+| `src/neurobrix/triton/sequence.py:887` | `_eliminate_weight_transpose_ops` |
+| `src/neurobrix/triton/sequence.py:996` | `_eliminate_dead_causal_mask_ops` |
+| `src/neurobrix/triton/sequence.py:1168` | `_fuse_swiglu_ops` |
+| `src/neurobrix/triton/sequence.py:1424` | `_fuse_rope_ops` |
+| `src/neurobrix/core/runtime/graph/compiled_sequence.py:657` | `_eliminate_detach_ops` (marked "Mirrors CompiledSequence…") |
+| `src/neurobrix/core/runtime/graph/compiled_sequence.py:982` | `_eliminate_weight_transpose_ops` |
+
+A `layer_streaming` segment boundary is a list of op ids taken from the graph Prism read. The
+fusions rewrite those ids. The boundary then names ops that no longer exist, and the segment
+executor cannot find its own segment.
+
+**The red, in the census shadow** (no card, no weights, no run):
+Qwen3-Coder-30B-int4g128-ffnonly, Strategy `layer_streaming`, boundary mismatch —
+
+> `10 of 12 op ids absent, e.g. aten.silu::1132`
+
+`aten.silu` is the swiglu fusion's input: the Llama-family swiglu+rope fusions are what break the
+boundaries. Evidence file: `docs/internal/_session_current.md` (gitignored by repo policy).
+
+### Why the obvious fix is already design-rejected
+
+Re-partitioning at execution ("option b") is rejected in the tree, by the `Plan` dataclass comment
+at `src/neurobrix/core/prism/solver.py:368-371`: *"the executor's dag may have been transformed
+since Prism read it … and a segment boundary recomputed on a different graph is not the boundary
+the budget was accepted under."* Boundaries stay authoritative. Therefore Prism must partition the
+**same transformed graph the executor runs**.
+
+### The design mapped (not written)
+
+One **per-branch graph normalization** in `core/optim/passes`: the structure-changing transforms
+(detach / weight-transpose / dead-causal-mask elimination, const-fold, cse, swiglu+rope fusion —
+today duplicated between `sequence.py` and `compiled_sequence.py`) run **before** the partition, on
+the one graph both Prism and the executor then use. It de-duplicates the transforms and puts the
+Prism↔sequence boundary on a normalized graph. A segment executor re-applying a pass is idempotent
+(proven here, pretranspose stamp included).
+
+### Why the proof is the Dell's and not mine
+
+The proof this needs is red→green at a fixed `NBX_PRISM_BUDGET_MB` on **both** arms, with the
+streamed text read against the prompt *and* compared to the resident run's — a clean rc is not
+proof. DeepSeek-Coder-V2-Lite is **unrunnable on this machine**: its weights come from the shared
+NFS export over Wi-Fi at ~9 MB/s, `layer_streaming` reads each segment's weights once per pass at
+17.7 GB per forward — about half an hour per token, a day for 64 tokens — and the resident arm does
+not fit in 24 GB unified. On a 32 GB card at 200 Gb/s the model holds resident and streamed-vs-
+resident is one sitting. **DeepSeek is the Dell's CUDA case.**
+
+### Two neighbouring defects found while reading, none of them fixed here
+
+**1. The global `_try_zero3` has no unified-device guard.**
+`solver.py:4455-4480` checks only that devices exist, that host RAM holds the weights, and that the
+largest activation fits — it never asks whether the device is unified. The **component** path does,
+at `solver.py:3977-3985`:
+
+```python
+if (mem.activation_mb <= effective_capacity * 0.92
+        and not _device_is_unified(largest.device_string, profile)):
+```
+
+with the reason written above it: selecting zero3 on unified memory is *"a plan accepted under one
+memory model and executed under another — it then dies in zero3's CUDA machinery before an op runs
+(Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21)"*. The global path can still select
+it. On this Mac that is the path that keeps `layer_streaming` from ever being reached.
+
+**2. `_host_budget_mb` ignores the `NBX_PRISM_BUDGET_MB` door.**
+`solver.py:2628-2635` reads `host_reading()` and rungs the figure down; the door is consulted only
+on the **device** reading (`solver.py:2604`, "the rung the NBX_PRISM_BUDGET_MB door names"). So at
+an imposed census rung the host budget stays at the machine's real free RAM, `_try_zero3` keeps
+succeeding, and `layer_streaming` is never censused at the rungs where it must fire. This is
+load-bearing for the Apple census, which imposes every rung.
+
+**3. Three stale `0.7` comments**, at `solver.py:1062`, `:4471` and `:4502`. They still describe a
+fraction-of-RAM budget (*"Use 0.7 × ram_mb"*, *"weights must fit in 70% of RAM"*, *"sum(component
+peaks) <= cpu.ram_mb * 0.7"*) that the code no longer computes — `_host_budget_mb` rungs the free
+reading down onto the standard ladder. **These are not cosmetic**: this Mac measured "zero3's host
+check is `ram_mb × 0.7` ≈ 16.8 GB, not door-affected" *from the comment*, and concluded the door
+could not force `layer_streaming` on a small model. The conclusion happens to hold for another
+reason (defect 2), but it was read off a comment that describes code that is gone.
