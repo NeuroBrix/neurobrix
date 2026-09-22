@@ -107,8 +107,20 @@ def ladder_Woct(v):
     return p
 
 
+def ladder_profile(v, _dim="M"):
+    """The ladder the PROFILE actually ships, read through the engine's own `bucket_of`.
+
+    The named ladders above are hand copies for comparing candidates; this one is the thing
+    that will run, so a candidate is only adopted once it has been evaluated under this name
+    too. Two spellings of one ladder is how a tool comes to measure something the engine does
+    not do."""
+    from neurobrix.kernels.autotune_bucket import bucket_of
+    return int(bucket_of(_dim, int(v)))
+
+
 LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact": lambda v: v,
-           "Wq": ladder_Wq, "Woct": ladder_Woct}
+           "Wq": ladder_Wq, "Woct": ladder_Woct,
+           "profile": ladder_profile, "profileW": lambda v: ladder_profile(v, "W")}
 
 
 # --------------------------------------------------------------------------- one sweep
@@ -264,6 +276,12 @@ def measure(a):
 
 
 def evaluate(a):
+    # The `profile` ladder reads the engine's own `bucket_of`, which answers EXACT when no
+    # vendor profile is bound — an evaluation run behind a door would then report every
+    # ladder as costless and mean nothing. Bind first and say which profile the numbers
+    # belong to (`feedback_a_shadow_behind_a_door_must_be_told_who_it_is`).
+    from neurobrix.kernels.autotune_certify import _bind_hardware_profile
+    print(f"[bucket_loss] evaluating under hardware profile: {_bind_hardware_profile()}")
     doc = json.loads(Path(a.evaluate).read_text())
     rows = {r["size"]: r for r in doc["rows"] if r.get("timings_ms")}
     sizes = sorted(rows)
