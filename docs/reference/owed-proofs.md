@@ -2900,3 +2900,62 @@ That `layer_streaming` is the right strategy here. On a link of ~9 MB/s it re-re
 segment's weights every pass — 17.7 GB per forward for DeepSeek, about half an hour a token —
 so even repaired it is not runnable on this machine. What is owed is the BOUNDARY being
 correct, so the plan is honest; running it is the rack's, on 200 Gb/s.
+
+## 2026-09-22 — CORRECTION to my own class-1 reading, and a 2.000× the two machines found together
+
+The rack reproduced the DeepSeek red from `3c734f70` **figure for figure with no Apple GPU** —
+strategy, score, 33 238 MB planned, `2 of 4 op ids absent, e.g. 'aten.silu::843'` — by dropping
+the untracked `default-9f169c79.yml` in as a fixture. So the open question in that entry is
+answered: **the profile alone is the eliminator**, the cascade reads the profile and not the
+card, and the fix is gateable there. Sending the file as text rather than a description is what
+made that possible, and it is worth keeping as a habit.
+
+### The rack's correction, and why it does not reproduce here
+
+They instrumented every `return None` in `_try_layer_streaming` for Flex.1-alpha and measured:
+
+```
+budget=17277MB  streamed=[]  resident_beside=32407MB  segment_budget=-15130MB
+components: transformer=16977, text_encoder_2=11848, vae=3325, text_encoder=257
+```
+
+`streamed` EMPTY — no single component over budget, only their sum — so the strategy returns
+**before `LayerPartitioner` is ever called**. Their point: the boundaries are not gone, nothing
+asks for them, so this is a NEIGHBOURING defect and not the one in `9675411a`.
+
+**On this machine it does not reproduce, and the arithmetic says why.** Same model, same
+17 277 MB budget:
+
+| component | this Mac | the rack | ratio |
+|---|---|---|---|
+| transformer | **33 954** | 16 977 | **2.000** |
+| text_encoder_2 | 23 695 | 11 848 | 2.000 |
+| vae | 6 650 | 3 325 | 2.000 |
+| text_encoder | 515 | 257 | 2.004 |
+| required | 64 814 | (sum 32 407) | |
+
+So here the transformer **alone** is 33 954 MB against 17 277 MB: `streamed` is non-empty, it
+holds the transformer, and the message *"the streaming path needs 33954MB for that one
+component"* is literally correct rather than a sum mislabelled. Their `streamed=[]` arises
+because every component is half the size — exactly the threshold they flagged as the boundary
+between the two readings.
+
+### The finding neither machine could have made alone
+
+**An exact 2.000× across four unrelated components is an element size, not an op-level
+upcast.** `Flex.1-alpha`'s manifest declares `dtype: bfloat16`, and the RACK's figures are the
+bf16 ones (16 977 MB for an ~8B transformer is 2 bytes/param). This machine's are the fp32
+ones.
+
+**Not yet traced past `MemoryBreakdown.weight_bytes`** — certification is running and a
+half-traced mechanism is worse than a measured ratio. What is claimed is the 2.000×, measured
+on one model at one budget on two machines.
+
+**What it would mean if it holds**: some of the five class-1 models are not "too large for this
+chip" at all, they are DOUBLED, and they belong to a third class again — an estimator defect,
+not a streaming one. **My earlier reading of those five as "the same defect seen from the other
+side" is therefore withdrawn pending this.** The six models that name the boundary defect
+verbatim are untouched by any of it and remain class 1.
+
+The estimator is `core/prism`, the rack's, and this only surfaces by comparing two machines on
+one model — which is what owed-proofs is for.
