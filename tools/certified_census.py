@@ -107,12 +107,41 @@ def frozen_dims(model: str) -> list:
             # length is frozen even when a weight shares the extent (chatterbox's 314).
             lost = r.get("never_carried") or (
                 b and b.get("relation") == "v" and (b.get("lost_in") == "shape" or not b.get("literal_is_a_parameter_extent")))
-            if lost:
+            # A break on a DERIVED relation — the literal is k*v or v//k, not v — was silent.
+            # The tool's reasoning for that is sound and is kept: an architecture constant can
+            # coincide with an arithmetic of the symbol, so it cannot be CALLED a defect from
+            # the graph alone. What was wrong is that it was called CLEAN: the row vanished,
+            # the census printed `frozen: []`, and the model was harvested as if inspected.
+            #
+            # mochi-1-preview is the proof that the silence costs something. Its VAE breaks
+            # height and width at `aten._unsafe_view::1` on `v*2` (28 for a trace 14, 44 for
+            # 22), 180 of its 353 five-dimensional activations carry concrete spatial dims,
+            # and the consequence is measured: the profiler sizes `aten.silu::26` at
+            # [1,256,84,56,88] = 0.20 GiB where the run allocates [1,128,84,480,848] = 8.15 GiB
+            # — 1x128x84x480x848x2 is exactly the 8752988160 bytes the allocator refused. A
+            # 40x under-estimate, a plan that cannot run, and `status: ok` over the top of it.
+            #
+            # So the row is REPORTED and left UNADJUDICATED rather than decided either way:
+            # `?` rather than a plausible reconstruction, which is this register's own rule.
+            derived = (not lost) and b and b.get("relation") and b.get("relation") != "v"
+            if lost or derived:
                 rows.append({"component": gp.parent.name, "symbol": r.get("symbol"), "name": r.get("name"),
                              "trace_value": r.get("trace_value"), "source": r.get("source"),
                              "never_carried": bool(r.get("never_carried")),
+                             "adjudicated": bool(lost),
                              "first_break": b and {k: b.get(k) for k in ("op_uid", "op_type", "literal", "relation")}})
     return rows
+
+
+def split_frozen(rows: list) -> tuple:
+    """(adjudicated, unadjudicated) — a lost symbol against a derived-relation break.
+
+    The first is a defect and queues a retrace. The second is a QUESTION, and it is printed
+    so somebody answers it; 20 of the 59 containers in this cache carry one and every single
+    one of them read `frozen: []` before this split existed.
+    """
+    return ([r for r in rows if r.get("adjudicated") or r.get("unreadable")],
+            [r for r in rows if not r.get("adjudicated") and not r.get("unreadable")])
 
 
 def rungs_for(hardware: str) -> list:
@@ -208,8 +237,11 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                  log_dir: Path, rungs: list = (), walk_extents: bool = False) -> dict:
     fam = _family(model)
     row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [],
+           "derived_breaks": [],
            "graph_sha": _graph_sha(model)}
-    frozen = frozen_dims(model)
+    _all_breaks = frozen_dims(model)
+    frozen, unadjudicated = split_frozen(_all_breaks)
+    row["derived_breaks"] = unadjudicated
     if any("unreadable" in r for r in frozen):
         row.update(status="unreadable", frozen=frozen)
         return row
@@ -360,7 +392,9 @@ def main() -> int:
             rows[m] = f.result()
             r = rows[m]
             print(f"[census] {m:44s} {r['family']:10s} {r['status']:8s} {r['keys']:5d} key(s)"
-                  + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else ""), flush=True)
+                  + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
+                  + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
+                     if r.get("derived_breaks") else ""), flush=True)
 
     entries = {}
     for m, r in rows.items():

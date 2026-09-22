@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-87 entries, of which five are placeholders and 82 carry a site. Two
+88 entries, of which five are placeholders and 83 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2329,3 +2329,41 @@ it in the docs.
 **The lesson, in one line.** A textual guard over commands must distinguish use from mention,
 or the first thing it blocks is the documentation of the rule it enforces — and possibly its
 own fix.
+
+### 88 — the census's frozen-dimension check reported `[]` for a model whose spatial dims are frozen
+
+**Where.** `tools/certified_census.py::frozen_dims`, this rack, 2026-09-22, found while
+chasing why mochi-1-preview's judged run dies for lack of memory. Present since the check was
+written.
+
+**What it did.** `where_the_symbol_chain_breaks.py` classifies a break by how the literal
+relates to the symbol's trace value — `v`, `v*2`, `v*4`, `v//2`, … — and `frozen_dims`
+reported only `relation == "v"`. A dimension frozen downstream of an upsample or a reshape
+breaks on a MULTIPLE of the trace value, never on the value itself, so it produced no row at
+all: the census printed `frozen: []`, `status: ok`, and harvested the model as if inspected.
+
+mochi's VAE breaks `height` and `width` at `aten._unsafe_view::1` on `v*2` — 28 from a trace
+of 14, 44 from 22. 180 of its 353 five-dimensional activation tensors then carry CONCRETE
+spatial dims.
+
+**What would it have done if the code were wrong?** Printed `frozen: []` — which is what it
+printed when the code WAS wrong. The check's healthy output and its blind output are the same
+string, and 20 of the 59 containers in this cache produced it.
+
+**What the silence cost, arithmetic rather than opinion.** The profiler sizes `aten.silu::26`
+at `[1, 256, 84, 56, 88]` = 0.20 GiB. The run allocates `[1, 128, 84, 480, 848]`, and
+`1*128*84*480*848*2 == 8752988160` — exactly the byte count the allocator refused. A **40x**
+under-estimate, so Prism accepted a plan that cannot run and the engine died for memory in a
+VAE its estimator called comfortable. Three sessions read that failure as a Prism defect, a
+lifecycle defect and a tiling defect in turn; it was none of them.
+
+**The fix.** The derived-relation row is now REPORTED and carried as `adjudicated: False`,
+and the census prints `UNADJUDICATED: N derived-relation break(s)` beside the model. The
+tool's caution is kept — an architecture constant can coincide with an arithmetic of the
+symbol, and a graph alone cannot tell them apart — so it is a question, not a verdict: `?`
+rather than a plausible reconstruction. A retrace is still queued only by an adjudicated row,
+because 20 of 59 containers must not all stop at once on a question nobody has answered.
+
+**The lesson, in one line.** A classifier that reports one of its own classes and silently
+drops the rest has an empty answer and a healthy answer that look identical — enumerate what
+a check does NOT report, and print the count even when you cannot judge it.
