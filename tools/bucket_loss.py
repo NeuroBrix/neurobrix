@@ -124,6 +124,28 @@ LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact
 
 
 # --------------------------------------------------------------------------- one sweep
+def _synth(rng, shape, dtype):
+    """A synthetic operand in `dtype`, including the one numpy cannot express.
+
+    numpy has no bfloat16. The engine carries bf16 as its BITS in a uint16 container
+    (`NBXTensor.from_numpy(arr, dtype=NBXDtype.bfloat16)` declares what the bits ARE and
+    never converts), so a bf16 sweep builds fp32 values and rounds them to bf16 the way the
+    hardware does — round-to-nearest-even on the top 16 bits. Before this, every bf16 sweep
+    died on `.astype('bfloat16')` with "data type 'bfloat16' not understood", on a profile
+    whose `preferred_dtype` IS bfloat16 and whose certified directory holds 285 bf16 entries
+    of 1 205 (Apple M4 Pro, 2026-09-22).
+    """
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    x = np.ascontiguousarray((rng.standard_normal(shape) * 0.1).astype(np.float32))
+    if str(dtype) in ("bfloat16", "bf16"):
+        u = x.view(np.uint32)
+        bits = ((u + (((u >> np.uint32(16)) & np.uint32(1)) + np.uint32(0x7FFF)))
+                >> np.uint32(16)).astype(np.uint16)
+        return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
+    return NBXTensor.from_numpy(x.astype(dtype))
+
+
 def _cfg_repr(cfg) -> str:
     return json.dumps({"kwargs": dict(cfg.kwargs), "num_warps": cfg.num_warps,
                        "num_stages": cfg.num_stages}, sort_keys=True)
@@ -136,8 +158,8 @@ def sweep_matmul(M, N, K, dtype, dev):
     from neurobrix.kernels.ops.matmul import matmul_kernel
     from neurobrix.triton import autotune_cache as atc
     rng = np.random.default_rng(M)
-    a = NBXTensor.from_numpy((rng.standard_normal((M, K)) * 0.1).astype(dtype))   # lands on the visible card
-    b = NBXTensor.from_numpy((rng.standard_normal((K, N)) * 0.1).astype(dtype))
+    a = _synth(rng, (M, K), dtype)   # lands on the visible card
+    b = _synth(rng, (K, N), dtype)
     seen = {}
     saved = matmul_kernel.run
 
@@ -170,8 +192,8 @@ def sweep_bmm(B, M, N, K, dtype):
     from neurobrix.kernels.ops.baddbmm_op import baddbmm_kernel
     from neurobrix.triton import autotune_cache as atc
     rng = np.random.default_rng(M * 1000 + N)
-    a = NBXTensor.from_numpy((rng.standard_normal((B, M, K)) * 0.1).astype(dtype))
-    b = NBXTensor.from_numpy((rng.standard_normal((B, K, N)) * 0.1).astype(dtype))
+    a = _synth(rng, (B, M, K), dtype)
+    b = _synth(rng, (B, K, N), dtype)
     seen = {}
     saved = baddbmm_kernel.run
 
@@ -205,8 +227,8 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
     from neurobrix.triton import autotune_cache as atc
     kh = int(kh or k); kw = int(kw or k)
     rng = np.random.default_rng(H * 7919 + W)
-    x = NBXTensor.from_numpy((rng.standard_normal((B, C_in, H, W)) * 0.1).astype(dtype))
-    w = NBXTensor.from_numpy((rng.standard_normal((C_out, C_in, kh, kw)) * 0.1).astype(dtype))
+    x = _synth(rng, (B, C_in, H, W), dtype)
+    w = _synth(rng, (C_out, C_in, kh, kw), dtype)
     seen = {}
     saved = conv2d_forward_kernel.run
 
@@ -275,6 +297,27 @@ def measure(a):
     print(f"[bucket_loss] written {a.out} ({len(rows)} sizes, {doc['wall_s']} s)")
 
 
+def _loss_tolerance():
+    """[(up_to_ms, pct)] below which a bucket loss is not distinguishable from this chip's
+    own run-to-run noise, read from the PROFILE — never a constant here.
+
+    A ladder verdict is only as good as the band it was taken in. On Apple the measured p95
+    of the run-to-run spread is 51 % below 1 ms and 5.08 % in 2-5 ms, so the same 20 % reading
+    is meaningless in one band and decisive in the other. A profile that declares no tolerance
+    gets no verdict column rather than a made-up one.
+    """
+    try:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        spec = ((active_vendor_profile() or {}).get("autotune") or {}).get("loss_tolerance")
+        rows = (spec or {}).get("bands")
+        if not rows:
+            return None
+        return [(float("inf") if r.get("up_to_ms") is None else float(r["up_to_ms"]),
+                 float(r["pct"])) for r in rows]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def evaluate(a):
     # The `profile` ladder reads the engine's own `bucket_of`, which answers EXACT when no
     # vendor profile is bound — an evaluation run behind a door would then report every
@@ -290,7 +333,9 @@ def evaluate(a):
         fn = LADDERS[name]
         losses = []
         per_bucket = {}
+        per_bucket_ms = {}
         missing = 0
+        tol = _loss_tolerance()
         for s in sizes:
             top = fn(s)
             # the representative measured for this bucket: the largest measured size <= top
@@ -308,6 +353,7 @@ def evaluate(a):
             loss = t_bucket / t_opt - 1.0
             losses.append(loss)
             per_bucket.setdefault(top, []).append(loss)
+            per_bucket_ms.setdefault(top, []).append(t_opt)
         if not losses:
             print(f"  {name}: no size evaluable"); continue
         losses_sorted = sorted(losses)
@@ -317,9 +363,21 @@ def evaluate(a):
         print(f"  {name:6s}: buckets={n_buckets:3d} sizes={len(losses):3d} median loss={med * 100:5.1f} %  "
               f"max loss={worst * 100:5.1f} %  unevaluable={missing}")
         if a.verbose:
+            if tol:
+                print("      (profile noise p95 by band: "
+                      + ", ".join(f"<{'inf' if up == float('inf') else f'{up:g}'} ms {p:.1f} %"
+                                  for up, p in tol) + ")")
             for top in sorted(per_bucket):
                 ls = per_bucket[top]
-                print(f"      bucket top {top:5d}: n={len(ls):2d} median={sorted(ls)[len(ls) // 2] * 100:5.1f} % max={max(ls) * 100:5.1f} %")
+                med = sorted(ls)[len(ls) // 2]
+                ms = sorted(per_bucket_ms[top])[len(per_bucket_ms[top]) // 2]
+                verdict = ""
+                if tol:
+                    pct = next(p for up, p in tol if ms < up)
+                    verdict = (f"  [{ms:.2f} ms, noise p95 {pct:.1f} %: "
+                               f"{'ABOVE it' if med * 100 > pct else 'within it'}]")
+                print(f"      bucket top {top:5d}: n={len(ls):2d} median={med * 100:5.1f} % "
+                      f"max={max(ls) * 100:5.1f} %{verdict}")
 
 
 def main():

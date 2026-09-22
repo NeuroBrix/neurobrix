@@ -547,6 +547,21 @@ def memory_ladder_rung_mb(free_mb) -> int:
     return rung_down_mb(free_mb)
 
 
+
+def _census_shadow_active() -> bool:
+    """True when this process is a census SHADOW.
+
+    A shadow enumerates the keys a machine's plan demands; it executes nothing. So the
+    room's free memory — which is what gets a real render killed mid-execution, and the whole
+    reason `_prepare_devices` lowers capacity on unified memory — says nothing about it, and
+    letting it in makes a census a function of whatever else happened to be running.
+    """
+    try:
+        from neurobrix.kernels import census as _census
+        return bool(_census.active())
+    except Exception:  # noqa: BLE001 — no census module means no shadow
+        return False
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -1938,6 +1953,15 @@ class PrismSolver:
             comp_dtype_str = (component_dtypes or {}).get(
                 comp.name, target_dtype_str)
             dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
+            if os.environ.get("NBX_DTYPE_RESOLVE_DIAG"):
+                # Default-off diagnostic (rules/debugging-and-known-issues.md): the two
+                # strings that decide the weight multiplier, printed where they are USED.
+                # `compute_dtype_factor` defaults a miss to source=2/target=4, so a name the
+                # DTYPE_BYTES map does not carry returns 2.0 for ANY pair, identity included.
+                print(f"[DTYPE_RESOLVE] {comp.name}: source_dtype={source_dtype!r} "
+                      f"comp_dtype_str={comp_dtype_str!r} -> dtype_mult={dtype_mult} "
+                      f"| target_dtype_str={target_dtype_str!r} "
+                      f"| component_dtypes={component_dtypes!r}", flush=True)
 
             # Weight memory. Sized by what the ENGINE LOADS, which is the
             # weights this graph consumes — not by the bytes on disk.
@@ -2678,7 +2702,13 @@ class PrismSolver:
         for dev in profile.devices:
             recommended = dev.memory_mb * self.safety_margin
             capacity = recommended
-            if dev.has_unified_memory and host.measured:
+            # A census SHADOW carries the machine's plan, not the room's — the same rule
+            # `_device_reading` already applies one call later. Without it the shadow's
+            # capacity, and therefore every tile a tiled family derives from it, is a
+            # function of whatever else was running: the same model at the same imposed rung
+            # logged 8 659 MB in one shadow and 7 604 MB in the next, minutes apart
+            # (Apple M4 Pro, 2026-09-22). A census that is not reproducible is not a census.
+            if dev.has_unified_memory and host.measured and not _census_shadow_active():
                 capacity = min(recommended, host.available_mb * self.safety_margin)
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
@@ -5222,7 +5252,26 @@ class PrismSolver:
 
 
     def _try_fp32_fallback(self, container: "NBXContainer", profile: PrismProfile) -> bool:
-        """Check if FP32 fallback should be tried for BF16 models."""
+        """Whether an fp32 pass is worth trying for a bf16 model.
+
+        It is worth trying only where the hardware CANNOT do bf16 — which is what this
+        fallback was written for. The caller reaches it when the bf16 plan produced no
+        candidates, and on bf16-capable hardware fp32 needs strictly MORE memory than the plan
+        that just failed: it cannot succeed, and its figures then replace the diagnostic ones
+        at exactly 2x the truth.
+
+        Measured 2026-09-22, Flex.1-alpha on an M4 Pro (bf16-capable, 17 277 MB budget). The
+        call site of `compute_dtype_factor` ran twice per component — `comp_dtype_str`
+        'bfloat16' at mult 1.0, then 'float32' at mult 2.0 with `component_dtypes=None` — and
+        the refusal reported the SECOND: "the streaming path needs 33954MB for that one
+        component", where the bf16 figure is ~16 977 MB and fits. Two machines spent hours
+        chasing that 2.000x as an estimator defect.
+
+        `profile` was accepted and ignored until then. A caller that passes none keeps the old
+        behaviour, since refusing to answer would change plans this has never been asked about.
+        """
+        if profile is not None and profile.devices_support_dtype("bfloat16"):
+            return False
         for comp in container.get_neural_components():
             if comp.get_dominant_dtype() == "bfloat16":
                 return True

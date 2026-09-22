@@ -326,6 +326,110 @@ dispatch:
 # Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
 # and boolean results are compared BIT-IDENTICALLY and ignore this table —
 # there is no valid reordering that changes an integer.
+# The bucket ladder of a request-dependent autotune-key dimension
+# (kernels/autotune_bucket.py). A profile that declares NOTHING buckets nothing,
+# and until 2026-09-22 this profile declared nothing — so every Apple key was
+# exact and a census could only ever cover the requests it was shown.
+#
+# The rows below are the engine's own rows, lifted from the NVIDIA profile rather
+# than retyped, and MEASURED ON THIS CHIP on 2026-09-22 before being kept. A ladder
+# measured on V100 is not a ladder measured on an M4 Pro, so it was not assumed.
+#
+# METAL FIGURES (tools/bucket_loss.py --ladder profile, sizes that SHARE each bucket
+# with its top among them per register 84, every bucket read at a duration where this
+# chip is measurable — see loss_tolerance above):
+#
+#   matmul M fp32, 2.20 ms   median 0.0 %, <=1.7 % in ten of twelve buckets
+#   matmul M bf16, 1.97 ms   median 0.0 %, <=0.4 % in ten of twelve
+#   bmm    M bf16, 2.64 ms   median 0.4 %, <=2.9 % in eleven of twelve
+#   bmm    M fp32, 3.9-5.6 ms, 16 sizes a bucket, buckets 112-176: medians 0.3-1.4 %
+#   bmm    K fp32, 3.6-13.6 ms, the contraction: max 5.8 % at 1 024, 0.6 % at 2 048,
+#                            with the SAME block sizes winning across each bucket
+#   conv   W bf16, 0.6-1.6 ms at 4 k-16 k (the widths a vocoder meets; chatterbox
+#                            reaches 444 721 samples): medians 0.0 % in all six buckets,
+#                            the 2 048-wide quarter-octave buckets included
+#
+# NO ROW IS NARROWED, and the key-count cost of that decision is zero. The earlier
+# Apple readings of 18-99 % were all taken on kernels of 0.3-0.8 ms, where this chip's
+# own run-to-run p95 is 51 % — see `loss_tolerance` above, and owed-proofs 2026-09-22.
+autotune:
+  # The loss below which a bucket cannot be told from THIS CHIP'S OWN NOISE. Derived, never
+  # chosen, and only valid for a bucket whose kernels ran inside `band_ms`.
+  #
+  # MEASURED 2026-09-22 on this M4 Pro, two ways that agree:
+  #   1. `tools/bucket_loss.py` swept an identical size list twice (`bmm_M_fp32` and
+  #      `bmm_M_fp32_rep2`). The tool seeds from the size, so both runs used the same operand
+  #      BYTES and every difference is the machine. Over 350 (size, configuration) pairs the
+  #      p95 of the relative difference is 51.08 % below 1 ms, 7.91 % at 1-2 ms, **5.08 % at
+  #      2-5 ms**, 14.77 % above 5 ms (unified memory is bandwidth-bound there and shared with
+  #      everything else on the machine).
+  #   2. `tools/rig_protocol.metal.json` measured the same quantity in 2026-09-17 by re-timing
+  #      one fixed shape twelve times: 5.0 % worst-pair at 2.19 ms, 2.1 % at 4.58 ms, ~31 % at
+  #      0.6 ms. Different method, different day, same answer.
+  #
+  # Why it matters more than it looks: the first Apple sweeps ran kernels at 0.3-0.8 ms and
+  # read 18-99 % "losses" that vanished at 2-5 ms — the contraction read 65-70 % at 0.5 ms and
+  # at most 5.8 % at 6.7 ms. A ladder verdict taken below this band is not a weak verdict, it
+  # is no verdict. `bucket_loss.py --evaluate` reads this and says so per bucket.
+  # The rows ARE the measurement: p95 of the spread, by the band the kernel ran in. A single
+  # figure would hide that this chip is worst below 1 ms AND rises again above 5 ms, where
+  # unified memory is bandwidth-bound and shared with every other process on the machine.
+  loss_tolerance:
+    bands:
+      - {up_to_ms: 1.0, pct: 51.08}
+      - {up_to_ms: 2.0, pct: 7.91}
+      - {up_to_ms: 5.0, pct: 5.08}
+      - {up_to_ms: null, pct: 14.77}
+  buckets:
+    default:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      # Above 8 192 a QUARTER-OCTAVE, not a 512-step. The 512 tail was decided by a sweep
+      # that ran to about 4 096 and never met a request-scale dimension: a vocoder's batched
+      # GEMM keys on the WAVEFORM and reaches 1 963 520, which a 512-step cuts into some four
+      # thousand buckets — 1 400 of one model's 1 522 distinct M values sat above 8 192.
+      # Measured 2026-09-22 on both classes, two shapes (the vocoder's B=1,N=1,K=9 and a
+      # GEMM at N=K=512), each octave bucket carrying three or four measured values with its
+      # TOP as representative: 0.0 % median loss, 0.2 % max at ONE octave bucket. The rows
+      # below are finer than the octave that was measured, so they cost no more than it did.
+      # The first three octaves above the knee keep a NARROW step. Measured directly on the
+      # rows as shipped (the upscalers' N=360, K=180; three sizes inside each bucket with
+      # its TOP among them, 2026-09-22): a quarter-octave there cost 0.0 % median but
+      # **5.2 %** at the 10 240 bucket and 1.2 % at 16 384 — the loss lives just above the
+      # knee, where a quarter of an OCTAVE is still a quarter of the VALUE. Beyond 65 536
+      # the same sweep measured 0.0 % median and at most 0.6 %, so the quarter-octave stands.
+      # The convolution-width ladder below keeps its quarter-octave: its own sweep measured
+      # 0.0 % median AND max there, on both classes and two channel counts.
+      - {up_to: 16384, step: 512}
+      - {up_to: 32768, step: 1024}
+      - {up_to: 65536, step: 2048}
+      - {up_to: 131072, step: 16384}
+      - {up_to: 262144, step: 32768}
+      - {up_to: 524288, step: 65536}
+      - {up_to: 1048576, step: 131072}
+      - {up_to: 2097152, step: 262144}
+      - {up_to: null, step: 524288}
+    # The width of a ONE-ROW convolution (a 1-D convolution over a sequence: a vocoder's
+    # samples, a mel spectrogram's frames) is the request's length, unbounded by any
+    # resolution — chatterbox's vocoder reaches 444 721 samples for 18 s of speech. Above the
+    # GEMM ladder it steps by a quarter-octave (≤ 25 % of the value), so a census meets every
+    # class of a speech length in ~100 runs instead of ~1 000; the loss of that step is owed a
+    # measurement on both classes (bucket_loss.py) before the ladder is called final.
+    W:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      - {up_to: 16384, step: 2048}
+      - {up_to: 32768, step: 4096}
+      - {up_to: 65536, step: 8192}
+      - {up_to: 131072, step: 16384}
+      - {up_to: 262144, step: 32768}
+      - {up_to: 524288, step: 65536}
+      - {up_to: null, step: 131072}
+
 autotune_screen_rtol:
   float16: 2.0e-2
   bfloat16: 4.0e-2

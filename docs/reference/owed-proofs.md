@@ -2212,3 +2212,991 @@ now certifies on the 32 GB class at deviation 3.22e-04, 17/17 accepted, **0 unre
 `D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE` had exactly one member and it was never the
 engine's. **The Mac should re-read its own UNREACHABLE lines against this**: the same class of
 table — `_NP`, then `_DTYPES` — has now locked a certification three times in three spellings.
+## 2026-09-22 — OWED TO THE DELL (core/prism): Prism partitions a graph the executor no longer runs
+
+Established on this Mac, **not implemented** — `core/prism` is the Dell's, and this lands on main
+only with a CUDA plan-census (no plan change except named ones) and a byte-identical battery. The
+`layer_streaming` refactor is stopped here; what follows is the whole of what was established.
+
+### The defect
+
+Prism partitions the **raw** graph. Each sequence then transforms that graph **in place**, before
+the executor runs it:
+
+| site | transform |
+|---|---|
+| `src/neurobrix/triton/sequence.py:646` | `_eliminate_detach_ops` |
+| `src/neurobrix/triton/sequence.py:887` | `_eliminate_weight_transpose_ops` |
+| `src/neurobrix/triton/sequence.py:996` | `_eliminate_dead_causal_mask_ops` |
+| `src/neurobrix/triton/sequence.py:1168` | `_fuse_swiglu_ops` |
+| `src/neurobrix/triton/sequence.py:1424` | `_fuse_rope_ops` |
+| `src/neurobrix/core/runtime/graph/compiled_sequence.py:657` | `_eliminate_detach_ops` (marked "Mirrors CompiledSequence…") |
+| `src/neurobrix/core/runtime/graph/compiled_sequence.py:982` | `_eliminate_weight_transpose_ops` |
+
+A `layer_streaming` segment boundary is a list of op ids taken from the graph Prism read. The
+fusions rewrite those ids. The boundary then names ops that no longer exist, and the segment
+executor cannot find its own segment.
+
+**The red, in the census shadow** (no card, no weights, no run):
+Qwen3-Coder-30B-int4g128-ffnonly, Strategy `layer_streaming`, boundary mismatch —
+
+> `10 of 12 op ids absent, e.g. aten.silu::1132`
+
+`aten.silu` is the swiglu fusion's input: the Llama-family swiglu+rope fusions are what break the
+boundaries. Evidence file: `docs/internal/_session_current.md` (gitignored by repo policy).
+
+### Why the obvious fix is already design-rejected
+
+Re-partitioning at execution ("option b") is rejected in the tree, by the `Plan` dataclass comment
+at `src/neurobrix/core/prism/solver.py:368-371`: *"the executor's dag may have been transformed
+since Prism read it … and a segment boundary recomputed on a different graph is not the boundary
+the budget was accepted under."* Boundaries stay authoritative. Therefore Prism must partition the
+**same transformed graph the executor runs**.
+
+### The design mapped (not written)
+
+One **per-branch graph normalization** in `core/optim/passes`: the structure-changing transforms
+(detach / weight-transpose / dead-causal-mask elimination, const-fold, cse, swiglu+rope fusion —
+today duplicated between `sequence.py` and `compiled_sequence.py`) run **before** the partition, on
+the one graph both Prism and the executor then use. It de-duplicates the transforms and puts the
+Prism↔sequence boundary on a normalized graph. A segment executor re-applying a pass is idempotent
+(proven here, pretranspose stamp included).
+
+### Why the proof is the Dell's and not mine
+
+The proof this needs is red→green at a fixed `NBX_PRISM_BUDGET_MB` on **both** arms, with the
+streamed text read against the prompt *and* compared to the resident run's — a clean rc is not
+proof. DeepSeek-Coder-V2-Lite is **unrunnable on this machine**: its weights come from the shared
+NFS export over Wi-Fi at ~9 MB/s, `layer_streaming` reads each segment's weights once per pass at
+17.7 GB per forward — about half an hour per token, a day for 64 tokens — and the resident arm does
+not fit in 24 GB unified. On a 32 GB card at 200 Gb/s the model holds resident and streamed-vs-
+resident is one sitting. **DeepSeek is the Dell's CUDA case.**
+
+### Two neighbouring defects found while reading, none of them fixed here
+
+**1. The global `_try_zero3` has no unified-device guard.**
+`solver.py:4455-4480` checks only that devices exist, that host RAM holds the weights, and that the
+largest activation fits — it never asks whether the device is unified. The **component** path does,
+at `solver.py:3977-3985`:
+
+```python
+if (mem.activation_mb <= effective_capacity * 0.92
+        and not _device_is_unified(largest.device_string, profile)):
+```
+
+with the reason written above it: selecting zero3 on unified memory is *"a plan accepted under one
+memory model and executed under another — it then dies in zero3's CUDA machinery before an op runs
+(Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21)"*. The global path can still select
+it. On this Mac that is the path that keeps `layer_streaming` from ever being reached.
+
+**2. `_host_budget_mb` ignores the `NBX_PRISM_BUDGET_MB` door.**
+`solver.py:2628-2635` reads `host_reading()` and rungs the figure down; the door is consulted only
+on the **device** reading (`solver.py:2604`, "the rung the NBX_PRISM_BUDGET_MB door names"). So at
+an imposed census rung the host budget stays at the machine's real free RAM, `_try_zero3` keeps
+succeeding, and `layer_streaming` is never censused at the rungs where it must fire. This is
+load-bearing for the Apple census, which imposes every rung.
+
+**3. Three stale `0.7` comments**, at `solver.py:1062`, `:4471` and `:4502`. They still describe a
+fraction-of-RAM budget (*"Use 0.7 × ram_mb"*, *"weights must fit in 70% of RAM"*, *"sum(component
+peaks) <= cpu.ram_mb * 0.7"*) that the code no longer computes — `_host_budget_mb` rungs the free
+reading down onto the standard ladder. **These are not cosmetic**: this Mac measured "zero3's host
+check is `ram_mb × 0.7` ≈ 16.8 GB, not door-affected" *from the comment*, and concluded the door
+could not force `layer_streaming` on a small model. The conclusion happens to hold for another
+reason (defect 2), but it was read off a comment that describes code that is gone.
+
+## 2026-09-22 — the Apple pin moved, and the 09-21 figures are void
+
+**For the Dell, because it changes what the Mac's certified directory will be stamped with.**
+
+### The pin
+
+`6904de9f47398b00fd170c1259e65913051b9074`, on `benkelaya/triton-ext-nbx`, branch
+`nbx/applegpu-b9d5c06-residency` (a PRIVATE repo — a private repo is not a publication, and
+publishing upstream remains the owner's decision). It is `b9d5c06` — the triton-ext commit whose
+`ci/triton-hash.txt` pins Triton `4a15f415d8ac…`, our Triton — with our residency commit
+cherry-picked on top (clean, 45 insertions, `metal_native.m`).
+
+**The cherry-pick is forced, not preferred.** `triton_ext_driver.py:412` calls
+`_native().retain_resident(buf)`. `b9d5c06` contains no `retain_resident` and no `useResource`
+anywhere in its tree, so the pin alone breaks our driver on any loaded-address table. The two lines
+diverge at `5439436`: ours carried the residency fix, upstream's carried the f64-argument and
+timeout-poll work, and neither contained the other.
+
+### The build, which is not what the earlier note described
+
+Triton must be built with **`TRITON_EXT_ENABLED=1`**. It is `OFF` by default and it is exactly
+*"default visibility for Triton+LLVM symbol exposure to plugin extensions"* (`CMakeLists.txt:26`).
+Without it the plugin builds and installs and then dies at import with
+`symbol not found in flat namespace '__ZN4mlir6detail14TypeIDResolverINS_3gpu9BarrierOpEvE2idE'`.
+The plugin builds against the LLVM its Triton pins (`b010a18d`, which Triton downloads), not the
+`ce352942` artifact sitting in the old clone — that one belongs to the `5439436` line.
+
+### The 09-21 figures are void
+
+"72/72 backend tests, 129/0 fp64 oracles on b9d5c06" cannot be reproduced from anything on this
+disk, and the clone's reflog shows HEAD was never at `b9d5c06`: that build lived in a git worktree
+on `/private/tmp`, in a session scratchpad that is gone. **The only reference from now on is the
+run below, on the combined pin.**
+
+| | |
+|---|---|
+| backend's own suite | **82 passed, 2 failed** |
+| the 2 red | `test_torch_free.py::{test_dispatch_without_torch, test_address_table_without_torch}` |
+| why they are red | `inspect.getsourcelines` → `OSError: could not get source code`. The cells run the kernel through `python -c`, and `triton.jit` needs real source. A harness limitation, not the backend. |
+| the property they test, measured separately | **GREEN.** The same body from a FILE: `MetalDriver` active, vector add correct against numpy on both the `wrap` and `alloc` paths, and `torch` never in `sys.modules`. R33 holds. |
+| engine's triton unit suite, this environment | 158 passed, 7 skipped, 1 failed — the red one runs `neurobrix run --model TinyLlama-1.1B-Chat-v1.0` and the LOCAL cache is empty (the container is in the shared cache). Not a code defect, and models run at verification. |
+
+### The guard that did not exist
+
+`metal-first-light 796524eb`. The ephemeral-path guard this chantier's notes credited itself with
+was **not in the tree at all** — nothing looked at where a backend was installed. Three losses came
+through that hole. An install has three legs — package, environment, build tree (pip records the
+last in `direct_url.json`) — and losing any one loses the install, so `core.paths` now asks about
+all three and the Metal seam **refuses** rather than warns. Compared by resolved prefix, never
+substring: `/Users/x/tmpwork` is durable. 7 cells, red then green. The dead `/private/tmp` worktree
+is pruned; both remaining worktrees are durable.
+
+**Nothing is stamped yet.** Bucket loss on Metal is next, then the census, then certification.
+
+## 2026-09-22 — a ladder verdict needs the DURATION it was taken at, or it is not a verdict
+
+**For the Dell, because it may apply to rows already decided on the rack.** Register 84 fixed
+the *arrangement* of a ladder sweep (sizes must share buckets, with the top among them). This is
+a second, independent way the same measurement returns a meaningless number, and it is not
+fixed by arrangement.
+
+### What happened here
+
+The first Apple sweeps, correctly arranged, read losses of 18 %, 22 %, 70 % and 99 % against the
+shipped rows and looked like a chip-specific ladder failure. Every one of them was an artefact
+of kernel DURATION. Re-measured at 2–5 ms by scaling the fixed dimensions, the same buckets read:
+
+| dimension | at 0.3–0.8 ms | at 2–13 ms |
+|---|---|---|
+| bmm M, buckets 112–176 | medians 10.2–19.4 % | **medians 0.3–1.4 %** |
+| bmm K (contraction), buckets 1024 / 2048 | 65.2 % / 70.2 %, top's config ranked last of ten | **max 5.8 % / 0.6 %**, same block sizes winning across each bucket |
+| matmul M | 7.1 % max | median 0.0 %, ≤1.7 % in ten of twelve buckets |
+
+### The noise floor, measured two ways that agree
+
+`tools/bucket_loss.py` swept an IDENTICAL size list twice (`bmm_M_fp32`, `bmm_M_fp32_rep2`). The
+tool seeds from the size, so both runs used the same operand BYTES and every difference between
+them is the machine. Over 350 (size, configuration) pairs, the p95 of the relative difference:
+
+| band | < 1 ms | 1–2 ms | 2–5 ms | > 5 ms |
+|---|---|---|---|---|
+| p95 spread | **51.08 %** | 7.91 % | **5.08 %** | 14.77 % |
+
+Independently, `tools/rig_protocol.metal.json` had already measured 5.0 % worst-pair at 2.19 ms,
+2.1 % at 4.58 ms and ~31 % at 0.6 ms on 2026-09-17, by re-timing one fixed shape twelve times.
+Different method, different day, same answer. Above 5 ms it rises again: those are the largest
+shapes, and on UNIFIED memory they are bandwidth-bound and share the pool with everything else
+on the machine.
+
+### What is owed to you
+
+**Whether any CUDA row was decided on sub-millisecond kernels.** The rack has discrete memory
+and locked clocks, so its floor is certainly lower than ours — but it is not zero, and it has
+never been written down. Two things would settle it, both cheap:
+
+1. Run `bucket_loss.py` twice over one identical size list on each memory class and report the
+   p95 by band, exactly as above. That is the rack's own floor, measured not assumed.
+2. Check the durations behind the rows that were decided close to the line — in particular the
+   **5.2 % at the 10 240 bucket** that narrowed the first three octaves above the knee
+   (`2797f607`), and the conv-width **37–40 % flip at tops 128/144**. If those kernels ran in
+   the sub-millisecond band, the figures need re-reading before they are called final.
+
+### Landed here
+
+`metal-first-light e3821e85`: the band table is declared in `apple_m4_pro.yml` as
+`autotune.loss_tolerance.bands` — rows, not one figure, because this chip is worst below 1 ms
+and rises again above 5 ms — and `bucket_loss.py --evaluate` reads it and prints each bucket's
+own duration beside the p95 that applies there. Re-run on the old conv sweep, every bucket that
+read 35–99 % now prints `0.39 ms, noise p95 51.1 %: within it`. A verdict can no longer be
+quoted out of its band, on this machine or yours.
+
+## 2026-09-22 — the census shadow bound no vendor profile for a non-CUDA brand (CUDA proof owed)
+
+**Shared engine code, so a CUDA inertness proof is owed by the Dell before this lands on main.**
+`src/neurobrix/kernels/census.py::_bind_target`, `metal-first-light`.
+
+### The defect
+
+`_bind_target` exists because behind the door (`CUDA_VISIBLE_DEVICES=`) no driver answers which
+vendor profile applies — its own docstring records what that cost the rack on 2026-09-21: *"the
+bucket ladder went unread and every recorded key was composed in the exact form … matmul M = 226
+and 3 136 where the served launcher keys 240 and 3 200"*.
+
+It closed that for nvidia and amd and **left it open for every other brand**:
+
+```python
+if brand not in ("nvidia", "amd") or not cc.replace(".", "").isdigit():
+    return
+```
+
+On Apple the capability is not a CUDA-style number (the arch is a device NAME), so the function
+returned before binding anything. `_ACTIVE_PROFILE` stayed empty, `ladder_for` fell through to
+its exact default, and the census recorded exact keys **silently** — a fallback where this
+project's rule is a refusal.
+
+**Measured here on the first bucketed Apple census**: 825 of 2 955 harvested keys carried a first
+dimension off the ladder — matmul `M_BUCKET` 8 664 where the launcher keys 8 704, addmm 158 400
+where it keys 163 840. Under the real shadow conditions
+(`CUDA_VISIBLE_DEVICES= NBX_CENSUS=1 NBX_CENSUS_DEVICES=1`): `ladder_for("M")` returned **1 row**
+instead of 13 and `_ACTIVE_PROFILE` held **0 entries**. A census of exact keys cannot serve a
+bucketed launcher, and "zero miss at verification" could never be true against it.
+
+Note what made it hard to see: the CUDA door alone does not reproduce it on a Mac, because
+`CUDA_VISIBLE_DEVICES=` hides no Metal device. Only the installed SHADOW silences the driver.
+
+### The fix (red then green)
+
+A brand whose capability is not a number resolves its vendor profile from the device's MODEL,
+through `vendor_profile_for_arch` — the door that exists precisely to resolve a profile without a
+Triton target. A device naming no model, or a model no profile covers, is **refused**: a census
+under no vendor profile is a census of nothing.
+
+After it, under the same shadow: 13 ladder rows, `8664 → 8704`, `158400 → 163840`, 21 profile
+entries. Six cells in
+`tests/unit/kernels/test_the_census_shadow_reads_the_bucket_ladder_on_apple.py`, with the driver
+silenced by monkeypatching `arch_smem_budget` so the test does not depend on a machine without a
+device.
+
+### What is owed
+
+1. **CUDA inertness.** The nvidia/amd path is untouched — the new branch is only reached where the
+   old one returned — but that is an argument, not a measurement. A plan/key census on the rack
+   before and after, differing in 0 keys, is what makes it landable.
+2. **A question the rack should answer**: an unknown Apple variant falls back to `apple_silicon`
+   by declared prefix, which declares no ladder, so such a machine censuses exact keys. That is
+   honest for a chip whose ladder nobody measured — but if the same prefix fallback exists on the
+   CUDA side for an unlisted card, a rack census there is exact too and nobody has said so.
+
+## 2026-09-22 — for the Dell: the scratchpad exemption is false on this machine
+
+`.claude/hooks/guard-ephemeral-durable-output.sh` covers `/tmp` and deliberately EXEMPTS the
+harness scratchpad, on the stated reasoning that it "holds only intermediates".
+
+**On this Mac that assumption has been false three times**, and each time it cost a campaign's
+environment: 2026-09-17 an installed `triton-msl` package resolving into the scratchpad;
+2026-09-21 the venv the AppleGPU plugin was installed into; 2026-09-22 a git **worktree** at
+`…/scratchpad/agpu-b9d5c06` with every build artefact, which took the validated `b9d5c06`
+build with it and left only wheels from a different commit.
+
+The scratchpad does not hold only intermediates. It holds whatever is put there, and what gets
+put there is exactly what is convenient during a long campaign.
+
+Not fixed in your file — this machine adds its own hook beside yours
+(`guard-scratchpad-durable-output.sh`, refusing `.json`/`.md`/`.yml`/`.csv` there while
+allowing scripts and logs) rather than editing the shared text. **The question for the rack is
+whether the same exemption is safe there.** If a rack campaign ever installs into, builds in,
+or worktrees under its scratchpad, the answer is no and the shared hook should lose the
+exemption; if the rack only ever writes intermediates there, it is correct as written and this
+note closes.
+
+Related and already landed here: `core.paths.installation_refusals` (metal-first-light
+`796524eb`) refuses a BACKEND whose package, environment or build tree — pip records the last
+in `direct_url.json` — stands on storage the machine clears. That is the code half of the same
+lesson and it is vendor-neutral; the rack inherits it with the branch.
+
+## 2026-09-22 — a census shadow on unified memory planned at the ROOM's memory (CUDA proof owed)
+
+**`core/prism` is the Dell's, so this needs a CUDA inertness proof before it lands on main.**
+It is fixed here rather than handed over because it blocks key harvest on this machine, which
+is the one exception the doctrine allows.
+
+### The defect
+
+`_device_reading` already knows the rule — *"a census shadow sees no card and carries the
+machine's plan, not the room's"* — but `_prepare_devices` lowers `capacity` one call EARLIER,
+on any unified device, with no shadow check:
+
+```python
+capacity = recommended
+if dev.has_unified_memory and host.measured:
+    capacity = min(recommended, host.available_mb * self.safety_margin)
+```
+
+That lowering is correct and must stay for a real RUN: it is the 2026-09-10 repair for a plan
+accepted against the recommendation and then killed mid-execution (an artefact of 12 298 MB
+killed at step 3 of 20 with 10 099 MB actually free). **A census executes nothing**, so the
+justification does not reach it — and the cost is severe, because a tiled family's tile is
+derived from the budget, so its KEYS become a function of whatever else was running.
+
+**Measured on this M4 Pro, 2026-09-22**: the same model at the same imposed rung logged
+`planning against 8659 MB actually free` in one shadow and `7604 MB` in the next, minutes
+apart — while a Metal shader compile and a test suite happened to be running. Under the real
+shadow after the fix, capacity is the profile's `17276.7 MB` every time.
+
+A census that is not reproducible is not a census, and this one would have produced a
+different key set on every pass.
+
+### The fix (red then green)
+
+`_census_shadow_active()` at module level, asking `kernels.census.active()` behind a bare
+`except` (no census module means no shadow), and the lowering skipped under it. Two cells in
+`tests/unit/core/test_the_census_plans_at_its_rung_not_the_rooms_memory.py`: a busy machine
+must STILL lower a real plan (the 09-10 repair intact), and the shadow must plan at the
+profile's capacity.
+
+### What is owed
+
+1. **CUDA inertness.** A discrete card never enters the branch — `has_unified_memory` is
+   false there, so the guard is unreachable on the rack. That is an argument, not a
+   measurement: a plan census on both memory classes, before and after, differing in 0 plans.
+2. **A question worth asking on the rack**: `_prepare_devices` also lowers a DISCRETE card's
+   `used_mb` from the driver's live free figure a few lines below. That reading is live too.
+   If a rack census runs while anything else holds memory on the card, does its plan move? If
+   it does, the same fix is owed there and this note covers both.
+
+Related, same day, same shape: `census._bind_target` bound no vendor profile for a non-CUDA
+brand, so the ladder went unread and 825 of 2 955 keys came out exact (see the entry above).
+Both are the census reading the machine where it should be reading the profile.
+
+## 2026-09-22 — for the Dell: `guard-silent-fallback.sh` FAILS OPEN on macOS
+
+Found while proving each adopted hook refuses a test case, which is the only reason it was
+found at all — the hook reports nothing when it fails.
+
+**`.claude/hooks/guard-silent-fallback.sh` uses `grep -P` and `grep -zP` (GNU PCRE) at four
+sites.** BSD grep, which is `/usr/bin/grep` on macOS, does not have `-P`:
+
+```
+grep: invalid option -- P
+```
+
+Each of the four calls errors, none matches, and the hook exits **0** on a genuine
+`except Exception:\n    pass` in engine source. It does not refuse, and it does not report
+that it could not — `lib.sh`'s own comment names this exact failure: *"a door that fails open
+is not a door."* On this machine that guard has been inert since the moment it was adopted.
+
+**Not forked here.** GNU grep is installed (`brew install grep`) and
+`/opt/homebrew/opt/grep/libexec/gnubin` is put at the head of `env.PATH` in this machine's
+`.claude/settings.json`, so the rack's hook now runs **verbatim** and correctly: exit 2 with
+the right reason on the violation, exit 0 on ordinary code.
+
+**What is owed**: the choice is yours, and either is fine —
+1. make the four patterns POSIX (`grep -E` over a newline-joined form, or `perl -0777 -ne`,
+   which is present on both platforms by default), or
+2. keep PCRE and have `lib.sh` **refuse to load** when `grep -P` is unavailable, so the hook
+   fails CLOSED instead of silently passing. A guard that cannot run should say so.
+
+Option 2 is the smaller change and matches the project's own rule about doors.
+
+**Same class, lower stakes**: `hooks/version-bump.sh:51` uses GNU `sed -i "…"`; BSD `sed`
+requires `sed -i '' "…"` and errors otherwise. The index calls it a helper rather than a hook,
+so nothing fails open — it would simply fail. Worth fixing if the Mac is ever meant to cut a
+release.
+
+**Method note, because it generalises**: every other adopted hook was exercised against a
+real violation and a real non-violation on this machine. Only this one was inert. A hook
+adopted and never fired is a vacuous gate in a new costume, and the register already has a
+name for that.
+
+## 2026-09-22 — census pass A on Apple: 16 of 30 tiled models are OPEN, with their causes
+
+**The census is NOT complete and must not be read as complete.** Pass A (30 tiled models ×
+6 rungs 4-16 GB × 2 modes, from the shared cache through the shadow) produced **856 keys from
+11 models — all eleven upscalers** — and `64 served, 792 to certify`. The other **16 models
+contributed 0 to 856 usable key sets**, in three distinct classes. Certification proceeds on
+the 792 keys in hand; it closes nothing below.
+
+**A correction to my own earlier report first**: I called the zero-key models "honest
+refusals". They are not. The doctrine is that the engine **never refuses a model for lack of
+memory — it streams**, and that every key the catalogue demands is certified on THIS chip
+including for a model too large for it, because a key is a shape and not weights. The rack
+certifies Volta keys; it does not owe Apple keys. These models are **blocked**, not closed.
+
+### Class 1 — BLOCKED on the open Prism defect (`9675411a`). Five models, zero keys.
+
+Every one reports the same shape of failure: *"Every strategy was tried, down to streaming one
+component at a time from disk"*, then
+
+| model | "the streaming path needs … for that one component" |
+|---|---|
+| Flex.1-alpha | 33 954 MB |
+| Wan2.2-I2V-A14B-Diffusers | 58 522 MB |
+| Wan2.1-I2V-14B-480P-Diffusers | 75 707 MB |
+| mochi-1-preview | 86 923 MB |
+| SANA-Video_2B_720p_diffusers | **302 416 MB** |
+
+**A streaming path that demands an entire component at once is not streaming**, and 302 GB for
+one component is the reductio. This is the defect already handed over in `9675411a`: *Prism
+partitions the RAW graph while each sequence transforms it in place
+(`sequence.py` 646/887/996/1168/1424, `compiled_sequence.py` 657/982), so a `layer_streaming`
+boundary names op ids the fusions rewrote.* With the boundaries gone the partition degenerates
+to the whole component, which is exactly these figures. The Mac's own earlier note recorded
+the same frontier from the other side: *"a single segment that is too large still refuses
+(CogVideoX at rungs ≤ 12 GB), contrary to the principle."*
+
+**Dependency, stated plainly: these five are censused on Apple once the per-branch graph
+normalization lands on `main`.** They are not re-triable here and they are not the Mac's to
+fix — `core/prism` is the Dell's.
+
+### Class 2 — probe failures with a MEASURED cause. Six models, keys harvested but the tiling probe red.
+
+`probe_failed` is its own status (`021667c8`) so harvested keys stop hiding behind the word
+"failed" — but a red probe means the tiled request never ran, so the tiled key classes are
+missing. Causes read from `logs_tiled/<model>.triton.probe.r*.log`:
+
+| model | keys | measured cause |
+|---|---|---|
+| PixArt-Sigma-XL-1024 | 35 | `aten.mul::5` — **Cannot broadcast (2, 1, 1152) and (32, 4096, 1152)** |
+| PixArt-Sigma-XL-2-1024-MS | 34 | same class |
+| PixArt-XL-1024 | 35 | same class |
+| PixArt-XL-2-1024-MS | 34 | `aten.addmm::0` — arg0 `(1152,)` against arg1 `(2, 384)` |
+| Sana-1600M-MultiLing | 69 | `_broadcast_shapes` — **Cannot broadcast (1, 32, 128, 128) and (1, 128, 128, 32)** |
+| Sana_1600M_1024px_MultiLing | 61 | `aten.bmm::0` — **shape mismatch (140, 33, 16384) @ (35, 16384, 128)** |
+
+Two distinct signatures, and both are **batch/layout propagation under a tiled request**, not
+memory:
+- **a batch expanded on one operand and not the other** — PixArt 2 vs 32 (a factor of 16),
+  Sana bmm 140 vs 35 (a factor of 4). The conditioning tensor keeps the untiled batch while the
+  latent carries the tiled one.
+- **a layout transposition** — Sana `(1, 32, 128, 128)` against `(1, 128, 128, 32)`, channels
+  first against channels last, 32 channels either way.
+
+These fail in `triton/sequence.py:3989` and `kernels/nbx_tensor.py:2895`, i.e. on the **Triton
+execution path**, which is this chantier's. **Ownership triage and the red-then-green fix are
+the Mac's next engine work**, after the 792 keys in hand are certified; if triage shows the
+batch expansion is decided in the shared Tiling Engine rather than the Triton sequence, that
+half comes back here with the evidence above.
+
+### Class 3 — frozen symbols, for the Dell's Forge RETRACE queue. Four containers, not three.
+
+A declared input symbol whose chain breaks on a literal written into a shape
+(`tools/where_the_symbol_chain_breaks.py`). Each contributes no tiled key and needs a re-trace
+in Forge, which is the Dell's toolchain:
+
+| container | census status | keys |
+|---|---|---|
+| PixArt-Sigma-XL-1024 | `retrace+probe_failed`, frozen 1 symbol | 35 |
+| Sana_1600M_4Kpx_BF16 | `retrace`, frozen 1 symbol | 166 |
+| Wan2.1-I2V-14B-480P-Diffusers | `retrace+failed`, frozen 1 symbol | 0 |
+| Wan2.1-VACE-1.3B-diffusers | `retrace+failed`, frozen 1 symbol | 9 |
+
+(PixArt-Sigma-XL-1024 and Wan2.1-I2V-14B-480P also appear in classes 2 and 1 respectively — a
+container can be blocked more than one way, and closing one does not close the other.)
+
+### Also still open, keys partially harvested
+
+`CogVideoX-5b-I2V` (9), `Open-Sora-v2` (20), `Wan2.1-T2V-1.3B-Diffusers` (59) and
+`Wan2.1-VACE-1.3B-diffusers` (9) are `failed` with some keys taken. Their causes are not yet
+read and they are listed here so they are not lost.
+
+**Evidence**: `nbx-atelier/campagnes/2026_09_22_apple/census/` — `census_tiled.json` (727 626
+bytes), `logs_tiled/` (569 probe logs + per-rung logs). Durable storage, not a scratchpad.
+
+## 2026-09-22 — the container cache had a second door, and it cost a census pass
+
+**`core/paths.py` exists because the answer used to live in four places** reached by two
+mechanisms, one of which *"calls itself 'single source of truth for paths' in its own
+docstring. It was not one, and nothing said so."*
+
+It happened again. `tools/certified_census.py` reads the one door
+(`from neurobrix.core.paths import cache_dir`), but `tools/precision_zoo_campaign.py:84` held
+
+```python
+CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
+```
+
+so census pass B — whose environment named the shared NFS catalogue in `NEUROBRIX_CACHE` —
+read an **empty local directory** and died on the first model:
+`FileNotFoundError: /Users/hocine/.neurobrix/cache/Janus-Pro-7B/topology.json`. Pass A
+survived only because the upscaler path never reached `request_args`. Zero keys from 29
+models, ~30 minutes of shadow time spent on nothing.
+
+**Fixed at the source here** (it blocks key harvest, which is the one exception the doctrine
+allows): the five tools in the census/certification chain now read `cache_dir()` —
+`precision_zoo_campaign.py`, `levers_byte_identity.py`, `unroll_census_report.py`,
+`artefact_voice.py`, `ir_census.py`. Verified: `CACHE` resolves to
+`~/Mounts/Super-NeuroBrix-Cache` and finds the container. A gate,
+`tests/unit/tools/test_no_tool_spells_the_container_cache_itself.py`, keeps the chain honest.
+
+### What is owed
+
+**Seventeen other tools carry the same literal** and this chantier neither drives nor can
+exercise them, so the gate is scoped to the chain rather than committed red for everyone:
+
+`audit_artifact_integrity.py` · `audit_vendor_locked_ops.py` · `certify_the_catalogue.py` ·
+`constant_load_differential.py` · `container_regression_gate.py` · `frozen_dim_report.py` ·
+`head_dim_length_cell.py` · `hub_family_sweep.py` · `microtest_vae_top_ops.py` ·
+`probe_spatial_promotion.py` · and seven more (the gate lists them when its `CHAIN` set is
+widened).
+
+Each is one line. **Whoever owns them should widen the gate's `CHAIN` set as they go** — the
+test is written so that growing it is the whole change. Note that `~/.neurobrix/replay_cache`
+is deliberately NOT covered: that is per-machine autotune state, not the catalogue, and it is
+right for it to be local.
+
+**The lesson is the one `core/paths.py` already wrote down**: a door is only a door if
+everything goes through it, and a tool that spells the path itself is not refused by anything
+— it simply reads somewhere else and reports nothing.
+
+## 2026-09-22 — for the Dell: `wait_for.producer_alive` is Linux-only, and it blocked certification entirely
+
+`tools/wait_for.py::_stat_fields` read `/proc/<pid>/stat`. macOS and the BSDs have no `/proc`,
+so the read raised, the function returned None, and **`producer_alive()` answered False for
+every pid — including a process plainly running.**
+
+The consequence reached all the way to the milestone. `certified_checkpoint.py` holds a
+producer and exits when the last one is gone, so on this Mac it decided its producer was
+*"already gone at start"* on every launch, ran one empty checkpoint and exited. The certifier
+then refuses to start at all, because `6442fe30` requires a checkpointer to be holding the
+repository. **Certification of the Apple directory was impossible on this machine** — and
+nothing said so, because each layer behaved correctly given what it was told.
+
+It failed **closed**, which is the right direction, and that is exactly why it took a
+certification launch to find: nothing was ever wrong, only permanently refused.
+
+**Fixed here** (it blocks the chantier, which is the exception the doctrine allows):
+`/proc` where there is one, `ps -o state=,lstart=` where there is not. Same two facts, same
+meaning — a state letter whose `Z` is a zombie, and a start time stable for one process and
+different for a recycled pid, which is what `producer_alive` compares. Verified on this
+machine: `/proc exists: False`, `_stat_fields(self) -> ('S', 'Tue Sep 22 17:08:30 2026')`.
+Four cells in `tests/unit/tools/test_producer_liveness_works_without_proc.py`: a running
+process, a live child, a dead child and a pid that never existed.
+
+**What is owed**: the Linux path is untouched — it is tried first and the `ps` fallback is
+reached only when `/proc` is absent — but that is an argument, not a measurement. Run the four
+cells on the rack; they should pass there through the `/proc` branch.
+
+**Third macOS portability gap found today**, all in adopted tooling, and the pattern is worth
+naming: `guard-silent-fallback.sh` (`grep -P`, failed OPEN), `version-bump.sh` (`sed -i`), and
+this one (failed CLOSED). A tool that has only ever run on one platform has only ever been
+tested on one platform.
+
+## 2026-09-22 — ANSWER to `7f4bd022`: the rung, the host RAM and the profile under which `layer_streaming` won
+
+You asked for one thing: the conditions under which `layer_streaming` WON here, because on the
+rack Prism picks `lazy_sequential` at every rung, scored 260 ahead, and nothing goes red.
+
+**The short answer: `layer_streaming` never wins here on score. It wins by ELIMINATION, and
+the eliminator is unified memory.** The device pool IS the host pool, so `lazy_sequential` —
+whose whole premise is holding weights in host RAM while the device computes — has nowhere to
+hold them. It is not viable, the cascade falls through, and `layer_streaming` is what is left.
+
+### DeepSeek-Coder-V2-Lite-Instruct at `NBX_PRISM_BUDGET_MB=12288` — measured, not inferred
+
+Run for this answer: `tools/certified_census.py --hardware default-9f169c79 --models
+DeepSeek-Coder-V2-Lite-Instruct --rungs 12288 --modes triton`, 243.2 s, `failed 1`.
+
+| | |
+|---|---|
+| hardware profile | `default-9f169c79` → `auto-apple-m4-pro-18g (17.8 GB)` |
+| rung imposed | **12 288 MB** (`NBX_PRISM_BUDGET_MB`) |
+| device memory | **18 186 MB** (`recommendedMaxWorkingSetSize`, not `hw.memsize`) |
+| **host RAM** | **24 576 MB** — and it is the SAME 24 GB as the device's |
+| strategy chosen | **`layer_streaming`**, `scored 50 the only viable strategy` |
+| plan | `mps:0 (33238 MB planned)` |
+| result | RED — `layer_streaming: the plan's segment boundaries are not in 'model's graph (2 of 4 op ids absent, e.g. 'aten.silu::843'). The graph was transformed after Prism read it; re-plan rather than …` |
+
+**The same model at the profile's own budget** (pass B, `--rungs none`) gives the same verdict
+with a different op id: `2 of 4 op ids absent, e.g. 'aten.silu::890'`. **The boundary moves
+with the rung** — which is worth having, because it means a gate pinned to one op id will pass
+at another rung.
+
+### It is not one model. Six name the defect verbatim on this machine
+
+Census pass B, one rung, the profile budget:
+
+| model | red |
+|---|---|
+| DeepSeek-Coder-V2-Lite-Instruct | 2 of 4 op ids absent |
+| deepseek-moe-16b-chat | 2 of 4 op ids absent |
+| Qwen3-30B-A3B-Thinking-2507 | 6 of 8 op ids absent |
+| Qwen3-Coder-30B-A3B-Instruct | 6 of 8 op ids absent |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128 | 6 of 8 op ids absent |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly | 6 of 8 op ids absent |
+
+### The five pass-A reproducers — a different, WORSE condition
+
+These do not reach a red boundary; nothing is viable at all, at every rung 4 096–16 384 MB:
+
+```
+Every strategy was tried, down to streaming one component at a time from disk:
+  single_gpu, single_gpu_lifecycle, lazy_sequential, zero3 - ALL FAILED, cpu_execution, cpu_streaming
+  1. More host RAM — the streaming path needs 33954MB for that one component
+   Profile: auto-apple-m4-pro-18g (17.8 GB)
+```
+
+`lazy_sequential` is explicitly among **ALL FAILED**, and even `cpu_streaming` asks for more
+than the machine has: Flex.1-alpha 33 954 MB, Wan2.2-I2V-A14B 58 522, Wan2.1-I2V-14B-480P
+75 707, mochi-1-preview 86 923, SANA-Video_2B_720p **302 416** — against 24 576 MB of host
+RAM. A streaming path asking 302 GB for ONE component is the same missing-boundaries defect
+seen from the other side: with the boundaries gone the partition degenerates to the whole
+component.
+
+### The profile, in full — it is UNTRACKED, so the rack cannot see it
+
+`src/neurobrix/config/hardware/default-9f169c79.yml`, generated by hardware detection on this
+Mac (`git ls-files` does not know it):
+
+```yaml
+# Hardware Profile: 1 x Apple M4 Pro
+# Auto-generated by NeuroBrix hardware detection
+# Regenerate: delete this file and run neurobrix without --hardware
+
+id: auto-apple-m4-pro-18g
+vendor: apple
+preferred_dtype: bfloat16
+summary:
+  total_gpus: 1
+  total_vram_gb: 17.8
+  total_ram_gb: 24.0
+  topology: Single-GPU
+cpu:
+  model: Apple M4 Pro
+  cores: 12
+  threads: 12
+  ram_mb: 24576
+  architecture: arm64
+  features:
+  - neon
+  - fp16
+devices:
+- index: 0
+  brand: apple
+  model: Apple M4 Pro
+  memory_mb: 18186
+  compute_capability: '0.0'
+  supports_dtypes:
+  - float32
+  - float16
+  - bfloat16
+  architecture: apple_silicon
+  pcie_version: N/A
+  unified_memory: true
+  host_memory_mb: 24576
+interconnect:
+  groups: []
+pcie_fallback:
+  version: N/A
+  lanes: 16
+  bandwidth_gbps: 32
+notes: '1 x Apple M4 Pro
+
+  GPU brand: apple
+
+  Architecture: apple_silicon
+
+  CPU: Apple M4 Pro (12 cores, 24.0 GB RAM)
+
+  System vendor: apple
+
+  Auto-generated by NeuroBrix hardware detection.'
+```
+
+**The three lines that decide it**: `unified_memory: true`, `memory_mb: 18186`,
+`host_memory_mb: 24576` equal to `cpu.ram_mb`. Drop that profile on the rack with
+`--hardware` and Prism should make the same choice without an Apple GPU present — the cascade
+reads the profile, not the card. If it does, the red is reproducible there and the fix is
+gateable; if `lazy_sequential` still wins on the rack with this profile, then the eliminator
+is not the profile alone and I want to know, because it changes where the fix belongs.
+
+### What I am NOT claiming
+
+That `layer_streaming` is the right strategy here. On a link of ~9 MB/s it re-reads each
+segment's weights every pass — 17.7 GB per forward for DeepSeek, about half an hour a token —
+so even repaired it is not runnable on this machine. What is owed is the BOUNDARY being
+correct, so the plan is honest; running it is the rack's, on 200 Gb/s.
+
+## 2026-09-22 — CORRECTION to my own class-1 reading, and a 2.000× the two machines found together
+
+The rack reproduced the DeepSeek red from `3c734f70` **figure for figure with no Apple GPU** —
+strategy, score, 33 238 MB planned, `2 of 4 op ids absent, e.g. 'aten.silu::843'` — by dropping
+the untracked `default-9f169c79.yml` in as a fixture. So the open question in that entry is
+answered: **the profile alone is the eliminator**, the cascade reads the profile and not the
+card, and the fix is gateable there. Sending the file as text rather than a description is what
+made that possible, and it is worth keeping as a habit.
+
+### The rack's correction, and why it does not reproduce here
+
+They instrumented every `return None` in `_try_layer_streaming` for Flex.1-alpha and measured:
+
+```
+budget=17277MB  streamed=[]  resident_beside=32407MB  segment_budget=-15130MB
+components: transformer=16977, text_encoder_2=11848, vae=3325, text_encoder=257
+```
+
+`streamed` EMPTY — no single component over budget, only their sum — so the strategy returns
+**before `LayerPartitioner` is ever called**. Their point: the boundaries are not gone, nothing
+asks for them, so this is a NEIGHBOURING defect and not the one in `9675411a`.
+
+**On this machine it does not reproduce, and the arithmetic says why.** Same model, same
+17 277 MB budget:
+
+| component | this Mac | the rack | ratio |
+|---|---|---|---|
+| transformer | **33 954** | 16 977 | **2.000** |
+| text_encoder_2 | 23 695 | 11 848 | 2.000 |
+| vae | 6 650 | 3 325 | 2.000 |
+| text_encoder | 515 | 257 | 2.004 |
+| required | 64 814 | (sum 32 407) | |
+
+So here the transformer **alone** is 33 954 MB against 17 277 MB: `streamed` is non-empty, it
+holds the transformer, and the message *"the streaming path needs 33954MB for that one
+component"* is literally correct rather than a sum mislabelled. Their `streamed=[]` arises
+because every component is half the size — exactly the threshold they flagged as the boundary
+between the two readings.
+
+### The finding neither machine could have made alone
+
+**An exact 2.000× across four unrelated components is an element size, not an op-level
+upcast.** `Flex.1-alpha`'s manifest declares `dtype: bfloat16`, and the RACK's figures are the
+bf16 ones (16 977 MB for an ~8B transformer is 2 bytes/param). This machine's are the fp32
+ones.
+
+**Not yet traced past `MemoryBreakdown.weight_bytes`** — certification is running and a
+half-traced mechanism is worse than a measured ratio. What is claimed is the 2.000×, measured
+on one model at one budget on two machines.
+
+**What it would mean if it holds**: some of the five class-1 models are not "too large for this
+chip" at all, they are DOUBLED, and they belong to a third class again — an estimator defect,
+not a streaming one. **My earlier reading of those five as "the same defect seen from the other
+side" is therefore withdrawn pending this.** The six models that name the boundary defect
+verbatim are untouched by any of it and remain class 1.
+
+The estimator is `core/prism`, the rack's, and this only surfaces by comparing two machines on
+one model — which is what owed-proofs is for.
+
+## 2026-09-22 — the 2.000× traced: it is in Prism's ESTIMATE, not in the op dtypes, and one question settles it
+
+Traced down to the deciding lines, as asked, and the answer is narrower than feared.
+
+### Where the factor is made
+
+`solver.py:1946-1948` — `dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)`,
+where `comp_dtype_str` is the component's RUNTIME dtype from `_resolve_component_dtypes`. A
+factor of exactly 2.000 is `compute_dtype_factor(bfloat16, float32)`.
+
+### But BOTH fp32 sources read as inactive on this profile
+
+`_resolve_component_dtypes` (5182) pins fp32 only from `_components_force_fp32` (5014), which
+is a union of two sources:
+
+1. **AUTO** (`_auto_fp32_components`) — carries an explicit hardware gate:
+   ```python
+   # Hardware gate: skip on bf16-capable hardware (bf16 exponent
+   # range = fp32, no conv-storage saturation).
+   if policy.get("skip_when_hw_supports_bf16", True) and profile is not None:
+       if profile.devices_support_dtype("bfloat16"):
+           return set()
+   ```
+   Measured on this machine: `profile.devices_support_dtype("bfloat16") → True`. **AUTO
+   returns the empty set.**
+2. **MANUAL** — `requires_fp32_compute`. Measured: **absent** from Flex.1-alpha's manifest.
+
+With `forced_fp32` empty, branch 2 applies — `preferred_dtype` is `bfloat16` and the device
+supports it — so the runtime dtype SHOULD resolve to bf16 and the multiplier to 1.0.
+
+### What is measured instead
+
+| fact | figure |
+|---|---|
+| Flex transformer weights **on disk** | **15 571 MB** (bf16: ~8B params × 2 bytes) |
+| this machine's plan | **33 954 MB** (≈ 2.18× disk = 2× dtype + activations/overhead) |
+| the rack's plan, **running this very profile** | **16 977 MB** (≈ 1.09× disk) |
+
+Reproduced on CURRENT code after merging `dcd1f0b4`: `transformer: 33954MB` again. And **no
+dtype-resolution code changed today** — `git log -p --since 10:00 -- solver.py` shows no touch
+to `_resolve_component_dtypes`, `_components_force_fp32` or `skip_when_hw_supports_bf16`.
+
+**So the profile does not explain the gap**, and the remaining candidate is that the two
+machines hold **different Flex exports**.
+
+### The question that settles it, and it is one line
+
+**What is `du -sm components/transformer/weights` for Flex.1-alpha in your cache?**
+- ~15 571 MB → same export, and the divergence is in code or in a path I have not found; it is
+  a real defect and it is yours, in the estimator.
+- ~7 800 MB → a different export, my container is the doubled one, there is no estimator
+  defect, and Flex genuinely needs what my plan says on this machine.
+
+### The downstream worry, measured: the census is NOT contaminated
+
+The concern was that the census recorded fp32 keys where runs need bf16. Measured over all
+**3 106** censused keys:
+
+| | bf16 | fp32 |
+|---|---|---|
+| all keys | **1 652** | 1 454 |
+| image | **167** | 73 |
+| video | **140** | 55 |
+| upscaler | 195 | 226 |
+
+**bf16 dominates image and video**, which is where the doubling appears. So the estimate's
+factor moves PLANNING — whether a model fits, which strategy, which tile — and does not force
+the recorded op dtypes. Nothing detectable needs re-censusing on this account, and the five
+class-1 models contributed **zero** keys anyway, so they touched none.
+
+**Certification therefore proceeds on the 3 106 keys in hand**, and the switchover is not
+blocked by this. If the rack's answer is ~15 571 MB, the estimator defect is real and what it
+changes is which models PLAN at all — a re-census of those models, not of the keys already
+taken.
+
+## 2026-09-22 — the 2.000× was the FP32 FALLBACK, not the estimator. My framing was wrong; the rack's reading was right.
+
+The export hypothesis is dead — both machines mount the same directory on optimus over two
+links, Flex's transformer is the same 15 044 MB of bf16 there. So it was code, and
+instrumenting `compute_dtype_factor`'s call site (`solver.py:1948`, behind a default-off
+`NBX_DTYPE_RESOLVE_DIAG`) named the line in one run.
+
+### What the instrument showed
+
+The call site runs **twice per component**:
+
+```
+transformer: source_dtype='bfloat16' comp_dtype_str='bfloat16' -> dtype_mult=1.0
+             target_dtype_str='bfloat16'  component_dtypes={...all bfloat16}
+transformer: source_dtype='bfloat16' comp_dtype_str='float32'  -> dtype_mult=2.0
+             target_dtype_str='float32'   component_dtypes=None
+```
+
+The first is the real bf16 plan at **1.0**. The second is the **fp32 fallback pass**, and the
+refusal message reports THAT one. `solver.py:998`:
+
+```python
+# FP32 fallback for BF16 models
+if not candidates:
+    if self._try_fp32_fallback(container, profile):
+        target_dtype_str = "float32"
+```
+
+It fires **precisely when the bf16 plan produced no candidates** — and fp32 needs strictly MORE
+memory than the plan that just failed, so it cannot succeed. `_try_fp32_fallback` returned True
+for any bf16 component and **accepted `profile` and ignored it**, so bf16-capable hardware took
+it too. Its only effect there is to replace the diagnostic figures with numbers exactly 2×
+the truth.
+
+### The fix (red then green)
+
+The fallback is tried only where the hardware CANNOT do bf16 — which is what it was written
+for. Four cells in `tests/unit/core/test_no_fp32_fallback_on_bf16_capable_hardware.py`: bf16
+hardware does not fall back; hardware without bf16 still does; a model with no bf16 component
+never does; a caller passing no profile keeps the old behaviour.
+
+**Measured before and after on Flex.1-alpha, M4 Pro, 17 277 MB budget:**
+
+| | transformer | "needs" |
+|---|---|---|
+| before | 33 954 MB | 33 954 MB |
+| after | **16 977 MB** | **16 977 MB** |
+| the rack, same profile | 16 977 MB | — |
+
+**The two machines now agree to the megabyte.**
+
+### Two corrections I owe explicitly
+
+1. **My "estimator defect" framing was wrong.** The estimator is correct; `dtype_mult` is 1.0
+   on the real plan. I read a refusal message produced by a second pass and attributed it to
+   the first. The question I sent — "is it a different export?" — was the wrong question, and
+   the right one was "how many times is this call made?".
+2. **The rack's `streamed=[]` correction was right, and it now reproduces here.** Flex still
+   fails after the fix, and for exactly their reason: no single component exceeds the budget,
+   only their SUM (32 407 MB), so `resident_beside` becomes the whole sum, `segment_budget`
+   goes negative and `_try_layer_streaming` returns before `LayerPartitioner` is called. That
+   is the neighbouring defect they named, and it is theirs.
+
+### Still latent, worth one line of yours
+
+`compute_dtype_factor` (`memory_estimator.py:150-154`) defaults a missing key to
+`source=2, target=4`:
+
+```python
+source_bytes = dtype_bytes.get(source_dtype, 2)
+target_bytes = dtype_bytes.get(target_dtype, 4)
+```
+
+`DTYPE_BYTES` carries only the long names, so **any short name returns 2.0 for every pair,
+identity included** — measured: `compute_dtype_factor('bf16','bf16') == 2.0`. Nothing reaches
+it with a short name today, which is why this was not the cause, but it is a
+`config.get(k, default)` of the kind the red-line table forbids and it would produce exactly
+this class of bug again, silently.
+
+### What it changes for the census
+
+The five class-1 models were read at fp32-fallback figures. Their planning is re-run after
+this fix before any of them is called too large; Flex is already re-run and still fails, on the
+rack's defect. **No censused key is affected** — the factor moved planning, never the recorded
+op dtypes (measured previously: bf16 leads 1 652 to 1 454 over 3 106 keys).
+
+---
+
+## From the rack, 2026-09-22 — merging metal-first-light: what the CUDA proof found
+
+### 1. `compute_dtype_factor`'s default — CLOSED, it was yours to flag and mine to fix
+
+Your "still latent, worth one line of yours" is now a refusal rather than a guess.
+`compute_dtype_factor` and `get_dtype_bytes_per_element` no longer default a miss; an
+unrecognised NAME raises and names the known set. Measured before: `('bf16','bf16') -> 2.0`,
+`get_dtype_bytes_per_element('fp16') -> 4`.
+
+It is safe to every measurement that exists, and that is measured, not assumed: across all
+59 containers, **188 components**, `get_dominant_dtype()` — the actual `source_dtype` at
+`solver.py:1955` — returns only `bfloat16` (96), `float32` (78) and `float16` (14). Nothing
+reaches the refusal today.
+
+One narrowing you should know about, because my first cut was wrong: ABSENCE is not an
+unrecognised name. `InputConfig()` names no dtype and `profiler.py:686` passes that `None`
+straight in, so refusing it turned all five cells of
+`test_profile_says_which_request_it_is_about.py` red. `None` keeps the historical widths
+exactly (source 2, target 4) and only a NAME refuses. Pinned both ways in
+`tests/unit/prism/test_a_dtype_name_it_does_not_know_is_refused_not_halved.py` (23 cells).
+
+### 2. `b945e040` and `81154c79` — CUDA proof done, both inert here
+
+Your four cells pass on CUDA unchanged. Full suite on card 2 after the merge: **prism, core
+and docs 346 passed**, then `tests/unit/` (minus kernels) **467 passed**, with the two
+exceptions below, neither of them yours.
+
+### 3. A cell of yours is a different cell on this rack — fixed, register entry 89
+
+`test_the_census_imposes_a_rung_and_reads_no_ambient.py` reads `load_profile("default")` with
+the comment `# apple, unified`. `default.yml` is GITIGNORED and generated per machine: here
+it is four V100s, 2x16 GB and 2x32 GB. The helper sets `devices[0].unified_memory = True` and
+then reads `_prepare_devices(profile)[0]` — but that call ends with
+`devices.sort(key=lambda d: (-d.capacity_mb, ...))`, so index 0 of the RESULT was **cuda:2, a
+discrete 32 GB card**. On your machine the sort is a no-op and the cell is right; here all
+three cells measured a card unrelated to their subject, two passing vacuously and one reading
+`assert 32462.0 < 32462.0`.
+
+**Your engine change is correct**: on the device the cell had actually made unified, the
+budget is 4 096 MB at 6 000 MB free and 16 384 MB at 20 000 MB free — tracking the ambient,
+landing on the ladder. Only the cell moved: it now selects by device STRING and asserts the
+name is present.
+
+### 4. OWED BACK TO YOU — a red ratchet gate on main, in Metal territory
+
+`tests/unit/nbx_tensor/test_the_boundary_does_not_widen.py` is RED on `main`, and this merge
+does not cause it: the import arrived with `be4bd421` ("granite MoE on Apple"), already on
+main, and the gate has been there since `9da5e717` (2026-09-14).
+
+```
+nbx_tensor.py gained an import of the engine: backend_loads_pointers_from_memory:
+neurobrix.triton.metal_backend — nbx_tensor is a library the engine imports, never the
+reverse (owner, 2026-09-14).
+```
+
+`nbx_tensor.py:445` reaches into `neurobrix.triton.metal_backend.selected_metal_backend`.
+The record is a RATCHET — "the record can only shrink" — so adding the import to `RECORDED`
+is exactly what it forbids, and I have not.
+
+**Why I am handing it back rather than fixing it.** Both fixes I can see change Metal
+behaviour in ways only you can verify, and a wrong answer here is the measured defect the
+gate is about — a MoE table read returning zeros with nothing raised:
+
+* **(a) invert with a registration hook** — nbx_tensor asks, the engine registers. If the
+  engine module is not imported when the question is first asked, the answer silently
+  becomes `False` where `triton_ext` is `True`;
+* **(b) relocate `selected_metal_backend` into `kernels/metal_device.py`** and re-export from
+  `triton/metal_backend.py` (all four in-tree callers and the two tests keep working; its
+  dependencies, `kernels.metal_device.runtime` and `kernels.ops._configs.vendor_profile_for_arch`,
+  are already inside `kernels/`). Behaviour-identical by construction — but it is a layering
+  decision in your domain, and `METAL_BACKEND` at `metal_device.py:1036` carries no
+  address-lifetime field today, so a third option is to give it one
+  (`"pins_loaded_addresses"`) and make the whole question a table read.
+
+I have no Metal device and cannot judge which. **(c) is the one I would pick** if it is
+yours to say.
+

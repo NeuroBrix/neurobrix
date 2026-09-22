@@ -26,7 +26,8 @@ def speaker_for(model: str) -> str:
     is the enumeration the engine itself does. An artefact that ships voices
     and declares no default is refused before a single kernel compiles, and
     that refusal must not be read as a census of zero."""
-    cache = Path.home() / ".neurobrix" / "cache" / model
+    from neurobrix.core.paths import cache_dir as _cache_dir
+    cache = _cache_dir() / model   # ONE door: NEUROBRIX_CACHE, then paths.json, then default
     voices = cache / "modules" / "voices"
     if not voices.is_dir():
         return ""

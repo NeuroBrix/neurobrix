@@ -14,6 +14,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A memory plan no longer reports twice the memory a model needs when a dtype is written
+  in short form.** The planner looks up how many bytes a number type takes. When the name it
+  was given was not one it knew — `bf16` rather than `bfloat16`, `fp16` rather than
+  `float16` — it quietly assumed 2 bytes on one side and 4 on the other, so every such plan
+  came out at exactly double, including when the model was not converting at all. A doubled
+  figure looks like a real figure, and it sent two machines chasing a memory estimate for
+  hours. An unrecognised type name is now reported, and says which names are recognised.
+  Every model shipped with the engine already uses the full names, so no working setup
+  changes.
+
+- **A model traced on a machine whose graphics cards cannot hold it now traces on the
+  computer's own memory.** Asking for a trace on the processor was accepted and then
+  ignored three times over — the tool still reserved graphics memory it would not use,
+  still assigned the work to a card, and still overrode the choice a moment later. A model
+  whose weights exceed every card, but fit in main memory several times over, could not be
+  prepared at all.
+
+- **The option that reduces a trace's image size now reaches video models.** It was accepted,
+  checked and passed along, and then silently did nothing for a video model whose input shape
+  came from a recorded run — which is the case where it is most needed, since those are the
+  traces large enough to exhaust a machine.
+
 - **A model streamed layer by layer no longer refuses to start.** When a model is too large to
   hold at once, the engine can run it in slices. It chose where to cut by reading the model's
   operation list before the runtime had finished rewriting it — and the rewriting merges and

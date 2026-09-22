@@ -95,6 +95,19 @@ ALLOWED: dict[str, tuple[str, str]] = {
          "backend through a blocking `.to(device)` -- so there is nothing "
          "outstanding to synchronise. Same reason as the :700 sync; it was "
          "filed as open by mistake and re-adjudicated."),
+    'neurobrix/core/strategies/zero3.py::if not self.exec_device.startswith("cuda"):':
+        ("prism",
+         "not a vendor branch in vendorless code: it guards the ELSE of "
+         "`if is_triton`, and that else-branch IS CUDA machinery -- it calls "
+         "torch.cuda.Stream(device=...) on the next line, and torch.cuda "
+         "set_device/events/memory-stats below. There is no vendorless form of "
+         "torch.cuda. The triton branch beside it is DeviceAllocator-dispatched "
+         "and verified on Metal, so no backend loses a path: a non-CUDA torch "
+         "device reaching here means a stale or forced plan, and the solver "
+         "already refuses to SELECT zero3 on a unified device (cafaf799 -- "
+         "zero3's offload frees nothing where the pools are the same memory). "
+         "Refusing by name beats an AttributeError three calls later, which is "
+         "how Sana 4Kpx compiled died on mps (2026-09-21)."),
 }
 
 # A guard that is WRONG on hardware it excludes, recorded with what it costs.
