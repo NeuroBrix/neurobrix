@@ -78,7 +78,49 @@ def ladder_Lmix(v):
     return v if v <= 64 else ladder_L16(v)
 
 
-LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact": lambda v: v}
+def _fine(v):
+    """The profile's default ladder below 8 192: exact to 64, 16 to 256, 32 to 1 024, 128 on."""
+    return ladder_Lmix(v)
+
+
+def ladder_Wq(v):
+    """The candidate ladder for the WIDTH of a one-row convolution (branch
+    `one-row-conv-width-bucket`, `config/vendors/nvidia/volta.yml` rows `autotune.buckets.W`):
+    the default ladder to 8 192, then a quarter-octave step. A vocoder's width is the
+    request's and reaches 444 721, where a 512-step ladder would demand 869 buckets."""
+    if v <= 8192:
+        return _fine(v)
+    for bound, step in ((16384, 2048), (32768, 4096), (65536, 8192), (131072, 16384),
+                        (262144, 32768), (524288, 65536)):
+        if v <= bound:
+            return -(-v // step) * step
+    return -(-v // 131072) * 131072
+
+
+def ladder_Woct(v):
+    """The same, one octave a bucket above 8 192 — the coarsest ladder that still has a top."""
+    if v <= 8192:
+        return _fine(v)
+    p = 8192
+    while p < v:
+        p *= 2
+    return p
+
+
+def ladder_profile(v, _dim="M"):
+    """The ladder the PROFILE actually ships, read through the engine's own `bucket_of`.
+
+    The named ladders above are hand copies for comparing candidates; this one is the thing
+    that will run, so a candidate is only adopted once it has been evaluated under this name
+    too. Two spellings of one ladder is how a tool comes to measure something the engine does
+    not do."""
+    from neurobrix.kernels.autotune_bucket import bucket_of
+    return int(bucket_of(_dim, int(v)))
+
+
+LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact": lambda v: v,
+           "Wq": ladder_Wq, "Woct": ladder_Woct,
+           "profile": ladder_profile, "profileW": lambda v: ladder_profile(v, "W")}
 
 
 # --------------------------------------------------------------------------- one sweep
@@ -151,18 +193,20 @@ def sweep_bmm(B, M, N, K, dtype):
                            for c, t in timings.items() if t is not None}}
 
 
-def sweep_conv(B, C_in, C_out, H, W, k, dtype):
-    """conv2d_forward_kernel: [B, C_in, H, W] x [C_out, C_in, k, k], stride 1, padding k//2 —
-    the VAE decoder's 3x3 convolutions at a tile's extents. Request-dependent: B (frames as
-    batch), H, W (resolution, tile extent)."""
+def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
+    """conv2d_forward_kernel: [B, C_in, H, W] x [C_out, C_in, kh, kw], stride 1, padding
+    (kh//2, kw//2) — the VAE decoder's 3x3 convolutions at a tile's extents, and with
+    `kh=1` the 1-D convolutions a vocoder runs over a sequence, whose width is the request's.
+    Request-dependent: B (frames as batch), H, W (resolution, tile extent, sequence length)."""
     import numpy as np
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels import wrappers as Wr
     from neurobrix.kernels.ops.conv2d import conv2d_forward_kernel
     from neurobrix.triton import autotune_cache as atc
+    kh = int(kh or k); kw = int(kw or k)
     rng = np.random.default_rng(H * 7919 + W)
     x = NBXTensor.from_numpy((rng.standard_normal((B, C_in, H, W)) * 0.1).astype(dtype))
-    w = NBXTensor.from_numpy((rng.standard_normal((C_out, C_in, k, k)) * 0.1).astype(dtype))
+    w = NBXTensor.from_numpy((rng.standard_normal((C_out, C_in, kh, kw)) * 0.1).astype(dtype))
     seen = {}
     saved = conv2d_forward_kernel.run
 
@@ -172,7 +216,7 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype):
     conv2d_forward_kernel.run = spy
     try:
         conv2d_forward_kernel.cache.clear()
-        Wr.conv2d_wrapper(x, w, None, stride=1, padding=k // 2)
+        Wr.conv2d_wrapper(x, w, None, stride=1, padding=(kh // 2, kw // 2))
     finally:
         conv2d_forward_kernel.run = saved
     key = seen.get("key")
@@ -214,7 +258,7 @@ def measure(a):
             B, C_in, C_out, k = fixed.get("B", 1), fixed.get("C_in", 128), fixed.get("C_out", 128), fixed.get("k", 3)
             H = s if a.dim == "H" else fixed["H"]
             W = s if a.dim == "W" else fixed["W"]
-            row = sweep_conv(B, C_in, C_out, H, W, k, a.dtype)
+            row = sweep_conv(B, C_in, C_out, H, W, k, a.dtype, fixed.get("kh"), fixed.get("kw"))
             row["size"] = s
         else:
             raise SystemExit(f"kernel {a.kernel!r}: not wired (matmul, bmm, conv2d)")
@@ -232,6 +276,12 @@ def measure(a):
 
 
 def evaluate(a):
+    # The `profile` ladder reads the engine's own `bucket_of`, which answers EXACT when no
+    # vendor profile is bound — an evaluation run behind a door would then report every
+    # ladder as costless and mean nothing. Bind first and say which profile the numbers
+    # belong to (`feedback_a_shadow_behind_a_door_must_be_told_who_it_is`).
+    from neurobrix.kernels.autotune_certify import _bind_hardware_profile
+    print(f"[bucket_loss] evaluating under hardware profile: {_bind_hardware_profile()}")
     doc = json.loads(Path(a.evaluate).read_text())
     rows = {r["size"]: r for r in doc["rows"] if r.get("timings_ms")}
     sizes = sorted(rows)

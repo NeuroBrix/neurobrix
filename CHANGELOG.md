@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
+  such a stage at every key class of that length, on the largest memory rung.
+
 ### Fixed
+
+- **A certification refuses to start while nothing is saving its results.** Proving
+  configurations writes them one at a time into the repository and nothing else carried them
+  anywhere, so a power cut cost the whole run; the command now refuses unless the checkpointer
+  is running, and says how to start it.
+
+- **A configuration that could not fit the card is reported as that, not as a failure.** One
+  video model's final projection needs more memory than a smaller card holds, and a run on
+  such a card never reaches it because the work is split first; the certification now says so
+  with the arithmetic instead of counting it beside real failures.
+
+- **A census reaches the branch of a model that actually computes.** Where a model chooses
+  its next step from values, a census shadow has none and kept choosing the same cheap step,
+  so the work the model really does was never measured; the shadow now takes the computing
+  branch and walks it by the classes it produces.
+
+- **A request-scale dimension no longer explodes into thousands of configurations.** The
+  configuration ladder stepped by a fixed amount above its knee, so a dimension that follows
+  the request — a waveform of two million samples — asked for a different certified setting
+  every few hundred values. Above the knee it now widens with the value, measured to cost
+  nothing.
+
+- **A census shadow reads a dtype by name, not by how the interpreter prints it.** What
+  `str()` renders for an integer enumeration changed between Python versions, so on a newer
+  interpreter a shadow's health check read as unhealthy and every diffusion census stopped at
+  its first step, harvesting none of the keys after the loop.
+
+- **A certification reads only the part of a result its oracle measures.** Proving one kernel
+  configuration copied the kernel's whole output back from the device even when the reference
+  covers three small windows of it, so a large convolution moved gigabytes per candidate; the
+  windows are now cut on the device and the comparison is unchanged.
+
+- **A key whose extent is zero is refused instead of certified.** No tensor has a side of
+  zero and no request forms such a launch, but a census recorded them and one reached the
+  served directory; they are now refused where a negative extent already was, on the key
+  positions that are extents and not the ones where zero is ordinary.
+
+- **A one-row convolution selects its configuration by the bucket of its width.** A
+  convolution over a sequence (a vocoder's samples, a mel spectrogram's frames) has a width
+  that is the request's, so every speech length asked the certified directory for a
+  configuration proven at no other length. Two-dimensional convolutions keep their exact
+  extents.
 
 - **A census enumerates an extent it can only learn from values.** The length a vocoder or
   codec receives is what survived a filter on generated tokens, so a census taken from one

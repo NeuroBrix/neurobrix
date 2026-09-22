@@ -65,6 +65,15 @@ def record(tuned, key: tuple) -> None:
         _say_once(f"[census] key with a negative extent refused: {key_line(tuned, key)}")
         return
     line = key_line(tuned, key)
+    if line is not None:
+        from neurobrix.kernels.autotune_certified import degenerate_extent
+        bad = degenerate_extent(line.split("::", 1)[0], tuple(key))
+        if bad is not None:
+            # An extent of zero names a launch that cannot exist and a tensor the certifier
+            # cannot synthesise; the shadow reaches them at the bottom of a value-derived
+            # extent (a four-token speech), and one is already in the served directory.
+            _say_once(f"[census] key with a zero extent refused ({bad}): {line}")
+            return
     if line is None:
         return
     with _RECORD_LOCK:
@@ -186,6 +195,19 @@ def _noop(*_a, **_k):
     return None
 
 
+def _dtype_name(d) -> str:
+    """A dtype read by its NAME, never by `str()` of it.
+
+    `NBXDtype` is an `IntEnum`, and what `str()` gives for one changed under us: Python 3.10
+    renders `NBXDtype.bool_`, Python 3.11 renders `9`. A shadow that matched on `"bool" in
+    str(dtype)` therefore works on this rack and fails on the Mac's interpreter, where every
+    diffusion shadow's `all(isfinite(x))` guard read falsy and the loop's NaN gate ended the
+    run at step 1 with no post-loop key harvested (the Mac measured PixArt-XL 16 -> 33 keys
+    once it read the name, 2026-09-21). Measured here on 3.10.12: the old form matched, which
+    is exactly why nothing on this rack ever said so."""
+    return str(getattr(d, "name", d)).lower()
+
+
 def shadow_run(*_a, **_k):
     """What stands behind an autotuned kernel's `run` in the shadow: nothing."""
     return None
@@ -210,7 +232,7 @@ def _shadow_item_value(dtype):
     every integer read answered 0.0 (float) instead of an int. Same defect class
     as the input-synth dtype read (ac10eddf). This is the fallback for a value
     with no host-born `_shadow_host`."""
-    name = getattr(dtype, "name", str(dtype)).lower()
+    name = _dtype_name(dtype)
     if "bool" in name:
         return True                     # a guard's `all(isfinite(x))`: healthy
     return 1 if "int" in name else 0.0
@@ -383,7 +405,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
         # after a frame count read 0, 2026-09-21). Float reads stay zero.
         import numpy as np
-        if "int" in str(self._dtype).lower():
+        if "int" in _dtype_name(self._dtype):
             return np.ones(tuple(self._shape), dtype=np.int64)
         return np.zeros(tuple(self._shape), dtype=np.float32)
 

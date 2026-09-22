@@ -23,6 +23,7 @@ import json
 import os
 import warnings
 import platform
+import re
 import socket
 import subprocess
 import time
@@ -249,6 +250,13 @@ class WindowedOracle:
         for (ni, r0, r1, c0, c1), ref in self.blocks:
             yield out[ni:ni + 1, :, r0:r1, c0:c1], ref
 
+    def device_slices(self, t):
+        """The same windows, cut on the tensor WHERE IT LIVES. The whole output used to cross
+        to the host once per candidate config so that three small windows could be read out of
+        it — 1.73 GB a candidate on a 49x128x96x720 convolution, eighteen candidates a key."""
+        for (ni, r0, r1, c0, c1), ref in self.blocks:
+            yield _materialise(t[ni:ni + 1, :, r0:r1, c0:c1]), ref
+
 
 class RowWindowedOracle:
     """The float64 oracle on row windows of a matrix product's output (matmul, addmm, batched
@@ -269,6 +277,12 @@ class RowWindowedOracle:
     def slices(self, out):
         for (r0, r1), ref in self.blocks:
             yield out[..., r0:r1, :], ref
+
+    def device_slices(self, t):
+        """The same row windows, cut on the tensor WHERE IT LIVES (see WindowedOracle)."""
+        for (r0, r1), ref in self.blocks:
+            cut = t[r0:r1, :] if len(tuple(t.shape)) == 2 else t[:, r0:r1, :]
+            yield _materialise(cut), ref
 
 
 def _row_windows(m, n, k, cap=None):
@@ -408,6 +422,30 @@ def host_values(t) -> np.ndarray:
     if dt is not None and dt.kind == "V" and dt.itemsize == 2:
         return bf16_bits_to_f32(np.ascontiguousarray(host).view(np.uint16))
     return host
+
+
+def _materialise(piece):
+    """A cut ready to be read as numbers: an NBXTensor slice is a VIEW whose strides no flat
+    reader can follow, so it is made contiguous on the device (R33: `NBXTensor.contiguous()`
+    materialises through the `_strided_copy` Triton kernel) before it crosses. Anything that
+    is already an array is handed back."""
+    contiguous = getattr(piece, "contiguous", None)
+    return contiguous() if callable(contiguous) else piece
+
+
+def deviation_against(out_tensor, oracle) -> float:
+    """The deviation of a kernel's output against the oracle, reading from the device ONLY
+    what the oracle measures.
+
+    A windowed oracle already refuses to compute the whole reference; it was still handed the
+    whole result, because the windows were cut AFTER the crossing. A window of a large
+    convolution is a thousandth of its output, so this is the same comparison on the same
+    values, and a window cut wrongly fails loudly — its values would not match the reference
+    and every config would read as diverging."""
+    if hasattr(oracle, "device_slices"):
+        return max(oracle_deviation(host_values(piece) if hasattr(piece, "data_ptr") else piece, ref)
+                   for piece, ref in oracle.device_slices(out_tensor))
+    return oracle_deviation(host_values(out_tensor), oracle)
 
 
 def oracle_deviation(out: np.ndarray, oracle) -> float:
@@ -944,7 +982,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
                 run_s = time.time() - t_one                # the run every config makes anyway, timed
-                dev = oracle_deviation(host_values(out_tensor), oracle)
+                dev = deviation_against(out_tensor, oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
                 continue
@@ -1180,10 +1218,60 @@ def sticky_cuda_error(exc: BaseException) -> bool:
     return any(m in text for m in _STICKY_MARKS)
 
 
+_OVERSIZE = re.compile(r"GPU malloc failed \(error 2\) for (\d+) bytes.*?driver_total=(\d+)MB", re.S)
+
+
+def oversize_for_class(exc: BaseException):
+    """The bytes asked and the card's total when a key's tensors cannot FIT the memory class,
+    else None.
+
+    This is not a certification failure, it is a CENSUS defect arriving late: Wan2.1-T2V's
+    video VAE projects 81 frames of 722x1282x96 to RGB, whose input alone is 28.8 GB, and the
+    16 GB census recorded it because the shadow planned the op at its graph shape. A real
+    16 GB run never forms that key — Prism tiles the decode long before it — so no certified
+    entry is owed for it and reporting it beside genuine failures buries both. Named, counted
+    apart, and left for the census to stop recording (2026-09-22)."""
+    m = _OVERSIZE.search(str(exc))
+    if not m:
+        return None
+    asked, total_mb = int(m.group(1)), int(m.group(2))
+    return (asked, total_mb * 1024 * 1024) if asked > total_mb * 1024 * 1024 else None
+
+
+def _release_between_keys() -> None:
+    """Give the device back between keys.
+
+    The certifier held nothing deliberately and freed nothing either: a key's synthetic
+    operands are released when Python collects them, which had not happened by the time the
+    next key asked for its own. Measured 2026-09-22 on the 16 GB class — a matmul needing
+    11.0 GiB was refused on a 15.8 GiB card with `live_tracked=5632MB` still resident from
+    the key before it, and reported as a failure when it was a certifiable shape meeting
+    someone else's leftovers. Cheap: a collection between keys costs milliseconds against a
+    sweep that costs seconds a key."""
+    import gc
+    gc.collect()
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        drain = getattr(DeviceAllocator, "empty_cache", None) or getattr(DeviceAllocator, "device_empty_cache", None)
+        if callable(drain):
+            drain()
+    except Exception:  # noqa: BLE001 — a release that cannot run must not end the sweep
+        pass
+
+
 def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
     """Count a key's failure; return True when the run must STOP because the
     context is poisoned (the summary then names the key and the reason)."""
-    summary["failed"] += 1
+    big = oversize_for_class(exc)
+    if big is not None:
+        asked, card = big
+        summary["oversize"] = summary.get("oversize", 0) + 1
+        log(f"[certify] TOO LARGE FOR THIS CLASS at {key_text}: the key's tensors ask "
+            f"{asked / 2**30:.1f} GiB of a {card / 2**30:.1f} GiB card. No entry is owed — a run "
+            f"of this class never forms this key, because the plan tiles before it. The CENSUS "
+            f"recorded a shape this class cannot reach; that is where it is fixed.")
+        return False
+    summary["failed"] = summary.get("failed", 0) + 1
     if sticky_cuda_error(exc):
         summary["aborted"] = {"key": key_text, "reason": str(exc)[:300]}
         log(f"[certify] ABORTED at {key_text}: the CUDA context is poisoned ({str(exc)[:160]}) — "
@@ -1273,11 +1361,13 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: UNREACHABLE — {exc}")
                 continue
             except Exception as exc:
+                _release_between_keys()
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")
                 if after_key_failure(exc, summary, ktext, log):
                     summary["seconds"] = round(time.time() - summary["started"], 1)
                     return summary                    # a poisoned context: stop, say it, exit non-zero
                 continue
+            _release_between_keys()
             try:
                 C.file_certification(entries, ktext, entry)   # by the class its proof names; refused without one
             except ValueError as exc:
