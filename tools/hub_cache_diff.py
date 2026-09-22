@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import struct
+import re
 import subprocess
 import sys
 import threading
@@ -481,11 +482,104 @@ def publish_one(name: str, slug: Optional[str], nbx: Path, mbps: float, logdir: 
         cmd += ["--max-write-mbps", str(mbps)]
     logfile = logdir / f"publish_{name}.log"
     log(f"{name}: publishing {nbx} → {slug or 'new entry'} (log {logfile})")
-    with open(logfile, "a") as fh:
-        fh.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(cmd[2:])}\n"); fh.flush()
-        rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=str(REPO / "forge"), timeout=7200)
-    log(f"{name}: publish rc={rc}")
-    return rc
+    return _publish_patiently(name, cmd, logfile)
+
+
+#: A write is retried this many times through a REFUSAL, with this ceiling on the wait.
+#: The reader beside it already waits 5 + 15 + 45 + 120 + 120 s; the writer waited not at
+#: all — one `subprocess.TimeoutExpired` and the object was abandoned, which is how a
+#: publish log came to end mid-upload at 15 % with no second attempt (2026-09-22).
+PUBLISH_ATTEMPTS = 6
+PUBLISH_MAX_BACKOFF_S = 300
+PUBLISH_SPACING_S = 20.0          # between objects: the store takes its drive offline in bursts
+PUBLISH_TIMEOUT_S = 7200
+
+#: What a TEMPORARY refusal looks like coming back from the store. The owner's decision
+#: (2026-09-22): the store is accepted as it is — the zvol behind 10.0.0.36 sits on four
+#: Micron 5200s with multi-second latency and takes its drive offline for 10 to 30 s at a
+#: time. None of these is a failure of the object or of this pass; they are the store
+#: breathing, and counting one as a failure is what made a healthy container read as unpublished.
+_TEMPORARY = re.compile(
+    r"SlowDown|503|429|Retry-After|ServiceUnavailable|InternalError|"
+    r"timed out|TimeoutExpired|Connection (reset|aborted|refused)|"
+    r"RequestTimeout|write quorum|drive is offline|EOF occurred",
+    re.I)
+
+
+def _probe_patiently(probe, name: str) -> int:
+    """The store's write probe, retried through refusals.
+
+    A single non-200 used to DEFER the whole object. On this store that is the wrong reading:
+    it takes its drive offline for 10 to 30 s at a time, so a 503 says "not this second", not
+    "not this container". Deferring on the first one is precisely counting a temporary
+    refusal as a failure, and it is why healthy containers sat unpublished.
+    """
+    for attempt in range(1, PUBLISH_ATTEMPTS + 1):
+        try:
+            code = int(probe())
+        except Exception as exc:                          # noqa: BLE001 — a refused probe is a reading
+            code, exc_name = 0, type(exc).__name__
+            log(f"{name}: write probe raised {exc_name} (attempt {attempt}/{PUBLISH_ATTEMPTS})")
+        if code == 200:
+            if attempt > 1:
+                log(f"{name}: the store took a write on attempt {attempt}")
+            return 200
+        if attempt == PUBLISH_ATTEMPTS:
+            return code
+        wait = min(PUBLISH_MAX_BACKOFF_S, 15 * (2 ** (attempt - 1)))
+        log(f"{name}: write probe answers {code} (attempt {attempt}/{PUBLISH_ATTEMPTS}); "
+            f"waiting {wait:.0f} s — a refusal is not a failure")
+        time.sleep(wait)
+    return 0
+
+
+def _publish_patiently(name: str, cmd: list, logfile: Path) -> int:
+    """Run one publish, retrying through temporary refusals rather than counting them.
+
+    Three things the previous shape did not do, each named because each cost something:
+    it never retried (a single timeout abandoned a 21.9 GB upload at 15 %); it could not
+    tell a refusal from a failure (so a store that breathes read as a broken container);
+    and it left no pause between objects (the store's stall is not per-object, so the next
+    write walked straight into the same offline window).
+    """
+    waited = 0.0
+    for attempt in range(1, PUBLISH_ATTEMPTS + 1):
+        with open(logfile, "a") as fh:
+            fh.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')} attempt {attempt}/{PUBLISH_ATTEMPTS} "
+                     f"{' '.join(cmd[2:])}\n")
+            fh.flush()
+            try:
+                rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                     cwd=str(REPO / "forge"), timeout=PUBLISH_TIMEOUT_S)
+                why = ""
+            except subprocess.TimeoutExpired:
+                # The word matters: `_TEMPORARY` reads this string, and a timeout on a
+                # store that stalls for 10-30 s at a time IS the temporary case — it is
+                # the exact shape that abandoned a 21.9 GB upload at 15 %.
+                rc, why = 124, f"TimeoutExpired: no completion in {PUBLISH_TIMEOUT_S} s"
+            except OSError as exc:                       # the process itself could not run
+                rc, why = 125, f"{type(exc).__name__}: {exc}"
+        if rc == 0:
+            log(f"{name}: publish rc=0 on attempt {attempt}" + (f" after {waited:.0f} s of waiting" if waited else ""))
+            return 0
+        tail = ""
+        try:                                             # read the store's own words, not a guess
+            tail = logfile.read_text(errors="replace")[-4000:]
+        except OSError:
+            pass
+        temporary = bool(_TEMPORARY.search(why or "") or _TEMPORARY.search(tail))
+        if not temporary or attempt == PUBLISH_ATTEMPTS:
+            log(f"{name}: publish rc={rc} on attempt {attempt}"
+                + (f" ({why})" if why else "")
+                + ("; the refusal looks temporary but the attempts are spent"
+                   if temporary else "; not a temporary refusal — reported as a failure"))
+            return rc
+        wait = min(PUBLISH_MAX_BACKOFF_S, 15 * (2 ** (attempt - 1)))
+        waited += wait
+        log(f"{name}: the store refused this write (attempt {attempt}/{PUBLISH_ATTEMPTS}"
+            + (f", {why}" if why else "") + f"); waiting {wait:.0f} s — a refusal is not a failure")
+        time.sleep(wait)
+    return 1
 
 
 # ----------------------------------------------------------------------------- main
@@ -604,9 +698,20 @@ def main() -> int:
             log(f"{name}: re-packed from the cache into {nbx} ({nbx.stat().st_size} bytes)")
         if r["slug"]:
             org, mname = r["slug"].split("/", 1)
-            probe = Z.hub_store_write_probe(org, mname, token, registry=registry, nbytes=min(Z.PROBE_BYTES, max(5, nbx.stat().st_size)), mbps=args.upload_mbps)
+            probe = _probe_patiently(
+                lambda: Z.hub_store_write_probe(
+                    org, mname, token, registry=registry,
+                    nbytes=min(Z.PROBE_BYTES, max(5, nbx.stat().st_size)), mbps=args.upload_mbps),
+                name)
             if probe != 200:
-                log(f"{name}: publish deferred — the store's write probe answers {probe}"); deferred.append(name); continue
+                log(f"{name}: publish deferred — the store's write probe still answers {probe} "
+                    f"after {PUBLISH_ATTEMPTS} patient attempts")
+                deferred.append(name); continue
+        if published:
+            # The store stalls in bursts of 10-30 s and the stall is not per-object, so the
+            # next write would walk straight into the same offline window. Space them.
+            log(f"{name}: spacing {PUBLISH_SPACING_S:.0f} s behind the previous publication")
+            time.sleep(PUBLISH_SPACING_S)
         rc = publish_one(name, r["slug"], nbx, args.upload_mbps, args.out)
         if rc == 0:
             # The bytes the hub now serves are read back whole and verified against the file
