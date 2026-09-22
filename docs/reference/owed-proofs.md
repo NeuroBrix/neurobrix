@@ -2518,3 +2518,97 @@ release.
 real violation and a real non-violation on this machine. Only this one was inert. A hook
 adopted and never fired is a vacuous gate in a new costume, and the register already has a
 name for that.
+
+## 2026-09-22 — census pass A on Apple: 16 of 30 tiled models are OPEN, with their causes
+
+**The census is NOT complete and must not be read as complete.** Pass A (30 tiled models ×
+6 rungs 4-16 GB × 2 modes, from the shared cache through the shadow) produced **856 keys from
+11 models — all eleven upscalers** — and `64 served, 792 to certify`. The other **16 models
+contributed 0 to 856 usable key sets**, in three distinct classes. Certification proceeds on
+the 792 keys in hand; it closes nothing below.
+
+**A correction to my own earlier report first**: I called the zero-key models "honest
+refusals". They are not. The doctrine is that the engine **never refuses a model for lack of
+memory — it streams**, and that every key the catalogue demands is certified on THIS chip
+including for a model too large for it, because a key is a shape and not weights. The rack
+certifies Volta keys; it does not owe Apple keys. These models are **blocked**, not closed.
+
+### Class 1 — BLOCKED on the open Prism defect (`9675411a`). Five models, zero keys.
+
+Every one reports the same shape of failure: *"Every strategy was tried, down to streaming one
+component at a time from disk"*, then
+
+| model | "the streaming path needs … for that one component" |
+|---|---|
+| Flex.1-alpha | 33 954 MB |
+| Wan2.2-I2V-A14B-Diffusers | 58 522 MB |
+| Wan2.1-I2V-14B-480P-Diffusers | 75 707 MB |
+| mochi-1-preview | 86 923 MB |
+| SANA-Video_2B_720p_diffusers | **302 416 MB** |
+
+**A streaming path that demands an entire component at once is not streaming**, and 302 GB for
+one component is the reductio. This is the defect already handed over in `9675411a`: *Prism
+partitions the RAW graph while each sequence transforms it in place
+(`sequence.py` 646/887/996/1168/1424, `compiled_sequence.py` 657/982), so a `layer_streaming`
+boundary names op ids the fusions rewrote.* With the boundaries gone the partition degenerates
+to the whole component, which is exactly these figures. The Mac's own earlier note recorded
+the same frontier from the other side: *"a single segment that is too large still refuses
+(CogVideoX at rungs ≤ 12 GB), contrary to the principle."*
+
+**Dependency, stated plainly: these five are censused on Apple once the per-branch graph
+normalization lands on `main`.** They are not re-triable here and they are not the Mac's to
+fix — `core/prism` is the Dell's.
+
+### Class 2 — probe failures with a MEASURED cause. Six models, keys harvested but the tiling probe red.
+
+`probe_failed` is its own status (`021667c8`) so harvested keys stop hiding behind the word
+"failed" — but a red probe means the tiled request never ran, so the tiled key classes are
+missing. Causes read from `logs_tiled/<model>.triton.probe.r*.log`:
+
+| model | keys | measured cause |
+|---|---|---|
+| PixArt-Sigma-XL-1024 | 35 | `aten.mul::5` — **Cannot broadcast (2, 1, 1152) and (32, 4096, 1152)** |
+| PixArt-Sigma-XL-2-1024-MS | 34 | same class |
+| PixArt-XL-1024 | 35 | same class |
+| PixArt-XL-2-1024-MS | 34 | `aten.addmm::0` — arg0 `(1152,)` against arg1 `(2, 384)` |
+| Sana-1600M-MultiLing | 69 | `_broadcast_shapes` — **Cannot broadcast (1, 32, 128, 128) and (1, 128, 128, 32)** |
+| Sana_1600M_1024px_MultiLing | 61 | `aten.bmm::0` — **shape mismatch (140, 33, 16384) @ (35, 16384, 128)** |
+
+Two distinct signatures, and both are **batch/layout propagation under a tiled request**, not
+memory:
+- **a batch expanded on one operand and not the other** — PixArt 2 vs 32 (a factor of 16),
+  Sana bmm 140 vs 35 (a factor of 4). The conditioning tensor keeps the untiled batch while the
+  latent carries the tiled one.
+- **a layout transposition** — Sana `(1, 32, 128, 128)` against `(1, 128, 128, 32)`, channels
+  first against channels last, 32 channels either way.
+
+These fail in `triton/sequence.py:3989` and `kernels/nbx_tensor.py:2895`, i.e. on the **Triton
+execution path**, which is this chantier's. **Ownership triage and the red-then-green fix are
+the Mac's next engine work**, after the 792 keys in hand are certified; if triage shows the
+batch expansion is decided in the shared Tiling Engine rather than the Triton sequence, that
+half comes back here with the evidence above.
+
+### Class 3 — frozen symbols, for the Dell's Forge RETRACE queue. Four containers, not three.
+
+A declared input symbol whose chain breaks on a literal written into a shape
+(`tools/where_the_symbol_chain_breaks.py`). Each contributes no tiled key and needs a re-trace
+in Forge, which is the Dell's toolchain:
+
+| container | census status | keys |
+|---|---|---|
+| PixArt-Sigma-XL-1024 | `retrace+probe_failed`, frozen 1 symbol | 35 |
+| Sana_1600M_4Kpx_BF16 | `retrace`, frozen 1 symbol | 166 |
+| Wan2.1-I2V-14B-480P-Diffusers | `retrace+failed`, frozen 1 symbol | 0 |
+| Wan2.1-VACE-1.3B-diffusers | `retrace+failed`, frozen 1 symbol | 9 |
+
+(PixArt-Sigma-XL-1024 and Wan2.1-I2V-14B-480P also appear in classes 2 and 1 respectively — a
+container can be blocked more than one way, and closing one does not close the other.)
+
+### Also still open, keys partially harvested
+
+`CogVideoX-5b-I2V` (9), `Open-Sora-v2` (20), `Wan2.1-T2V-1.3B-Diffusers` (59) and
+`Wan2.1-VACE-1.3B-diffusers` (9) are `failed` with some keys taken. Their causes are not yet
+read and they are listed here so they are not lost.
+
+**Evidence**: `nbx-atelier/campagnes/2026_09_22_apple/census/` — `census_tiled.json` (727 626
+bytes), `logs_tiled/` (569 probe logs + per-rung logs). Durable storage, not a scratchpad.
