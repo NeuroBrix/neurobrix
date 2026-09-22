@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model streamed layer by layer no longer refuses to start.** When a model is too large to
+  hold at once, the engine can run it in slices. It chose where to cut by reading the model's
+  operation list before the runtime had finished rewriting it — and the rewriting merges and
+  removes operations, so the cut points named steps that no longer existed and the run stopped
+  before computing anything. The cut is now chosen on the same operation list the runtime will
+  execute. Six models reported this; it is fixed for the ones reproducible here.
+
 - **Publishing to the hub now waits out a busy object store instead of giving up on it.** The
   store this project publishes to pauses for ten to thirty seconds at a time. A publication
   that met one of those pauses was abandoned — once mid-upload, at 15 % of a 22 GB file — and
