@@ -2626,7 +2626,7 @@ class PrismSolver:
     # DEVICE PREPARATION
     # =========================================================================
 
-    def _device_reading(self, dev, capacity: float, host) -> "DeviceReading":
+    def _device_reading(self, dev, capacity: float, host, profile=None) -> "DeviceReading":
         """The one reading the law is applied to, for this device (memory_budget.py).
 
         A unified device is shared with the host by its nature: its free figure is the host's
@@ -2645,6 +2645,25 @@ class PrismSolver:
                                  source="census shadow: the profile's capacity")
         if dev.has_unified_memory:
             free = float(host.available_mb) if getattr(host, "measured", False) else float(capacity)
+            # A plan taken under a PROFILE may not assume more host memory than that profile
+            # declares. The live reading is this machine's; the profile's `cpu.ram_mb` is the
+            # machine the plan is FOR, and on a unified device that figure IS the pool.
+            #
+            # Without this bound a foreign profile is not reproducible, which is the premise
+            # the whole census rests on — the cascade reads the profile, not the card.
+            # Measured 2026-09-22: Flex.1-alpha under the Mac's `default-9f169c79`
+            # (memory_mb 18 186, cpu.ram_mb 24 576) planned on THIS rack at
+            # `budget_mb=131072` — the 128 GB rung of a 251 GB host — and took `single_gpu`
+            # with its four components summing to 30 327 MB against a capacity of 17 277 MB.
+            # The Mac, planning the same container under the same profile, refuses.
+            #
+            # `_host_budget_mb` already applies exactly this bound, `min(free, installed)`;
+            # this path did not, so the two halves of the same law disagreed.
+            # On a machine planning under its OWN profile the two figures agree and nothing
+            # moves; a busy machine still lowers, which is the 2026-09-10 repair.
+            declared_host = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+            if declared_host > 0 and declared_host < free:
+                free = declared_host
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=free, unified=True,
                                  measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
         try:
@@ -2737,7 +2756,7 @@ class PrismSolver:
                     free_live = None
                 if free_live is not None:
                     used = max(0.0, capacity - free_live)
-            reading = self._device_reading(dev, capacity, host)
+            reading = self._device_reading(dev, capacity, host, profile)
             note = _describe_budget(reading)
             logging.getLogger(__name__).info("%s: memory budget — %s", dev.get_device_string(), note)
             devices.append(DeviceState(
