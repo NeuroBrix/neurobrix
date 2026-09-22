@@ -3345,3 +3345,41 @@ generalisation worth carrying; on your card it is invisible.
 Gate: `tests/unit/kernels/test_depthwise_bf16_padding.py`, red on the old kernel (4 of 6, with
 the fp32 and fp16 controls passing, which is what proves it discriminates) and green on the
 new. One of its cells asserts your invariant directly: padding must not move the error floor.
+
+### The generalisation: 12 more sites with the same shape, audited not fixed
+
+`393570c6` removed the engine's dependence on the Metal backend's lowering of a native bf16
+product of a masked-loaded operand. **That lowering is still wrong**, so every other site with
+the same shape is SUSPECT ON METAL and invisible on CUDA. Swept the kernel set for the exact
+pattern — accumulating a product of masked-loaded operands with no fp32 upcast on that line:
+
+| file | line | expression |
+|---|---|---|
+| `ops/conv_depthwise2d.py` | 86, 146 | `acc += x_val * w_val` |
+| `ops/conv_transpose2d.py` | 110 | `acc += tl.where(valid, in_val * w_val, 0.0)` |
+| `ops/grid_sampler.py` | 106, 138, 142 | `acc += wy * wx * val` and variants |
+| `ops/moe_decode_vec.py` | 127, 138, 252 | `acc += tl.sum(a[:, None] * b, axis=0)` |
+| `ops/gemv_vec.py` | 70 | `acc += tl.sum(a * b[None, :], 1)` |
+| `ops/addmv_op.py` | 46 | `acc += a * b` |
+| `ops/mv_op.py` | 41 | `acc += a * b` |
+
+**These are SUSPECT, not proven, and none is fixed here.** Reasons to be careful rather than
+sweeping:
+
+- Most of these files already call `.to(tl.float32)` elsewhere (grid_sampler 7 times,
+  moe_decode_vec 11), so these are partial gaps, not a uniform omission — some operands may
+  already be fp32 and the upcast would be a no-op.
+- Only `depthwise_conv2d_kernel` is in the Apple census, so none of these blocks key harvest
+  here. Per the standing rule they are reported rather than turned into a detour.
+- `conv_depthwise2d.py` is the one I would check first: it is a SECOND depthwise
+  implementation, reachable through its own `conv_depthwise2d_wrapper`, with the identical
+  `acc += x_val * w_val` at two sites.
+
+Each needs the same two-cell test the fixed kernel now has: bf16 at pad 0 versus pad 1 (or any
+condition that makes the mask bite), asserting the error floor does not move. A site whose
+operands are already fp32 will pass unchanged, which is the cheap way to tell the real gaps
+from the false positives.
+
+The scan is reproducible: `campagnes/2026_09_22_apple/` — match `acc +=` / `acc = acc +`
+whose right-hand side multiplies a variable assigned from a `tl.load` carrying `mask=`, with
+no `.to(tl.float32)` on the line, skipping docstrings and comments.
