@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both are now refused, and the refusal says how to read the file without touching the store
   and how to replace it on purpose. Running a model is unaffected.
 
+- **Transposed convolutions are slightly more accurate in half precision.** The kernel behind
+  every upsampling step of an image or video decoder multiplied its two inputs at their own
+  precision before adding them up at full precision. Multiplying at full precision costs
+  nothing — the running total was already kept that way — and removes error that was being
+  introduced for no reason: 23% less in float16, 20% less in bfloat16, unchanged in float32.
+
 - **A plan made for another machine no longer borrows this one's memory.** When a model was
   planned against a description of a different computer — which is how work for one machine is
   prepared on another — the part of the calculation covering shared graphics-and-system memory
