@@ -330,6 +330,31 @@ def _installed(name: str) -> bool:
         return False
 
 
+def _refuse_if_ephemeral(name: str) -> None:
+    """A backend whose installation stands on storage the machine clears is REFUSED.
+
+    Three losses on this Mac — 2026-09-17, -09-21 and -09-22 — each cost a
+    campaign's environment. The third is why this looks at more than the package:
+    the package looked fine, while the venv it lived in and the git worktree it
+    was built from were both on `/private/tmp`, and all of it went at once. An
+    install has three legs (package, environment, build tree) and losing any one
+    loses the install, so all three are asked about
+    (`core.paths.installation_refusals`).
+
+    It REFUSES rather than warns, on purpose: the measurement that follows would
+    be attributed to a backend that may not exist by the time anyone reads it.
+    """
+    from neurobrix.core.paths import installation_refusals
+    probe = METAL_BACKENDS[name]["probe"].split(".")[0]
+    reasons = installation_refusals(probe)
+    if reasons:
+        raise BackendSelectionRefused(
+            f"the Metal backend `{name}` stands on storage this machine clears: "
+            + "; ".join(reasons)
+            + ". Reinstall it on durable storage. Refusing rather than measuring "
+            "against an install a cleaner can remove mid-campaign.")
+
+
 def selected_metal_backend() -> str:
     """WHICH Metal backend this machine runs, decided by the PROFILE.
 
@@ -387,6 +412,7 @@ def selected_metal_backend() -> str:
                 f"(no module {METAL_BACKENDS[declared]['probe']!r}). Refusing rather "
                 f"than running on the other backend and attributing the numbers to "
                 f"the declared one. Install it, or change the profile.")
+        _refuse_if_ephemeral(declared)
         return declared
 
     present = [n for n in METAL_BACKENDS if _installed(n)]
@@ -401,6 +427,7 @@ def selected_metal_backend() -> str:
             f"profile declares no `{_PROFILE_KEY}`. A machine that can run either "
             f"must say which, or its measurements cannot name the backend that "
             f"produced them.")
+    _refuse_if_ephemeral(present[0])
     return present[0]
 
 
