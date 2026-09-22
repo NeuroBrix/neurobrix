@@ -1666,3 +1666,31 @@ RESOLUTION itself rather than each caller, so a backend that resolves a runtime 
 one; I cannot write or test that on Metal, and it is the Mac's own seam to place. What this
 rack can promise is that the door stays `CUDA_VISIBLE_DEVICES=`, so any path we have not
 covered fails LOUDLY rather than reaching a card.
+
+## 2026-09-22 04:05 — the ladder's open tail is too fine for a request-scale dimension (owed: the measurement)
+
+Walking chatterbox's vocoder across its speech length with the one-row convolution width
+already bucketed still demands **5 748 keys** — 3 072 convolution, 2 110 baddbmm, 566 matmul —
+and the reason is no longer the convolutions. The vocoder's batched GEMM keys on the WAVEFORM:
+`baddbmm M_BUCKET=1 104 384 N_BUCKET=1 K_BUCKET=9`, then `1 105 920`, then `1 107 456` — the
+profile's default ladder is open above 8 192 with a step of **512**, so a dimension that
+reaches **1 963 520** is cut into roughly four thousand buckets. Measured over the walk:
+**1 522 distinct M values, 1 400 of them above 8 192**, for ONE model.
+
+The doctrine's ladder was decided by measurement — exact under 64, 16 to 256, 32 to 1 024,
+128 to 8 192, 512 beyond, 0.0 % loss on both V100 classes — but that sweep ran to about
+4 096. Nothing has ever measured the 512-step tail at 10^5 or 10^6, where a GEMM's grid is
+saturated many times over and the configuration is expected to stop depending on M, exactly
+as the one-row convolution's did in W. Expected is not measured, so this is written as OWED,
+not decided:
+
+* sweep `bucket_loss.py --kernel bmm --dim M --fixed B=1,N=1,K=9` (the vocoder's own shape)
+  and a second, fuller shape, over 8 192..2 000 000, on a free card of each memory class;
+* evaluate the existing `Wq` and `Woct` tails against the 512-step one;
+* if the tail is free, the ladder's open row becomes a coarse tail and every request-scale
+  dimension — a waveform, a mel, a long context — collapses with it.
+
+Until then the catalogue census is taken WITHOUT `--walk-extents`, so it carries the M values
+of one speech length rather than four thousand, and the certification budget stays bounded.
+**The Mac will meet the same tail**: its audio models key the same waveform dimension, and the
+ladder is data (`autotune.buckets`), so its profile can carry its own tail once measured.
