@@ -3727,6 +3727,21 @@ _NBX_CONV3D_CHUNK_BYTES = int(
 _NBX_CONV2D_TRACE = os.environ.get("NBX_CONV2D_TRACE", "0") == "1"
 
 
+def _conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w):
+    """The width a convolution's autotune key carries. A convolution whose spatial extent is
+    ONE ROW is a 1-D convolution over a sequence — a vocoder's frames, a mel spectrogram's
+    time axis — and that extent is the request's (a speech of 1 716 tokens and one of 1 856
+    gave chatterbox's vocoder two different exact keys for every layer, 2026-09-21): it keys
+    on the profile's ladder like a GEMM's M, the output width derived from the input's top by
+    the convolution's own arithmetic so a certifier synthesising at the top forms the same
+    key. A 2-D convolution keeps its exact extents (bounded by resolutions and tile edges;
+    the ladder measured 37–40 % loss where the conv optimum flips)."""
+    if int(in_h) == 1 and int(out_h) == 1:
+        top = int(_bucket_of("W", int(in_w)))
+        return top, (top + 2 * int(pad_w) - int(dil_w) * (int(kw) - 1) - 1) // int(stride_w) + 1
+    return int(in_w), int(out_w)
+
+
 def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
     """Return True when the conv2d output alone would exceed the spatial
     band-streaming threshold. Output is the dominant transient because the
@@ -4169,10 +4184,12 @@ def conv2d_wrapper(
         groups,
     )
     _set_device(x_c)
+    _in_w_key, _out_w_key = _conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w)
     _autotune_headroom_guard(conv2d_forward_kernel[grid])(
         x_c, w_c, output,
         N, in_c, in_h, in_w,
         out_c, out_h, out_w,
+        _in_w_key, _out_w_key,
         *x_c.stride(), *w_c.stride(), *output.stride(),
         kernel_height=kh, kernel_width=kw,
         stride_height=stride_h, stride_width=stride_w,
@@ -4207,10 +4224,12 @@ def _depthwise_conv2d_dispatch(
         triton.cdiv(out_h * out_w, META['BLOCK_HW']),
     )
     _set_device(x_c)
+    _iw_key, _ow_key = _conv_width_key(IH, out_h, IW, out_w, kw, stride_w, pad_w, 1)
     _autotune_headroom_guard(depthwise_conv2d_kernel[grid])(
         x_c, w_c, output,
         N, C,
         IH, IW, out_h, out_w,
+        _iw_key, _ow_key,
         *x_c.stride(), *w_c.stride()[:1], *w_c.stride()[2:],
         *output.stride(),
         kh=kh, kw=kw,
