@@ -7,7 +7,7 @@ float accumulation order is non-deterministic. When several source
 positions map to the same destination (MoE expert aggregation: many
 routed rows -> one token), repeated runs produced different fp32
 roundings -> a different greedy argmax on Qwen3-30B::triton's unfused
-MoE path (chantier P-TRITON-MOE-DETERMINISM sub-chantier 2).
+MoE path (workstream P-TRITON-MOE-DETERMINISM sub-workstream 2).
 
 State of the art consulted (R16, 2026-05-19):
   - Triton #7402: tl.atomic_add return value is incorrect across

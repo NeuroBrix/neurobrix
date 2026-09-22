@@ -249,7 +249,7 @@ is impossible, the means is **replaced by a witness, not removed**:
   where the Dell records its frequency (`proof.machine.clocks_mhz`).
 
 The contract stays whole and single. `proof_records_regime` (the coverage gate,
-née `proof_records_clock`) accepts EITHER a recorded lock OR a recorded witness:
+born as `proof_records_clock`) accepts EITHER a recorded lock OR a recorded witness:
 both are proofs of the same fact — the sweep was comparable — and an entry with
 neither is not served, exactly as before. Stability is PROVEN by what was
 measured, not ASSUMED from what was set: no sudo, no lock, no constant. If a

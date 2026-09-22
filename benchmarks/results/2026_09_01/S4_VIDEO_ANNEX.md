@@ -66,7 +66,7 @@ config keys; 0.38.0 kwarg name, then its video post-processor reshape
 fails at the row's 480×832×9f — the 720p checkpoint's decode emits a
 mismatched spatial shape at this size). The vendor stack does not run
 this checkpoint at the row config on any tested stable release; a
-vendor timing cell, if ever needed, is a dedicated chantier at native
+vendor timing cell, if ever needed, is a dedicated workstream at native
 720p. The row's engine cell (nbx triton, 39.5 s, R29 fox) stands.
 ⁷ The cell's pins block in this JSON also carries a stale
 `enabled_optims: "none"` line beside a dtype string listing the

@@ -2,7 +2,7 @@
 """
 PyTekken — pure-Python, stdlib-only replacement for ``mistral_common`` Tekken.
 
-Zero Outsider chantier (R34): the NeuroBrix runtime engine must not import any
+Zero Outsider workstream (R34): the NeuroBrix runtime engine must not import any
 vendor ML library at inference time. ``mistral_common`` provides the Tekken
 byte-level BPE tokenizer used by Voxtral-Mini-3B-2507. This module reproduces
 ``Tekkenizer.encode`` / ``decode`` bit for bit using only the Python standard

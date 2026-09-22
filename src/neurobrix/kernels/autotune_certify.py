@@ -100,10 +100,16 @@ _NP = {"fp16": np.float16, "bf16": np.float32, "fp32": np.float32, "fp64": np.fl
        # MiniCPM-o on 2026-09-22 forms
        # `(64, 1024, 128, True, False, True, 'fp16','fp16','fp16','uint8')` and MISSES on it.
        # This is the same defect the class below records for bf16, in a second spelling.
-       "uint8": np.uint8, "int8": np.int8, "int16": np.int16,
+       # Every name `autotune_certified._DTYPES` recognises must be buildable here, or a key
+       # carrying it is recognised and then unsynthesisable — the failure simply moves. A cell
+       # ties the two tables together so a third omission cannot be silent.
+       # `int1` is Triton's spelling of a boolean tensor.
+       "uint8": np.uint8, "uint16": np.uint16, "uint32": np.uint32, "uint64": np.uint64,
+       "int1": np.bool_, "int8": np.int8, "int16": np.int16,
        "int32": np.int32, "int64": np.int64, "bool": np.bool_}
 
-_INTEGRAL = {"uint8", "int8", "int16", "int32", "int64", "bool"}
+_INTEGRAL = {"uint8", "uint16", "uint32", "uint64",
+             "int1", "int8", "int16", "int32", "int64", "bool"}
 
 
 class _Synth(np.ndarray):

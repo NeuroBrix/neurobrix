@@ -13,7 +13,7 @@ emitter, and ours is now triton-ext's.
 
 The staged-dot shape must COMPUTE correctly, not merely stop refusing.
 
-Everything measured on this chantier so far is a question of compilation: the
+Everything measured on this workstream so far is a question of compilation: the
 refusal falls, another appears, the MSL is emitted, the shader fails with nine
 errors. The day those nine fall there will be a kernel that compiles, and
 nothing whatever will have said that it computes the right thing. Fifteen

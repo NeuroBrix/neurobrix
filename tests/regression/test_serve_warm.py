@@ -111,7 +111,7 @@ FAMILY_ROWS = [
         marks=pytest.mark.xfail(
             reason="sampling capability gate refuses defaults-carried "
                    "top_k/top_p on the audio_llm paths even at "
-                   "temperature 0 (landed a9aab29; chantier "
+                   "temperature 0 (landed a9aab29; workstream "
                    "P-SAMPLING-CONSOLIDATION) and serving has no "
                    "top-k/top-p plumb-through to neutralize them — "
                    "warm-sweep finding 2026-08-26",

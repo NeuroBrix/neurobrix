@@ -7,7 +7,7 @@ Four causes were eliminated by measurement (the save is byte-identical to not
 saving; the reference is bit-reproducible; the latent dtype was a real bug and
 fixing it changed nothing; `sigmas` placement was mine and was reverted). The
 registered next probe is this one, and it is the op-by-op differential this
-project uses for every numerical chantier: **dump the latent per step in both
+project uses for every numerical workstream: **dump the latent per step in both
 runs and name the first step that differs.**
 
 A whole-image diff says "wrong". The first differing STEP says which component

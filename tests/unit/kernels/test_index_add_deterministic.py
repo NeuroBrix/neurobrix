@@ -1,6 +1,6 @@
 """Determinism + torch-parity guard for the Triton `aten::index_add` path.
 
-Chantier P-TRITON-MOE-DETERMINISM sub-chantier 2. The pre-fix kernel
+Workstream P-TRITON-MOE-DETERMINISM sub-workstream 2. The pre-fix kernel
 (`kernels/ops/index_add.py`) used `tl.atomic_add`, whose inter-block
 float accumulation order is non-deterministic. On Qwen3-30B::triton's
 unfused MoE path (6144 aten::index_add x autoregressive steps) this

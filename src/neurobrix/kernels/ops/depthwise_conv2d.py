@@ -11,7 +11,7 @@ groups=in=out=11200), the generic kernel measures ~4.8 s per call
 versus ~2.6 ms for cuDNN's dedicated depthwise path — a ~1800× gap
 that closes under the dedicated stencil.
 
-Pattern reference (P-SANA-4KPX-RUNTIME Étape 3 study):
+Pattern reference (P-SANA-4KPX-RUNTIME Step 3 study):
 - MultiPath/DepthwiseConv2d (CUTLASS sm_70 NCHW depthwise iterator,
   threadblock 64x128x32, warp 32x32x32, instruction 8x8x4 HMMA)
 - PyTorch PR #22302 — confirmed cuDNN has a separate depthwise code

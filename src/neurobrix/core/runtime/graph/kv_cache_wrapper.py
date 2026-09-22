@@ -956,7 +956,7 @@ def create_kv_wrapper_from_config(
     for key in required_keys:
         if key not in lm_config:
             raise RuntimeError(
-                f"ZERO FALLBACK: '{key}' manquant dans lm_config.\n"
+                f"ZERO FALLBACK: '{key}' missing from lm_config.\n"
                 "Model data incomplete. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
             )
 

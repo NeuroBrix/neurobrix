@@ -107,7 +107,7 @@ Addition 3 says "re-enter the cascade at the op-level tiling rung". It is worth 
 down why the cheaper seam beside it does **not** work, because it looks like it should.
 
 `conv2d_wrapper` already carries a kernel-level band-streaming lever
-(`_NBX_CONV2D_BAND_BYTES`, 4 GiB, P-SANA-4KPX Étape 1). The reproducer's failing allocation
+(`_NBX_CONV2D_BAND_BYTES`, 4 GiB, P-SANA-4KPX Step 1). The reproducer's failing allocation
 is **8 589 934 592 bytes** — the conv's own output, `(1, 64, 8192, 8192)` in fp16 — which is
 **above** that threshold, so the band path is entered. And it still dies, for the reason its
 own docstring gives:

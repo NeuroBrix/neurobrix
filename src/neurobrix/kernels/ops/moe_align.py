@@ -11,7 +11,7 @@ pipeline stays on device. Two independent wins:
    Device-side, the recorded launches recompute the tables from the
    CURRENT router output at every replay.
 2. Sync elimination: 48 D2H round-trips per decode step disappear from
-   the MoE band (same class as the device-scalar chantier).
+   the MoE band (same class as the device-scalar workstream).
 
 Pattern source: vLLM's moe_align_block_size CUDA kernel (grid sized on
 the worst case, consumers early-exit on the device num_tokens_post_

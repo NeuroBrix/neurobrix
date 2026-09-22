@@ -92,7 +92,7 @@ divergence is Sana's, predates the retrace and survives it.
 
 **What it means.** The public container renders a different picture from the vendor's for a
 user's prompt, with no warning. The gate refused the retrace's upload (an artefact that fails the
-gate is a chantier, not an upload); the hub keeps the June object until a judged replacement
+gate is a workstream, not an upload); the hub keeps the June object until a judged replacement
 exists. The 09-09 vendor-correctness cell read "image agrees" from Sana at another request — the
 disagreement is at this one (1024², the family protocol's prompt, seed 42), so the next step is
 the drift walk on THIS request: the compiled oracle against the vendor per stage boundary (text
