@@ -52,8 +52,8 @@ _CONV2D_AUTOTUNE_VOLTA = [
 
 @nbx_autotune(
     configs=maybe_pin_single(_CONV2D_AUTOTUNE_VOLTA, is_conv2d_pinned),
-    key=['batch_dim', 'in_feat_dim', 'in_height', 'in_width',
-         'out_feat_dim', 'out_height', 'out_width',
+    key=['batch_dim', 'in_feat_dim', 'in_height', 'in_width_key',
+         'out_feat_dim', 'out_height', 'out_width_key',
          'kernel_height', 'kernel_width',
          'stride_height', 'stride_width',
          'padding_height', 'padding_width',
@@ -66,6 +66,7 @@ def conv2d_forward_kernel(
     input_pointer, weight_pointer, output_pointer,
     batch_dim, in_feat_dim, in_height, in_width,
     out_feat_dim, out_height, out_width,
+    in_width_key, out_width_key,
     input_batch_stride, input_in_feat_stride, input_height_stride, input_width_stride,
     weight_out_feat_stride, weight_in_feat_stride, weight_height_stride, weight_width_stride,
     output_batch_stride, output_out_feat_stride, output_height_stride, output_width_stride,
