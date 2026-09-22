@@ -249,6 +249,13 @@ class WindowedOracle:
         for (ni, r0, r1, c0, c1), ref in self.blocks:
             yield out[ni:ni + 1, :, r0:r1, c0:c1], ref
 
+    def device_slices(self, t):
+        """The same windows, cut on the tensor WHERE IT LIVES. The whole output used to cross
+        to the host once per candidate config so that three small windows could be read out of
+        it — 1.73 GB a candidate on a 49x128x96x720 convolution, eighteen candidates a key."""
+        for (ni, r0, r1, c0, c1), ref in self.blocks:
+            yield _materialise(t[ni:ni + 1, :, r0:r1, c0:c1]), ref
+
 
 class RowWindowedOracle:
     """The float64 oracle on row windows of a matrix product's output (matmul, addmm, batched
@@ -269,6 +276,12 @@ class RowWindowedOracle:
     def slices(self, out):
         for (r0, r1), ref in self.blocks:
             yield out[..., r0:r1, :], ref
+
+    def device_slices(self, t):
+        """The same row windows, cut on the tensor WHERE IT LIVES (see WindowedOracle)."""
+        for (r0, r1), ref in self.blocks:
+            cut = t[r0:r1, :] if len(tuple(t.shape)) == 2 else t[:, r0:r1, :]
+            yield _materialise(cut), ref
 
 
 def _row_windows(m, n, k, cap=None):
@@ -408,6 +421,30 @@ def host_values(t) -> np.ndarray:
     if dt is not None and dt.kind == "V" and dt.itemsize == 2:
         return bf16_bits_to_f32(np.ascontiguousarray(host).view(np.uint16))
     return host
+
+
+def _materialise(piece):
+    """A cut ready to be read as numbers: an NBXTensor slice is a VIEW whose strides no flat
+    reader can follow, so it is made contiguous on the device (R33: `NBXTensor.contiguous()`
+    materialises through the `_strided_copy` Triton kernel) before it crosses. Anything that
+    is already an array is handed back."""
+    contiguous = getattr(piece, "contiguous", None)
+    return contiguous() if callable(contiguous) else piece
+
+
+def deviation_against(out_tensor, oracle) -> float:
+    """The deviation of a kernel's output against the oracle, reading from the device ONLY
+    what the oracle measures.
+
+    A windowed oracle already refuses to compute the whole reference; it was still handed the
+    whole result, because the windows were cut AFTER the crossing. A window of a large
+    convolution is a thousandth of its output, so this is the same comparison on the same
+    values, and a window cut wrongly fails loudly — its values would not match the reference
+    and every config would read as diverging."""
+    if hasattr(oracle, "device_slices"):
+        return max(oracle_deviation(host_values(piece) if hasattr(piece, "data_ptr") else piece, ref)
+                   for piece, ref in oracle.device_slices(out_tensor))
+    return oracle_deviation(host_values(out_tensor), oracle)
 
 
 def oracle_deviation(out: np.ndarray, oracle) -> float:
@@ -941,7 +978,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
                 run_s = time.time() - t_one                # the run every config makes anyway, timed
-                dev = oracle_deviation(host_values(out_tensor), oracle)
+                dev = deviation_against(out_tensor, oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
                 continue

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A certification reads only the part of a result its oracle measures.** Proving one kernel
+  configuration copied the kernel's whole output back from the device even when the reference
+  covers three small windows of it, so a large convolution moved gigabytes per candidate; the
+  windows are now cut on the device and the comparison is unchanged.
+
 - **A key whose extent is zero is refused instead of certified.** No tensor has a side of
   zero and no request forms such a launch, but a census recorded them and one reached the
   served directory; they are now refused where a negative extent already was, on the key
