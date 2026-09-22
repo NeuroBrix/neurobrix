@@ -1966,7 +1966,10 @@ door but **op-level tiling failing to cover these flattened projections** (`aten
 every pixel of a video, N = 3, K = 128) — Prism's `_try_op_level_tiling` is in the cascade and
 does not catch them. The plan also prints `56 554 MB planned` on a card the door set to 16 384,
 which is worth reading before anything else: if that figure is a SUM over a lazy_sequential
-stream it is harmless, and if it is a peak the plan is over budget by three times. Whichever
-it is, it is one line to check and I have not checked it.
+stream it is harmless, and if it is a peak the plan is over budget by three times. It is a SUM: `solver.py`
+starts `total_mb` at zero and adds every component's allocation, and this plan's loading mode
+is lazy — one component resident at a time, which is the whole point of that rung. So the
+figure is harmless and says nothing about the budget. Checked rather than left hanging.
 
-That is the lead, stated as a question rather than an answer.
+What remains, then, is exactly one thing: **op-level tiling does not cover these flattened
+projections**, and that is the lead.
