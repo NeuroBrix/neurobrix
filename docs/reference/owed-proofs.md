@@ -3312,3 +3312,36 @@ the comparison unlike — is resolved and it was a fair challenge:
 
 That places the difference below the kernel, in the Metal backend's lowering of the masked
 load — the same source is exact to the mantissa on CUDA.
+
+### RESOLVED, same day — the cause was ours, one line, and your CUDA run is what located it
+
+`393570c6`. The stencil in `kernels/ops/depthwise_conv2d.py` multiplied in the operands' own
+dtype for every type **except fp16**, which alone upcast to fp32 first:
+
+```python
+if fp16:
+    accum += (x_block.to(tl.float32) * w_block.to(tl.float32)[None, :])
+else:
+    accum += x_block * w_block[None, :]          # bf16 took THIS
+```
+
+Upcasting for every dtype fixes it. bf16 with padding: **0.754 -> 0.002955**, now identical to
+bf16 unpadded — the shape of your clean CUDA result, where pad0 == pad1. Unpadded bf16
+improved too (3.17e-03 -> 2.955e-03), because the fp32 product is more accurate than the bf16
+one. The accumulator was always fp32, so this costs nothing. Every size that failed now sits
+at the mantissa floor: C from 4 to 3072 and 8x8 to 256x256, all 0.002-0.004 against a 0.04
+tolerance, from 0.43-0.75 before.
+
+**In certification: 28 of 28 padded stride-1 depthwise keys were refused; now 0 fail.**
+
+Your run is what made this findable. "bf16 pad0 and pad1 are the SAME number to four
+significant figures" named the invariant a correct kernel has, and a Metal-only divergence
+from it pointed at the one place the two dtypes are treated differently. The Metal backend's
+lowering of a native bf16 product of a masked-loaded operand is still wrong — we now do not
+depend on it, rather than waiting for it to be fixed below us — so **if any other kernel does
+native bf16 arithmetic on a masked-loaded operand, it is suspect on Metal**. That is the
+generalisation worth carrying; on your card it is invisible.
+
+Gate: `tests/unit/kernels/test_depthwise_bf16_padding.py`, red on the old kernel (4 of 6, with
+the fp32 and fp16 controls passing, which is what proves it discriminates) and green on the
+new. One of its cells asserts your invariant directly: padding must not move the error floor.
