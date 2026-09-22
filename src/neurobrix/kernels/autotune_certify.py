@@ -23,6 +23,7 @@ import json
 import os
 import warnings
 import platform
+import re
 import socket
 import subprocess
 import time
@@ -1217,10 +1218,39 @@ def sticky_cuda_error(exc: BaseException) -> bool:
     return any(m in text for m in _STICKY_MARKS)
 
 
+_OVERSIZE = re.compile(r"GPU malloc failed \(error 2\) for (\d+) bytes.*?driver_total=(\d+)MB", re.S)
+
+
+def oversize_for_class(exc: BaseException):
+    """The bytes asked and the card's total when a key's tensors cannot FIT the memory class,
+    else None.
+
+    This is not a certification failure, it is a CENSUS defect arriving late: Wan2.1-T2V's
+    video VAE projects 81 frames of 722x1282x96 to RGB, whose input alone is 28.8 GB, and the
+    16 GB census recorded it because the shadow planned the op at its graph shape. A real
+    16 GB run never forms that key — Prism tiles the decode long before it — so no certified
+    entry is owed for it and reporting it beside genuine failures buries both. Named, counted
+    apart, and left for the census to stop recording (2026-09-22)."""
+    m = _OVERSIZE.search(str(exc))
+    if not m:
+        return None
+    asked, total_mb = int(m.group(1)), int(m.group(2))
+    return (asked, total_mb * 1024 * 1024) if asked > total_mb * 1024 * 1024 else None
+
+
 def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
     """Count a key's failure; return True when the run must STOP because the
     context is poisoned (the summary then names the key and the reason)."""
-    summary["failed"] += 1
+    big = oversize_for_class(exc)
+    if big is not None:
+        asked, card = big
+        summary["oversize"] = summary.get("oversize", 0) + 1
+        log(f"[certify] TOO LARGE FOR THIS CLASS at {key_text}: the key's tensors ask "
+            f"{asked / 2**30:.1f} GiB of a {card / 2**30:.1f} GiB card. No entry is owed — a run "
+            f"of this class never forms this key, because the plan tiles before it. The CENSUS "
+            f"recorded a shape this class cannot reach; that is where it is fixed.")
+        return False
+    summary["failed"] = summary.get("failed", 0) + 1
     if sticky_cuda_error(exc):
         summary["aborted"] = {"key": key_text, "reason": str(exc)[:300]}
         log(f"[certify] ABORTED at {key_text}: the CUDA context is poisoned ({str(exc)[:160]}) — "
