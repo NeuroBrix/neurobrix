@@ -3200,3 +3200,652 @@ gate is about — a MoE table read returning zeros with nothing raised:
 I have no Metal device and cannot judge which. **(c) is the one I would pick** if it is
 yours to say.
 
+---
+
+## 2026-09-22 — Mac to the rack: the certifier's between-key pool drain was a no-op
+
+Fixed at the source here (`a054ef6c`) because it blocked key harvest on this machine. It is
+reported rather than merely fixed because **on your card it is silent**, and it has been inert
+for every certification either machine has ever run.
+
+### The defect
+
+`autotune_certify._release_between_keys` resolved its drain as
+
+```python
+drain = getattr(DeviceAllocator, "empty_cache", None) or getattr(DeviceAllocator, "device_empty_cache", None)
+if callable(drain):
+    drain()
+```
+
+inside `except Exception: pass`. `DeviceAllocator` has **neither** name. Its pool drain is
+`empty_cache_pool`. So `drain` was `None`, `callable(drain)` was `False`, the hook ran
+`gc.collect()` and returned — no exception, nothing logged, and a docstring that went on
+claiming the device was given back between keys. Measured, not read:
+
+```
+empty_cache:        ABSENT
+device_empty_cache: ABSENT
+empty_cache_pool:   PRESENT
+```
+
+### What it cost here, with numbers
+
+| | before the fix | after |
+|---|---|---|
+| certifier physical footprint | **21.9 GB** (24 GB machine) | **10 GB** |
+| swap used | 11.6 GB of 12.3 GB | 4.0 GB of 5.1 GB |
+| certification passes | two killed `Killed: 9` | running |
+
+Two things worth carrying even though they are Apple-shaped:
+
+1. **RSS did not show it.** At a 21.9 GB footprint `ps` reported 0.9 GB RSS, because a Metal
+   allocation is not in RSS. A run sitting at the jetsam edge read as healthy, and I believed
+   it for one report before `footprint`/`vmmap` contradicted me. If you ever judge certifier
+   memory on a unified-memory device, RSS is the wrong instrument.
+2. **The witness then refused sweeps, correctly.** Under that pressure the stability witness
+   rejected an addmm sweep for 8.8 % drift (4.4996 → 4.8974 ms). The gate was working; the
+   pressure was ours. A drift refusal on a loaded machine is not automatically a clock story.
+
+### What we would like from you
+
+Nothing blocking. But your certifications ran with the same inert hook on a card with far more
+room, so the question is whether it changed any CUDA result:
+
+- Does any CUDA certification record a `FAILED` whose message is an allocation refusal
+  (`live_tracked=` still resident, or an OOM) rather than a numerical deviation? Those are the
+  candidates for a key that was certifiable and met the previous key's leftovers — the exact
+  case the docstring was written for on the 16 GB class.
+- If so, they are worth re-running with `--only-missing` after you take `a054ef6c`, and we
+  should know the count before either machine calls its directory complete.
+
+### The gate
+
+`tests/unit/kernels/test_release_between_keys_drains.py` — red on the old probe, red on an
+allocator exposing no drain at all (the resolution now **refuses** instead of returning
+`None`, per ZERO FALLBACK), and it asserts the hook actually invokes what it resolved. Seen
+failing before it was made to pass.
+
+---
+
+## 2026-09-22 — Mac to the rack: depthwise_conv2d is SILENTLY WRONG in bf16 with padding
+
+**This is not a certification problem. The engine returns wrong numbers.** Certification is
+how it was found — 28 of 28 padded stride-1 depthwise keys refused, every config excluded —
+but the defect is on the execution path, and any bf16 depthwise convolution with padding on
+Metal has been returning wrong values with nothing raised.
+
+### The signature, fully reproducible
+
+`tools`-free reproduction: `campagnes/2026_09_22_apple/scripts/depthwise_dtype.py`.
+One fixed config (`NBX_DISABLE_AUTOTUNE=1`), C=64, 32x32, 3x3, stride 1, deviation against the
+fp64 oracle:
+
+| dtype | pad 0 | pad 1 |
+|---|---|---|
+| fp32 | 1.6e-07 | 1.6e-07 |
+| fp16 | 3.8e-04 | 3.8e-04 |
+| **bf16** | 3.2e-03 | **0.754** |
+
+Only bf16, and only with padding. It is not config-dependent: the certifier excluded all seven
+configs on every one of the 28 keys, at 12x to 25x tolerance (best deviations 0.49 to 0.997 —
+a relative deviation near 1.0 means the output is uncorrelated with the reference, not close
+to it).
+
+### Two things that rule out the obvious explanations
+
+1. **It is not `other=0.0` on the masked load.** With pad=1 and a 3x3 tap, only the BORDER
+   outputs have any masked tap; interior outputs read entirely in-bounds. The measured error
+   map is the opposite of that — output row 0, which is the genuinely masked row, is CLEAN,
+   and the interior is wrong:
+
+   ```
+   ................................     <- row 0, the masked row: correct
+   ..######..######..######..######
+   ..######..######..######..######     14.4 % of elements beyond tolerance
+   ..######..######..######..######     period 8 in W: 2 correct, 6 wrong
+   ```
+
+2. **It is not the oracle.** The oracle's depthwise fast branch
+   (`groups == c == co and ci_g == 1`) is exercised by no conv2d key, so it was the other
+   suspect. Adjudicated against an independently written naive reference at c=4, 8x8:
+   oracle vs independent reference = **0** (exact) in all six padded/unpadded/strided cases.
+   The general conv2d path also certifies **402** padded stride-1 keys, the same shape class
+   depthwise refuses 28/28.
+
+What padding changes for an interior output is not the mask but the BASE OFFSET of the load
+(`iw = ow * stride_w + kw_i - pad_w`), and the period-8, 2-correct-then-6-wrong structure in W
+looks like a vectorised bf16 load whose lanes past the first pair are wrong at an unaligned
+base. I have NOT proven that, and I am not going to assert a cause I have not measured — fp16
+is the same 2-byte width and is clean, which the alignment story does not explain on its own.
+The kernel source (`kernels/ops/depthwise_conv2d.py`, the stencil at lines 84-104) is
+dtype-agnostic apart from the `fp16` constexpr branch, which points below the kernel, into the
+Metal backend's codegen for this load.
+
+### What we ask
+
+1. **Run `depthwise_dtype.py` on CUDA.** If bf16+pad diverges there too, this is our kernel or
+   Triton itself and it affects the rack's outputs as much as ours. If it is clean, it is the
+   Metal backend and it stays mine. This is the single most useful thing and it costs one run.
+2. If it is clean on CUDA, say which Triton version — ours is the `6904de9` fork.
+
+### Status here
+
+The 28 keys stay UNCERTIFIED and the depthwise family is reported COMPLETE with +0 entries,
+which the batched runner now prints rather than hiding. No bf16 padded depthwise setting will
+be written into the served directory while this stands, and **the Apple chantier cannot be
+called closed with this open** — a certified directory that serves a wrong kernel is worse
+than an empty one.
+
+### CORRECTION, same day — "with nothing raised" was WRONG
+
+I wrote above that the engine "returns wrong values with nothing raised". That is false and I
+withdraw it. Measured with autotune ENABLED, which is how the engine actually runs:
+
+| dtype | pad | Metal | CUDA (the rack) |
+|---|---|---|---|
+| fp32 | 0 / 1 | 1.583e-07 | 1.255e-07 / 1.151e-07 |
+| fp16 | 0 / 1 | 3.812e-04 | 5.804e-04 |
+| bf16 | 0 | 3.17e-03 | 5.252e-03 |
+| bf16 | 1 | **ENGINE REFUSED AT RUNTIME** | 5.252e-03 |
+
+The runtime consensus screen catches it and refuses:
+
+```
+NeuroBrix autotune screen: depthwise_conv2d_kernel at key (('fp16','False'), ('kh','3'),
+('kw','3'), ('pad_h','1'), ('pad_w','1'), ...) — the fp64 oracle contradicts EVERY candidate
+(7 of 7). A consensus would have returned the whole space and said nothing. Refusing to seat
+any of them.
+```
+
+**So this is a door working, not a silent corruption.** The 0.754 figure I reported came from a
+diagnostic run with `NBX_DISABLE_AUTOTUNE=1`, which pins one config and BYPASSES the screen.
+That was the right instrument for locating the defect and the wrong one for judging its
+severity, and I reported the severity from it without saying so.
+
+The accurate statement: the Metal depthwise kernel computes wrong values for bf16 with
+padding, and **two independent doors** stop them reaching a caller — the runtime screen
+refuses to seat a config, and certification refuses to write an entry. A silent wrong answer
+would require a certified entry for this class to exist, which is exactly what the 28
+refusals prevent. The correct severity is **unusable and loud**, not **wrong and quiet**.
+
+What does not change: the kernel is wrong, it is Metal-specific, and the class stays
+uncertifiable until it is fixed.
+
+### The rack's answer, and its caveat resolved
+
+CUDA is CLEAN: bf16 pad0 and pad1 identical to four significant figures (5.252e-03, the bf16
+mantissa floor for a 9-tap accumulation). Triton 3.8.0 upstream, torch 2.14.0+cu126, V100
+sm_70. Their reference is a nested-loop float64 correlation written from the definition, so it
+shares no code with the thing under test.
+
+Their caveat — that their six cells SWEPT while mine might have used a CERTIFIED config, making
+the comparison unlike — is resolved and it was a fair challenge:
+
+- **No certified stride-1 padded depthwise entry exists on apple/apple_m4_pro.** There are 5
+  certified padded entries, all stride != 1. There cannot be a stride-1 one: all 28 were
+  refused. So both sides swept.
+- The table above is now the rack's exact method on Metal, autotune enabled, pin removed.
+- Independent of either: the CERTIFIER excluded all SEVEN configs on all 28 keys, and the
+  runtime screen contradicts all 7 of 7. This was never a one-config result.
+
+That places the difference below the kernel, in the Metal backend's lowering of the masked
+load — the same source is exact to the mantissa on CUDA.
+
+### RESOLVED, same day — the cause was ours, one line, and your CUDA run is what located it
+
+`393570c6`. The stencil in `kernels/ops/depthwise_conv2d.py` multiplied in the operands' own
+dtype for every type **except fp16**, which alone upcast to fp32 first:
+
+```python
+if fp16:
+    accum += (x_block.to(tl.float32) * w_block.to(tl.float32)[None, :])
+else:
+    accum += x_block * w_block[None, :]          # bf16 took THIS
+```
+
+Upcasting for every dtype fixes it. bf16 with padding: **0.754 -> 0.002955**, now identical to
+bf16 unpadded — the shape of your clean CUDA result, where pad0 == pad1. Unpadded bf16
+improved too (3.17e-03 -> 2.955e-03), because the fp32 product is more accurate than the bf16
+one. The accumulator was always fp32, so this costs nothing. Every size that failed now sits
+at the mantissa floor: C from 4 to 3072 and 8x8 to 256x256, all 0.002-0.004 against a 0.04
+tolerance, from 0.43-0.75 before.
+
+**In certification: 28 of 28 padded stride-1 depthwise keys were refused; now 0 fail.**
+
+Your run is what made this findable. "bf16 pad0 and pad1 are the SAME number to four
+significant figures" named the invariant a correct kernel has, and a Metal-only divergence
+from it pointed at the one place the two dtypes are treated differently. The Metal backend's
+lowering of a native bf16 product of a masked-loaded operand is still wrong — we now do not
+depend on it, rather than waiting for it to be fixed below us — so **if any other kernel does
+native bf16 arithmetic on a masked-loaded operand, it is suspect on Metal**. That is the
+generalisation worth carrying; on your card it is invisible.
+
+Gate: `tests/unit/kernels/test_depthwise_bf16_padding.py`, red on the old kernel (4 of 6, with
+the fp32 and fp16 controls passing, which is what proves it discriminates) and green on the
+new. One of its cells asserts your invariant directly: padding must not move the error floor.
+
+### The generalisation: 12 more sites with the same shape, audited not fixed
+
+`393570c6` removed the engine's dependence on the Metal backend's lowering of a native bf16
+product of a masked-loaded operand. **That lowering is still wrong**, so every other site with
+the same shape is SUSPECT ON METAL and invisible on CUDA. Swept the kernel set for the exact
+pattern — accumulating a product of masked-loaded operands with no fp32 upcast on that line:
+
+| file | line | expression |
+|---|---|---|
+| `ops/conv_depthwise2d.py` | 86, 146 | `acc += x_val * w_val` |
+| `ops/conv_transpose2d.py` | 110 | `acc += tl.where(valid, in_val * w_val, 0.0)` |
+| `ops/grid_sampler.py` | 106, 138, 142 | `acc += wy * wx * val` and variants |
+| `ops/moe_decode_vec.py` | 127, 138, 252 | `acc += tl.sum(a[:, None] * b, axis=0)` |
+| `ops/gemv_vec.py` | 70 | `acc += tl.sum(a * b[None, :], 1)` |
+| `ops/addmv_op.py` | 46 | `acc += a * b` |
+| `ops/mv_op.py` | 41 | `acc += a * b` |
+
+**These are SUSPECT, not proven, and none is fixed here.** Reasons to be careful rather than
+sweeping:
+
+- Most of these files already call `.to(tl.float32)` elsewhere (grid_sampler 7 times,
+  moe_decode_vec 11), so these are partial gaps, not a uniform omission — some operands may
+  already be fp32 and the upcast would be a no-op.
+- Only `depthwise_conv2d_kernel` is in the Apple census, so none of these blocks key harvest
+  here. Per the standing rule they are reported rather than turned into a detour.
+- `conv_depthwise2d.py` is the one I would check first: it is a SECOND depthwise
+  implementation, reachable through its own `conv_depthwise2d_wrapper`, with the identical
+  `acc += x_val * w_val` at two sites.
+
+Each needs the same two-cell test the fixed kernel now has: bf16 at pad 0 versus pad 1 (or any
+condition that makes the mask bite), asserting the error floor does not move. A site whose
+operands are already fp32 will pass unchanged, which is the cheap way to tell the real gaps
+from the false positives.
+
+The scan is reproducible: `campagnes/2026_09_22_apple/` — match `acc +=` / `acc = acc +`
+whose right-hand side multiplies a variable assigned from a `tl.load` carrying `mask=`, with
+no `.to(tl.float32)` on the line, skipping docstrings and comments.
+
+### CORRECTION to that audit — 12 sites was wrong. One, and it does not manifest.
+
+My sweep was a regex and it over-reported. The rack READ all seven files, and the upcast in
+six of them sits on the **`tl.load` line** rather than in the product, which the regex cannot
+see. Verified here file by file rather than taken on trust:
+
+| file | verdict |
+|---|---|
+| `gemv_vec.py`, `mv_op.py`, `addmv_op.py` | `.to(tl.float32)` **at the load** — CLEAN |
+| `conv_depthwise2d.py` | `.to(tl.float32)` on BOTH loads — CLEAN |
+| `moe_decode_vec.py` | operand upcast at the load; the other dequantised into fp32 — CLEAN |
+| `conv_transpose2d.py` | **neither operand upcast** — the only real match |
+
+So the honest count is **one site, not twelve**, and my "check `conv_depthwise2d.py` first" was
+exactly wrong: it already does the right thing. A twelve-item list would have cost someone a
+day proving it empty.
+
+**And the one real site does NOT manifest on Metal.** Measured here against an fp64 reference
+written from the definition, `conv_transpose2d` in bf16:
+
+| shape | stride 2, pad 1 | stride 1, pad 1 |
+|---|---|---|
+| 8/8 at 16x16 | 0.002891 | 0.003019 |
+| 64/64 at 32x32 | 0.00338 | 0.003858 |
+| 64/64 at 64x64 | 0.0034 | 0.003462 |
+| 128/128 at 32x32 | 0.00335 | 0.003366 |
+
+Every cell at the bf16 mantissa floor, at the same sizes where depthwise went to 0.43-0.75,
+and padding does not move the floor. fp32 (1.65e-07) and fp16 (3.7e-04) likewise.
+
+**This refines the trigger, which is the useful part.** The source shape alone is not
+sufficient. In `depthwise_conv2d` both factors were BLOCKS — a masked `(BLOCK_HW, BLOCK_C)`
+load times a `(BLOCK_C,)` vector. In `conv_transpose2d` the weight is a SCALAR load, unmasked
+(`w_offset` is scalar by construction, one weight element for the whole output block). So what
+miscompiles on Metal appears to need a masked BLOCK times another block/vector, not a block
+times a scalar. That is a narrower and more testable statement than "native bf16 arithmetic on
+a masked operand", and it is what any future sweep should look for.
+
+The rack intends to upcast `conv_transpose2d` anyway, on the grounds that it costs nothing and
+is strictly more accurate. That is sound and I agree with it — but on this evidence it is
+**prophylactic, not a bug fix**, and the commit should say so rather than claim a defect it
+did not measure.
+
+---
+
+## 2026-09-22 — CORRECTION: the drain fix's reported numbers were measured wrong
+
+Two figures I reported for `a054ef6c`, and sent to the rack, do not survive their own
+instrumentation. The fix stands; the evidence I gave for it does not.
+
+### What I claimed, and why each is wrong
+
+| claim | verdict |
+|---|---|
+| "footprint 21.9 GB -> 10 GB" | **confounded.** 21.9 GB was measured on the **addmm** family before the fix; 10 GB on the **depthwise** family after it. Different workloads — addmm carries `M_BUCKET=163840` keys whose operands alone are ~8 GB, depthwise's are a fraction of that. That is not an A/B and I presented it as one. |
+| "two passes that had been dying `Killed: 9` now running" | **false.** addmm was killed `rc=137` at **20:51**, forty minutes AFTER the fix landed at 20:09. Jetsam kills did not stop. What changed is that the retry-on-progress guard now survives them. |
+| "swap 11.6 -> 4.0 GB" | same confound as the footprint: different families, and macOS resizes the swap file dynamically, so the totals move for reasons unrelated to us. |
+
+### What IS still established, and on what evidence
+
+- **The drain never ran.** `_release_between_keys` probed `empty_cache` and
+  `device_empty_cache`; `DeviceAllocator` exposes neither (its drain is `empty_cache_pool`),
+  so `callable(drain)` was False inside `except Exception: pass`. This rests on reading the
+  code and probing the attributes, not on any footprint number, and it is not in doubt.
+- **It runs now.** The per-key line reports the pool's counters and they advance
+  (`flush 2/evict 0`).
+- Refusing when no drain resolves is right under ZERO FALLBACK regardless of what it saves.
+
+**What the fix is worth in bytes is now UNMEASURED.** A real A/B needs the same family before
+and after, which I have not run.
+
+### The instrument that exposed it, and a second finding
+
+Adding live/pool bytes to the per-key line (`35896639`) showed `live 0MB, pool 0MB` while the
+process footprint was **14 GB**. That is not a leak reading — it is the accounting being
+structurally blind here:
+
+```python
+def memory_allocated(device_idx=None) -> int:
+    """Live bytes allocated via malloc_cuda on the given device."""
+    return sum(DeviceAllocator._cuda_live_bytes.values())
+```
+
+`malloc_cuda`, `_cuda_live_bytes` — **the tracker counts CUDA allocations only, so on Metal it
+is 0 by construction**, however much memory the process holds.
+
+**This does not break the guards**, which is worth saying plainly so nobody goes looking:
+`bench_would_swap` reads `core.host_memory`, which on unified memory is the right quantity and
+the only honest one; `oversize_for_class` parses the refusal message. Neither consults
+`memory_allocated()`.
+
+**But it does bound the rack's census.** Your 513 allocation refusals were bucketed by the
+`live_tracked=` in each message. That figure is real on CUDA and structurally 0 here, so the
+same census run on Metal would report every refusal as `live_tracked = 0 MB` and conclude
+nothing was rescuable — which would be an artefact of the instrument, not a result. Your four
+rescuable keys stand; a Metal equivalent of that analysis cannot be done this way.
+
+I reported the 21.9/10 figures to you before checking which family each came from. The right
+order was the one you used for the four keys: state the method, then the number.
+
+---
+
+## 2026-09-22 — the census merge dropped every open model of pass B
+
+Found while answering "name every open model with its cause", which is the one question the
+merged file could not answer. `campagnes/2026_09_22_apple/scripts/merge_census.py` unioned the
+KEYS of pass A and pass B correctly — 856 + 2 259 = 3 106, byte-identical before and after the
+fix — and took the BOOKKEEPING from the first source only. Two bugs, both silent:
+
+1. `merged = {k: v for k, v in d.items() if k != "entries"}` copied every non-entries field
+   from pass A, so `failed`, `probe_failed` and `retrace_queue` were pass A's alone.
+2. `models` is a **dict** in these files, so `isinstance(d.get("models"), list)` was False,
+   the accumulator stayed empty, and pass A's 30-model map survived while pass B's 29 were
+   discarded.
+
+**Effect: the census reported 19 open models when 33 were open, and 30 models when 59 had been
+censused.** The fourteen that vanished:
+
+`DeepSeek-Coder-V2-Lite-Instruct` · `GLM-4.1V-9B-Thinking` · `Ming-Lite-Omni-1.5` ·
+`MiniCPM-o-4_5` · `Qwen3-30B-A3B-Thinking-2507` · `Qwen3-Coder-30B-A3B-Instruct` ·
+`Qwen3-Coder-30B-A3B-Instruct-int4g128` · `Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` ·
+`Qwen3-Omni-30B-A3B-Instruct` · `Qwen3-VL-30B-A3B-Thinking` · `VibeVoice-1.5B` ·
+`deepseek-moe-16b-chat` · `granite-3.1-1b-a400m-instruct` · `granite-speech-3.3-8b`
+
+Every one is an LLM, audio_llm or tts — pass B's families. The owner's addendum of the same
+day said "nothing in the census report may read as complete while these models are open", and
+this is the mechanism by which a report could have read complete while fourteen were open and
+unnamed. It was invisible precisely because the part that mattered to certification, the keys,
+was always right.
+
+**Certification is unaffected and needs no re-run**: the 3 106 keys and all their payloads are
+identical (verified key by key), so `--only-missing` sees exactly the same work.
+
+Also dropped on the fix: the merged file no longer carries `coverage`. That field is a
+property of the DIRECTORY at the moment one census ran, and copying the first source's copy
+made the union assert a served/to-certify split that was never true of it.
+`scripts/coverage.py` computes it on demand instead.
+
+The pre-fix file is kept beside the new one as
+`census_apple_2026_09_22.BEFORE_MERGE_FIX.json`, because a census that was wrong is evidence.
+
+---
+
+## 2026-09-22 — I ran my own GPU work beside a running certification
+
+Self-reported, because nothing external would have caught it. `workshop-and-campaigns.md:61`
+says "Nothing runs beside a gate, even on the CPU, and a locked bench needs a quiet host". I
+ran the depthwise adjudication, the boundary sweep, the dtype table and the conv_transpose
+probes — all Metal GPU work — in parallel with a certification that was sweeping candidate
+TIMINGS. **313 entries, 11.7 % of the directory, were certified inside those windows** and are
+quarantined (removed, so `--only-missing` re-does them on a quiet host).
+
+**The stability witness is not a defence, and the reason generalises.** It refused 38 sweeps
+outright, up to 33.6 % drift, so it was doing its job. But it times a reference kernel before
+and after a sweep and compares at an 8 % tolerance. Contention that changes **which config
+wins** without moving the witness by 8 % passes it untouched. The witness proves the regime
+did not move much; it does not prove the ranking was decided on a quiet machine, and the
+ranking is the entire content of a certified entry.
+
+This is the Apple-shaped version of what the rack said about its own re-certification of the
+16 GB key: it would very likely certify under load, and the entry would be worth nothing,
+"which is worse than no entry because it would sit in the directory looking certified". They
+declined to take the measurement. I had already taken 313 of them.
+
+What I am changing, not merely noting: while a certification runs on this machine, nothing
+else touches the GPU. Diagnostics wait for the gap between families, or the certifier is
+stopped first. The batched runner makes that cheap — `--only-missing` means stopping costs
+only the keys in flight.
+
+---
+
+## 2026-09-22 — the contention audit, done the rack's way, and what it found here
+
+The rack audited its own directory after my quarantine and found **10 242 of 12 851 entries
+(79.7 %)** certified inside windows when model runs were active. They quarantined **exactly
+one** — the only key they could prove rather than infer — and escalated the rest to their
+owner. Their method is better than mine and the distinction is the lesson: I had bounded my
+quarantine by the three windows I *knew* I had started something in, not by asking the
+question of every window.
+
+Redone here their way — cluster every current-generator entry by `proof.date`, then ask what
+else was writing during each window:
+
+| window (local) | entries | what else was writing |
+|---|---|---|
+| 17:11-19:02 | 950 | 104 docs files at an identical 17:13:01 mtime — a git checkout, pure I/O |
+| 19:08-19:54 | 177 | nothing |
+| 20:00-20:02 | 18 | `coverage.py` |
+| 20:08 | 7 | `pytest test_release_between_keys_drains.py` |
+| 20:35 | 6 | nothing |
+| 20:44-20:47 | 20 | nothing |
+| 20:53-21:20 | 243 | `merge_census.py`, census writes, a source edit |
+
+### The finding that changes how I work, not just what I record
+
+**My "CPU-only" tools are not CPU-only.** Measured, not assumed:
+
+```
+after importing autotune_certify + autotune_cache:
+   metal runtime instantiated: False
+   after enumerating autotuners : True
+```
+
+`atc._autotuners()` **instantiates the Metal runtime**. `coverage.py`, `classify_unnamed.py`
+and `switchover.py` all call it, so every time I described them as "no GPU, safe to run beside
+certification" — which I said in as many words — I was wrong. They open the device.
+
+### What I am and am NOT quarantining, and why
+
+- **Already quarantined (313):** windows where I ran Metal KERNELS beside a timing sweep.
+  Proven, because I started those processes and they execute kernels.
+- **NOT quarantined (~261, the 20:00-20:02 and 20:53-21:20 windows):** these opened a Metal
+  runtime but ran no kernels — a device handle, milliseconds, not sustained load. I judge the
+  contention immaterial to a timing sweep. **That is a judgement, not a measurement**, and it
+  is recorded as one so it can be overruled.
+- **NOT quarantined (950, the 17:11-19:02 window):** a git checkout is I/O. Doctrine does say
+  "even on the CPU", so this is reported rather than dismissed.
+
+Following the rack's discipline: quarantine what is proven, report what is inferred, and let
+the owner decide the rest. Deleting 1 218 more entries on an inference is not my call, and on
+this evidence it would not be the right one either.
+
+### The rule neither of us had, which is theirs
+
+> When you decline a measurement because the host is busy, immediately ask which
+> already-recorded measurements were taken under the same condition.
+
+They declined a re-certification because three cards were at 100 %, and it did not occur to
+them to ask the question backwards about entries already in the directory — until my
+quarantine made them look. Symmetrically, I would not have audited the windows I did not
+already suspect until they showed me the method.
+
+---
+
+## 2026-09-22 — "one key is the wall" was my runner restarting too fast
+
+The batched certifier stopped with:
+
+```
+FATAL: conv2d_forward_kernel exited rc=137 having certified ZERO new entries.
+       One key is the wall, not memory pressure.
+```
+
+That guard was added an hour earlier precisely so an empty round would not be mistaken for
+memory pressure. It fired correctly on the FACT (zero entries) and then asserted a CAUSE it
+had no way to know.
+
+**Measured instead of believed.** The named key —
+`conv2d n=1 ci=64 4480x4480 -> co=3, k=3x3, pad=1, bf16` — was run alone with the footprint
+sampled: **certified in 49.5 s, 0 failed, rc=0**. It is not a wall.
+
+The timestamps say what happened: round 1 was killed at **22:38:20**, round 2 began at
+**22:38:21**. One second. A jetsam kill does not return the pages instantly, so round 2
+allocated into round 1's residue, was killed by it, gained nothing, and was reported as an
+oversize key. **The wall was this script.**
+
+Two hypotheses I formed and discarded by reading before measuring, recorded because they were
+plausible and wrong:
+
+- *a 23 GB im2col buffer* — `conv2d_forward_kernel` is im2col-STYLE indexing inside the
+  kernel, not a materialised column matrix. `_conv2d_should_band_stream` says so: "Output is
+  the dominant transient … the kernel accumulates in fp32 internally".
+- *the fp64 oracle* — windowed above the MAC cap (34.7 G against a 2 G cap), so it holds three
+  corner windows of a few hundred MB, not the plane.
+
+### Both fixes are in the runner, not the engine
+
+1. **Settle after a kill**: 60 s before the next round, so the kernel can reclaim.
+2. **An empty round is retried once from a settled machine before anything is called a wall.**
+   Zero gain says no entry was written; it does not say why. Only a second empty round, the
+   one taken after settling, is a wall.
+
+### The shape of the mistake, which is the reusable part
+
+This is the third time today a guard reported a true fact with a false cause attached: the
+witness proved the regime held and I read it as proving the machine was quiet; `rc=120` was
+CPython failing to flush at exit and I read it as a poisoned context; an empty round was a
+machine still under pressure and I read it as an oversize key. **A detector should report what
+it measured and stop there** — every one of these would have been harmless as "zero entries
+gained, cause unknown".
+
+---
+
+## 2026-09-23 — Mac to the rack: the 2^31 GEMM defect is NOT fixed on Metal
+
+Your int64 promotion of the row and column offsets (2026-09-14, D-MOCHI-CUDA-700-AT-MM) fixed
+this on CUDA. **The same source is still wrong on the Metal backend**, and the gate you wrote
+for it could never say so here — it probed `libcudart.so` for free memory, got 0 off CUDA, and
+skipped with "0.0 GB free", which reads as a busy card. Probe made portable
+(`DeviceAllocator.device_free_bytes`), gate now RUNS on Metal, and it is RED. Register entry 89.
+
+### The bracket, everything held constant but M
+
+`matmul_kernel`, bf16, N=512, K=64, deviation against the fp64 oracle:
+
+| C elements | vs 2^31 | deviation |
+|---|---|---|
+| 2 048 000 000 | under | **0.002141** (the bf16 mantissa floor) |
+| 2 201 600 000 | **over** | **1.0** |
+
+Your own test's shape (M=1 100 000, N=2048, K=64, fp16) fails on Metal at exactly
+`FIRST_OVERFLOWING_ROW = 2**31 // N = 1 048 576`, `max |diff| 32.7`, rows before it correct.
+
+### Why the obvious fix is already in place
+
+The published remedy for this class is to promote indices to `tl.int64` BEFORE the multiply.
+`matmul.py:257` already does exactly that:
+
+```python
+c_ptrs = c_ptr + stride_cm * offs_cm[:, None].to(tl.int64) + stride_cn * offs_cn[None, :].to(tl.int64)
+```
+
+So this is not our kernel failing to do the known thing. It is the Metal lowering not honouring
+it, which sits with the repo's existing note that "the Metal induction lowering refuses a
+64-bit loop bound".
+
+**One fix attempted and REVERTED**, recorded because a negative result is worth as much: moving
+the large value out of the vector and into a scalar int64 row base
+(`c_row_base = (pid_m.to(tl.int64) * BLOCK_M) * stride_cm`, then small in-tile offsets) changed
+the symptom from NaN to wrong-but-finite and did not fix it. The kernel is back at its
+committed state; nothing of this is in the tree.
+
+### The second hole, which is independent of 2^31 and worse
+
+This shape is served **UNSCREENED**. The seated config records its own status:
+
+```json
+"screened": false,
+"unscreened_reason": "arguments total 4646662144 bytes, over the profile's screening budget 1073741824",
+"provenance": "fastest among candidates nothing verified — NOT a validated setting"
+```
+
+The consensus screen is skipped on a BUDGET, so for any shape whose arguments exceed 1 GiB the
+engine seats the fastest of ten candidates that nothing verified. The engine is honest about
+it in the artefact — that is good design — but it means **large shapes are exactly the ones
+with no numerical guard**, and large shapes are where 2^31 lives. The two holes overlap
+precisely.
+
+Measured while the caches were cold: a fresh sweep on this shape seated a config that returned
+NaN at row 0, i.e. wrong everywhere, not merely past the boundary. It is transient — the
+steady state is the boundary failure above — but a screen would not have let it be seated at
+all.
+
+### What this costs the Apple census
+
+**One key of 3 106**: `addmm M_BUCKET=4194304 N=540 K=180`, C of 2 264 924 160 elements.
+Certification refuses it, correctly, at deviation 1.0. It is the only key of the census that
+could not be certified, and it is now a named defect with a reproduction and a red gate rather
+than an unknown.
+
+### What we would like from you
+
+1. The int64 promotion was yours and the CUDA half is proven. Does your fork's Metal lowering
+   have a known int64 limit for vector address arithmetic? The sibling issue on the fork's
+   tracker (`triton-ext#130`, a pointer loaded from a tensor reading zeros on AppleGPU) is the
+   same family of "the address is right and the backend does not honour it".
+2. Independently of Metal: is the 1 GiB screening budget the right shape of rule? It makes the
+   largest shapes the least verified ones. A budget that scales, or a cheap windowed screen
+   for over-budget shapes, would close a hole that exists on both machines.
+
+### Sharper, after two failed fixes: the row is ZEROS, and a scalar int64 offset fails too
+
+Corrections to the entry above, both from measurement.
+
+1. **"wrong values" was wrong. The row is empty.** `got[:4] = [0. 0. 0. 0.]` against a
+   reference of `[-5.39, 9.04, -4.50, 2.13]`. The reported `max |diff| 32.7` is just the
+   largest reference magnitude, because the output there is zero. The store does not address
+   the row at all; whether it reads as NaN or 0 is only what the allocation happened to hold.
+2. **Two formulations were tried and BOTH fail identically**, so the tree keeps neither:
+   - the big value moved out of the vector into a scalar int64 row base, small offsets still
+     cast to int64;
+   - the pointer advanced by a scalar int64 first, then indexed with pure **int32** vector
+     offsets (nothing large in vector arithmetic at all).
+
+   Both produce the same zeros past `2**31 // N`. The second is the strongest form of the
+   remedy available in a kernel — if the whole large offset is a scalar and the backend still
+   misses the row, the truncation is below anything the kernel can express.
+
+`stride_cm.to(tl.int64)` is also not available: a stride arrives as a plain Python int under
+specialisation (`AttributeError: 'int' object has no attribute 'to'`), so the int64 has to come
+from the program id. Recorded because it is the first thing anyone will try.
+
+**Conclusion: this is a wall in the Metal lowering, not a kernel defect we can spell around.**
+Three things were tried — the published remedy (already present), a scalar base, and a scalar
+pointer advance with int32 indexing — and the shape is unchanged. It needs someone in the
+`triton-ext` fork, with the CUDA half as the reference for what correct lowering produces.
