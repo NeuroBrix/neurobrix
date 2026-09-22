@@ -187,7 +187,7 @@ def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
 
 
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
-                 log_dir: Path, rungs: list = ()) -> dict:
+                 log_dir: Path, rungs: list = (), walk_extents: bool = False) -> dict:
     fam = _family(model)
     row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": []}
     frozen = frozen_dims(model)
