@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A census shadow walks a request loop by the key classes it produces.** Under
+  `NBX_CENSUS=1` the autoregressive, dual-AR and TTS decodes skip to each bucket's top
+  instead of stepping token by token, and the KV cache moves its counters past the skipped
+  positions; a live run never skips (chatterbox's 2 048-token census: 541.7 s to 37.9 s,
+  same decode keys).
 - **An input the graph binds symbolically is handed to it whole.** The runtime cut any
   component input longer than the container's traced extent down to that extent, even where
   the graph binds the dimension as a symbol and runs at any length: Qwen3-Omni's thinker

@@ -75,6 +75,28 @@ def record(tuned, key: tuple) -> None:
             fh.flush()
 
 
+def pace(length: int) -> int:
+    """How many extra positions a request loop may skip after `length` under the shadow: up to
+    the last position of the current bucket, so the next step lands on a new bucketed key.
+
+    A census costs shapes, and under the bucketed keys a decode's shapes change only at the
+    bucket tops of the context (or cache) length: the steps in between produce the keys the
+    step before them produced. Walking every one of them cost chatterbox 390 steps for the
+    keys of ~110 lengths (9 min on one thread, 2026-09-21). A flow calls this with the length
+    it has and appends that many copies of the token it sampled: the keys of every bucket are
+    still met once, and the walk is enumerated by the key classes it produces. 0 outside the
+    shadow — a live run never skips a position."""
+    if not _ACTIVE["census"] or length < 1:
+        return 0
+    try:
+        from neurobrix.kernels.autotune_bucket import bucket_of
+        nxt = int(length) + 1
+        top = max(int(bucket_of(dim, nxt)) for dim in ("M", "N", "K"))
+        return max(0, top - nxt)
+    except Exception:  # noqa: BLE001 — no ladder: every position is its own key, nothing to skip
+        return 0
+
+
 def active() -> bool:
     return _ACTIVE["census"]
 
