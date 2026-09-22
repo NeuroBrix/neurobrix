@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   immediately. Half of those tables were also being kept twice over. Once past that, the
   pieces could not read each other's results, because what one piece hands to the next lost
   the information the next one needed to make sense of it. All of this is fixed, and a model
-  far larger than the card now runs to completion on it. Its answers are still being checked
-  against the same model run whole, and this note will say so when that comparison lands.
+  far larger than the card now runs to completion on it, and answers coherently. One further
+  fault was found by that comparison and fixed: the piece-by-piece path was not carrying the
+  running memory of the conversation between pieces, so the first word of an answer was right
+  and everything after it degenerated into repetition. The answers are close to the whole
+  model's but not word-for-word identical, and the remaining difference has a known and
+  reported cause, which this note will resolve when it is measured rather than reasoned.
 
 - **Opening a packaged model file no longer overwrites the copy already installed.** Reading
   a `.nbx` unpacks it into the local model store, and it did so even when a different build of
