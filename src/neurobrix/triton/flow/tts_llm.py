@@ -371,11 +371,21 @@ class TritonTTSLLMEngine:
                 pos_emb = speech_pos_emb_np[pos_idx:pos_idx + 1]  # [1, dim]
                 token_embed = token_embed + pos_emb[np.newaxis, :, :]
 
+            # A census shadow walks the context by bucket classes, not by tokens: the
+            # positions up to the current bucket's top produce the keys this step produced,
+            # so they are appended at once (kernels/census.py::pace; 0 outside the shadow).
+            from neurobrix.kernels import census as _census
+            _skip = min(_census.pace(int(context_np.shape[1])), max(0, _nsteps - len(generated_ids)))
+            if _skip:
+                token_embed = np.repeat(token_embed, 1 + _skip, axis=1)
+                generated_ids.extend([next_token] * _skip)
             # Grow both contexts in lockstep (shared speech sequence).
             context_np = np.concatenate([context_np, token_embed], axis=1)
             if do_cfg:
                 uncond_context_np = np.concatenate(
                     [uncond_context_np, token_embed], axis=1)
+            if _skip and len(generated_ids) >= _nsteps:
+                break
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")

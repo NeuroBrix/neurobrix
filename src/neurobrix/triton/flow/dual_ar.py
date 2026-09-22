@@ -221,6 +221,16 @@ class TritonDualAREngine:
 
                 acoustic_codes.append(ctx)
                 grid_cols.append([slow_token] + ctx)
+                # A census shadow walks the grid by bucket classes, not by columns (the
+                # positions up to the bucket's top produce this step's keys): kernels/census.py.
+                from neurobrix.kernels import census as _census
+                _skip = min(_census.pace(len(grid_cols)), max(0, max_tokens - len(grid_cols)))
+                if _skip:
+                    grid_cols.extend([[slow_token] + list(ctx)] * _skip)
+                    slow_history.extend([slow_token] * _skip)
+                    acoustic_codes.extend([list(ctx)] * _skip)
+                    if len(grid_cols) >= max_tokens:
+                        break
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
