@@ -1526,3 +1526,75 @@ its `fp16_conv_cascade_safe` and planned fp32. The difference was the harness, r
 twice before naming a culprit, and the pointer is now part of every worktree here. The unified
 outcome (a refusal becoming a streaming strategy, since the engine never refuses for memory)
 is the Mac's to prove. Records: `nbx/campaigns/2026_09_21_mac_proofs/`.
+
+## 2026-09-22 00:50 — the certifier that held 155 GB, and the shadow that walked every token: for the Mac
+
+Four measurements the owner took on this rack at 23:32 named two host burns that made the
+cards idle while certification work existed. Both are fixed at the source and both have the
+same shape on Metal, so the Mac should read this before its own rounds.
+
+**A fp64 oracle computed WHOLE on the host.** `autotune_certify` proved a matmul key by
+building the reference product in float64 with numpy, at the key's full shape. The 32 GB
+matrix round reached `44 544 x 3 072 x 8 192` and the process held **155.5 GB of resident
+host memory** (read at 23:32:41 on pid 4023027) while its card sat at 0 %; the rack's 251 GB
+and its 7 GB of swap were both full, load 74.3 on 80 cores. The oracle is now WINDOWED by
+rows above a cap of 2e9 multiply-accumulates (`ORACLE_MAX_MACS`): the first, middle and last
+row windows of the product are computed and compared, the batched bias windowed with them
+(`RowWindowedOracle`, `_row_windows`, `_matmul_oracle_fn`, commit `ec86f575`). A windowed
+oracle proves the same thing a whole one does for a GEMM — every output row is the same
+inner product over K, so a wrong BLOCK_K or a wrong accumulation order shows in any row —
+and the deviation it reports is measured on real rows, not sampled values.
+
+**A BLAS pool spinning behind a shadow.** One chatterbox census shadow ran at **4 235 % CPU**
+(64 threads at ~24 % each) and another at 2 843 % with 16.3 GB resident: the shadow's own
+host arithmetic is small, but OpenBLAS opened a pool per process and the pool spun. With
+`OPENBLAS/OMP/MKL/NUMEXPR_NUM_THREADS=1` the same shadow runs at 93–99 % CPU on one thread
+and records the same keys; every shadow the census launches is single-threaded now
+(`tools/certified_census.py::shadow`, commit `ec86f575`). The census must never starve
+certification, and 24 shadows at 64 threads is how it did.
+
+**A shadow that walked every token.** The census walked a decode one position at a time:
+chatterbox's 2 048 speech tokens cost **541.7 s** for the keys of about 110 distinct lengths.
+Under the bucketed keys a decode's shapes change only at the bucket tops of the context or
+cache length, so the shadow now skips to each top and the sampled token stands for the
+positions between (`census.pace`, the three triton flows, `kv_cache.skip_positions`, commit
+`2e0852d8`): **37.9 s, the same decode keys**. TinyLlama: 20 s to 10 s, its 6 keys unchanged
+(all under 64, where the ladder is exact). A live run never skips — `pace` answers 0 outside
+the shadow, and a cell pins that.
+
+**An extent a shadow cannot learn.** What the vocoder receives is the number of speech tokens
+that survived a filter on the tokens SAMPLED, and a shadow has no values: two runs of
+chatterbox gave 1 716 and 1 856 tokens and therefore two complete sets of convolution keys.
+A census taken from one run certifies one speech length. `census.walk_extent(lo, hi, run)`
+runs such a stage at every KEY CLASS of the extent — the ends, then the midpoint of any pair
+whose recorded key sets differ, until the pair is adjacent; every kernel's key is a monotone
+step function of the extent, so a pair with one key set brackets a range with that key set.
+Synthetic proof on this profile's own ladders: every class met, none missed, in under four
+runs per class. The door is `NBX_CENSUS_EXTENTS=1`; a walk refused at every extent RAISES
+rather than reading as censused (commit `11045c4d`).
+
+**A key whose extent is zero.** Walking that extent to its bottom recorded convolution keys
+with `in_width` 0 — a four-token speech through a vocoder. No tensor has a side of zero, no
+certifier can synthesise one, and no request forms the launch; the served directory already
+carries one (`conv2d_forward_kernel.fp32`, a key whose `batch_dim` is 0), so a census recorded
+them before anyone read one. Refused now where a negative extent already was, on the key
+positions that are extents or divisors and not on a padding, which may legitimately be zero
+(`autotune_certified.EXTENT_POSITIONS`, `degenerate_extent`, commit `69df7418`; seen failing
+on two injections). **The Mac should check its own directory for the same entries.**
+
+**Open, and NOT landed: the width of a one-row convolution.** A convolution whose spatial
+extent is one row is a 1-D convolution over a sequence — a vocoder's samples, a mel
+spectrogram's frames — and that extent is the request's, bounded by nothing: the served
+directory holds **483 one-row entries at 201 distinct widths up to 210 998** (conv2d fp16,
+of 798 entries) and one chatterbox run reaches 444 721. So the doctrine's second reason for
+exact convolution keys — that their extents are bounded by resolutions and tile edges — is
+false for this class, while its first reason (a ladder lost 37–40 % where the conv optimum
+flips) was measured in the 2-D regime and says nothing about H = 1 with W huge, where the
+grid is `cdiv(N*W, BLOCK)` and the optimum is EXPECTED to be flat in W. An expectation is not
+a measurement, so the change sits on the branch `one-row-conv-width-bucket` (17f58975, both
+remotes) until `tools/bucket_loss.py --kernel conv2d --dim W` has run on a free card of each
+memory class. The decision matters beyond this rack: it sets the certification budget for the
+whole audio family. One chatterbox vocoder walked over its speech length demands **5 058
+keys** — 2 889 convolution, 1 818 baddbmm, 329 matmul — of which 125 of 145 distinct one-row
+widths fall below 8 192, where the ladder is fine. The Mac's profile needs the same
+measurement before it certifies any audio model.
