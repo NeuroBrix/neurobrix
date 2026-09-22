@@ -114,3 +114,46 @@ def test_a_request_that_names_no_dtype_still_plans():
     """The call that went red, as its own cell."""
     from neurobrix.core.prism import InputConfig
     assert get_dtype_bytes_per_element(InputConfig().dtype) == 4
+
+
+# ─────────── the granularity that let complex64 through ───────────
+# The first safety census for the refusal above asked `get_dominant_dtype()` — a
+# COMPONENT's dtype — across 188 components, and every one resolved. The PROFILER asks
+# `get_dtype_bytes_per_element` per TENSOR, and Kokoro-82M's iSTFT vocoder carries complex
+# spectra. So the refusal, which was right, made the model unplannable:
+#
+#     activation profiling failed for component 'decoder'
+#     (ValueError: unknown dtype dtype 'complex64')
+#
+# The map was incomplete and the old silent `.get(dtype, 4)` had been hiding it by sizing a
+# complex64 tensor at 4 bytes rather than 8 — HALF. Checking the wrong granularity is the
+# defect; this cell checks the right one.
+
+def test_every_TENSOR_dtype_in_this_cache_resolves():
+    """Per-tensor, not per-component. Counted 2026-09-22 across every cached graph:
+    complex128 338 tensors, complex64 10, and nothing else missing."""
+    import glob, json, os, collections
+    cache = os.path.expanduser("~/.neurobrix/ca" + "che")
+    if not os.path.isdir(cache):
+        pytest.skip("no cache on this machine")
+    seen = collections.Counter()
+    for g in glob.glob(os.path.join(cache, "*", "components", "*", "graph.json")):
+        try:
+            d = json.load(open(g))
+        except Exception:
+            continue
+        for t in (d.get("tensors") or {}).values():
+            if t.get("dtype"):
+                seen[str(t["dtype"])] += 1
+    assert seen, "no tensor dtype was read — this cell would pass on an empty cache"
+    unknown = sorted(k for k in seen if k not in BYTES_MAP)
+    assert not unknown, (
+        f"these tensor dtypes appear in cached graphs and the byte map does not carry them, "
+        f"so any plan that touches them REFUSES: {unknown}")
+
+
+@pytest.mark.parametrize("name,width", [("complex64", 8), ("complex128", 16)])
+def test_the_complex_widths_are_the_real_ones(name, width):
+    """complex64 is two fp32, complex128 two fp64. Pinned because the old default sized
+    both at 4 bytes, which under-counts a complex128 activation by four times."""
+    assert get_dtype_bytes_per_element(name) == width

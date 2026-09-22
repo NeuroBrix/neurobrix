@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in 17 GB. The plan now never assumes more memory than the description states, and a machine
   that is genuinely busy still plans on less.
 
+- **Models using complex numbers can be planned again.** Some audio models represent sound as
+  complex spectra before turning it back into a waveform. The planner's table of how many
+  bytes each number type occupies did not list the complex types, and had been quietly
+  assuming four bytes for them — half the real size for one, a quarter for the other. Once
+  unknown types began being reported rather than assumed (the previous entry), that omission
+  stopped the planner outright for those models. The table now carries them at their true
+  widths.
+
 - **A memory plan no longer reports twice the memory a model needs when a dtype is written
   in short form.** The planner looks up how many bytes a number type takes. When the name it
   was given was not one it knew — `bf16` rather than `bfloat16`, `fp16` rather than
