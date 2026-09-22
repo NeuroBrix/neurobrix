@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-90 entries, of which five are placeholders and 85 carry a site. Two
+91 entries, of which five are placeholders and 86 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2456,4 +2456,62 @@ and `ensure_extracted` returns it without calling `extract()`. Measured after th
 destination is written on the command line — put the door where the write happens, in the
 library that computes the path, and test it by calling that function rather than by typing a
 command.
+
+
+### 91 — the stimulus-collision guard passed a trace it could not have failed
+
+**Where.** `forge/tracer/worker.py`, `_decollide_video_dims.collides()` — the guard that is
+supposed to refuse a trace stimulus whose values collide with the model's own constants.
+
+**What it passed.** `--trace-spatial 30,54` on mochi-1-preview's transformer. It printed
+`De-collided 5D trace dims: [1, 30, 54] -> [10, 30, 54]` and reported nothing wrong. The
+trace then completed, the container built, and the RUN died:
+
+    Failed at aten.mul::18 (aten::mul): Cannot broadcast (2, 22260, 24, 64) and (11872, 24, 120)
+
+`aten.cos::1::out_0` had been given dims `[4050, 24, {add(s1=10, s3=54), trace 64}]`. The last
+axis is the **head_dim** — an architectural constant — symbolised as `time + width`, because
+10 + 54 = 64. At the request's real extents that expression becomes 28 + 106 and the rotary
+table stops matching Q/K.
+
+**What would the guard have done if the stimulus were wrong?** Passed — which is what it did.
+It checks subset **PRODUCTS** of {b, T, H, W} against `occupied`, checks them for duplicates,
+and checks affine forms `(d-1)*k`, `d*k`, `(d+1)*k` for k in (2, 4, 8, 16). It never checks
+subset **SUMS**. Meanwhile the symbolisation deliberately MATCHES sums — the "bare-sum
+carrier" that single-value matching misses — so one half of the system can create a carrier
+the other half never looks for.
+
+**TWO gaps, and closing either alone still misses this case.** `occupied` is built from the
+config's literal ints and `b*v`. 64 is `attention_head_dim // 2` = 128 // 2, the rotate_half
+split: a DERIVED constant that was never in the set. So adding sums without seeding
+`occupied` with derived constants still passes 30,54, because there is nothing there for the
+sum to collide with; and seeding derived constants without adding sums also passes, because
+the carrier is a sum. (Named by the Mac on reading the first write-up of this, and correct.)
+
+**A THIRD constraint the guard does not apply to an operator's extent.** `--trace-spatial
+26,27` cleared the collision rule and died at
+`shape '[2, -1, 10, 26, 27]' is invalid for input of size 162240`: W must be divisible by
+`patch_size`. The nudge search knows this — "nudge in PATCH-SIZE steps so patchified models
+keep divisibility" — and the operator-supplied path does not go through it.
+
+**The rule that discriminates, measured in both directions.** With sums added, `occupied`
+seeded with {v, b*v, v//2, v//4, v*2}, and the BATCH exempt from sums as it already is from
+products:
+
+    T=10 H=30 W=54   (what I traced)    -> SUM[64]   correctly refused
+    T=10 H=60 W=106  (vendor default)   -> clean     history agrees
+    T=10 H=26 W=30                      -> clean, and it traced (OK, 11337 ops)
+
+Exempting the batch is not cosmetic: without it the vendor's own default is flagged on
+`b + T = 2 + 10 = 12 = in_channels`, rejecting an extent that has always worked.
+
+**NOT YET FIXED, and the entry is filed anyway** — which is the point of filing it. The
+change is three lines in `collides()`, but the blast radius needs `occupied` reconstructed
+per model from each `hf_snapshots/<model>/<component>/config.json`, because a rule that
+over-rejects makes models UNTRACEABLE rather than merely wrong. Filed now because the guard's
+green on that trace will otherwise read as coverage the next time someone looks.
+
+**The lesson, in one line.** A guard that enumerates one family of arithmetic — products —
+while the thing it guards against is built from another — sums — is green by construction on
+the whole second family, and its silence is indistinguishable from a clean stimulus.
 
