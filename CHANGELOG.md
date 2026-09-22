@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A key whose extent is zero is refused instead of certified.** No tensor has a side of
+  zero and no request forms such a launch, but a census recorded them and one reached the
+  served directory; they are now refused where a negative extent already was, on the key
+  positions that are extents and not the ones where zero is ordinary.
+
 - **A census enumerates an extent it can only learn from values.** The length a vocoder or
   codec receives is what survived a filter on generated tokens, so a census taken from one
   run certified one speech length and every other length missed the directory at runtime.
