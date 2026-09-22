@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A census shadow reads a dtype by name, not by how the interpreter prints it.** What
+  `str()` renders for an integer enumeration changed between Python versions, so on a newer
+  interpreter a shadow's health check read as unhealthy and every diffusion census stopped at
+  its first step, harvesting none of the keys after the loop.
+
 - **A certification reads only the part of a result its oracle measures.** Proving one kernel
   configuration copied the kernel's whole output back from the device even when the reference
   covers three small windows of it, so a large convolution moved gigabytes per candidate; the
