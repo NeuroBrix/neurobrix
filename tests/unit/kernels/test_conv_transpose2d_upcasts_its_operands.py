@@ -1,39 +1,72 @@
 """conv_transpose2d multiplies in fp32, whatever dtype its operands arrive in.
 
+PROPHYLACTIC, not a bug fix. Say so plainly, because the first version of this file did not.
+
 It used to multiply a MASKED-LOADED operand in the operands' own dtype:
 
     in_val = tl.load(input_ptr + in_offset, mask=valid, other=0.0)   # no upcast
     w_val  = tl.load(weight_ptr + w_offset)                          # no upcast
     acc   += tl.where(valid, in_val * w_val, 0.0)
 
-That is, line for line, what `depthwise_conv2d` did before metal-first-light 393570c6 —
-where the fp16 arm upcast and every other dtype took the native path, and bf16 with padding
-returned 0.754 relative error against an fp64 oracle on Metal. This kernel had no fp16 arm at
-all, so BOTH operands stayed narrow for every dtype. Found by sweeping the kernel family for
-that shape after the Mac reported theirs: of seven candidates, five upcast at the LOAD line
-(gemv_vec, mv_op, addmv_op, conv_depthwise2d, moe_decode_vec) and this was the only match.
+which is the SOURCE SHAPE that broke `depthwise_conv2d` in bf16 on Metal (0.754 relative
+error against an fp64 oracle; metal-first-light 393570c6). It was found by sweeping the
+kernel family for that shape after the Mac reported theirs.
 
-WHAT IT IS WORTH ON CUDA, measured on a V100 (Cin=Cout=8, 16x16, k=3, stride 1):
+THIS KERNEL IS MEASURED CLEAN ON METAL. The Mac ran it there in bf16 against an fp64
+reference written from the definition, deliberately scaling up first because depthwise was
+clean at 8x8 and only broke from 16x16 — size was the trap there:
+
+    shape               stride2 pad1   stride1 pad1
+    8/8    at 16x16     0.002891       0.003019
+    64/64  at 32x32     0.00338        0.003858
+    64/64  at 64x64     0.0034         0.003462
+    128/128 at 32x32    0.00335        0.003366
+    256/64 at 32x32     0.00333        0.003063
+
+Every cell on the bf16 mantissa floor, at the same sizes where depthwise reached 0.43-0.75,
+and padding does not move it. fp32 1.65e-07, fp16 3.7e-04.
+
+WHY IT IS CLEAN, AND THE SHARPER RULE THAT CAME OUT OF IT
+---------------------------------------------------------
+The source shape alone is not sufficient to trigger the Metal miscompile. In
+`depthwise_conv2d` BOTH factors were blocks: a masked `(BLOCK_HW, BLOCK_C)` load times a
+`(BLOCK_C,)` vector. Here the weight is a SCALAR, loaded unmasked — the file's own comment
+says so, "one weight element for the whole output block". So what miscompiles appears to
+need a masked BLOCK times another block or vector, not a block times a scalar. That is
+narrower and more testable than "native bf16 arithmetic on a masked operand", and it is what
+a future sweep should look for.
+
+WHAT THE CHANGE IS WORTH ANYWAY, measured on a V100 (Cin=Cout=8, 16x16, k=3, stride 1):
 
     dtype       before      after
     float32     2.411e-07   2.411e-07     unchanged
     float16     4.802e-04   3.700e-04     -23 %
     bfloat16    3.345e-03   2.687e-03     -20 %
 
-So it is not a Metal-only courtesy: an fp32 product is strictly more accurate than a narrow
-one, and the accumulator was ALREADY fp32, so it costs nothing on any backend (R23).
+An fp32 product is strictly more accurate than a narrow one, and the accumulator was ALREADY
+fp32, so it costs nothing on any backend (R23). That is the whole case for it: an accuracy
+gain at zero cost, and one less kernel carrying a shape we now know can miscompile somewhere.
 
-THE INVARIANT, which is the part that transfers
------------------------------------------------
-Padding must not move a dtype's error floor. The floor is set by the mantissa; padding adds
-masked taps that contribute zero. A dtype whose pad=1 and pad=0 disagree is a dtype the
-kernel is treating differently from the others — which is how the Metal defect was finally
-located, after an error map and a dtype table had failed to name it. Asserted here for
-every dtype, so this kernel cannot acquire that asymmetry silently.
+THE GATE IS THE INVARIANT, NOT THE IMPROVEMENT
+----------------------------------------------
+Padding must not move a dtype's error floor. The floor is the mantissa's; padding adds masked
+taps contributing zero. A dtype whose pad=1 and pad=0 disagree is one the kernel treats
+differently from the others — which is how the Metal defect was finally located, after an
+error map and a dtype table had both failed to name it.
 
-On CUDA the invariant held BEFORE the fix too (3.345e-03 at both paddings), which is exactly
-why the defect was invisible here and why this cell is about the invariant rather than about
-a number going down.
+The before/after numbers are context, NOT the gate: they would look the same if the kernel
+were broken on a backend this rack cannot run. The floor-does-not-move cell and the source
+door are what actually hold.
+
+THE SWEEP, and how both of its halves were wrong before they were right
+-----------------------------------------------------------------------
+The Mac's regex reported 12 sites across 7 files. Reading the files showed the upcast in six
+of them sits on the `tl.load` line, where the pattern could not see it — including
+`conv_depthwise2d.py`, which already upcasts both loads and had been named as the one to
+check first. One site, not twelve. My own looser first pass said 32 files, most of it integer
+index arithmetic in gather/scatter/index_select where native dtype is correct; that number
+was not reported as a finding. Then the Mac's Metal measurement corrected mine in the other
+direction: the one site I found is clean where it matters.
 """
 from __future__ import annotations
 
