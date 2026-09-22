@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A census enumerates an extent it can only learn from values.** The length a vocoder or
+  codec receives is what survived a filter on generated tokens, so a census taken from one
+  run certified one speech length and every other length missed the directory at runtime.
+  The census now runs such a stage at every key class of the extent, and a walk whose every
+  extent is refused fails instead of reading as censused.
+
+- **A census shadow walks a request loop by the key classes it produces.** Under
+  `NBX_CENSUS=1` the autoregressive, dual-AR and TTS decodes skip to each bucket's top
+  instead of stepping token by token, and the KV cache moves its counters past the skipped
+  positions; a live run never skips (chatterbox's 2 048-token census: 541.7 s to 37.9 s,
+  same decode keys).
 - **An input the graph binds symbolically is handed to it whole.** The runtime cut any
   component input longer than the container's traced extent down to that extent, even where
   the graph binds the dimension as a symbol and runs at any length: Qwen3-Omni's thinker
@@ -27,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flow the frame count it resolved (request, then the container's defaults, then the family),
   not only the raw argument; Allegro-TI2V and CogVideoX-5b-I2V refused every request without
   `--num-frames` while their containers declared 88 and 49.
+- **Certification costs the host nothing it does not need.** The fp64 oracle of the matmul family
+  is computed on row windows above the multiply-add cap (first, middle and last rows), never
+  whole on the host: a 44 544 × 3 072 × 8 192 product's whole oracle held one certifier at
+  155 GB of host memory with its card idle. A census shadow runs its host math on one thread;
+  a BLAS pool spinning behind one shadow took 42 cores.
 - **The kernel census enumerates every memory rung.** Each model is shadowed at every rung of
   the ladder up to its card's capacity, and a spatial family declares in its configuration
   the request large enough to tile (`census.tiling_probe`), so the certified directory holds

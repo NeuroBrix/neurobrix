@@ -137,7 +137,11 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
         rec.unlink()
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": str(n_dev),
-                "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src")})
+                "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src"),
+                # A shadow costs shapes: its host math is small, and a BLAS thread pool spinning
+                # behind it burned 4 235 % CPU on one chatterbox shadow (64 threads at 24 % each)
+                # and starved the certifiers on the cards (measured 2026-09-21 23:32). One thread.
+                "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1"})
     if rung_mb:
         env["NBX_PRISM_BUDGET_MB"] = str(int(rung_mb))
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *request, *MODES[mode], "--hardware", hardware]

@@ -219,6 +219,21 @@ class TritonAutoregressiveHandler:
             next_token, is_done = generator.step(logits, step_idx)
             if step_idx == 0:
                 _phase_mark("flow.first_token")
+            # A census shadow walks the decode by bucket classes of the cache length, not by
+            # tokens (kernels/census.py::pace, 0 on a live run): the positions up to the
+            # current bucket's top would produce this step's keys, so the cache's counters
+            # move past them at once and the sampled token stands for them.
+            from neurobrix.kernels import census as _census
+            _kvw = getattr(session, "kv_wrapper", None)
+            if _kvw is not None and not is_done:
+                _skip = _census.pace(int(_kvw.get_cache_len()) + 1)
+                _gen_n = len(getattr(getattr(generator, "_state", None), "generated_tokens", None) or [])
+                _skip = min(_skip, max(0, int(getattr(generator, "max_tokens", _gen_n + _skip)) - _gen_n))
+                if _skip:
+                    _kvw.skip_positions(_skip)
+                    _gen = getattr(getattr(generator, "_state", None), "generated_tokens", None)
+                    if _gen:
+                        _gen.extend([_gen[-1]] * _skip)
 
             # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
             # for triton-seq-vs-sequential decode parity. R33-pure scalar read
