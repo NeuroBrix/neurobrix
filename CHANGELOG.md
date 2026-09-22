@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
+  such a stage at every key class of that length, on the largest memory rung.
+
 ### Fixed
 
 - **A certification reads only the part of a result its oracle measures.** Proving one kernel
