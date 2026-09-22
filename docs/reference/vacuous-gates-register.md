@@ -2247,3 +2247,85 @@ costless for a second, different reason.
 **The lesson, in one line.** A comparison that hands each candidate its own answer key is not
 a comparison; when a measurement can return the ideal number by construction, the arrangement
 that avoids it is the measurement.
+
+### 85 — three hooks that read an environment variable nothing sets, and never ran a line
+
+**Where.** `.claude/hooks/audio-tracker-update.sh`, `neurotax-key-guard.sh`,
+`neurotax-new-model-check.sh`, this rack, found 2026-09-22 while rebuilding the assistant
+configuration. Present since `?` — the first is dated in its own header to the audio chantier.
+
+**What they did.** Each opened with `TOOL_NAME="$TOOL_NAME"` and then
+`if [ "$TOOL_NAME" != "Bash" ]; then exit 0; fi`. The harness passes a hook its input as a
+single JSON document **on stdin** and sets no such variable, so the expansion was the empty
+string, the test was always true, and all three exited at their first branch on every
+invocation they ever received. `neurotax-new-model-check.sh` was additionally registered
+twice, which doubled nothing.
+
+**What would they have done if the code were wrong?** Exactly what they did when it was
+right: nothing, silently, with exit 0. There is no output either way — the failure and the
+quiet success are the same observation.
+
+**The fix.** Rewritten on stdin as `track-neurotax.sh` and `track-video-models.sh`, sharing a
+`lib.sh` that parses the JSON once. The originals are kept under `hooks/retired/` with the
+reason, for one cycle.
+
+**The lesson, in one line.** A gate whose FIRST test is a no-op is indistinguishable from a
+gate that never fires — read the contract for how input arrives before believing any hook,
+and make one of its branches produce an observable.
+
+### 86 — five guards that exited 2 from the wrong event, and could only report
+
+**Where.** `.claude/hooks/{no-cache-hacks,no-silent-fallback,confidentiality,trace-seq-len,
+runtime}-guard.sh`, this rack, found 2026-09-22. Since `?`.
+
+**What they did.** Every one of them ends `exit 2  # Block the edit`, and their headers say
+`BLOCKS`. All were wired as **PostToolUse**. Only **PreToolUse** honours a block: at
+PostToolUse the write has already landed, and exit 2 merely hands stderr back as a note. For
+months the cache guard, the silent-fallback guard and the confidentiality guard were reporting
+a violation that had already reached the disk, in the tone of a refusal.
+`no-silent-fallback-guard.sh` was worse: never registered in any settings file at all, so even
+its note went nowhere.
+
+Two of them could not simply be moved, either: `runtime-guard.sh` and the confidentiality
+guard read the file FROM DISK, which at PreToolUse still holds the version before the change —
+moved as written they would have passed every edit they exist to refuse.
+
+**What would they have done if the code were wrong?** Printed the same message at the same
+moment. The only difference between the working and the broken version is whether the file on
+disk changed, which nothing in the hook's own output reveals.
+
+**The fix.** Re-shaped as `guard-*.sh` on **PreToolUse**, reading the text the call is about to
+write (`tool_input.new_string` / `content`) rather than the file. `runtime-guard.sh` stays a
+PostToolUse tracker — it genuinely needs the file on disk — and now says so in its header
+instead of claiming to block. Each was fired against a deliberate injection before being
+wired; two were red on the first try, including one that missed `except Exception: pass` as a
+file's last line because `$(…)` had stripped the newline its pattern anchored on.
+
+**The lesson, in one line.** `exit 2` is not a refusal on its own — the EVENT decides whether
+anything can still be refused; and a guard moved earlier in time must be re-pointed at the
+thing that exists at that time.
+
+### 87 — a guard that refused the file describing it, and then its own repair
+
+**Where.** `.claude/hooks/guard-composite-kill.sh`, this rack, 2026-09-22, within an hour of
+being written.
+
+**What it did.** It matched the pattern-kill spelling anywhere in the command string. A
+heredoc writing the documentation that NAMES the forbidden pattern therefore looked like an
+invocation, and the guard refused it. Then — the sharper half — it refused the very Bash
+command that would have replaced the broken script, so the repair had to be made with a
+different tool. A guard that cannot tell a mention from an invocation makes its own doctrine
+unwritable.
+
+**What would it have done if the code were wrong?** Blocked more, not less — which is why this
+one was caught immediately and the other direction never is. The opposite error, a guard too
+narrow to fire, is silent forever.
+
+**The fix.** The command is split into segments and only a segment's FIRST word is read as an
+invocation, stepping past `sudo`, `env`, `setsid`, `nohup`, `time` and `xargs`. Ten cases,
+five refused and five passed, including a heredoc that describes the pattern and a `grep` for
+it in the docs.
+
+**The lesson, in one line.** A textual guard over commands must distinguish use from mention,
+or the first thing it blocks is the documentation of the rule it enforces — and possibly its
+own fix.
