@@ -278,7 +278,15 @@ def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
     if not ver:
         return None
     name = b.get("name")
-    return f"triton {ver}" + (f" {name}" if name and name != "cuda" else "")
+    label = f"triton {ver}" + (f" {name}" if name and name != "cuda" else "")
+    # The out-of-tree backend's source hash, when the identity carries one, is
+    # part of the generator: two triton-ext builds share the distribution
+    # version but differ here, and the gate must see them apart. In-tree
+    # (cuda/amd) proofs carry no hash, so their labels are unchanged.
+    bh = b.get("backend_hash")
+    if bh:
+        label += f" {str(bh)[:12]}"
+    return label
 
 
 def proof_backends(entry: Dict[str, Any]) -> set:
@@ -320,9 +328,54 @@ def running_generator() -> Optional[str]:
     """
     try:
         import triton
+        return proof_backend({"backend": generator_identity()})
     except Exception:
+        # Triton missing, or the target/backend cannot be identified
+        # (generator_identity raises rather than answer a wrong "cuda"): the
+        # engine cannot say which generator it is, so it refuses NOTHING for
+        # not matching — serving on an unanswerable question beats refusing all.
         return None
-    return proof_backend({"backend": generator_identity()})
+
+
+_OUT_OF_TREE_HASH: Dict[str, Optional[str]] = {}
+
+
+def _out_of_tree_backend_hash() -> Optional[str]:
+    """The source hash of the Triton backend that will ACTUALLY generate code,
+    but ONLY when that backend is out of tree — its version does not travel in
+    the `triton` distribution metadata.
+
+    `generator_identity`'s `triton` field is the DISTRIBUTION version, which
+    tracks the IN-TREE compiler (nvidia/amd): move the Triton pin and it moves.
+    An out-of-tree backend — the Metal backend under triton-ext, target `mps` —
+    is a separately built shared library whose distribution metadata is a
+    static `0.1.0` and does NOT move when triton-ext is rebuilt from a new head
+    (5439436 -> b9d5c06d), so a stamp built from the distribution version alone
+    would serve certified entries to a generator that had moved. That is the
+    same vacuous-gate class as the bare `triton.__version__` the version half
+    already fixed.
+
+    triton's OWN backend `hash()` folds in the compiled `PLUGIN_LIBRARY`'s stat
+    and the compiler source, and is exactly what triton puts in its kernel
+    cache key — so reusing it means the identity moves precisely when triton
+    would recompile. One canonical hash, not a second spelling. The active
+    backend is resolved by triton's own `make_backend` (matches `supports_target`),
+    so nothing here hardcodes the mps/apple mapping. Returns None for an
+    in-tree backend (cuda/amd), whose generator the distribution version
+    already tracks, leaving those labels unchanged."""
+    from neurobrix.kernels.launcher import target as _target
+    tgt = _target()
+    if tgt is None:
+        return None
+    key = f"{getattr(tgt, 'backend', '?')}:{getattr(tgt, 'arch', '?')}"
+    if key in _OUT_OF_TREE_HASH:
+        return _OUT_OF_TREE_HASH[key]
+    from triton.compiler.compiler import make_backend
+    backend = make_backend(tgt)
+    module = (type(backend).__module__ or "")
+    result = None if module.startswith("triton.backends.") else backend.hash()
+    _OUT_OF_TREE_HASH[key] = result
+    return result
 
 
 def generator_identity() -> Dict[str, Any]:
@@ -345,25 +398,47 @@ def generator_identity() -> Dict[str, Any]:
       `cuda` on the rack), not the engine's own name (`metal` here either way)
       and not `nbx_tensor.BACKEND_NAME`, a symbol that never existed — reading
       it defaulted every machine to "cuda" and refused all 945 Apple entries
-      (fixed 2026-09-19). `autotune_certify._current_backend()` documents the
-      metal/mps divergence at length.
+      (fixed 2026-09-19). It no longer defaults to "cuda" at all: a target that
+      cannot be read RAISES (ZERO FALLBACK). `autotune_certify._current_backend()`
+      documents the metal/mps divergence at length.
+
+    * **The OUT-OF-TREE backend carries its own source hash** (`backend_hash`,
+      present only when the active backend is out of tree). The `triton` field
+      above tracks the IN-TREE compiler; the Metal backend (target `mps`) is a
+      separately built library whose distribution metadata is a static `0.1.0`,
+      so without this a triton-ext move (5439436 -> b9d5c06d) would change the
+      compiled kernels while the identity stayed put — the same vacuous-gate
+      class as the bare `__version__`. The hash is triton's own backend
+      `hash()`, the one it puts in its kernel cache key. See
+      `_out_of_tree_backend_hash`.
 
     `autotune_certify._backend()` writes this identity into every proof and
     `running_generator()` reads it back: two hands, one spelling, because two
-    spellings is how each of those two defects happened.
+    spellings is how each of those defects happened.
     """
     try:
         import importlib.metadata as _md
         ver = _md.version("triton")
     except Exception:
         ver = str(triton.__version__)
-    name = "cuda"
-    try:
-        from neurobrix.kernels.launcher import target as _target
-        name = getattr(_target(), "backend", None) or "cuda"
-    except Exception:
-        pass
-    return {"triton": ver, "name": name}
+    from neurobrix.kernels.launcher import target as _target
+    tgt = _target()
+    name = getattr(tgt, "backend", None)
+    if not name:
+        # ZERO FALLBACK: a target that cannot be read is an ERROR, not "cuda".
+        # A silent default to "cuda" once labelled every Apple run as the rack's
+        # generator and refused all 945 Apple entries (2026-09-19). The caller
+        # (running_generator) turns this into "cannot say" rather than a wrong
+        # answer; the writer (_backend) fails the stamp rather than mis-certify.
+        raise RuntimeError(
+            "generator_identity: the Triton target names no backend "
+            f"({tgt!r}); a certification generator that cannot be identified is "
+            "an error, not 'cuda'.")
+    ident = {"triton": ver, "name": name}
+    bh = _out_of_tree_backend_hash()
+    if bh:
+        ident["backend_hash"] = bh
+    return ident
 
 
 def entry_for_generator(entry: Optional[Dict[str, Any]],
