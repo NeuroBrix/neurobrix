@@ -3426,3 +3426,60 @@ The rack intends to upcast `conv_transpose2d` anyway, on the grounds that it cos
 is strictly more accurate. That is sound and I agree with it — but on this evidence it is
 **prophylactic, not a bug fix**, and the commit should say so rather than claim a defect it
 did not measure.
+
+---
+
+## 2026-09-22 — CORRECTION: the drain fix's reported numbers were measured wrong
+
+Two figures I reported for `a054ef6c`, and sent to the rack, do not survive their own
+instrumentation. The fix stands; the evidence I gave for it does not.
+
+### What I claimed, and why each is wrong
+
+| claim | verdict |
+|---|---|
+| "footprint 21.9 GB -> 10 GB" | **confounded.** 21.9 GB was measured on the **addmm** family before the fix; 10 GB on the **depthwise** family after it. Different workloads — addmm carries `M_BUCKET=163840` keys whose operands alone are ~8 GB, depthwise's are a fraction of that. That is not an A/B and I presented it as one. |
+| "two passes that had been dying `Killed: 9` now running" | **false.** addmm was killed `rc=137` at **20:51**, forty minutes AFTER the fix landed at 20:09. Jetsam kills did not stop. What changed is that the retry-on-progress guard now survives them. |
+| "swap 11.6 -> 4.0 GB" | same confound as the footprint: different families, and macOS resizes the swap file dynamically, so the totals move for reasons unrelated to us. |
+
+### What IS still established, and on what evidence
+
+- **The drain never ran.** `_release_between_keys` probed `empty_cache` and
+  `device_empty_cache`; `DeviceAllocator` exposes neither (its drain is `empty_cache_pool`),
+  so `callable(drain)` was False inside `except Exception: pass`. This rests on reading the
+  code and probing the attributes, not on any footprint number, and it is not in doubt.
+- **It runs now.** The per-key line reports the pool's counters and they advance
+  (`flush 2/evict 0`).
+- Refusing when no drain resolves is right under ZERO FALLBACK regardless of what it saves.
+
+**What the fix is worth in bytes is now UNMEASURED.** A real A/B needs the same family before
+and after, which I have not run.
+
+### The instrument that exposed it, and a second finding
+
+Adding live/pool bytes to the per-key line (`35896639`) showed `live 0MB, pool 0MB` while the
+process footprint was **14 GB**. That is not a leak reading — it is the accounting being
+structurally blind here:
+
+```python
+def memory_allocated(device_idx=None) -> int:
+    """Live bytes allocated via malloc_cuda on the given device."""
+    return sum(DeviceAllocator._cuda_live_bytes.values())
+```
+
+`malloc_cuda`, `_cuda_live_bytes` — **the tracker counts CUDA allocations only, so on Metal it
+is 0 by construction**, however much memory the process holds.
+
+**This does not break the guards**, which is worth saying plainly so nobody goes looking:
+`bench_would_swap` reads `core.host_memory`, which on unified memory is the right quantity and
+the only honest one; `oversize_for_class` parses the refusal message. Neither consults
+`memory_allocated()`.
+
+**But it does bound the rack's census.** Your 513 allocation refusals were bucketed by the
+`live_tracked=` in each message. That figure is real on CUDA and structurally 0 here, so the
+same census run on Metal would report every refusal as `live_tracked = 0 MB` and conclude
+nothing was rescuable — which would be an artefact of the instrument, not a result. Your four
+rescuable keys stand; a Metal equivalent of that analysis cannot be done this way.
+
+I reported the 21.9/10 figures to you before checking which family each came from. The right
+order was the one you used for the four keys: state the method, then the number.
