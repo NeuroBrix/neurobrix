@@ -1939,3 +1939,34 @@ The certifier now says so with the arithmetic — bytes asked, card size, where 
 **For the Mac**: the same defect will appear wherever a model is tiled for memory, and its
 symptom is a certification asking for more than the device holds. The ARITHMETIC is the tell —
 if the key needs more than the card exists with, no run of that class formed it.
+
+## 2026-09-22 07:25 — a correction to the entry above: the rung door works; op-level tiling is what misses these ops
+
+The 06:45 entry said the shadow "plans an op at its GRAPH shape rather than at the shape the
+rung's plan would give it". Half of that is wrong and the measurement says so.
+
+The rung enumeration DOES change what a shadow records, exactly where it should. Comparing
+each model's recorded keys at rung 4 096 against rung 16 384 on the 16 GB census:
+
+| model | request | keys | differing |
+|---|---|---|---|
+| swinir-classical-x2 | ordinary (fits any rung) | 11 | **0** |
+| real-esrgan-x4 | ordinary | 10 | **0** |
+| Sana_1600M_1024px_MultiLing | ordinary | 58 | **0** |
+| swinir-classical-x2 | the 4 096-pixel probe (tiles) | 11 | **18** |
+| real-esrgan-x4 | the probe (tiles) | 10 | **20** |
+| mochi-1-preview | ordinary | 30 | **18** |
+
+A request that fits every rung records the same keys at every rung — which is correct, not a
+defect — and a request that must be tiled records different ones. The door reaches the plan.
+
+What is left is narrower and still real: at the 16 GB rung, mochi's plan does vary, and it
+still forms a matmul of M = 77 594 624 whose operands need 37 GiB. So the gap is not the rung
+door but **op-level tiling failing to cover these flattened projections** (`aten::mm` over
+every pixel of a video, N = 3, K = 128) — Prism's `_try_op_level_tiling` is in the cascade and
+does not catch them. The plan also prints `56 554 MB planned` on a card the door set to 16 384,
+which is worth reading before anything else: if that figure is a SUM over a lazy_sequential
+stream it is harmless, and if it is a peak the plan is over budget by three times. Whichever
+it is, it is one line to check and I have not checked it.
+
+That is the lead, stated as a question rather than an answer.
