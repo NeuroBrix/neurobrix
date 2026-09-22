@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-91 entries, of which five are placeholders and 86 carry a site. Two
+92 entries, of which five are placeholders and 87 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2514,4 +2514,60 @@ green on that trace will otherwise read as coverage the next time someone looks.
 **The lesson, in one line.** A guard that enumerates one family of arithmetic — products —
 while the thing it guards against is built from another — sums — is green by construction on
 the whole second family, and its silence is indistinguishable from a clean stimulus.
+
+
+### 92 — the stability witness proves the regime held, not that the ranking was decided quietly
+
+**Where.** The certifier's stability witness, leaned on by BOTH machines as evidence that a
+sweep was trustworthy. Named by the Mac on 2026-09-22 (`c1fd98d7`) after they quarantined 313
+of their own entries; audited here the same day and found to be the larger problem of the two.
+
+**The shape.** The witness times a reference kernel before and after a sweep and compares at
+an 8 % tolerance. That is a real measurement and it works — it refused 38 of the Mac's sweeps,
+up to 33.6 % drift. But what it proves is that the REGIME did not move much across the sweep.
+
+The content of a certified entry is not the regime. It is the RANKING: which candidate config
+won. Contention that changes which config wins WITHOUT moving the witness by 8 % passes it
+untouched, and the entry is then a ranking decided on a busy machine, recorded as if decided
+on a quiet one.
+
+**What would the witness have done if the host were busy?** Passed, in every case where the
+contention was under 8 % — which is most of them. Its green and its blind are the same green.
+
+**The clock lock has the same shape and was leaned on the same way.** This rack locks every
+card to 877/1290 and verifies it. That proves the CLOCK held. It says nothing about whether
+the card was otherwise idle, and a certification is a timing measurement.
+
+**Audited here, from the entries' own `proof.date` against what else was writing:**
+
+| window | entries | independent model runs active |
+|---|---|---|
+| 09-16 16:29-23:59 | 7 596 | 29 |
+| 09-17 00:00-04:13 | 2 491 | **0** |
+| 09-20 18:12-18:42 | 62 | 23 |
+| 09-21 19:35-23:58 | 871 | 2 025 |
+| 09-22 00:00-06:30 | 1 713 | 3 402 |
+| 09-22 06:48-10:19 | 117 | **0** |
+
+**10 242 of 12 851 entries — 79.7 % of this directory — were measured in windows when model
+runs were on the rack.** The clean remainder is 2 608.
+
+**One entry is proven contaminated rather than merely suspect, and it is quarantined.**
+`baddbmm_kernel.fp16`, key
+`(64, 1024, 128, True, False, True, 'fp16', 'fp16', 'fp16', 'uint8')`, certified
+2026-09-22T14:10:30 while a mochi render and a Kokoro walk-extent run held cards. Removed
+rather than annotated, so `--only-missing` re-does it on a quiet host; the pre-quarantine file
+is kept whole at `docs/reference/quarantine/`. It is the uint8 bias key — the one the current
+mandate asks to finish.
+
+**What is NOT claimed.** That all 10 242 rankings are wrong. Contention may or may not flip a
+winner, and the audit cannot say which entries actually moved; the proxy is "a run log was
+written during the window", which proves the rack was busy, not that a given key's sweep
+overlapped a given run. The bulk is reported, not quarantined — 10 242 entries is the owner's
+decision, not a session's.
+
+**The lesson, in one line.** A witness that measures the CONDITION either side of a
+measurement does not witness the measurement; when what you record is a choice between
+candidates, only a quiet host makes that choice mean anything, and no before/after reading
+substitutes for it.
 
