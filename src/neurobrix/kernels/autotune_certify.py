@@ -1306,6 +1306,45 @@ def _resolve_pool_drain(allocator=None):
     )
 
 
+def _alloc_state() -> str:
+    """Live bytes, pool-cached bytes and the pool's flush/evict counters, for the per-key line.
+
+    Certification on this Mac reached a 42 GB physical footprint on keys whose operands are
+    about 8 GB (M_BUCKET=163840 addmm), driving swap to 27.9 GB of 28.7 and taking jetsam
+    kills. Whether the excess is live, pool-cached or neither is not readable from outside the
+    process, and a footprint alone cannot say. Printed per key so a run answers it instead of
+    another round of reading the code.
+
+    `_pool_cached_bytes` is a dict KEYED BY DEVICE, not a scalar, and `_pool_enabled` is set
+    lazily by the first allocation — read from a bare process both look empty, which is how a
+    disabled pool and an idle one come to look identical. Summed here. Never raises: a probe
+    that can end a sweep is worse than no probe."""
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as A
+
+        def _sum(name):
+            v = getattr(A, name, None)
+            if isinstance(v, dict):
+                return sum(x for x in v.values() if isinstance(x, (int, float)))
+            return v if isinstance(v, (int, float)) else None
+
+        parts = []
+        live = A.memory_allocated() if callable(getattr(A, "memory_allocated", None)) else None
+        if isinstance(live, (int, float)):
+            parts.append(f"live {live / 2**20:.0f}MB")
+        cached = _sum("_pool_cached_bytes")
+        if cached is not None:
+            parts.append(f"pool {cached / 2**20:.0f}MB")
+        if getattr(A, "_pool_enabled", None) is False:
+            parts.append("pool OFF")
+        st = getattr(A, "_pool_stats", None)
+        if isinstance(st, dict) and (st.get("flushes") or st.get("evictions")):
+            parts.append(f"flush {st.get('flushes', 0)}/evict {st.get('evictions', 0)}")
+        return ", ".join(parts) or "alloc ?"
+    except Exception:  # noqa: BLE001
+        return "alloc ?"
+
+
 def _release_between_keys(allocator=None) -> None:
     """Give the device back between keys.
 
@@ -1450,6 +1489,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 f"warps={entry['config']['num_warps']} stages={entry['config']['num_stages']} — deviation {p['deviation']:.2e} "
                 f"(tol {tol:g}), {p['best_ms']:.4f} ms, {p['accepted']}/{p['candidates']} accepted, "
                 f"{len(entry['excluded'])} excluded, {time.time() - t0:.1f} s "
-                f"(oracle {p['seconds']['oracle']}, runs {p['seconds']['runs']}, bench {p['seconds']['bench']})")
+                f"(oracle {p['seconds']['oracle']}, runs {p['seconds']['runs']}, bench {p['seconds']['bench']}; "
+                f"{_alloc_state()})")
     summary["seconds"] = round(time.time() - summary["started"], 1)
     return summary
