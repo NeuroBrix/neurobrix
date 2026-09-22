@@ -2566,6 +2566,30 @@ written during the window", which proves the rack was busy, not that a given key
 overlapped a given run. The bulk is reported, not quarantined — 10 242 entries is the owner's
 decision, not a session's.
 
+**THE COROLLARY, and it is the Mac's, paid for.** Adopting "nothing runs beside a gate" is
+not enough: you must MEASURE which of your own tools touch the device. They described
+`coverage.py`, `classify_unnamed.py` and `switchover.py` to their owner twice as "no GPU,
+safe to run beside certification". Three lines proved otherwise —
+`autotune_certify._autotuners()` instantiates the Metal runtime, so those three open the
+device. They were policing the discipline with tools that violated it.
+
+Asked of this rack's tools, with the CUDA DRIVER rather than with torch
+(`cuDevicePrimaryCtxGetState` on device 0, which answers whether a primary context is live):
+
+    baseline                          False
+    import autotune_certify           False
+    tools/certified_checkpoint.py     False
+    tools/certified_census.py         False
+    tools/hub_cache_diff.py           False
+    tools/wait_for.py                 False
+
+None of them opens a context, and the census additionally runs behind
+`CUDA_VISIBLE_DEVICES=`, which is a door rather than a promise. So the corollary does not
+convict anything here — but the measurement is recorded because "we checked and it was clean"
+and "we assumed it was clean" are the same sentence until someone runs the probe. Limit,
+stated: this tests IMPORT, not execution; a tool that opens a context only when it does work
+would pass it.
+
 **The lesson, in one line.** A witness that measures the CONDITION either side of a
 measurement does not witness the measurement; when what you record is a choice between
 candidates, only a quiet host makes that choice mean anything, and no before/after reading
