@@ -214,6 +214,10 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    certify_p.add_argument('--allow-uncheckpointed', action='store_true',
+                           help='certify with no checkpointer holding the repository — the proofs '
+                                'then exist only where they are written, which three mains cuts have '
+                                'already cost; say it deliberately or start tools/certified_checkpoint.py')
     certify_p.add_argument('--reprove-unclocked', action='store_true',
                            help='skip only the shapes certified for this card\'s class AT A RECORDED CLOCK; a proof that '
                                 'does not say its clock is re-proven at the protocol clock')

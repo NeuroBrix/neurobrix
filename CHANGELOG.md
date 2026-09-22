@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A certification refuses to start while nothing is saving its results.** Proving
+  configurations writes them one at a time into the repository and nothing else carried them
+  anywhere, so a power cut cost the whole run; the command now refuses unless the checkpointer
+  is running, and says how to start it.
+
 - **A configuration that could not fit the card is reported as that, not as a failure.** One
   video model's final projection needs more memory than a smaller card holds, and a run on
   such a card never reaches it because the work is split first; the certification now says so
