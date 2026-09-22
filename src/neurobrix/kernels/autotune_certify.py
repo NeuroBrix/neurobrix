@@ -1031,8 +1031,14 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             # (2026-09-22: 21 depthwise bf16 keys refused, every config excluded, and the
             # message named no number to act on).
             best = min((e["deviation"] for e in excluded), default=float("nan"))
+            # `tolerance` of 0 is legitimate — a profile may demand an exact match — and
+            # `_tolerance` accepts it (it refuses a MISSING one, not a zero one). Dividing by
+            # it would raise ZeroDivisionError INSIDE this error path and replace the
+            # diagnosis with a traceback: exactly the failure this message was added to fix
+            # (the rack found it on a277dd39, 2026-09-23; latent, no profile declares 0 today).
+            ratio = f", {best / tolerance:.1f}x tolerance" if tolerance else " against an EXACT-match tolerance"
             raise RuntimeError(f"{qual} at {key!r}: every config diverges from the fp64 oracle beyond {tolerance:g} "
-                               f"(best {best:.3g}, {best / tolerance:.1f}x tolerance; "
+                               f"(best {best:.3g}{ratio}; "
                                f"{len(excluded)} excluded, {len(unrun)} could not run"
                                + (f"; first error: {unrun[0]['error']}" if unrun else "") + ")")
         state["t_runs"] = round(time.time() - t_runs, 3)
