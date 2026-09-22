@@ -326,7 +326,7 @@ thing it prints on success, it is already an entry here and nobody has noticed.
   * **5 arithmetic collisions**, all at trace 1 — the worst value, where `k*s`, `s+(k-1)`, `s**n` and `s` are one rule. **One of the five is the defect above.** The other four are `Allegro-TI2V/transformer` (`seq_len` from an attention mask), `Janus-Pro-7B/gen_embed`, `Qwen3-Omni/talker.code_predictor…codec_embedding` and `openaudio-s1-mini/codec.decoder`, all `seq_len`. None is known to be defective; none can be CLEARED by the trace-point check either.
   * **34 weight-extent collisions** — an axis whose trace value equals a parameter extent of its own component, so a dim bound to the wrong quantity reproduces the trace anyway (`real-esrgan` height and width at 64; `parakeet/joint` seq_len at 1024).
   * **the batch axis is excluded and counted, never dropped.** It is 58 of the 293 raw flags and nearly all of the 57 at trace 2, and it is a DELIBERATE requirement at those values — a batch symbol is never a literal 1, and 2 is the CFG batch. Listing it buries the rest; `--all` shows it for anyone re-examining the decision rather than its consequences.
-* **filed** `D-CAUSAL-PAD-SYMBOL-COMPOUNDS` in `DETTE.md`, with the blast radius measured (2 187 references for the offender, 5 for the next across every 5-D component of 56 containers) and the remedy named as a tracer chantier requiring a re-trace of one container.
+* **filed** `D-CAUSAL-PAD-SYMBOL-COMPOUNDS` in `DETTE.md`, with the blast radius measured (2 187 references for the offender, 5 for the next across every 5-D component of 56 containers) and the remedy named as a tracer workstream requiring a re-trace of one container.
 
 ---
 
@@ -2252,7 +2252,7 @@ that avoids it is the measurement.
 
 **Where.** `.claude/hooks/audio-tracker-update.sh`, `neurotax-key-guard.sh`,
 `neurotax-new-model-check.sh`, this rack, found 2026-09-22 while rebuilding the assistant
-configuration. Present since `?` — the first is dated in its own header to the audio chantier.
+configuration. Present since `?` — the first is dated in its own header to the audio workstream.
 
 **What they did.** Each opened with `TOOL_NAME="$TOOL_NAME"` and then
 `if [ "$TOOL_NAME" != "Bash" ]; then exit 0; fi`. The harness passes a hook its input as a

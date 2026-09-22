@@ -64,7 +64,7 @@ LLM_MAX_TOKENS = 5
 LLM_TEMPERATURE = 0.0
 
 # Diffusion/image-family anti-regression prompt. Matches the historical
-# "red apple on a table" used across the P-SANA-4KPX-RUNTIME chantier
+# "red apple on a table" used across the P-SANA-4KPX-RUNTIME workstream
 # (every Sana 1024 / PixArt anti-regression cell verifies "still
 # produces a coherent red apple PNG"). Diffusion model behaviour is
 # prompt-sensitive: Sana 1600M_1024px in particular returns a

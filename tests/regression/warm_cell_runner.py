@@ -5,7 +5,7 @@ model per process, which is BOTH the production serve shape (one
 daemon per model) and the isolation the in-process sweep needs:
 sequential load/unload cycles in a single process accumulate the
 triton live set even after `unload()` + gc (module-global holders
-retain NBXTensor refs — named chantier P-SERVE-UNLOAD-LIVE-SET,
+retain NBXTensor refs — named workstream P-SERVE-UNLOAD-LIVE-SET,
 warm-sweep finding 2026-08-26; the doctrine gc.collect in unload()
 is necessary but not sufficient).
 

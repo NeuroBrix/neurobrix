@@ -164,15 +164,15 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # 'int4-g128-asym', which the compiled engine does not execute. Run
     # this build with --triton" (graph_executor.py:1163). Recorded as
     # xfail so the matrix stays honest about which mode is unblocked;
-    # the ::triton cells run normally. Chantier named by the engine
+    # the ::triton cells run normally. Workstream named by the engine
     # message: compiled-mode encoded-weight execution.
     # ------------------------------------------------------------------
     ("Qwen3-Coder-30B-A3B-Instruct-int4g128", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine (graph_executor.py:1163) — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine (graph_executor.py:1163) — run with --triton. Workstream: compiled-mode encoded-weight execution."),
     ("Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Workstream: compiled-mode encoded-weight execution."),
     ("TinyLlama-1.1B-Chat-v1.0-int4g128", "native",
-     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Workstream: compiled-mode encoded-weight execution."),
 
     # ------------------------------------------------------------------
     # Triton audio — genuine runtime blockers on the --triton path.
@@ -231,10 +231,10 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # (`project_sana_4kpx_triton_indeterminate_2026_05.md`). The model
     # is included in the cached matrix so the harness reflects reality
     # (it WAS validated end-to-end on compiled mode in the
-    # P-SANA-4KPX-RUNTIME chantier — closed 2026-05-13). Triton and
+    # P-SANA-4KPX-RUNTIME workstream — closed 2026-05-13). Triton and
     # both --runslow timeouts are documented-unsafe to relaunch under
     # longer budgets; the harness deselects the model from --runslow
-    # batches via `-k "not Sana_1600M_4Kpx_BF16"` in chantier-level
+    # batches via `-k "not Sana_1600M_4Kpx_BF16"` in workstream-level
     # invocations (see e.g. Ch8 verdict). Marked xfail rather than
     # absent so the matrix is honest.
     # ------------------------------------------------------------------

@@ -768,11 +768,11 @@ class MetalRuntime:
         copies above are CPU `memmove` on shared memory — so there is nothing
         it misses. When the launch path lands it must either share this queue
         or this method must be re-pointed at the backend's, and that is a
-        contract for that chantier, not an option.
+        contract for that workstream, not an option.
         """
         # Everything the launch path committed without waiting, first: the
         # contract this docstring used to describe as owed to the launch
-        # chantier is now kept here.
+        # workstream is now kept here.
         self.flush()
         command_buffer = self._queue.commandBuffer()
         if command_buffer is None:                      # pragma: no cover

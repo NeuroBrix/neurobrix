@@ -743,7 +743,7 @@ def _detect_gate_blends(
                 f"tensor and one blended weight tensor "
                 f"(int={sorted(int_terms)}, float={sorted(float_terms)}). "
                 "The blend topology is unsupported — extend "
-                "_detect_gate_blends (chantier P-MOE-MULTIGATE) rather than "
+                "_detect_gate_blends (workstream P-MOE-MULTIGATE) rather than "
                 "letting the trace-frozen routing run."
             )
 

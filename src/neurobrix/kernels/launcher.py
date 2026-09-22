@@ -1874,7 +1874,7 @@ def _time_ms(fn, n: int) -> float:
 
 # ---------------------------------------------------------------------------
 # The launcher contract's CUDA client (`neurobrix.triton.launcher_contract`,
-# Metal chantier 2026-09-05): a driver COMPILES a jit function plus an
+# Metal workstream 2026-09-05): a driver COMPILES a jit function plus an
 # explicit signature / constexprs / specialization markers into a
 # CompiledKernel, and LAUNCHES it with a grid and a flat argument list —
 # integer addresses for pointers (each verified with the allocator), typed

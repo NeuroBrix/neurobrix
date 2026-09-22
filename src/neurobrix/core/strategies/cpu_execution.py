@@ -5,7 +5,7 @@ All components placed on host RAM. Compute via PyTorch ATen native CPU
 dispatcher for the `compiled` and `sequential` modes (branch A). The
 `triton` and `triton_sequential` modes route to PyTorch CPU when no
 Triton-CPU runtime is integrated yet (branch B Triton-CPU integration
-is a separate chantier; until then, those modes fall back to ATen CPU
+is a separate workstream; until then, those modes fall back to ATen CPU
 via the existing dispatcher with a clear log note).
 
 Activation budget: validated by the solver

@@ -98,7 +98,7 @@ def test_a_new_sweep_forgets_the_old_scale(_fresh_sweep):
         "kernel's 0.1 ms would sentence every candidate of a large one")
 
 
-# ── the per-config memory footprint door (Hocine's unified-memory chantier) ─
+# ── the per-config memory footprint door (Hocine's unified-memory workstream) ─
 
 
 def test_a_config_over_footprint_is_excluded_before_running():

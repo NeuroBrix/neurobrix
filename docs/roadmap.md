@@ -44,7 +44,7 @@ before first light.
 
 A primary goal. The Triton execution mode must run on Apple Metal
 GPUs — even if that means building our own Triton-to-Metal path. This
-is a large chantier, undertaken with open eyes: it begins with a
+is a large workstream, undertaken with open eyes: it begins with a
 sourced state-of-the-art review (Triton upstream, existing Metal
 efforts, MLIR backends) and an honest scoping before any line of code.
 

@@ -55,7 +55,7 @@ def complete(name: str) -> bool:
 
 
 def attempted_and_stopped(name: str) -> bool:
-    """A model whose pipeline stopped (a gate to explain, a failed step): not retried by the dispatcher — a chantier."""
+    """A model whose pipeline stopped (a gate to explain, a failed step): not retried by the dispatcher — a workstream."""
     sp = OUT / name / "state.json"
     if not sp.exists():
         return False
@@ -80,7 +80,7 @@ def main():
     while True:
         pending = [c for c in cands if not complete(c) and not attempted_and_stopped(c)]
         if not pending:
-            log("every candidate complete or stopped as a chantier"); return 0
+            log("every candidate complete or stopped as a workstream"); return 0
         ready = [c for c in pending if has_snapshot(c)]
         if ready:
             m = ready[0]

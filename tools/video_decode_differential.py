@@ -10,7 +10,7 @@ vendor's, horizontal 0.87x) and that WORSENS with convergence.
 That measurement was taken on frames that had crossed an H.264 encode. The
 encode is exonerated by argument — both clips are h264 at the same size and fps,
 ours at `-crf 18 -preset medium` against the vendor clip's imageio default, and
-ours is the LARGER file — but this chantier will not name a component on an
+ours is the LARGER file — but this workstream will not name a component on an
 argument. This tool takes the comparison BEFORE any codec touches either side:
 
   * ours     — `NBX_DUMP_DECODED_FRAMES` writes what `save_video` computed,
@@ -24,7 +24,7 @@ WHAT IT REPORTS, AND WHY THAT SHAPE
 -----------------------------------
 Per frame: PSNR, SSIM, and the fraction of spectral energy in the top half of
 each axis's frequencies, ours against theirs. The RATIO of those two fractions
-is the discriminator this chantier turns on:
+is the discriminator this workstream turns on:
 
     a different sample          raises both axes together
     a horizontal-streak defect  raises the vertical one alone

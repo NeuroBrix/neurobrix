@@ -21,7 +21,7 @@ estimator's `peak_bytes` is applied to the compiled placement too, and can
 flip a validated plan (e.g. `single_gpu+tiling → weight_sharding`) across
 the whole model zoo. The audit's own F3 note records exactly this failure
 class (the CFG batch-binding incident that doubled the Sana 4Kpx VAE
-estimate and flipped its plan). A capacity chantier whose gate is "capacity
+estimate and flipped its plan). A capacity workstream whose gate is "capacity
 must only improve or hold" must not ship a plan-flipping change without a
 full-zoo plan-diff gate on BOTH engines — which is broader than the
 watermark-measurement gate that governs the landed core.

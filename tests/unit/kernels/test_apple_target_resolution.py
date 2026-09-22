@@ -168,7 +168,7 @@ def test_the_volta_space_is_unchanged_with_no_budget():
 
 
 def test_the_apple_selection_is_exactly_the_ten_that_fit():
-    """The 10 of 17 the Dell chantier computed, now actually reachable on a
+    """The 10 of 17 the Dell workstream computed, now actually reachable on a
     Mac. Pinned by VALUE: a count alone would not catch a swap."""
     got = _signature(configs_within_smem_budget(_MATMUL_AUTOTUNE_VOLTA, 32768))
     assert got == _VOLTA_AT_32K

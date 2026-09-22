@@ -17,7 +17,7 @@ fp32 reference).
 This is a **Level-1 Triton-pure primitive** (an op the runtime
 must support), not a deferrable fused optimisation — so it is
 named here rather than closed silently. Per the Triton-pure
-2-level doctrine, the chantier that exposed it (U7 HAT) closed
+2-level doctrine, the workstream that exposed it (U7 HAT) closed
 at the highest level reached (compiled + sequential) with this
 gap named.
 
