@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Both are now refused, and the refusal says how to read the file without touching the store
   and how to replace it on purpose. Running a model is unaffected.
 
+- **A tiled image or video decode no longer hands kernels a mis-addressed tile.** When a
+  picture is too large to decode in one piece the engine cuts it into tiles. Each tile was
+  passed on as a view into the larger picture rather than as its own packed block, so any
+  kernel that walks memory in a straight line read from the wrong places. Tiles at the edge
+  of the picture were unaffected, because the padding step happened to repack them — which is
+  why the damage appeared as a grid, with tile interiors wrong and the seams between them
+  clean. Tiles are now packed before they are used.
+
+- **A video decode no longer crashes at the edge of the picture.** Padding an edge tile of a
+  video used the wrong number of arguments for five-dimensional data and raised an error
+  instead of padding. It was only reachable in the PyTorch execution mode; the Triton mode
+  takes a different padding path.
+
 - **Transposed convolutions are slightly more accurate in half precision.** The kernel behind
   every upsampling step of an image or video decoder multiplied its two inputs at their own
   precision before adding them up at full precision. Multiplying at full precision costs
