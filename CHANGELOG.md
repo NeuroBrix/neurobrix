@@ -81,6 +81,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   came from a recorded run — which is the case where it is most needed, since those are the
   traces large enough to exhaust a machine.
 
+- **A model streamed layer by layer no longer loads itself whole first.** When a model is too
+  large to hold at once the engine can run it in slices, holding one slice at a time. It was
+  still loading the entire model into the graphics card before the slicing was set up, so the
+  very models that need slicing ran out of memory before a single slice ran. The slicing is
+  now arranged first and each slice loads its own weights, as it was always meant to.
+
 - **A model streamed layer by layer no longer refuses to start.** When a model is too large to
   hold at once, the engine can run it in slices. It chose where to cut by reading the model's
   operation list before the runtime had finished rewriting it — and the rewriting merges and

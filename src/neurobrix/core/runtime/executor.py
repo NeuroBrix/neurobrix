@@ -1313,6 +1313,30 @@ class RuntimeExecutor:
         component = params["component"]
         shard_map = params.get("shard_map", {})
 
+        # A strategy that loads its OWN weights must be installed BEFORE the load, and the
+        # whole-component load must then not happen at all. `install_for_executor` reads the
+        # executor's `_dag` to cut its segments and needs no weights to do it.
+        #
+        # This is narrower than `manages_weight_residency`, which zero3 also declares: zero3
+        # manages residency THROUGH `load_component_weights` (partitioning blocks onto pinned
+        # host) and needs the load. layer_streaming loads per segment inside `segmented_run`,
+        # so the whole-component load is fatal to it — measured on all four class-1 MoE
+        # models, every one dying at `live_tracked=0MB` with a single 32 332 025 856-byte
+        # request on a 16 151 MB card, before one LAYERDIAG line was printed.
+        _manages = (self._component_manages_own_residency(comp_name)
+                    and self.strategy is not None)
+        _loads_own = _manages and getattr(self.strategy, "loads_own_weights", False)
+
+        if _loads_own:
+            install_fn = getattr(self.strategy, 'install_for_executor', None)
+            if install_fn is not None:
+                install_fn(comp_name, executor)
+            # The strategy now owns loading. The flag records "the runtime has done what it
+            # must for this component", which is what it gates — re-entry — and not a claim
+            # that bytes are resident.
+            executor._weights_loaded = True
+            return
+
         if shard_map:
             executor.load_weights(nbx_path, component, shard_map)
         else:
@@ -1326,7 +1350,7 @@ class RuntimeExecutor:
         # LLM prefill) still funnel through here for weight loading, so
         # this is the natural install point. Other strategies ignore —
         # the method is zero3-specific by design.
-        if self._component_manages_own_residency(comp_name) and self.strategy is not None:
+        if _manages:
             install_fn = getattr(self.strategy, 'install_for_executor', None)
             if install_fn is not None:
                 install_fn(comp_name, executor)

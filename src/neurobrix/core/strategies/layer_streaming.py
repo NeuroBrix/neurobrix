@@ -32,6 +32,20 @@ class LayerStreamingStrategy(ExecutionStrategy):
     #: strategy needs the same runtime hook zero3 uses.
     manages_weight_residency = True
 
+    #: And it loads them ITSELF, per segment, inside `segmented_run`. That is a NARROWER
+    #: claim than the flag above and the two must not be conflated: zero3 also manages its
+    #: own residency, but it does so THROUGH the loader — `load_component_weights`
+    #: partitions its blocks onto pinned host — so zero3 needs the whole-component load to
+    #: happen. This strategy needs it NOT to happen, because `segmented_run` calls
+    #: `load_weights` per segment and the whole-component load defeats the entire point.
+    #:
+    #: Without this, `_ensure_weights_loaded` loaded the component whole and then installed
+    #: the segmentation, in that order — so every class-1 MoE model died before any segment
+    #: ran: `live_tracked=0MB`, one allocation of 32 332 025 856 bytes on a 16 151 MB card,
+    #: and not one LAYERDIAG line. The predicate's own docstring named that outcome as the
+    #: thing it existed to prevent; it gated the install and not the load.
+    loads_own_weights = True
+
     def __init__(self, context, strategy_name: str):
         super().__init__(context, strategy_name)
         self._segment_executors: Dict[str, List[Any]] = {}
