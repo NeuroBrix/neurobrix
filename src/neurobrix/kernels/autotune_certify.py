@@ -1025,8 +1025,15 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             if not excluded and unrun:
                 raise RuntimeError(f"{qual} at {key!r}: no config could run ({len(unrun)} of {len(configs)}; "
                                    f"first: {unrun[0]['error']})")
+            # The deviations are the whole diagnosis and were being thrown away: "beyond 0.04"
+            # cannot distinguish a kernel that misses by a hair from one that is wrong, and the
+            # two have nothing to do with each other. The BEST config's deviation says which
+            # (2026-09-22: 21 depthwise bf16 keys refused, every config excluded, and the
+            # message named no number to act on).
+            best = min((e["deviation"] for e in excluded), default=float("nan"))
             raise RuntimeError(f"{qual} at {key!r}: every config diverges from the fp64 oracle beyond {tolerance:g} "
-                               f"({len(excluded)} excluded, {len(unrun)} could not run"
+                               f"(best {best:.3g}, {best / tolerance:.1f}x tolerance; "
+                               f"{len(excluded)} excluded, {len(unrun)} could not run"
                                + (f"; first error: {unrun[0]['error']}" if unrun else "") + ")")
         state["t_runs"] = round(time.time() - t_runs, 3)
         timed: List[Tuple[Any, float, float]] = []
