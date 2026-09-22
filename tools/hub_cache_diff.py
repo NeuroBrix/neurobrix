@@ -38,6 +38,7 @@ import os
 import struct
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 import zlib
@@ -75,11 +76,13 @@ class RangeSource:
     ATTEMPTS = 6                      # 5 + 15 + 45 + 120 + 120 s of waiting before giving up
     MAX_BACKOFF_S = 120
     GENTLE_PAUSE_S = 0.5              # once refused, one chunk every half second for this object
+    CHUNK_DEADLINE_S = 90.0           # a hard budget for one chunk's whole body, trickle-proof
 
     def __init__(self, url: Optional[str] = None, path: Optional[Path] = None):
         self.url, self.path = url, path
         self._gentle = False
         self._waited = 0.0
+        self._abandoned = False
         self.bytes_read = 0
         if path is not None:
             self.size = path.stat().st_size
@@ -91,6 +94,15 @@ class RangeSource:
             if r.status_code != 206 or "Content-Range" not in r.headers:
                 raise RuntimeError(f"the store did not answer a Range read (status {r.status_code}); the object cannot be read by parts")
             self.size = int(r.headers["Content-Range"].rsplit("/", 1)[1])
+
+    def _abandon(self, response) -> None:
+        """Close the socket a blocked read is waiting on, so the read raises instead of
+        waiting for a trickle that never ends."""
+        self._abandoned = True
+        try:
+            response.raw.close()
+        except Exception:  # noqa: BLE001 — the point is to interrupt, not to succeed
+            pass
 
     def read(self, offset: int, length: int) -> bytes:
         if length <= 0:
@@ -126,12 +138,41 @@ class RangeSource:
                         # read 36 MB in fifty-one minutes and sat in `socket.readinto` with
                         # nothing arriving. A stalled attempt is abandoned in a minute and
                         # retried after the backoff.
-                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"}, timeout=(15, 60))
+                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"},
+                                               timeout=(15, 60), stream=True)
                         if r.status_code != 206:
                             if r.status_code in (429, 503):
                                 self._gentle = True
+                            r.close()
                             raise RuntimeError(f"Range read {pos}-{stop} answered {r.status_code}")
-                        chunk = r.content
+                        # A hard DEADLINE for the whole body, enforced from OUTSIDE the read.
+                        # `requests`' read timeout restarts on every byte that arrives, so a
+                        # server trickling one byte before each deadline holds the connection
+                        # for ever: at 300 s this pass read 36 MB in fifty-one minutes and sat
+                        # idle in `socket.readinto`, and 60 s changed nothing because the
+                        # trickle only had to be faster. Checking the clock between chunks does
+                        # not help either — the reader BLOCKS inside the iterator waiting for
+                        # bytes that come one at a time, so the check never runs. A timer that
+                        # closes the underlying socket is the only thing that interrupts it.
+                        # Eight megabytes take under a second from a store answering at all.
+                        deadline = time.time() + self.CHUNK_DEADLINE_S
+                        buf = bytearray()
+                        try:
+                            # `iter_content(None)` yields whatever has ARRIVED rather than
+                            # blocking for a fixed count, so the clock is read on every packet.
+                            # With a fixed size the reader blocks inside urllib3 waiting for
+                            # that many bytes and the check never runs at all — which is how a
+                            # timer, a 60 s read timeout and a 300 s one each failed to stop a
+                            # one-byte-per-50ms trickle in turn.
+                            for part in r.iter_content(None):
+                                buf += part
+                                if time.time() > deadline:
+                                    raise TimeoutError(
+                                        f"Range read {pos}-{stop} abandoned after "
+                                        f"{self.CHUNK_DEADLINE_S:.0f}s: {len(buf)} of {stop - pos + 1} bytes")
+                        finally:
+                            r.close()
+                        chunk = bytes(buf)
                         if len(chunk) != stop - pos + 1:
                             raise RuntimeError(f"Range read {pos}-{stop}: {len(chunk)} bytes for {stop - pos + 1} asked")
                         break
