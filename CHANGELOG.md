@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A configuration whose mask is an unsigned integer can now be proven.** The proving tool
+  recognised a fixed list of value types and silently ignored any name outside it. One
+  everyday type was missing, so for those configurations it quietly built the wrong kind of
+  input for one of the arguments, then reported that the engine could not produce the
+  configuration at all — while a model was meeting it on every run and finding nothing proven.
+  The list now covers the unsigned types, an unrecognised name is refused by name instead of
+  skipped, and a check ties the two tables involved together so a future omission cannot be
+  silent.
+
 - **Every GPU architecture now quantises request-dependent shapes the same way.** The table
   that groups similar request sizes together, so a prompt one token longer does not need its
   own proof, had been written for one GPU generation only. On every other supported card the
