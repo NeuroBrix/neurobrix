@@ -1861,3 +1861,26 @@ up to four measured widths a bucket.
 certifying and the sweep wants one alone). **For the Mac**: the ladder is data, so an Apple
 profile writes its own rows — but the ARRANGEMENT lesson is not hardware-specific, and any
 sweep of yours that reads 0.0 % with one size a bucket has measured nothing.
+
+## 2026-09-22 04:55 — the tail's measurement is complete: both classes, both bucketed dimensions
+
+The 32 GB half that the earlier entry owed, taken the same way (three sizes inside each
+shipped bucket with its TOP among them, `NBX_AUTOTUNE_CERTIFIED=off`, private replay cache,
+alone on card 3):
+
+| class | dimension | shape | buckets | median loss | max loss |
+|---|---|---|---|---|---|
+| 16 GB | matmul M | N=360, K=180 | 8 | 0.0 % | 1.6 % |
+| 16 GB | baddbmm K | B=1, M=1, N=64 | 6 | 0.0 % | 0.0 % |
+| 32 GB | matmul M | N=360, K=180 | 8 | 0.0 % | **0.7 %** |
+| 32 GB | baddbmm K | B=1, M=1, N=64 | 6 | 0.0 % | **0.0 %** |
+
+The contraction costs nothing at any bucket on either class. The 16 GB maximum of 1.6 % sits
+at the open row's 4 194 304 bucket and the 32 GB one at 1 048 576, both below the 5.2 % the
+quarter-octave had at the knee and far below the 20 % the project already accepted when it
+bucketed this same contraction in the small regime (2026-09-21, `bmm_K` on the default
+ladder). The ladder is settled: `config/vendors/nvidia/volta.yml`, `autotune.buckets.default`.
+
+Files: `nbx/campaigns/2026_09_21_bucketed_keys/{matmul_M_refined,bmm_K_tail}_{16g,32g}.json`,
+`matmul_M_quarter_16g.json` (the 5.2 % that forced the refinement), and the three earlier
+one-size-a-bucket sweeps kept as the record of what an arrangement can hide.
