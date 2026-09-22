@@ -149,6 +149,24 @@ autotune:
       - {up_to: 1024, step: 32}
       - {up_to: 8192, step: 128}
       - {up_to: null, step: 512}
+    # The width of a ONE-ROW convolution (a 1-D convolution over a sequence: a vocoder's
+    # samples, a mel spectrogram's frames) is the request's length, unbounded by any
+    # resolution — chatterbox's vocoder reaches 444 721 samples for 18 s of speech. Above the
+    # GEMM ladder it steps by a quarter-octave (≤ 25 % of the value), so a census meets every
+    # class of a speech length in ~100 runs instead of ~1 000; the loss of that step is owed a
+    # measurement on both classes (bucket_loss.py) before the ladder is called final.
+    W:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      - {up_to: 16384, step: 2048}
+      - {up_to: 32768, step: 4096}
+      - {up_to: 65536, step: 8192}
+      - {up_to: 131072, step: 16384}
+      - {up_to: 262144, step: 32768}
+      - {up_to: 524288, step: 65536}
+      - {up_to: null, step: 131072}
 
 memory:
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)

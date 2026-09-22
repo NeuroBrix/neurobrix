@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A one-row convolution selects its configuration by the bucket of its width.** A
+  convolution over a sequence (a vocoder's samples, a mel spectrogram's frames) has a width
+  that is the request's, so every speech length asked the certified directory for a
+  configuration proven at no other length. Two-dimensional convolutions keep their exact
+  extents.
+
 - **A census enumerates an extent it can only learn from values.** The length a vocoder or
   codec receives is what survived a filter on generated tokens, so a census taken from one
   run certified one speech length and every other length missed the directory at runtime.
