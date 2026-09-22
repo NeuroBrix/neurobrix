@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A census reaches the branch of a model that actually computes.** Where a model chooses
+  its next step from values, a census shadow has none and kept choosing the same cheap step,
+  so the work the model really does was never measured; the shadow now takes the computing
+  branch and walks it by the classes it produces.
+
 - **A request-scale dimension no longer explodes into thousands of configurations.** The
   configuration ladder stepped by a fixed amount above its knee, so a dimension that follows
   the request — a waveform of two million samples — asked for a different certified setting
