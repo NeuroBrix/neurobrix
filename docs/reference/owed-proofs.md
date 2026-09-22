@@ -2202,3 +2202,60 @@ substring: `/Users/x/tmpwork` is durable. 7 cells, red then green. The dead `/pr
 is pruned; both remaining worktrees are durable.
 
 **Nothing is stamped yet.** Bucket loss on Metal is next, then the census, then certification.
+
+## 2026-09-22 — a ladder verdict needs the DURATION it was taken at, or it is not a verdict
+
+**For the Dell, because it may apply to rows already decided on the rack.** Register 84 fixed
+the *arrangement* of a ladder sweep (sizes must share buckets, with the top among them). This is
+a second, independent way the same measurement returns a meaningless number, and it is not
+fixed by arrangement.
+
+### What happened here
+
+The first Apple sweeps, correctly arranged, read losses of 18 %, 22 %, 70 % and 99 % against the
+shipped rows and looked like a chip-specific ladder failure. Every one of them was an artefact
+of kernel DURATION. Re-measured at 2–5 ms by scaling the fixed dimensions, the same buckets read:
+
+| dimension | at 0.3–0.8 ms | at 2–13 ms |
+|---|---|---|
+| bmm M, buckets 112–176 | medians 10.2–19.4 % | **medians 0.3–1.4 %** |
+| bmm K (contraction), buckets 1024 / 2048 | 65.2 % / 70.2 %, top's config ranked last of ten | **max 5.8 % / 0.6 %**, same block sizes winning across each bucket |
+| matmul M | 7.1 % max | median 0.0 %, ≤1.7 % in ten of twelve buckets |
+
+### The noise floor, measured two ways that agree
+
+`tools/bucket_loss.py` swept an IDENTICAL size list twice (`bmm_M_fp32`, `bmm_M_fp32_rep2`). The
+tool seeds from the size, so both runs used the same operand BYTES and every difference between
+them is the machine. Over 350 (size, configuration) pairs, the p95 of the relative difference:
+
+| band | < 1 ms | 1–2 ms | 2–5 ms | > 5 ms |
+|---|---|---|---|---|
+| p95 spread | **51.08 %** | 7.91 % | **5.08 %** | 14.77 % |
+
+Independently, `tools/rig_protocol.metal.json` had already measured 5.0 % worst-pair at 2.19 ms,
+2.1 % at 4.58 ms and ~31 % at 0.6 ms on 2026-09-17, by re-timing one fixed shape twelve times.
+Different method, different day, same answer. Above 5 ms it rises again: those are the largest
+shapes, and on UNIFIED memory they are bandwidth-bound and share the pool with everything else
+on the machine.
+
+### What is owed to you
+
+**Whether any CUDA row was decided on sub-millisecond kernels.** The rack has discrete memory
+and locked clocks, so its floor is certainly lower than ours — but it is not zero, and it has
+never been written down. Two things would settle it, both cheap:
+
+1. Run `bucket_loss.py` twice over one identical size list on each memory class and report the
+   p95 by band, exactly as above. That is the rack's own floor, measured not assumed.
+2. Check the durations behind the rows that were decided close to the line — in particular the
+   **5.2 % at the 10 240 bucket** that narrowed the first three octaves above the knee
+   (`2797f607`), and the conv-width **37–40 % flip at tops 128/144**. If those kernels ran in
+   the sub-millisecond band, the figures need re-reading before they are called final.
+
+### Landed here
+
+`metal-first-light e3821e85`: the band table is declared in `apple_m4_pro.yml` as
+`autotune.loss_tolerance.bands` — rows, not one figure, because this chip is worst below 1 ms
+and rises again above 5 ms — and `bucket_loss.py --evaluate` reads it and prints each bucket's
+own duration beside the p95 that applies there. Re-run on the old conv sweep, every bucket that
+read 35–99 % now prints `0.39 ms, noise p95 51.1 %: within it`. A verdict can no longer be
+quoted out of its band, on this machine or yours.
