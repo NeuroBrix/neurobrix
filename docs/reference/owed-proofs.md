@@ -1598,3 +1598,66 @@ whole audio family. One chatterbox vocoder walked over its speech length demands
 keys** — 2 889 convolution, 1 818 baddbmm, 329 matmul — of which 125 of 145 distinct one-row
 widths fall below 8 192, where the ladder is fine. The Mac's profile needs the same
 measurement before it certifies any audio model.
+
+## 2026-09-22 02:40 — the one-row convolution width: the measurement, on both classes; and where a shadow's coverage ends (an answer for the Mac)
+
+**The measurement the branch waited for.** `tools/bucket_loss.py --kernel conv2d --dim W`
+(the tool now takes `kh`/`kw`, so a 1-D convolution can be swept at all), directory OFF,
+private replay cache, alone on its card, fp16, kernel (1,3), padding (0,1), batch 1:
+
+| class | C_in=C_out | sizes | ladder | buckets | median loss | max loss |
+|---|---|---|---|---|---|---|
+| 16 GB (card 1) | 128 | 26, 1 024..524 288 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
+| 32 GB (card 2) | 128 | the same 26 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
+| 16 GB (card 1) | 512 | 19, 8 193..524 288 | Woct | 6 | 0.0 % | 0.0 % |
+
+The sizes include the widths a chatterbox run actually makes (3 206, 27 408, 137 040,
+210 998, 411 121, 444 721). The buckets that carry the evidence are those holding two to
+four measured widths, each represented by its own TOP — the configuration proven at the top
+is optimal at every width the bucket serves, including one just above the bucket's floor
+(411 121 served by 524 288's). The stress case is the SMALL widths, not the large: at
+W = 1 024 with 128 channels the grid is sixteen blocks on eighty multiprocessors, where
+occupancy is most sensitive to the width, and it costs nothing there either.
+
+**Landed on main (803ab6cc)**: `conv2d_forward_kernel` and `depthwise_conv2d_kernel` key
+`in_width_key`/`out_width_key`; for a convolution whose spatial extent is ONE ROW these are
+the input width's bucket top on the profile's `autotune.buckets.W` rows and the output width
+the convolution's own arithmetic gives from that top, so a certifier synthesising at the top
+forms the very key the census recorded. Two-dimensional convolutions keep their exact
+extents and every 2-D entry keeps serving, because the key positions did not move. The
+directory's 483 one-row entries (of 798, conv2d fp16, at 201 distinct widths) are unserved
+and re-certified at their tops. Effect on the census: chatterbox censuses **333 keys** where
+walking its speech length unbucketed demanded **5 058**. **The Mac needs this measurement on
+its own profile before it certifies any audio model**, and the ladder is data
+(`config/vendors/nvidia/volta.yml`, `autotune.buckets.W`), so an Apple profile writes its own
+rows rather than inheriting these.
+
+**The certifier's real cost, measured and fixed.** Not the oracle and not the bench: three
+py-spy samples of a conv round all landed in `host_values → numpy → to_cpu → memcpy`. A
+windowed oracle refuses to compute the whole reference but was handed the whole RESULT,
+because the windows were cut AFTER the crossing. Now cut on the device
+(`WindowedOracle.device_slices`, `RowWindowedOracle.device_slices`, `deviation_against`,
+12b4d271). Measured on this rack's own proofs, same card, same census:
+
+| round | oracle windows cut | n proofs | `runs` median | `bench` median | `oracle` median |
+|---|---|---|---|---|---|
+| four | after the crossing | 452 | 6.4 s | 2.2 s | 2.4 s |
+| five | on the device | 84 | **1.2 s** | 1.0 s | 2.3 s |
+
+`runs` was the dominant phase and it fell 5.3×. The key populations differ between the two
+rounds, so this is the phase cost, not a controlled end-to-end A/B.
+
+**Where a shadow's coverage ends — the `aten::embedding` gap the Mac characterised.** The
+census shadow replaces two surfaces and nothing else: the `DeviceAllocator` (allocation, the
+whole driver surface — syncs, streams, events, peer access, pinned host memory, device
+queries) and the kernel launcher, plus, since 2026-09-21, the device utilities rebound in
+every loaded module, a pointer-keyed table for host-born values, and the samplers. A path
+that resolves a **runtime** rather than allocating or launching is NOT covered, and that is
+the class both machines have hit: orpheus asked the driver directly here ("No CUDA GPUs are
+available") and Metal's embedding asks for a GPU runtime there. On CUDA `aten::embedding`
+goes through the covered seams, which is why it censuses here and not there — the difference
+is the backend's dispatch, not the model. The structural answer is to shadow the RUNTIME
+RESOLUTION itself rather than each caller, so a backend that resolves a runtime gets a shadow
+one; I cannot write or test that on Metal, and it is the Mac's own seam to place. What this
+rack can promise is that the door stays `CUDA_VISIBLE_DEVICES=`, so any path we have not
+covered fails LOUDLY rather than reaching a card.
