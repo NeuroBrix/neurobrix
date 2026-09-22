@@ -33,6 +33,29 @@ _SENTINEL = object()
 # GraphLMSession — Executor + KV Cache Lifecycle
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _phase_mem_note() -> str:
+    """The allocator baseline at a phase boundary (`NBX_PHASE_TRACE=1`, diagnostic only).
+
+    Module-level rather than a closure inside `execute`, because the two stamps that
+    matter most for a STREAMED plan — `flow.session.weights_ensured` and
+    `flow.session.kv_ready` — are raised inside `_create_session`, where that closure
+    was out of scope. They carried no baseline, so the only reading available before
+    the first segment loaded was the one at `flow.session.created`, AFTER both, and
+    the residency was a single number with nothing to decompose it into.
+
+    Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct under `layer_streaming`:
+    `live=2160MB` at `session.created` against a plan that reserves 844.8 MB beside the
+    streamed component. Which side of `weights_ensured` the remainder arrives on is
+    exactly what these two stamps decide, and it could not be read.
+    """
+    if not torch.cuda.is_available():
+        return ""
+    a = torch.cuda.memory_allocated() / 2**20
+    r = torch.cuda.memory_reserved() / 2**20
+    free, _tot = torch.cuda.mem_get_info()
+    return f"alloc={a:.0f}MB reserved={r:.0f}MB free={free / 2**20:.0f}MB"
+
+
 class GraphLMSession:
     """
     Encapsulates GraphExecutor + KVCacheWrapper lifecycle.
@@ -609,13 +632,7 @@ class AutoregressiveHandler(FlowHandler):
                 for _i in range(torch.cuda.device_count()):
                     torch.cuda.synchronize(_i)
 
-        def _mem_note():  # torch allocator baseline at the boundary (diagnostic only)
-            if not torch.cuda.is_available():
-                return ""
-            a = torch.cuda.memory_allocated() / 2**20
-            r = torch.cuda.memory_reserved() / 2**20
-            free, _tot = torch.cuda.mem_get_info()
-            return f"alloc={a:.0f}MB reserved={r:.0f}MB free={free / 2**20:.0f}MB"
+        _mem_note = _phase_mem_note      # module-level: the session stamps use it too
 
         session = self._create_session(gen_info)
         self._active_session = session
@@ -822,7 +839,7 @@ class AutoregressiveHandler(FlowHandler):
         # mirror of the triton _create_session: weights_ensured / kv_ready)
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         self._ensure_weights_loaded(lm_name)
-        _phase_mark("flow.session.weights_ensured")
+        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
 
         # Get lm_config
         lm_config = self.ctx.pkg.defaults.get("lm_config", {})
@@ -936,7 +953,7 @@ class AutoregressiveHandler(FlowHandler):
                 f"ZERO FALLBACK: 'hidden_size' not found for '{lm_name}'."
             )
 
-        _phase_mark("flow.session.kv_ready")
+        _phase_mark("flow.session.kv_ready", None, _phase_mem_note)
         return GraphLMSession(
             executor=executor,
             kv_wrapper=kv_wrapper,

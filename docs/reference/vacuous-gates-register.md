@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-92 entries, of which five are placeholders and 87 carry a site. Two
+93 entries, of which five are placeholders and 88 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2595,3 +2595,41 @@ measurement does not witness the measurement; when what you record is a choice b
 candidates, only a quiet host makes that choice mean anything, and no before/after reading
 substitutes for it.
 
+
+---
+
+### 93 — a source-inspection gate that a COMMENT could satisfy, and then break
+
+`tests/unit/prism/test_a_strategy_that_loads_its_own_weights_is_installed_first.py::test_install_happens_before_the_skip_returns`
+asserted an ordering inside `RuntimeExecutor._ensure_weights_loaded` by searching its raw
+source text:
+
+```python
+block = src[src.find("loads_own_weights"):]
+i_install = block.find("install_fn(comp_name, executor)")
+i_return = block.find("return")
+assert i_install > -1 and i_return > i_install
+```
+
+**What it would do if the code were wrong**: on 2026-09-22 the code was made *more* correct —
+the unconditional `return` became `if took_over: ... return`, so a whole component the
+strategy manages but does not stream is loaded by the runtime instead of being skipped. The
+cell went RED: `assert (913 > -1 and 504 > 913)`. Nothing about the executable ordering had
+regressed. The explanatory comment added above the call contains the word *returns*, and
+`find("return")` matched it 400 characters before the statement it was looking for.
+
+The same weakness runs the other way and is the reason this is a register entry rather than a
+fixed typo: a `return` written only in a comment would have SATISFIED the ordering just as
+easily. The gate was reading prose and reporting it as structure. Its green never meant what
+it was read to mean, in either direction.
+
+**Repair.** The source is tokenised and its comments and docstrings removed before any
+`find`, and the search string is the tokenised spelling. The invariant is unchanged — what
+changed is that the instrument now looks at code. A second cell was added for the new
+invariant (the skip is taken only when the strategy SAYS it took the component over), and a
+third asserts it on the strategy's behaviour rather than on its source, because a behavioural
+cell cannot be satisfied by any sentence at all.
+
+**The lesson, in one line.** A gate that greps source text is measuring a document, not a
+program: strip the prose before you assert on the structure, and prefer a cell that calls the
+thing over one that reads about it.

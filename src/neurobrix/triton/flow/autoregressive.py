@@ -86,6 +86,44 @@ def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _phase_mem_note() -> str:
+    """The allocator baseline at a phase boundary (`NBX_PHASE_TRACE=1`, diagnostic only).
+
+    Module-level rather than a closure inside `execute`, because the two stamps that
+    matter most for a STREAMED plan — `flow.session.weights_ensured` and
+    `flow.session.kv_ready` — are raised inside `_create_session`, where that closure
+    was out of scope. They carried no baseline, so the only reading available before
+    the first segment loaded was the one at `flow.session.created`, AFTER both, and
+    the residency was a single number with nothing to decompose it into.
+
+    Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct under `layer_streaming`:
+    `live=2160MB` at `session.created` against a plan that reserves 844.8 MB beside the
+    streamed component. Which side of `weights_ensured` the remainder arrives on is
+    exactly what these two stamps decide, and it could not be read.
+    """
+    import os as _os
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+    d = _DA.get_device()
+    live = _DA._cuda_live_bytes.get(d, 0) / 2**20
+    pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
+    free = _DA.device_free_bytes() / 2**20
+    note = f"live={live:.0f}MB pool={pooled:.0f}MB free={free:.0f}MB"
+    if _os.environ.get("NBX_PHASE_BLOCKS") == "1":
+        # The blocks BEHIND the number. A single `live=` reading says a plan and an
+        # execution disagree; it never says which allocation is the difference. The
+        # sizes do: a weight is recognisable by its byte count.
+        pooled_ptrs = {q for per in _DA._pool_free.values() for qs in per.values() for q in qs}
+        blocks = sorted(((sz, q) for q, sz in _DA._cuda_ptr_size.items()
+                         if q not in pooled_ptrs
+                         and _DA._cuda_ptr_device.get(q) == d), reverse=True)
+        from collections import Counter as _C
+        hist = _C(sz for sz, _ in blocks)
+        top = "; ".join(f"{n}x{sz / 2**20:.2f}MB={n * sz / 2**20:.0f}MB"
+                        for sz, n in sorted(hist.items(), key=lambda kv: -kv[0] * kv[1])[:6])
+        note += f" | {len(blocks)} live blocks: {top}"
+    return note
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -137,12 +175,7 @@ class TritonAutoregressiveHandler:
                 _DA.sync_device()
             _DA.set_device(prev)
 
-        def _mem_note():  # allocator baseline at the boundary (diagnostic only)
-            d = _DA.get_device()
-            live = _DA._cuda_live_bytes.get(d, 0) / 2**20
-            pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
-            free = _DA.device_free_bytes() / 2**20
-            return f"live={live:.0f}MB pool={pooled:.0f}MB free={free:.0f}MB"
+        _mem_note = _phase_mem_note      # module-level: the session stamps use it too
 
         session = self._create_session(gen_info)
         self._active_session = session
@@ -541,7 +574,7 @@ class TritonAutoregressiveHandler:
         # which loads as NBXTensor directly. Same lifecycle, different format.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         self._ensure_weights_loaded(lm_name)
-        _phase_mark("flow.session.weights_ensured")
+        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
 
         # Get executor from context
         executor = self.ctx.executors.get(lm_name)
@@ -763,7 +796,7 @@ class TritonAutoregressiveHandler:
                 interceptors["aten::arange"] = kv_interceptor.intercept_arange
             executor.register_triton_interceptors(interceptors)
 
-        _phase_mark("flow.session.kv_ready")
+        _phase_mark("flow.session.kv_ready", None, _phase_mem_note)
         return TritonLMSession(
             executor=executor,
             kv_wrapper=kv_interceptor,

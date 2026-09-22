@@ -373,6 +373,18 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
             "input_name": tid,
             "output_name": None,
             "seam_alias_of": tid,
+            # The seam carries the SYMBOLIC shape, not only the concrete one.
+            # Without it every dim crossing a segment boundary arrives as a
+            # literal, and a later segment has nothing to bind its symbols from
+            # — which is not a shape bug that shows up as a wrong number, it is
+            # the engine's own refusal:
+            #   UnboundSymbolError: symbol 's0' (batch, binds from
+            #   input::input_ids::dim_0) is not bound at runtime. Bound: ['s2','s3']
+            # `input_ids` is read by the embedding in segment 0 and by nothing
+            # after it, so s0 and s1 lost their source at the first boundary
+            # while `position_ids` (a graph input throughout) kept s2 and s3.
+            # Principle 1 is not suspended at a seam.
+            "symbolic_shape": src.get("symbolic_shape"),
         }
 
     # Ops are shared with the full graph, so the rewrite copies rather than
@@ -389,16 +401,48 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         new_op["input_tensor_ids"] = [alias_of.get(t, t)
                                       for t in (op.get("input_tensor_ids") or [])]
         attrs = op.get("attributes")
-        if isinstance(attrs, dict) and attrs.get("args"):
-            new_args = []
-            for arg in attrs["args"]:
-                if (isinstance(arg, dict)
-                        and arg.get("tensor_id") in alias_of):
-                    arg = dict(arg)
-                    arg["tensor_id"] = alias_of[arg["tensor_id"]]
-                new_args.append(arg)
+        if isinstance(attrs, dict):
             new_attrs = dict(attrs)
-            new_attrs["args"] = new_args
+            if attrs.get("args"):
+                new_args = []
+                for arg in attrs["args"]:
+                    if (isinstance(arg, dict)
+                            and arg.get("tensor_id") in alias_of):
+                        arg = dict(arg)
+                        arg["tensor_id"] = alias_of[arg["tensor_id"]]
+                    new_args.append(arg)
+                new_attrs["args"] = new_args
+            # Every OTHER tensor id the op carries in its attributes. A fused op
+            # does not take all of its inputs positionally: `custom::moe_fused`
+            # names its hidden states, its gate scores and its pre-computed
+            # routing by tid in `attributes`, and the runtime resolves those
+            # attributes to arena SLOTS — so an id left un-aliased points at a
+            # slot the seam never fills.
+            #
+            # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct under
+            # `layer_streaming`: segment 0 ran and returned its five outputs,
+            # segment 1 then raised
+            #     RuntimeError: MoE fused: hidden_states is None (slot N).
+            #     Killed by liveness analysis before fused op.
+            # which is not what happened — nothing killed it. The tensor was
+            # present under `input::<tid>` while the attribute still asked for
+            # `<tid>`. All four class-1 MoE models failed this way.
+            #
+            # Data-driven, and it has to be: the rewrite knows only "this value
+            # IS a tensor id this seam is aliasing". It names no op, no
+            # attribute and no family, so a fused op added later is covered the
+            # day it is written. A weight id is never in `alias_of` — a seam
+            # carries activations — so expert weight lists pass through
+            # untouched.
+            for key, val in attrs.items():
+                if key == "args":
+                    continue
+                if isinstance(val, str) and val in alias_of:
+                    new_attrs[key] = alias_of[val]
+                elif isinstance(val, list) and any(
+                        isinstance(v, str) and v in alias_of for v in val):
+                    new_attrs[key] = [alias_of.get(v, v) if isinstance(v, str)
+                                      else v for v in val]
             new_op["attributes"] = new_attrs
         seg_ops[op_uid] = new_op
 
@@ -437,6 +481,52 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
             out["tensors"][tid] = t
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
+
+    # A symbol binds from an INPUT, and a segment's inputs are not the
+    # component's. `s0`/`s1` bind from `input_ids::dim_{0,1}`; the embedding
+    # reads `input_ids` in segment 0 and nothing reads it afterwards, so every
+    # later segment declared a symbol it had no way to bind and refused at the
+    # first op that resolved a shape.
+    #
+    # The seam tensors carry those same dims — they are the SAME activations,
+    # aliased — so each symbol is re-sourced to a tensor this segment actually
+    # receives. Re-sourcing, not dropping: an op inside the segment still names
+    # the symbol, and a segment with the symbol removed would fail resolving it
+    # rather than fail binding it. Nothing is invented — a symbol with no seam
+    # dim carrying it keeps its original source and refuses as before, which is
+    # the honest outcome for a dim that genuinely does not cross.
+    sym_ctx = graph.get("symbolic_context")
+    if isinstance(sym_ctx, dict) and isinstance(sym_ctx.get("symbols"), dict):
+        seg_input_ids = set(out["input_tensor_ids"])
+        # Where each symbol can be read on THIS segment's inputs.
+        available: Dict[str, str] = {}
+        for tid in seg_input_ids:
+            meta = out["tensors"].get(tid) or {}
+            dims = ((meta.get("symbolic_shape") or {}).get("dims")) or []
+            for axis, d in enumerate(dims):
+                if isinstance(d, dict) and d.get("type") == "symbol" and d.get("id"):
+                    # `tid` is already the seam's `input::<original>` alias; a
+                    # second prefix names a tensor that does not exist.
+                    _src = tid if tid.startswith("input::") else f"input::{tid}"
+                    available.setdefault(str(d["id"]), f"{_src}::dim_{axis}")
+        new_symbols = {}
+        for sid, info in sym_ctx["symbols"].items():
+            if not isinstance(info, dict):
+                new_symbols[sid] = info
+                continue
+            source = str(info.get("source") or "")
+            # `input::<name>::dim_N` — the source input as the executor binds it.
+            src_tid = source[7:].rsplit("::dim_", 1)[0] if source.startswith("input::") else ""
+            if src_tid and src_tid not in {t[7:] if t.startswith("input::") else t
+                                           for t in seg_input_ids} and sid in available:
+                info = dict(info)
+                info["source"] = available[sid]
+                info["seam_resourced_from"] = source
+            new_symbols[sid] = info
+        new_ctx = dict(sym_ctx)
+        new_ctx["symbols"] = new_symbols
+        out["symbolic_context"] = new_ctx
+
     return out
 
 

@@ -588,6 +588,54 @@ def _census_shadow_active() -> bool:
     except Exception:  # noqa: BLE001 — no census module means no shadow
         return False
 
+def _graph_constant_bytes(graph: Optional[Dict]) -> int:
+    """Resident bytes of the constants baked into `graph`, as the EXECUTOR holds them.
+
+    `GraphExecutor._load_constants_from_graph` loads every tensor carrying
+    `constant: True` and a `constant_data` payload, and `_load_constant_triton`
+    narrows two of them on the way in — fp64 to fp32, complex128 to complex64,
+    because the Triton kernels are fp32-max. This mirrors that narrowing, so the
+    figure is what stays resident rather than what the graph declares.
+
+    A computable buffer (`is_computable`) is deliberately NOT counted: the loader
+    skips its constant_data and recomputes it at runtime resolution, so its traced
+    size is not what it occupies.
+
+    A dimension that is not a concrete int is skipped rather than guessed. That is a
+    symbolic constant and its size is a question for the resolver, not for a budget.
+    """
+    if not isinstance(graph, dict):
+        return 0
+    widths = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 4,
+              "int32": 4, "int64": 8, "int8": 1, "uint8": 1, "bool": 1,
+              "complex64": 8, "complex128": 8}
+    total = 0
+    for tdata in (graph.get("tensors") or {}).values():
+        if not isinstance(tdata, dict):
+            continue
+        if tdata.get("is_computable") or not tdata.get("constant"):
+            continue
+        if not tdata.get("constant_data"):
+            continue
+        shape = tdata.get("shape") or []
+        if not shape or not all(isinstance(d, int) and d > 0 for d in shape):
+            continue
+        dtype = str(tdata.get("dtype", "float32")).replace("torch.", "")
+        width = widths.get(dtype)
+        if width is None:
+            # ZERO FALLBACK: a dtype this table does not know is not silently
+            # halved or assumed 4 bytes — the caller gets a refusal it can read.
+            raise ValueError(
+                f"_graph_constant_bytes: unknown constant dtype {dtype!r}. "
+                f"Add its resident width to this table — guessing one would "
+                f"under-reserve the budget by exactly the amount that matters.")
+        n = 1
+        for d in shape:
+            n *= d
+        total += n * width
+    return total
+
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -4845,7 +4893,22 @@ class PrismSolver:
                     if mem.total_bytes > budget_bytes}
         resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
                               if name not in streamed)
-        segment_budget = budget_bytes - resident_beside
+        # And the graph's CONSTANTS, which are resident beside every segment and
+        # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
+        # baked into graph.json is not a component, so it was invisible here while
+        # being the first thing the executor allocates.
+        #
+        # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct on a 16 GB V100
+        # (`NBX_MALLOC_TRACE`, one run): 2160 MB live before the first segment
+        # loads, every byte of it from `_load_constant_triton` — 54 RoPE tables
+        # declared `[163840, 64]` bfloat16, `max_position_embeddings` materialised
+        # in full for a request of 8 tokens, and held twice. The partition cut
+        # against 15 539 MB while execution offered 13 680 MB; the segment asked
+        # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
+        # segments that fit, instead of a plan that cannot run.
+        constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
+                             for name in streamed)
+        segment_budget = budget_bytes - resident_beside - constant_bytes
         if segment_budget <= 0:
             return None
 
