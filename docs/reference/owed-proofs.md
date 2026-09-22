@@ -2424,3 +2424,57 @@ Related and already landed here: `core.paths.installation_refusals` (metal-first
 `796524eb`) refuses a BACKEND whose package, environment or build tree — pip records the last
 in `direct_url.json` — stands on storage the machine clears. That is the code half of the same
 lesson and it is vendor-neutral; the rack inherits it with the branch.
+
+## 2026-09-22 — a census shadow on unified memory planned at the ROOM's memory (CUDA proof owed)
+
+**`core/prism` is the Dell's, so this needs a CUDA inertness proof before it lands on main.**
+It is fixed here rather than handed over because it blocks key harvest on this machine, which
+is the one exception the doctrine allows.
+
+### The defect
+
+`_device_reading` already knows the rule — *"a census shadow sees no card and carries the
+machine's plan, not the room's"* — but `_prepare_devices` lowers `capacity` one call EARLIER,
+on any unified device, with no shadow check:
+
+```python
+capacity = recommended
+if dev.has_unified_memory and host.measured:
+    capacity = min(recommended, host.available_mb * self.safety_margin)
+```
+
+That lowering is correct and must stay for a real RUN: it is the 2026-09-10 repair for a plan
+accepted against the recommendation and then killed mid-execution (an artefact of 12 298 MB
+killed at step 3 of 20 with 10 099 MB actually free). **A census executes nothing**, so the
+justification does not reach it — and the cost is severe, because a tiled family's tile is
+derived from the budget, so its KEYS become a function of whatever else was running.
+
+**Measured on this M4 Pro, 2026-09-22**: the same model at the same imposed rung logged
+`planning against 8659 MB actually free` in one shadow and `7604 MB` in the next, minutes
+apart — while a Metal shader compile and a test suite happened to be running. Under the real
+shadow after the fix, capacity is the profile's `17276.7 MB` every time.
+
+A census that is not reproducible is not a census, and this one would have produced a
+different key set on every pass.
+
+### The fix (red then green)
+
+`_census_shadow_active()` at module level, asking `kernels.census.active()` behind a bare
+`except` (no census module means no shadow), and the lowering skipped under it. Two cells in
+`tests/unit/core/test_the_census_plans_at_its_rung_not_the_rooms_memory.py`: a busy machine
+must STILL lower a real plan (the 09-10 repair intact), and the shadow must plan at the
+profile's capacity.
+
+### What is owed
+
+1. **CUDA inertness.** A discrete card never enters the branch — `has_unified_memory` is
+   false there, so the guard is unreachable on the rack. That is an argument, not a
+   measurement: a plan census on both memory classes, before and after, differing in 0 plans.
+2. **A question worth asking on the rack**: `_prepare_devices` also lowers a DISCRETE card's
+   `used_mb` from the driver's live free figure a few lines below. That reading is live too.
+   If a rack census runs while anything else holds memory on the card, does its plan move? If
+   it does, the same fix is owed there and this note covers both.
+
+Related, same day, same shape: `census._bind_target` bound no vendor profile for a non-CUDA
+brand, so the ladder went unread and 825 of 2 955 keys came out exact (see the entry above).
+Both are the census reading the machine where it should be reading the profile.
