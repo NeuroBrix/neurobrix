@@ -343,6 +343,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `4a15f415` with the `triton-apple-backend` plugin. Every figure below is a
   run on that machine, not an inference from another mode.
 
+  > **The key count and the service verdict below are BEING RE-MEASURED and must
+  > not ship as they stand (2026-09-22).** They were taken before request-dependent
+  > dimensions were bucketed in the autotune key. The catalogue was then re-censused
+  > in bucketed form and asks **3 106** keys, against the 974 recorded here, so "974
+  > witnessed keys" and "service is at zero miss" describe a directory and a
+  > verification that the bucketing superseded. Certification against the new census
+  > is in progress; the figures are rewritten from that run, after it, never before.
+  > Two further things must land in this entry when they do: the 33 catalogue models
+  > still open, each with its cause (`docs/reference/catalogue-state.md`), and the
+  > `depthwise_conv2d` bf16-with-padding defect fixed in the meantime, which no
+  > release should describe as absent.
+
   **Three modes, ten catalogue cells each, judged outside the engine.** The
   same ten cells — six upscalers (swin2SR x2/x4-realworld, swinir x2/x4,
   real-esrgan x2/x4), whisper-large-v3-turbo, Kokoro-82M, TinyLlama-1.1B,
