@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and everything after it degenerated into repetition. The answers are close to the whole
   model's but not word-for-word identical, and the remaining difference has a known and
   reported cause, which this note will resolve when it is measured rather than reasoned.
+  A second model of the same kind was then found to fail for a related reason — the running
+  memory of the conversation is held alongside every piece and was not being counted when the
+  pieces were sized — and now answers correctly on a card less than a third of its size.
 
 - **Opening a packaged model file no longer overwrites the copy already installed.** Reading
   a `.nbx` unpacks it into the local model store, and it did so even when a different build of
