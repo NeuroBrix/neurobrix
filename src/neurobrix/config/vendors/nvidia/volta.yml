@@ -156,9 +156,17 @@ autotune:
       # GEMM at N=K=512), each octave bucket carrying three or four measured values with its
       # TOP as representative: 0.0 % median loss, 0.2 % max at ONE octave bucket. The rows
       # below are finer than the octave that was measured, so they cost no more than it did.
-      - {up_to: 16384, step: 2048}
-      - {up_to: 32768, step: 4096}
-      - {up_to: 65536, step: 8192}
+      # The first three octaves above the knee keep a NARROW step. Measured directly on the
+      # rows as shipped (the upscalers' N=360, K=180; three sizes inside each bucket with
+      # its TOP among them, 2026-09-22): a quarter-octave there cost 0.0 % median but
+      # **5.2 %** at the 10 240 bucket and 1.2 % at 16 384 — the loss lives just above the
+      # knee, where a quarter of an OCTAVE is still a quarter of the VALUE. Beyond 65 536
+      # the same sweep measured 0.0 % median and at most 0.6 %, so the quarter-octave stands.
+      # The convolution-width ladder below keeps its quarter-octave: its own sweep measured
+      # 0.0 % median AND max there, on both classes and two channel counts.
+      - {up_to: 16384, step: 512}
+      - {up_to: 32768, step: 1024}
+      - {up_to: 65536, step: 2048}
       - {up_to: 131072, step: 16384}
       - {up_to: 262144, step: 32768}
       - {up_to: 524288, step: 65536}
