@@ -2612,3 +2612,49 @@ read and they are listed here so they are not lost.
 
 **Evidence**: `nbx-atelier/campagnes/2026_09_22_apple/census/` — `census_tiled.json` (727 626
 bytes), `logs_tiled/` (569 probe logs + per-rung logs). Durable storage, not a scratchpad.
+
+## 2026-09-22 — the container cache had a second door, and it cost a census pass
+
+**`core/paths.py` exists because the answer used to live in four places** reached by two
+mechanisms, one of which *"calls itself 'single source of truth for paths' in its own
+docstring. It was not one, and nothing said so."*
+
+It happened again. `tools/certified_census.py` reads the one door
+(`from neurobrix.core.paths import cache_dir`), but `tools/precision_zoo_campaign.py:84` held
+
+```python
+CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
+```
+
+so census pass B — whose environment named the shared NFS catalogue in `NEUROBRIX_CACHE` —
+read an **empty local directory** and died on the first model:
+`FileNotFoundError: /Users/hocine/.neurobrix/cache/Janus-Pro-7B/topology.json`. Pass A
+survived only because the upscaler path never reached `request_args`. Zero keys from 29
+models, ~30 minutes of shadow time spent on nothing.
+
+**Fixed at the source here** (it blocks key harvest, which is the one exception the doctrine
+allows): the five tools in the census/certification chain now read `cache_dir()` —
+`precision_zoo_campaign.py`, `levers_byte_identity.py`, `unroll_census_report.py`,
+`artefact_voice.py`, `ir_census.py`. Verified: `CACHE` resolves to
+`~/Mounts/Super-NeuroBrix-Cache` and finds the container. A gate,
+`tests/unit/tools/test_no_tool_spells_the_container_cache_itself.py`, keeps the chain honest.
+
+### What is owed
+
+**Seventeen other tools carry the same literal** and this chantier neither drives nor can
+exercise them, so the gate is scoped to the chain rather than committed red for everyone:
+
+`audit_artifact_integrity.py` · `audit_vendor_locked_ops.py` · `certify_the_catalogue.py` ·
+`constant_load_differential.py` · `container_regression_gate.py` · `frozen_dim_report.py` ·
+`head_dim_length_cell.py` · `hub_family_sweep.py` · `microtest_vae_top_ops.py` ·
+`probe_spatial_promotion.py` · and seven more (the gate lists them when its `CHAIN` set is
+widened).
+
+Each is one line. **Whoever owns them should widen the gate's `CHAIN` set as they go** — the
+test is written so that growing it is the whole change. Note that `~/.neurobrix/replay_cache`
+is deliberately NOT covered: that is per-machine autotune state, not the catalogue, and it is
+right for it to be local.
+
+**The lesson is the one `core/paths.py` already wrote down**: a door is only a door if
+everything goes through it, and a tool that spells the path itself is not refused by anything
+— it simply reads somewhere else and reports nothing.

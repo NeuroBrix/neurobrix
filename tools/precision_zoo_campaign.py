@@ -81,7 +81,13 @@ from rig_devices import visible_card, gate_card   # the one brick, not a third c
 
 PY = zoo_python()
 NBX_CMD = nbx_cmd()          # a LIST: `python -m neurobrix` where the rig's binary is absent
-CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
+# The container cache has ONE door (`core.paths.cache_dir`), which reads
+# NEUROBRIX_CACHE, then ~/.neurobrix/paths.json, then the default. A literal here is a
+# SECOND answer to a question that already has one: on 2026-09-22 this file sent a
+# whole census pass to an empty ~/.neurobrix/cache while the canonical catalogue sat on
+# the shared mount the env var named, and every model died on a missing manifest.
+from neurobrix.core.paths import cache_dir as _cache_dir
+CACHE = _cache_dir()
 ASSETS = REPO / "benchmarks" / "assets"
 OUT_DEFAULT = REPO / "validation_outputs" / "precision_zoo_2026_09_05"
 
