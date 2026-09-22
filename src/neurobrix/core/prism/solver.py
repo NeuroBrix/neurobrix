@@ -548,6 +548,32 @@ def memory_ladder_rung_mb(free_mb) -> int:
 
 
 
+def _capped_budget_mb(reading, capacity: float) -> float:
+    """The law's budget for this reading, never above the capacity it budgets.
+
+    A BUDGET CANNOT EXCEED THE CAPACITY IT BUDGETS. The law rounds a reading onto the
+    commercial ladder and the nearest rung can sit ABOVE the device: a V100-16GB reads
+    capacity 15 564.8 MB (16 384 x 0.95) and came out with budget 16 384.0 — over the
+    capacity, and over the card's real driver_total of 16 151 MB. A plan sized against it is
+    accepted and then cannot run; measured on the class-1 MoE models, whose segments were cut
+    against 16 384 and OOM'd by ~286 MB at execution. e55e5c9e capped the UNIFIED reading by
+    capacity; this is the same invariant one level out, for every device kind.
+
+    EXCEPT BEHIND THE DOOR. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool so a census
+    enumerating rungs is reproducible, and it must win over the ambient — that is its whole
+    purpose. Capping it by a capacity that was itself lowered from a live host reading puts
+    the ambient straight back: measured, door=8192 with 6 000 MB free returned 5 700, which
+    is the reading and not the rung, and the census would be a coin toss again.
+
+    So: the door is honoured exactly; only the DERIVED budget is capped.
+    """
+    from neurobrix.core.prism.memory_budget import budget_mb as _bmb
+    value = float(_bmb(reading))
+    if os.environ.get("NBX_PRISM_BUDGET_MB"):
+        return value
+    return min(value, float(capacity)) if capacity > 0 else value
+
+
 def _census_shadow_active() -> bool:
     """True when this process is a census SHADOW.
 
@@ -2793,7 +2819,18 @@ class PrismSolver:
                 device_string=dev.get_device_string(),
                 capacity_mb=capacity,
                 external_used_mb=used,
-                budget_mb=float(_budget_mb(reading)),
+                # A BUDGET CAN NEVER EXCEED THE CAPACITY IT BUDGETS. The law rounds a
+                # reading onto the commercial ladder, and the nearest rung can sit ABOVE
+                # the device: a V100-16GB reads capacity 15 564.8 MB (16 384 x 0.95) and
+                # came out with budget 16 384.0 — over the capacity, and over the card's
+                # real driver_total of 16 151 MB. A plan sized against it is accepted and
+                # then cannot run; measured on the class-1 MoE models, whose segments were
+                # cut against 16 384 and OOM'd by ~286 MB at execution.
+                #
+                # e55e5c9e capped the UNIFIED reading by capacity. This is the same
+                # invariant one level out, where it holds for every device kind: the ladder
+                # may round a reading, it may not round it past the hardware.
+                budget_mb=float(_capped_budget_mb(reading, capacity)),
                 tile_rung_mb=int(_tile_rung_mb(reading)),
                 budget_note=note,
                 spec=dev,
