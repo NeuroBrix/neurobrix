@@ -2828,5 +2828,12 @@ screening large shapes at all.
 
 Detail and the exchange: `nbx/campaigns/2026_09_22_mochi_prism/screening/UNSCREENED.md`.
 
+**Where the rule stops applying, on both machines.** The Mac's point, and it sharpens the
+entry: the shapes that skip the screen are not a corner of the budget, they are where the
+budget's rule ceases to apply at all. Their addmm key carries 4 646 662 144 bytes of arguments
+against a 1 073 741 824-byte budget; the conv shape this rack swept on 2026-09-22 carries
+4.6 GB. Neither is near the line. And large arguments are exactly where index arithmetic
+crosses 2^31, so the shapes the screen declines to check are the shapes most likely to need it.
+
 **The lesson, in one line.** "We screen our kernels" and "our artefact has no field saying
 whether we screen" are the same sentence until someone greps for the field.
