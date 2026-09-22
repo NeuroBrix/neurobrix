@@ -242,7 +242,21 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                 row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
                 keys.update(res["keys"])
                 if res["rc"] != 0:
-                    row["status"] = "failed" if row["status"] != "retrace" else "retrace+failed"
+                    # A PROBE that fails is not the model failing. The probe is a SECOND
+                    # request the census composes to reach the tiled shapes (a 4 096-pixel
+                    # image); when the model's OWN request censused at every rung and only
+                    # the probe broke, calling the model failed hides thirty-six harvested
+                    # keys behind a word (PixArt x4 and Flex.1-alpha read as failed on
+                    # 2026-09-22 with every ordinary rung green). It is its own status, so
+                    # the gap it names — the tiled keys nobody has — stays visible without
+                    # burying what was collected.
+                    if ri:
+                        if row["status"] == "ok":
+                            row["status"] = "probe_failed"
+                        elif row["status"] == "retrace":
+                            row["status"] = "retrace+probe_failed"
+                    else:
+                        row["status"] = "failed" if "retrace" not in row["status"] else "retrace+failed"
     row["keys"] = len(keys)
     row["_keys"] = sorted(keys)
     return row
@@ -359,7 +373,8 @@ def main() -> int:
               "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
               "modes": modes, "rungs_mb": rungs, "wall_s": round(time.time() - t0, 1),
               "models": rows, "retrace_queue": sorted(m for m, r in rows.items() if r["status"] == "retrace"),
-              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable")),
+              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed")),
+              "probe_failed": sorted(m for m, r in rows.items() if "probe_failed" in r["status"]),
               "entries": entries}
     if a.directory:
         served = directory_idents(a.directory)
