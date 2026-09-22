@@ -2329,3 +2329,47 @@ it in the docs.
 **The lesson, in one line.** A textual guard over commands must distinguish use from mention,
 or the first thing it blocks is the documentation of the rule it enforces — and possibly its
 own fix.
+
+### 88 — `neurobrix`'s exit status could not express failure, so every gate over it was empty
+
+**2026-09-23, Apple/Metal campaign.** `src/neurobrix/__main__.py` was:
+
+```python
+from neurobrix.cli import main
+main()
+```
+
+`main()` returns what the command returned — and the return value was dropped. Every
+`return cmd_xxx(args)` in `cli/__init__.py` was therefore unobservable, and the process exited
+0 whatever the command decided.
+
+**What it made vacuous.** `autotune certify` ends with
+
+```python
+return 0 if not bad and not summary["failed"] else 1
+```
+
+carrying a comment explaining why `unreachable` is deliberately NOT folded into that status —
+"a status that cries wolf is a status nobody reads on the day it is right". That reasoning was
+correct, was carefully written, and could never be observed by anything.
+
+**How it surfaced.** The batched runner keys its retry logic on the certifier's exit code. The
+addmm family printed `"failed": 1` in its own summary while the shell read `rc=0`, so the
+runner recorded the family COMPLETE and moved on with a census key uncertified. The campaign
+then reported `BATCHED CERTIFY DONE` at 3 057 of 3 106 keys. The runner was not wrong; it was
+reading a status that could not be anything but 0.
+
+**Why it is the purest form of the class.** Most entries here are tests that check too little.
+This is a *status that cannot go red*. Any CI step, any script, any human running
+`neurobrix autotune certify && echo ok` got a green that no defect could have turned.
+
+**Seen failing before it was made to pass.**
+`tests/unit/cli/test_exit_code_reaches_the_process.py` patches the command layer to return 3
+and asserts the process exits 3 — red on the old `__main__.py`, green on the new. Two further
+cells hold the edges the obvious fix would break: 0 and `None` must stay 0, and a non-int
+return must not become a status (a bare `sys.exit(main())` would exit 1 and print the string
+as an error, turning a success into a failure on the way past).
+
+**The lesson, in one line.** Before trusting an exit code, make a command fail on purpose and
+look at `$?` — and take it without a pipe, because `cmd | tail` reports *tail's* status and
+will show you a 0 that was never the command's.
