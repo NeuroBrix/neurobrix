@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-89 entries, of which five are placeholders and 84 carry a site. Two
+90 entries, of which five are placeholders and 85 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2402,3 +2402,58 @@ the same fact killed a frozen-worktree run an hour earlier in the same session; 
 you need and build it, never inherit it from the room. (Second, smaller: mutating a collection
 by index and reading the result by index asserts that the call between them preserves order —
 write that assertion down, or select by name.)
+
+### 90 — a door that watches the command line cannot see a library that computes where it writes
+
+**Where.** `.claude/hooks/guard-cache-hacks.sh`, the blocking hook that refuses writes to the
+shared container cache, against `src/neurobrix/nbx/cache.py:extract()`.
+
+**The shape.** The hook inspects a SHELL COMMAND and refuses it when the command names the
+cache path. `NBXContainer.load()` takes a path to a `.nbx`, and `extract()` then resolves the
+DESTINATION itself — `cache_dir / <the .nbx's parent directory name>`. No argument on the
+command line names the cache, so there is nothing for the hook to match.
+
+**What it cost, 2026-09-22 17:44.** A call made to GATE a freshly built container's symbolic
+dims printed
+
+    [Cache] Extracting model.nbx -> ~/.neurobrix/<cache>/mochi-1-preview
+    [Cache] Done: 43 files, 41.05GB extracted
+
+and replaced the canonical `mochi-1-preview` — the census's own source of truth — with a new
+build. The command that did it named only a path under `nbx/builds/`. Both states survived as
+files (`models/video/mochi-1-preview/model.nbx`, 2026-07-07, and the new build), so nothing
+was lost; nothing REFUSED, which is the entry.
+
+**What would the hook have done if the code were wrong?** Exactly what it did: pass. It is
+green on every write of this class and always will be, because the string it looks for is
+produced inside the process after the hook has already run. Its healthy output and its blind
+output are the same silence.
+
+**How wide it was.** `is_cached()` returns False whenever `.cache_meta.json` is missing, and
+only **2 of the 59** containers in this cache carry one. So for 57 of them any load from a
+`.nbx` re-extracted over the installed tree.
+
+**The mirror nobody had named.** The same slot is keyed on the `.nbx`'s PARENT DIRECTORY
+NAME, so two builds of one model in different trees always collide. When the cache is NEWER
+than the requested file, `is_cached()` is True and the old code returned the cached tree —
+a DIFFERENT container under the requested name, with no line printed. That is worse than the
+overwrite, and it was reached by the same call.
+
+**The fix, as a door rather than a census.** `extract()` refuses at the LIBRARY seam, above
+the cached short-circuit, whenever the cache slot did not come from this `.nbx`: fresh
+install allowed, same recorded source allowed, anything else refused — and an ABSENT record
+refuses rather than assumes, because absence is the common case here and the least intended
+place to overwrite. The opening is named (`NBX_ALLOW_CACHE_REPLACE=1`, or
+`allow_replace=True`), and the refusal names the way to READ without replacing
+(`NEUROBRIX_CACHE=<scratch>`) — which had to be corrected once, because the first draft
+advertised `NEUROBRIX_CACHE_DIR`, a variable that does not exist.
+
+The RUNTIME path is deliberately untouched: `neurobrix run` passes the extracted DIRECTORY
+and `ensure_extracted` returns it without calling `extract()`. Measured after the fix: all
+59 containers load, 0 refused.
+
+**The lesson, in one line.** A guard that reads the command line only sees the writes whose
+destination is written on the command line — put the door where the write happens, in the
+library that computes the path, and test it by calling that function rather than by typing a
+command.
+

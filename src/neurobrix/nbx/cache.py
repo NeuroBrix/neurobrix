@@ -85,7 +85,81 @@ class NBXCache:
                 return json.load(f)
         return None
 
-    def extract(self, nbx_path: Path, force: bool = False) -> Path:
+    #: The named opening on the replacement door below. Deliberate, never silent.
+    REPLACE_ENV = "NBX_ALLOW_CACHE_REPLACE"
+
+    def _refuse_incidental_replacement(self, nbx_path: Path, cache_path: Path,
+                                       declared: bool) -> None:
+        """Refuse to REPLACE a cached container as a side effect of reading one.
+
+        `NBXContainer.load()`, `NBXLoader` and `core/runtime/factory` all call
+        `ensure_extracted()` — they are READ paths, and none of them means "replace the
+        canonical copy of this model". But `extract()` re-unpacks whenever the `.nbx` is
+        newer than the cache, so handing any of them a freshly built container silently
+        overwrote the installed one.
+
+        Measured 2026-09-22 17:44: a call made to GATE a new build's symbolic dims printed
+        `[Cache] Extracting model.nbx -> ~/.neurobrix/<cache>/mochi-1-preview` and replaced
+        the canonical container, 43 files and 41.05 GB, with the new build. The repository's
+        blocking hook could not see it: the hook refuses a SHELL COMMAND that names the cache
+        path, and this write came from inside a library that resolved the destination itself
+        from a path in `nbx/builds/`. A door that watches the command line cannot see that.
+
+        THE HARMFUL STATE, named rather than the outcome: a container this cache did not get
+        from THIS `.nbx` is replaced by it. So:
+
+        * nothing cached yet -> a fresh install, allowed;
+        * `.cache_meta.json` records THIS same source -> the artefact was rebuilt in place,
+          which is the ordinary update path, allowed;
+        * anything else -> a replacement, and it must be declared.
+
+        Only 2 of the 59 containers in this cache carry `.cache_meta.json` at all; the other
+        57 arrived by another route, and a missing record is exactly the case where the
+        replacement is least intended. Absent metadata therefore refuses rather than assumes.
+
+        The opening is named and reads as deliberate: `force=True` / `allow_replace=True` at
+        the call, or `NBX_ALLOW_CACHE_REPLACE=1` in the environment for a CLI that installs.
+        """
+        if declared or os.environ.get(self.REPLACE_ENV) == "1":
+            return
+        if not (cache_path / "manifest.json").exists():
+            return                                  # fresh install, nothing to lose
+
+        recorded = ""
+        meta_path = cache_path / ".cache_meta.json"
+        if meta_path.exists():
+            try:
+                recorded = str((json.loads(meta_path.read_text()) or {}).get("source") or "")
+            except Exception:                       # noqa: BLE001 — unreadable == unknown
+                recorded = ""
+        if recorded:
+            try:
+                if Path(recorded).resolve() == Path(nbx_path).resolve():
+                    return                          # same artefact, rebuilt in place
+            except Exception:                       # noqa: BLE001
+                pass
+
+        raise RuntimeError(
+            f"ZERO FALLBACK: the cached container at {cache_path}\n"
+            f"  did not come from this .nbx, and this call would either replace it or\n"
+            f"  silently serve it in place of what was asked for.\n"
+            f"  with a different .nbx: {nbx_path}\n"
+            f"  the cache records its source as: {recorded or '(no .cache_meta.json — unknown)'}\n"
+            f"\n"
+            f"  Reading a container must not overwrite the installed one. The cache is the\n"
+            f"  canonical source the census reads, and 57 of its 59 containers carry no\n"
+            f"  record of where they came from, so an unrecorded source is refused rather\n"
+            f"  than assumed to be the same artefact.\n"
+            f"\n"
+            f"  To READ this .nbx without touching the installed container, point the cache\n"
+            f"  elsewhere for the call:\n"
+            f"      NEUROBRIX_CACHE=<a scratch dir> ...\n"
+            f"  To REPLACE it on purpose, say so:\n"
+            f"      {self.REPLACE_ENV}=1 ...      (or extract(..., allow_replace=True))"
+        )
+
+    def extract(self, nbx_path: Path, force: bool = False,
+                allow_replace: bool = False) -> Path:
         """
         Extract NBX to cache directory.
 
@@ -98,6 +172,18 @@ class NBXCache:
         """
         nbx_path = Path(nbx_path)
         cache_path = self.get_cache_path(nbx_path)
+
+        # THE DOOR, ABOVE the cached short-circuit. Both directions are harmful and only
+        # one of them is a replacement:
+        #   * cache OLDER than this .nbx -> it is re-extracted, and the installed container
+        #     is REPLACED as a side effect of a read (the 2026-09-22 incident);
+        #   * cache NEWER -> `is_cached()` returns True and this returns the cached tree,
+        #     which is a DIFFERENT container under the requested name. The caller asked for
+        #     one artefact and silently received another, with no line printed.
+        # `get_cache_path` keys the slot on the .nbx's PARENT DIRECTORY NAME, so two builds
+        # of the same model in different trees always collide here.
+        self._refuse_incidental_replacement(nbx_path, cache_path,
+                                            declared=bool(force or allow_replace))
 
         if self.is_cached(nbx_path) and not force:
             print(f"[Cache] Using cached: {cache_path}")
