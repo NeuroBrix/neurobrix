@@ -296,6 +296,42 @@ class LayerStreamingStrategy(ExecutionStrategy):
             return last
 
         executor.run = segmented_run
+
+        # An interceptor registered on this executor must reach the SEGMENTS, because
+        # this executor no longer runs an op — `run` is `segmented_run` above, and the
+        # triton sequence that consults interceptors is compiled by each segment.
+        #
+        # The autoregressive flow registers the KV attention interceptor on the
+        # component's executor AFTER the strategy is installed, so nothing here can
+        # forward a registration that has not happened yet: the call itself is
+        # forwarded instead.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct — the arms agree on the
+        # FIRST token and diverge from the second, which is the signature of a decode
+        # that is not reading a cache rather than of a broken graph:
+        #     whole     Sure, I'd be happy to
+        #     streamed  Suresearchsearchsearchsearchsearchsearchsearch
+        #
+        # One interceptor instance for all segments, deliberately. It indexes layers as
+        # `call_count % num_layers` on a counter it never resets, so three segments run in
+        # order inside one decode step continue the count instead of restarting it — the
+        # segmenting is invisible to the cache, which is the property that makes a shared
+        # instance correct rather than merely convenient.
+        _register = getattr(executor, "register_triton_interceptors", None)
+        if _register is not None:
+            def register_on_segments(interceptors, _base=_register, _segs=segments):
+                _base(interceptors)
+                for seg_exec in _segs:
+                    fn = getattr(seg_exec, "register_triton_interceptors", None)
+                    if fn is None:
+                        raise RuntimeError(
+                            "layer_streaming: a segment executor cannot take an "
+                            "interceptor registration. Its decode would silently run "
+                            "with no KV cache, which reads as a model defect and is not "
+                            "one — a refusal is the only honest answer.")
+                    fn(interceptors)
+            executor.register_triton_interceptors = register_on_segments
+
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)
         return True
