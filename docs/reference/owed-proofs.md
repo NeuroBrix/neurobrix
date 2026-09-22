@@ -3186,3 +3186,74 @@ room, so the question is whether it changed any CUDA result:
 allocator exposing no drain at all (the resolution now **refuses** instead of returning
 `None`, per ZERO FALLBACK), and it asserts the hook actually invokes what it resolved. Seen
 failing before it was made to pass.
+
+---
+
+## 2026-09-22 — Mac to the rack: depthwise_conv2d is SILENTLY WRONG in bf16 with padding
+
+**This is not a certification problem. The engine returns wrong numbers.** Certification is
+how it was found — 28 of 28 padded stride-1 depthwise keys refused, every config excluded —
+but the defect is on the execution path, and any bf16 depthwise convolution with padding on
+Metal has been returning wrong values with nothing raised.
+
+### The signature, fully reproducible
+
+`tools`-free reproduction: `campagnes/2026_09_22_apple/scripts/depthwise_dtype.py`.
+One fixed config (`NBX_DISABLE_AUTOTUNE=1`), C=64, 32x32, 3x3, stride 1, deviation against the
+fp64 oracle:
+
+| dtype | pad 0 | pad 1 |
+|---|---|---|
+| fp32 | 1.6e-07 | 1.6e-07 |
+| fp16 | 3.8e-04 | 3.8e-04 |
+| **bf16** | 3.2e-03 | **0.754** |
+
+Only bf16, and only with padding. It is not config-dependent: the certifier excluded all seven
+configs on every one of the 28 keys, at 12x to 25x tolerance (best deviations 0.49 to 0.997 —
+a relative deviation near 1.0 means the output is uncorrelated with the reference, not close
+to it).
+
+### Two things that rule out the obvious explanations
+
+1. **It is not `other=0.0` on the masked load.** With pad=1 and a 3x3 tap, only the BORDER
+   outputs have any masked tap; interior outputs read entirely in-bounds. The measured error
+   map is the opposite of that — output row 0, which is the genuinely masked row, is CLEAN,
+   and the interior is wrong:
+
+   ```
+   ................................     <- row 0, the masked row: correct
+   ..######..######..######..######
+   ..######..######..######..######     14.4 % of elements beyond tolerance
+   ..######..######..######..######     period 8 in W: 2 correct, 6 wrong
+   ```
+
+2. **It is not the oracle.** The oracle's depthwise fast branch
+   (`groups == c == co and ci_g == 1`) is exercised by no conv2d key, so it was the other
+   suspect. Adjudicated against an independently written naive reference at c=4, 8x8:
+   oracle vs independent reference = **0** (exact) in all six padded/unpadded/strided cases.
+   The general conv2d path also certifies **402** padded stride-1 keys, the same shape class
+   depthwise refuses 28/28.
+
+What padding changes for an interior output is not the mask but the BASE OFFSET of the load
+(`iw = ow * stride_w + kw_i - pad_w`), and the period-8, 2-correct-then-6-wrong structure in W
+looks like a vectorised bf16 load whose lanes past the first pair are wrong at an unaligned
+base. I have NOT proven that, and I am not going to assert a cause I have not measured — fp16
+is the same 2-byte width and is clean, which the alignment story does not explain on its own.
+The kernel source (`kernels/ops/depthwise_conv2d.py`, the stencil at lines 84-104) is
+dtype-agnostic apart from the `fp16` constexpr branch, which points below the kernel, into the
+Metal backend's codegen for this load.
+
+### What we ask
+
+1. **Run `depthwise_dtype.py` on CUDA.** If bf16+pad diverges there too, this is our kernel or
+   Triton itself and it affects the rack's outputs as much as ours. If it is clean, it is the
+   Metal backend and it stays mine. This is the single most useful thing and it costs one run.
+2. If it is clean on CUDA, say which Triton version — ours is the `6904de9` fork.
+
+### Status here
+
+The 28 keys stay UNCERTIFIED and the depthwise family is reported COMPLETE with +0 entries,
+which the batched runner now prints rather than hiding. No bf16 padded depthwise setting will
+be written into the served directory while this stands, and **the Apple chantier cannot be
+called closed with this open** — a certified directory that serves a wrong kernel is worse
+than an empty one.
