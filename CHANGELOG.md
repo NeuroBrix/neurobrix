@@ -14,6 +14,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every GPU architecture now quantises request-dependent shapes the same way.** The table
+  that groups similar request sizes together, so a prompt one token longer does not need its
+  own proof, had been written for one GPU generation only. On every other supported card the
+  engine silently treated each size as unique — no error, just far more work to prove and a
+  run that could never reach "nothing missing". Every architecture now carries the table, and
+  a profile that is missing it is refused by name instead of being given a silent default.
+  The values are carried over from where they were measured and are marked as unproven on the
+  other architectures until each one's own proving run confirms them.
+
+- **A placement that cannot run is no longer accepted on machines that share memory with the
+  system.** On hardware where the graphics memory and the system memory are the same memory —
+  Apple silicon, integrated GPUs — one of the placement routes still offered to "move the
+  weights to system memory", which frees nothing there. The run then failed while setting up,
+  before any computation started. That route is now declined on such machines, as the
+  neighbouring one already was. Discrete graphics cards are unaffected, verified by running
+  the same model before and after and comparing the output byte for byte.
+
+- **An imposed memory limit now applies to system memory as well as to the card.** The option
+  that tells the engine to plan against a smaller memory budget was honoured for the graphics
+  card but ignored for system memory, so plans that stream a model through a small budget were
+  never exercised at the sizes they exist for.
+
 - **A configuration whose mask is an integer can be proven.** Some models pass an integer
   mask where a bias is expected; the certification built a floating-point one instead and
   then reported the configuration as one nothing would ever ask for, hiding a real gap. An

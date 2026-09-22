@@ -13,7 +13,13 @@ GEMM's optimum moves with every size there: up to 16.7 % lost inside a 16-wide b
 then 16-step to 256, 32-step to 1024, 128-step to 8192, 512-step beyond: 0.0 % median and
 maximum loss against the per-size optimum, where powers of two lost up to 26.9 %.
 
-A profile that declares no ladder buckets NOTHING: the key stays exact, as before.
+A profile that is BOUND but declares no ladder is REFUSED, not quietly bucketed at step 1.
+Answering "exact" there is a silent degradation dressed as a default: it produces a key
+explosion with no error, and it hid for a day that the ladder had been added to
+nvidia/volta.yml alone while all twenty-six other profiles carried none (found 2026-09-22 by
+the schema gate, not by a run). An UNBOUND profile — `{}`, no target matched, the census
+behind its door before `install()` — is a different condition and still keys exact; that one
+is covered by binding the shadow to its profile, not by a refusal here.
 """
 from __future__ import annotations
 
@@ -73,11 +79,26 @@ def ladder_for(dim: str, profile: Optional[Dict[str, Any]] = None) -> Ladder:
     if profile is None:
         from neurobrix.kernels.ops._configs import active_vendor_profile
         profile = active_vendor_profile()
+    bound = bool(profile)
     spec = ((profile or {}).get("autotune") or {}).get("buckets") or {}
     rows = spec.get(dim) if isinstance(spec, dict) else None
     if rows is None:
         rows = spec.get("default") if isinstance(spec, dict) else None
-    return parse_ladder(rows) if rows else [(None, 1)]
+    if rows:
+        return parse_ladder(rows)
+    if bound:
+        # ZERO FALLBACK: a real profile that forgot the ladder is a defect in the profile,
+        # and keying exact would hide it behind a plausible-looking answer.
+        raise RuntimeError(
+            "ZERO FALLBACK: the bound hardware profile "
+            f"{(profile or {}).get('architecture') or '<unnamed>'!r} declares no "
+            f"autotune.buckets ladder, so dimension {dim!r} has no bucket.\n"
+            "  Add `autotune.buckets.default` to its vendor YAML (see nvidia/volta.yml), "
+            "or the census keys this dimension EXACTLY and every request length becomes "
+            "its own key.\n"
+            "  A step of 1 is a legitimate ladder and must be written down as one."
+        )
+    return [(None, 1)]        # no target bound: the census's own door, unchanged
 
 
 def bucket_of(dim: str, value: int, profile: Optional[Dict[str, Any]] = None) -> int:
