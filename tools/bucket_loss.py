@@ -124,6 +124,28 @@ LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact
 
 
 # --------------------------------------------------------------------------- one sweep
+def _synth(rng, shape, dtype):
+    """A synthetic operand in `dtype`, including the one numpy cannot express.
+
+    numpy has no bfloat16. The engine carries bf16 as its BITS in a uint16 container
+    (`NBXTensor.from_numpy(arr, dtype=NBXDtype.bfloat16)` declares what the bits ARE and
+    never converts), so a bf16 sweep builds fp32 values and rounds them to bf16 the way the
+    hardware does — round-to-nearest-even on the top 16 bits. Before this, every bf16 sweep
+    died on `.astype('bfloat16')` with "data type 'bfloat16' not understood", on a profile
+    whose `preferred_dtype` IS bfloat16 and whose certified directory holds 285 bf16 entries
+    of 1 205 (Apple M4 Pro, 2026-09-22).
+    """
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    x = np.ascontiguousarray((rng.standard_normal(shape) * 0.1).astype(np.float32))
+    if str(dtype) in ("bfloat16", "bf16"):
+        u = x.view(np.uint32)
+        bits = ((u + (((u >> np.uint32(16)) & np.uint32(1)) + np.uint32(0x7FFF)))
+                >> np.uint32(16)).astype(np.uint16)
+        return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
+    return NBXTensor.from_numpy(x.astype(dtype))
+
+
 def _cfg_repr(cfg) -> str:
     return json.dumps({"kwargs": dict(cfg.kwargs), "num_warps": cfg.num_warps,
                        "num_stages": cfg.num_stages}, sort_keys=True)
@@ -136,8 +158,8 @@ def sweep_matmul(M, N, K, dtype, dev):
     from neurobrix.kernels.ops.matmul import matmul_kernel
     from neurobrix.triton import autotune_cache as atc
     rng = np.random.default_rng(M)
-    a = NBXTensor.from_numpy((rng.standard_normal((M, K)) * 0.1).astype(dtype))   # lands on the visible card
-    b = NBXTensor.from_numpy((rng.standard_normal((K, N)) * 0.1).astype(dtype))
+    a = _synth(rng, (M, K), dtype)   # lands on the visible card
+    b = _synth(rng, (K, N), dtype)
     seen = {}
     saved = matmul_kernel.run
 
@@ -170,8 +192,8 @@ def sweep_bmm(B, M, N, K, dtype):
     from neurobrix.kernels.ops.baddbmm_op import baddbmm_kernel
     from neurobrix.triton import autotune_cache as atc
     rng = np.random.default_rng(M * 1000 + N)
-    a = NBXTensor.from_numpy((rng.standard_normal((B, M, K)) * 0.1).astype(dtype))
-    b = NBXTensor.from_numpy((rng.standard_normal((B, K, N)) * 0.1).astype(dtype))
+    a = _synth(rng, (B, M, K), dtype)
+    b = _synth(rng, (B, K, N), dtype)
     seen = {}
     saved = baddbmm_kernel.run
 
@@ -205,8 +227,8 @@ def sweep_conv(B, C_in, C_out, H, W, k, dtype, kh=None, kw=None):
     from neurobrix.triton import autotune_cache as atc
     kh = int(kh or k); kw = int(kw or k)
     rng = np.random.default_rng(H * 7919 + W)
-    x = NBXTensor.from_numpy((rng.standard_normal((B, C_in, H, W)) * 0.1).astype(dtype))
-    w = NBXTensor.from_numpy((rng.standard_normal((C_out, C_in, kh, kw)) * 0.1).astype(dtype))
+    x = _synth(rng, (B, C_in, H, W), dtype)
+    w = _synth(rng, (C_out, C_in, kh, kw), dtype)
     seen = {}
     saved = conv2d_forward_kernel.run
 
