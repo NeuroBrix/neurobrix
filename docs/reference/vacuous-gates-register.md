@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-82 entries, of which five are placeholders and 77 carry a site. Two
+83 entries, of which five are placeholders and 78 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2183,3 +2183,36 @@ through Triton's `backend.hash()`, so a moved or rebuilt backend changes the ide
 **The lesson, in one line.** An identity that leaves out one of the things that can change the
 artefact is not an identity; a default behind a bare `except` is the wrong answer that never
 raises.
+
+### 83 — the damage check that looked where the damage was not
+
+**Where.** This rack (Dell, metatron), 2026-09-22, during the catalogue census relaunch.
+
+**What it did.** A `git merge` escaped into the live working tree for about thirty seconds
+because a compound command chained a `cd` into a worktree that had failed to be created with
+`;` instead of `&&`: the `cd` failed, the shell carried on, and the merge ran where it stood.
+`kernels/census.py` held conflict markers for that half minute while twenty-four census
+shadows were spawning. The merge was aborted and the tree verified clean, and then a check
+was run for the damage — `grep -l "SyntaxError\|<<<<<<<" <dir>/census_runs/*.log` inside a
+loop whose working directory had already been reset — which printed nothing. That nothing was
+read as "no shadow saw the conflicted file", and the census was left to run and reported as
+sound.
+
+It was not sound. The census's own merged report named the casualties an hour later: six
+models — `whisper-large-v3-turbo`, `orpheus-3b-0.1-ft-snac`, `real-esrgan-x2/x4/x8`,
+`TinyLlama-1.1B-Chat-v1.0` — every one of them `SyntaxError: invalid syntax` at
+`census.py:397`, `<<<<<<< HEAD`, all stamped 02:45. A seventh of the catalogue, silently
+missing from a census that was about to feed certification on four cards.
+
+**What would it have done if the code were wrong?** Printed nothing, exactly as it did when
+the code WAS wrong — the check could not distinguish "no damage" from "no files read".
+
+**The fix.** The fates a census reports are now DERIVED from the merged per-model statuses
+rather than unioned from the parts (`merge_parts.py`), so a model re-censused after a fix
+stops being reported as failed; the six were re-censused into their own part and merged. The
+check itself is the lesson: a search that can return empty for two different reasons must
+prove it read something — count the files it opened, or assert a known-present line — before
+its silence is allowed to mean anything.
+
+**The lesson, in one line.** A search that finds nothing has told you nothing until you know
+it looked; and a compound command joined by `;` runs its tail wherever the head left it.
