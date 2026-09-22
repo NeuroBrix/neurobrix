@@ -2664,6 +2664,20 @@ class PrismSolver:
             declared_host = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
             if declared_host > 0 and declared_host < free:
                 free = declared_host
+            # AND never more than the device itself can hold. On unified memory the device's
+            # pool is a SUBSET of the machine's RAM, so a reading taken from host memory has
+            # to be capped by the device's own capacity or the budget exceeds the thing it is
+            # a budget for. Measured 2026-09-22 on the Mac's profile: capacity 17 276.7 MB,
+            # budget 24 576.0 — the profile's cpu.ram_mb, straight through. A plan budgeted
+            # at 24 GB against a 17 GB device accepts plans that cannot run, which is the
+            # same failure as the 131 072 MB reading this bound was added to remove, just
+            # smaller. Both halves are needed: the host bound stops another machine's RAM
+            # leaking in, this one stops the machine's RAM exceeding its own GPU.
+            #
+            # Still a CEILING, not a replacement: a busy host lowers below capacity, which
+            # is the 2026-09-10 repair, and `min` preserves that.
+            if capacity > 0:
+                free = min(free, float(capacity))
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=free, unified=True,
                                  measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
         try:

@@ -122,3 +122,33 @@ def test_the_capacity_is_untouched():
     profile = _apple_profile()
     d = _unified_device(profile, host_available_mb=251_000)
     assert d.capacity_mb == pytest.approx(profile.devices[0].memory_mb * 0.95, rel=1e-6)
+
+
+# ─────────── and never more than the DEVICE can hold ───────────
+# The host bound above stops another machine's RAM leaking into the plan. It does not stop
+# the profile's OWN RAM exceeding its own GPU: on unified memory the device pool is a SUBSET
+# of machine RAM, so a reading taken from host memory has to be capped by the device's
+# capacity too. Measured 2026-09-22 on the Mac's profile with only the host bound in place:
+# capacity 17 276.7 MB, budget 24 576.0 — cpu.ram_mb straight through. A plan budgeted at
+# 24 GB against a 17 GB device accepts plans that cannot run: the same failure as the
+# 131 072 MB reading, just smaller and harder to notice.
+
+def test_the_budget_never_exceeds_the_devices_own_capacity():
+    profile = _apple_profile()
+    d = _unified_device(profile, host_available_mb=251_000)
+    assert d.budget_mb <= d.capacity_mb, (
+        f"budget {d.budget_mb:.1f} exceeds the device's capacity {d.capacity_mb:.1f} — "
+        f"a budget larger than the thing it budgets")
+
+
+def test_both_bounds_are_needed_and_neither_alone_is_enough():
+    """Host bound alone lets cpu.ram_mb through; capacity bound alone lets another
+    machine's free RAM through while it is below capacity. Pinned together."""
+    profile = _apple_profile()
+    declared = float(profile.cpu.ram_mb)
+    cap = float(profile.devices[0].memory_mb) * 0.95
+    assert declared > cap, (
+        "this profile no longer has more system RAM than GPU capacity, so it cannot "
+        "distinguish the two bounds — pick another fixture")
+    d = _unified_device(profile, host_available_mb=251_000)
+    assert d.budget_mb <= min(declared, cap)
