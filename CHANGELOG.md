@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A request-scale dimension no longer explodes into thousands of configurations.** The
+  configuration ladder stepped by a fixed amount above its knee, so a dimension that follows
+  the request — a waveform of two million samples — asked for a different certified setting
+  every few hundred values. Above the knee it now widens with the value, measured to cost
+  nothing.
+
 - **A census shadow reads a dtype by name, not by how the interpreter prints it.** What
   `str()` renders for an integer enumeration changed between Python versions, so on a newer
   interpreter a shadow's health check read as unhealthy and every diffusion census stopped at
