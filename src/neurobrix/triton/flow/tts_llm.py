@@ -371,11 +371,21 @@ class TritonTTSLLMEngine:
                 pos_emb = speech_pos_emb_np[pos_idx:pos_idx + 1]  # [1, dim]
                 token_embed = token_embed + pos_emb[np.newaxis, :, :]
 
+            # A census shadow walks the context by bucket classes, not by tokens: the
+            # positions up to the current bucket's top produce the keys this step produced,
+            # so they are appended at once (kernels/census.py::pace; 0 outside the shadow).
+            from neurobrix.kernels import census as _census
+            _skip = min(_census.pace(int(context_np.shape[1])), max(0, _nsteps - len(generated_ids)))
+            if _skip:
+                token_embed = np.repeat(token_embed, 1 + _skip, axis=1)
+                generated_ids.extend([next_token] * _skip)
             # Grow both contexts in lockstep (shared speech sequence).
             context_np = np.concatenate([context_np, token_embed], axis=1)
             if do_cfg:
                 uncond_context_np = np.concatenate(
                     [uncond_context_np, token_embed], axis=1)
+            if _skip and len(generated_ids) >= _nsteps:
+                break
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
@@ -422,25 +432,27 @@ class TritonTTSLLMEngine:
                 start = time.perf_counter()
                 self._ensure_weights_loaded(voc_name)
 
-                speech_len_np = np.array([len(speech_ids)], dtype=np.int64)
                 voc_executor = self.ctx.executors.get(voc_name)
                 # Reference-voice ref-dict from the embedded conditioning (R30
                 # mirror of core): ref_dict.* <- gen.*. Without it the s3gen
                 # flow-matching gets all-zeros reference and the voice/audio is
                 # wrong even when the speech tokens are correct.
                 conds = _load_default_conditioning_np(self.ctx)
-                comp_inputs: Dict[str, Any] = {}
-                if voc_executor is not None:
-                    voc_dag = getattr(voc_executor, '_dag', None)
+
+                def _run_vocoder(ids):
+                    _tok = NBXTensor.from_numpy(np.array([list(ids)], dtype=np.int64))
+                    _len = np.array([len(ids)], dtype=np.int64)
+                    comp_inputs: Dict[str, Any] = {}
+                    voc_dag = getattr(voc_executor, '_dag', None) if voc_executor is not None else None
                     if voc_dag:
                         for _tid, tspec in voc_dag.get("tensors", {}).items():
                             iname = tspec.get("input_name")
                             if not iname:
                                 continue
                             if iname == "speech_tokens":
-                                comp_inputs[iname] = speech_tokens
+                                comp_inputs[iname] = _tok
                             elif iname == "speech_token_lens":
-                                comp_inputs[iname] = NBXTensor.from_numpy(speech_len_np)
+                                comp_inputs[iname] = NBXTensor.from_numpy(_len)
                             elif iname.startswith("ref_dict.") and conds is not None \
                                     and f"gen.{iname[len('ref_dict.'):]}" in conds:
                                 _ref = conds[f"gen.{iname[len('ref_dict.'):]}"]
@@ -454,8 +466,17 @@ class TritonTTSLLMEngine:
                                 else:
                                     dummy = np.zeros(shape, dtype=np.float32)
                                 comp_inputs[iname] = NBXTensor.from_numpy(dummy)
+                    return voc_executor.run(comp_inputs)
 
-                output = voc_executor.run(comp_inputs)
+                from neurobrix.kernels import census as _census
+                if _census.walks_extents():
+                    # The vocoder's extent is the number of speech tokens that survived the
+                    # value filter — a value the shadow does not have. The census meets every
+                    # key class of that extent up to the request's token bound instead.
+                    output = _census.walk_extent(1, max_tokens, lambda n: _run_vocoder(_census.extent_ids(speech_ids, n)),
+                                                 name=f"{voc_name} speech tokens")
+                else:
+                    output = _run_vocoder(speech_ids)
 
                 audio_output = None
                 if isinstance(output, dict):
@@ -633,6 +654,11 @@ def _sample_token_np(
     rng: Optional[np.random.RandomState] = None,
 ) -> int:
     """Sample next token from logits (NumPy). `rng` makes it deterministic."""
+    from neurobrix.kernels import census as _census
+    if _census.active():
+        # A census shadow has no values: the draw is token 0 and no host math runs (a
+        # softmax over a shadow's logits drew NaN probabilities, 2026-09-22).
+        return 0
     logits = logits_1d.copy().astype(np.float64)
 
     # Repetition penalty

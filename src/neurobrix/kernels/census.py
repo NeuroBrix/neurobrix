@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Dict, Optional, Set
+from typing import List, Any, Dict, Optional, Set
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
+_OBSERVERS: List[Set[str]] = []         # key lines formed during a `walk_extent` run, dedup or not
 _ACTIVE = {"census": False}
 _SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distinct and aligned
 
@@ -67,12 +68,104 @@ def record(tuned, key: tuple) -> None:
     if line is None:
         return
     with _RECORD_LOCK:
+        for obs in _OBSERVERS:
+            obs.add(line)
         if line in _RECORDED:
             return
         _RECORDED.add(line)
         with open(path, "a") as fh:
             fh.write(line + "\n")
             fh.flush()
+
+
+def pace(length: int) -> int:
+    """How many extra positions a request loop may skip after `length` under the shadow: up to
+    the last position of the current bucket, so the next step lands on a new bucketed key.
+
+    A census costs shapes, and under the bucketed keys a decode's shapes change only at the
+    bucket tops of the context (or cache) length: the steps in between produce the keys the
+    step before them produced. Walking every one of them cost chatterbox 390 steps for the
+    keys of ~110 lengths (9 min on one thread, 2026-09-21). A flow calls this with the length
+    it has and appends that many copies of the token it sampled: the keys of every bucket are
+    still met once, and the walk is enumerated by the key classes it produces. 0 outside the
+    shadow — a live run never skips a position."""
+    if not _ACTIVE["census"] or length < 1:
+        return 0
+    try:
+        from neurobrix.kernels.autotune_bucket import bucket_of
+        nxt = int(length) + 1
+        top = max(int(bucket_of(dim, nxt)) for dim in ("M", "N", "K"))
+        return max(0, top - nxt)
+    except Exception:  # noqa: BLE001 — no ladder: every position is its own key, nothing to skip
+        return 0
+
+
+def walks_extents() -> bool:
+    """Whether this shadow enumerates the classes of a value-derived extent (the census tool
+    sets `NBX_CENSUS_EXTENTS=1` on the rung it walks them at)."""
+    return _ACTIVE["census"] and os.environ.get("NBX_CENSUS_EXTENTS", "") not in ("", "0")
+
+
+def extent_ids(ids: list, n: int) -> list:
+    """`ids` cut or padded to `n` positions (the last id repeated: a shadow has no values)."""
+    ids = list(ids)
+    if not ids:
+        ids = [0]
+    return (ids + [ids[-1]] * max(0, n - len(ids)))[:n]
+
+
+def walk_extent(lo: int, hi: int, run, name: str = ""):
+    """Run `run(n)` at every KEY CLASS of an extent the flow learns only from values — the
+    number of speech tokens a vocoder receives, the frames a codec decodes — instead of at the
+    one value the shadow happened to produce: `run(lo)` and `run(hi)`, then between any two
+    extents whose recorded key sets differ, the midpoint, until the differing pair is
+    adjacent. Every kernel's key is a monotone step function of the extent (a bucket top, an
+    exact extent), so two extents with one key set bracket a range with that key set, and the
+    walk meets every class once at the cost of one run per class and a log of the class's
+    width. Returns the last run's result. Said in clear: classes met, runs, wall."""
+    import time as _t
+    lo, hi = max(1, int(lo)), max(1, int(hi))
+    if hi < lo:
+        lo, hi = hi, lo
+    seen = {}
+    last = [None]
+    t0 = _t.perf_counter()
+
+    def at(n):
+        if n not in seen:
+            obs: Set[str] = set()
+            _OBSERVERS.append(obs)
+            try:
+                last[0] = run(n)
+                seen[n] = frozenset(obs)
+            except Exception as exc:  # noqa: BLE001 — an extent the graph refuses is its own class, said
+                head = str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
+                _say_once(f"[census] extent {name or 'walk'} refused at {n}: {head}")
+                seen[n] = frozenset({f"<refused> {head}"})
+            finally:
+                _OBSERVERS.remove(obs)
+        return seen[n]
+
+    stack = [(lo, hi)]
+    while stack:
+        a, b = stack.pop()
+        if b - a <= 1 or at(a) == at(b):
+            continue
+        m = (a + b) // 2
+        at(m)
+        stack.append((m, b))
+        stack.append((a, m))
+    refused = sorted(n for n, v in seen.items() if any(k.startswith("<refused>") for k in v))
+    if len(refused) == len(seen):
+        # Every extent refused: the walk recorded nothing and the model would read as censused
+        # (instrumentation that lies by construction). The run fails with the graph's own words.
+        raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: every extent refused; "
+                           f"first: {sorted(seen[refused[0]])[0]}")
+    classes = len({v for v in seen.values()}) - (1 if refused else 0)
+    print(f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
+          f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""),
+          flush=True)
+    return last[0]
 
 
 def active() -> bool:
@@ -251,11 +344,19 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         except Exception:  # noqa: BLE001
             return None
 
+    # Only SMALL host values are kept: the ones a flow reads back as values (a grid, a token id
+    # list, a frame count, a timestep table). A large array (weights, features) is never read
+    # by value — keeping every one made a chatterbox shadow hold 17 GB of host memory and a dozen
+    # shadows filled the swap (2026-09-21 23:45).
+    _HOST_VALUE_CAP_BYTES = 1 << 20
+
     def _from_numpy_shadow(arr, dtype=None):
         t = _from_numpy(arr, dtype)
         try:
             import numpy as np
-            _HOST_VALUES[int(t.data_ptr())] = np.array(arr, copy=True)
+            a = np.asarray(arr)
+            if a.nbytes <= _HOST_VALUE_CAP_BYTES:
+                _HOST_VALUES[int(t.data_ptr())] = np.array(a, copy=True)
         except Exception:  # noqa: BLE001 — a value without a pointer is a device value
             pass
         return t

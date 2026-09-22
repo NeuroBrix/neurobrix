@@ -691,6 +691,13 @@ class TritonAttentionInterceptor:
         # recorded against the old buffers can ever match again.
         return ("kv_decode", bucket, padded, self.cache._uid, self.cache.generation)
 
+    def skip_positions(self, n: int) -> None:
+        """A census shadow skips `n` positions of the decode at once (kernels/census.py::pace):
+        every layer's counter moves as if `n` tokens had been written. Never on a live run —
+        the caller asks the shadow first; here the counters simply move."""
+        for layer in self.cache._layers.values():
+            layer.current_len += int(n)
+
     def replay_advance(self):
         """The replayed launches appended one position per layer and
         advanced every device counter; mirror on the host authority
