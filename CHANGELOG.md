@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plan made for another machine no longer borrows this one's memory.** When a model was
+  planned against a description of a different computer — which is how work for one machine is
+  prepared on another — the part of the calculation covering shared graphics-and-system memory
+  read the memory of the machine doing the planning instead of the one described. A laptop with
+  24 GB was planned as though it had 251 GB, and a model needing 30 GB was reported as fitting
+  in 17 GB. The plan now never assumes more memory than the description states, and a machine
+  that is genuinely busy still plans on less.
+
 - **A memory plan no longer reports twice the memory a model needs when a dtype is written
   in short form.** The planner looks up how many bytes a number type takes. When the name it
   was given was not one it knew — `bf16` rather than `bfloat16`, `fp16` rather than
