@@ -241,3 +241,102 @@ value is green for the reason that blinds it.
 * **Anything about hardware other than this rack**: four V100s, two of 16 GB
   and two of 32, at 1290/877 MHz.
 
+
+---
+
+# Apple / M4 Pro — the 33 open models of the 2026-09-22 census, each with its cause
+
+This section is about **this Mac**, not the rack: Apple M4 Pro, 18 186 MB device budget,
+no NVIDIA card. Nothing here is reproducible there and nothing there is reproducible here.
+
+Census of 2026-09-22: **3 106 keys from 59 models**, modes `triton` and `triton-sequential`,
+read from the shared cache through the census shadow. 33 models are OPEN, and the owner's
+addendum of that day is explicit that nothing may read as complete while they are.
+**None is unclassified.** Causes were recovered from the 484 per-model logs the run wrote
+(`campagnes/2026_09_22_apple/scripts/name_open_models.py`); the full per-model table is
+`campagnes/2026_09_22_apple/census/OPEN_MODELS.md`.
+
+| owner | models |
+|---|---|
+| APPLE (memory / rung) | 9 |
+| DELL (layer_streaming) | 6 |
+| ENGINE (trace / op defect) | 6 |
+| CENSUS HARNESS (input never supplied) | 3 |
+| FORGE (frozen symbol, re-trace owed) | 3 |
+| ENGINE (census shadow opened the device) | 2 |
+| ENGINE (missing capability) | 2 |
+| FORGE (symbolic coverage) | 1 |
+| METAL (driver / allocator) | 1 |
+
+## What each class means for closing the chantier
+
+- **APPLE (memory / rung)** — `solver.py::_fail_error`: Prism finds no strategy at 18 186 MB.
+  A limit of this card, not a defect; the same containers plan on the rack. Closed by naming,
+  not by fixing.
+- **DELL (layer_streaming)** — the plan's segment boundaries are absent from the graph Prism
+  read. Handed over in owed-proofs; re-censused here once their fix reaches main.
+- **ENGINE (trace / op defect)** — broadcast and shape mismatches in triton-sequential
+  (PixArt, Sana). Real defects, reproducible, and the census's own commands reproduce them.
+- **ENGINE (census shadow opened the device)** — Allegro and CogVideoX-2b trip
+  `census shadow: the Metal device is deliberately unreachable (NBX_CENSUS=1)`. Key formation
+  is pure data; a path that opens the device during a shadow is a defect on OUR side and is
+  the most actionable item in this table.
+- **METAL (driver / allocator)** — granite-3.1: `the triton-ext driver cannot bind pointer
+  ... the allocator does not record it`. Ours, and Apple-only.
+- **FORGE (frozen symbol / symbolic coverage)** — principle 1. The three retrace-queue models
+  are NOT failures: they ran clean and contributed keys, and are queued because the trace
+  froze a symbol that must stay symbolic.
+- **CENSUS HARNESS (input never supplied)** — the I2V models were censused without the image
+  their flow requires (`None of the sources resolved: ['global.image']`). Not an engine
+  defect; naming it as one would send someone hunting a bug that is not there. Closed by
+  giving the census an image for these families.
+
+
+## Why the count was 19 an hour earlier
+
+`merge_census.py` unioned the KEYS of census pass A and pass B correctly and took the
+BOOKKEEPING from the first source only, so 14 open models of pass B — all LLM, audio_llm
+and tts — were absent from every count. Recorded in `owed-proofs.md` (2026-09-22). The
+keys were always right, which is why certification was unaffected and the defect could
+hide behind a report that looked finished.
+
+### CORRECTION, same day — two of those causes were wrong, and the tool was why
+
+`name_open_models.py` read a model's logs without filtering on whether the run FINISHED. A
+model censused at six rungs in two modes has 24 logs, and the first alphabetically is often
+one that SUCCEEDED; its warnings were then reported as the model's cause.
+
+**Allegro and CogVideoX-2b were named "ENGINE (census shadow opened the device)" on exactly
+that mistake.** The line
+
+```
+[flash] shared-memory probe unavailable (RuntimeError: census shadow: the Metal device is
+deliberately unreachable (NBX_CENSUS=1) ...); the tile is not checked against the device
+```
+
+is a CAUGHT WARNING printed by runs that went on to complete — "the tile is not checked
+against the device", then the run continues. It is not a failure, and that class does not
+exist. Their real cause is **memory at the low rungs**: the VAE asks 82 688 MB of activations
+against a 17 277 MB card, and both models SUCCEED at r11264 and above.
+
+Corrected counts, from the failing logs only:
+
+| owner | models |
+|---|---|
+| APPLE (memory / rung) | **11** |
+| DELL (layer_streaming) | 6 |
+| ENGINE (trace / op defect) | 6 |
+| CENSUS HARNESS (input never supplied) | 3 |
+| FORGE (frozen symbol, re-trace owed) | 3 |
+| ENGINE (missing capability) | 2 |
+| FORGE (symbolic coverage) | 1 |
+| METAL (driver / allocator) | 1 |
+
+**Eleven of the 33 are only PARTIALLY open** — they failed at some rungs and succeeded at
+others, and contributed keys: Allegro, CogVideoX-2b, the four PixArt variants, the three Sana
+variants, GLM-4.1V-9B-Thinking and VibeVoice-1.5B. "Failed" in the census summary means a run
+failed, not that the model contributed nothing.
+
+The warning is still worth one line of someone's time — a path that reaches the Metal runtime
+inside a shadow is uncovered by the census, and the flash tile goes unchecked there — but it
+is a gap in coverage, not the reason any model is open.
