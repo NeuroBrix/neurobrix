@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A configuration that could not fit the card is reported as that, not as a failure.** One
+  video model's final projection needs more memory than a smaller card holds, and a run on
+  such a card never reaches it because the work is split first; the certification now says so
+  with the arithmetic instead of counting it beside real failures.
+
 - **A census reaches the branch of a model that actually computes.** Where a model chooses
   its next step from values, a census shadow has none and kept choosing the same cheap step,
   so the work the model really does was never measured; the shadow now takes the computing
