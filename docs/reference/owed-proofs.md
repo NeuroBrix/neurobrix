@@ -3615,3 +3615,52 @@ They declined a re-certification because three cards were at 100 %, and it did n
 them to ask the question backwards about entries already in the directory — until my
 quarantine made them look. Symmetrically, I would not have audited the windows I did not
 already suspect until they showed me the method.
+
+---
+
+## 2026-09-22 — "one key is the wall" was my runner restarting too fast
+
+The batched certifier stopped with:
+
+```
+FATAL: conv2d_forward_kernel exited rc=137 having certified ZERO new entries.
+       One key is the wall, not memory pressure.
+```
+
+That guard was added an hour earlier precisely so an empty round would not be mistaken for
+memory pressure. It fired correctly on the FACT (zero entries) and then asserted a CAUSE it
+had no way to know.
+
+**Measured instead of believed.** The named key —
+`conv2d n=1 ci=64 4480x4480 -> co=3, k=3x3, pad=1, bf16` — was run alone with the footprint
+sampled: **certified in 49.5 s, 0 failed, rc=0**. It is not a wall.
+
+The timestamps say what happened: round 1 was killed at **22:38:20**, round 2 began at
+**22:38:21**. One second. A jetsam kill does not return the pages instantly, so round 2
+allocated into round 1's residue, was killed by it, gained nothing, and was reported as an
+oversize key. **The wall was this script.**
+
+Two hypotheses I formed and discarded by reading before measuring, recorded because they were
+plausible and wrong:
+
+- *a 23 GB im2col buffer* — `conv2d_forward_kernel` is im2col-STYLE indexing inside the
+  kernel, not a materialised column matrix. `_conv2d_should_band_stream` says so: "Output is
+  the dominant transient … the kernel accumulates in fp32 internally".
+- *the fp64 oracle* — windowed above the MAC cap (34.7 G against a 2 G cap), so it holds three
+  corner windows of a few hundred MB, not the plane.
+
+### Both fixes are in the runner, not the engine
+
+1. **Settle after a kill**: 60 s before the next round, so the kernel can reclaim.
+2. **An empty round is retried once from a settled machine before anything is called a wall.**
+   Zero gain says no entry was written; it does not say why. Only a second empty round, the
+   one taken after settling, is a wall.
+
+### The shape of the mistake, which is the reusable part
+
+This is the third time today a guard reported a true fact with a false cause attached: the
+witness proved the regime held and I read it as proving the machine was quiet; `rc=120` was
+CPython failing to flush at exit and I read it as a poisoned context; an empty round was a
+machine still under pressure and I read it as an oversize key. **A detector should report what
+it measured and stop there** — every one of these would have been harmless as "zero entries
+gained, cause unknown".
