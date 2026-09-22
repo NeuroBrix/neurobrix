@@ -2959,3 +2959,78 @@ verbatim are untouched by any of it and remain class 1.
 
 The estimator is `core/prism`, the rack's, and this only surfaces by comparing two machines on
 one model — which is what owed-proofs is for.
+
+## 2026-09-22 — the 2.000× traced: it is in Prism's ESTIMATE, not in the op dtypes, and one question settles it
+
+Traced down to the deciding lines, as asked, and the answer is narrower than feared.
+
+### Where the factor is made
+
+`solver.py:1946-1948` — `dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)`,
+where `comp_dtype_str` is the component's RUNTIME dtype from `_resolve_component_dtypes`. A
+factor of exactly 2.000 is `compute_dtype_factor(bfloat16, float32)`.
+
+### But BOTH fp32 sources read as inactive on this profile
+
+`_resolve_component_dtypes` (5182) pins fp32 only from `_components_force_fp32` (5014), which
+is a union of two sources:
+
+1. **AUTO** (`_auto_fp32_components`) — carries an explicit hardware gate:
+   ```python
+   # Hardware gate: skip on bf16-capable hardware (bf16 exponent
+   # range = fp32, no conv-storage saturation).
+   if policy.get("skip_when_hw_supports_bf16", True) and profile is not None:
+       if profile.devices_support_dtype("bfloat16"):
+           return set()
+   ```
+   Measured on this machine: `profile.devices_support_dtype("bfloat16") → True`. **AUTO
+   returns the empty set.**
+2. **MANUAL** — `requires_fp32_compute`. Measured: **absent** from Flex.1-alpha's manifest.
+
+With `forced_fp32` empty, branch 2 applies — `preferred_dtype` is `bfloat16` and the device
+supports it — so the runtime dtype SHOULD resolve to bf16 and the multiplier to 1.0.
+
+### What is measured instead
+
+| fact | figure |
+|---|---|
+| Flex transformer weights **on disk** | **15 571 MB** (bf16: ~8B params × 2 bytes) |
+| this machine's plan | **33 954 MB** (≈ 2.18× disk = 2× dtype + activations/overhead) |
+| the rack's plan, **running this very profile** | **16 977 MB** (≈ 1.09× disk) |
+
+Reproduced on CURRENT code after merging `dcd1f0b4`: `transformer: 33954MB` again. And **no
+dtype-resolution code changed today** — `git log -p --since 10:00 -- solver.py` shows no touch
+to `_resolve_component_dtypes`, `_components_force_fp32` or `skip_when_hw_supports_bf16`.
+
+**So the profile does not explain the gap**, and the remaining candidate is that the two
+machines hold **different Flex exports**.
+
+### The question that settles it, and it is one line
+
+**What is `du -sm components/transformer/weights` for Flex.1-alpha in your cache?**
+- ~15 571 MB → same export, and the divergence is in code or in a path I have not found; it is
+  a real defect and it is yours, in the estimator.
+- ~7 800 MB → a different export, my container is the doubled one, there is no estimator
+  defect, and Flex genuinely needs what my plan says on this machine.
+
+### The downstream worry, measured: the census is NOT contaminated
+
+The concern was that the census recorded fp32 keys where runs need bf16. Measured over all
+**3 106** censused keys:
+
+| | bf16 | fp32 |
+|---|---|---|
+| all keys | **1 652** | 1 454 |
+| image | **167** | 73 |
+| video | **140** | 55 |
+| upscaler | 195 | 226 |
+
+**bf16 dominates image and video**, which is where the doubling appears. So the estimate's
+factor moves PLANNING — whether a model fits, which strategy, which tile — and does not force
+the recorded op dtypes. Nothing detectable needs re-censusing on this account, and the five
+class-1 models contributed **zero** keys anyway, so they touched none.
+
+**Certification therefore proceeds on the 3 106 keys in hand**, and the switchover is not
+blocked by this. If the rack's answer is ~15 571 MB, the estimator defect is real and what it
+changes is which models PLAN at all — a re-census of those models, not of the keys already
+taken.
