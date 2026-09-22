@@ -53,6 +53,23 @@ BYTES_MAP: Dict[str, int] = {
     "int8": 1,
     "uint8": 1,
     "bool": 1,
+    # COMPLEX — measured, not guessed. complex64 is two fp32 (8 bytes), complex128 two
+    # fp64 (16). Absent until 2026-09-22, when the refusal added that day for unrecognised
+    # dtype NAMES turned the absence into a hard stop: Kokoro-82M could no longer be
+    # PLANNED at all —
+    #     activation profiling failed for component 'decoder'
+    #     (ValueError: unknown dtype dtype 'complex64')
+    # — because its iSTFT vocoder carries complex spectra. The refusal was right; the map
+    # was incomplete, and the silent `.get(dtype, 4)` default had been hiding that by
+    # sizing a complex64 tensor at 4 bytes instead of 8, i.e. HALF.
+    #
+    # Counted across every graph in this cache: complex128 338 tensors, complex64 10;
+    # every other dtype present already resolved. The safety census taken with the refusal
+    # asked `get_dominant_dtype()`, which is a COMPONENT's dtype — the profiler asks
+    # per-TENSOR, and that is where these live. Checking the wrong granularity is what let
+    # this through.
+    "complex64": 8,
+    "complex128": 16,
 }
 
 
