@@ -3034,3 +3034,89 @@ class-1 models contributed **zero** keys anyway, so they touched none.
 blocked by this. If the rack's answer is ~15 571 MB, the estimator defect is real and what it
 changes is which models PLAN at all — a re-census of those models, not of the keys already
 taken.
+
+## 2026-09-22 — the 2.000× was the FP32 FALLBACK, not the estimator. My framing was wrong; the rack's reading was right.
+
+The export hypothesis is dead — both machines mount the same directory on optimus over two
+links, Flex's transformer is the same 15 044 MB of bf16 there. So it was code, and
+instrumenting `compute_dtype_factor`'s call site (`solver.py:1948`, behind a default-off
+`NBX_DTYPE_RESOLVE_DIAG`) named the line in one run.
+
+### What the instrument showed
+
+The call site runs **twice per component**:
+
+```
+transformer: source_dtype='bfloat16' comp_dtype_str='bfloat16' -> dtype_mult=1.0
+             target_dtype_str='bfloat16'  component_dtypes={...all bfloat16}
+transformer: source_dtype='bfloat16' comp_dtype_str='float32'  -> dtype_mult=2.0
+             target_dtype_str='float32'   component_dtypes=None
+```
+
+The first is the real bf16 plan at **1.0**. The second is the **fp32 fallback pass**, and the
+refusal message reports THAT one. `solver.py:998`:
+
+```python
+# FP32 fallback for BF16 models
+if not candidates:
+    if self._try_fp32_fallback(container, profile):
+        target_dtype_str = "float32"
+```
+
+It fires **precisely when the bf16 plan produced no candidates** — and fp32 needs strictly MORE
+memory than the plan that just failed, so it cannot succeed. `_try_fp32_fallback` returned True
+for any bf16 component and **accepted `profile` and ignored it**, so bf16-capable hardware took
+it too. Its only effect there is to replace the diagnostic figures with numbers exactly 2×
+the truth.
+
+### The fix (red then green)
+
+The fallback is tried only where the hardware CANNOT do bf16 — which is what it was written
+for. Four cells in `tests/unit/core/test_no_fp32_fallback_on_bf16_capable_hardware.py`: bf16
+hardware does not fall back; hardware without bf16 still does; a model with no bf16 component
+never does; a caller passing no profile keeps the old behaviour.
+
+**Measured before and after on Flex.1-alpha, M4 Pro, 17 277 MB budget:**
+
+| | transformer | "needs" |
+|---|---|---|
+| before | 33 954 MB | 33 954 MB |
+| after | **16 977 MB** | **16 977 MB** |
+| the rack, same profile | 16 977 MB | — |
+
+**The two machines now agree to the megabyte.**
+
+### Two corrections I owe explicitly
+
+1. **My "estimator defect" framing was wrong.** The estimator is correct; `dtype_mult` is 1.0
+   on the real plan. I read a refusal message produced by a second pass and attributed it to
+   the first. The question I sent — "is it a different export?" — was the wrong question, and
+   the right one was "how many times is this call made?".
+2. **The rack's `streamed=[]` correction was right, and it now reproduces here.** Flex still
+   fails after the fix, and for exactly their reason: no single component exceeds the budget,
+   only their SUM (32 407 MB), so `resident_beside` becomes the whole sum, `segment_budget`
+   goes negative and `_try_layer_streaming` returns before `LayerPartitioner` is called. That
+   is the neighbouring defect they named, and it is theirs.
+
+### Still latent, worth one line of yours
+
+`compute_dtype_factor` (`memory_estimator.py:150-154`) defaults a missing key to
+`source=2, target=4`:
+
+```python
+source_bytes = dtype_bytes.get(source_dtype, 2)
+target_bytes = dtype_bytes.get(target_dtype, 4)
+```
+
+`DTYPE_BYTES` carries only the long names, so **any short name returns 2.0 for every pair,
+identity included** — measured: `compute_dtype_factor('bf16','bf16') == 2.0`. Nothing reaches
+it with a short name today, which is why this was not the cause, but it is a
+`config.get(k, default)` of the kind the red-line table forbids and it would produce exactly
+this class of bug again, silently.
+
+### What it changes for the census
+
+The five class-1 models were read at fp32-fallback figures. Their planning is re-run after
+this fix before any of them is called too large; Flex is already re-run and still fails, on the
+rack's defect. **No censused key is affected** — the factor moved planning, never the recorded
+op dtypes (measured previously: bf16 leads 1 652 to 1 454 over 3 106 keys).
