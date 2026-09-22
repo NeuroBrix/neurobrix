@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A census enumerates an extent it can only learn from values.** The length a vocoder or
+  codec receives is what survived a filter on generated tokens, so a census taken from one
+  run certified one speech length and every other length missed the directory at runtime.
+  The census now runs such a stage at every key class of the extent, and a walk whose every
+  extent is refused fails instead of reading as censused.
+
 - **A census shadow walks a request loop by the key classes it produces.** Under
   `NBX_CENSUS=1` the autoregressive, dual-AR and TTS decodes skip to each bucket's top
   instead of stepping token by token, and the KV cache moves its counters past the skipped

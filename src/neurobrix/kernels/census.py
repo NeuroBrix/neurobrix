@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Dict, Optional, Set
+from typing import List, Any, Dict, Optional, Set
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
+_OBSERVERS: List[Set[str]] = []         # key lines formed during a `walk_extent` run, dedup or not
 _ACTIVE = {"census": False}
 _SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distinct and aligned
 
@@ -67,6 +68,8 @@ def record(tuned, key: tuple) -> None:
     if line is None:
         return
     with _RECORD_LOCK:
+        for obs in _OBSERVERS:
+            obs.add(line)
         if line in _RECORDED:
             return
         _RECORDED.add(line)
@@ -95,6 +98,74 @@ def pace(length: int) -> int:
         return max(0, top - nxt)
     except Exception:  # noqa: BLE001 — no ladder: every position is its own key, nothing to skip
         return 0
+
+
+def walks_extents() -> bool:
+    """Whether this shadow enumerates the classes of a value-derived extent (the census tool
+    sets `NBX_CENSUS_EXTENTS=1` on the rung it walks them at)."""
+    return _ACTIVE["census"] and os.environ.get("NBX_CENSUS_EXTENTS", "") not in ("", "0")
+
+
+def extent_ids(ids: list, n: int) -> list:
+    """`ids` cut or padded to `n` positions (the last id repeated: a shadow has no values)."""
+    ids = list(ids)
+    if not ids:
+        ids = [0]
+    return (ids + [ids[-1]] * max(0, n - len(ids)))[:n]
+
+
+def walk_extent(lo: int, hi: int, run, name: str = ""):
+    """Run `run(n)` at every KEY CLASS of an extent the flow learns only from values — the
+    number of speech tokens a vocoder receives, the frames a codec decodes — instead of at the
+    one value the shadow happened to produce: `run(lo)` and `run(hi)`, then between any two
+    extents whose recorded key sets differ, the midpoint, until the differing pair is
+    adjacent. Every kernel's key is a monotone step function of the extent (a bucket top, an
+    exact extent), so two extents with one key set bracket a range with that key set, and the
+    walk meets every class once at the cost of one run per class and a log of the class's
+    width. Returns the last run's result. Said in clear: classes met, runs, wall."""
+    import time as _t
+    lo, hi = max(1, int(lo)), max(1, int(hi))
+    if hi < lo:
+        lo, hi = hi, lo
+    seen = {}
+    last = [None]
+    t0 = _t.perf_counter()
+
+    def at(n):
+        if n not in seen:
+            obs: Set[str] = set()
+            _OBSERVERS.append(obs)
+            try:
+                last[0] = run(n)
+                seen[n] = frozenset(obs)
+            except Exception as exc:  # noqa: BLE001 — an extent the graph refuses is its own class, said
+                head = str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__
+                _say_once(f"[census] extent {name or 'walk'} refused at {n}: {head}")
+                seen[n] = frozenset({f"<refused> {head}"})
+            finally:
+                _OBSERVERS.remove(obs)
+        return seen[n]
+
+    stack = [(lo, hi)]
+    while stack:
+        a, b = stack.pop()
+        if b - a <= 1 or at(a) == at(b):
+            continue
+        m = (a + b) // 2
+        at(m)
+        stack.append((m, b))
+        stack.append((a, m))
+    refused = sorted(n for n, v in seen.items() if any(k.startswith("<refused>") for k in v))
+    if len(refused) == len(seen):
+        # Every extent refused: the walk recorded nothing and the model would read as censused
+        # (instrumentation that lies by construction). The run fails with the graph's own words.
+        raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: every extent refused; "
+                           f"first: {sorted(seen[refused[0]])[0]}")
+    classes = len({v for v in seen.values()}) - (1 if refused else 0)
+    print(f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
+          f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""),
+          flush=True)
+    return last[0]
 
 
 def active() -> bool:

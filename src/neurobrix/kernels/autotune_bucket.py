@@ -25,7 +25,22 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 Ladder = Sequence[Tuple[Optional[int], int]]
 
 
+_PARSED: Dict[str, Ladder] = {}
+
+
 def parse_ladder(rows: Any) -> Ladder:
+    """Parsed once per distinct row list: the key of every launch reads the ladder (32 616
+    parses in one chatterbox shadow, 2026-09-22)."""
+    memo = repr(rows)
+    got = _PARSED.get(memo)
+    if got is not None:
+        return got
+    out = _parse_ladder(rows)
+    _PARSED[memo] = out
+    return out
+
+
+def _parse_ladder(rows: Any) -> Ladder:
     out: List[Tuple[Optional[int], int]] = []
     for r in rows or []:
         if isinstance(r, dict):
