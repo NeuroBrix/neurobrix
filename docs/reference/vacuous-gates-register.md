@@ -2373,3 +2373,58 @@ as an error, turning a success into a failure on the way past).
 **The lesson, in one line.** Before trusting an exit code, make a command fail on purpose and
 look at `$?` — and take it without a pipe, because `cmd | tail` reports *tail's* status and
 will show you a 0 that was never the command's.
+
+### 89 — the gate for the 2^31 GEMM defect asked CUDA whether Apple had memory, and skipped
+
+**2026-09-23, Apple/Metal campaign.**
+`tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py` exists for one defect: a GEMM
+whose output holds more than 2^31 elements must address every element. It gates its own memory
+need with
+
+```python
+def _cuda_free_bytes():
+    cuda = ctypes.CDLL("libcudart.so")
+```
+
+Off CUDA that load raises, the helper returns 0, and the test skips with:
+
+```
+SKIPPED: needs 5.3 GB free on one card — C is 4.2 GB and A is 134 MB, plus headroom;
+         0.0 GB free
+```
+
+**"0.0 GB free" reads as a busy card.** It actually means "this probe cannot see this
+machine". A reader has no way to tell the difference, and the gate for a live defect reported
+itself as merely deferred.
+
+**The defect is present on this machine.** Bracketed before the gate was touched, everything
+held constant but M, bf16, N=512, K=64:
+
+| C elements | vs 2^31 | deviation vs the fp64 oracle |
+|---|---|---|
+| 2 048 000 000 | under | **0.002141** (the bf16 mantissa floor) |
+| 2 201 600 000 | **over** | **1.0** |
+
+**Made portable, then RED.** The probe now asks `DeviceAllocator.device_free_bytes`, which
+answers on every backend the engine supports — the right authority for a question about the
+engine's own device. The test then RUNS on Metal and fails as it should:
+
+```
+row 1048576 (past the int32 boundary at 1048576):
+array([nan, nan, nan, ...]) vs array([10.215995, -6.7434797, -17.018623, ...])
+```
+
+Rows past `2**31 // N` come back NaN. The int64 promotion of the row and column offsets
+(`matmul.py:230,257`) fixed this on CUDA in 2026-09-14; the same source is still wrong on the
+Metal backend, and no one could have learned that from this file.
+
+**Consequence beyond the test.** The census key
+`addmm M_BUCKET=4194304 N=540 K=180` — C of 2 264 924 160 elements — is the single key of 3 106
+that certification could not certify. Its deviation is 1.0 for this reason. It is also served
+**unscreened** at runtime: `arguments total 12079985400 bytes, over the profile's screening
+budget 1073741824`, so the consensus screen is skipped on budget grounds and nothing verifies
+the configuration either.
+
+**The lesson, in one line.** A gate that probes the HOST with a vendor library is a gate that
+silently disappears on every other vendor — and it disappears with a message about memory,
+which is the most believable excuse there is.
