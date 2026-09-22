@@ -1238,6 +1238,27 @@ def oversize_for_class(exc: BaseException):
     return (asked, total_mb * 1024 * 1024) if asked > total_mb * 1024 * 1024 else None
 
 
+def _release_between_keys() -> None:
+    """Give the device back between keys.
+
+    The certifier held nothing deliberately and freed nothing either: a key's synthetic
+    operands are released when Python collects them, which had not happened by the time the
+    next key asked for its own. Measured 2026-09-22 on the 16 GB class — a matmul needing
+    11.0 GiB was refused on a 15.8 GiB card with `live_tracked=5632MB` still resident from
+    the key before it, and reported as a failure when it was a certifiable shape meeting
+    someone else's leftovers. Cheap: a collection between keys costs milliseconds against a
+    sweep that costs seconds a key."""
+    import gc
+    gc.collect()
+    try:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        drain = getattr(DeviceAllocator, "empty_cache", None) or getattr(DeviceAllocator, "device_empty_cache", None)
+        if callable(drain):
+            drain()
+    except Exception:  # noqa: BLE001 — a release that cannot run must not end the sweep
+        pass
+
+
 def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
     """Count a key's failure; return True when the run must STOP because the
     context is poisoned (the summary then names the key and the reason)."""
@@ -1340,11 +1361,13 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: UNREACHABLE — {exc}")
                 continue
             except Exception as exc:
+                _release_between_keys()
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")
                 if after_key_failure(exc, summary, ktext, log):
                     summary["seconds"] = round(time.time() - summary["started"], 1)
                     return summary                    # a poisoned context: stop, say it, exit non-zero
                 continue
+            _release_between_keys()
             try:
                 C.file_certification(entries, ktext, entry)   # by the class its proof names; refused without one
             except ValueError as exc:
