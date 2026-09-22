@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Publishing to the hub now waits out a busy object store instead of giving up on it.** The
+  store this project publishes to pauses for ten to thirty seconds at a time. A publication
+  that met one of those pauses was abandoned — once mid-upload, at 15 % of a 22 GB file — and
+  a container whose first write attempt was refused was skipped entirely, as though the
+  container were at fault. Publishing now waits and retries through a busy store the same way
+  reading already did, leaves a gap between uploads, and still verifies every published object
+  by reading it back. A genuine error — a permission problem, a missing bucket, a checksum
+  mismatch — is still reported at once and never retried.
+
 - **A configuration whose mask is an unsigned integer can now be proven.** The proving tool
   recognised a fixed list of value types and silently ignored any name outside it. One
   everyday type was missing, so for those configurations it quietly built the wrong kind of
