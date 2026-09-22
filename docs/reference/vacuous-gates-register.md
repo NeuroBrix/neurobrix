@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-88 entries, of which five are placeholders and 83 carry a site. Two
+89 entries, of which five are placeholders and 84 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2367,3 +2367,38 @@ because 20 of 59 containers must not all stop at once on a question nobody has a
 **The lesson, in one line.** A classifier that reports one of its own classes and silently
 drops the rest has an empty answer and a healthy answer that look identical — enumerate what
 a check does NOT report, and print the count even when you cannot judge it.
+### 89 — three cells whose subject is decided by a file that differs on every machine
+
+**Where.** `tests/unit/prism/test_the_census_imposes_a_rung_and_reads_no_ambient.py`, all
+three cells, from the file's birth (metal-first-light `81154c79`).
+
+**The shape.** The helper reads `load_profile("default")` — and `default.yml` is
+**gitignored**, generated per machine by hardware detection. The cell's own comment says
+`# apple, unified`, which is true where it was written and false here: on this rack
+`default.yml` carries four V100s, 2x16 GB and 2x32 GB. The helper then sets
+`profile.devices[0].unified_memory = True` and reads `_prepare_devices(profile)[0]`, but
+`_prepare_devices` ends with `devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))`,
+so index 0 of the RESULT is the largest card, not the device just modified. On one device
+the sort is a no-op and the two indices agree; on four they do not, and the cells measured
+**`cuda:2`, a 32 GB DISCRETE card**, whose budget is 32 462 MB whatever the host reads.
+
+**What would they have done if the code were wrong?** On THIS rack, two of the three pass
+regardless: they pin `NBX_PRISM_BUDGET_MB`, which applies to any device, so they were green
+about a card unrelated to their subject. The third could never pass here — it asks a
+discrete card to move with host pressure, the one thing the memory law says it must not do —
+and read `assert 32462.0 < 32462.0` on main and on the merge alike. It cost one bisection as
+a merge suspicion before the device strings were printed.
+
+**The engine was never wrong.** On the device the cell had actually made unified: budget
+**4 096 MB** at 6 000 MB free, **16 384 MB** at 20 000 MB free — tracking the ambient and
+landing on the commercial ladder, exactly `core/prism/memory_budget.py`.
+
+**The fix.** Select by NAME — `by_name[profile.devices[0].get_device_string()]` — and assert
+the name is present, so a future sort or rename fails loudly instead of measuring a neighbour.
+
+**The lesson, in one line.** A cell whose SUBJECT comes out of a gitignored, per-machine file
+is a different cell on every machine — 8 of this repo's 35 hardware profiles are ignored, and
+the same fact killed a frozen-worktree run an hour earlier in the same session; name the shape
+you need and build it, never inherit it from the room. (Second, smaller: mutating a collection
+by index and reading the result by index asserts that the call between them preserves order —
+write that assertion down, or select by name.)

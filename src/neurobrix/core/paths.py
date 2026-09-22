@@ -125,3 +125,119 @@ def describe() -> dict:
         except PathNotConfigured as exc:
             out[key] = {"path": None, "said_by": said, "refused": str(exc)}
     return out
+
+
+# ---------------------------------------------------------------------------
+# Storage the machine clears, and an installation that depends on it.
+#
+# Written after the THIRD loss of the Metal backend (2026-09-22). Twice a
+# PACKAGE resolved into a session scratchpad; the third time the package was
+# durable-looking but the venv it lived in, and the git worktree it was built
+# from, were both on `/private/tmp` — and every artefact went with them.
+#
+# An installation has three legs and losing any one loses the install: the
+# package, the environment it is installed into, and the tree it was built
+# from. pip records that last one in `direct_url.json`, so it can be read back.
+#
+# The comparison is by RESOLVED PREFIX, never by substring. `/Users/x/tmpwork`
+# is a durable directory; a guard that refused it would be disabled within a
+# week, and then it guards nothing.
+# ---------------------------------------------------------------------------
+
+def _temp_roots() -> tuple:
+    """Every root this machine empties on its own schedule."""
+    import tempfile
+    named = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+             "/var/folders", "/private/var/folders", tempfile.gettempdir()]
+    out = []
+    for n in named:
+        try:
+            r = Path(n).resolve()
+        except OSError:
+            continue
+        if r not in out:
+            out.append(r)
+    return tuple(out)
+
+
+def ephemeral_reason(path) -> Optional[str]:
+    """Why `path` will not survive a reboot or a cleaner, else None."""
+    if path is None:
+        return None
+    p = Path(str(path)).expanduser()
+    try:
+        rp = p.resolve()
+    except OSError:
+        rp = p.absolute()
+    for root in _temp_roots():
+        if rp == root or root in rp.parents:
+            return f"under {root}, which the machine clears without asking"
+    return None
+
+
+def _dist_info_dirs(module_name: str, search_root: Optional[Path]):
+    roots = [search_root] if search_root is not None else []
+    if search_root is None:
+        import sys as _sys
+        seen = set()
+        for entry in _sys.path:
+            if not entry or entry in seen:
+                continue
+            seen.add(entry)
+            roots.append(Path(entry))
+    for root in roots:
+        try:
+            yield from Path(root).glob(f"{module_name.replace('-', '_')}-*.dist-info")
+            yield from Path(root).glob(f"{module_name.replace('_', '-')}-*.dist-info")
+        except OSError:
+            continue
+
+
+def installation_refusals(module_name: str, search_root=None) -> list:
+    """Every ephemeral leg `module_name`'s installation stands on.
+
+    Empty list means all three legs are durable. Each entry is a sentence naming
+    WHICH leg and WHERE, because "refused" without the place is unactionable.
+    """
+    import sys as _sys
+    reasons: list = []
+
+    # 1. the package itself
+    pkg_dir = None
+    if search_root is not None:
+        cand = Path(search_root) / module_name
+        pkg_dir = cand if cand.exists() else None
+    else:
+        try:
+            import importlib.util
+            spec = importlib.util.find_spec(module_name)
+            if spec is not None and spec.origin:
+                pkg_dir = Path(spec.origin).parent
+        except (ImportError, ValueError):
+            pkg_dir = None
+    if pkg_dir is not None:
+        why = ephemeral_reason(pkg_dir)
+        if why:
+            reasons.append(f"the package {module_name} is installed at {pkg_dir}, {why}")
+
+    # 2. the environment it is installed into
+    why = ephemeral_reason(_sys.prefix)
+    if why:
+        reasons.append(f"the environment at {_sys.prefix} is {why}")
+
+    # 3. the tree it was built from, as pip recorded it
+    for dist in _dist_info_dirs(module_name, search_root):
+        record = dist / "direct_url.json"
+        if not record.exists():
+            continue
+        try:
+            url = json.loads(record.read_text()).get("url") or ""
+        except (OSError, ValueError):
+            continue
+        if not url.startswith("file://"):
+            continue
+        tree = url[len("file://"):]
+        why = ephemeral_reason(tree)
+        if why:
+            reasons.append(f"{module_name} was built from {tree}, {why}")
+    return reasons

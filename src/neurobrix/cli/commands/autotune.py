@@ -31,15 +31,45 @@ def _checkpointer_holds(repo: Path) -> bool:
     line — the self-match that has cost this session three shells (exit 144)."""
     import os
     target = str(repo)
-    for entry in os.listdir("/proc"):
-        if not entry.isdigit():
+    if os.path.isdir("/proc"):
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                    argv = fh.read().split(b"\0")
+            except OSError:
+                continue
+            text = [a.decode("utf-8", "replace") for a in argv if a]
+            if len(text) < 2 or "certified_checkpoint.py" not in " ".join(text[:2]):
+                continue
+            if target in text:
+                return True
+        return False
+    # No /proc (macOS, the BSDs). `os.listdir("/proc")` used to raise here, and the certifier
+    # died with "[Errno 2] No such file or directory: '/proc'" the moment a checkpointer was
+    # finally holding the repository — the door could not see, so nothing could be certified
+    # on this platform at all (2026-09-22).
+    #
+    # `ps` is the only process table there is here, so the self-match the /proc walk was
+    # chosen to avoid is handled directly: THIS process's pid is skipped. Nothing else on the
+    # machine carries `certified_checkpoint.py` in its first two arguments unless it IS one.
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-Ao", "pid=,args="], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0:
+        return False
+    me = os.getpid()
+    for line in (out.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
             continue
-        try:
-            with open(f"/proc/{entry}/cmdline", "rb") as fh:
-                argv = fh.read().split(b"\0")
-        except OSError:
+        head, _, rest = line.partition(" ")
+        if not head.isdigit() or int(head) == me:
             continue
-        text = [a.decode("utf-8", "replace") for a in argv if a]
+        text = rest.split()
         if len(text) < 2 or "certified_checkpoint.py" not in " ".join(text[:2]):
             continue
         if target in text:
