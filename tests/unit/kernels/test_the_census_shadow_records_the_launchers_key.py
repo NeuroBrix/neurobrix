@@ -86,9 +86,21 @@ def test_the_shadow_refuses_while_a_device_is_visible(tmp_path):
     silence, so install() refuses at entry. Seen failing (the refusal) 2026-09-21 with
     CUDA_VISIBLE_DEVICES=0 on the rack; on a machine with no card this test cannot see the
     door and is skipped rather than read as green."""
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator, _detect_gpu_backend
     if DeviceAllocator.device_count() < 1:
         pytest.skip("no device visible: the door cannot be exercised here")
+    try:
+        _metal = _detect_gpu_backend() == "metal"
+    except Exception:
+        _metal = False
+    if _metal:
+        # On Metal there is no CUDA_VISIBLE_DEVICES to forget: NBX_CENSUS=1
+        # itself makes the device unreachable (metal_device.runtime refuses),
+        # so device_count() reads 0 and the "visible card under census"
+        # failure mode this test drives cannot occur. The hide is intrinsic;
+        # the door is exercised by that refusal, proven by the census forming
+        # keys with no device. Nothing to see here.
+        pytest.skip("Metal: NBX_CENSUS=1 hides the device intrinsically")
     script = "from neurobrix.kernels import census\ncensus.install()\n"
     env = dict(os.environ)
     env.update({"NBX_CENSUS": "1",

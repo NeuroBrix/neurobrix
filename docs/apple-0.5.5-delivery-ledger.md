@@ -4,10 +4,14 @@
 download-and-run loop this ledger began under):** three stages, three
 columns, never one.
 
-- **CENSUS** — the keys the catalogue demands for this profile, enumerated
-  by passing the containers' GRAPHS (never weights) through the engine's own
-  dispatch. Until the census tool lands on main, today's census is the
-  runtime replay cache, and every census figure below says which.
+- **CENSUS** — the keys the catalogue demands for this profile, kernel x
+  BUCKETED-shape x dtype, enumerated by passing the containers' GRAPHS (never
+  weights, never model runs) through the engine's dispatch in shadow mode
+  (`NBX_CENSUS=1`), from the SHARED CACHE (`Super-NeuroBrix-Cache`, canonical),
+  never the hub. The census tool is on main (`tools/certified_census.py`);
+  each model's keys are tagged with its graph_sha. NOTE: the launcher key is
+  still EXACT on main — the bucketed key is on the Dell's branch; request-
+  dependent keys are held until it lands.
 - **CERTIFIED** — those keys swept and oracle-proven on synthetic tensors
   under the stability witness (which already refuses a perturbed sweep, so
   the VM may run).
@@ -33,9 +37,9 @@ readback; image external degeneracy judge; video judged by eye.
 | upscaler/swin2SR-classical-sr-x2-64 | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged non-degenerate (std ~104). |
 | upscaler/swin2SR-classical-sr-x4-64 | 58 MB | **DELIVERED** 2026-09-20 | same battery, same judge. |
 | upscaler/swin2SR-realworld-sr-x4-64-bsrgan-psnr | 58 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x2 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x4 | 67 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
-| upscaler/real-esrgan-x8 | 67 MB | **DELIVERED at ≤512 px** 2026-09-20 | C/T/S rc=0 at 448/512 px, judged. 1024 px OWED on the per-tile retention defect (handed to the runtime owners); refused with figures until it returns. |
+| upscaler/real-esrgan-x2 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 896², rc=0, **0 misses**, std 103.9. **Looked at (R29):** coherent apple faithful to the input — sharp stem, preserved yellow crown, bright specular, fine lenticel speckle, base spot; no grid, no seam. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x4 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 1792², rc=0, **0 misses**, std 104.5. **Looked at (R29):** coherent, faithful — same features, crisp speckle; no grid, no seam. x8@1024 (tiled) owed in a memory window. |
+| upscaler/real-esrgan-x8 | 67 MB | **VERIFIED (R29, viewed)** 2026-09-21 | Retraced shared-cache container; @448 → 3584², rc=0, **0 misses**, std 104.1. **Looked at (R29):** looked at whole at full 3584² — coherent apple, forked textured stem, yellow crown, smooth specular, the GAN's own lenticel-speckle texture, rounded rim shading, base spot; NO grid, NO tile seam (untiled at 448), NO banding. x8@1024 (tiled) owed in a memory window. |
 | upscaler/swinir-classical-x2 | 99 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | upscaler/swinir-classical-x4 | 92 MB | **DELIVERED** 2026-09-20 | C/T/S rc=0, judged. |
 | stt/parakeet-tdt-1.1b | 4.2 GB | **DELIVERED** 2026-09-21 | C/T/S all rc=0 (7 s / 22 s / 15 s), JFK transcript exact in each mode (STT judge), 0 misses both triton modes. Extract from hub 350 s (~12 MB/s sequential). Local copy deleted after judgment. |
@@ -51,6 +55,14 @@ readback; image external degeneracy judge; video judged by eye.
 
 ## Arithmetic re-reads of the standing refusals (doctrine, 2026-09-21)
 
+**Superseded framing (owner, 2026-09-21):** "refusal STANDS" for a MEMORY reason
+is no longer doctrine — NeuroBrix never refuses for lack of memory (see the fit
+arithmetic below). hat-l-x4 / hat-s-x4 (floor stop / Prism estimate) become
+SCHEDULED under tiling + weight streaming, not refused. canary-qwen and
+Voxtral remain as written: canary is an ENGINE DEFECT (no allocation for a
+component), not a memory refusal; Voxtral T/S is a CONDITIONAL on a retention
+object, not memory. Re-verify all four under the adaptive-memory cascade.
+
 - **hat-l-x4** — refusal STANDS, and it was never ambient: floor stop at
   1567 MB available with 0 misses after its 8 shapes were certified, in both
   triton modes, on the settled machine. The figure is the model's own
@@ -64,20 +76,151 @@ readback; image external degeneracy judge; video judged by eye.
   object by ten megabytes. Re-verify when the retention moves.
 - **real-esrgan-x8 @1024** — CONDITIONAL on the same object.
 
-## BLOCKED: the upscaler family regressed by the merge (2026-09-21)
+## RESOLVED: the upscaler "regression" was a STALE LOCAL CONTAINER (2026-09-21)
 
-`git bisect` → `78784abe` (the Mac merge) enabled the reshape rung for upscalers,
-whose ENGINE runtime fold does not stitch: `real-esrgan-x2 @448` emits one 64px
-tile upscaled to 128px (both modes; pixel-matched), space-to-batch 49 tiles never
-folded to 896. x8 compiled hits `leaky_relu _device_idx` (torch tensor in NBX
-wrapper). Vendor-neutral, core/prism/runtime — handed to the rack side in
-`docs/reference/owed-proofs.md` (2026-09-21 entry) with the bisect and datum.
-Every previously-delivered upscaler (x2/x4/x8, swin2SR-x2/x4, swinir-x2/x4) now
-FAILS VERIFICATION under the doctrine at any request larger than its 64px trace;
-they are moved from delivered to **BLOCKED — merge regression** until the fold
-lands. Their CERTIFIED keys stand; only VERIFIED is withdrawn.
+Not the engine, not the merge. real-esrgan-x2's graph is frozen at the trace
+size (pixel-unshuffle H/2 frozen at 32 → the batch symbol inflates to 49 →
+`final_as_array` keeps tile 0 → 128px). My engine diagnosis of the defect was
+exact — but it is the defect the RETRACE fixed. The Dell retraced the
+real-esrgan family on 2026-09-20 (x2 graph `74a2d7ea`, view::0 now
+`floordiv(s1, 2)` — SYMBOLIC), and that container lives on the shared cache
+(`Super-NeuroBrix-Cache` = 10.0.0.20:/nvme/neurobrix_cache). My local copy was
+`626f2e07` — the OLD frozen graph, identical to the hub object because the store
+stopped accepting writes, so the hub is behind every retrace.
+
+PROVEN: refreshed x2 from the shared cache (74a2d7ea) → `neurobrix run
+real-esrgan-x2 @448 --triton` → **896×896, rc=0**. The engine was never at
+fault. ACTION: all verification copies come from the shared cache, never the
+hub; the hub is stale for every retraced container. The real-esrgan family is
+unblocked; swinir/swin2SR/hat were already symbolic (census harvests their
+keys). No Dell datum needed — the correction was the owner's, checked.
+
+
+## R29 verification of the fitting upscaler family — VIEWED 2026-09-21
+
+All 8 fitting upscalers run from their RETRACED shared-cache containers, @448, rc=0,
+**0 misses**, and each artefact was **looked at whole at full resolution** (R29 — std
+alone only proves not-blank). Every one is a coherent red apple faithful to the input
+(sharp forked stem, preserved yellow crown, smooth specular, natural lenticel-speckle
+texture, rounded 3D shading, base dark spot), on a clean white ground, with **no grid,
+no tile seam, no banding, no degeneracy**. None tiles at 448 (they fit untiled) so no
+tile boundary is present — the across-a-seam look is owed at x8@1024.
+
+| model | out | what I saw |
+|---|---|---|
+| real-esrgan-x2 | 896² | faithful apple, fine speckle |
+| real-esrgan-x4 | 1792² | faithful, crisp |
+| real-esrgan-x8 | 3584² | coherent at full res, GAN lenticel texture, sharp stem |
+| swinir-classical-x2 | 896² | clean, faithful |
+| swinir-classical-x4 | 1792² | clean, crisp white-pink speckle, radial crown streaks |
+| swin2SR-classical-sr-x2-64 | 896² | faithful, soft speckle |
+| swin2SR-classical-sr-x4-64 | 1792² | faithful, crisp |
+| swin2SR-realworld-...-bsrgan-psnr | 1792² | coherent, deeper red, natural speckle |
+
+## Catalogue fit arithmetic (VM off, 24 GB unified, ~22 GB usable) — 2026-09-21
+Measured from each container's weight footprint on the hub. No downloads.
+
+**DOCTRINE CORRECTION (owner, 2026-09-21):** NeuroBrix never refuses a model for
+lack of memory — a Mac with 4 GB free must run any model, slowly if it must,
+never refuse and never crash. So there is NO "refused by arithmetic" class. On a
+unified device the Prism cascade must end in a strategy that streams weights
+block by block from storage, so resident memory is ONE block rather than the
+whole component. The 11 models below are therefore **SCHEDULED**, not refused:
+they run by weight block-streaming, throughput bounded by the storage read
+(local NVMe / shared cache, not the 7–9 MB/s hub link). Implementing that
+cascade tail on unified is the adaptive-memory chantier (this branch; the
+`return None` guard in `b23105fe` is the placeholder it replaces).
+
+**Scheduled — weight block-streaming on unified (11, weights exceed 22 GB usable
+so they cannot be resident; resident cost = one streamed block):**
+- Allegro — 23.6 GB weights
+- Flex.1-alpha — 24.5 GB weights
+- Wan2.1-T2V-1.3B-Diffusers — 27.0 GB weights
+- DeepSeek-Coder-V2-Lite-Instruct — 30.7 GB weights
+- mochi-1-preview — 38.2 GB weights
+- Open-Sora-v2 — 42.5 GB weights
+- Qwen3-Coder-30B-A3B-Instruct — 57.1 GB weights
+- Qwen3-30B-A3B-Thinking-2507 — 57.1 GB weights
+- Qwen3-VL-30B-A3B-Thinking — 57.9 GB weights
+- Wan2.1-I2V-14B-480P-Diffusers — 84.4 GB weights
+- Wan2.2-I2V-A14B-Diffusers — 118.1 GB weights
+
+**Batched for one VM-off verification session (12, 12–22 GB — fit only with the Parallels VM off; memory matters at verification, not certification):**
+- Sana_1600M_4Kpx_BF16 — 12.1 GB
+- CogVideoX-2b — 13.2 GB
+- Janus-Pro-7B — 13.8 GB
+- orpheus-3b-0.1-ft — 14.1 GB
+- orpheus-3b-0.1-ft-snac — 14.2 GB
+- granite-speech-3.3-8b — 16.1 GB
+- Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly — 17.2 GB
+- Wan2.1-VACE-1.3B-diffusers — 18.3 GB
+- GLM-4.1V-9B-Thinking — 19.2 GB
+- PixArt-Sigma-XL-2-1024-MS — 20.3 GB
+- PixArt-XL-2-1024-MS — 20.4 GB
+- CogVideoX-5b-I2V — 21.5 GB
+
+**Fit with the VM running (18 ≤12 GB weights):** the delivered set plus the frozen upscalers (retrace-queued) and the small TTS/LLM/STT — census + certify + verify these first.
 
 ## Census and certification state
+
+**First-stage catalogue census — DONE 2026-09-21, from the CANONICAL shared cache**
+(`Super-NeuroBrix-Cache`, not the stale hub), 30 fitting models, `apple_m4_pro`:
+
+- **11,079 keys harvested** (kernel x EXACT-shape x dtype -- the key is exact today; the
+  bucketing key change lives on the Dell's origin/bucketed-autotune-keys, NOT main), each
+  model tagged with
+  its `graph_sha` so a retrace invalidates exactly its own keys. Directory before:
+  154 served → **10,925 to certify**.
+- **13 OK** (harvest keys): the WHOLE upscaler family (real-esrgan x2/x4/x8, swin2SR
+  x2/x4/realworld, swinir x2/x4, hat-l/s — all symbolic on the shared cache),
+  TinyLlama (2560), parakeet (16), orpheus-snac (8400).
+- **8 RETRACE** (frozen on the shared cache, handed to the Dell's Forge with graph_sha —
+  `apple_retrace_queue.md`): GLM-4.1V, Janus-Pro-7B, Sana-4Kpx, VibeVoice, Wan-VACE,
+  canary-qwen, chatterbox, granite-speech.
+- **9 FAILED** (census request gaps / partial): CogVideoX×2 and PixArt×2 (need a
+  resolution in the request), Kokoro/Voxtral/openaudio/orpheus-ft (one mode succeeded,
+  one failed — partial), Qwen3-int4 (quantized path). To fix in the request map, not
+  keys to sweep.
+
+**CogVideoX/PixArt "FAILED" root-caused — a chain of engine defects, not request gaps
+(2026-09-21):** the shadow was diverging from the real plan and dying, not missing a
+request field. Each fix let the shadow reach further and harvest more keys.
+- **Fix 1 — Prism host-offload on unified (`b23105fe`, red→green):** Strategy 4 placed
+  the text_encoder on `cpu` to "save memory" on a unified device, where host==device so
+  it frees nothing, and the Metal path then had nothing to trace. Root cause: asymmetric
+  accounting — GPU checked against live-free (~10.7 GB, VM up), CPU against the profile's
+  24 GB, on ONE physical pool. Same family as zero3-on-unified (`cafaf799`). Guarded:
+  on unified, Strategy 4 returns None → refuse-by-arithmetic. Keys: CogVideoX 0→8,
+  PixArt 0→5.
+- **Fix 2 — NBX dtype read by name (`ac10eddf`, red→green):** Triton input synthesis
+  read `str(val.nbx_dtype).split(".")[-1]`; NBXDtype is an IntEnum so this yielded the
+  VALUE ("0"), and `np.dtype("0")` raised `data type '' not understood`. Read
+  `.name` instead. Latent on ANY triton run that synthesizes an input. Keys:
+  PixArt 5→16, CogVideoX 8→10.
+- **WALL (open, doctrine call needed) — the census NaN gate blocks coverage:** the run
+  now reaches the diffusion main loop and the always-on `_gate_loop_state_finite`
+  aborts after step 1 (state NaN/Inf on SYNTHETIC inputs, no real weights). Per-step
+  kernels repeat, so step 0 harvested the transformer's keys, but the abort skips the
+  post-loop VAE decode → its keys are MISSED (a real census miss). The gate is right for
+  a real run and wrong for a census shadow (synthetic garbage is expected). A real run
+  can't confirm whether the NaN is synthetic-only: it dies EARLIER, at weight staging —
+  a missing `fp32→bf16` conversion in `_load_to_pinned_cpu` (shape 4096×10240). Options
+  for the owner: (a) skip/soften the NaN gate under `NBX_CENSUS` (census-mode-specific,
+  like `metal_device.runtime()`), so the shadow harvests VAE-decode keys; or (b) census
+  the VAE decode as a standalone component. NOT changed unilaterally — it is a
+  safety-critical gate.
+
+**Second stage, CORRECTED (2026-09-21):** the keys are EXACT, not bucketed. TinyLlama's
+2,560 and orpheus's 8,400 are per-decode-step exact prompt/cache lengths -- the explosion
+the buckets collapse (~6 for a short request). Certifying them now unserves them the day
+the bucketed key lands on main. So:
+- CERTIFIED NOW (request-INDEPENDENT, stable): 31 new keys (+41 served = 72) for the
+  upscalers' and hat's convolutions/attention, deriving from the memory ladder and tile
+  lattice the bucketing does not touch (conv2d 45, addmm 13, baddbmm 11, matmul 3).
+- HELD (request-DEPENDENT, 10,976): every prefill/decode/audio-length family. Re-census
+  under the bucketed form and certify ONCE when bucketed-autotune-keys reaches main.
+- Request gaps (video/PixArt resolutions, partial audio) fixed in the request map
+  meanwhile -- needed under either key form.
 
 - Census basis today: the runtime replay cache (the census tool is being
   built once on main, hardware profile as input; the Apple inputs it needs

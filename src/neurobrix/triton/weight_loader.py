@@ -403,6 +403,19 @@ def _load_to_pinned_cpu(
             fp32 = arr.astype(np.float32)
             arr = np.ascontiguousarray(
                 (fp32.view(np.uint32) >> 16).astype(np.uint16))
+        elif target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float32:
+            # fp32 → bf16 (top 16 bits of the fp32), the SAME bit-transform the
+            # GPU arena loader uses (_load_shard_into_arenas), so the zero3
+            # host-staged copy of a weight is bit-identical to its arena copy.
+            # An fp32 encoder (PixArt / CogVideoX T5) staged to a bf16 compute
+            # target reached here still 4 bytes wide and overflowed the 2-byte
+            # pinned buffer — _NUMPY_FOR has no bf16 entry (numpy cannot
+            # represent it). The target itself is decided by
+            # stored_dtype_in_compute, the one rule shared with the census
+            # shadow, so completing this pair keeps the shadow's dtypes and the
+            # real run's identical rather than diverging.
+            arr = np.ascontiguousarray(
+                (arr.view(np.uint32) >> 16).astype(np.uint16))
 
     # Any remaining source->target pair: cast through numpy.
     #
