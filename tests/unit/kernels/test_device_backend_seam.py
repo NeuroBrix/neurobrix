@@ -77,6 +77,35 @@ def test_every_runtime_touch_is_inside_the_allocator():
     )
 
 
+def _docstring_lines(text: str) -> set:
+    """The line numbers covered by DOCSTRINGS, which are prose and may name a runtime.
+
+    Only docstrings, never every string literal: the name this gate hunts appears as a
+    string literal in the load it is hunting (`CDLL("libcudart.so")`), so skipping all
+    strings would blind it to the one thing it exists to catch. A grep gate that fires on
+    prose is a false-positive generator — this one did, on a sentence in `metal_device.py`
+    describing the CUDA rack (2026-09-22) — and a gate people learn to ignore is worse than
+    no gate.
+    """
+    import ast as _ast
+    out = set()
+    try:
+        tree = _ast.parse(text)
+    except SyntaxError:
+        return out
+    for node in _ast.walk(tree):
+        if not isinstance(node, (_ast.Module, _ast.ClassDef, _ast.FunctionDef, _ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if isinstance(first, _ast.Expr) and isinstance(getattr(first, "value", None), _ast.Constant) \
+                and isinstance(first.value.value, str):
+            out.update(range(first.lineno, (first.end_lineno or first.lineno) + 1))
+    return out
+
+
 def test_no_other_module_reaches_the_device_runtime_directly():
     """The same property, one level up: only `nbx_tensor` talks to the driver.
 
@@ -91,7 +120,10 @@ def test_no_other_module_reaches_the_device_runtime_directly():
         text = path.read_text(errors="replace")
         if "cpu_backend" in path.name:
             continue                      # its whole job is probing for runtimes
+        prose = _docstring_lines(text)    # a DOCSTRING naming it is fine, like a comment
         for number, line in enumerate(text.split("\n"), start=1):
+            if number in prose:
+                continue
             code = line.split("#", 1)[0]          # a comment naming it is fine
             if "libcudart" not in code and "libamdhip64" not in code:
                 continue
