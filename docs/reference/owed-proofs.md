@@ -2340,3 +2340,60 @@ and rises again above 5 ms — and `bucket_loss.py --evaluate` reads it and prin
 own duration beside the p95 that applies there. Re-run on the old conv sweep, every bucket that
 read 35–99 % now prints `0.39 ms, noise p95 51.1 %: within it`. A verdict can no longer be
 quoted out of its band, on this machine or yours.
+
+## 2026-09-22 — the census shadow bound no vendor profile for a non-CUDA brand (CUDA proof owed)
+
+**Shared engine code, so a CUDA inertness proof is owed by the Dell before this lands on main.**
+`src/neurobrix/kernels/census.py::_bind_target`, `metal-first-light`.
+
+### The defect
+
+`_bind_target` exists because behind the door (`CUDA_VISIBLE_DEVICES=`) no driver answers which
+vendor profile applies — its own docstring records what that cost the rack on 2026-09-21: *"the
+bucket ladder went unread and every recorded key was composed in the exact form … matmul M = 226
+and 3 136 where the served launcher keys 240 and 3 200"*.
+
+It closed that for nvidia and amd and **left it open for every other brand**:
+
+```python
+if brand not in ("nvidia", "amd") or not cc.replace(".", "").isdigit():
+    return
+```
+
+On Apple the capability is not a CUDA-style number (the arch is a device NAME), so the function
+returned before binding anything. `_ACTIVE_PROFILE` stayed empty, `ladder_for` fell through to
+its exact default, and the census recorded exact keys **silently** — a fallback where this
+project's rule is a refusal.
+
+**Measured here on the first bucketed Apple census**: 825 of 2 955 harvested keys carried a first
+dimension off the ladder — matmul `M_BUCKET` 8 664 where the launcher keys 8 704, addmm 158 400
+where it keys 163 840. Under the real shadow conditions
+(`CUDA_VISIBLE_DEVICES= NBX_CENSUS=1 NBX_CENSUS_DEVICES=1`): `ladder_for("M")` returned **1 row**
+instead of 13 and `_ACTIVE_PROFILE` held **0 entries**. A census of exact keys cannot serve a
+bucketed launcher, and "zero miss at verification" could never be true against it.
+
+Note what made it hard to see: the CUDA door alone does not reproduce it on a Mac, because
+`CUDA_VISIBLE_DEVICES=` hides no Metal device. Only the installed SHADOW silences the driver.
+
+### The fix (red then green)
+
+A brand whose capability is not a number resolves its vendor profile from the device's MODEL,
+through `vendor_profile_for_arch` — the door that exists precisely to resolve a profile without a
+Triton target. A device naming no model, or a model no profile covers, is **refused**: a census
+under no vendor profile is a census of nothing.
+
+After it, under the same shadow: 13 ladder rows, `8664 → 8704`, `158400 → 163840`, 21 profile
+entries. Six cells in
+`tests/unit/kernels/test_the_census_shadow_reads_the_bucket_ladder_on_apple.py`, with the driver
+silenced by monkeypatching `arch_smem_budget` so the test does not depend on a machine without a
+device.
+
+### What is owed
+
+1. **CUDA inertness.** The nvidia/amd path is untouched — the new branch is only reached where the
+   old one returned — but that is an argument, not a measurement. A plan/key census on the rack
+   before and after, differing in 0 keys, is what makes it landable.
+2. **A question the rack should answer**: an unknown Apple variant falls back to `apple_silicon`
+   by declared prefix, which declares no ladder, so such a machine censuses exact keys. That is
+   honest for a chip whose ladder nobody measured — but if the same prefix fallback exists on the
+   CUDA side for an unlisted card, a rack census there is exact too and nobody has said so.
