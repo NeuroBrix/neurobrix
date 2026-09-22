@@ -519,6 +519,28 @@ def _bind_target(hardware: Optional[str], profile: Optional[dict]) -> None:
     brand = str(dev.get("brand") or "").strip().lower()
     cc = str(dev.get("compute_capability") or "").strip()
     if brand not in ("nvidia", "amd") or not cc.replace(".", "").isdigit():
+        # A brand whose capability is not a CUDA-style number (Apple: the arch is a DEVICE
+        # NAME) still needs its vendor profile bound, and used to get nothing here — the
+        # early return was written for the target, and the profile was left to the driver
+        # that the door has just silenced. Measured 2026-09-22 on the first bucketed Apple
+        # census: 825 of 2 955 harvested keys carried a first dimension off the ladder
+        # (matmul M_BUCKET 8 664 where the launcher keys 8 704, addmm 158 400 where it keys
+        # 163 840) — the exact defect this function was written to close, still open for
+        # every non-CUDA brand. The profile is resolved WITHOUT a target
+        # (`vendor_profile_for_arch`), which is why that door exists.
+        model = str(dev.get("model") or "").strip().lower().replace(" ", "-")
+        if not model:
+            raise RuntimeError(
+                "census: the hardware profile's device names no model, so no vendor profile "
+                "can be resolved for it; a census under no vendor profile is a census of "
+                "nothing (the ladder goes unread and every key is composed exact)")
+        from neurobrix.kernels.ops import _configs as _cfg
+        _cfg._ACTIVE_PROFILE.clear()
+        if not _cfg.vendor_profile_for_arch(model):
+            raise RuntimeError(
+                f"census: no vendor profile matches the hardware profile's device {model!r}; "
+                f"refusing rather than recording a catalogue of exact keys a bucketed "
+                f"launcher will never ask for")
         return
     major, minor = (cc.split(".") + ["0"])[:2]
     from triton.backends.compiler import GPUTarget
