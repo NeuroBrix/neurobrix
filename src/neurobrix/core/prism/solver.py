@@ -4908,7 +4908,29 @@ class PrismSolver:
         # segments that fit, instead of a plan that cannot run.
         constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
                              for name in streamed)
-        segment_budget = budget_bytes - resident_beside - constant_bytes
+        # And the KV CACHE, for the same reason and with the same blind spot. It is
+        # inside the streamed component's `total_bytes` — which is why that component
+        # is correctly classified as streamed — but the PARTITIONER sizes segments from
+        # `_bytes_for` (weights) less the graph's own activation curve, and the cache is
+        # in neither: the session allocates it, outside the graph, before the first
+        # segment loads, and it stays resident for every one of them.
+        #
+        # Measured 2026-09-22, Qwen3-Coder-30B-A3B-Instruct on a 16 GB V100, one run of
+        # `NBX_MALLOC_TRACE` — every live block at the failure, by site:
+        #     593.5 MB  memory_pool ComponentArena   (lm_head — resident_beside DOES see this)
+        #     771.0 MB  triton/kv_cache.py __init__  (24 blocks — resident_beside does NOT)
+        # and the allocator's own figure at the OOM was `live_tracked=1365MB`, which is
+        # 593.5 + 771.0 to the megabyte. Segment 1 asked 14 855 MB against 14 086 MB of
+        # free memory and missed by 769 — the cache, within two megabytes.
+        #
+        # `_estimate_kv_cache_bytes` already exists and is already what the component
+        # estimate uses; this is the same number, reserved one level down where the
+        # segments are cut. A model with no cache estimates zero and nothing changes.
+        kv_bytes = 0
+        if getattr(self, "_needs_kv_cache", False):
+            kv_bytes = self._estimate_kv_cache_bytes(
+                container, getattr(self, "_target_dtype_str", "float16"))
+        segment_budget = budget_bytes - resident_beside - constant_bytes - kv_bytes
         if segment_budget <= 0:
             return None
 
