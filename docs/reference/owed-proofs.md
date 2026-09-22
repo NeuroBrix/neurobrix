@@ -2007,3 +2007,53 @@ and the distinction it destroyed (UNREAD against MISMATCHED) is the whole point 
 The reader now waits 5/15/45/120/120 s and puts half a second between chunks of an object once
 refused (f46759e5). If your own hub reads ever report errors in bulk, read the reason before
 the count.
+
+## 2026-09-22 11:05 — why the store refuses writes: it is not a rate, it is seconds per write (for Hocine)
+
+The refusal has been called "the store's 503 SlowDownWrite" and left there. Measured with the
+tool's own probe path (a registry upload slot, then the presigned PUT, slot deleted after):
+
+| operation | result |
+|---|---|
+| PUT 5 bytes | **200 in 7.69 s**, then 9.93 s, then 2.26 s, and once the registry itself timed out |
+| PUT 1 024 bytes | **200 in 18.69 s** |
+| PUT 65 536 bytes | **400 IncompleteBody after 30.02 s** — the server did not receive the bytes it was promised |
+| PUT 1 048 576 bytes | **503 SlowDownWrite in 0.01 s**, `Retry-After: 60` |
+| GET 65 536 bytes (twice, two offsets) | **206 in 0.009 s** |
+
+The store READS sixty-four kilobytes in nine milliseconds and takes two to ten seconds to
+WRITE five bytes. That is not bandwidth and it is not a request rate: five bytes have no rate.
+It is a per-write-operation stall, and the instant 503 on anything larger is MinIO shedding
+load it already cannot carry — which is why the health endpoints all answer 200 (they report
+liveness, not the write path) and why the checksum pass could read at all.
+
+Read against it: MinIO returns `SlowDownWrite` when an erasure set cannot reach write quorum,
+commonly from stale or sick drive state, and the project's own tool already recorded exactly
+that on 2026-09-07 — "the cluster health answered 200 with a write quorum of 1 through every
+refusal". The asymmetry fits: an erasure WRITE must reach quorum across the set, so one drive
+stalling every write costs seconds; a READ is served from whichever drives answer first, so it
+stays at nine milliseconds.
+
+**What I could not do**: there is no MinIO credential on this rack (`.env` holds none), the
+metrics endpoints answer 403, and `ssh 10.0.0.36` is refused (publickey, password). So the
+drive state itself cannot be read from here.
+
+**The one action, for Hocine, on 10.0.0.36** — read the drive state and say which drive is
+stalling:
+
+```
+mc admin info <alias>                         # per-drive online/offline and latency
+journalctl -u minio --since -24h | grep -iE "drive|disk|quorum|heal|timeout|slow"
+dmesg -T | grep -iE "I/O error|ata[0-9]|nvme|reset|timeout"
+smartctl -a /dev/<the backing disk>
+```
+
+If one drive is stalling or offline, the write path is waiting on it and publication stays
+blocked until it is replaced or dropped from the set; a service restart clears the stale-disk
+form of this and is what MinIO's maintainers suggest first, with an upgrade as the permanent
+fix (minio/minio#17875, fixed by PR #17085). **Nothing here should be restarted without you**:
+the store holds the hub.
+
+Meanwhile the checksum pass reads on, and publication is deferred by the tool itself rather
+than retried — a 1 MB write is refused in one hundredth of a second, so retrying is not
+patience, it is noise.
