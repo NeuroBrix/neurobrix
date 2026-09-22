@@ -1610,6 +1610,11 @@ private replay cache, alone on its card, fp16, kernel (1,3), padding (0,1), batc
 | 16 GB (card 1) | 128 | 26, 1 024..524 288 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
 | 32 GB (card 2) | 128 | the same 26 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
 | 16 GB (card 1) | 512 | 19, 8 193..524 288 | Woct | 6 | 0.0 % | 0.0 % |
+| 32 GB (card 2) | 512 | the same 19 | Woct | 6 | 0.0 % | 0.0 % |
+
+All four sweeps agree. The 512-channel pair is the strongest of them: its six octave buckets
+each hold three or four measured widths, every one of them served by the configuration proven
+at the bucket's top, and none loses anything.
 
 The sizes include the widths a chatterbox run actually makes (3 206, 27 408, 137 040,
 210 998, 411 121, 444 721). The buckets that carry the evidence are those holding two to
