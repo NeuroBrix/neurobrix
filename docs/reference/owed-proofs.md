@@ -1905,3 +1905,37 @@ configuration stops depending on it as soon as the grid saturates; a GEMM near t
 still choosing its tile against M, and a bucket a quarter of an octave wide there is a quarter
 of the value. The two ladders differ because the kernels differ, and each now says so with its
 own numbers.
+
+## 2026-09-22 06:45 — the 16 GB class is certified except seven keys that cannot fit it, and that is a census defect
+
+A whole-census sweep of the 16 GB catalogue (`catalogue_16g_v8`, 2 888 entries, every kernel,
+`--only-missing`) certifies everything and stops on exactly two kinds of key:
+
+* **1 unreachable** — the known debt D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE, a key
+  recorded under an older rule that no run will present again.
+* **7 too large for the class** — six matmuls and one convolution, all from the video family,
+  asking between 11.0 and 37.0 GiB of a 15.8 GiB card:
+
+| kernel | shape | model |
+|---|---|---|
+| conv2d | batch 81, 96 ch, 722x1282 -> 3 ch, 720x1280 | Wan2.1-T2V-1.3B |
+| matmul | M 77 594 624, N 3, K 128 | mochi-1-preview |
+| matmul | M 34 603 008, N 3, K 128 | mochi-1-preview |
+| matmul | M 19 398 656 / 8 912 896 / 5 767 168, N 512, K 256 | mochi-1-preview |
+| matmul | M 2 621 440, N 2 048, K 512 | mochi-1-preview |
+
+No certified entry is owed for any of them, because a 16 GB run never forms them: Prism tiles
+the video decode long before the op is reached. They are in the census because **the shadow
+plans an op at its GRAPH shape rather than at the shape the rung's plan would give it** — the
+rung door (`NBX_PRISM_BUDGET_MB`) sizes the PLAN, but the op-level and component tiling that
+the plan implies is not reflected in the recorded key. That is the next census-tool defect and
+it is named here rather than guessed at: a census that records keys its own memory class
+cannot reach is not yet a census of that class.
+
+The certifier now says so with the arithmetic — bytes asked, card size, where the fix belongs
+— and counts them apart from failures, so a round's `failed` count means what it says
+(80d4ed18, three cells including the contrasting case of an allocation that is merely tight).
+
+**For the Mac**: the same defect will appear wherever a model is tiled for memory, and its
+symptom is a certification asking for more than the device holds. The ARITHMETIC is the tell —
+if the key needs more than the card exists with, no run of that class formed it.
