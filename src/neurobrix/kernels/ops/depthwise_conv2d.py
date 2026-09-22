@@ -99,10 +99,17 @@ def depthwise_conv2d_kernel(
                       + kw_i * w_kw_stride)
             w_block = tl.load(w_addr, mask=c_mask, other=0.0)
 
-            if fp16:
-                accum += (x_block.to(tl.float32) * w_block.to(tl.float32)[None, :])
-            else:
-                accum += x_block * w_block[None, :]
+            # Upcast for EVERY dtype, not just fp16. The accumulator is fp32 either way, so
+            # this costs nothing — and multiplying in the operands' own dtype made bf16 with
+            # padding wrong on Metal: deviation 0.754 against the fp64 oracle where unpadded
+            # bf16 sat at its 3.2e-03 mantissa floor, with the error in the ALL-IN-BOUNDS
+            # interior while the genuinely masked border row was clean. fp32 and fp16 were
+            # unaffected at both paddings, and the same source is exact to the mantissa on
+            # CUDA (Triton 3.8.0, V100 sm_70: bf16 pad0 == pad1), so the bad lowering is the
+            # Metal backend's for a native bf16 product of a masked-loaded operand. Upcasting
+            # removes the dependence on it rather than relying on it being fixed below us.
+            # Gate: tests/unit/kernels/test_depthwise_bf16_padding.py (2026-09-22).
+            accum += (x_block.to(tl.float32) * w_block.to(tl.float32)[None, :])
 
     out_addr = (out_ptr + pid_n * out_n_stride
                 + offs_c[None, :] * out_c_stride

@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-93 entries, of which five are placeholders and 88 carry a site. Two
+97 entries, 95 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 92 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2595,6 +2595,107 @@ measurement does not witness the measurement; when what you record is a choice b
 candidates, only a quiet host makes that choice mean anything, and no before/after reading
 substitutes for it.
 
+---
+
+### 500 (was 88 — renumbered, see note) — `neurobrix`'s exit status could not express failure, so every gate over it was empty
+
+**2026-09-23, Apple/Metal campaign.** `src/neurobrix/__main__.py` was:
+
+```python
+from neurobrix.cli import main
+main()
+```
+
+`main()` returns what the command returned — and the return value was dropped. Every
+`return cmd_xxx(args)` in `cli/__init__.py` was therefore unobservable, and the process exited
+0 whatever the command decided.
+
+**What it made vacuous.** `autotune certify` ends with
+
+```python
+return 0 if not bad and not summary["failed"] else 1
+```
+
+carrying a comment explaining why `unreachable` is deliberately NOT folded into that status —
+"a status that cries wolf is a status nobody reads on the day it is right". That reasoning was
+correct, was carefully written, and could never be observed by anything.
+
+**How it surfaced.** The batched runner keys its retry logic on the certifier's exit code. The
+addmm family printed `"failed": 1` in its own summary while the shell read `rc=0`, so the
+runner recorded the family COMPLETE and moved on with a census key uncertified. The campaign
+then reported `BATCHED CERTIFY DONE` at 3 057 of 3 106 keys. The runner was not wrong; it was
+reading a status that could not be anything but 0.
+
+**Why it is the purest form of the class.** Most entries here are tests that check too little.
+This is a *status that cannot go red*. Any CI step, any script, any human running
+`neurobrix autotune certify && echo ok` got a green that no defect could have turned.
+
+**Seen failing before it was made to pass.**
+`tests/unit/cli/test_exit_code_reaches_the_process.py` patches the command layer to return 3
+and asserts the process exits 3 — red on the old `__main__.py`, green on the new. Two further
+cells hold the edges the obvious fix would break: 0 and `None` must stay 0, and a non-int
+return must not become a status (a bare `sys.exit(main())` would exit 1 and print the string
+as an error, turning a success into a failure on the way past).
+
+**The lesson, in one line.** Before trusting an exit code, make a command fail on purpose and
+look at `$?` — and take it without a pipe, because `cmd | tail` reports *tail's* status and
+will show you a 0 that was never the command's.
+
+### 501 (was 89 — renumbered, see note) — the gate for the 2^31 GEMM defect asked CUDA whether Apple had memory, and skipped
+
+**2026-09-23, Apple/Metal campaign.**
+`tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py` exists for one defect: a GEMM
+whose output holds more than 2^31 elements must address every element. It gates its own memory
+need with
+
+```python
+def _cuda_free_bytes():
+    cuda = ctypes.CDLL("libcudart.so")
+```
+
+Off CUDA that load raises, the helper returns 0, and the test skips with:
+
+```
+SKIPPED: needs 5.3 GB free on one card — C is 4.2 GB and A is 134 MB, plus headroom;
+         0.0 GB free
+```
+
+**"0.0 GB free" reads as a busy card.** It actually means "this probe cannot see this
+machine". A reader has no way to tell the difference, and the gate for a live defect reported
+itself as merely deferred.
+
+**The defect is present on this machine.** Bracketed before the gate was touched, everything
+held constant but M, bf16, N=512, K=64:
+
+| C elements | vs 2^31 | deviation vs the fp64 oracle |
+|---|---|---|
+| 2 048 000 000 | under | **0.002141** (the bf16 mantissa floor) |
+| 2 201 600 000 | **over** | **1.0** |
+
+**Made portable, then RED.** The probe now asks `DeviceAllocator.device_free_bytes`, which
+answers on every backend the engine supports — the right authority for a question about the
+engine's own device. The test then RUNS on Metal and fails as it should:
+
+```
+row 1048576 (past the int32 boundary at 1048576):
+array([nan, nan, nan, ...]) vs array([10.215995, -6.7434797, -17.018623, ...])
+```
+
+Rows past `2**31 // N` come back NaN. The int64 promotion of the row and column offsets
+(`matmul.py:230,257`) fixed this on CUDA in 2026-09-14; the same source is still wrong on the
+Metal backend, and no one could have learned that from this file.
+
+**Consequence beyond the test.** The census key
+`addmm M_BUCKET=4194304 N=540 K=180` — C of 2 264 924 160 elements — is the single key of 3 106
+that certification could not certify. Its deviation is 1.0 for this reason. It is also served
+**unscreened** at runtime: `arguments total 12079985400 bytes, over the profile's screening
+budget 1073741824`, so the consensus screen is skipped on budget grounds and nothing verifies
+the configuration either.
+
+**The lesson, in one line.** A gate that probes the HOST with a vendor library is a gate that
+silently disappears on every other vendor — and it disappears with a message about memory,
+which is the most believable excuse there is.
+
 
 ---
 
@@ -2633,3 +2734,99 @@ cell cannot be satisfied by any sentence at all.
 **The lesson, in one line.** A gate that greps source text is measuring a document, not a
 program: strip the prose before you assert on the structure, and prefer a cell that calls the
 thing over one that reads about it.
+
+---
+
+## Numbering: a per-machine range, because sequential numbers collided twice in one day
+
+Two entries written on this Mac (88, 89) collided with two written on the rack the same day,
+which had to renumber them on merge. The register is append-only and both machines append; a
+single sequence cannot survive that, and the collision is the SCHEME's defect rather than
+either machine's.
+
+**Ranges from 2026-09-23: the rack takes 1-499, this Mac takes 500-999.**
+
+`88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
+before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
+are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
+
+---
+
+### 94 — the register's own gate went blind the moment the numbering scheme changed
+
+`tests/unit/docs/test_vacuous_gate_register_counts_itself.py` matched an entry heading with
+
+```python
+re.match(r"^### (\d+)(?:[-–](\d+))?\s+—", line)
+```
+
+— the em-dash required immediately after the number. When the rack and the Mac agreed on
+per-machine allocation blocks (rack 1-499, Mac 500-999) after appending the same number twice in
+one day, the Mac's renumbered entries arrived spelled
+
+    ### 500 (was 88 — renumbered, see note) — `neurobrix`'s exit status could not express failure
+
+with a parenthetical between the number and the dash, so the citation stays readable. **Those two
+entries matched nothing.** They were invisible to both cells: the stated count said 93 while 95
+entries were present, contiguity was computed over a list that silently excluded them, and the
+gate was **GREEN**.
+
+**What it would do if the register were wrong**: exactly what it did — nothing. A counter that
+cannot see an entry is worse than no counter, because its green is read as a count. And this file
+is the gate on the register that exists to catch precisely this.
+
+The failure was not introduced by carelessness in the heading; it was introduced by a CONVENTION
+CHANGE that the gate was never told about. A gate pinned to a spelling breaks silently the first
+time the document's own convention moves, and the direction it breaks in is always green-when-
+blind rather than red-when-blind.
+
+**Repair, and it is three cells rather than a looser regex.** The pattern now admits a
+parenthetical; the loosening immediately surfaced a second problem — an ADDENDUM heading
+(`### 62 (addendum, 2026-09-16 evening) — …`) deliberately re-uses its entry's number and would
+have been counted twice — so the counter reads the register's own word `addendum` and skips it,
+while asserting that any OTHER repeat is an error. Contiguity is checked per BLOCK, because from
+1 alone the Mac's 500 reads as a gap of 406. A third cell refuses any number outside every
+declared block, which is the collision that created the scheme.
+
+Seen RED on three injections: a number outside every block; a duplicate not marked an addendum;
+an entry deleted from the Mac's block rather than struck in place. Green on restore.
+
+**The lesson, in one line.** When a document's convention changes, the gate that reads it is part
+of the change: a pattern that no longer matches does not fail, it stops counting.
+
+---
+
+### 95 — this rack's certified directory does not record whether it was screened
+
+Raised by the Mac on 2026-09-22: on Apple, a shape whose arguments exceed a 1 GiB budget is
+seated without the consensus screen and the entry says so —
+`"provenance": "fastest among candidates nothing verified — NOT a validated setting"`. Measured
+here before answering:
+
+    total certified entries (nvidia): 12 871
+    entries with screened == False:        0
+    entries carrying the key at all:       0     <- every one is None
+
+`src/neurobrix/triton/autotune_cache.py` writes `screened` ONLY when the key appears in the
+`verified` or `unverified` map the screen builds. Not one CUDA entry carries either, so the
+honest reading of this directory is **not** "every entry here was screened" — it is "the field
+that would record the answer was never written".
+
+**What it would do if the entries were unscreened**: report nothing, which is what it reports
+now. Absent key = silence, read as assurance — the family this project already names as
+*instrumentation that lies by construction*. The Mac's artefact is noisy about its own
+provenance; ours is silent, and silence is the worse of the two.
+
+**Not repaired here, deliberately.** Writing the field is a one-line change; making it TRUE for
+12 871 existing entries is a re-certification, and choosing the screening rule is a separate
+decision — a fixed byte budget is a rule about COST while the question is CORRECTNESS, so
+scaling it only moves which shapes go unverified. The recommendation put to the Mac and owed to
+the owner is a windowed screen: a bounded slice of the output against the fp64 oracle at fixed
+cost, placed at the tile holding the largest linear index the shape reaches, which removes the
+constant instead of giving it a better value and lands exactly on the 2^31 class that motivates
+screening large shapes at all.
+
+Detail and the exchange: `nbx/campaigns/2026_09_22_mochi_prism/screening/UNSCREENED.md`.
+
+**The lesson, in one line.** "We screen our kernels" and "our artefact has no field saying
+whether we screen" are the same sentence until someone greps for the field.
