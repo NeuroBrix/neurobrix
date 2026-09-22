@@ -1817,3 +1817,47 @@ be reproduced here.
 
 **Engine proof**: a one-model census on main after the merge records the same six TinyLlama
 keys and the same six served entries as before it.
+
+## 2026-09-22 04:45 — the ladder's tail, measured three times: what the first two sweeps could not see
+
+The tail is settled and the road to it is worth writing down, because two of the three sweeps
+read 0.0 % on a ladder that in fact cost 5.2 %.
+
+**Why the first sweeps could not see it.** `bucket_loss --evaluate` serves each size the
+configuration proven at its bucket's representative — and the representative is the largest
+MEASURED size in that bucket. If the sizes are spread so that each lands in a bucket of its
+own, every size is its own representative and the loss is 0.0 % by construction, whatever the
+ladder. The first two sweeps were spread that way. **A ladder is only evaluated by sizes that
+SHARE its buckets, with the bucket's top among them**, and the arrangement is part of the
+measurement, not its decor.
+
+**The three sweeps** (matmul/bmm, `NBX_AUTOTUNE_CERTIFIED=off`, private replay cache, alone
+on card 1, 16 GB class):
+
+| shape | arrangement | ladder | median | max |
+|---|---|---|---|---|
+| bmm B=1 N=1 K=9, 26 sizes 8 192..2 097 152 | one size a bucket | octave | 0.0 % | 0.0 % |
+| matmul N=K=512, 19 sizes to 524 288 | one size a bucket | octave | 0.0 % | 0.2 % |
+| matmul N=360 K=180, 19 sizes to 4 194 304 | 2 a bucket | octave | 0.0 % | 2.9 % |
+| matmul N=360 K=180, 27 sizes | **3 a bucket, top included** | quarter-octave AS SHIPPED | 0.0 % | **5.2 %** |
+| matmul N=360 K=180, 24 sizes | **3 a bucket, top included** | the REFINED rows | 0.0 % | **1.6 %** |
+
+The 5.2 % sat at the 10 240 bucket and the reason is arithmetic, not hardware: a quarter of an
+OCTAVE at 10 240 is a quarter of the VALUE, so a request of 8 500 was handed a configuration
+proven at 10 240. Beyond 65 536 the same sweep reads 0.0 % median and at most 0.6 %.
+
+**What ships** (`config/vendors/nvidia/volta.yml`, `autotune.buckets.default`): 128 to 8 192
+unchanged, then 512 to 16 384, 1 024 to 32 768, 2 048 to 65 536 — at most 3.1 % of each
+bucket's top — then quarter-octave to 2 097 152 and a 524 288 open row, which is 0.7 % wide at
+the catalogue's largest M (mochi's 77 414 400). A request of 8 500 now meets 8 704. Against
+the 512-step tail it replaced: chatterbox's 1 400 buckets above 8 192 become of the order of
+a hundred.
+
+**The convolution-width ladder (`autotune.buckets.W`) is untouched** — its own sweeps measured
+0.0 % median AND max in the same region, on both memory classes and two channel counts, with
+up to four measured widths a bucket.
+
+**Owed**: the same three-a-bucket arrangement on the 32 GB class (both its cards are
+certifying and the sweep wants one alone). **For the Mac**: the ladder is data, so an Apple
+profile writes its own rows — but the ARRANGEMENT lesson is not hardware-specific, and any
+sweep of yours that reads 0.0 % with one size a bucket has measured nothing.
