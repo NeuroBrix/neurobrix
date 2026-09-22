@@ -31,15 +31,24 @@ M, N, K = 1_100_000, 2048, 64          # M*N = 2 252 800 000 > 2**31; rows >= 1 
 FIRST_OVERFLOWING_ROW = (2 ** 31) // N   # 1 048 576
 
 
-def _cuda_free_bytes():
+def _device_free_bytes():
+    """Free device memory, asked of the ENGINE rather than of CUDA.
+
+    This was `ctypes.CDLL("libcudart.so")`, which does not exist off CUDA. On Apple the load
+    raised, the helper returned 0, and `_require_room` skipped with "0.0 GB free" — a reason
+    that reads as a busy card and is really "this probe cannot see this machine". So the gate
+    for a defect that IS PRESENT on Metal could never run there (measured 2026-09-23: a matmul
+    whose C holds 2 201 600 000 elements deviates 1.0 from the fp64 oracle on an M4 Pro, while
+    2 048 000 000 elements deviates 0.002141 — the same bracket this file exists to hold).
+
+    `DeviceAllocator.device_free_bytes` answers on every backend the engine supports, which is
+    the right authority for a question about the engine's own device.
+    """
     try:
-        import ctypes
-        cuda = ctypes.CDLL("libcudart.so")
-        free, total = ctypes.c_size_t(), ctypes.c_size_t()
-        if cuda.cudaMemGetInfo(ctypes.byref(free), ctypes.byref(total)) != 0:
-            return 0
-        return free.value
-    except OSError:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        free = DeviceAllocator.device_free_bytes(None)
+        return int(free) if free and free > 0 else 0
+    except Exception:                                    # noqa: BLE001
         return 0
 
 
@@ -70,10 +79,10 @@ def _require_room():
         DeviceAllocator.empty_cache_pool()
     except Exception:
         pass
-    free = _cuda_free_bytes()
+    free = _device_free_bytes()
     if free < NEEDED_BYTES:
         pytest.skip(
-            f"needs {NEEDED_BYTES / 2 ** 30:.1f} GB free on one card — C is "
+            f"needs {NEEDED_BYTES / 2 ** 30:.1f} GB free on the device — C is "
             f"{M * N * 2 / 2 ** 30:.1f} GB and A is {M * K * 2 / 2 ** 20:.0f} MB, "
             f"plus headroom; {free / 2 ** 30:.1f} GB free")
 
