@@ -331,12 +331,27 @@ dispatch:
 # and until 2026-09-22 this profile declared nothing — so every Apple key was
 # exact and a census could only ever cover the requests it was shown.
 #
-# The rows below are the engine's own measured rows, lifted from the NVIDIA
-# profile rather than retyped, and they are a CANDIDATE here until this chip
-# says so: a ladder measured on V100 is not a ladder measured on an M4 Pro.
-# The Metal figures are written under each dimension as its sweep lands
-# (tools/bucket_loss.py, `--ladder profile`, sizes that SHARE each bucket with
-# its top among them — register 84).
+# The rows below are the engine's own rows, lifted from the NVIDIA profile rather
+# than retyped, and MEASURED ON THIS CHIP on 2026-09-22 before being kept. A ladder
+# measured on V100 is not a ladder measured on an M4 Pro, so it was not assumed.
+#
+# METAL FIGURES (tools/bucket_loss.py --ladder profile, sizes that SHARE each bucket
+# with its top among them per register 84, every bucket read at a duration where this
+# chip is measurable — see loss_tolerance above):
+#
+#   matmul M fp32, 2.20 ms   median 0.0 %, <=1.7 % in ten of twelve buckets
+#   matmul M bf16, 1.97 ms   median 0.0 %, <=0.4 % in ten of twelve
+#   bmm    M bf16, 2.64 ms   median 0.4 %, <=2.9 % in eleven of twelve
+#   bmm    M fp32, 3.9-5.6 ms, 16 sizes a bucket, buckets 112-176: medians 0.3-1.4 %
+#   bmm    K fp32, 3.6-13.6 ms, the contraction: max 5.8 % at 1 024, 0.6 % at 2 048,
+#                            with the SAME block sizes winning across each bucket
+#   conv   W bf16, 0.6-1.6 ms at 4 k-16 k (the widths a vocoder meets; chatterbox
+#                            reaches 444 721 samples): medians 0.0 % in all six buckets,
+#                            the 2 048-wide quarter-octave buckets included
+#
+# NO ROW IS NARROWED, and the key-count cost of that decision is zero. The earlier
+# Apple readings of 18-99 % were all taken on kernels of 0.3-0.8 ms, where this chip's
+# own run-to-run p95 is 51 % — see `loss_tolerance` above, and owed-proofs 2026-09-22.
 autotune:
   # The loss below which a bucket cannot be told from THIS CHIP'S OWN NOISE. Derived, never
   # chosen, and only valid for a bucket whose kernels ran inside `band_ms`.
