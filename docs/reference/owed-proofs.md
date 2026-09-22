@@ -1884,3 +1884,24 @@ ladder). The ladder is settled: `config/vendors/nvidia/volta.yml`, `autotune.buc
 Files: `nbx/campaigns/2026_09_21_bucketed_keys/{matmul_M_refined,bmm_K_tail}_{16g,32g}.json`,
 `matmul_M_quarter_16g.json` (the 5.2 % that forced the refinement), and the three earlier
 one-size-a-bucket sweeps kept as the record of what an arrangement can hide.
+
+## 2026-09-22 04:57 — the convolution-width ladder at its knee: 0.0 % on both classes, and why the two ladders differ
+
+The GEMM ladder needed narrowing just above 8 192 (5.2 % at the 10 240 bucket). The
+convolution-width ladder keeps a quarter-octave there, and the earlier conv sweeps carried
+only TWO sizes in that bucket — below the standard register 84 set — so it was re-measured to
+the same arrangement: one-row convolution, C_in = C_out = 128, kernel (1,3), three widths
+inside each bucket with its TOP among them, six buckets from the knee to 458 752.
+
+| class | buckets | sizes | median loss | max loss |
+|---|---|---|---|---|
+| 16 GB (card 1) | 6 | 18 | 0.0 % | **0.0 %** |
+| 32 GB (card 3) | 6 | 18 | 0.0 % | **0.0 %** |
+
+Every bucket, both classes, including 10 240 — the one that cost 5.2 % on the GEMM. The
+asymmetry is not an accident of measurement: a one-row convolution's grid is
+`cdiv(N*W, BLOCK)` by `cdiv(C_out, BLOCK)`, so W only scales the first dimension and the
+configuration stops depending on it as soon as the grid saturates; a GEMM near the knee is
+still choosing its tile against M, and a bucket a quarter of an octave wide there is a quarter
+of the value. The two ladders differ because the kernels differ, and each now says so with its
+own numbers.
