@@ -1269,7 +1269,37 @@ def oversize_for_class(exc: BaseException):
     return (asked, total_mb * 1024 * 1024) if asked > total_mb * 1024 * 1024 else None
 
 
-def _release_between_keys() -> None:
+#: The allocator's pool drain, by the names an allocator may legitimately use. Probed as a
+#: LIST and refused when none matches: the previous code asked `empty_cache` then
+#: `device_empty_cache`, DeviceAllocator has neither (its drain is `empty_cache_pool`), and
+#: `getattr(a, x, None) or getattr(a, y, None)` inside `except Exception: pass` turned that
+#: into silence. A whole Apple campaign ran with the drain inert.
+_POOL_DRAIN_NAMES = ("empty_cache_pool", "empty_cache", "device_empty_cache")
+
+
+def _resolve_pool_drain(allocator=None):
+    """The allocator's pool drain, or a refusal naming what it does expose.
+
+    ZERO FALLBACK: an allocator that exposes no drain at all is a defect to surface at the
+    first key, not a condition to carry silently through a sweep."""
+    if allocator is None:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as allocator  # noqa: N813
+    for name in _POOL_DRAIN_NAMES:
+        drain = getattr(allocator, name, None)
+        if callable(drain):
+            return drain
+    exposed = sorted(n for n in dir(allocator) if "cache" in n.lower() or "pool" in n.lower())
+    raise RuntimeError(
+        "ZERO FALLBACK: the device allocator exposes no pool drain under any of "
+        f"{_POOL_DRAIN_NAMES!r}, so the certifier cannot give the device back between keys.\n"
+        f"  What it does expose: {exposed or '<nothing cache- or pool-named>'}\n"
+        "  Add the drain to the allocator, or add its name above — do not let the release "
+        "become a no-op, which is how one campaign reached 21.9 GB of footprint on a 24 GB "
+        "machine and had its sweeps refused for witness drift."
+    )
+
+
+def _release_between_keys(allocator=None) -> None:
     """Give the device back between keys.
 
     The certifier held nothing deliberately and freed nothing either: a key's synthetic
@@ -1278,16 +1308,13 @@ def _release_between_keys() -> None:
     11.0 GiB was refused on a 15.8 GiB card with `live_tracked=5632MB` still resident from
     the key before it, and reported as a failure when it was a certifiable shape meeting
     someone else's leftovers. Cheap: a collection between keys costs milliseconds against a
-    sweep that costs seconds a key."""
+    sweep that costs seconds a key.
+
+    The drain is resolved by `_resolve_pool_drain`, which REFUSES rather than returning None:
+    this hook spent the whole 2026-09-22 Apple campaign calling nothing at all."""
     import gc
     gc.collect()
-    try:
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
-        drain = getattr(DeviceAllocator, "empty_cache", None) or getattr(DeviceAllocator, "device_empty_cache", None)
-        if callable(drain):
-            drain()
-    except Exception:  # noqa: BLE001 — a release that cannot run must not end the sweep
-        pass
+    _resolve_pool_drain(allocator)()
 
 
 def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str, log) -> bool:
