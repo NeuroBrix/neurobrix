@@ -119,7 +119,14 @@ class RangeSource:
                     try:
                         if self._gentle:
                             time.sleep(self.GENTLE_PAUSE_S)
-                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"}, timeout=(30, 300))
+                        # SHORT attempt, LONG wait. The patience belongs between attempts, not
+                        # inside one: `requests`' read timeout is per CHUNK of the body, so a
+                        # server that trickles a byte before each deadline holds the socket for
+                        # ever. Raising it to 300 s on 2026-09-22 did exactly that — the pass
+                        # read 36 MB in fifty-one minutes and sat in `socket.readinto` with
+                        # nothing arriving. A stalled attempt is abandoned in a minute and
+                        # retried after the backoff.
+                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"}, timeout=(15, 60))
                         if r.status_code != 206:
                             if r.status_code in (429, 503):
                                 self._gentle = True
