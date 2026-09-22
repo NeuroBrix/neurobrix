@@ -92,7 +92,18 @@ def census(path: Optional[str] = None) -> Dict[str, List[tuple]]:
 # ---------------------------------------------------------------------------
 # inputs from a key, and the fp64 oracle
 # ---------------------------------------------------------------------------
-_NP = {"fp16": np.float16, "bf16": np.float32, "fp32": np.float32, "fp64": np.float64}
+_NP = {"fp16": np.float16, "bf16": np.float32, "fp32": np.float32, "fp64": np.float64,
+       # The integer and boolean dtypes a real key carries. A batched GEMM's BIAS is an
+       # attention MASK on some models — MiniCPM-o's is `uint8` — and without these entries
+       # the lookup below fell back to float32, the wrapper recomputed the key as fp16, and
+       # the certification reported the key UNREACHABLE. It is not: a judged run of
+       # MiniCPM-o on 2026-09-22 forms
+       # `(64, 1024, 128, True, False, True, 'fp16','fp16','fp16','uint8')` and MISSES on it.
+       # This is the same defect the class below records for bf16, in a second spelling.
+       "uint8": np.uint8, "int8": np.int8, "int16": np.int16,
+       "int32": np.int32, "int64": np.int64, "bool": np.bool_}
+
+_INTEGRAL = {"uint8", "int8", "int16", "int32", "int64", "bool"}
 
 
 class _Synth(np.ndarray):
@@ -151,13 +162,27 @@ def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
 
 
 def _arr(rng, shape, dtype_name, scale=0.1):
+    if dtype_name not in _NP:
+        # ZERO FALLBACK. A dtype this table does not know used to become float32 in silence,
+        # and the key the wrapper then computed was not the key the census recorded — which
+        # reads as UNREACHABLE and hides a real miss. Refuse and name it instead.
+        raise RuntimeError(
+            f"certify: no synthesis for dtype {dtype_name!r}. A key carrying it cannot be "
+            f"proven until this table knows it; defaulting to float32 would certify a "
+            f"different key than the one asked for.")
+    if dtype_name in _INTEGRAL:
+        # An integral operand in these kernels is a MASK or an index, not a sample from a
+        # normal distribution: zeros and ones, which is what a mask carries and what the
+        # oracle can reproduce exactly.
+        a = rng.integers(0, 2, size=shape)
+        return _Synth(a.astype(_NP[dtype_name]), dtype_name)
     a = (rng.standard_normal(shape) * scale)
     if dtype_name == "bf16":
         # The VALUES are made exactly representable in bf16, so the oracle
         # reading this array reads what the kernel will receive.
         exact = bf16_bits_to_f32(f32_to_bf16_bits(a.astype(np.float32)))
         return _Synth(exact.reshape(np.shape(a)), "bf16")
-    return _Synth(a.astype(_NP.get(dtype_name, np.float32)), dtype_name)
+    return _Synth(a.astype(_NP[dtype_name]), dtype_name)
 
 
 def _conv_out_hw(h, wd, kh, kw, stride, padding, dilation):

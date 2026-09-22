@@ -2057,6 +2057,87 @@ the store holds the hub.
 Meanwhile the checksum pass reads on, and publication is deferred by the tool itself rather
 than retried — a 1 MB write is refused in one hundredth of a second, so retrying is not
 patience, it is noise.
+
+## 2026-09-22 12:15 — stage three finds the third instance of one class: a length predicted from VALUES
+
+Kokoro-82M is the first judged run to miss with a request taken from the census, and the
+cause is exact. Both runs phonemize identically — `'The quick brown fox…' (80 chars) -> 92
+phonemes -> 94 IDs` in the census log and in the run's — and then:
+
+```
+census:  [decoder] Chunked: 34 frames -> 128-frame blocks
+run:     [decoder] Chunked: 229 frames -> 128-frame blocks
+```
+
+The frame count is PREDICTED — a duration predictor's outputs summed — and a shadow has no
+values, so it read 34 frames where the run reads 229. The census recorded the decoder's keys
+at sequence 34 and 80; the run forms them at 240 and 480. Eight of Kokoro's fifty-four keys
+differ, and those eight are exactly the eight misses. Both sides bucket correctly; the lengths
+themselves disagree.
+
+This is the THIRD instance of one class, and the class now has a name and a mechanism:
+
+| model | the length a shadow cannot know | what it cost |
+|---|---|---|
+| chatterbox | the speech tokens surviving a value filter | two full sets of vocoder keys |
+| VibeVoice | which control token the argmax picks | the whole diffusion branch, never entered |
+| Kokoro | the frames a duration predictor sums to | 8 of 54 keys, all 8 of its misses |
+
+`census.walk_extent` is the mechanism and it is already landed — it runs a stage at every KEY
+CLASS of such an extent instead of at the one value a shadow happens to make. What is owed is
+wiring it at Kokoro's decoder (`triton/flow/audio.py`, `actual_seq`) and at the other sites
+of the same shape, which means restructuring a chunked loop rather than substituting a
+number. A hook that reads a bound nobody sets was written here and REVERTED: a fix that
+cannot fire is worse than none, because the comment beside it claims otherwise.
+
+**For the Mac**: the same three models will miss the same way on Metal, and the tell is always
+this — the census and the run agree on every key except those carrying one length, and that
+length is one the model computes from what it generated.
+
+## 2026-09-22 12:20 — the two stage-three questions, answered by running them
+
+**The over-large mochi projections.** The hypothesis on the table was "Prism tiles the decode
+first, so the shadow should have recorded the tiled shapes". A judged run of mochi-1-preview
+on the 32 GB class, at the censused request, settles it and the answer is neither side:
+
+```
+[ERROR] Pipeline failed: Failed at aten.silu::26 (aten::silu):
+GPU malloc failed (error 2) for 8752988160 bytes
+[device cuda:0 live_tracked=25963MB pool_cached=0MB driver_free=5624MB / driver_total=32501MB]
+```
+
+The RUN does not fit either. It dies after **26 keys** where the census recorded **73**, and
+it never reaches the 19 398 656 or 77 594 624 projections at all. So Prism does NOT tile this
+decode, the model does not run at this request on a 32 GB card, and the census's over-large
+keys are keys for a run that cannot happen: the shadow allocates nothing, so it walks the
+whole graph past the point a real run dies. **The census and the run are not following the
+same plan, and the reason is that the shadow has no memory limit at all.** That is one defect
+with two faces — a census that records what cannot run, and a plan that does not tile what it
+cannot fit — and mochi is where both show. It is no longer a lead: it is a measured failure
+with its byte counts.
+
+**The unreachable key, per class.** It is NOT unreachable. A judged run of MiniCPM-o-4_5 forms
+`baddbmm (64, 1024, 128, True, False, True, 'fp16','fp16','fp16','uint8')` and reports
+`no certified setting` for it — a real miss. The bias is an attention MASK and a mask is an
+integer; the certifier's synthesis table knew only float dtypes and `.get(name, np.float32)`
+turned uint8 into float32, so the wrapper keyed it fp16, the keys disagreed, and the miss was
+filed as "the census holds a key the engine cannot produce". Half fixed at the source (3c99945d):
+the integer and boolean dtypes are in the table, an integral operand is synthesised as a mask
+of zeros and ones, and an unknown dtype is REFUSED by name rather than defaulted.
+
+**It is still not certifiable, and the remaining step is now narrow.** With a genuinely uint8
+bias synthesised, the certification re-run on both classes still reports
+`the wrapper computed key (…,'fp16') for inputs synthesized from (…,'uint8')`. So the wrapper
+NARROWS the certifier's bias to fp16 where it does not narrow the run's — the run forms the
+key with `uint8` intact. The difference is in how the bias reaches the wrapper, not in the
+table any more. That is the next thing to read, and it is written down rather than guessed.
+
+What HAS changed is what the line means: this key is no longer "the census holds something
+the engine cannot produce" (D-CENSUS-HOLDS-KEYS). It is a REAL MISS on a model in the
+catalogue, and it will stay a miss at serving time until the certifier can build the operand
+the run builds. **The Mac should re-read its own UNREACHABLE lines against this** — the same
+table locked its bf16 certification once already, and this is the same defect in a second
+spelling.
 ## 2026-09-22 — OWED TO THE DELL (core/prism): Prism partitions a graph the executor no longer runs
 
 Established on this Mac, **not implemented** — `core/prism` is the Dell's, and this lands on main
