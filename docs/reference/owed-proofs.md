@@ -2121,8 +2121,20 @@ with its byte counts.
 `no certified setting` for it — a real miss. The bias is an attention MASK and a mask is an
 integer; the certifier's synthesis table knew only float dtypes and `.get(name, np.float32)`
 turned uint8 into float32, so the wrapper keyed it fp16, the keys disagreed, and the miss was
-filed as "the census holds a key the engine cannot produce". Fixed at the source (3c99945d):
+filed as "the census holds a key the engine cannot produce". Half fixed at the source (3c99945d):
 the integer and boolean dtypes are in the table, an integral operand is synthesised as a mask
-of zeros and ones, and an unknown dtype is REFUSED by name rather than defaulted. **The Mac
-should re-read its own UNREACHABLE lines against this** — the same table locked its bf16
-certification once already, and this is the same defect in a second spelling.
+of zeros and ones, and an unknown dtype is REFUSED by name rather than defaulted.
+
+**It is still not certifiable, and the remaining step is now narrow.** With a genuinely uint8
+bias synthesised, the certification re-run on both classes still reports
+`the wrapper computed key (…,'fp16') for inputs synthesized from (…,'uint8')`. So the wrapper
+NARROWS the certifier's bias to fp16 where it does not narrow the run's — the run forms the
+key with `uint8` intact. The difference is in how the bias reaches the wrapper, not in the
+table any more. That is the next thing to read, and it is written down rather than guessed.
+
+What HAS changed is what the line means: this key is no longer "the census holds something
+the engine cannot produce" (D-CENSUS-HOLDS-KEYS). It is a REAL MISS on a model in the
+catalogue, and it will stay a miss at serving time until the certifier can build the operand
+the run builds. **The Mac should re-read its own UNREACHABLE lines against this** — the same
+table locked its bf16 certification once already, and this is the same defect in a second
+spelling.
