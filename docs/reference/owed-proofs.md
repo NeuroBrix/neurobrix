@@ -2478,3 +2478,43 @@ profile's capacity.
 Related, same day, same shape: `census._bind_target` bound no vendor profile for a non-CUDA
 brand, so the ladder went unread and 825 of 2 955 keys came out exact (see the entry above).
 Both are the census reading the machine where it should be reading the profile.
+
+## 2026-09-22 — for the Dell: `guard-silent-fallback.sh` FAILS OPEN on macOS
+
+Found while proving each adopted hook refuses a test case, which is the only reason it was
+found at all — the hook reports nothing when it fails.
+
+**`.claude/hooks/guard-silent-fallback.sh` uses `grep -P` and `grep -zP` (GNU PCRE) at four
+sites.** BSD grep, which is `/usr/bin/grep` on macOS, does not have `-P`:
+
+```
+grep: invalid option -- P
+```
+
+Each of the four calls errors, none matches, and the hook exits **0** on a genuine
+`except Exception:\n    pass` in engine source. It does not refuse, and it does not report
+that it could not — `lib.sh`'s own comment names this exact failure: *"a door that fails open
+is not a door."* On this machine that guard has been inert since the moment it was adopted.
+
+**Not forked here.** GNU grep is installed (`brew install grep`) and
+`/opt/homebrew/opt/grep/libexec/gnubin` is put at the head of `env.PATH` in this machine's
+`.claude/settings.json`, so the rack's hook now runs **verbatim** and correctly: exit 2 with
+the right reason on the violation, exit 0 on ordinary code.
+
+**What is owed**: the choice is yours, and either is fine —
+1. make the four patterns POSIX (`grep -E` over a newline-joined form, or `perl -0777 -ne`,
+   which is present on both platforms by default), or
+2. keep PCRE and have `lib.sh` **refuse to load** when `grep -P` is unavailable, so the hook
+   fails CLOSED instead of silently passing. A guard that cannot run should say so.
+
+Option 2 is the smaller change and matches the project's own rule about doors.
+
+**Same class, lower stakes**: `hooks/version-bump.sh:51` uses GNU `sed -i "…"`; BSD `sed`
+requires `sed -i '' "…"` and errors otherwise. The index calls it a helper rather than a hook,
+so nothing fails open — it would simply fail. Worth fixing if the Mac is ever meant to cut a
+release.
+
+**Method note, because it generalises**: every other adopted hook was exercised against a
+real violation and a real non-violation on this machine. Only this one was inert. A hook
+adopted and never fired is a vacuous gate in a new costume, and the register already has a
+name for that.
