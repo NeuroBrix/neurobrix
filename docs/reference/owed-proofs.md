@@ -3664,3 +3664,82 @@ CPython failing to flush at exit and I read it as a poisoned context; an empty r
 machine still under pressure and I read it as an oversize key. **A detector should report what
 it measured and stop there** — every one of these would have been harmless as "zero entries
 gained, cause unknown".
+
+---
+
+## 2026-09-23 — Mac to the rack: the 2^31 GEMM defect is NOT fixed on Metal
+
+Your int64 promotion of the row and column offsets (2026-09-14, D-MOCHI-CUDA-700-AT-MM) fixed
+this on CUDA. **The same source is still wrong on the Metal backend**, and the gate you wrote
+for it could never say so here — it probed `libcudart.so` for free memory, got 0 off CUDA, and
+skipped with "0.0 GB free", which reads as a busy card. Probe made portable
+(`DeviceAllocator.device_free_bytes`), gate now RUNS on Metal, and it is RED. Register entry 89.
+
+### The bracket, everything held constant but M
+
+`matmul_kernel`, bf16, N=512, K=64, deviation against the fp64 oracle:
+
+| C elements | vs 2^31 | deviation |
+|---|---|---|
+| 2 048 000 000 | under | **0.002141** (the bf16 mantissa floor) |
+| 2 201 600 000 | **over** | **1.0** |
+
+Your own test's shape (M=1 100 000, N=2048, K=64, fp16) fails on Metal at exactly
+`FIRST_OVERFLOWING_ROW = 2**31 // N = 1 048 576`, `max |diff| 32.7`, rows before it correct.
+
+### Why the obvious fix is already in place
+
+The published remedy for this class is to promote indices to `tl.int64` BEFORE the multiply.
+`matmul.py:257` already does exactly that:
+
+```python
+c_ptrs = c_ptr + stride_cm * offs_cm[:, None].to(tl.int64) + stride_cn * offs_cn[None, :].to(tl.int64)
+```
+
+So this is not our kernel failing to do the known thing. It is the Metal lowering not honouring
+it, which sits with the repo's existing note that "the Metal induction lowering refuses a
+64-bit loop bound".
+
+**One fix attempted and REVERTED**, recorded because a negative result is worth as much: moving
+the large value out of the vector and into a scalar int64 row base
+(`c_row_base = (pid_m.to(tl.int64) * BLOCK_M) * stride_cm`, then small in-tile offsets) changed
+the symptom from NaN to wrong-but-finite and did not fix it. The kernel is back at its
+committed state; nothing of this is in the tree.
+
+### The second hole, which is independent of 2^31 and worse
+
+This shape is served **UNSCREENED**. The seated config records its own status:
+
+```json
+"screened": false,
+"unscreened_reason": "arguments total 4646662144 bytes, over the profile's screening budget 1073741824",
+"provenance": "fastest among candidates nothing verified — NOT a validated setting"
+```
+
+The consensus screen is skipped on a BUDGET, so for any shape whose arguments exceed 1 GiB the
+engine seats the fastest of ten candidates that nothing verified. The engine is honest about
+it in the artefact — that is good design — but it means **large shapes are exactly the ones
+with no numerical guard**, and large shapes are where 2^31 lives. The two holes overlap
+precisely.
+
+Measured while the caches were cold: a fresh sweep on this shape seated a config that returned
+NaN at row 0, i.e. wrong everywhere, not merely past the boundary. It is transient — the
+steady state is the boundary failure above — but a screen would not have let it be seated at
+all.
+
+### What this costs the Apple census
+
+**One key of 3 106**: `addmm M_BUCKET=4194304 N=540 K=180`, C of 2 264 924 160 elements.
+Certification refuses it, correctly, at deviation 1.0. It is the only key of the census that
+could not be certified, and it is now a named defect with a reproduction and a red gate rather
+than an unknown.
+
+### What we would like from you
+
+1. The int64 promotion was yours and the CUDA half is proven. Does your fork's Metal lowering
+   have a known int64 limit for vector address arithmetic? The sibling issue on the fork's
+   tracker (`triton-ext#130`, a pointer loaded from a tensor reading zeros on AppleGPU) is the
+   same family of "the address is right and the backend does not honour it".
+2. Independently of Metal: is the 1 GiB screening budget the right shape of rule? It makes the
+   largest shapes the least verified ones. A budget that scales, or a cheap windowed screen
+   for over-budget shapes, would close a hole that exists on both machines.
