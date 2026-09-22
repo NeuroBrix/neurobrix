@@ -3483,3 +3483,44 @@ rescuable keys stand; a Metal equivalent of that analysis cannot be done this wa
 
 I reported the 21.9/10 figures to you before checking which family each came from. The right
 order was the one you used for the four keys: state the method, then the number.
+
+---
+
+## 2026-09-22 — the census merge dropped every open model of pass B
+
+Found while answering "name every open model with its cause", which is the one question the
+merged file could not answer. `campagnes/2026_09_22_apple/scripts/merge_census.py` unioned the
+KEYS of pass A and pass B correctly — 856 + 2 259 = 3 106, byte-identical before and after the
+fix — and took the BOOKKEEPING from the first source only. Two bugs, both silent:
+
+1. `merged = {k: v for k, v in d.items() if k != "entries"}` copied every non-entries field
+   from pass A, so `failed`, `probe_failed` and `retrace_queue` were pass A's alone.
+2. `models` is a **dict** in these files, so `isinstance(d.get("models"), list)` was False,
+   the accumulator stayed empty, and pass A's 30-model map survived while pass B's 29 were
+   discarded.
+
+**Effect: the census reported 19 open models when 33 were open, and 30 models when 59 had been
+censused.** The fourteen that vanished:
+
+`DeepSeek-Coder-V2-Lite-Instruct` · `GLM-4.1V-9B-Thinking` · `Ming-Lite-Omni-1.5` ·
+`MiniCPM-o-4_5` · `Qwen3-30B-A3B-Thinking-2507` · `Qwen3-Coder-30B-A3B-Instruct` ·
+`Qwen3-Coder-30B-A3B-Instruct-int4g128` · `Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` ·
+`Qwen3-Omni-30B-A3B-Instruct` · `Qwen3-VL-30B-A3B-Thinking` · `VibeVoice-1.5B` ·
+`deepseek-moe-16b-chat` · `granite-3.1-1b-a400m-instruct` · `granite-speech-3.3-8b`
+
+Every one is an LLM, audio_llm or tts — pass B's families. The owner's addendum of the same
+day said "nothing in the census report may read as complete while these models are open", and
+this is the mechanism by which a report could have read complete while fourteen were open and
+unnamed. It was invisible precisely because the part that mattered to certification, the keys,
+was always right.
+
+**Certification is unaffected and needs no re-run**: the 3 106 keys and all their payloads are
+identical (verified key by key), so `--only-missing` sees exactly the same work.
+
+Also dropped on the fix: the merged file no longer carries `coverage`. That field is a
+property of the DIRECTORY at the moment one census ran, and copying the first source's copy
+made the union assert a served/to-certify split that was never true of it.
+`scripts/coverage.py` computes it on demand instead.
+
+The pre-fix file is kept beside the new one as
+`census_apple_2026_09_22.BEFORE_MERGE_FIX.json`, because a census that was wrong is evidence.
