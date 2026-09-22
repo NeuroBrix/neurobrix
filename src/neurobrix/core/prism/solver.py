@@ -547,6 +547,21 @@ def memory_ladder_rung_mb(free_mb) -> int:
     return rung_down_mb(free_mb)
 
 
+
+def _census_shadow_active() -> bool:
+    """True when this process is a census SHADOW.
+
+    A shadow enumerates the keys a machine's plan demands; it executes nothing. So the
+    room's free memory — which is what gets a real render killed mid-execution, and the whole
+    reason `_prepare_devices` lowers capacity on unified memory — says nothing about it, and
+    letting it in makes a census a function of whatever else happened to be running.
+    """
+    try:
+        from neurobrix.kernels import census as _census
+        return bool(_census.active())
+    except Exception:  # noqa: BLE001 — no census module means no shadow
+        return False
+
 class PrismSolver:
     """
     Enterprise Grade Hardware Allocation Solver.
@@ -2660,7 +2675,13 @@ class PrismSolver:
         for dev in profile.devices:
             recommended = dev.memory_mb * self.safety_margin
             capacity = recommended
-            if dev.has_unified_memory and host.measured:
+            # A census SHADOW carries the machine's plan, not the room's — the same rule
+            # `_device_reading` already applies one call later. Without it the shadow's
+            # capacity, and therefore every tile a tiled family derives from it, is a
+            # function of whatever else was running: the same model at the same imposed rung
+            # logged 8 659 MB in one shadow and 7 604 MB in the next, minutes apart
+            # (Apple M4 Pro, 2026-09-22). A census that is not reproducible is not a census.
+            if dev.has_unified_memory and host.measured and not _census_shadow_active():
                 capacity = min(recommended, host.available_mb * self.safety_margin)
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
