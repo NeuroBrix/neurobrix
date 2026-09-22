@@ -3120,3 +3120,69 @@ The five class-1 models were read at fp32-fallback figures. Their planning is re
 this fix before any of them is called too large; Flex is already re-run and still fails, on the
 rack's defect. **No censused key is affected** — the factor moved planning, never the recorded
 op dtypes (measured previously: bf16 leads 1 652 to 1 454 over 3 106 keys).
+
+---
+
+## 2026-09-22 — Mac to the rack: the certifier's between-key pool drain was a no-op
+
+Fixed at the source here (`a054ef6c`) because it blocked key harvest on this machine. It is
+reported rather than merely fixed because **on your card it is silent**, and it has been inert
+for every certification either machine has ever run.
+
+### The defect
+
+`autotune_certify._release_between_keys` resolved its drain as
+
+```python
+drain = getattr(DeviceAllocator, "empty_cache", None) or getattr(DeviceAllocator, "device_empty_cache", None)
+if callable(drain):
+    drain()
+```
+
+inside `except Exception: pass`. `DeviceAllocator` has **neither** name. Its pool drain is
+`empty_cache_pool`. So `drain` was `None`, `callable(drain)` was `False`, the hook ran
+`gc.collect()` and returned — no exception, nothing logged, and a docstring that went on
+claiming the device was given back between keys. Measured, not read:
+
+```
+empty_cache:        ABSENT
+device_empty_cache: ABSENT
+empty_cache_pool:   PRESENT
+```
+
+### What it cost here, with numbers
+
+| | before the fix | after |
+|---|---|---|
+| certifier physical footprint | **21.9 GB** (24 GB machine) | **10 GB** |
+| swap used | 11.6 GB of 12.3 GB | 4.0 GB of 5.1 GB |
+| certification passes | two killed `Killed: 9` | running |
+
+Two things worth carrying even though they are Apple-shaped:
+
+1. **RSS did not show it.** At a 21.9 GB footprint `ps` reported 0.9 GB RSS, because a Metal
+   allocation is not in RSS. A run sitting at the jetsam edge read as healthy, and I believed
+   it for one report before `footprint`/`vmmap` contradicted me. If you ever judge certifier
+   memory on a unified-memory device, RSS is the wrong instrument.
+2. **The witness then refused sweeps, correctly.** Under that pressure the stability witness
+   rejected an addmm sweep for 8.8 % drift (4.4996 → 4.8974 ms). The gate was working; the
+   pressure was ours. A drift refusal on a loaded machine is not automatically a clock story.
+
+### What we would like from you
+
+Nothing blocking. But your certifications ran with the same inert hook on a card with far more
+room, so the question is whether it changed any CUDA result:
+
+- Does any CUDA certification record a `FAILED` whose message is an allocation refusal
+  (`live_tracked=` still resident, or an OOM) rather than a numerical deviation? Those are the
+  candidates for a key that was certifiable and met the previous key's leftovers — the exact
+  case the docstring was written for on the 16 GB class.
+- If so, they are worth re-running with `--only-missing` after you take `a054ef6c`, and we
+  should know the count before either machine calls its directory complete.
+
+### The gate
+
+`tests/unit/kernels/test_release_between_keys_drains.py` — red on the old probe, red on an
+allocator exposing no drain at all (the resolution now **refuses** instead of returning
+`None`, per ZERO FALLBACK), and it asserts the hook actually invokes what it resolved. Seen
+failing before it was made to pass.
