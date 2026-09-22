@@ -340,6 +340,15 @@ def running_generator() -> Optional[str]:
 _OUT_OF_TREE_HASH: Dict[str, Optional[str]] = {}
 
 
+_SAID: set = set()
+
+
+def _say_once(msg: str) -> None:
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(msg, flush=True)
+
+
 def _out_of_tree_backend_hash() -> Optional[str]:
     """The source hash of the Triton backend that will ACTUALLY generate code,
     but ONLY when that backend is out of tree — its version does not travel in
@@ -364,7 +373,19 @@ def _out_of_tree_backend_hash() -> Optional[str]:
     in-tree backend (cuda/amd), whose generator the distribution version
     already tracks, leaving those labels unchanged."""
     from neurobrix.kernels.launcher import target as _target
-    tgt = _target()
+    try:
+        tgt = _target()
+    except Exception as exc:  # noqa: BLE001 — no driver to ask: see below
+        # There is no target to name because there is no device to ask (a CPU-only
+        # machine, a census behind `CUDA_VISIBLE_DEVICES=`, a build host). The
+        # question "which OUT-OF-TREE backend will generate the code" is then
+        # unanswerable, and an unanswerable question refuses nothing — the rule the
+        # generator gate is built on. It is said once rather than swallowed, because
+        # an out-of-tree backend that silently lost its hash would serve entries to a
+        # generator that had moved, which is the defect this hash exists to stop.
+        _say_once(f"[autotune] no device to name the code generator ({exc.__class__.__name__}): "
+                  f"an out-of-tree backend hash cannot be read, so no entry is refused for one")
+        return None
     if tgt is None:
         return None
     key = f"{getattr(tgt, 'backend', '?')}:{getattr(tgt, 'arch', '?')}"
