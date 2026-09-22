@@ -1329,13 +1329,23 @@ class RuntimeExecutor:
 
         if _loads_own:
             install_fn = getattr(self.strategy, 'install_for_executor', None)
-            if install_fn is not None:
-                install_fn(comp_name, executor)
-            # The strategy now owns loading. The flag records "the runtime has done what it
-            # must for this component", which is what it gates — re-entry — and not a claim
-            # that bytes are resident.
-            executor._weights_loaded = True
-            return
+            # A strategy declaring `loads_own_weights` does not necessarily take over
+            # EVERY component it manages. `layer_streaming` streams the components the
+            # plan cut into segments and leaves the others whole beside them — and a
+            # whole component still needs the runtime to load it.
+            #
+            # `install_for_executor` returns True when it took the component over.
+            # Treating the declaration as the answer skipped lm_head's load and the run
+            # died in it: `Failed at aten.mm::0 — None args at positions [1] of 2`, the
+            # weight matrix that was never read. Measured 2026-09-22 on
+            # DeepSeek-Coder-V2-Lite-Instruct, after the three streamed segments ran.
+            took_over = bool(install_fn(comp_name, executor)) if install_fn else False
+            if took_over:
+                # The strategy now owns loading. The flag records "the runtime has done
+                # what it must for this component", which is what it gates — re-entry —
+                # and not a claim that bytes are resident.
+                executor._weights_loaded = True
+                return
 
         if shard_map:
             executor.load_weights(nbx_path, component, shard_map)

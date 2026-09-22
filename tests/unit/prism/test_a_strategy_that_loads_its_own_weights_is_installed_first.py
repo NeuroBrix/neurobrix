@@ -81,15 +81,77 @@ def test_the_load_is_gated_on_the_narrower_flag_not_the_wider_one():
         "where the install was gated and the load was not")
 
 
+def _code_only(src: str) -> str:
+    """`src` with its comments and docstrings removed.
+
+    This helper exists because the cell below was GREEN for the wrong reason and then RED for
+    the wrong reason. It searched the raw source for `return`, and a comment added later —
+    "`install_for_executor` returns True when it took the component over" — matched it 400
+    characters before the real one, turning the cell red while the code was correct. A gate a
+    sentence can satisfy, or break, is measuring prose. Recorded in the vacuous-gates register.
+    """
+    import io, tokenize
+    out = []
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, IndentationError):
+        return src
+    prev_type = None
+    for tok in toks:
+        if tok.type == tokenize.COMMENT:
+            continue
+        if (tok.type == tokenize.STRING
+                and prev_type in (tokenize.INDENT, tokenize.NEWLINE, tokenize.NL, None)):
+            continue                       # a docstring
+        out.append(tok.string)
+        if tok.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT):
+            prev_type = tok.type
+    return " ".join(out)
+
+
 def test_install_happens_before_the_skip_returns():
     """If the strategy is not installed, nothing replaces `run` and the component executes
     with no weights at all — worse than the OOM this replaces."""
     import inspect
     from neurobrix.core.runtime import executor as _ex
-    src = inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded)
+    src = _code_only(inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded))
     block = src[src.find("loads_own_weights"):]
-    i_install = block.find("install_fn(comp_name, executor)")
+    i_install = block.find("install_fn ( comp_name , executor )")
     i_return = block.find("return")
-    assert i_install > -1 and i_return > i_install, (
+    assert i_install > -1, "install_for_executor is no longer called on the skip path"
+    assert i_return > i_install, (
         "the early return happens before install_for_executor — the component would run "
         "with no weights and no segmentation")
+
+
+def test_the_skip_is_taken_only_when_the_strategy_SAYS_it_took_over():
+    """A strategy declaring `loads_own_weights` does not necessarily take over every
+    component it manages. `layer_streaming` streams the ones the plan cut into segments and
+    leaves the others whole beside them — and a whole component still needs the runtime to
+    load it.
+
+    Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct: reading the DECLARATION as the
+    answer skipped `lm_head`'s load and the run died in it —
+    `Failed at aten.mm::0 (aten::mm) — None args at positions [1] of 2`, the weight matrix
+    nothing had read — after the three streamed segments had run correctly.
+    """
+    import inspect
+    from neurobrix.core.runtime import executor as _ex
+    src = _code_only(inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded))
+    block = src[src.find("loads_own_weights"):]
+    i_install = block.find("install_fn ( comp_name , executor )")
+    i_return = block.find("return")
+    between = block[i_install:i_return]
+    assert "if" in between, (
+        "nothing stands between the install and the early return, so the skip is taken for "
+        "every component the strategy manages — including the ones it left whole")
+
+
+def test_a_strategy_that_takes_nothing_over_leaves_the_load_to_the_runtime():
+    """The behaviour itself, on the strategy rather than on the source: a component with no
+    segments in the plan must report that it was NOT taken over."""
+    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    st = object.__new__(LayerStreamingStrategy)
+    st._segments_for = lambda name: []
+    st._installed = set()
+    assert st.install_for_executor("lm_head", object()) is False

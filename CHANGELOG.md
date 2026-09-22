@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A very large model can now be run on a card that cannot hold it.** When no single
+  component fits, the engine cuts that component into pieces and holds one at a time. That
+  path existed but had never run: the memory it reserved left out the fixed tables a model
+  carries inside its graph, which on one 16 GB card came to more than two gigabytes and were
+  loaded before anything else — so a plan that looked comfortable ran out of memory
+  immediately. Half of those tables were also being kept twice over. Once past that, the
+  pieces could not read each other's results, because what one piece hands to the next lost
+  the information the next one needed to make sense of it. All of this is fixed, and a model
+  far larger than the card now runs to completion on it. Its answers are still being checked
+  against the same model run whole, and this note will say so when that comparison lands.
+
 - **Opening a packaged model file no longer overwrites the copy already installed.** Reading
   a `.nbx` unpacks it into the local model store, and it did so even when a different build of
   the same model was already there — so simply inspecting a newly built file replaced the

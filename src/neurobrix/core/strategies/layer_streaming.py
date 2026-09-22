@@ -19,6 +19,8 @@ runs wherever the allocation points.
 
 from __future__ import annotations
 
+import os
+
 from typing import Any, Dict, List, Optional
 
 from neurobrix.core.strategies.base import ExecutionStrategy
@@ -202,7 +204,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
         return last
 
-    def install_for_executor(self, component_name: str, executor) -> None:
+    def install_for_executor(self, component_name: str, executor) -> bool:
         """Make this component's own executor run segment by segment.
 
         Called by `RuntimeExecutor._ensure_weights_loaded` for any strategy
@@ -217,13 +219,46 @@ class LayerStreamingStrategy(ExecutionStrategy):
         exactly as it was.
         """
         if not self._segments_for(component_name):
-            return
+            # Not a streamed component — it stays whole and the runtime must load it.
+            # Saying so is the caller's only way to tell the two apart.
+            return False
         if component_name in self._installed:
-            return
+            return True
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
         nbx_path = self._nbx_path(component_name)
+
+        # The base executor's constants are now dead, and they are not small.
+        #
+        # Every executor loads the constants baked into ITS OWN graph at
+        # construction (`_load_constants_from_graph`). A segment executor's graph
+        # carries the constants its own ops read, so the segments together hold
+        # the whole set — and the base holds a second, complete copy of it, while
+        # its `run` is about to be replaced by `segmented_run` and never executes
+        # a single op again.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct (`NBX_MALLOC_TRACE`):
+        # 108 live blocks of 20 971 520 B = 2160 MB before the first segment loads,
+        # all from `_load_constant_triton`, for 54 distinct constants. Exactly half
+        # of that — 1080 MB on a 16 GB card — is this copy.
+        #
+        # The base is already weightless under this strategy: `_ensure_weights_loaded`
+        # returns early for a strategy that declares `loads_own_weights`, so it never
+        # loads a single weight. Holding its constants made it half-populated, which
+        # is the inconsistency, not the release.
+        released = 0
+        base_weights = getattr(executor, "_weights", None)
+        if isinstance(base_weights, dict) and base_weights:
+            held = {n for seg in segments
+                    for n in (getattr(seg, "_weights", None) or {})}
+            for name in [n for n in base_weights if n in held]:
+                released += 1
+                base_weights.pop(name, None)
+        if released and os.environ.get("NBX_LAYER_DIAG") == "1":
+            print(f"   [LAYERDIAG] released {released} base-executor constants of "
+                  f"'{component_name}' — the segment executors carry them",
+                  flush=True)
 
         def segmented_run(inputs=None, *args, **kwargs):
             values = dict(inputs or {})
@@ -263,6 +298,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         executor.run = segmented_run
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)
+        return True
 
     def prepare_inputs(self, component_name: str,
                        inputs: Dict[str, Any]) -> Dict[str, Any]:
