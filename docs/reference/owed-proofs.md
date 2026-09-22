@@ -3524,3 +3524,31 @@ made the union assert a served/to-certify split that was never true of it.
 
 The pre-fix file is kept beside the new one as
 `census_apple_2026_09_22.BEFORE_MERGE_FIX.json`, because a census that was wrong is evidence.
+
+---
+
+## 2026-09-22 — I ran my own GPU work beside a running certification
+
+Self-reported, because nothing external would have caught it. `workshop-and-campaigns.md:61`
+says "Nothing runs beside a gate, even on the CPU, and a locked bench needs a quiet host". I
+ran the depthwise adjudication, the boundary sweep, the dtype table and the conv_transpose
+probes — all Metal GPU work — in parallel with a certification that was sweeping candidate
+TIMINGS. **313 entries, 11.7 % of the directory, were certified inside those windows** and are
+quarantined (removed, so `--only-missing` re-does them on a quiet host).
+
+**The stability witness is not a defence, and the reason generalises.** It refused 38 sweeps
+outright, up to 33.6 % drift, so it was doing its job. But it times a reference kernel before
+and after a sweep and compares at an 8 % tolerance. Contention that changes **which config
+wins** without moving the witness by 8 % passes it untouched. The witness proves the regime
+did not move much; it does not prove the ranking was decided on a quiet machine, and the
+ranking is the entire content of a certified entry.
+
+This is the Apple-shaped version of what the rack said about its own re-certification of the
+16 GB key: it would very likely certify under load, and the entry would be worth nothing,
+"which is worse than no entry because it would sit in the directory looking certified". They
+declined to take the measurement. I had already taken 313 of them.
+
+What I am changing, not merely noting: while a certification runs on this machine, nothing
+else touches the GPU. Diagnostics wait for the gap between families, or the certifier is
+stopped first. The batched runner makes that cheap — `--only-missing` means stopping costs
+only the keys in flight.
