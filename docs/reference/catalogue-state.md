@@ -299,3 +299,44 @@ BOOKKEEPING from the first source only, so 14 open models of pass B — all LLM,
 and tts — were absent from every count. Recorded in `owed-proofs.md` (2026-09-22). The
 keys were always right, which is why certification was unaffected and the defect could
 hide behind a report that looked finished.
+
+### CORRECTION, same day — two of those causes were wrong, and the tool was why
+
+`name_open_models.py` read a model's logs without filtering on whether the run FINISHED. A
+model censused at six rungs in two modes has 24 logs, and the first alphabetically is often
+one that SUCCEEDED; its warnings were then reported as the model's cause.
+
+**Allegro and CogVideoX-2b were named "ENGINE (census shadow opened the device)" on exactly
+that mistake.** The line
+
+```
+[flash] shared-memory probe unavailable (RuntimeError: census shadow: the Metal device is
+deliberately unreachable (NBX_CENSUS=1) ...); the tile is not checked against the device
+```
+
+is a CAUGHT WARNING printed by runs that went on to complete — "the tile is not checked
+against the device", then the run continues. It is not a failure, and that class does not
+exist. Their real cause is **memory at the low rungs**: the VAE asks 82 688 MB of activations
+against a 17 277 MB card, and both models SUCCEED at r11264 and above.
+
+Corrected counts, from the failing logs only:
+
+| owner | models |
+|---|---|
+| APPLE (memory / rung) | **11** |
+| DELL (layer_streaming) | 6 |
+| ENGINE (trace / op defect) | 6 |
+| CENSUS HARNESS (input never supplied) | 3 |
+| FORGE (frozen symbol, re-trace owed) | 3 |
+| ENGINE (missing capability) | 2 |
+| FORGE (symbolic coverage) | 1 |
+| METAL (driver / allocator) | 1 |
+
+**Eleven of the 33 are only PARTIALLY open** — they failed at some rungs and succeeded at
+others, and contributed keys: Allegro, CogVideoX-2b, the four PixArt variants, the three Sana
+variants, GLM-4.1V-9B-Thinking and VibeVoice-1.5B. "Failed" in the census summary means a run
+failed, not that the model contributed nothing.
+
+The warning is still worth one line of someone's time — a path that reaches the Metal runtime
+inside a shadow is uncovered by the census, and the flash tile goes unchecked there — but it
+is a gap in coverage, not the reason any model is open.
