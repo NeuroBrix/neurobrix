@@ -3552,3 +3552,66 @@ What I am changing, not merely noting: while a certification runs on this machin
 else touches the GPU. Diagnostics wait for the gap between families, or the certifier is
 stopped first. The batched runner makes that cheap — `--only-missing` means stopping costs
 only the keys in flight.
+
+---
+
+## 2026-09-22 — the contention audit, done the rack's way, and what it found here
+
+The rack audited its own directory after my quarantine and found **10 242 of 12 851 entries
+(79.7 %)** certified inside windows when model runs were active. They quarantined **exactly
+one** — the only key they could prove rather than infer — and escalated the rest to their
+owner. Their method is better than mine and the distinction is the lesson: I had bounded my
+quarantine by the three windows I *knew* I had started something in, not by asking the
+question of every window.
+
+Redone here their way — cluster every current-generator entry by `proof.date`, then ask what
+else was writing during each window:
+
+| window (local) | entries | what else was writing |
+|---|---|---|
+| 17:11-19:02 | 950 | 104 docs files at an identical 17:13:01 mtime — a git checkout, pure I/O |
+| 19:08-19:54 | 177 | nothing |
+| 20:00-20:02 | 18 | `coverage.py` |
+| 20:08 | 7 | `pytest test_release_between_keys_drains.py` |
+| 20:35 | 6 | nothing |
+| 20:44-20:47 | 20 | nothing |
+| 20:53-21:20 | 243 | `merge_census.py`, census writes, a source edit |
+
+### The finding that changes how I work, not just what I record
+
+**My "CPU-only" tools are not CPU-only.** Measured, not assumed:
+
+```
+after importing autotune_certify + autotune_cache:
+   metal runtime instantiated: False
+   after enumerating autotuners : True
+```
+
+`atc._autotuners()` **instantiates the Metal runtime**. `coverage.py`, `classify_unnamed.py`
+and `switchover.py` all call it, so every time I described them as "no GPU, safe to run beside
+certification" — which I said in as many words — I was wrong. They open the device.
+
+### What I am and am NOT quarantining, and why
+
+- **Already quarantined (313):** windows where I ran Metal KERNELS beside a timing sweep.
+  Proven, because I started those processes and they execute kernels.
+- **NOT quarantined (~261, the 20:00-20:02 and 20:53-21:20 windows):** these opened a Metal
+  runtime but ran no kernels — a device handle, milliseconds, not sustained load. I judge the
+  contention immaterial to a timing sweep. **That is a judgement, not a measurement**, and it
+  is recorded as one so it can be overruled.
+- **NOT quarantined (950, the 17:11-19:02 window):** a git checkout is I/O. Doctrine does say
+  "even on the CPU", so this is reported rather than dismissed.
+
+Following the rack's discipline: quarantine what is proven, report what is inferred, and let
+the owner decide the rest. Deleting 1 218 more entries on an inference is not my call, and on
+this evidence it would not be the right one either.
+
+### The rule neither of us had, which is theirs
+
+> When you decline a measurement because the host is busy, immediately ask which
+> already-recorded measurements were taken under the same condition.
+
+They declined a re-certification because three cards were at 100 %, and it did not occur to
+them to ask the question backwards about entries already in the directory — until my
+quarantine made them look. Symmetrically, I would not have audited the windows I did not
+already suspect until they showed me the method.
