@@ -2444,3 +2444,42 @@ either machine's.
 `88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
 before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
 are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
+
+### 502 — a verification on a warm replay cache measures the cache, not the directory
+
+**2026-09-23, Apple/Metal campaign.** Verification judges "zero miss" by counting
+`no certified setting` lines in each model's run. A key that is NOT certified but IS in
+`~/.neurobrix/replay_cache/autotune_configs_<arch>.json` is served from there, silently, and
+the run prints no such line. The count is then a property of the cache.
+
+**Measured.** After an earlier standalone run of the same cell:
+
+```
+runtime-swept configs cached:                          42
+cached configs NOT in the certified directory:          9
+```
+
+Kokoro-82M reported **8 autotune misses** when run with a cold cache and **0** an hour later,
+with nothing certified in between. Nine of the ten cells then read "0 misses" and the whole
+`--triton` arm looked clean. It was not: the arm had inherited a cache warmed by my own
+earlier probing.
+
+**Why it is not merely a stale-cache nuisance.** The replay cache is working as designed — the
+engine's own message says a runtime sweep "is kept in `~/.neurobrix/replay_cache`, never in
+the engine's directory". The cache is the correct place for an unverified setting. The defect
+is that the INSTRUMENT counting misses cannot distinguish "served from the certified
+directory" from "served from a runtime sweep", and those are the two things verification
+exists to tell apart.
+
+**The rack hit the same shape on CUDA the same night**, from the other side: their
+`test_a_conv_input_beyond_two_billion_elements` passed in 3.96 s warm and took 1 266 s cold,
+because warm there was no sweep at all — a seated config replayed. Warm caches make a gate
+fast and make it measure something else.
+
+**Fixed** by clearing `autotune_configs_*.json` before the arms run
+(`campagnes/2026_09_22_apple/scripts/verify_all.sh`), with the warm cache preserved beside the
+logs as evidence. The exclusions file is deliberately NOT cleared: it records configs proven
+to diverge, and deleting it would discard knowledge that protects correctness.
+
+**The lesson, in one line.** Before believing a "zero miss", ask what the run would have done
+had the cache been empty — and if you cannot answer, empty it.
