@@ -25,13 +25,32 @@ validation_outputs/
 .DS_Store
 ._*
 .cache/
-# Claude Code project dir — local state stays ignored, but the versioned
-# subagent definitions (.claude/agents/) are part of the repo.
 # flight recorder state (machine-local power-loss resume records)
 .flightrec/
 
-.claude/*
-!.claude/agents/
+# ---------------------------------------------------------------------------
+# Assistant configuration — NEVER tracked, in any form (2026-09-22).
+# This repository is public. An assistant's configuration describes how this
+# machine is driven, not what the engine is, and it carries machine facts,
+# private paths and working habits that have no place in a public trunk.
+# The four .claude/agents/*.md files WERE tracked until 2026-09-22; they are
+# untracked here and stay on disk. Rewriting the history that still holds them
+# is a separate decision, the owner's.
+# ---------------------------------------------------------------------------
+.claude/
+**/.claude/
+.claude*/
+CLAUDE.md
+**/CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.local.md
+AGENTS.md
+**/AGENTS.md
+GEMINI.md
+**/GEMINI.md
+.cursorrules
+.mcp.json
+**/.mcp.json
 .env
 .gemini/
 .idea/
