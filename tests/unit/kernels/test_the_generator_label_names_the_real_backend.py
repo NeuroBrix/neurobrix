@@ -49,7 +49,9 @@ def test_the_running_label_names_the_triton_target_backend():
     if name == "cuda":
         assert gen.endswith("cuda") or " " not in gen.split("triton ")[-1].strip(), gen
     else:
-        assert gen.endswith(f" {name}"), (
+        # The name is PRESENT in the label; an out-of-tree backend appends its
+        # own source hash after it, so it is no longer terminal.
+        assert f" {name}" in gen, (
             f"the running label is {gen!r} but this Triton target is {name!r}. "
             f"A gate that refuses on this label will refuse every entry the "
             f"certifier stamped on this machine.")
@@ -57,18 +59,23 @@ def test_the_running_label_names_the_triton_target_backend():
 
 def test_the_running_label_round_trips_through_proof_backend():
     """Reader and writer must agree, which is the whole contract — and the
-    version they agree on is the DISTRIBUTION's, which carries the pin."""
+    version they agree on is the DISTRIBUTION's, which carries the pin. The
+    identity is now three parts (version, name, and an out-of-tree backend's
+    hash), so the round-trip is built from the door, not a hand-made {triton,
+    name} that would omit the hash and disagree with the reader."""
     name = _target_or_skip()
+    from neurobrix.kernels.autotune_certified import generator_identity
     import importlib.metadata as md
     try:
         ver = md.version("triton")
     except md.PackageNotFoundError:
         import triton
         ver = str(triton.__version__)
-    written = proof_backend({"backend": {"triton": ver, "name": name}})
+    written = proof_backend({"backend": generator_identity()})
     assert running_generator() == written, (
         f"running_generator() is {running_generator()!r} but a proof stamped on "
         f"this machine reads {written!r}")
+    assert ver in written, (ver, written)   # the pin-bearing version is shared
 
 
 def test_the_label_sees_a_pin_move_when_the_metadata_does():

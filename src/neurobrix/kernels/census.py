@@ -213,6 +213,31 @@ def shadow_run(*_a, **_k):
     return None
 
 
+def _shadow_item_value(dtype):
+    """The benign scalar a value-read (`.item()`) answers in shadow mode.
+
+    In a census shadow no VALUE means anything — a `.item()` is only ever a
+    guard or a token/size index. A guard's `all(isfinite(x))` (a bool tensor)
+    must read healthy, or a loop's step-boundary NaN gate refuses the shadow
+    (Sana at step 1, and PixArt/CogVideoX once Prism stopped mis-placing on the
+    host). An integer read answers ONE, not zero (main's rationale, 9ea81cd2):
+    a read that is a SIZE — a duration, a frame count, a length derived from
+    data — shaped an empty tensor at zero (Kokoro's index_select divided by
+    zero, Allegro's group norm met (0,…)), while a token id 1 runs the same
+    shapes as 0. Anything else answers 0.0.
+
+    Read the dtype by NAME. NBXDtype is an IntEnum, so `str(<NBXDtype.bool_: 9>)`
+    is "9", not "bool_": the previous `"bool" in str(dtype)` never matched, so
+    every diffusion shadow died at step 1 on a finite gate reading falsy, and
+    every integer read answered 0.0 (float) instead of an int. Same defect class
+    as the input-synth dtype read (ac10eddf). This is the fallback for a value
+    with no host-born `_shadow_host`."""
+    name = _dtype_name(dtype)
+    if "bool" in name:
+        return True                     # a guard's `all(isfinite(x))`: healthy
+    return 1 if "int" in name else 0.0
+
+
 def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     """The weights a component would load, as metadata-only tensors: the graph's param
     and buffer shapes, each in the dtype the loader would give it under the component's
@@ -360,18 +385,16 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
     T.from_numpy = staticmethod(_from_numpy_shadow)
 
     def _item(self):
+        # A host-born value answers with its REAL value; otherwise the benign
+        # read keyed on the dtype NAME via `_shadow_item_value` — NBXDtype is an
+        # IntEnum, so `str(self._dtype)` is a number and `"int"/"bool" in
+        # str(...)` never matched, leaving the fallback answering 0.0 for every
+        # dtype (the CogVideoX/Sana finite-gate and integer-read failures).
         h = _host_of(self)
         if h is not None and h.size == 1:
             v = h.reshape(-1)[0]
             return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
-        d = _dtype_name(self._dtype)
-        if "bool" in d:
-            return True                 # a guard's `all(isfinite(x))`: the shadow is healthy
-        # An integer read answers ONE, not zero: a read that is a SIZE (a duration, a frame
-        # count, a length derived from data) shaped an empty tensor at zero — Kokoro's
-        # index_select divided by zero, Allegro's group norm met (0, …), Wan 2.2's div met a
-        # negative extent (2026-09-21) — while a token id 1 runs the same shapes as 0.
-        return 1 if "int" in d else 0.0
+        return _shadow_item_value(self._dtype)
 
     def _numpy(self):
         import numpy as np

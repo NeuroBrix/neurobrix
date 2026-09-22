@@ -128,7 +128,13 @@ class InputSynthesizer:
             if hasattr(val, "nbx_dtype"):
                 idx = getattr(val, "_device_idx", None)
                 device = f"cuda:{idx}" if idx is not None else None
-                dtype = str(val.nbx_dtype).split(".")[-1]
+                # NBXDtype is an IntEnum: str(<NBXDtype.float16: 0>) is "0",
+                # so `.split(".")[-1]` yielded the VALUE, not the name, and
+                # `_np_dtype("0")` raised `data type '' not understood`. Read
+                # the enum's `.name` ("float16"). Surfaced by the Apple census
+                # shadow once Prism stopped mis-placing a component on the host
+                # (b23105fe); latent on any Triton run that synthesizes an input.
+                dtype = val.nbx_dtype.name
                 break
 
         # Fallback to plan/config if no tensors in inputs.

@@ -1072,7 +1072,17 @@ write the unit into `apple_m4_pro.yml` beside its numbers.
 
 ---
 
-## 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
+## 2026-09-21 — RESOLVED: the single-tile upscaler was a STALE LOCAL CONTAINER, not the engine
+
+**Superseded.** The Dell retraced real-esrgan-x2 on 09-20 (graph `74a2d7ea`, view::0 now
+`floordiv(s1,2)` — symbolic) and it is on the shared cache; my local copy was `626f2e07`,
+the old frozen graph, identical to the hub because the store stopped accepting writes.
+Refreshed from the shared cache → x2@448 → **896×896**. No engine bug, no Dell datum owed.
+The rule that stands: verification copies come from the shared cache (canonical), never the
+stale hub; and the Apple census now reads graphs from the shared cache, tagging each model's
+keys with its graph_sha so a later retrace invalidates exactly its own keys.
+
+### (historical, now moot) 2026-09-21 — CORRECTED: the single-tile upscaler output is MINE (Apple), not the rack side
 
 My earlier entry here handed the reshape-rung fold breakage to the rack side. **That was
 wrong, and the correction is the owner's, checked:** the Dell ran `real-esrgan-x2` at 448 in
@@ -1082,6 +1092,35 @@ is Apple-specific. The merge's engine-side files are the launcher, the Metal bac
 driver, the certifier, the tensor library, and the Triton sequence — the cause is in one of
 those, on my side. A bisect landing on a merge assigns no parent side without testing each;
 the Dell tested them and they are green, which is the datum I owed and did not produce.
+
+**ROOT CAUSE, precisely characterized on Apple (2026-09-21):** real-esrgan-x2 is a
+PIXEL-UNSHUFFLE upscaler. `aten.view::0` targets `[s0, 3, 32, 2, 32, 2]` (32 = trace_H/2)
+and `aten._unsafe_view::0` targets `[s0, 12, 32, 32]` — the spatial dims enter as H/2, W/2
+at the pixel-unshuffle positions, NOT as H, W. The census confirms s1/s2 (height/width) are
+`never_carried`, first broken here. The spatial-promotion pass
+(`triton/promotion._spatial_promotion_pass`) matches H/W at shape positions [-1]/[-2]
+against the TRACE H/W (64); the pixel-unshuffle `32` (=64/2) matches neither, so it is left
+frozen (MEASURED: view::0 args byte-identical before and after the pass). With the spatial
+frozen at 32, the batch symbol `s0` (trace 1) inflates to 49 to absorb the runtime
+448×448 → the graph runs `[49,3,64,64] → [49,3,128,128]`, and `output_dispatch.final_as_array`
+takes `np.take(arr, 0, axis=batch_axis)` — batch index 0 — yielding the single 128px tile.
+
+**The unresolved contradiction (needs the Dell):** the hub x2 and my cached x2 graphs are
+BYTE-IDENTICAL (same frozen view::0), the promotion pass is shared across all modes and
+platforms, and it PROVABLY leaves the 32 frozen on Apple. Yet the Dell reports 896×896 on
+CUDA in both modes "with the 49 tiles accumulated." So on CUDA the identical frozen graph
+either (a) has `s0` resolved to 1 with the spatial promoted to 224 — which the shared pass
+does NOT do here — or (b) reassembles the 49-batch `[49,3,128,128] → [1,3,896,896]` in an
+engine step I could not locate in the flow, output_dispatch, or the graph. I need the Dell's
+answer to ONE question: on CUDA, what is `GraphExecutor.run`'s OUTPUT shape for
+`real-esrgan-x2 @448` — `[1,3,896,896]` or `[49,3,128,128]`? That single datum says whether
+the divergence is at symbol resolution (before the graph) or at reassembly (after it).
+
+**The clean resolution regardless: RETRACE.** The census (now working on Apple) marks x2 —
+and every pixel-unshuffle upscaler — for retrace: a symbolic-spatial retrace removes the
+frozen 32 and the batch inflation entirely, and the family verifies natively at any size on
+both platforms. That is the doctrine's own prescription for a frozen container, and it does
+not wait on the engine-side contradiction above.
 
 **What stands as the symptom:** `real-esrgan-x2 --input-image apple_448.png` (traced
 `[1,3,64,64] -> [1,3,128,128]`) emits 128×128 on Apple — one tile, upscaled (pixel-matched:
@@ -1188,6 +1227,50 @@ Every mode reproduces the vendor's unfused forward byte for byte. Landed on main
 taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
 granite content. The Mac's matcher is now the only granite fusion in the tree.
 
+## 2026-09-21 — OWED TO THE DELL (vacuous-gates register): a new entry to number, and a stale count to fix
+
+Two register bookkeeping items the Dell owns, because numbers are assigned on main only.
+
+**1. A new vacuous-gate entry to number and append** (text below, ready for `### <n> — …`).
+The fix is committed on `metal-first-light` as `793ac348`; it belongs in the register as the
+sibling of the `__version__` and `BACKEND_NAME` entries.
+
+> ### <n> — a certified setting served to an out-of-tree backend that had moved, its version in neither half of the identity
+>
+> **Where.** `src/neurobrix/kernels/autotune_certified.py::generator_identity`, 2026-09-21,
+> this Mac, `metal-first-light`.
+>
+> **What it did.** The generator identity stamped `{triton distribution version, backend name}`.
+> On Metal the code that actually runs is generated by triton-ext's OUT-OF-TREE backend (target
+> `mps`), whose version is in neither half: the distribution version tracks the in-tree compiler,
+> and the out-of-tree backend's own distribution metadata is a static `0.1.0`. So moving
+> triton-ext (5439436 → b9d5c06) would change the compiled kernels while the identity stayed put,
+> and the gate would serve every certified entry to a generator that had moved. Measured: the
+> backend hash moves `msl-v0.1-99803d274e80` → `msl-v0.1-a76b1bff3a60` across that build; the old
+> identity did not. Just below it, `name` defaulted to `"cuda"` behind a bare `except` — the exact
+> shape of the BACKEND_NAME defect that once refused all 945 Apple entries.
+>
+> **What would it have done if the code were wrong?** Served — the whole certified directory to a
+> compiler that had moved, silently, exactly as the `__version__` half did before its fix.
+>
+> **The fix.** Add the out-of-tree backend's source hash to the identity through the one door for
+> writer and gate — triton's own `backend.hash()` (its kernel-cache-key hash), resolved by triton's
+> own `make_backend(target)` so nothing hardcodes the mps/apple mapping. In-tree (cuda/amd) carry
+> no hash, so the rack's labels are unchanged. Remove the silent `"cuda"` default: an unreadable
+> target RAISES (ZERO FALLBACK); `running_generator` turns that into None (serve, don't refuse on
+> an unanswerable question), the writer fails rather than mis-certify. Red then green:
+> `tests/unit/kernels/test_a_proof_names_its_code_generator.py` (+4 cells),
+> `test_the_generator_label_names_the_real_backend.py` (2 cells updated to the three-part contract).
+>
+> **The lesson, in one line.** A generator's identity must name the code that actually runs; an
+> out-of-tree backend whose version rides in neither the distribution nor a static wheel number is
+> a generator the gate cannot see move.
+
+**2. A stale count to fix.** `docs/reference/vacuous-gates-register.md` states "77 entries" but
+holds 81 (`_entry_numbers` counts the ranges); `test_the_stated_count_matches_the_entries_present`
+fails on main today. The count was not updated when entries 78–81 landed. Fixing the count (and
+numbering the entry above) are main-side, so the Dell's — flagged here rather than edited from a
+branch 36 commits behind main, to honour the register's own rule that a number never moves.
 ## 2026-09-21 — a plan is budgeted at the request the flow executes (Wan2.1-T2V-1.3B, CUDA)
 
 The estimator-against-ATen gap the owner named (11.6 GiB asked, 24.1 GiB held, 19.7 GB planned)

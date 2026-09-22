@@ -39,6 +39,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize("source_np,source_dtype,target_dtype", [
     (np.float32, NBXDtype.float32, NBXDtype.float16),   # Kokoro-82M's decoder
+    (np.float32, NBXDtype.float32, NBXDtype.bfloat16),  # PixArt / CogVideoX T5
     (np.float16, NBXDtype.float16, NBXDtype.float32),   # the widening direction
     (np.float32, NBXDtype.float32, NBXDtype.float32),   # no conversion at all
     (np.int32, NBXDtype.int32, NBXDtype.int64),
@@ -65,6 +66,23 @@ def test_the_values_survive_the_conversion():
                 __import__("ctypes").POINTER(__import__("ctypes").c_uint16)),
             shape=(256,))).tobytes(), dtype=np.float16)
     np.testing.assert_allclose(got.astype(np.float32), values, rtol=1e-3)
+
+
+def test_fp32_to_bf16_takes_the_top_16_bits():
+    """An fp32 encoder (PixArt / CogVideoX T5) staged to a bf16 compute target
+    must truncate to the top 16 bits — the SAME transform the GPU arena loader
+    uses — not reach the copy 4 bytes wide and overflow the 2-byte buffer."""
+    values = np.array([1.0, 2.0, -1.0, 0.5, 12345.0], dtype=np.float32)
+    staged = _load_to_pinned_cpu(values.tobytes(), (values.size,),
+                                 NBXDtype.float32, NBXDtype.bfloat16)
+    from neurobrix.kernels.nbx_tensor import dtype_size
+    assert staged.nbytes() == values.size * dtype_size(NBXDtype.bfloat16)
+    import ctypes
+    got = np.ctypeslib.as_array(
+        ctypes.cast(staged.data_ptr(), ctypes.POINTER(ctypes.c_uint16)),
+        shape=(values.size,)).copy()
+    want = (values.view(np.uint32) >> 16).astype(np.uint16)
+    np.testing.assert_array_equal(got, want)
 
 
 def test_bf16_to_fp16_still_takes_its_bit_exact_path():
