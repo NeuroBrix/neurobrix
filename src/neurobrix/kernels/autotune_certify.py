@@ -906,11 +906,14 @@ def _backend() -> Dict[str, Any]:
     """The proof's generator stamp — C.generator_identity(), the ONE DOOR the
     gate reads back. Writing a different spelling here is how ec938641's gate
     refused all 945 Apple entries once, and how a pin move stayed invisible to
-    it once more; both are documented on the door itself."""
-    try:
-        return dict(C.generator_identity())
-    except Exception:
-        return {"name": "?"}
+    it once more; both are documented on the door itself.
+
+    ZERO FALLBACK: when the door cannot identify the generator it RAISES, and
+    that must propagate — a certification stamped `{"name": "?"}` (the old
+    silent fallback) mis-certifies under an unknown generator, exactly the
+    mis-spelling this docstring warns against. A run that cannot say which
+    compiler it is has no business writing a proof."""
+    return dict(C.generator_identity())
 
 
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None) -> Dict[str, Any]:

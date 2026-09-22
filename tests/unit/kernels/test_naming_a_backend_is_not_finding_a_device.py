@@ -81,6 +81,27 @@ def _backend_has_a_visibility_mask() -> bool:
         return False
 
 
+def test_under_census_metal_is_nameable_though_the_device_is_unreachable(monkeypatch):
+    """The census MAKES the Metal analogue of the CUDA asymmetry above.
+
+    With NBX_CENSUS=1 the Metal device is deliberately unreachable (`runtime()`
+    refuses — key formation needs no device), but the backend must still be
+    NAMEABLE, the exact analogue of `libcudart` loading with no visible device.
+    Answering False here made every op that resolves the backend fail with
+    "No GPU runtime found" on Apple — `aten::embedding` first, so CogVideoX /
+    Kokoro / orpheus / openaudio would not census — though the same census
+    completes on CUDA (the Dell's 9ea81cd2 covers the rack, not Apple). Both
+    answers are census-gated, so this holds on any machine."""
+    from neurobrix.kernels import metal_device
+
+    monkeypatch.setenv("NBX_CENSUS", "1")
+    # naming: the backend is nameable, so the resolver can pick metal
+    assert metal_device.metal_device_available() is True
+    # finding: the device itself stays unreachable
+    with pytest.raises(RuntimeError, match="unreachable"):
+        metal_device.runtime()
+
+
 def test_naming_a_backend_survives_what_finding_a_device_does_not():
     """The door that makes the two answers separable: no device visible, runtime still loadable."""
     if not _backend_has_a_visibility_mask():

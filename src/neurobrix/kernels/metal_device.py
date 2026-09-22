@@ -1060,7 +1060,26 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def runtime() -> MetalRuntime:
-    """The process-wide Metal runtime. Raises if Metal is unusable."""
+    """The process-wide Metal runtime. Raises if Metal is unusable.
+
+    Under NBX_CENSUS=1 the Metal device is deliberately UNREACHABLE — the
+    honest analogue of the census's `CUDA_VISIBLE_DEVICES=` on a discrete
+    card. The census forms the keys the launcher WOULD form for a profile
+    (shapes, dtypes, block sizes, all data), and must touch no device; a
+    path that reaches for the real Metal device inside a shadow is one the
+    census does not cover, and it fails LOUDLY here rather than succeeding in
+    silence on the one card an Apple host always has. `device_count()` reads
+    0 through this (its own except path), so the census gate passes; the
+    backend NAME still resolves via NBX_GPU_BACKEND=metal, which needs no
+    device (`_pin_triton_backend`).
+    """
+    import os as _os_c
+    if _os_c.environ.get("NBX_CENSUS") == "1":
+        raise RuntimeError(
+            "census shadow: the Metal device is deliberately unreachable "
+            "(NBX_CENSUS=1). Key formation is pure data and needs no device; "
+            "a path that opened the Metal runtime here is uncovered by the "
+            "census and must be made pure.")
     global _RUNTIME
     if _RUNTIME is None:
         with _RUNTIME_LOCK:
@@ -1075,7 +1094,21 @@ def metal_device_available() -> bool:
     A probe, so it answers False instead of raising — but it opens the real
     device rather than checking for the import, because a machine with the
     bindings and no usable GPU must not be reported as ready.
+
+    Under NBX_CENSUS the device is deliberately UNREACHABLE (`runtime()`
+    refuses), but the backend must still be NAMEABLE — the exact analogue of a
+    CUDA rack where `libcudart` loads and names the backend though
+    `CUDA_VISIBLE_DEVICES=` leaves no device visible. The backend resolver
+    (`nbx_tensor` `_resolve_backend`) calls this to decide whether to name
+    metal; answering False under census made every op that resolves the
+    backend — `aten::embedding` first — fail with "No GPU runtime found",
+    though the same census completes on CUDA (the Dell's 9ea81cd2 covers the
+    rack, not Apple). So answer True here (naming) while `runtime()` stays
+    unreachable (opening): keys are pure data and need no open device.
     """
+    import os as _os_a
+    if _os_a.environ.get("NBX_CENSUS") == "1":
+        return True
     try:
         runtime()
         return True

@@ -62,7 +62,12 @@ sys.path.insert(0, str(REPO / "src"))
 import precision_zoo_campaign as _zoo                       # noqa: E402  (request_args, CACHE)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
-CACHE = _zoo.CACHE
+# Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
+# redirected graph-only cache — the whole hub catalogue, extracted without
+# weights — not only what sits in the default ~/.neurobrix/cache. _zoo.CACHE
+# is hardcoded to the default and does not see the env.
+from neurobrix.core.paths import cache_dir as _cache_dir
+CACHE = _cache_dir()
 FORMAT = "nbx-census/1"
 #: The engine modes that hand keys to the Triton launcher — the served modes a census covers.
 #: The ATen modes (compiled, sequential) launch no NeuroBrix kernel and form no key.
@@ -159,6 +164,19 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
             "command": " ".join(cmd[2:])}
 
 
+def _graph_sha(model: str) -> str:
+    """A stable hash over every component graph.json of this model, so a
+    retrace (which changes a graph) invalidates exactly the keys harvested
+    from it. Recorded per model in the census; a certifier or a later census
+    diff can drop keys whose source graph_sha no longer matches the cache."""
+    import hashlib
+    h = hashlib.sha256()
+    for gp in sorted((CACHE / model / "components").glob("*/graph.json")):
+        h.update(gp.name.encode())
+        h.update(gp.read_bytes())
+    return h.hexdigest()[:16]
+
+
 def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
     """The family's request large enough to TILE (its YAML `census.tiling_probe`, Hocine's tiling
     standard, 2026-09-21): an upscaler's input image resized to `image_px` a side, an image or
@@ -189,7 +207,8 @@ def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
                  log_dir: Path, rungs: list = (), walk_extents: bool = False) -> dict:
     fam = _family(model)
-    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": []}
+    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [],
+           "graph_sha": _graph_sha(model)}
     frozen = frozen_dims(model)
     if any("unreadable" in r for r in frozen):
         row.update(status="unreadable", frozen=frozen)
