@@ -3257,3 +3257,58 @@ which the batched runner now prints rather than hiding. No bf16 padded depthwise
 be written into the served directory while this stands, and **the Apple chantier cannot be
 called closed with this open** — a certified directory that serves a wrong kernel is worse
 than an empty one.
+
+### CORRECTION, same day — "with nothing raised" was WRONG
+
+I wrote above that the engine "returns wrong values with nothing raised". That is false and I
+withdraw it. Measured with autotune ENABLED, which is how the engine actually runs:
+
+| dtype | pad | Metal | CUDA (the rack) |
+|---|---|---|---|
+| fp32 | 0 / 1 | 1.583e-07 | 1.255e-07 / 1.151e-07 |
+| fp16 | 0 / 1 | 3.812e-04 | 5.804e-04 |
+| bf16 | 0 | 3.17e-03 | 5.252e-03 |
+| bf16 | 1 | **ENGINE REFUSED AT RUNTIME** | 5.252e-03 |
+
+The runtime consensus screen catches it and refuses:
+
+```
+NeuroBrix autotune screen: depthwise_conv2d_kernel at key (('fp16','False'), ('kh','3'),
+('kw','3'), ('pad_h','1'), ('pad_w','1'), ...) — the fp64 oracle contradicts EVERY candidate
+(7 of 7). A consensus would have returned the whole space and said nothing. Refusing to seat
+any of them.
+```
+
+**So this is a door working, not a silent corruption.** The 0.754 figure I reported came from a
+diagnostic run with `NBX_DISABLE_AUTOTUNE=1`, which pins one config and BYPASSES the screen.
+That was the right instrument for locating the defect and the wrong one for judging its
+severity, and I reported the severity from it without saying so.
+
+The accurate statement: the Metal depthwise kernel computes wrong values for bf16 with
+padding, and **two independent doors** stop them reaching a caller — the runtime screen
+refuses to seat a config, and certification refuses to write an entry. A silent wrong answer
+would require a certified entry for this class to exist, which is exactly what the 28
+refusals prevent. The correct severity is **unusable and loud**, not **wrong and quiet**.
+
+What does not change: the kernel is wrong, it is Metal-specific, and the class stays
+uncertifiable until it is fixed.
+
+### The rack's answer, and its caveat resolved
+
+CUDA is CLEAN: bf16 pad0 and pad1 identical to four significant figures (5.252e-03, the bf16
+mantissa floor for a 9-tap accumulation). Triton 3.8.0 upstream, torch 2.14.0+cu126, V100
+sm_70. Their reference is a nested-loop float64 correlation written from the definition, so it
+shares no code with the thing under test.
+
+Their caveat — that their six cells SWEPT while mine might have used a CERTIFIED config, making
+the comparison unlike — is resolved and it was a fair challenge:
+
+- **No certified stride-1 padded depthwise entry exists on apple/apple_m4_pro.** There are 5
+  certified padded entries, all stride != 1. There cannot be a stride-1 one: all 28 were
+  refused. So both sides swept.
+- The table above is now the rack's exact method on Metal, autotune enabled, pin removed.
+- Independent of either: the CERTIFIER excluded all SEVEN configs on all 28 keys, and the
+  runtime screen contradicts all 7 of 7. This was never a one-config result.
+
+That places the difference below the kernel, in the Metal backend's lowering of the masked
+load — the same source is exact to the mantissa on CUDA.
