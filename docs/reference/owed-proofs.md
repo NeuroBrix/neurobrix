@@ -1610,6 +1610,453 @@ twice before naming a culprit, and the pointer is now part of every worktree her
 outcome (a refusal becoming a streaming strategy, since the engine never refuses for memory)
 is the Mac's to prove. Records: `nbx/campaigns/2026_09_21_mac_proofs/`.
 
+## 2026-09-22 00:50 — the certifier that held 155 GB, and the shadow that walked every token: for the Mac
+
+Four measurements the owner took on this rack at 23:32 named two host burns that made the
+cards idle while certification work existed. Both are fixed at the source and both have the
+same shape on Metal, so the Mac should read this before its own rounds.
+
+**A fp64 oracle computed WHOLE on the host.** `autotune_certify` proved a matmul key by
+building the reference product in float64 with numpy, at the key's full shape. The 32 GB
+matrix round reached `44 544 x 3 072 x 8 192` and the process held **155.5 GB of resident
+host memory** (read at 23:32:41 on pid 4023027) while its card sat at 0 %; the rack's 251 GB
+and its 7 GB of swap were both full, load 74.3 on 80 cores. The oracle is now WINDOWED by
+rows above a cap of 2e9 multiply-accumulates (`ORACLE_MAX_MACS`): the first, middle and last
+row windows of the product are computed and compared, the batched bias windowed with them
+(`RowWindowedOracle`, `_row_windows`, `_matmul_oracle_fn`, commit `ec86f575`). A windowed
+oracle proves the same thing a whole one does for a GEMM — every output row is the same
+inner product over K, so a wrong BLOCK_K or a wrong accumulation order shows in any row —
+and the deviation it reports is measured on real rows, not sampled values.
+
+**A BLAS pool spinning behind a shadow.** One chatterbox census shadow ran at **4 235 % CPU**
+(64 threads at ~24 % each) and another at 2 843 % with 16.3 GB resident: the shadow's own
+host arithmetic is small, but OpenBLAS opened a pool per process and the pool spun. With
+`OPENBLAS/OMP/MKL/NUMEXPR_NUM_THREADS=1` the same shadow runs at 93–99 % CPU on one thread
+and records the same keys; every shadow the census launches is single-threaded now
+(`tools/certified_census.py::shadow`, commit `ec86f575`). The census must never starve
+certification, and 24 shadows at 64 threads is how it did.
+
+**A shadow that walked every token.** The census walked a decode one position at a time:
+chatterbox's 2 048 speech tokens cost **541.7 s** for the keys of about 110 distinct lengths.
+Under the bucketed keys a decode's shapes change only at the bucket tops of the context or
+cache length, so the shadow now skips to each top and the sampled token stands for the
+positions between (`census.pace`, the three triton flows, `kv_cache.skip_positions`, commit
+`2e0852d8`): **37.9 s, the same decode keys**. TinyLlama: 20 s to 10 s, its 6 keys unchanged
+(all under 64, where the ladder is exact). A live run never skips — `pace` answers 0 outside
+the shadow, and a cell pins that.
+
+**An extent a shadow cannot learn.** What the vocoder receives is the number of speech tokens
+that survived a filter on the tokens SAMPLED, and a shadow has no values: two runs of
+chatterbox gave 1 716 and 1 856 tokens and therefore two complete sets of convolution keys.
+A census taken from one run certifies one speech length. `census.walk_extent(lo, hi, run)`
+runs such a stage at every KEY CLASS of the extent — the ends, then the midpoint of any pair
+whose recorded key sets differ, until the pair is adjacent; every kernel's key is a monotone
+step function of the extent, so a pair with one key set brackets a range with that key set.
+Synthetic proof on this profile's own ladders: every class met, none missed, in under four
+runs per class. The door is `NBX_CENSUS_EXTENTS=1`; a walk refused at every extent RAISES
+rather than reading as censused (commit `11045c4d`).
+
+**A key whose extent is zero.** Walking that extent to its bottom recorded convolution keys
+with `in_width` 0 — a four-token speech through a vocoder. No tensor has a side of zero, no
+certifier can synthesise one, and no request forms the launch; the served directory already
+carries one (`conv2d_forward_kernel.fp32`, a key whose `batch_dim` is 0), so a census recorded
+them before anyone read one. Refused now where a negative extent already was, on the key
+positions that are extents or divisors and not on a padding, which may legitimately be zero
+(`autotune_certified.EXTENT_POSITIONS`, `degenerate_extent`, commit `69df7418`; seen failing
+on two injections). **The Mac should check its own directory for the same entries.**
+
+**Open, and NOT landed: the width of a one-row convolution.** A convolution whose spatial
+extent is one row is a 1-D convolution over a sequence — a vocoder's samples, a mel
+spectrogram's frames — and that extent is the request's, bounded by nothing: the served
+directory holds **483 one-row entries at 201 distinct widths up to 210 998** (conv2d fp16,
+of 798 entries) and one chatterbox run reaches 444 721. So the doctrine's second reason for
+exact convolution keys — that their extents are bounded by resolutions and tile edges — is
+false for this class, while its first reason (a ladder lost 37–40 % where the conv optimum
+flips) was measured in the 2-D regime and says nothing about H = 1 with W huge, where the
+grid is `cdiv(N*W, BLOCK)` and the optimum is EXPECTED to be flat in W. An expectation is not
+a measurement, so the change sits on the branch `one-row-conv-width-bucket` (17f58975, both
+remotes) until `tools/bucket_loss.py --kernel conv2d --dim W` has run on a free card of each
+memory class. The decision matters beyond this rack: it sets the certification budget for the
+whole audio family. One chatterbox vocoder walked over its speech length demands **5 058
+keys** — 2 889 convolution, 1 818 baddbmm, 329 matmul — of which 125 of 145 distinct one-row
+widths fall below 8 192, where the ladder is fine. The Mac's profile needs the same
+measurement before it certifies any audio model.
+
+## 2026-09-22 02:40 — the one-row convolution width: the measurement, on both classes; and where a shadow's coverage ends (an answer for the Mac)
+
+**The measurement the branch waited for.** `tools/bucket_loss.py --kernel conv2d --dim W`
+(the tool now takes `kh`/`kw`, so a 1-D convolution can be swept at all), directory OFF,
+private replay cache, alone on its card, fp16, kernel (1,3), padding (0,1), batch 1:
+
+| class | C_in=C_out | sizes | ladder | buckets | median loss | max loss |
+|---|---|---|---|---|---|---|
+| 16 GB (card 1) | 128 | 26, 1 024..524 288 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
+| 32 GB (card 2) | 128 | the same 26 | Lmix / Wq / Woct | 25 / 22 / 14 | 0.0 % | 0.0 % |
+| 16 GB (card 1) | 512 | 19, 8 193..524 288 | Woct | 6 | 0.0 % | 0.0 % |
+| 32 GB (card 2) | 512 | the same 19 | Woct | 6 | 0.0 % | 0.0 % |
+
+All four sweeps agree. The 512-channel pair is the strongest of them: its six octave buckets
+each hold three or four measured widths, every one of them served by the configuration proven
+at the bucket's top, and none loses anything.
+
+The sizes include the widths a chatterbox run actually makes (3 206, 27 408, 137 040,
+210 998, 411 121, 444 721). The buckets that carry the evidence are those holding two to
+four measured widths, each represented by its own TOP — the configuration proven at the top
+is optimal at every width the bucket serves, including one just above the bucket's floor
+(411 121 served by 524 288's). The stress case is the SMALL widths, not the large: at
+W = 1 024 with 128 channels the grid is sixteen blocks on eighty multiprocessors, where
+occupancy is most sensitive to the width, and it costs nothing there either.
+
+**Landed on main (803ab6cc)**: `conv2d_forward_kernel` and `depthwise_conv2d_kernel` key
+`in_width_key`/`out_width_key`; for a convolution whose spatial extent is ONE ROW these are
+the input width's bucket top on the profile's `autotune.buckets.W` rows and the output width
+the convolution's own arithmetic gives from that top, so a certifier synthesising at the top
+forms the very key the census recorded. Two-dimensional convolutions keep their exact
+extents and every 2-D entry keeps serving, because the key positions did not move. The
+directory's 483 one-row entries (of 798, conv2d fp16, at 201 distinct widths) are unserved
+and re-certified at their tops. Effect on the census: chatterbox censuses **333 keys** where
+walking its speech length unbucketed demanded **5 058**. **The Mac needs this measurement on
+its own profile before it certifies any audio model**, and the ladder is data
+(`config/vendors/nvidia/volta.yml`, `autotune.buckets.W`), so an Apple profile writes its own
+rows rather than inheriting these.
+
+**The certifier's real cost, measured and fixed.** Not the oracle and not the bench: three
+py-spy samples of a conv round all landed in `host_values → numpy → to_cpu → memcpy`. A
+windowed oracle refuses to compute the whole reference but was handed the whole RESULT,
+because the windows were cut AFTER the crossing. Now cut on the device
+(`WindowedOracle.device_slices`, `RowWindowedOracle.device_slices`, `deviation_against`,
+12b4d271). Measured on this rack's own proofs, same card, same census:
+
+| round | oracle windows cut | n proofs | `runs` median | `bench` median | `oracle` median |
+|---|---|---|---|---|---|
+| four | after the crossing | 452 | 6.4 s | 2.2 s | 2.4 s |
+| five | on the device | 84 | **1.2 s** | 1.0 s | 2.3 s |
+
+`runs` was the dominant phase and it fell 5.3×. The key populations differ between the two
+rounds, so this is the phase cost, not a controlled end-to-end A/B.
+
+**Where a shadow's coverage ends — the `aten::embedding` gap the Mac characterised.** The
+census shadow replaces two surfaces and nothing else: the `DeviceAllocator` (allocation, the
+whole driver surface — syncs, streams, events, peer access, pinned host memory, device
+queries) and the kernel launcher, plus, since 2026-09-21, the device utilities rebound in
+every loaded module, a pointer-keyed table for host-born values, and the samplers. A path
+that resolves a **runtime** rather than allocating or launching is NOT covered, and that is
+the class both machines have hit: orpheus asked the driver directly here ("No CUDA GPUs are
+available") and Metal's embedding asks for a GPU runtime there. On CUDA `aten::embedding`
+goes through the covered seams, which is why it censuses here and not there — the difference
+is the backend's dispatch, not the model. The structural answer is to shadow the RUNTIME
+RESOLUTION itself rather than each caller, so a backend that resolves a runtime gets a shadow
+one; I cannot write or test that on Metal, and it is the Mac's own seam to place. What this
+rack can promise is that the door stays `CUDA_VISIBLE_DEVICES=`, so any path we have not
+covered fails LOUDLY rather than reaching a card.
+
+## 2026-09-22 04:05 — the ladder's open tail is too fine for a request-scale dimension (owed: the measurement)
+
+Walking chatterbox's vocoder across its speech length with the one-row convolution width
+already bucketed still demands **5 748 keys** — 3 072 convolution, 2 110 baddbmm, 566 matmul —
+and the reason is no longer the convolutions. The vocoder's batched GEMM keys on the WAVEFORM:
+`baddbmm M_BUCKET=1 104 384 N_BUCKET=1 K_BUCKET=9`, then `1 105 920`, then `1 107 456` — the
+profile's default ladder is open above 8 192 with a step of **512**, so a dimension that
+reaches **1 963 520** is cut into roughly four thousand buckets. Measured over the walk:
+**1 522 distinct M values, 1 400 of them above 8 192**, for ONE model.
+
+The doctrine's ladder was decided by measurement — exact under 64, 16 to 256, 32 to 1 024,
+128 to 8 192, 512 beyond, 0.0 % loss on both V100 classes — but that sweep ran to about
+4 096. Nothing has ever measured the 512-step tail at 10^5 or 10^6, where a GEMM's grid is
+saturated many times over and the configuration is expected to stop depending on M, exactly
+as the one-row convolution's did in W. Expected is not measured, so this is written as OWED,
+not decided:
+
+* sweep `bucket_loss.py --kernel bmm --dim M --fixed B=1,N=1,K=9` (the vocoder's own shape)
+  and a second, fuller shape, over 8 192..2 000 000, on a free card of each memory class;
+* evaluate the existing `Wq` and `Woct` tails against the 512-step one;
+* if the tail is free, the ladder's open row becomes a coarse tail and every request-scale
+  dimension — a waveform, a mel, a long context — collapses with it.
+
+Until then the catalogue census is taken WITHOUT `--walk-extents`, so it carries the M values
+of one speech length rather than four thousand, and the certification budget stays bounded.
+**The Mac will meet the same tail**: its audio models key the same waveform dimension, and the
+ladder is data (`autotune.buckets`), so its profile can carry its own tail once measured.
+
+## 2026-09-22 04:12 — `metal-first-light` is on main (cc71b3d2, both remotes): the CUDA proofs
+
+All 25 commits merged; `main...origin/metal-first-light` now counts 0 on the branch side.
+The proof is a comparison, not an assertion: the SAME worktree was run at main and at the
+merge, both behind the census door, and the difference accounted for line by line.
+
+| | failing cells |
+|---|---|
+| main (db437f1e) | 28 |
+| the merge | 46 |
+
+Of the 18 new, **17 are cells that reach `generator_identity` directly and now need a driver**
+— with a device visible, 28 of the 29 affected cells pass. That is the deliberate half of your
+change: `generator_identity` RAISES where main silently defaulted to `"cuda"`, the default
+that once labelled every Apple run as this rack's generator and refused all 945 Apple entries.
+It is kept exactly as you wrote it.
+
+**One was a real defect, and it is fixed**: `test_no_other_module_reaches_the_device_runtime_directly`
+greps for `libcudart` with comments stripped, and the new docstring in `metal_device.py`
+describing this CUDA rack tripped it. The gate now skips docstrings — ONLY docstrings, never
+every string literal, because the name it hunts appears as a literal in the load it hunts
+(`CDLL("libcudart.so")`) and skipping all strings would blind it. Seen failing on an injected
+real load, green with it removed.
+
+**One more, at the seam you added**: `_out_of_tree_backend_hash` let the launcher's driver
+error escape, where the gate's own rule is that an unanswerable question refuses nothing. On a
+machine with no device the question "which out-of-tree backend will generate the code" has no
+answer; it now answers None and SAYS so once rather than swallowing it.
+
+**The conflict, and how it was resolved**: `census.py`'s shadow value-read. Your extracted
+`_shadow_item_value` had already taken this rack's integer-answers-ONE rationale, so the two
+sides agreed on semantics and differed only in shape — your extracted form is kept, reading
+the dtype through the single `_dtype_name`. main had already taken your dtype-by-name fix on
+its own (db437f1e), after measuring that on this rack's Python 3.10 the old `str()` form
+matched correctly and on 3.11 it would not: the defect is real and is yours, it simply cannot
+be reproduced here.
+
+**Engine proof**: a one-model census on main after the merge records the same six TinyLlama
+keys and the same six served entries as before it.
+
+## 2026-09-22 04:45 — the ladder's tail, measured three times: what the first two sweeps could not see
+
+The tail is settled and the road to it is worth writing down, because two of the three sweeps
+read 0.0 % on a ladder that in fact cost 5.2 %.
+
+**Why the first sweeps could not see it.** `bucket_loss --evaluate` serves each size the
+configuration proven at its bucket's representative — and the representative is the largest
+MEASURED size in that bucket. If the sizes are spread so that each lands in a bucket of its
+own, every size is its own representative and the loss is 0.0 % by construction, whatever the
+ladder. The first two sweeps were spread that way. **A ladder is only evaluated by sizes that
+SHARE its buckets, with the bucket's top among them**, and the arrangement is part of the
+measurement, not its decor.
+
+**The three sweeps** (matmul/bmm, `NBX_AUTOTUNE_CERTIFIED=off`, private replay cache, alone
+on card 1, 16 GB class):
+
+| shape | arrangement | ladder | median | max |
+|---|---|---|---|---|
+| bmm B=1 N=1 K=9, 26 sizes 8 192..2 097 152 | one size a bucket | octave | 0.0 % | 0.0 % |
+| matmul N=K=512, 19 sizes to 524 288 | one size a bucket | octave | 0.0 % | 0.2 % |
+| matmul N=360 K=180, 19 sizes to 4 194 304 | 2 a bucket | octave | 0.0 % | 2.9 % |
+| matmul N=360 K=180, 27 sizes | **3 a bucket, top included** | quarter-octave AS SHIPPED | 0.0 % | **5.2 %** |
+| matmul N=360 K=180, 24 sizes | **3 a bucket, top included** | the REFINED rows | 0.0 % | **1.6 %** |
+
+The 5.2 % sat at the 10 240 bucket and the reason is arithmetic, not hardware: a quarter of an
+OCTAVE at 10 240 is a quarter of the VALUE, so a request of 8 500 was handed a configuration
+proven at 10 240. Beyond 65 536 the same sweep reads 0.0 % median and at most 0.6 %.
+
+**What ships** (`config/vendors/nvidia/volta.yml`, `autotune.buckets.default`): 128 to 8 192
+unchanged, then 512 to 16 384, 1 024 to 32 768, 2 048 to 65 536 — at most 3.1 % of each
+bucket's top — then quarter-octave to 2 097 152 and a 524 288 open row, which is 0.7 % wide at
+the catalogue's largest M (mochi's 77 414 400). A request of 8 500 now meets 8 704. Against
+the 512-step tail it replaced: chatterbox's 1 400 buckets above 8 192 become of the order of
+a hundred.
+
+**The convolution-width ladder (`autotune.buckets.W`) is untouched** — its own sweeps measured
+0.0 % median AND max in the same region, on both memory classes and two channel counts, with
+up to four measured widths a bucket.
+
+**Owed**: the same three-a-bucket arrangement on the 32 GB class (both its cards are
+certifying and the sweep wants one alone). **For the Mac**: the ladder is data, so an Apple
+profile writes its own rows — but the ARRANGEMENT lesson is not hardware-specific, and any
+sweep of yours that reads 0.0 % with one size a bucket has measured nothing.
+
+## 2026-09-22 04:55 — the tail's measurement is complete: both classes, both bucketed dimensions
+
+The 32 GB half that the earlier entry owed, taken the same way (three sizes inside each
+shipped bucket with its TOP among them, `NBX_AUTOTUNE_CERTIFIED=off`, private replay cache,
+alone on card 3):
+
+| class | dimension | shape | buckets | median loss | max loss |
+|---|---|---|---|---|---|
+| 16 GB | matmul M | N=360, K=180 | 8 | 0.0 % | 1.6 % |
+| 16 GB | baddbmm K | B=1, M=1, N=64 | 6 | 0.0 % | 0.0 % |
+| 32 GB | matmul M | N=360, K=180 | 8 | 0.0 % | **0.7 %** |
+| 32 GB | baddbmm K | B=1, M=1, N=64 | 6 | 0.0 % | **0.0 %** |
+
+The contraction costs nothing at any bucket on either class. The 16 GB maximum of 1.6 % sits
+at the open row's 4 194 304 bucket and the 32 GB one at 1 048 576, both below the 5.2 % the
+quarter-octave had at the knee and far below the 20 % the project already accepted when it
+bucketed this same contraction in the small regime (2026-09-21, `bmm_K` on the default
+ladder). The ladder is settled: `config/vendors/nvidia/volta.yml`, `autotune.buckets.default`.
+
+Files: `nbx/campaigns/2026_09_21_bucketed_keys/{matmul_M_refined,bmm_K_tail}_{16g,32g}.json`,
+`matmul_M_quarter_16g.json` (the 5.2 % that forced the refinement), and the three earlier
+one-size-a-bucket sweeps kept as the record of what an arrangement can hide.
+
+## 2026-09-22 04:57 — the convolution-width ladder at its knee: 0.0 % on both classes, and why the two ladders differ
+
+The GEMM ladder needed narrowing just above 8 192 (5.2 % at the 10 240 bucket). The
+convolution-width ladder keeps a quarter-octave there, and the earlier conv sweeps carried
+only TWO sizes in that bucket — below the standard register 84 set — so it was re-measured to
+the same arrangement: one-row convolution, C_in = C_out = 128, kernel (1,3), three widths
+inside each bucket with its TOP among them, six buckets from the knee to 458 752.
+
+| class | buckets | sizes | median loss | max loss |
+|---|---|---|---|---|
+| 16 GB (card 1) | 6 | 18 | 0.0 % | **0.0 %** |
+| 32 GB (card 3) | 6 | 18 | 0.0 % | **0.0 %** |
+
+Every bucket, both classes, including 10 240 — the one that cost 5.2 % on the GEMM. The
+asymmetry is not an accident of measurement: a one-row convolution's grid is
+`cdiv(N*W, BLOCK)` by `cdiv(C_out, BLOCK)`, so W only scales the first dimension and the
+configuration stops depending on it as soon as the grid saturates; a GEMM near the knee is
+still choosing its tile against M, and a bucket a quarter of an octave wide there is a quarter
+of the value. The two ladders differ because the kernels differ, and each now says so with its
+own numbers.
+
+## 2026-09-22 06:45 — the 16 GB class is certified except seven keys that cannot fit it, and that is a census defect
+
+A whole-census sweep of the 16 GB catalogue (`catalogue_16g_v8`, 2 888 entries, every kernel,
+`--only-missing`) certifies everything and stops on exactly two kinds of key:
+
+* **1 unreachable** — the known debt D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE, a key
+  recorded under an older rule that no run will present again.
+* **7 too large for the class** — six matmuls and one convolution, all from the video family,
+  asking between 11.0 and 37.0 GiB of a 15.8 GiB card:
+
+| kernel | shape | model |
+|---|---|---|
+| conv2d | batch 81, 96 ch, 722x1282 -> 3 ch, 720x1280 | Wan2.1-T2V-1.3B |
+| matmul | M 77 594 624, N 3, K 128 | mochi-1-preview |
+| matmul | M 34 603 008, N 3, K 128 | mochi-1-preview |
+| matmul | M 19 398 656 / 8 912 896 / 5 767 168, N 512, K 256 | mochi-1-preview |
+| matmul | M 2 621 440, N 2 048, K 512 | mochi-1-preview |
+
+No certified entry is owed for any of them, because a 16 GB run never forms them: Prism tiles
+the video decode long before the op is reached. They are in the census because **the shadow
+plans an op at its GRAPH shape rather than at the shape the rung's plan would give it** — the
+rung door (`NBX_PRISM_BUDGET_MB`) sizes the PLAN, but the op-level and component tiling that
+the plan implies is not reflected in the recorded key. That is the next census-tool defect and
+it is named here rather than guessed at: a census that records keys its own memory class
+cannot reach is not yet a census of that class.
+
+The certifier now says so with the arithmetic — bytes asked, card size, where the fix belongs
+— and counts them apart from failures, so a round's `failed` count means what it says
+(80d4ed18, three cells including the contrasting case of an allocation that is merely tight).
+
+**For the Mac**: the same defect will appear wherever a model is tiled for memory, and its
+symptom is a certification asking for more than the device holds. The ARITHMETIC is the tell —
+if the key needs more than the card exists with, no run of that class formed it.
+
+## 2026-09-22 07:25 — a correction to the entry above: the rung door works; op-level tiling is what misses these ops
+
+The 06:45 entry said the shadow "plans an op at its GRAPH shape rather than at the shape the
+rung's plan would give it". Half of that is wrong and the measurement says so.
+
+The rung enumeration DOES change what a shadow records, exactly where it should. Comparing
+each model's recorded keys at rung 4 096 against rung 16 384 on the 16 GB census:
+
+| model | request | keys | differing |
+|---|---|---|---|
+| swinir-classical-x2 | ordinary (fits any rung) | 11 | **0** |
+| real-esrgan-x4 | ordinary | 10 | **0** |
+| Sana_1600M_1024px_MultiLing | ordinary | 58 | **0** |
+| swinir-classical-x2 | the 4 096-pixel probe (tiles) | 11 | **18** |
+| real-esrgan-x4 | the probe (tiles) | 10 | **20** |
+| mochi-1-preview | ordinary | 30 | **18** |
+
+A request that fits every rung records the same keys at every rung — which is correct, not a
+defect — and a request that must be tiled records different ones. The door reaches the plan.
+
+What is left is narrower and still real: at the 16 GB rung, mochi's plan does vary, and it
+still forms a matmul of M = 77 594 624 whose operands need 37 GiB. So the gap is not the rung
+door but **op-level tiling failing to cover these flattened projections** (`aten::mm` over
+every pixel of a video, N = 3, K = 128) — Prism's `_try_op_level_tiling` is in the cascade and
+does not catch them. The plan also prints `56 554 MB planned` on a card the door set to 16 384,
+which is worth reading before anything else: if that figure is a SUM over a lazy_sequential
+stream it is harmless, and if it is a peak the plan is over budget by three times. It is a SUM: `solver.py`
+starts `total_mb` at zero and adds every component's allocation, and this plan's loading mode
+is lazy — one component resident at a time, which is the whole point of that rung. So the
+figure is harmless and says nothing about the budget. Checked rather than left hanging.
+
+What remains, then, is exactly one thing: **op-level tiling does not cover these flattened
+projections**, and that is the lead.
+
+## 2026-09-22 10:45 — stage two is complete on both memory classes (for the Mac)
+
+A whole-census sweep of each class, run TWICE on the 32 GB side from two different cards so
+the second could only find what the first left:
+
+| class | census | certified | failed | unreachable | too large for the class |
+|---|---|---|---|---|---|
+| 32 GB | catalogue_32g_v7 (3 211 entries) | **427** | **0** | 1 | 2 |
+| 16 GB | catalogue_16g_v8 (2 888 entries) | all | **0** | 1 | 7 |
+
+The 32 GB convolution family alone closed at **494 certified, 0 excluded, 0 failed, 0
+unreachable**. What is left is not work:
+
+* **the over-large keys** — mochi-1-preview's video projections (M = 19 398 656 and
+  77 594 624, both asking 37.0 GiB of a 31.7 GiB card) and on 16 GB those plus Wan2.1-T2V's
+  VAE projection. No run of that class forms them because Prism tiles the decode first; they
+  are in the census because op-level tiling does not cover those flattened projections, which
+  is the named lead, not a certification debt.
+* **one unreachable key per class** — the standing D-CENSUS-HOLDS-KEYS debt.
+
+So the directory now serves every key the catalogue's censuses demand on both V100 classes,
+under torch 2.14 / Triton 3.8, with each entry proven on the class it serves. Stage three
+(verification at zero miss with artefacts judged) is what this unblocks — and it waits on
+nothing else here.
+
+**Also worth your reader**: the checksum pass's `ERROR 37` was never thirty-seven bad
+containers. Every one was a 503 or a Range read that failed three times — the store refusing a
+RATE while answering single probes fine, the exact offset that failed on Allegro reading in
+2.6 s an hour later. Three attempts over fifteen seconds is not patience against a limiter,
+and the distinction it destroyed (UNREAD against MISMATCHED) is the whole point of the pass.
+The reader now waits 5/15/45/120/120 s and puts half a second between chunks of an object once
+refused (f46759e5). If your own hub reads ever report errors in bulk, read the reason before
+the count.
+
+## 2026-09-22 11:05 — why the store refuses writes: it is not a rate, it is seconds per write (for Hocine)
+
+The refusal has been called "the store's 503 SlowDownWrite" and left there. Measured with the
+tool's own probe path (a registry upload slot, then the presigned PUT, slot deleted after):
+
+| operation | result |
+|---|---|
+| PUT 5 bytes | **200 in 7.69 s**, then 9.93 s, then 2.26 s, and once the registry itself timed out |
+| PUT 1 024 bytes | **200 in 18.69 s** |
+| PUT 65 536 bytes | **400 IncompleteBody after 30.02 s** — the server did not receive the bytes it was promised |
+| PUT 1 048 576 bytes | **503 SlowDownWrite in 0.01 s**, `Retry-After: 60` |
+| GET 65 536 bytes (twice, two offsets) | **206 in 0.009 s** |
+
+The store READS sixty-four kilobytes in nine milliseconds and takes two to ten seconds to
+WRITE five bytes. That is not bandwidth and it is not a request rate: five bytes have no rate.
+It is a per-write-operation stall, and the instant 503 on anything larger is MinIO shedding
+load it already cannot carry — which is why the health endpoints all answer 200 (they report
+liveness, not the write path) and why the checksum pass could read at all.
+
+Read against it: MinIO returns `SlowDownWrite` when an erasure set cannot reach write quorum,
+commonly from stale or sick drive state, and the project's own tool already recorded exactly
+that on 2026-09-07 — "the cluster health answered 200 with a write quorum of 1 through every
+refusal". The asymmetry fits: an erasure WRITE must reach quorum across the set, so one drive
+stalling every write costs seconds; a READ is served from whichever drives answer first, so it
+stays at nine milliseconds.
+
+**What I could not do**: there is no MinIO credential on this rack (`.env` holds none), the
+metrics endpoints answer 403, and `ssh 10.0.0.36` is refused (publickey, password). So the
+drive state itself cannot be read from here.
+
+**The one action, for Hocine, on 10.0.0.36** — read the drive state and say which drive is
+stalling:
+
+```
+mc admin info <alias>                         # per-drive online/offline and latency
+journalctl -u minio --since -24h | grep -iE "drive|disk|quorum|heal|timeout|slow"
+dmesg -T | grep -iE "I/O error|ata[0-9]|nvme|reset|timeout"
+smartctl -a /dev/<the backing disk>
+```
+
+If one drive is stalling or offline, the write path is waiting on it and publication stays
+blocked until it is replaced or dropped from the set; a service restart clears the stale-disk
+form of this and is what MinIO's maintainers suggest first, with an upgrade as the permanent
+fix (minio/minio#17875, fixed by PR #17085). **Nothing here should be restarted without you**:
+the store holds the hub.
+
+Meanwhile the checksum pass reads on, and publication is deferred by the tool itself rather
+than retried — a 1 MB write is refused in one hundredth of a second, so retrying is not
+patience, it is noise.
 ## 2026-09-22 — OWED TO THE DELL (core/prism): Prism partitions a graph the executor no longer runs
 
 Established on this Mac, **not implemented** — `core/prism` is the Dell's, and this lands on main

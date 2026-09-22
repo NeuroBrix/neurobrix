@@ -255,6 +255,17 @@ class TritonNextTokenDiffusionEngine:
             # logits constrained to the valid control-token ids, greedy argmax.
             logits_valid = last_hidden_np @ embed_np[valid_arr].T             # [1, n_valid]
             next_token = int(valid_arr[int(np.argmax(logits_valid[0]))])
+            from neurobrix.kernels import census as _census
+            if _census.active():
+                # A shadow has no values, so the constrained argmax over meaningless logits
+                # picks ONE control token and keeps picking it: the census of 2026-09-22 read
+                # `start=0 diff=0 end=2048 eos=0` — every step took the cheap branch, the
+                # diffusion branch was never entered, and 193 s of shadow produced none of the
+                # keys the model actually demands. The branch a census needs is the one that
+                # COMPUTES, so the shadow announces the start once and then takes the
+                # diffusion branch; the keys of the branches that only append an embedding are
+                # already met by the step that appends one.
+                next_token = speech_start_id if step == 0 else speech_diffusion_id
             emitted_tokens.append(next_token)
 
             if step < 8 or step % 16 == 0:
@@ -304,6 +315,20 @@ class TritonNextTokenDiffusionEngine:
             inputs_embeds_np = np.concatenate([inputs_embeds_np, next_embed_np], axis=1)
             if use_cfg:
                 neg_inputs_embeds_np = np.concatenate([neg_inputs_embeds_np, next_embed_np], axis=1)
+            if _census.active():
+                # The loop is walked by the key classes of the context length, not step by
+                # step (kernels/census.py::pace): every bucket top is still met once, and a
+                # request whose bound is 2 048 steps costs the number of BUCKETS instead.
+                _skip = min(_census.pace(int(inputs_embeds_np.shape[1])),
+                            max(0, max_steps - len(emitted_tokens)))
+                if _skip:
+                    _pad = np.repeat(next_embed_np, _skip, axis=1)
+                    inputs_embeds_np = np.concatenate([inputs_embeds_np, _pad], axis=1)
+                    if use_cfg:
+                        neg_inputs_embeds_np = np.concatenate([neg_inputs_embeds_np, _pad], axis=1)
+                    emitted_tokens.extend([next_token] * _skip)
+                    if len(emitted_tokens) >= max_steps:
+                        break
 
         return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
@@ -362,6 +387,13 @@ class TritonNextTokenDiffusionEngine:
         for step in range(max_steps):
             logits = w.matmul_wrapper(last_hidden.to(NBXDtype.float32), valid_rows_t)         # [1, n_valid]
             next_token = int(valid_arr[int(w.argmax_wrapper(logits, dim=-1).item())])
+            from neurobrix.kernels import census as _census
+            if _census.active():
+                # See the re-prefill path: a shadow's constrained argmax picks one control
+                # token and keeps picking it (`start=0 diff=0 end=2048`), so the branch that
+                # COMPUTES is never entered and the census harvests none of its keys. The
+                # shadow announces the start once, then takes the diffusion branch.
+                next_token = speech_start_id if step == 0 else speech_diffusion_id
             emitted_tokens.append(next_token)
             if step < 8 or step % 16 == 0:
                 _tname = ("eos" if next_token == eos_token_id else
@@ -401,6 +433,19 @@ class TritonNextTokenDiffusionEngine:
                 neg_last = self._last_hidden(session.decode_step(dummy, inputs_embeds=next_embed))
                 session.use_branch(pos_branch)
             seq += 1
+            if _census.active():
+                # Walked by the key classes of the context length, not step by step: the
+                # decoder's counters move past the positions whose keys this step already
+                # produced (kernels/census.py::pace, 0 on a live run).
+                _skip = min(_census.pace(int(seq)), max(0, max_steps - len(emitted_tokens)))
+                if _skip:
+                    _kvw = getattr(session, "kv_wrapper", None)
+                    if _kvw is not None and hasattr(_kvw, "skip_positions"):
+                        _kvw.skip_positions(_skip)
+                    seq += _skip
+                    emitted_tokens.extend([next_token] * _skip)
+                    if len(emitted_tokens) >= max_steps:
+                        break
         return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
     @staticmethod

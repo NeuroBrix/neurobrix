@@ -72,8 +72,14 @@ class RangeSource:
 
     CHUNK = 8 << 20
 
+    ATTEMPTS = 6                      # 5 + 15 + 45 + 120 + 120 s of waiting before giving up
+    MAX_BACKOFF_S = 120
+    GENTLE_PAUSE_S = 0.5              # once refused, one chunk every half second for this object
+
     def __init__(self, url: Optional[str] = None, path: Optional[Path] = None):
         self.url, self.path = url, path
+        self._gentle = False
+        self._waited = 0.0
         self.bytes_read = 0
         if path is not None:
             self.size = path.stat().st_size
@@ -102,19 +108,41 @@ class RangeSource:
             pos = offset
             while pos <= end:
                 stop = min(pos + self.CHUNK, end + 1) - 1
-                for attempt in range(1, 4):
+                # The store RATE-LIMITS; it does not break. The 2026-09-22 06:28 pass ended
+                # `ERROR 37` and every one of those was a 503 or three failed Range reads,
+                # while a single probe of the very offset that failed answered 206 in 2.6 s
+                # an hour later. Three attempts over fifteen seconds is not patience against
+                # a limiter, so the reader now waits minutes and SLOWS ITSELF for the rest of
+                # an object once refused — a verification that gives up is worth less than one
+                # that takes longer.
+                for attempt in range(1, self.ATTEMPTS + 1):
                     try:
-                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"}, timeout=(30, 120))
+                        if self._gentle:
+                            time.sleep(self.GENTLE_PAUSE_S)
+                        # SHORT attempt, LONG wait. The patience belongs between attempts, not
+                        # inside one: `requests`' read timeout is per CHUNK of the body, so a
+                        # server that trickles a byte before each deadline holds the socket for
+                        # ever. Raising it to 300 s on 2026-09-22 did exactly that — the pass
+                        # read 36 MB in fifty-one minutes and sat in `socket.readinto` with
+                        # nothing arriving. A stalled attempt is abandoned in a minute and
+                        # retried after the backoff.
+                        r = self._requests.get(str(self.url), headers={"Range": f"bytes={pos}-{stop}"}, timeout=(15, 60))
                         if r.status_code != 206:
+                            if r.status_code in (429, 503):
+                                self._gentle = True
                             raise RuntimeError(f"Range read {pos}-{stop} answered {r.status_code}")
                         chunk = r.content
                         if len(chunk) != stop - pos + 1:
                             raise RuntimeError(f"Range read {pos}-{stop}: {len(chunk)} bytes for {stop - pos + 1} asked")
                         break
                     except Exception as exc:  # noqa: BLE001 — retried, then raised by name
-                        if attempt == 3:
-                            raise RuntimeError(f"Range read {pos}-{stop} failed three times: {type(exc).__name__}: {str(exc)[:120]}") from exc
-                        time.sleep(5 * attempt)
+                        if attempt == self.ATTEMPTS:
+                            raise RuntimeError(f"Range read {pos}-{stop} failed {self.ATTEMPTS} times over "
+                                               f"{self._waited:.0f}s: {type(exc).__name__}: {str(exc)[:120]}") from exc
+                        self._gentle = True
+                        wait = min(self.MAX_BACKOFF_S, 5 * (3 ** (attempt - 1)))
+                        self._waited += wait
+                        time.sleep(wait)
                 parts.append(chunk)
                 pos = stop + 1
             data = b"".join(parts)

@@ -157,6 +157,43 @@ def output_dtype(tuner, key: tuple) -> str:
     return dts[-1]
 
 
+#: Key positions that are TENSOR EXTENTS or divisors — every one of them must be at least 1
+#: for the key to name a launch that can exist. A padding may be 0 and is not listed; a
+#: negative value is impossible anywhere. The positions mirror what the certifier unpacks to
+#: synthesise a shape (`autotune_certify._synth`), and a test pins the two together: a key
+#: whose extent is 0 can be neither synthesised nor launched, and the served directory holds
+#: one already (`conv2d_forward_kernel.fp32`, batch_dim 0) from a census that recorded a
+#: shadow's degenerate arithmetic (2026-09-22).
+EXTENT_POSITIONS: Dict[str, tuple] = {
+    "matmul_kernel": (0, 1, 2),                       # M_BUCKET, N, K
+    "addmm_kernel": (0, 1, 2),
+    "baddbmm_kernel": (0, 1, 2),                      # M_BUCKET, N_BUCKET, K_BUCKET
+    # batch, in_feat, in_h, in_w, out_feat, out_h, out_w, kh, kw, stride_h, stride_w,
+    # (padding_h, padding_w may be 0), dilation_h, dilation_w, groups
+    "conv2d_forward_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15),
+    # C, H_in, W_in, H_out, W_out, kh, kw, stride_h, stride_w, (pad_h, pad_w may be 0)
+    "depthwise_conv2d_kernel": (0, 1, 2, 3, 4, 5, 6, 7, 8),
+}
+
+
+def degenerate_extent(qual: str, key: tuple) -> Optional[str]:
+    """The name and value of the first key position that cannot be a launch, or None.
+
+    A key is refused ONLY on a position this table names: a kernel not listed is answered
+    None rather than guessed at, because refusing a legitimate key would shrink a census in
+    silence — the failure mode this whole register exists to stop."""
+    short = qual.rsplit(".", 1)[-1]
+    positions = EXTENT_POSITIONS.get(short)
+    if not positions:
+        return None
+    for i in positions:
+        if i < len(key):
+            v = key[i]
+            if isinstance(v, int) and not isinstance(v, bool) and v < 1:
+                return f"position {i} = {v}"
+    return None
+
+
 def key_repr(key: tuple) -> str:
     return repr(tuple(key))
 
@@ -303,6 +340,15 @@ def running_generator() -> Optional[str]:
 _OUT_OF_TREE_HASH: Dict[str, Optional[str]] = {}
 
 
+_SAID: set = set()
+
+
+def _say_once(msg: str) -> None:
+    if msg not in _SAID:
+        _SAID.add(msg)
+        print(msg, flush=True)
+
+
 def _out_of_tree_backend_hash() -> Optional[str]:
     """The source hash of the Triton backend that will ACTUALLY generate code,
     but ONLY when that backend is out of tree — its version does not travel in
@@ -327,7 +373,19 @@ def _out_of_tree_backend_hash() -> Optional[str]:
     in-tree backend (cuda/amd), whose generator the distribution version
     already tracks, leaving those labels unchanged."""
     from neurobrix.kernels.launcher import target as _target
-    tgt = _target()
+    try:
+        tgt = _target()
+    except Exception as exc:  # noqa: BLE001 — no driver to ask: see below
+        # There is no target to name because there is no device to ask (a CPU-only
+        # machine, a census behind `CUDA_VISIBLE_DEVICES=`, a build host). The
+        # question "which OUT-OF-TREE backend will generate the code" is then
+        # unanswerable, and an unanswerable question refuses nothing — the rule the
+        # generator gate is built on. It is said once rather than swallowed, because
+        # an out-of-tree backend that silently lost its hash would serve entries to a
+        # generator that had moved, which is the defect this hash exists to stop.
+        _say_once(f"[autotune] no device to name the code generator ({exc.__class__.__name__}): "
+                  f"an out-of-tree backend hash cannot be read, so no entry is refused for one")
+        return None
     if tgt is None:
         return None
     key = f"{getattr(tgt, 'backend', '?')}:{getattr(tgt, 'arch', '?')}"
