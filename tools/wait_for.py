@@ -23,17 +23,47 @@ import re
 import signal
 import sys
 import time
+import subprocess
 from typing import Optional
 
 
 def _stat_fields(pid: int):
-    """(state, starttime) from /proc/<pid>/stat, or None when the pid is gone."""
+    """(state, starttime) for `pid`, or None when it is gone.
+
+    `/proc/<pid>/stat` where there is a /proc; `ps` where there is not. macOS and the BSDs
+    have no /proc, so the read raised, this returned None, and `producer_alive` answered
+    False for EVERY pid — including a process plainly running. That made
+    `certified_checkpoint.py` decide its producer was "already gone at start" every time and
+    exit after one empty checkpoint, which in turn made the certifier refuse to start at all
+    (`6442fe30` requires a checkpointer holding the repository). Certification on the Mac was
+    impossible until this was portable (2026-09-22).
+
+    `ps -o state=,lstart=` gives the same two facts with the same meaning: a state letter
+    whose "Z" is a zombie, and a start time that is stable for one process and different for
+    a recycled pid — which is what the caller compares.
+    """
     try:
         with open(f"/proc/{pid}/stat") as f:
             rest = f.read().split(")", 1)[1].split()
         return rest[0], rest[19]          # field 3 = state, field 22 = starttime (clock ticks since boot)
+    except FileNotFoundError:
+        pass                              # the pid is gone, OR this platform has no /proc
     except OSError:
         return None
+    if os.path.isdir("/proc"):            # there IS a /proc and the pid was not in it
+        return None
+    try:
+        out = subprocess.run(["ps", "-o", "state=,lstart=", "-p", str(int(pid))],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = (out.stdout or "").strip()
+    if out.returncode != 0 or not line:
+        return None
+    parts = line.split(None, 1)
+    if len(parts) < 2:
+        return None
+    return parts[0][:1], parts[1].strip()
 
 
 _BIRTH: dict = {}                          # pid -> starttime seen at the first check

@@ -2658,3 +2658,36 @@ right for it to be local.
 **The lesson is the one `core/paths.py` already wrote down**: a door is only a door if
 everything goes through it, and a tool that spells the path itself is not refused by anything
 — it simply reads somewhere else and reports nothing.
+
+## 2026-09-22 — for the Dell: `wait_for.producer_alive` is Linux-only, and it blocked certification entirely
+
+`tools/wait_for.py::_stat_fields` read `/proc/<pid>/stat`. macOS and the BSDs have no `/proc`,
+so the read raised, the function returned None, and **`producer_alive()` answered False for
+every pid — including a process plainly running.**
+
+The consequence reached all the way to the milestone. `certified_checkpoint.py` holds a
+producer and exits when the last one is gone, so on this Mac it decided its producer was
+*"already gone at start"* on every launch, ran one empty checkpoint and exited. The certifier
+then refuses to start at all, because `6442fe30` requires a checkpointer to be holding the
+repository. **Certification of the Apple directory was impossible on this machine** — and
+nothing said so, because each layer behaved correctly given what it was told.
+
+It failed **closed**, which is the right direction, and that is exactly why it took a
+certification launch to find: nothing was ever wrong, only permanently refused.
+
+**Fixed here** (it blocks the chantier, which is the exception the doctrine allows):
+`/proc` where there is one, `ps -o state=,lstart=` where there is not. Same two facts, same
+meaning — a state letter whose `Z` is a zombie, and a start time stable for one process and
+different for a recycled pid, which is what `producer_alive` compares. Verified on this
+machine: `/proc exists: False`, `_stat_fields(self) -> ('S', 'Tue Sep 22 17:08:30 2026')`.
+Four cells in `tests/unit/tools/test_producer_liveness_works_without_proc.py`: a running
+process, a live child, a dead child and a pid that never existed.
+
+**What is owed**: the Linux path is untouched — it is tried first and the `ps` fallback is
+reached only when `/proc` is absent — but that is an argument, not a measurement. Run the four
+cells on the rack; they should pass there through the `/proc` branch.
+
+**Third macOS portability gap found today**, all in adopted tooling, and the pattern is worth
+naming: `guard-silent-fallback.sh` (`grep -P`, failed OPEN), `version-bump.sh` (`sed -i`), and
+this one (failed CLOSED). A tool that has only ever run on one platform has only ever been
+tested on one platform.
