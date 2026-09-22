@@ -195,6 +195,19 @@ def _noop(*_a, **_k):
     return None
 
 
+def _dtype_name(d) -> str:
+    """A dtype read by its NAME, never by `str()` of it.
+
+    `NBXDtype` is an `IntEnum`, and what `str()` gives for one changed under us: Python 3.10
+    renders `NBXDtype.bool_`, Python 3.11 renders `9`. A shadow that matched on `"bool" in
+    str(dtype)` therefore works on this rack and fails on the Mac's interpreter, where every
+    diffusion shadow's `all(isfinite(x))` guard read falsy and the loop's NaN gate ended the
+    run at step 1 with no post-loop key harvested (the Mac measured PixArt-XL 16 -> 33 keys
+    once it read the name, 2026-09-21). Measured here on 3.10.12: the old form matched, which
+    is exactly why nothing on this rack ever said so."""
+    return str(getattr(d, "name", d)).lower()
+
+
 def shadow_run(*_a, **_k):
     """What stands behind an autotuned kernel's `run` in the shadow: nothing."""
     return None
@@ -351,7 +364,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         if h is not None and h.size == 1:
             v = h.reshape(-1)[0]
             return bool(v) if "bool" in str(h.dtype) else (int(v) if "int" in str(h.dtype) else float(v))
-        d = str(self._dtype).lower()
+        d = _dtype_name(self._dtype)
         if "bool" in d:
             return True                 # a guard's `all(isfinite(x))`: the shadow is healthy
         # An integer read answers ONE, not zero: a read that is a SIZE (a duration, a frame
@@ -369,7 +382,7 @@ def install(hardware: Optional[str] = None, hardware_profile: Optional[dict] = N
         # zero read as a count shaped an empty tensor (Allegro-TI2V's group norm met batch 0
         # after a frame count read 0, 2026-09-21). Float reads stay zero.
         import numpy as np
-        if "int" in str(self._dtype).lower():
+        if "int" in _dtype_name(self._dtype):
             return np.ones(tuple(self._shape), dtype=np.int64)
         return np.zeros(tuple(self._shape), dtype=np.float32)
 
