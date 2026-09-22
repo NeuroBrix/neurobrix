@@ -25,13 +25,6 @@ validation_outputs/
 .DS_Store
 ._*
 .cache/
-# Claude Code project dir — ALL of it, including the subagent definitions. They were
-# tracked until 2026-09-22 on the reasoning that they were "part of the repo"; this
-# repository is PUBLIC and no Claude configuration belongs in it, agents included.
-# flight recorder state (machine-local power-loss resume records)
-.flightrec/
-
-.claude/*
 .env
 .gemini/
 .idea/
@@ -267,13 +260,30 @@ secrets.*
 # The certifier's per-file fcntl lock (kernels/autotune_certify.py::_write_file), transient.
 src/neurobrix/config/autotune/**/*.json.lock
 
-# Claude Code configuration is NEVER tracked: this repository is public and these files
-# carry how we work and what the machines are. .gitignore is the first line; the PreToolUse
-# hook .claude/hooks/refuse-staging-claude-config.sh is the one that does not depend on this
-# file being right. (Mac, 2026-09-22 — CLAUDE.local.md was unignored and a bulk add would
-# have taken it.)
+
+# ---------------------------------------------------------------------------
+# Assistant configuration — NEVER tracked, in any form (2026-09-22).
+# This repository is public. An assistant's configuration describes how this
+# machine is driven, not what the engine is, and it carries machine facts,
+# private paths and working habits that have no place in a public trunk.
+# The four .claude/agents/*.md files WERE tracked until 2026-09-22; they are
+# untracked here and stay on disk. Rewriting the history that still holds them
+# is a separate decision, the owner's.
+# ---------------------------------------------------------------------------
+.claude/
+**/.claude/
+.claude*/
+CLAUDE.md
+**/CLAUDE.md
 CLAUDE.local.md
 **/CLAUDE.local.md
 AGENTS.md
 **/AGENTS.md
+GEMINI.md
+**/GEMINI.md
+.cursorrules
 .mcp.json
+**/.mcp.json
+.env
+.gemini/
+.idea/

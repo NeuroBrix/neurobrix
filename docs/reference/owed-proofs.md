@@ -2397,3 +2397,30 @@ device.
    by declared prefix, which declares no ladder, so such a machine censuses exact keys. That is
    honest for a chip whose ladder nobody measured — but if the same prefix fallback exists on the
    CUDA side for an unlisted card, a rack census there is exact too and nobody has said so.
+
+## 2026-09-22 — for the Dell: the scratchpad exemption is false on this machine
+
+`.claude/hooks/guard-ephemeral-durable-output.sh` covers `/tmp` and deliberately EXEMPTS the
+harness scratchpad, on the stated reasoning that it "holds only intermediates".
+
+**On this Mac that assumption has been false three times**, and each time it cost a campaign's
+environment: 2026-09-17 an installed `triton-msl` package resolving into the scratchpad;
+2026-09-21 the venv the AppleGPU plugin was installed into; 2026-09-22 a git **worktree** at
+`…/scratchpad/agpu-b9d5c06` with every build artefact, which took the validated `b9d5c06`
+build with it and left only wheels from a different commit.
+
+The scratchpad does not hold only intermediates. It holds whatever is put there, and what gets
+put there is exactly what is convenient during a long campaign.
+
+Not fixed in your file — this machine adds its own hook beside yours
+(`guard-scratchpad-durable-output.sh`, refusing `.json`/`.md`/`.yml`/`.csv` there while
+allowing scripts and logs) rather than editing the shared text. **The question for the rack is
+whether the same exemption is safe there.** If a rack campaign ever installs into, builds in,
+or worktrees under its scratchpad, the answer is no and the shared hook should lose the
+exemption; if the rack only ever writes intermediates there, it is correct as written and this
+note closes.
+
+Related and already landed here: `core.paths.installation_refusals` (metal-first-light
+`796524eb`) refuses a BACKEND whose package, environment or build tree — pip records the last
+in `direct_url.json` — stands on storage the machine clears. That is the code half of the same
+lesson and it is vendor-neutral; the rack inherits it with the branch.
