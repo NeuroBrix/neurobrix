@@ -65,6 +65,15 @@ def record(tuned, key: tuple) -> None:
         _say_once(f"[census] key with a negative extent refused: {key_line(tuned, key)}")
         return
     line = key_line(tuned, key)
+    if line is not None:
+        from neurobrix.kernels.autotune_certified import degenerate_extent
+        bad = degenerate_extent(line.split("::", 1)[0], tuple(key))
+        if bad is not None:
+            # An extent of zero names a launch that cannot exist and a tensor the certifier
+            # cannot synthesise; the shadow reaches them at the bottom of a value-derived
+            # extent (a four-token speech), and one is already in the served directory.
+            _say_once(f"[census] key with a zero extent refused ({bad}): {line}")
+            return
     if line is None:
         return
     with _RECORD_LOCK:
