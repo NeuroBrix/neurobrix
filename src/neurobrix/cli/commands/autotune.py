@@ -14,6 +14,68 @@ from pathlib import Path
 print = functools.partial(print, flush=True)   # a run of hours is read while it runs
 
 
+def _repo_root() -> Path:
+    """The repository this file lives in: commands -> cli -> neurobrix -> src -> repo.
+
+    Named rather than spelled inline because the door below is only as good as this number:
+    one short and it looks for a checkpointer holding `src/`, finds none however many are
+    running, and refuses every certification on the machine. It had that bug for five
+    minutes on 2026-09-22."""
+    return Path(__file__).resolve().parents[4]
+
+
+def _checkpointer_holds(repo: Path) -> bool:
+    """True when a `certified_checkpoint.py` process holds THIS repository.
+
+    Read from /proc rather than through `pgrep`, so the check cannot match its own command
+    line — the self-match that has cost this session three shells (exit 144)."""
+    import os
+    target = str(repo)
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                argv = fh.read().split(b"\0")
+        except OSError:
+            continue
+        text = [a.decode("utf-8", "replace") for a in argv if a]
+        if len(text) < 2 or "certified_checkpoint.py" not in " ".join(text[:2]):
+            continue
+        if target in text:
+            return True
+    return False
+
+
+def _refuse_without_a_checkpointer(allowed: bool) -> str:
+    """The refusal, or "" — a DOOR, not a report (`docs/reference/proving-by-doors.md`).
+
+    The harmful STATE is a certification writing proofs into the directory while nothing
+    carries them to a remote. On 2026-09-22 eleven hours of stage two — 2 497 entries across
+    seven files — stood in the working tree alone with no checkpoint commit and no checkpoint
+    ref on either remote, which is precisely the loss `tools/certified_checkpoint.py` was
+    written against after the mains cuts of 2026-09-11, 09-12 and 09-13. It did not run
+    because nothing STARTED it, and a brick that must be remembered is a brick that will be
+    forgotten; so the certifier refuses instead, and the opening is named
+    (`--allow-uncheckpointed`) rather than silent."""
+    if allowed:
+        return ""
+    repo = _repo_root()
+    if _checkpointer_holds(repo):
+        return ""
+    py = "python"
+    return (
+        "REFUSED: no certified checkpointer holds this repository, so a cut would cost this\n"
+        "whole pass — the certifier writes its proofs entry by entry and nothing else carries\n"
+        "them anywhere (2026-09-11, 09-12, 09-13, and again 09-22 with 2 497 entries).\n"
+        "Start one and re-run:\n"
+        f"  {py} tools/certified_checkpoint.py --repo {repo} \\\n"
+        "      --dir src/neurobrix/config/autotune --interval 600 &\n"
+        "Or say so deliberately with --allow-uncheckpointed (a sweep that certifies nothing,\n"
+        "a laptop with no remote)."
+    )
+
+
 def cmd_autotune(args) -> int:
     from neurobrix.kernels import autotune_certified as C
     action = getattr(args, "action", None)
@@ -21,6 +83,10 @@ def cmd_autotune(args) -> int:
         if not getattr(args, "profile", None):
             print("ERROR: --profile is required: a certification names the profile it was measured on.")
             return 2
+        refusal = _refuse_without_a_checkpointer(getattr(args, "allow_uncheckpointed", False))
+        if refusal:
+            print(refusal)
+            return 3
         from neurobrix.kernels.autotune_certify import certify
         kernels = [k for k in (args.kernels or "").split(",") if k] or None
         print("=" * 70)
