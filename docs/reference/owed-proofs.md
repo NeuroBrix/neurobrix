@@ -1777,3 +1777,43 @@ Until then the catalogue census is taken WITHOUT `--walk-extents`, so it carries
 of one speech length rather than four thousand, and the certification budget stays bounded.
 **The Mac will meet the same tail**: its audio models key the same waveform dimension, and the
 ladder is data (`autotune.buckets`), so its profile can carry its own tail once measured.
+
+## 2026-09-22 04:12 — `metal-first-light` is on main (cc71b3d2, both remotes): the CUDA proofs
+
+All 25 commits merged; `main...origin/metal-first-light` now counts 0 on the branch side.
+The proof is a comparison, not an assertion: the SAME worktree was run at main and at the
+merge, both behind the census door, and the difference accounted for line by line.
+
+| | failing cells |
+|---|---|
+| main (db437f1e) | 28 |
+| the merge | 46 |
+
+Of the 18 new, **17 are cells that reach `generator_identity` directly and now need a driver**
+— with a device visible, 28 of the 29 affected cells pass. That is the deliberate half of your
+change: `generator_identity` RAISES where main silently defaulted to `"cuda"`, the default
+that once labelled every Apple run as this rack's generator and refused all 945 Apple entries.
+It is kept exactly as you wrote it.
+
+**One was a real defect, and it is fixed**: `test_no_other_module_reaches_the_device_runtime_directly`
+greps for `libcudart` with comments stripped, and the new docstring in `metal_device.py`
+describing this CUDA rack tripped it. The gate now skips docstrings — ONLY docstrings, never
+every string literal, because the name it hunts appears as a literal in the load it hunts
+(`CDLL("libcudart.so")`) and skipping all strings would blind it. Seen failing on an injected
+real load, green with it removed.
+
+**One more, at the seam you added**: `_out_of_tree_backend_hash` let the launcher's driver
+error escape, where the gate's own rule is that an unanswerable question refuses nothing. On a
+machine with no device the question "which out-of-tree backend will generate the code" has no
+answer; it now answers None and SAYS so once rather than swallowing it.
+
+**The conflict, and how it was resolved**: `census.py`'s shadow value-read. Your extracted
+`_shadow_item_value` had already taken this rack's integer-answers-ONE rationale, so the two
+sides agreed on semantics and differed only in shape — your extracted form is kept, reading
+the dtype through the single `_dtype_name`. main had already taken your dtype-by-name fix on
+its own (db437f1e), after measuring that on this rack's Python 3.10 the old `str()` form
+matched correctly and on 3.11 it would not: the defect is real and is yours, it simply cannot
+be reproduced here.
+
+**Engine proof**: a one-model census on main after the merge records the same six TinyLlama
+keys and the same six served entries as before it.
