@@ -27,8 +27,8 @@
 # red test, never a false picture.
 
 architecture: apple_silicon
-# provenance: mesuré 2026-09-10 — le backend construit cette chaîne
-# depuis le nom du device (`driver.py`), vérifié sur Apple M4 Pro.
+# provenance: measured 2026-09-10 — the backend builds this string
+# from the device name (`driver.py`), verified on Apple M4 Pro.
 compute_capability: "apple-m6"
 # gpu_family: not stated. This project does not know which
 # Apple GPU family M6 reports, and will not guess one.
@@ -350,3 +350,77 @@ autotune_screen_rtol:
 # six unrelated tests in the same process. A skipped screen is announced, not
 # silent.
 autotune_screen_max_bytes: 33554432
+
+# ---------------------------------------------------------------------------
+# Autotune bucket ladder and tile-extent lattice — INHERITED, 2026-09-22.
+#
+# The schema gate (tests/unit/kernels/test_smem_budget.py) requires every profile
+# to declare what the reference profile declares. These three keys were added to
+# nvidia/volta.yml alone when the bucketed-key work landed, so every other
+# architecture had NO ladder — and `ladder_for()` answered a step of 1, which is
+# EXACT keying, silently. A key explosion with no refusal is the worst of both.
+#
+# NOT MEASURED ON THIS ARCHITECTURE. The values below are the Volta measurement
+# (0.0 %% median and maximum loss on both V100 memory classes, 2026-09-21),
+# carried here as a research SEED so the schema is uniform and no consumer reads
+# a silent default. They become certified for this architecture only when its own
+# certification proves them against the fp64 oracle — which is stage two's job,
+# per hardware profile and memory class. Until then this is a starting
+# neighbourhood, not a claim.
+#
+# The one corroboration that exists: apple/apple_m4_pro measured its own
+# tile-extent lattice independently and landed on the same 16.
+# ---------------------------------------------------------------------------
+tiling:
+  extent_lattice: 16
+
+autotune:
+  buckets:
+    default:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      # Above 8 192 a QUARTER-OCTAVE, not a 512-step. The 512 tail was decided by a sweep
+      # that ran to about 4 096 and never met a request-scale dimension: a vocoder's batched
+      # GEMM keys on the WAVEFORM and reaches 1 963 520, which a 512-step cuts into some four
+      # thousand buckets — 1 400 of one model's 1 522 distinct M values sat above 8 192.
+      # Measured 2026-09-22 on both classes, two shapes (the vocoder's B=1,N=1,K=9 and a
+      # GEMM at N=K=512), each octave bucket carrying three or four measured values with its
+      # TOP as representative: 0.0 % median loss, 0.2 % max at ONE octave bucket. The rows
+      # below are finer than the octave that was measured, so they cost no more than it did.
+      # The first three octaves above the knee keep a NARROW step. Measured directly on the
+      # rows as shipped (the upscalers' N=360, K=180; three sizes inside each bucket with
+      # its TOP among them, 2026-09-22): a quarter-octave there cost 0.0 % median but
+      # **5.2 %** at the 10 240 bucket and 1.2 % at 16 384 — the loss lives just above the
+      # knee, where a quarter of an OCTAVE is still a quarter of the VALUE. Beyond 65 536
+      # the same sweep measured 0.0 % median and at most 0.6 %, so the quarter-octave stands.
+      # The convolution-width ladder below keeps its quarter-octave: its own sweep measured
+      # 0.0 % median AND max there, on both classes and two channel counts.
+      - {up_to: 16384, step: 512}
+      - {up_to: 32768, step: 1024}
+      - {up_to: 65536, step: 2048}
+      - {up_to: 131072, step: 16384}
+      - {up_to: 262144, step: 32768}
+      - {up_to: 524288, step: 65536}
+      - {up_to: 1048576, step: 131072}
+      - {up_to: 2097152, step: 262144}
+      - {up_to: null, step: 524288}
+    # The width of a ONE-ROW convolution (a 1-D convolution over a sequence: a vocoder's
+    # samples, a mel spectrogram's frames) is the request's length, unbounded by any
+    # resolution — chatterbox's vocoder reaches 444 721 samples for 18 s of speech. Above the
+    # GEMM ladder it steps by a quarter-octave (≤ 25 % of the value), so a census meets every
+    # class of a speech length in ~100 runs instead of ~1 000; the loss of that step is owed a
+    # measurement on both classes (bucket_loss.py) before the ladder is called final.
+    W:
+      - {up_to: 64, step: 1}
+      - {up_to: 256, step: 16}
+      - {up_to: 1024, step: 32}
+      - {up_to: 8192, step: 128}
+      - {up_to: 16384, step: 2048}
+      - {up_to: 32768, step: 4096}
+      - {up_to: 65536, step: 8192}
+      - {up_to: 131072, step: 16384}
+      - {up_to: 262144, step: 32768}
+      - {up_to: 524288, step: 65536}
+      - {up_to: null, step: 131072}

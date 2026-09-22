@@ -51,7 +51,20 @@ _REQUIRED = {
                                  "deviation", "tolerance", "machine", "oracle",
                                  "built"),
 }
-_DTYPES = ("fp16", "bf16", "fp32", "fp64", "int8", "int16", "int32", "int64", "bool")
+#: Every dtype name the launcher can append to a key. The launcher writes
+#: `str(arg.dtype)` of a Triton dtype, so these are TRITON spellings.
+#:
+#: `uint8` was missing, and the omission was silent in the worst way: `key_dtypes`
+#: DROPPED the unknown name instead of refusing it, so a key ending
+#: `('fp16','fp16','fp16','uint8')` returned three dtypes, the bias index fell off the
+#: end, and `synthesize` built an fp16 bias for a uint8 key. The wrapper then computed
+#: an fp16 key — correctly — and the certifier reported the census key UNREACHABLE.
+#: A real miss on MiniCPM-o was read for a day as "the engine cannot produce this key".
+#: Same shape as `_NP` in autotune_certify.py, which did not know an integer dtype and
+#: made it float32 in silence: the same bug written twice is a missing brick.
+_DTYPES = ("fp16", "bf16", "fp32", "fp64",
+           "int1", "int8", "int16", "int32", "int64",
+           "uint8", "uint16", "uint32", "uint64", "bool")
 #: `built` says the kernel actually COMPILED on the device during the
 #: certifying run. It is required because the screen cannot answer it: a CPU
 #: fallback computes correctly, so its deviation against the fp64 oracle is
@@ -137,8 +150,28 @@ def file_for(vendor: str, profile: str, kernel_qual: str, dtype: str, root: Opti
 # the key and its dtype
 # ---------------------------------------------------------------------------
 def key_dtypes(key: tuple) -> List[str]:
-    """The dtype names the launcher appended to the key, in argument order."""
-    return [str(k) for k in key if isinstance(k, str) and str(k).lower() in _DTYPES]
+    """The dtype names the launcher appended to the key, in argument order.
+
+    ZERO FALLBACK on an unknown name. Every string the launcher puts in a key is a
+    dtype (`key_of` appends `str(arg.dtype)` per tensor argument, after the `keys`
+    values, which are the bucket integers). So a string this table does not know is
+    not a thing to skip — skipping it SHIFTS every operand after it, and the caller
+    then synthesises the wrong dtype for the wrong argument and blames the kernel.
+    """
+    out: List[str] = []
+    for k in key:
+        if not isinstance(k, str):
+            continue
+        if str(k).lower() not in _DTYPES:
+            raise RuntimeError(
+                f"certify: key element {k!r} is a string this engine does not recognise as a "
+                f"dtype, and every string a key carries is one.\n"
+                f"  Known: {', '.join(_DTYPES)}.\n"
+                f"  Dropping it would shift every operand after it and synthesise the wrong "
+                f"dtype for the wrong argument — which reads as an UNREACHABLE key and hides "
+                f"a real miss.")
+        out.append(str(k))
+    return out
 
 
 def output_dtype(tuner, key: tuple) -> str:

@@ -9,7 +9,7 @@ every upload: on its sequential oracle and on its family's locked protocol the
 retraced artifact produces a byte-identical output to the old one where the
 old was right, and a right output where the old was not, every difference
 explained by the closed defect and nothing else. An artifact that fails the
-gate is not uploaded; it is a chantier opened and closed first. The old
+gate is not uploaded; it is a workstream opened and closed first. The old
 artifacts stay on the hub (a replace keeps the previous object downloadable);
 nothing is deleted. A cut run resumes from its last validated artifact.
 

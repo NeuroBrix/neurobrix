@@ -1074,8 +1074,10 @@ class PrismSolver:
                 if strat_name == "cpu_execution":
                     # CPU-only: capacity = host RAM budget. KV cache lives
                     # in host RAM alongside weights and activations.
-                    # Use 0.7 × ram_mb (matches `_try_cpu_execution`'s
-                    # budget formula, R34 generic).
+                    # Through `_host_budget_mb`: the free reading rounded DOWN onto the
+                    # commercial ladder, honouring NBX_PRISM_BUDGET_MB. NOT a fraction of
+                    # installed RAM — that formula is gone, and this comment claimed it for
+                    # long enough that a reader took a measurement off it (the Mac, 9675411a).
                     if profile.cpu and profile.cpu.ram_mb > 0:
                         total_capacity = int(self._host_budget_mb(profile) * 1024 * 1024)
                     else:
@@ -1509,7 +1511,7 @@ class PrismSolver:
                 # Any other input rank crashes at dispatch:
                 #   - 5D conv3d (CogVideoX VAE): 'too many values to unpack'
                 #     in _tiled_conv2d_spatial_torch (waits on the 5D tiling
-                #     chantier; runs native, fits at proof sizes, OOMs visibly).
+                #     workstream; runs native, fits at proof sizes, OOMs visibly).
                 #   - 3D conv1d (Kokoro iSTFTNet vocoder noise_convs / the audio
                 #     decoders generally): _pair reads stride[1] on a 1-element
                 #     stride list -> IndexError. A 1D audio conv is never a
@@ -2644,8 +2646,17 @@ class PrismSolver:
         """Host RAM through the same law: the free reading rounded down onto the ladder; without a
         reading, the installed figure rounded down (never the raw figure, never a fraction of it)."""
         installed = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
-        from neurobrix.core.prism.memory_budget import host_reading
+        from neurobrix.core.prism.memory_budget import budget_mb, host_reading
+        # THE DOOR, first. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool, and the device
+        # reading already honours it through `budget_mb`. This path did not, so a census
+        # enumerating rungs left the HOST budget at the machine's real free RAM: the rungs
+        # where layer_streaming must fire were never reached, and the strategy went uncensused
+        # at exactly the sizes it exists for (the Mac, 9675411a).
         r = host_reading()
+        door = budget_mb(r)
+        import os
+        if os.environ.get("NBX_PRISM_BUDGET_MB"):
+            return float(door)
         figure = min(r.free_mb, installed) if (r.measured and installed > 0) else (r.free_mb if r.measured else installed)
         return float(rung_down_mb(figure))
 
@@ -4487,10 +4498,18 @@ class PrismSolver:
 
         fresh = self._fresh_devices(devices)
         largest = max(fresh, key=lambda d: d.capacity_mb)
+        # The same unified-device guard the COMPONENT path carries. On a unified device host
+        # and device are the same bytes, so offloading frees nothing the budget has not
+        # already counted, and selecting zero3 there hands the executor a plan accepted under
+        # one memory model and run under another — it dies in zero3's CUDA machinery before a
+        # single op runs. The component path has refused this since 2026-09-09; this global
+        # path never did (the Mac, 9675411a).
+        if _device_is_unified(largest.device_string, profile):
+            return None
         allocations = {}
 
-        # Validate CPU RAM budget: weights must fit in 70% of RAM
-        # (reserve 30% for OS, activations, PyTorch overhead)
+        # Validate CPU RAM budget: the weights must fit the host budget, which is the free
+        # reading rounded down onto the ladder (`_host_budget_mb`) — not 70 % of installed RAM.
         if profile.cpu and profile.cpu.ram_mb > 0:
             total_weight_mb = sum(mem.weight_mb for _, mem in sorted_comps)
             available_ram_mb = self._host_budget_mb(profile)
@@ -4520,9 +4539,10 @@ class PrismSolver:
         documented in `triton_cpu_coverage_gaps.md` once the branch B
         Triton-CPU integration lands).
 
-        Activation budget: `sum(component peaks) <= cpu.ram_mb * 0.7`
-        (reserve 30% for OS, Python interpreter, MKL/oneDNN workspaces,
-        and intermediate activations not modelled by the estimator).
+        Activation budget: `sum(component peaks) <= _host_budget_mb(profile)` — the host's
+        free reading rounded down onto the commercial ladder, which is where the headroom
+        for the OS, the interpreter and unmodelled activations now comes from. It is NOT a
+        0.7 fraction of installed RAM; that formula no longer exists in this file.
         For profiles without a `cpu` config or with `ram_mb == 0`, accept
         unconditionally — the doctrine says Prism never refuses, and the
         runtime will fail clean if RAM is genuinely insufficient. This
@@ -4531,7 +4551,7 @@ class PrismSolver:
 
         Wall-time is intentionally unbounded — the strategy may take
         minutes or hours for large diffusion models at high resolution.
-        Doctrine R35: perf libre, disponibilité first.
+        Doctrine R35: performance is free, availability comes first.
 
         R34 model-agnostic: discrimination only by hardware-profile
         (`cpu.ram_mb`) and graph-derived component memory. No model
@@ -5019,7 +5039,7 @@ class PrismSolver:
         Manual ⊕ auto by set union: manual entries always end up in the
         result (manual > auto by construction; no conflict surface). Both
         sources default-absent ⇒ empty set ⇒ ZERO behaviour change for
-        any model not matching the criteria (anti-régression guarantee).
+        any model not matching the criteria (anti-regression guarantee).
 
         ZERO FALLBACK (engine audit #2 2026-07-05): read failures
         PROPAGATE. The former blanket try/excepts silently returned an

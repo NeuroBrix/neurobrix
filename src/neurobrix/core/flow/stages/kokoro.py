@@ -79,7 +79,7 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
 
     This function is retained for the TRITON path only (triton/flow/audio.py),
     which cannot yet run the `aten::lstm` forward graph (no Triton LSTM kernel) —
-    a separate chantier (P-KOKORO-TRITON-LSTM-KERNEL, R33). Removing it now would
+    a separate workstream (P-KOKORO-TRITON-LSTM-KERNEL, R33). Removing it now would
     break the untested triton path; the removal is deliberately scoped to compiled.
 
     Handles:

@@ -135,7 +135,7 @@ class AudioOutputProcessor:
         # copy into ~/.cache/huggingface/hub on every machine that ran this —
         # 76 MB of it was still sitting there on 2026-09-17 while the same
         # model sat on the NAS. (The R34 remedy, baking the codec into the
-        # container, is its own chantier; this stops the duplication now.)
+        # container, is its own workstream; this stops the duplication now.)
         from neurobrix.core.workspace import snapshot_path
         snac_model = snac.SNAC.from_pretrained(
             str(snapshot_path("snac_24khz"))).to(device).eval()

@@ -218,7 +218,7 @@ def test_backend_probe_survives_a_broken_module_name(monkeypatch):
 # --- the coverage markers ---------------------------------------------------
 
 def test_known_gaps_are_declared_in_one_place():
-    """Marker constants exist so a future chantier flips them once, the same
+    """Marker constants exist so a future workstream flips them once, the same
     pattern triton-cpu uses for its upstream gaps."""
     assert metal_backend.TRITON_METAL_BATCHED_MATMUL_BLOCKED is True
     assert metal_backend.TRITON_METAL_BF16_ATTENTION_BLOCKED is True

@@ -123,29 +123,30 @@ Higher-priority suspects on prior reading:
 
 ## RESOLVED — 2026-05-16
 
-Bisect (P-KOKORO-NATIVE-CUDNN-BATCH-NORM session) : breaking commit `ea90d66`
+Bisect (P-KOKORO-NATIVE-CUDNN-BATCH-NORM session): breaking commit `ea90d66`
 "fix(zero3): correct mat2-on-CPU crash via per-op slow-path forcing".
 
-Cause racine : InstanceNorm dans Kokoro encode.norm1.norm reçoit
-légitimement `running_mean=None, running_var=None` (sémantique torch
-standard pour training=True). La logique zero3 per-op-device override
-de ea90d66 s'appliquait au general single-device path (Kokoro 82M
-n'active pas zero3) et cassait cette signature légitime.
+Root cause: InstanceNorm in Kokoro `encode.norm1.norm` legitimately receives
+`running_mean=None, running_var=None` (standard torch semantics for
+training=True). The zero3 per-op-device override logic from ea90d66 applied to
+the general single-device path (Kokoro 82M does not enable zero3) and broke that
+legitimate signature.
 
-Fix indirect : entre `be5c7b8` et `3fb4430`, les refactors zero3/device
-des chantiers P-PRISM-NEVER-REFUSE v2 et P-SANA-4KPX-RUNTIME ont
-restructuré la per-op device override d'une façon qui ne mute plus les
-args None légitimes. Le commit fixeur exact n'a pas été épinglé
-(forward-bisect ~100+ commits, coût élevé / valeur nulle vs le
-livrable). Aucun commit ne nomme cudnn_batch_norm — side-effect.
+Indirect fix: between `be5c7b8` and `3fb4430`, the zero3/device refactors of the
+P-PRISM-NEVER-REFUSE v2 and P-SANA-4KPX-RUNTIME workstreams restructured the
+per-op device override in a way that no longer mutates legitimate None args. The
+exact fixing commit was not pinned (forward-bisect over ~100+ commits, high cost
+/ zero value against the deliverable). No commit names cudnn_batch_norm — it was
+a side effect.
 
-Validation : HEAD 2a72b31 + bisect endpoints a64aa4b GREEN, be5c7b8 RED
-confirmés cette session ; HEAD GREEN runtime direct ×3 + harness XPASS.
+Validation: HEAD 2a72b31 plus bisect endpoints a64aa4b GREEN, be5c7b8 RED,
+both confirmed in that session; HEAD GREEN on the runtime directly ×3 and
+harness XPASS.
 
-Garde-fou pour le futur : tout chantier touchant zero3/device override
-(notamment P-OP-LEVEL-CROSS-DEVICE-SPLIT Gap B) doit valider non-régression
-sur Kokoro-82M::native et plus généralement sur les ops InstanceNorm/
-LayerNorm/BatchNorm dont running_mean/running_var sont légitimement None
-en mode training.
+Guard rail for the future: any workstream touching zero3/device override
+(notably P-OP-LEVEL-CROSS-DEVICE-SPLIT Gap B) must validate non-regression on
+Kokoro-82M::native, and more generally on the InstanceNorm / LayerNorm /
+BatchNorm ops whose running_mean/running_var are legitimately None in training
+mode.
 
-Verdict : docs/verdicts/p_kokoro_native_cudnn_batch_norm/verdict.md.
+Verdict: docs/verdicts/p_kokoro_native_cudnn_batch_norm/verdict.md.

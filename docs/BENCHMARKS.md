@@ -208,7 +208,7 @@ sourced.
 - **The `--triton` engine is much slower than `compiled` on image and
   upscaler work** — a structural sm_70 limit, measured at ~12 % of cuBLAS.
 - **Time-to-first-token is ×3.9–4.1 behind ollama** at long contexts on the
-  Triton engine. It is the widest open front and its chantier is open.
+  Triton engine. It is the widest open front and its workstream is open.
 - **Every number here is 2016-era silicon.** We have no modern GPU and publish
   no number from one.
 

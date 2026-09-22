@@ -12,7 +12,7 @@ op behind it: the site to open, not a verdict on the output.
 The bound is relative to the window's own scale (max |value| of both sides),
 so a large activation is judged by its own magnitude; the first op over it is
 the site, and the ops after it are cascade until proven otherwise (the
-three-class discipline of the numerical chantiers: root, cascade, common
+three-class discipline of the numerical workstreams: root, cascade, common
 baseline). Matching is by (component, tid): op uids restart per component.
 """
 from __future__ import annotations

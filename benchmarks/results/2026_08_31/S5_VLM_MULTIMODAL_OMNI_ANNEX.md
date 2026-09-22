@@ -23,7 +23,7 @@ mean band [80,220] + std>5. Artifacts under
   the autoregressive image path is where the SIMT decode family pays off;
   first row where mode 2 beats mode 1 outright.
 - **VQA rows: triton 2.1–2.4× slower than compiled** — the vision-prefill
-  gap (large-M matmuls) named by the prefill chantier; Qwen3-VL-30B is the
+  gap (large-M matmuls) named by the prefill workstream; Qwen3-VL-30B is the
   headline number (501 vs 1136 s).
 - **Ming gate-band false-red**: both engines render a photorealistic apple
   (R29 eyeballed); image mean 79.1/78.9 vs anti-black band lower bound 80.

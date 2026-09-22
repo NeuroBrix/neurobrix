@@ -80,7 +80,7 @@ second concurrent generation; no change to the wire format's framing.
   comes out of the engine" and this document does not overrule it.
 * Not a design. Items 3 and 4 in particular touch the serving dispatcher's
   shape, which three open debts already describe; the design belongs to the
-  chantier that takes them together.
+  workstream that takes them together.
 * Not verified against a running Studio: the Studio repository is a SvelteKit
   scaffold with a Rust `greet` command at the time of writing (its own plan says
   so); every claim here about the engine was read in the engine's source, every

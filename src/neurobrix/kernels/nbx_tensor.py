@@ -1958,7 +1958,7 @@ class DeviceAllocator:
         """True when `ptr` lies inside a live device allocation this allocator
         handed out (a block's base, or a view inside it). The launcher asks
         before dispatching a kernel on an address: a foreign pointer is
-        refused, never launched (launcher contract, Metal chantier 2026-09-05).
+        refused, never launched (launcher contract, Metal workstream 2026-09-05).
         O(log n): the live ranges are re-sorted only when a registration
         changed since the last call."""
         ptr = int(ptr)

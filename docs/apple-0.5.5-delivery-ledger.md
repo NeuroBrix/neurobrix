@@ -128,7 +128,7 @@ block by block from storage, so resident memory is ONE block rather than the
 whole component. The 11 models below are therefore **SCHEDULED**, not refused:
 they run by weight block-streaming, throughput bounded by the storage read
 (local NVMe / shared cache, not the 7–9 MB/s hub link). Implementing that
-cascade tail on unified is the adaptive-memory chantier (this branch; the
+cascade tail on unified is the adaptive-memory workstream (this branch; the
 `return None` guard in `b23105fe` is the placeholder it replaces).
 
 **Scheduled — weight block-streaming on unified (11, weights exceed 22 GB usable

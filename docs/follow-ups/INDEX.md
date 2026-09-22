@@ -1,13 +1,13 @@
 # Follow-ups index (D10 backlog)
 
 Named, scoped technical-debt items that are documented but not
-fixed in the chantier where they were surfaced. Each entry:
+fixed in the workstream where they were surfaced. Each entry:
 **severity** (P0 blocks shipping / P1 user-visible / P2 hygiene),
 **scope** (one-liner), **site** (file:line if pinpointable),
 **repro** (minimum command).
 
 When a follow-up is fixed, the entry moves to the matching
-verdict in `docs/verdicts/<chantier>/` and is **removed from
+verdict in `docs/verdicts/<workstream>/` and is **removed from
 this index**; the orphan-tracking belongs here, the resolution
 belongs there.
 
@@ -24,7 +24,7 @@ should route through a `TritonDtypeEngine` seam so the triton engine is
 likewise the single authority for its routing-upcast policy (R30 symmetry of
 authority, not of code — R33 keeps the two engines sealed). Deferred here
 because it pulls in triton-MoE re-validation (P-TRITON-MOE-DETERMINISM
-territory) the torch chantier did not scope.
+territory) the torch workstream did not scope.
 **Site**: `src/neurobrix/triton/moe.py:375`; new seam in `src/neurobrix/triton/dtype.py`.
 **Repro**: n/a (architecture symmetry, no defect).
 **Surfaced**: P-DTYPE-MOE-ROUTER-FP32 closure (2026-05-26).
@@ -155,7 +155,7 @@ axis); remaining runtime consumer is the istftnet window-norm reconstruction.
 fixed-length (band-aid path active until the follow-on).
 **Surfaced**: P-AUDIO-P0a (2026-05-22); predictor half resolved 2026-05-28.
 
-### P-SYMBOLIC-ITEM-TRACKING (was P-SYMBOLIC-ARANGE-SUM-FROM-ITEM) — P1, PARKED capability chantier
+### P-SYMBOLIC-ITEM-TRACKING (was P-SYMBOLIC-ARANGE-SUM-FROM-ITEM) — P1, PARKED capability workstream
 **Scope**: chatterbox vocoder (s3gen) crashes building its pad mask. The mask
 sequence length is `arange(prompt_token_len + generated_token_len)`; the
 `.item()` on that token-count sum severs the symbolic link, so the mask dim
@@ -179,7 +179,7 @@ matrix-wide. The two shortcuts are both rejected on principle: re-enabling the
 deprecated expression-value match (disabled after a spatial-dim false-match
 incident) is value-coincidence bricolage; a runtime patch that re-derives the
 mask length treats the symptom and fragilises the general mechanism.
-**Decision (2026-05-24)**: PARK as a dedicated capability chantier, exactly like
+**Decision (2026-05-24)**: PARK as a dedicated capability workstream, exactly like
 [[P-CEIL-PAD-WINDOW]] (granite) and P-VIBEVOICE-NEXT-TOKEN-DIFFUSION-FLOW — a
 missing build-side capability, not a finishable bug. chatterbox conditioning is
 RESOLVED (audio-family section); only this vocoder mask-length symbolization
@@ -329,7 +329,7 @@ many times, occasionally produces 70 rows of pure white at top.
 
 ---
 
-## Audio-family quality (full audio chantier scope)
+## Audio-family quality (full audio workstream scope)
 
 ### P-AUDIO-OPENAUDIO-CARRIER-TONE — P0
 **Scope**: openaudio-s1-mini produces a quiet ~689 Hz carrier tone
@@ -518,7 +518,7 @@ reader does not chase the orphan POINT 9 reference.
 **Scope**: GQA path in `kv_cache_wrapper.py:461` has a latent
 bug under certain head-grouping configurations. Tracked but
 not currently triggered by any cached model.
-**Surfaced**: earlier triton chantier.
+**Surfaced**: earlier triton workstream.
 
 ### Gap B — P-OP-LEVEL-CROSS-DEVICE-SPLIT — P2
 **Scope**: op-level cross-device split (multi-GPU per-op
@@ -543,13 +543,13 @@ than the trace one.
 **Site (runtime side)**: the pad-to-multiple windowing handling at
 `src/neurobrix/core/runtime/graph/compiled_sequence.py:1532-1639`
 does not fire for this projector and must be extended; the
-shape-capability side is parked in a dedicated build chantier.
+shape-capability side is parked in a dedicated build workstream.
 **Shared primitive** — affects every pad/reshape/window-partition
 model (LLM masks, Swin upscalers, image); R23 byte-identical
 re-build of all such models mandatory before fixing.
 **Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "Transcribe this audio."`
 → `Failed at op aten.bmm::2: Expected [208,64] got [224,64]`.
-**Status**: PARKED — dedicated chantier, after the audio loop.
+**Status**: PARKED — dedicated workstream, after the audio loop.
 
 ### P-VIBEVOICE-NEXT-TOKEN-DIFFUSION-FLOW — P1
 **Scope**: VibeVoice-1.5B TTS needs a complete next-token-diffusion generation
@@ -578,14 +578,14 @@ would diverge blind.
 **Site (runtime side)**: `core/flow/` (new flow handler) +
 `core/flow/stages/vibevoice.py`. **Repro**:
 `neurobrix run --model VibeVoice-1.5B --prompt "Hello world."` → silent .wav
-(RMS ~2e-5). **Status**: PARKED — dedicated chantier, after chatterbox + orpheus.
+(RMS ~2e-5). **Status**: PARKED — dedicated workstream, after chatterbox + orpheus.
 
 ---
 
-## Per-chantier follow-up archive
+## Per-workstream follow-up archive
 
 When a follow-up is resolved, the entry moves to the relevant
-verdict in `docs/verdicts/<chantier>/`. Historical archive files
+verdict in `docs/verdicts/<workstream>/`. Historical archive files
 under `docs/follow-ups/archive/` preserve the original
 investigation context (e.g., `kokoro_cudnn_batch_norm_regression.md`
 for the Ch3-era Kokoro crash, now closed).

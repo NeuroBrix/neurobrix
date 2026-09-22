@@ -91,7 +91,7 @@ class TritonDDIMScheduler:
         if self.thresholding:
             raise NotImplementedError(
                 "ZERO FALLBACK: triton DDIM dynamic thresholding unwired "
-                "(needs a percentile reduction kernel) — follow-up chantier. "
+                "(needs a percentile reduction kernel) — follow-up workstream. "
                 "clip_sample is supported.")
         # Variance prediction → keep first half of the channels.
         if (model_output.ndim >= 2 and sample.ndim >= 2

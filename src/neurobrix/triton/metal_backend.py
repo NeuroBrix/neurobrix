@@ -46,7 +46,7 @@ import subprocess
 
 
 # --- Known coverage gaps of the Metal backend -------------------------------
-# Marker constants read by the dispatcher, so a future chantier flips them in
+# Marker constants read by the dispatcher, so a future workstream flips them in
 # ONE place when the upstream gap closes. Same pattern as the triton-cpu
 # markers. Sourced from the backend's published refusal list, 2026-09-03;
 # none of them is measured by us — the compile census in the adoption plan is

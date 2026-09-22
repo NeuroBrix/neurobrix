@@ -62,7 +62,7 @@ _FP16_SENTINELS: Iterable[str] = (
 # need fp32 because inner-dim accumulation exceeds fp16 max; div needs
 # fp32 because epsilon 1e-15 rounds to 0 in fp16 (min ~6e-8).
 # Pinned EXACTLY — adding to this set is a doctrine change that
-# warrants its own chantier.
+# warrants its own workstream.
 _EXPECTED_FP16_NEED_FP32 = frozenset({"mm", "bmm", "div", "addmm"})
 
 _PROMOTE_SENTINELS: Iterable[str] = (
@@ -92,7 +92,7 @@ def test_fp16_need_fp32_subset_is_exact():
     assert _FP16_NEED_FP32 == _EXPECTED_FP16_NEED_FP32, (
         f"_FP16_NEED_FP32 doctrine drift: got {set(_FP16_NEED_FP32)}, "
         f"expected {set(_EXPECTED_FP16_NEED_FP32)}. Any change here is "
-        "a doctrine change — requires its own chantier."
+        "a doctrine change — requires its own workstream."
     )
 
 

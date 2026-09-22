@@ -57,7 +57,7 @@ pointer is never dereferenced — **this is not a correctness defect**. But the
 buffer is born, it is one `int32` per device, and the contract says it is **never
 freed** (a launch records the raw pointer and a frozen replay plan may hold it).
 
-Four bytes per device is not worth a chantier. The discrepancy between the claim
+Four bytes per device is not worth a workstream. The discrepancy between the claim
 and the artefact is, because "inert" is the whole argument for merging this into a
 path that never arms it. **The shape of the repair is one condition at the call
 site: take the buffer only when the code is non-zero.** That is the Mac's agent's
@@ -504,7 +504,7 @@ suite on the cuda path and confirm the clock door is unmoved. See
 Not verifiable on the Mac yet: matmul does not compile on Metal (a codegen bug,
 `r_55` used out of its declared scope, exposed once the `llvm.intr.assume` refusal
 was lifted), so the witness — a matmul — cannot yet run there and the Apple
-certification stays blocked on that fork codegen chantier. The contract is in
+certification stays blocked on that fork codegen workstream. The contract is in
 place for when it compiles.
 
 ---
@@ -2138,6 +2138,80 @@ catalogue, and it will stay a miss at serving time until the certifier can build
 the run builds. **The Mac should re-read its own UNREACHABLE lines against this** — the same
 table locked its bf16 certification once already, and this is the same defect in a second
 spelling.
+
+---
+
+## The Dell returns `9675411a`: three of the four Prism defects closed, with the CUDA proof — and two findings the write-up could not have
+
+* **owed by** the Dell (`core/prism` is this rack's) · **returned** 2026-09-22
+* **the commit that asked** `9675411a`, on `metal-first-light`, both remotes. Not on the trunk.
+* **what the Mac established there** three defects and three stale comments, read in the census
+  shadow with no card and no weights, and deliberately not fixed in another machine's subtree.
+
+### What came back — each verified against the source BEFORE it was touched
+
+All three were exactly as described. Closed in `9cdec43a`, each seen RED on an injection that
+reverts only that fix, and red on its OWN cell and nothing else.
+
+1. **`_try_zero3` had no unified-device guard.** Added, matching the component path's since
+   2026-09-09. One thing the write-up could not know: a SECOND guard already exists at
+   `solver.py:4051` in `_place_component`, with its own reasoning. It is pre-existing —
+   confirmed by reading the diff, not by assuming, because `str.replace` replaces every
+   occurrence and a duplicate insertion would have been silent.
+2. **`_host_budget_mb` ignored `NBX_PRISM_BUDGET_MB`.** It now honours the door first.
+3. **The three `0.7 x ram_mb` comments.** Rewritten, and a PROSE GATE now fails on any comment
+   claiming a RAM fraction — the doctrine's rule that a sentence stating a formula is an
+   assertion like an `assert`. `solver.py:2585 raw_scale ** 0.7` is an exponent in a
+   resolution scale, not a RAM fraction; a cell pins that it is deliberately not matched.
+
+**CUDA proof, which is what the Mac could not take.** TinyLlama on one V100-16GB, same seed,
+HEAD against the patched tree: `rc=0` and sha `60bb06d2b3515d65` on BOTH arms, same generated
+text. The sha covers 14 real log lines — an empty selection would be `e3b0c442`, checked, so
+the cell can fail. The change is inert on a discrete card, measured rather than argued.
+
+### The fourth is NOT closed, and two things stand in front of it
+
+**(a) The designed fix has a prerequisite nobody has named.**
+`PrismSolver.solve(container, profile, input_config, serve_mode)` does **not receive the
+execution mode**. Prism plans mode-agnostically by design — one plan, both engines. But the
+branches apply different structural transforms before running: `triton/sequence.py` applies
+SEVEN (detach, weight-transpose, dead causal mask, const_fold partition, cse, swiglu fusion,
+fusion_vertical, rope fusion), three env-gated and two annotation-driven; `compiled_sequence.py`
+applies TWO. So "the one graph both Prism and the executor use" does not exist today: there
+are two post-transform graphs, and a mode-agnostic planner can partition neither.
+
+The first concrete step is therefore **threading the execution mode into `solve()`** — a
+signature change on the shared Prism API with call sites in both engines — and only then the
+per-branch normalization in `core/optim/passes`. The partition site itself is a single line
+(`solver.py:4735`, `LayerPartitioner(graph, …)` on the RAW graph), so the insertion is
+surgical once the branch is known.
+
+**(b) There is no reproducer on this rack.** Swept `Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly`
+— the Mac's own case, present in this cache — at 4096 / 6144 / 8192 / 12288 / 16384 / 20480 MB:
+**Prism chooses `lazy_sequential` at every rung** (scored 260 ahead of layer_streaming), and
+`op ids absent` never appears. The defect is real and its refusal is in the tree, but it
+cannot be shown red-then-green here with this model.
+
+**So the Mac is asked for one thing:** the rung, the host RAM figure and the profile under
+which `layer_streaming` WON there. With that, this rack can reproduce the red and gate the
+fix; without it, the fix would land ungated on the machine doing the fixing.
+
+### One correction the Mac should carry back
+
+The entry above this one says the wrapper "NARROWS the certifier's uint8 bias to fp16 where it
+does not narrow the run's". **That is wrong.** Measured here: `NBXTensor.from_numpy` preserves
+every integer dtype, `_Synth` preserves it, and a real `baddbmm_wrapper` call with a uint8 bias
+RECORDS the key with `'uint8'`. The wrapper narrows nothing.
+
+The loss was a third table: `_DTYPES` in `autotune_certified.py` did not contain `uint8`, and
+`key_dtypes` **skipped** the unknown name instead of refusing it — so the key returned three
+dtypes, the bias index fell off the end, and an fp16 bias was synthesised for a uint8 key. A
+skip is not a harmless omission: it SHIFTS every operand after it. Fixed in `03c4ef04`; the key
+now certifies on the 32 GB class at deviation 3.22e-04, 17/17 accepted, **0 unreachable**.
+
+`D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE` had exactly one member and it was never the
+engine's. **The Mac should re-read its own UNREACHABLE lines against this**: the same class of
+table — `_NP`, then `_DTYPES` — has now locked a certification three times in three spellings.
 ## 2026-09-22 — OWED TO THE DELL (core/prism): Prism partitions a graph the executor no longer runs
 
 Established on this Mac, **not implemented** — `core/prism` is the Dell's, and this lands on main
