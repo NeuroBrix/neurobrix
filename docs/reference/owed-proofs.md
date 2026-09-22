@@ -2093,3 +2093,36 @@ cannot fire is worse than none, because the comment beside it claims otherwise.
 **For the Mac**: the same three models will miss the same way on Metal, and the tell is always
 this — the census and the run agree on every key except those carrying one length, and that
 length is one the model computes from what it generated.
+
+## 2026-09-22 12:20 — the two stage-three questions, answered by running them
+
+**The over-large mochi projections.** The hypothesis on the table was "Prism tiles the decode
+first, so the shadow should have recorded the tiled shapes". A judged run of mochi-1-preview
+on the 32 GB class, at the censused request, settles it and the answer is neither side:
+
+```
+[ERROR] Pipeline failed: Failed at aten.silu::26 (aten::silu):
+GPU malloc failed (error 2) for 8752988160 bytes
+[device cuda:0 live_tracked=25963MB pool_cached=0MB driver_free=5624MB / driver_total=32501MB]
+```
+
+The RUN does not fit either. It dies after **26 keys** where the census recorded **73**, and
+it never reaches the 19 398 656 or 77 594 624 projections at all. So Prism does NOT tile this
+decode, the model does not run at this request on a 32 GB card, and the census's over-large
+keys are keys for a run that cannot happen: the shadow allocates nothing, so it walks the
+whole graph past the point a real run dies. **The census and the run are not following the
+same plan, and the reason is that the shadow has no memory limit at all.** That is one defect
+with two faces — a census that records what cannot run, and a plan that does not tile what it
+cannot fit — and mochi is where both show. It is no longer a lead: it is a measured failure
+with its byte counts.
+
+**The unreachable key, per class.** It is NOT unreachable. A judged run of MiniCPM-o-4_5 forms
+`baddbmm (64, 1024, 128, True, False, True, 'fp16','fp16','fp16','uint8')` and reports
+`no certified setting` for it — a real miss. The bias is an attention MASK and a mask is an
+integer; the certifier's synthesis table knew only float dtypes and `.get(name, np.float32)`
+turned uint8 into float32, so the wrapper keyed it fp16, the keys disagreed, and the miss was
+filed as "the census holds a key the engine cannot produce". Fixed at the source (3c99945d):
+the integer and boolean dtypes are in the table, an integral operand is synthesised as a mask
+of zeros and ones, and an unknown dtype is REFUSED by name rather than defaulted. **The Mac
+should re-read its own UNREACHABLE lines against this** — the same table locked its bf16
+certification once already, and this is the same defect in a second spelling.
