@@ -1701,3 +1701,57 @@ reading down onto the standard ladder. **These are not cosmetic**: this Mac meas
 check is `ram_mb × 0.7` ≈ 16.8 GB, not door-affected" *from the comment*, and concluded the door
 could not force `layer_streaming` on a small model. The conclusion happens to hold for another
 reason (defect 2), but it was read off a comment that describes code that is gone.
+
+## 2026-09-22 — the Apple pin moved, and the 09-21 figures are void
+
+**For the Dell, because it changes what the Mac's certified directory will be stamped with.**
+
+### The pin
+
+`6904de9f47398b00fd170c1259e65913051b9074`, on `benkelaya/triton-ext-nbx`, branch
+`nbx/applegpu-b9d5c06-residency` (a PRIVATE repo — a private repo is not a publication, and
+publishing upstream remains the owner's decision). It is `b9d5c06` — the triton-ext commit whose
+`ci/triton-hash.txt` pins Triton `4a15f415d8ac…`, our Triton — with our residency commit
+cherry-picked on top (clean, 45 insertions, `metal_native.m`).
+
+**The cherry-pick is forced, not preferred.** `triton_ext_driver.py:412` calls
+`_native().retain_resident(buf)`. `b9d5c06` contains no `retain_resident` and no `useResource`
+anywhere in its tree, so the pin alone breaks our driver on any loaded-address table. The two lines
+diverge at `5439436`: ours carried the residency fix, upstream's carried the f64-argument and
+timeout-poll work, and neither contained the other.
+
+### The build, which is not what the earlier note described
+
+Triton must be built with **`TRITON_EXT_ENABLED=1`**. It is `OFF` by default and it is exactly
+*"default visibility for Triton+LLVM symbol exposure to plugin extensions"* (`CMakeLists.txt:26`).
+Without it the plugin builds and installs and then dies at import with
+`symbol not found in flat namespace '__ZN4mlir6detail14TypeIDResolverINS_3gpu9BarrierOpEvE2idE'`.
+The plugin builds against the LLVM its Triton pins (`b010a18d`, which Triton downloads), not the
+`ce352942` artifact sitting in the old clone — that one belongs to the `5439436` line.
+
+### The 09-21 figures are void
+
+"72/72 backend tests, 129/0 fp64 oracles on b9d5c06" cannot be reproduced from anything on this
+disk, and the clone's reflog shows HEAD was never at `b9d5c06`: that build lived in a git worktree
+on `/private/tmp`, in a session scratchpad that is gone. **The only reference from now on is the
+run below, on the combined pin.**
+
+| | |
+|---|---|
+| backend's own suite | **82 passed, 2 failed** |
+| the 2 red | `test_torch_free.py::{test_dispatch_without_torch, test_address_table_without_torch}` |
+| why they are red | `inspect.getsourcelines` → `OSError: could not get source code`. The cells run the kernel through `python -c`, and `triton.jit` needs real source. A harness limitation, not the backend. |
+| the property they test, measured separately | **GREEN.** The same body from a FILE: `MetalDriver` active, vector add correct against numpy on both the `wrap` and `alloc` paths, and `torch` never in `sys.modules`. R33 holds. |
+| engine's triton unit suite, this environment | 158 passed, 7 skipped, 1 failed — the red one runs `neurobrix run --model TinyLlama-1.1B-Chat-v1.0` and the LOCAL cache is empty (the container is in the shared cache). Not a code defect, and models run at verification. |
+
+### The guard that did not exist
+
+`metal-first-light 796524eb`. The ephemeral-path guard this chantier's notes credited itself with
+was **not in the tree at all** — nothing looked at where a backend was installed. Three losses came
+through that hole. An install has three legs — package, environment, build tree (pip records the
+last in `direct_url.json`) — and losing any one loses the install, so `core.paths` now asks about
+all three and the Metal seam **refuses** rather than warns. Compared by resolved prefix, never
+substring: `/Users/x/tmpwork` is durable. 7 cells, red then green. The dead `/private/tmp` worktree
+is pruned; both remaining worktrees are durable.
+
+**Nothing is stamped yet.** Bucket loss on Metal is next, then the census, then certification.
