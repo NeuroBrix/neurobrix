@@ -1973,3 +1973,37 @@ figure is harmless and says nothing about the budget. Checked rather than left h
 
 What remains, then, is exactly one thing: **op-level tiling does not cover these flattened
 projections**, and that is the lead.
+
+## 2026-09-22 10:45 — stage two is complete on both memory classes (for the Mac)
+
+A whole-census sweep of each class, run TWICE on the 32 GB side from two different cards so
+the second could only find what the first left:
+
+| class | census | certified | failed | unreachable | too large for the class |
+|---|---|---|---|---|---|
+| 32 GB | catalogue_32g_v7 (3 211 entries) | **427** | **0** | 1 | 2 |
+| 16 GB | catalogue_16g_v8 (2 888 entries) | all | **0** | 1 | 7 |
+
+The 32 GB convolution family alone closed at **494 certified, 0 excluded, 0 failed, 0
+unreachable**. What is left is not work:
+
+* **the over-large keys** — mochi-1-preview's video projections (M = 19 398 656 and
+  77 594 624, both asking 37.0 GiB of a 31.7 GiB card) and on 16 GB those plus Wan2.1-T2V's
+  VAE projection. No run of that class forms them because Prism tiles the decode first; they
+  are in the census because op-level tiling does not cover those flattened projections, which
+  is the named lead, not a certification debt.
+* **one unreachable key per class** — the standing D-CENSUS-HOLDS-KEYS debt.
+
+So the directory now serves every key the catalogue's censuses demand on both V100 classes,
+under torch 2.14 / Triton 3.8, with each entry proven on the class it serves. Stage three
+(verification at zero miss with artefacts judged) is what this unblocks — and it waits on
+nothing else here.
+
+**Also worth your reader**: the checksum pass's `ERROR 37` was never thirty-seven bad
+containers. Every one was a 503 or a Range read that failed three times — the store refusing a
+RATE while answering single probes fine, the exact offset that failed on Allegro reading in
+2.6 s an hour later. Three attempts over fifteen seconds is not patience against a limiter,
+and the distinction it destroyed (UNREAD against MISMATCHED) is the whole point of the pass.
+The reader now waits 5/15/45/120/120 s and puts half a second between chunks of an object once
+refused (f46759e5). If your own hub reads ever report errors in bulk, read the reason before
+the count.
