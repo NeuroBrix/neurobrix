@@ -935,14 +935,30 @@ class PrismSolver:
         # asked for X specifically, picking Y silently would hide bugs).
         forced = os.environ.get("NBX_FORCE_STRATEGY", "").strip()
         if forced:
-            valid = {
-                "single_gpu", "single_gpu_lifecycle",
-                "component_placement", "pipeline_parallel",
-                "block_scatter", "weight_sharding",
-                "component_placement_lazy", "lazy_sequential",
-                "zero3",
-                "cpu_execution",
-            }
+            # DERIVED from the cascade, never a second copy of it. This was a hardcoded
+            # literal and it had drifted: `layer_streaming`, `op_level_tiling` and
+            # `cpu_streaming` are rungs of the cascade and the door rejected all three —
+            #     NBX_FORCE_STRATEGY='layer_streaming' is invalid. Valid values: [...]
+            # — so the engine's own "deterministic single-strategy selection for matrix
+            # validation" could not reach three of the strategies it validates. Measured
+            # 2026-09-22 while trying to exercise the streamed path, which is unreachable by
+            # score on this rack (`lazy_sequential scored 260 ahead of layer_streaming`).
+            #
+            # The correct source was already three lines below, in the OTHER error message
+            # of this same block: `sorted(n for n, _ in strategies)`. One of the two read the
+            # cascade and the other held a copy, and the copy is the one that gated entry.
+            # Two different questions, and they had been collapsed into one literal:
+            #   "is this a real strategy name?"  -> STRATEGY_REGISTRY, whose own comment
+            #      says every name Prism can emit must have an entry there;
+            #   "is it available on THIS profile?" -> the cascade, checked just below.
+            # Keeping them apart preserves the better message for a multi-GPU strategy
+            # asked for on a single-GPU profile ("not available for this device count"),
+            # which a cascade-derived `valid` would have turned back into a bare "invalid".
+            try:
+                from neurobrix.core.strategies import STRATEGY_REGISTRY as _REG
+                valid = set(_REG.keys())
+            except Exception:  # noqa: BLE001 — registry unavailable: fall back to the cascade
+                valid = {n for n, _ in strategies}
             if forced not in valid:
                 raise RuntimeError(
                     f"NBX_FORCE_STRATEGY='{forced}' is invalid. "
