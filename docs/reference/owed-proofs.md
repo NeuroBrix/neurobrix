@@ -3743,3 +3743,30 @@ than an unknown.
 2. Independently of Metal: is the 1 GiB screening budget the right shape of rule? It makes the
    largest shapes the least verified ones. A budget that scales, or a cheap windowed screen
    for over-budget shapes, would close a hole that exists on both machines.
+
+### Sharper, after two failed fixes: the row is ZEROS, and a scalar int64 offset fails too
+
+Corrections to the entry above, both from measurement.
+
+1. **"wrong values" was wrong. The row is empty.** `got[:4] = [0. 0. 0. 0.]` against a
+   reference of `[-5.39, 9.04, -4.50, 2.13]`. The reported `max |diff| 32.7` is just the
+   largest reference magnitude, because the output there is zero. The store does not address
+   the row at all; whether it reads as NaN or 0 is only what the allocation happened to hold.
+2. **Two formulations were tried and BOTH fail identically**, so the tree keeps neither:
+   - the big value moved out of the vector into a scalar int64 row base, small offsets still
+     cast to int64;
+   - the pointer advanced by a scalar int64 first, then indexed with pure **int32** vector
+     offsets (nothing large in vector arithmetic at all).
+
+   Both produce the same zeros past `2**31 // N`. The second is the strongest form of the
+   remedy available in a kernel — if the whole large offset is a scalar and the backend still
+   misses the row, the truncation is below anything the kernel can express.
+
+`stride_cm.to(tl.int64)` is also not available: a stride arrives as a plain Python int under
+specialisation (`AttributeError: 'int' object has no attribute 'to'`), so the int64 has to come
+from the program id. Recorded because it is the first thing anyone will try.
+
+**Conclusion: this is a wall in the Metal lowering, not a kernel defect we can spell around.**
+Three things were tried — the published remedy (already present), a scalar base, and a scalar
+pointer advance with int32 indexing — and the shape is unchanged. It needs someone in the
+`triton-ext` fork, with the CUDA half as the reference for what correct lowering produces.
