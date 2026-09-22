@@ -700,7 +700,7 @@ class PrismSolver:
 
     def solve(
         self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
-        serve_mode: bool = False,
+        serve_mode: bool = False, mode: str = "compiled",
     ) -> ExecutionPlan:
         """
         Solve optimal allocation with Best-Fit-Decreasing.
@@ -719,6 +719,12 @@ class PrismSolver:
         7. lazy_sequential - One component at a time
         8. zero3 - CPU offload
         """
+
+        # THE EXECUTION MODE, recorded before any rung runs. Prism plans for BOTH engines and
+        # has never needed to know which one; `layer_streaming` does, because the branches
+        # transform the graph differently before running it and a boundary must name an op the
+        # executor will still have. Default "compiled" keeps every existing caller's behaviour.
+        self._mode = str(mode or "compiled")
         self._serve_mode = serve_mode
         self._serve_cold_fallback = False  # Track if serve degraded to cold
 
@@ -1616,9 +1622,10 @@ class PrismSolver:
 
         return OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
 
-    def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False):
+    def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
+                    mode: str = "compiled"):
         """Backward compatibility alias for solve()."""
-        return self.solve(container, profile, input_config, serve_mode=serve_mode)
+        return self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
 
     # =========================================================================
     # MEMORY COMPUTATION - Full Intelligence
@@ -4733,6 +4740,33 @@ class PrismSolver:
             graph = graphs.get(comp_name)
             if graph is None:
                 return None            # cannot cut what we cannot read
+            # Cut the graph the EXECUTOR will run, not the one the container holds. Each
+            # sequence rewrites the graph in place before running it, so a boundary chosen on
+            # the raw graph can name an op the fusions have already folded away — measured:
+            # the swiglu fusion takes `aten.silu::843` and `aten.silu::890`, the two boundary
+            # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
+            # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
+            # and both sides then speak about the same ops.
+            from neurobrix.core.optim.passes.normalize import normalize_for_branch
+            # The family lives in the MANIFEST, not the topology — checked, because reading
+            # the wrong file returned "" and silently skipped the MoE fusion, which is the
+            # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
+            # that moves the boundaries most.
+            _family = ""
+            try:
+                _family = str(getattr(container, "family", "") or "")
+                for _attr in ("manifest", "_manifest"):
+                    if _family:
+                        break
+                    _man = getattr(container, _attr, None) or {}
+                    if isinstance(_man, dict):
+                        _family = str(_man.get("family") or "")
+                if not _family:
+                    _topo = getattr(container, "topology", None) or {}
+                    _family = str(_topo.get("family") or "")
+            except Exception:  # noqa: BLE001 — a container without a family still plans
+                _family = ""
+            graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family)
             part = LayerPartitioner(
                 graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
@@ -5438,9 +5472,10 @@ class PrismImportPlanner:
 # CONVENIENCE FUNCTION
 # =============================================================================
 
-def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None) -> ExecutionPlan:
+def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+          mode: str = "compiled") -> ExecutionPlan:
     """Convenience wrapper for PrismSolver.solve()"""
-    return PrismSolver().solve(container, profile, input_config)
+    return PrismSolver().solve(container, profile, input_config, mode=mode)
 
 
 def plan_record(plan: "ExecutionPlan") -> dict:
