@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Opening a packaged model file no longer overwrites the copy already installed.** Reading
+  a `.nbx` unpacks it into the local model store, and it did so even when a different build of
+  the same model was already there — so simply inspecting a newly built file replaced the
+  installed one, 41 GB, with nothing asking first. The reverse was worse and quieter: when the
+  installed copy was the newer of the two, the file being opened was ignored and the installed
+  one was returned under its name, so you could ask for one build and silently receive another.
+  Both are now refused, and the refusal says how to read the file without touching the store
+  and how to replace it on purpose. Running a model is unaffected.
+
 - **A plan made for another machine no longer borrows this one's memory.** When a model was
   planned against a description of a different computer — which is how work for one machine is
   prepared on another — the part of the calculation covering shared graphics-and-system memory
