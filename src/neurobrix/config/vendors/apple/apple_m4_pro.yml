@@ -338,6 +338,33 @@ dispatch:
 # (tools/bucket_loss.py, `--ladder profile`, sizes that SHARE each bucket with
 # its top among them — register 84).
 autotune:
+  # The loss below which a bucket cannot be told from THIS CHIP'S OWN NOISE. Derived, never
+  # chosen, and only valid for a bucket whose kernels ran inside `band_ms`.
+  #
+  # MEASURED 2026-09-22 on this M4 Pro, two ways that agree:
+  #   1. `tools/bucket_loss.py` swept an identical size list twice (`bmm_M_fp32` and
+  #      `bmm_M_fp32_rep2`). The tool seeds from the size, so both runs used the same operand
+  #      BYTES and every difference is the machine. Over 350 (size, configuration) pairs the
+  #      p95 of the relative difference is 51.08 % below 1 ms, 7.91 % at 1-2 ms, **5.08 % at
+  #      2-5 ms**, 14.77 % above 5 ms (unified memory is bandwidth-bound there and shared with
+  #      everything else on the machine).
+  #   2. `tools/rig_protocol.metal.json` measured the same quantity in 2026-09-17 by re-timing
+  #      one fixed shape twelve times: 5.0 % worst-pair at 2.19 ms, 2.1 % at 4.58 ms, ~31 % at
+  #      0.6 ms. Different method, different day, same answer.
+  #
+  # Why it matters more than it looks: the first Apple sweeps ran kernels at 0.3-0.8 ms and
+  # read 18-99 % "losses" that vanished at 2-5 ms — the contraction read 65-70 % at 0.5 ms and
+  # at most 5.8 % at 6.7 ms. A ladder verdict taken below this band is not a weak verdict, it
+  # is no verdict. `bucket_loss.py --evaluate` reads this and says so per bucket.
+  # The rows ARE the measurement: p95 of the spread, by the band the kernel ran in. A single
+  # figure would hide that this chip is worst below 1 ms AND rises again above 5 ms, where
+  # unified memory is bandwidth-bound and shared with every other process on the machine.
+  loss_tolerance:
+    bands:
+      - {up_to_ms: 1.0, pct: 51.08}
+      - {up_to_ms: 2.0, pct: 7.91}
+      - {up_to_ms: 5.0, pct: 5.08}
+      - {up_to_ms: null, pct: 14.77}
   buckets:
     default:
       - {up_to: 64, step: 1}

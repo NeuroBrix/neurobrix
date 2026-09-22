@@ -297,6 +297,27 @@ def measure(a):
     print(f"[bucket_loss] written {a.out} ({len(rows)} sizes, {doc['wall_s']} s)")
 
 
+def _loss_tolerance():
+    """[(up_to_ms, pct)] below which a bucket loss is not distinguishable from this chip's
+    own run-to-run noise, read from the PROFILE — never a constant here.
+
+    A ladder verdict is only as good as the band it was taken in. On Apple the measured p95
+    of the run-to-run spread is 51 % below 1 ms and 5.08 % in 2-5 ms, so the same 20 % reading
+    is meaningless in one band and decisive in the other. A profile that declares no tolerance
+    gets no verdict column rather than a made-up one.
+    """
+    try:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        spec = ((active_vendor_profile() or {}).get("autotune") or {}).get("loss_tolerance")
+        rows = (spec or {}).get("bands")
+        if not rows:
+            return None
+        return [(float("inf") if r.get("up_to_ms") is None else float(r["up_to_ms"]),
+                 float(r["pct"])) for r in rows]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def evaluate(a):
     # The `profile` ladder reads the engine's own `bucket_of`, which answers EXACT when no
     # vendor profile is bound — an evaluation run behind a door would then report every
@@ -312,7 +333,9 @@ def evaluate(a):
         fn = LADDERS[name]
         losses = []
         per_bucket = {}
+        per_bucket_ms = {}
         missing = 0
+        tol = _loss_tolerance()
         for s in sizes:
             top = fn(s)
             # the representative measured for this bucket: the largest measured size <= top
@@ -330,6 +353,7 @@ def evaluate(a):
             loss = t_bucket / t_opt - 1.0
             losses.append(loss)
             per_bucket.setdefault(top, []).append(loss)
+            per_bucket_ms.setdefault(top, []).append(t_opt)
         if not losses:
             print(f"  {name}: no size evaluable"); continue
         losses_sorted = sorted(losses)
@@ -339,9 +363,21 @@ def evaluate(a):
         print(f"  {name:6s}: buckets={n_buckets:3d} sizes={len(losses):3d} median loss={med * 100:5.1f} %  "
               f"max loss={worst * 100:5.1f} %  unevaluable={missing}")
         if a.verbose:
+            if tol:
+                print("      (profile noise p95 by band: "
+                      + ", ".join(f"<{'inf' if up == float('inf') else f'{up:g}'} ms {p:.1f} %"
+                                  for up, p in tol) + ")")
             for top in sorted(per_bucket):
                 ls = per_bucket[top]
-                print(f"      bucket top {top:5d}: n={len(ls):2d} median={sorted(ls)[len(ls) // 2] * 100:5.1f} % max={max(ls) * 100:5.1f} %")
+                med = sorted(ls)[len(ls) // 2]
+                ms = sorted(per_bucket_ms[top])[len(per_bucket_ms[top]) // 2]
+                verdict = ""
+                if tol:
+                    pct = next(p for up, p in tol if ms < up)
+                    verdict = (f"  [{ms:.2f} ms, noise p95 {pct:.1f} %: "
+                               f"{'ABOVE it' if med * 100 > pct else 'within it'}]")
+                print(f"      bucket top {top:5d}: n={len(ls):2d} median={med * 100:5.1f} % "
+                      f"max={max(ls) * 100:5.1f} %{verdict}")
 
 
 def main():
