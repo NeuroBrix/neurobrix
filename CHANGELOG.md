@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A configuration whose mask is an integer can be proven.** Some models pass an integer
+  mask where a bias is expected; the certification built a floating-point one instead and
+  then reported the configuration as one nothing would ever ask for, hiding a real gap. An
+  unrecognised type is now refused by name rather than quietly replaced.
+
 - **A certification refuses to start while nothing is saving its results.** Proving
   configurations writes them one at a time into the repository and nothing else carried them
   anywhere, so a power cut cost the whole run; the command now refuses unless the checkpointer
