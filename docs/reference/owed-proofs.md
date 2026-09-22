@@ -3383,3 +3383,46 @@ from the false positives.
 The scan is reproducible: `campagnes/2026_09_22_apple/` — match `acc +=` / `acc = acc +`
 whose right-hand side multiplies a variable assigned from a `tl.load` carrying `mask=`, with
 no `.to(tl.float32)` on the line, skipping docstrings and comments.
+
+### CORRECTION to that audit — 12 sites was wrong. One, and it does not manifest.
+
+My sweep was a regex and it over-reported. The rack READ all seven files, and the upcast in
+six of them sits on the **`tl.load` line** rather than in the product, which the regex cannot
+see. Verified here file by file rather than taken on trust:
+
+| file | verdict |
+|---|---|
+| `gemv_vec.py`, `mv_op.py`, `addmv_op.py` | `.to(tl.float32)` **at the load** — CLEAN |
+| `conv_depthwise2d.py` | `.to(tl.float32)` on BOTH loads — CLEAN |
+| `moe_decode_vec.py` | operand upcast at the load; the other dequantised into fp32 — CLEAN |
+| `conv_transpose2d.py` | **neither operand upcast** — the only real match |
+
+So the honest count is **one site, not twelve**, and my "check `conv_depthwise2d.py` first" was
+exactly wrong: it already does the right thing. A twelve-item list would have cost someone a
+day proving it empty.
+
+**And the one real site does NOT manifest on Metal.** Measured here against an fp64 reference
+written from the definition, `conv_transpose2d` in bf16:
+
+| shape | stride 2, pad 1 | stride 1, pad 1 |
+|---|---|---|
+| 8/8 at 16x16 | 0.002891 | 0.003019 |
+| 64/64 at 32x32 | 0.00338 | 0.003858 |
+| 64/64 at 64x64 | 0.0034 | 0.003462 |
+| 128/128 at 32x32 | 0.00335 | 0.003366 |
+
+Every cell at the bf16 mantissa floor, at the same sizes where depthwise went to 0.43-0.75,
+and padding does not move the floor. fp32 (1.65e-07) and fp16 (3.7e-04) likewise.
+
+**This refines the trigger, which is the useful part.** The source shape alone is not
+sufficient. In `depthwise_conv2d` both factors were BLOCKS — a masked `(BLOCK_HW, BLOCK_C)`
+load times a `(BLOCK_C,)` vector. In `conv_transpose2d` the weight is a SCALAR load, unmasked
+(`w_offset` is scalar by construction, one weight element for the whole output block). So what
+miscompiles on Metal appears to need a masked BLOCK times another block/vector, not a block
+times a scalar. That is a narrower and more testable statement than "native bf16 arithmetic on
+a masked operand", and it is what any future sweep should look for.
+
+The rack intends to upcast `conv_transpose2d` anyway, on the grounds that it costs nothing and
+is strictly more accurate. That is sound and I agree with it — but on this evidence it is
+**prophylactic, not a bug fix**, and the commit should say so rather than claim a defect it
+did not measure.
