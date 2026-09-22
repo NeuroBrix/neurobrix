@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-83 entries, of which five are placeholders and 78 carry a site. Two
+84 entries, of which five are placeholders and 79 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2216,3 +2216,34 @@ its silence is allowed to mean anything.
 
 **The lesson, in one line.** A search that finds nothing has told you nothing until you know
 it looked; and a compound command joined by `;` runs its tail wherever the head left it.
+
+### 84 — the ladder sweep that read 0.0 % because every size was its own representative
+
+**Where.** `tools/bucket_loss.py --evaluate`, this rack, 2026-09-22, while deciding the
+autotune ladder's tail above 8 192.
+
+**What it did.** The evaluator serves each swept size the configuration proven at its bucket's
+REPRESENTATIVE, and the representative is the largest MEASURED size in that bucket. Choose the
+sizes so that each lands in a bucket of its own — which is what a natural list of round
+numbers does, and what the first sweeps did — and every size is its own representative, served
+its own configuration, at a loss of exactly 0.0 %. The ladder under test never enters the
+arithmetic. Two sweeps reported `median 0.0 %, max 0.0 %` and a third `0.0 % / 0.2 %`, and a
+quarter-octave tail was landed on them. Measuring the same rows with three sizes inside each
+bucket, its top among them, read **5.2 %** at the bucket just above the knee.
+
+**What would it have done if the code were wrong?** Printed 0.0 % for every candidate ladder,
+including one with a single bucket covering the whole range — it cannot tell a good ladder from
+an absurd one, because it is not comparing them.
+
+**The fix.** The arrangement is part of the measurement: a ladder is evaluated only by sizes
+that SHARE its buckets, with each bucket's top among them, and a bucket carrying one size is
+reported as carrying one size. The rows that shipped were re-measured that way (0.0 % median,
+1.6 % max) and the commit that adopted the earlier ones was corrected in the same breath. A
+`profile` ladder now reads the engine's own `bucket_of` so the tool cannot drift from what
+ships, and `--evaluate` binds and NAMES its hardware profile, because `bucket_of` answers
+EXACT when no profile is bound — an evaluation behind a door would report every ladder as
+costless for a second, different reason.
+
+**The lesson, in one line.** A comparison that hands each candidate its own answer key is not
+a comparison; when a measurement can return the ideal number by construction, the arrangement
+that avoids it is the measurement.
