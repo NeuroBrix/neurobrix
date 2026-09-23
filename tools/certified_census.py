@@ -45,6 +45,7 @@ whole requests per model) and says so in `models[*].requests`.
 """
 from __future__ import annotations
 
+import shlex
 import argparse
 import datetime as _dt
 import json
@@ -190,7 +191,7 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
         lines = [l for l in log.read_text(errors="replace").splitlines() if "Error" in l or "ERROR" in l]
         tail = (lines[-1] if lines else "")[:300]
     return {"mode": mode, "rung_mb": rung_mb, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys, "error": tail,
-            "command": " ".join(cmd[2:])}
+            "command": shlex.join(cmd[2:])}
 
 
 def _graph_sha(model: str) -> str:

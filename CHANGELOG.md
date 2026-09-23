@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The command printed in a drift report can now be copied and run.** Reports write the command
+  that produced them so you can repeat it. Any argument containing a space — a prompt, a path
+  with a space in it — lost its quotes on the way into the report, so copying the line back into
+  a terminal ran a different command than the one described, usually with the first word of the
+  prompt as the whole prompt. The line is now quoted correctly.
+
 - **A very large model can now be run on a card that cannot hold it.** When no single
   component fits, the engine cuts that component into pieces and holds one at a time. That
   path existed but had never run: the memory it reserved left out the fixed tables a model
