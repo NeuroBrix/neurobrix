@@ -2636,7 +2636,14 @@ def addmm(bias, a, b,
 
     M, K = a.shape
     K2, N = b.shape
-    assert K == K2
+    # Named, not bare: a shape mismatch here reaches the census as
+    # "AssertionError: " with nothing in it, and a failure that carries no
+    # numbers costs a whole reproduction run to say what the raise could
+    # have said itself (2026-09-23, the two PixArt -MS containers).
+    if K != K2:
+        raise AssertionError(
+            f"addmm shape mismatch: ({M}, {K}) @ ({K2}, {N}) — the contracted "
+            f"dimension differs, {K} against {K2}")
 
     if M <= 4:
         a = a.contiguous()
@@ -5117,7 +5124,10 @@ def baddbmm_wrapper(
     input = input.contiguous()
     B, M, K = batch1.shape
     _, K2, N = batch2.shape
-    assert K == K2
+    if K != K2:
+        raise AssertionError(
+            f"baddbmm shape mismatch: ({B}, {M}, {K}) @ (..., {K2}, {N}) — the "
+            f"contracted dimension differs, {K} against {K2}")
 
     output = NBXTensor.empty((B, M, N), device=batch1.device, dtype=batch1.dtype)
 
