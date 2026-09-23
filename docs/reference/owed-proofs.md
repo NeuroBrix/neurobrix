@@ -3955,3 +3955,33 @@ screen and **313 s** after. That is the price of screening shapes the budget use
 it is bounded by the window rather than by the shape. If it is judged too slow for a suite,
 the lever is `_SCREEN_WINDOWS` or the profile's `autotune_screen_max_bytes` — not returning to
 seating the largest shapes unverified.
+
+---
+
+## 2026-09-23 — the fifteen kernel-test failures, measured. None was "pre-existing" in the innocent sense.
+
+The rack found its own version of this class was tests needing a card behind a no-card door.
+Mine were four different things, and the largest was **this campaign's own regression**.
+
+| cause | cells | what it was |
+|---|---|---|
+| bucketing added two arguments to `conv2d_forward_kernel` | **11** | `in_width_key`/`out_width_key` entered the signature when request-dependent dimensions were bucketed. `test_staged_dot_computes_not_merely_compiles` calls the jit function POSITIONALLY and was never updated, so twelve stride arguments landed two positions early and every config died with `missing argument 'output_height_stride'`. **Fixed**, 11/11 pass. |
+| a float compared for exact equality | **2** | `oracle_deviation(...) == 0.0` saw 7.397696655726238e-17 here and 0.0 on the rack: the windowed oracle multiplies a SLICE of `a`, a different BLAS kernel and summation order. Accelerate against OpenBLAS. **Bounded at 1e-12** and seen failing on an injected window bug. |
+| my own concurrent model run | **1** | `test_autotune_certify_first_light` failed with `the witness drifted 26.6% across the sweep (6.1180 -> 4.4930 ms)` while a PixArt render held the GPU. **Passes on a quiet host.** Not a defect; my second contention error of the campaign, after the 313 quarantined entries. |
+| the engine refuses the capability by design | **6** | Every `test_moe_decode_vec_oracle` cell builds int4-g128-asym expert tables, and `triton/moe.py:190` refuses them on Metal: *"quantized (int4) expert tables are not proven on Metal — the pinned-table contract was measured for the dense bf16 grouped GEMM only."* The file already had a Metal door for a DIFFERENT limitation (pointer loading) which does not open for this one, so six cells asserted a path the engine states it will not take. **Skipped with the engine's own sentence as the reason.** |
+
+### The capability owed: int4 expert tables on Metal
+
+Not a defect and not fixed here. The dense bf16 grouped GEMM's pinned-table contract was
+measured; the quantized path's triplet tables were not. Proving them is the same work done
+once more — and until it is done, `moe.py` is right to refuse and the cells are right to skip.
+Whoever takes it should remove the door in
+`tests/unit/kernels/test_moe_decode_vec_oracle.py` in the same commit, so the proof and the
+cells that read it land together.
+
+### One method note, because it cost a wrong reading
+
+The first pass over these failures was taken while a PixArt render was loading, and it
+reported six moe cells failing for a reason that was not theirs. The quiet re-run separated
+them. **Measuring a test suite is a measurement**, and the quiet-host rule applies to it
+exactly as it applies to a certification sweep.

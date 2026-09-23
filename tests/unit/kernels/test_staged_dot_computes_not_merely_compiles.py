@@ -192,9 +192,18 @@ def _run_pinned(x32, w32, blocks=None):
     grid = (triton.cdiv(N * OUT_H * OUT_W, bhw), triton.cdiv(OUT_C, outf), 1)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
+        # `in_width_key`/`out_width_key` are the two arguments the BUCKETED autotune key
+        # added to this kernel's signature (a 1-row convolution keys its width on the
+        # profile's ladder, a 2-D one keeps its exact extents — `_conv_width_key`). This cell
+        # was calling the jit function positionally and was never updated, so every config
+        # died with "missing argument 'output_height_stride'": the strides were landing two
+        # positions early. The wrapper passes them here and so does this call now.
+        from neurobrix.kernels.wrappers import _conv_width_key
+        _in_w_key, _out_w_key = _conv_width_key(IN_H, OUT_H, IN_W, OUT_W, KW, STRIDE, PAD, 1)
         conv2d_forward_kernel.fn[grid](
             x, w, out,
             N, IN_C, IN_H, IN_W, OUT_C, OUT_H, OUT_W,
+            _in_w_key, _out_w_key,
             *x.stride(), *w.stride(), *out.stride(),
             kernel_height=KH, kernel_width=KW,
             stride_height=STRIDE, stride_width=STRIDE,
