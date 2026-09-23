@@ -43,10 +43,24 @@ def _budget(monkeypatch, *, available_mb, door=None):
         monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
     else:
         monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(door))
-    profile = load_profile("default")            # apple, unified
+    profile = load_profile("default")
     profile.devices[0].unified_memory = True
+    # Read the budget of the device this cell MADE unified, BY NAME.
+    # `_prepare_devices` ends with `devices.sort(key=lambda d: (-d.capacity_mb, ...))`, so
+    # `devices[0]` is the LARGEST card, not the one touched above. On the Mac that sort is a
+    # no-op (one device) and the cell was right by accident; on this rack `default.yml`
+    # carries four V100s — 2x16 GB and 2x32 GB — so `devices[0]` came back as cuda:2, a
+    # 32 GB DISCRETE card, whose budget is 32 462 MB whatever the host reads. All three
+    # cells here were measuring it: this one failed honestly (`32462.0 < 32462.0`) and the
+    # two below PASSED while proving nothing about unified memory at all.
+    # The engine was never wrong: on cuda:0, the unified one, the budget is 4 096 MB at
+    # 6 000 MB free and 16 384 MB at 20 000 MB free — it tracks the ambient and lands on
+    # the ladder, which is exactly the law.
+    want = profile.devices[0].get_device_string()
     devices = _solver()._prepare_devices(profile)
-    return float(devices[0].budget_mb)
+    by_name = {d.device_string: d for d in devices}
+    assert want in by_name, f"{want} is not in the prepared devices: {sorted(by_name)}"
+    return float(by_name[want].budget_mb)
 
 
 def test_without_the_door_the_unified_budget_tracks_the_ambient():

@@ -136,6 +136,47 @@ def compute_tensor_gb(shape: List[int], dtype: str) -> float:
     return bytes_to_gb(compute_tensor_bytes(shape, dtype))
 
 
+_UNSPECIFIED_WIDTH = 4          # fp32: a request that names no dtype plans at the widest
+
+
+def _bytes_of(dtype, role: str) -> int:
+    """The byte width of `dtype`, or a refusal naming it.
+
+    These two functions used to default a miss — source to 2 and target to 4 — so any
+    name the map does not carry returned a factor of 2.0 for EVERY pair, identity
+    included: `compute_dtype_factor("bf16", "bf16")` was 2.0, and
+    `get_dtype_bytes_per_element("fp16")` was 4. A plan then reports exactly twice the
+    memory it needs, which reads as a real figure and cannot be told from one.
+
+    That default cost two machines hours on Flex.1-alpha's 2.000x (metal-first-light
+    b945e040 / 697e80b1) before the call site was instrumented and named it.
+
+    Refusing instead is safe to the measurement: every dtype string in all 59 containers
+    of this cache is a full name already — float32 (29), bfloat16 (27), float16 (3) — so
+    no plan that works today reaches this refusal. A short name arriving later is a real
+    defect at its source, and it now says so instead of halving itself.
+    """
+    table = _get_dtype_bytes()
+    if dtype is None:
+        # ABSENCE is not an unrecognised name, and this refusal is only about names.
+        # A request that names no dtype has always been planned at the widest width, and
+        # that is the safe direction for a memory plan: it over-estimates. Under-estimating
+        # is what let mochi's VAE accept a plan 40x too small. Callers that legitimately
+        # pass None: `InputConfig()` with no dtype (profiler.py:686).
+        return _UNSPECIFIED_WIDTH
+    try:
+        return table[dtype]
+    except (KeyError, TypeError):
+        raise ValueError(
+            f"compute_dtype_factor/get_dtype_bytes_per_element: unknown {role} dtype "
+            f"{dtype!r}.\n"
+            f"  Known: {', '.join(sorted(table))}.\n"
+            f"  This used to default silently (source=2, target=4), which returns a "
+            f"factor of 2.0 for any pair including identity and misreports every plan "
+            f"that touches it by exactly 2x. Give the full dtype name at its source."
+        ) from None
+
+
 def compute_dtype_factor(source_dtype: str, target_dtype: str) -> float:
     """
     Compute memory multiplier for dtype conversion.
@@ -147,17 +188,17 @@ def compute_dtype_factor(source_dtype: str, target_dtype: str) -> float:
     Returns:
         Multiplier (e.g., 2.0 for float16→float32)
     """
-    dtype_bytes = _get_dtype_bytes()
-    source_bytes = dtype_bytes.get(source_dtype, 2)
-    target_bytes = dtype_bytes.get(target_dtype, 4)
-
+    # The historical widths for an ABSENT operand are preserved exactly (source 2,
+    # target 4) so no plan that works today moves; only an unrecognised NAME — the
+    # defect the Mac flagged in b945e040 — now refuses instead of silently returning 2.0.
+    source_bytes = 2 if source_dtype is None else _bytes_of(source_dtype, "source")
+    target_bytes = 4 if target_dtype is None else _bytes_of(target_dtype, "target")
     return target_bytes / source_bytes
 
 
 def get_dtype_bytes_per_element(dtype: str) -> int:
-    """Get bytes per element for a dtype."""
-    dtype_bytes = _get_dtype_bytes()
-    return dtype_bytes.get(dtype, 4)
+    """Bytes per element for a dtype. REFUSES a name it does not know."""
+    return _bytes_of(dtype, "dtype")
 
 
 @dataclass

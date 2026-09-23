@@ -31,6 +31,7 @@ toolchain's own `replace`/`publish` command, paced (`--upload-mbps`).
 """
 from __future__ import annotations
 
+import shlex
 import argparse
 import hashlib
 import json
@@ -546,7 +547,7 @@ def _publish_patiently(name: str, cmd: list, logfile: Path) -> int:
     for attempt in range(1, PUBLISH_ATTEMPTS + 1):
         with open(logfile, "a") as fh:
             fh.write(f"== {time.strftime('%Y-%m-%d %H:%M:%S')} attempt {attempt}/{PUBLISH_ATTEMPTS} "
-                     f"{' '.join(cmd[2:])}\n")
+                     f"{shlex.join(cmd[2:])}\n")
             fh.flush()
             try:
                 rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT,

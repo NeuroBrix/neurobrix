@@ -14,6 +14,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The command printed in a drift report can now be copied and run.** Reports write the command
+  that produced them so you can repeat it. Any argument containing a space — a prompt, a path
+  with a space in it — lost its quotes on the way into the report, so copying the line back into
+  a terminal ran a different command than the one described, usually with the first word of the
+  prompt as the whole prompt. The line is now quoted correctly.
+
+- **A very large model can now be run on a card that cannot hold it.** When no single
+  component fits, the engine cuts that component into pieces and holds one at a time. That
+  path existed but had never run: the memory it reserved left out the fixed tables a model
+  carries inside its graph, which on one 16 GB card came to more than two gigabytes and were
+  loaded before anything else — so a plan that looked comfortable ran out of memory
+  immediately. Half of those tables were also being kept twice over. Once past that, the
+  pieces could not read each other's results, because what one piece hands to the next lost
+  the information the next one needed to make sense of it. All of this is fixed, and a model
+  far larger than the card now runs to completion on it, and answers coherently. One further
+  fault was found by that comparison and fixed: the piece-by-piece path was not carrying the
+  running memory of the conversation between pieces, so the first word of an answer was right
+  and everything after it degenerated into repetition. The answers are close to the whole
+  model's but not word-for-word identical, and the remaining difference has a known and
+  reported cause, which this note will resolve when it is measured rather than reasoned.
+  A second model of the same kind was then found to fail for a related reason — the running
+  memory of the conversation is held alongside every piece and was not being counted when the
+  pieces were sized — and now answers correctly on a card less than a third of its size.
+
+- **Opening a packaged model file no longer overwrites the copy already installed.** Reading
+  a `.nbx` unpacks it into the local model store, and it did so even when a different build of
+  the same model was already there — so simply inspecting a newly built file replaced the
+  installed one, 41 GB, with nothing asking first. The reverse was worse and quieter: when the
+  installed copy was the newer of the two, the file being opened was ignored and the installed
+  one was returned under its name, so you could ask for one build and silently receive another.
+  Both are now refused, and the refusal says how to read the file without touching the store
+  and how to replace it on purpose. Running a model is unaffected.
+
+- **A tiled image or video decode no longer hands kernels a mis-addressed tile.** When a
+  picture is too large to decode in one piece the engine cuts it into tiles. Each tile was
+  passed on as a view into the larger picture rather than as its own packed block, so any
+  kernel that walks memory in a straight line read from the wrong places. Tiles at the edge
+  of the picture were unaffected, because the padding step happened to repack them — which is
+  why the damage appeared as a grid, with tile interiors wrong and the seams between them
+  clean. Tiles are now packed before they are used.
+
+- **A video decode no longer crashes at the edge of the picture.** Padding an edge tile of a
+  video used the wrong number of arguments for five-dimensional data and raised an error
+  instead of padding. It was only reachable in the PyTorch execution mode; the Triton mode
+  takes a different padding path.
+
+- **Transposed convolutions are slightly more accurate in half precision.** The kernel behind
+  every upsampling step of an image or video decoder multiplied its two inputs at their own
+  precision before adding them up at full precision. Multiplying at full precision costs
+  nothing — the running total was already kept that way — and removes error that was being
+  introduced for no reason: 23% less in float16, 20% less in bfloat16, unchanged in float32.
+  No output was ever wrong because of this; it is an accuracy improvement, not a repair.
+
+- **A plan made for another machine no longer borrows this one's memory.** When a model was
+  planned against a description of a different computer — which is how work for one machine is
+  prepared on another — the part of the calculation covering shared graphics-and-system memory
+  read the memory of the machine doing the planning instead of the one described. A laptop with
+  24 GB was planned as though it had 251 GB, and a model needing 30 GB was reported as fitting
+  in 17 GB. The plan now never assumes more memory than the description states, and a machine
+  that is genuinely busy still plans on less.
+
+- **Models using complex numbers can be planned again.** Some audio models represent sound as
+  complex spectra before turning it back into a waveform. The planner's table of how many
+  bytes each number type occupies did not list the complex types, and had been quietly
+  assuming four bytes for them — half the real size for one, a quarter for the other. Once
+  unknown types began being reported rather than assumed (the previous entry), that omission
+  stopped the planner outright for those models. The table now carries them at their true
+  widths.
+
+- **A memory plan no longer reports twice the memory a model needs when a dtype is written
+  in short form.** The planner looks up how many bytes a number type takes. When the name it
+  was given was not one it knew — `bf16` rather than `bfloat16`, `fp16` rather than
+  `float16` — it quietly assumed 2 bytes on one side and 4 on the other, so every such plan
+  came out at exactly double, including when the model was not converting at all. A doubled
+  figure looks like a real figure, and it sent two machines chasing a memory estimate for
+  hours. An unrecognised type name is now reported, and says which names are recognised.
+  Every model shipped with the engine already uses the full names, so no working setup
+  changes.
+
+- **A model traced on a machine whose graphics cards cannot hold it now traces on the
+  computer's own memory.** Asking for a trace on the processor was accepted and then
+  ignored three times over — the tool still reserved graphics memory it would not use,
+  still assigned the work to a card, and still overrode the choice a moment later. A model
+  whose weights exceed every card, but fit in main memory several times over, could not be
+  prepared at all.
+
+- **The option that reduces a trace's image size now reaches video models.** It was accepted,
+  checked and passed along, and then silently did nothing for a video model whose input shape
+  came from a recorded run — which is the case where it is most needed, since those are the
+  traces large enough to exhaust a machine.
+
+- **A model streamed layer by layer no longer loads itself whole first.** When a model is too
+  large to hold at once the engine can run it in slices, holding one slice at a time. It was
+  still loading the entire model into the graphics card before the slicing was set up, so the
+  very models that need slicing ran out of memory before a single slice ran. The slicing is
+  now arranged first and each slice loads its own weights, as it was always meant to.
+
+- **A model streamed layer by layer no longer refuses to start.** When a model is too large to
+  hold at once, the engine can run it in slices. It chose where to cut by reading the model's
+  operation list before the runtime had finished rewriting it — and the rewriting merges and
+  removes operations, so the cut points named steps that no longer existed and the run stopped
+  before computing anything. The cut is now chosen on the same operation list the runtime will
+  execute. Six models reported this; it is fixed for the ones reproducible here.
+
 - **Publishing to the hub now waits out a busy object store instead of giving up on it.** The
   store this project publishes to pauses for ten to thirty seconds at a time. A publication
   that met one of those pauses was abandoned — once mid-upload, at 15 % of a 22 GB file — and

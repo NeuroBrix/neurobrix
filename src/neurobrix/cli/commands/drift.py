@@ -8,6 +8,7 @@ Triton branch must not), through the same CLI as a user's request. The
 report is written beside the dumps (`<out>/drift.json`, `drift.txt`)."""
 from __future__ import annotations
 
+import shlex
 import json
 import os
 import subprocess
@@ -63,7 +64,7 @@ def cmd_drift(args) -> int:
         cmd = nbx + ["run", "--model", args.model] + request + flags + ["--output", str(output)]
         log = out / f"{name}.log"
         with open(log, "w") as fh:
-            fh.write("$ " + " ".join(cmd) + "\n")
+            fh.write("$ " + shlex.join(cmd) + "\n")
             fh.flush()
             rc = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT).returncode
         print(f"[drift] {name} arm exited {rc}; dump {dump} ({dump.stat().st_size if dump.exists() else 0} bytes) — log {log}")

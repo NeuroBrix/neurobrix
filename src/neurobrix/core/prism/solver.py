@@ -548,6 +548,32 @@ def memory_ladder_rung_mb(free_mb) -> int:
 
 
 
+def _capped_budget_mb(reading, capacity: float) -> float:
+    """The law's budget for this reading, never above the capacity it budgets.
+
+    A BUDGET CANNOT EXCEED THE CAPACITY IT BUDGETS. The law rounds a reading onto the
+    commercial ladder and the nearest rung can sit ABOVE the device: a V100-16GB reads
+    capacity 15 564.8 MB (16 384 x 0.95) and came out with budget 16 384.0 — over the
+    capacity, and over the card's real driver_total of 16 151 MB. A plan sized against it is
+    accepted and then cannot run; measured on the class-1 MoE models, whose segments were cut
+    against 16 384 and OOM'd by ~286 MB at execution. e55e5c9e capped the UNIFIED reading by
+    capacity; this is the same invariant one level out, for every device kind.
+
+    EXCEPT BEHIND THE DOOR. `NBX_PRISM_BUDGET_MB` imposes a rung on every pool so a census
+    enumerating rungs is reproducible, and it must win over the ambient — that is its whole
+    purpose. Capping it by a capacity that was itself lowered from a live host reading puts
+    the ambient straight back: measured, door=8192 with 6 000 MB free returned 5 700, which
+    is the reading and not the rung, and the census would be a coin toss again.
+
+    So: the door is honoured exactly; only the DERIVED budget is capped.
+    """
+    from neurobrix.core.prism.memory_budget import budget_mb as _bmb
+    value = float(_bmb(reading))
+    if os.environ.get("NBX_PRISM_BUDGET_MB"):
+        return value
+    return min(value, float(capacity)) if capacity > 0 else value
+
+
 def _census_shadow_active() -> bool:
     """True when this process is a census SHADOW.
 
@@ -561,6 +587,54 @@ def _census_shadow_active() -> bool:
         return bool(_census.active())
     except Exception:  # noqa: BLE001 — no census module means no shadow
         return False
+
+def _graph_constant_bytes(graph: Optional[Dict]) -> int:
+    """Resident bytes of the constants baked into `graph`, as the EXECUTOR holds them.
+
+    `GraphExecutor._load_constants_from_graph` loads every tensor carrying
+    `constant: True` and a `constant_data` payload, and `_load_constant_triton`
+    narrows two of them on the way in — fp64 to fp32, complex128 to complex64,
+    because the Triton kernels are fp32-max. This mirrors that narrowing, so the
+    figure is what stays resident rather than what the graph declares.
+
+    A computable buffer (`is_computable`) is deliberately NOT counted: the loader
+    skips its constant_data and recomputes it at runtime resolution, so its traced
+    size is not what it occupies.
+
+    A dimension that is not a concrete int is skipped rather than guessed. That is a
+    symbolic constant and its size is a question for the resolver, not for a budget.
+    """
+    if not isinstance(graph, dict):
+        return 0
+    widths = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 4,
+              "int32": 4, "int64": 8, "int8": 1, "uint8": 1, "bool": 1,
+              "complex64": 8, "complex128": 8}
+    total = 0
+    for tdata in (graph.get("tensors") or {}).values():
+        if not isinstance(tdata, dict):
+            continue
+        if tdata.get("is_computable") or not tdata.get("constant"):
+            continue
+        if not tdata.get("constant_data"):
+            continue
+        shape = tdata.get("shape") or []
+        if not shape or not all(isinstance(d, int) and d > 0 for d in shape):
+            continue
+        dtype = str(tdata.get("dtype", "float32")).replace("torch.", "")
+        width = widths.get(dtype)
+        if width is None:
+            # ZERO FALLBACK: a dtype this table does not know is not silently
+            # halved or assumed 4 bytes — the caller gets a refusal it can read.
+            raise ValueError(
+                f"_graph_constant_bytes: unknown constant dtype {dtype!r}. "
+                f"Add its resident width to this table — guessing one would "
+                f"under-reserve the budget by exactly the amount that matters.")
+        n = 1
+        for d in shape:
+            n *= d
+        total += n * width
+    return total
+
 
 class PrismSolver:
     """
@@ -715,7 +789,7 @@ class PrismSolver:
 
     def solve(
         self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
-        serve_mode: bool = False,
+        serve_mode: bool = False, mode: str = "compiled",
     ) -> ExecutionPlan:
         """
         Solve optimal allocation with Best-Fit-Decreasing.
@@ -734,6 +808,12 @@ class PrismSolver:
         7. lazy_sequential - One component at a time
         8. zero3 - CPU offload
         """
+
+        # THE EXECUTION MODE, recorded before any rung runs. Prism plans for BOTH engines and
+        # has never needed to know which one; `layer_streaming` does, because the branches
+        # transform the graph differently before running it and a boundary must name an op the
+        # executor will still have. Default "compiled" keeps every existing caller's behaviour.
+        self._mode = str(mode or "compiled")
         self._serve_mode = serve_mode
         self._serve_cold_fallback = False  # Track if serve degraded to cold
 
@@ -929,14 +1009,30 @@ class PrismSolver:
         # asked for X specifically, picking Y silently would hide bugs).
         forced = os.environ.get("NBX_FORCE_STRATEGY", "").strip()
         if forced:
-            valid = {
-                "single_gpu", "single_gpu_lifecycle",
-                "component_placement", "pipeline_parallel",
-                "block_scatter", "weight_sharding",
-                "component_placement_lazy", "lazy_sequential",
-                "zero3",
-                "cpu_execution",
-            }
+            # DERIVED from the cascade, never a second copy of it. This was a hardcoded
+            # literal and it had drifted: `layer_streaming`, `op_level_tiling` and
+            # `cpu_streaming` are rungs of the cascade and the door rejected all three —
+            #     NBX_FORCE_STRATEGY='layer_streaming' is invalid. Valid values: [...]
+            # — so the engine's own "deterministic single-strategy selection for matrix
+            # validation" could not reach three of the strategies it validates. Measured
+            # 2026-09-22 while trying to exercise the streamed path, which is unreachable by
+            # score on this rack (`lazy_sequential scored 260 ahead of layer_streaming`).
+            #
+            # The correct source was already three lines below, in the OTHER error message
+            # of this same block: `sorted(n for n, _ in strategies)`. One of the two read the
+            # cascade and the other held a copy, and the copy is the one that gated entry.
+            # Two different questions, and they had been collapsed into one literal:
+            #   "is this a real strategy name?"  -> STRATEGY_REGISTRY, whose own comment
+            #      says every name Prism can emit must have an entry there;
+            #   "is it available on THIS profile?" -> the cascade, checked just below.
+            # Keeping them apart preserves the better message for a multi-GPU strategy
+            # asked for on a single-GPU profile ("not available for this device count"),
+            # which a cascade-derived `valid` would have turned back into a bare "invalid".
+            try:
+                from neurobrix.core.strategies import STRATEGY_REGISTRY as _REG
+                valid = set(_REG.keys())
+            except Exception:  # noqa: BLE001 — registry unavailable: fall back to the cascade
+                valid = {n for n, _ in strategies}
             if forced not in valid:
                 raise RuntimeError(
                     f"NBX_FORCE_STRATEGY='{forced}' is invalid. "
@@ -1631,9 +1727,10 @@ class PrismSolver:
 
         return OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
 
-    def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False):
+    def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
+                    mode: str = "compiled"):
         """Backward compatibility alias for solve()."""
-        return self.solve(container, profile, input_config, serve_mode=serve_mode)
+        return self.solve(container, profile, input_config, serve_mode=serve_mode, mode=mode)
 
     # =========================================================================
     # MEMORY COMPUTATION - Full Intelligence
@@ -2619,7 +2716,7 @@ class PrismSolver:
     # DEVICE PREPARATION
     # =========================================================================
 
-    def _device_reading(self, dev, capacity: float, host) -> "DeviceReading":
+    def _device_reading(self, dev, capacity: float, host, profile=None) -> "DeviceReading":
         """The one reading the law is applied to, for this device (memory_budget.py).
 
         A unified device is shared with the host by its nature: its free figure is the host's
@@ -2638,6 +2735,39 @@ class PrismSolver:
                                  source="census shadow: the profile's capacity")
         if dev.has_unified_memory:
             free = float(host.available_mb) if getattr(host, "measured", False) else float(capacity)
+            # A plan taken under a PROFILE may not assume more host memory than that profile
+            # declares. The live reading is this machine's; the profile's `cpu.ram_mb` is the
+            # machine the plan is FOR, and on a unified device that figure IS the pool.
+            #
+            # Without this bound a foreign profile is not reproducible, which is the premise
+            # the whole census rests on — the cascade reads the profile, not the card.
+            # Measured 2026-09-22: Flex.1-alpha under the Mac's `default-9f169c79`
+            # (memory_mb 18 186, cpu.ram_mb 24 576) planned on THIS rack at
+            # `budget_mb=131072` — the 128 GB rung of a 251 GB host — and took `single_gpu`
+            # with its four components summing to 30 327 MB against a capacity of 17 277 MB.
+            # The Mac, planning the same container under the same profile, refuses.
+            #
+            # `_host_budget_mb` already applies exactly this bound, `min(free, installed)`;
+            # this path did not, so the two halves of the same law disagreed.
+            # On a machine planning under its OWN profile the two figures agree and nothing
+            # moves; a busy machine still lowers, which is the 2026-09-10 repair.
+            declared_host = float(getattr(getattr(profile, "cpu", None), "ram_mb", 0) or 0)
+            if declared_host > 0 and declared_host < free:
+                free = declared_host
+            # AND never more than the device itself can hold. On unified memory the device's
+            # pool is a SUBSET of the machine's RAM, so a reading taken from host memory has
+            # to be capped by the device's own capacity or the budget exceeds the thing it is
+            # a budget for. Measured 2026-09-22 on the Mac's profile: capacity 17 276.7 MB,
+            # budget 24 576.0 — the profile's cpu.ram_mb, straight through. A plan budgeted
+            # at 24 GB against a 17 GB device accepts plans that cannot run, which is the
+            # same failure as the 131 072 MB reading this bound was added to remove, just
+            # smaller. Both halves are needed: the host bound stops another machine's RAM
+            # leaking in, this one stops the machine's RAM exceeding its own GPU.
+            #
+            # Still a CEILING, not a replacement: a busy host lowers below capacity, which
+            # is the 2026-09-10 repair, and `min` preserves that.
+            if capacity > 0:
+                free = min(free, float(capacity))
             return DeviceReading(kind="device", capacity_mb=float(dev.memory_mb), free_mb=free, unified=True,
                                  measured=bool(getattr(host, "measured", False)), source=str(getattr(host, "source", "")))
         try:
@@ -2730,14 +2860,25 @@ class PrismSolver:
                     free_live = None
                 if free_live is not None:
                     used = max(0.0, capacity - free_live)
-            reading = self._device_reading(dev, capacity, host)
+            reading = self._device_reading(dev, capacity, host, profile)
             note = _describe_budget(reading)
             logging.getLogger(__name__).info("%s: memory budget — %s", dev.get_device_string(), note)
             devices.append(DeviceState(
                 device_string=dev.get_device_string(),
                 capacity_mb=capacity,
                 external_used_mb=used,
-                budget_mb=float(_budget_mb(reading)),
+                # A BUDGET CAN NEVER EXCEED THE CAPACITY IT BUDGETS. The law rounds a
+                # reading onto the commercial ladder, and the nearest rung can sit ABOVE
+                # the device: a V100-16GB reads capacity 15 564.8 MB (16 384 x 0.95) and
+                # came out with budget 16 384.0 — over the capacity, and over the card's
+                # real driver_total of 16 151 MB. A plan sized against it is accepted and
+                # then cannot run; measured on the class-1 MoE models, whose segments were
+                # cut against 16 384 and OOM'd by ~286 MB at execution.
+                #
+                # e55e5c9e capped the UNIFIED reading by capacity. This is the same
+                # invariant one level out, where it holds for every device kind: the ladder
+                # may round a reading, it may not round it past the hardware.
+                budget_mb=float(_capped_budget_mb(reading, capacity)),
                 tile_rung_mb=int(_tile_rung_mb(reading)),
                 budget_note=note,
                 spec=dev,
@@ -4752,7 +4893,44 @@ class PrismSolver:
                     if mem.total_bytes > budget_bytes}
         resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
                               if name not in streamed)
-        segment_budget = budget_bytes - resident_beside
+        # And the graph's CONSTANTS, which are resident beside every segment and
+        # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
+        # baked into graph.json is not a component, so it was invisible here while
+        # being the first thing the executor allocates.
+        #
+        # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct on a 16 GB V100
+        # (`NBX_MALLOC_TRACE`, one run): 2160 MB live before the first segment
+        # loads, every byte of it from `_load_constant_triton` — 54 RoPE tables
+        # declared `[163840, 64]` bfloat16, `max_position_embeddings` materialised
+        # in full for a request of 8 tokens, and held twice. The partition cut
+        # against 15 539 MB while execution offered 13 680 MB; the segment asked
+        # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
+        # segments that fit, instead of a plan that cannot run.
+        constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
+                             for name in streamed)
+        # And the KV CACHE, for the same reason and with the same blind spot. It is
+        # inside the streamed component's `total_bytes` — which is why that component
+        # is correctly classified as streamed — but the PARTITIONER sizes segments from
+        # `_bytes_for` (weights) less the graph's own activation curve, and the cache is
+        # in neither: the session allocates it, outside the graph, before the first
+        # segment loads, and it stays resident for every one of them.
+        #
+        # Measured 2026-09-22, Qwen3-Coder-30B-A3B-Instruct on a 16 GB V100, one run of
+        # `NBX_MALLOC_TRACE` — every live block at the failure, by site:
+        #     593.5 MB  memory_pool ComponentArena   (lm_head — resident_beside DOES see this)
+        #     771.0 MB  triton/kv_cache.py __init__  (24 blocks — resident_beside does NOT)
+        # and the allocator's own figure at the OOM was `live_tracked=1365MB`, which is
+        # 593.5 + 771.0 to the megabyte. Segment 1 asked 14 855 MB against 14 086 MB of
+        # free memory and missed by 769 — the cache, within two megabytes.
+        #
+        # `_estimate_kv_cache_bytes` already exists and is already what the component
+        # estimate uses; this is the same number, reserved one level down where the
+        # segments are cut. A model with no cache estimates zero and nothing changes.
+        kv_bytes = 0
+        if getattr(self, "_needs_kv_cache", False):
+            kv_bytes = self._estimate_kv_cache_bytes(
+                container, getattr(self, "_target_dtype_str", "float16"))
+        segment_budget = budget_bytes - resident_beside - constant_bytes - kv_bytes
         if segment_budget <= 0:
             return None
 
@@ -4763,6 +4941,33 @@ class PrismSolver:
             graph = graphs.get(comp_name)
             if graph is None:
                 return None            # cannot cut what we cannot read
+            # Cut the graph the EXECUTOR will run, not the one the container holds. Each
+            # sequence rewrites the graph in place before running it, so a boundary chosen on
+            # the raw graph can name an op the fusions have already folded away — measured:
+            # the swiglu fusion takes `aten.silu::843` and `aten.silu::890`, the two boundary
+            # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
+            # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
+            # and both sides then speak about the same ops.
+            from neurobrix.core.optim.passes.normalize import normalize_for_branch
+            # The family lives in the MANIFEST, not the topology — checked, because reading
+            # the wrong file returned "" and silently skipped the MoE fusion, which is the
+            # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
+            # that moves the boundaries most.
+            _family = ""
+            try:
+                _family = str(getattr(container, "family", "") or "")
+                for _attr in ("manifest", "_manifest"):
+                    if _family:
+                        break
+                    _man = getattr(container, _attr, None) or {}
+                    if isinstance(_man, dict):
+                        _family = str(_man.get("family") or "")
+                if not _family:
+                    _topo = getattr(container, "topology", None) or {}
+                    _family = str(_topo.get("family") or "")
+            except Exception:  # noqa: BLE001 — a container without a family still plans
+                _family = ""
+            graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family)
             part = LayerPartitioner(
                 graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
@@ -5487,9 +5692,10 @@ class PrismImportPlanner:
 # CONVENIENCE FUNCTION
 # =============================================================================
 
-def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None) -> ExecutionPlan:
+def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+          mode: str = "compiled") -> ExecutionPlan:
     """Convenience wrapper for PrismSolver.solve()"""
-    return PrismSolver().solve(container, profile, input_config)
+    return PrismSolver().solve(container, profile, input_config, mode=mode)
 
 
 def plan_record(plan: "ExecutionPlan") -> dict:

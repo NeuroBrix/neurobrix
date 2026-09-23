@@ -19,6 +19,8 @@ runs wherever the allocation points.
 
 from __future__ import annotations
 
+import os
+
 from typing import Any, Dict, List, Optional
 
 from neurobrix.core.strategies.base import ExecutionStrategy
@@ -31,6 +33,20 @@ class LayerStreamingStrategy(ExecutionStrategy):
     #: each segment. That is managing its own residency, and it is why this
     #: strategy needs the same runtime hook zero3 uses.
     manages_weight_residency = True
+
+    #: And it loads them ITSELF, per segment, inside `segmented_run`. That is a NARROWER
+    #: claim than the flag above and the two must not be conflated: zero3 also manages its
+    #: own residency, but it does so THROUGH the loader — `load_component_weights`
+    #: partitions its blocks onto pinned host — so zero3 needs the whole-component load to
+    #: happen. This strategy needs it NOT to happen, because `segmented_run` calls
+    #: `load_weights` per segment and the whole-component load defeats the entire point.
+    #:
+    #: Without this, `_ensure_weights_loaded` loaded the component whole and then installed
+    #: the segmentation, in that order — so every class-1 MoE model died before any segment
+    #: ran: `live_tracked=0MB`, one allocation of 32 332 025 856 bytes on a 16 151 MB card,
+    #: and not one LAYERDIAG line. The predicate's own docstring named that outcome as the
+    #: thing it existed to prevent; it gated the install and not the load.
+    loads_own_weights = True
 
     def __init__(self, context, strategy_name: str):
         super().__init__(context, strategy_name)
@@ -188,7 +204,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
         return last
 
-    def install_for_executor(self, component_name: str, executor) -> None:
+    def install_for_executor(self, component_name: str, executor) -> bool:
         """Make this component's own executor run segment by segment.
 
         Called by `RuntimeExecutor._ensure_weights_loaded` for any strategy
@@ -203,13 +219,46 @@ class LayerStreamingStrategy(ExecutionStrategy):
         exactly as it was.
         """
         if not self._segments_for(component_name):
-            return
+            # Not a streamed component — it stays whole and the runtime must load it.
+            # Saying so is the caller's only way to tell the two apart.
+            return False
         if component_name in self._installed:
-            return
+            return True
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
         nbx_path = self._nbx_path(component_name)
+
+        # The base executor's constants are now dead, and they are not small.
+        #
+        # Every executor loads the constants baked into ITS OWN graph at
+        # construction (`_load_constants_from_graph`). A segment executor's graph
+        # carries the constants its own ops read, so the segments together hold
+        # the whole set — and the base holds a second, complete copy of it, while
+        # its `run` is about to be replaced by `segmented_run` and never executes
+        # a single op again.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct (`NBX_MALLOC_TRACE`):
+        # 108 live blocks of 20 971 520 B = 2160 MB before the first segment loads,
+        # all from `_load_constant_triton`, for 54 distinct constants. Exactly half
+        # of that — 1080 MB on a 16 GB card — is this copy.
+        #
+        # The base is already weightless under this strategy: `_ensure_weights_loaded`
+        # returns early for a strategy that declares `loads_own_weights`, so it never
+        # loads a single weight. Holding its constants made it half-populated, which
+        # is the inconsistency, not the release.
+        released = 0
+        base_weights = getattr(executor, "_weights", None)
+        if isinstance(base_weights, dict) and base_weights:
+            held = {n for seg in segments
+                    for n in (getattr(seg, "_weights", None) or {})}
+            for name in [n for n in base_weights if n in held]:
+                released += 1
+                base_weights.pop(name, None)
+        if released and os.environ.get("NBX_LAYER_DIAG") == "1":
+            print(f"   [LAYERDIAG] released {released} base-executor constants of "
+                  f"'{component_name}' — the segment executors carry them",
+                  flush=True)
 
         def segmented_run(inputs=None, *args, **kwargs):
             values = dict(inputs or {})
@@ -247,8 +296,45 @@ class LayerStreamingStrategy(ExecutionStrategy):
             return last
 
         executor.run = segmented_run
+
+        # An interceptor registered on this executor must reach the SEGMENTS, because
+        # this executor no longer runs an op — `run` is `segmented_run` above, and the
+        # triton sequence that consults interceptors is compiled by each segment.
+        #
+        # The autoregressive flow registers the KV attention interceptor on the
+        # component's executor AFTER the strategy is installed, so nothing here can
+        # forward a registration that has not happened yet: the call itself is
+        # forwarded instead.
+        #
+        # Measured 2026-09-22 on DeepSeek-Coder-V2-Lite-Instruct — the arms agree on the
+        # FIRST token and diverge from the second, which is the signature of a decode
+        # that is not reading a cache rather than of a broken graph:
+        #     whole     Sure, I'd be happy to
+        #     streamed  Suresearchsearchsearchsearchsearchsearchsearch
+        #
+        # One interceptor instance for all segments, deliberately. It indexes layers as
+        # `call_count % num_layers` on a counter it never resets, so three segments run in
+        # order inside one decode step continue the count instead of restarting it — the
+        # segmenting is invisible to the cache, which is the property that makes a shared
+        # instance correct rather than merely convenient.
+        _register = getattr(executor, "register_triton_interceptors", None)
+        if _register is not None:
+            def register_on_segments(interceptors, _base=_register, _segs=segments):
+                _base(interceptors)
+                for seg_exec in _segs:
+                    fn = getattr(seg_exec, "register_triton_interceptors", None)
+                    if fn is None:
+                        raise RuntimeError(
+                            "layer_streaming: a segment executor cannot take an "
+                            "interceptor registration. Its decode would silently run "
+                            "with no KV cache, which reads as a model defect and is not "
+                            "one — a refusal is the only honest answer.")
+                    fn(interceptors)
+            executor.register_triton_interceptors = register_on_segments
+
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)
+        return True
 
     def prepare_inputs(self, component_name: str,
                        inputs: Dict[str, Any]) -> Dict[str, Any]:

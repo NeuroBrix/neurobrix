@@ -657,9 +657,36 @@ class TilingEngine:
                 tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
             else:
                 import torch
-                tile = torch.nn.functional.pad(tile, (0, pad_w, 0, pad_h), mode='replicate')
+                # `replicate` takes 2 pad values per padded dim and REQUIRES one pair per
+                # spatial dim of the input rank: 4 for a 4-D NCHW tile, 6 for a 5-D NCDHW
+                # one. Passing 4 for a 5-D video tile raises NotImplementedError from
+                # torch — so a video edge-tile in COMPILED mode crashed here. The triton
+                # path never reached it because it takes `pad_wrapper` above, which is why
+                # this survived: the mode that exercises video tiling is not the mode with
+                # the bug. The temporal axis is never padded (t_positions guarantees
+                # t + t_tile <= T by construction), so its pair is (0, 0).
+                pads = ((0, pad_w, 0, pad_h, 0, 0) if tile.dim() == 5
+                        else (0, pad_w, 0, pad_h))
+                tile = torch.nn.functional.pad(tile, pads, mode='replicate')
 
-        return tile
+        # A TILE IS A SLICE, AND A SLICE IS NOT CONTIGUOUS.
+        #
+        # `input_tensor[sl]` above strides across the parent's rows: an interior 32-wide
+        # tile of a 64-wide image comes back with strides (16384, 4096, 64, 1), row stride
+        # 64 for a 32-wide tile. Handed to a flat-indexed wrapper that assumes packed
+        # memory, it resolves to the WRONG ADDRESSES and produces silent garbage — the
+        # Sana 4Kpx conv::55 incident, 94 % of elements past 1.0 absolute, and the rule
+        # `.claude/rules/kernels-and-triton.md` states in its own words: "Audit every
+        # `x[:, :, ...]` and add `.contiguous()`; it short-circuits at zero cost when
+        # already contiguous."
+        #
+        # The asymmetry is what makes it a GRID rather than a uniform mess: an EDGE tile
+        # goes through the pad above and comes back contiguous and correct, while every
+        # INTERIOR tile did not. Tile interiors wrong, tile seams clean.
+        #
+        # Mode-polymorphic and R33-safe: NBXTensor carries its OWN `contiguous()` (it is
+        # not torch's method), which is how `kernels/wrappers.py` has always done this.
+        return tile.contiguous()
 
     def __repr__(self) -> str:
         return (

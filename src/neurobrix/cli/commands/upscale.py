@@ -130,7 +130,8 @@ def cmd_upscale(args):
         batch_size=1, height=in_h, width=in_w, dtype="float32",
     )
     solver = PrismSolver()
-    execution_plan = solver.solve_smart(container, hw_profile, input_config)
+    execution_plan = solver.solve_smart(container, hw_profile, input_config,
+                                        mode=locals().get('execution_mode') or 'compiled')
     print(f"   Strategy: {execution_plan.strategy}")
     # The choice, said out loud. Prism scores every viable strategy and takes
     # the fastest — invisible unless printed, and an engine that decides
