@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-87 entries, of which five are placeholders and 82 carry a site. Two
+103 entries, 98 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 95 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2330,6 +2330,273 @@ it in the docs.
 or the first thing it blocks is the documentation of the rule it enforces — and possibly its
 own fix.
 
+### 88 — the census's frozen-dimension check reported `[]` for a model whose spatial dims are frozen
+
+**Where.** `tools/certified_census.py::frozen_dims`, this rack, 2026-09-22, found while
+chasing why mochi-1-preview's judged run dies for lack of memory. Present since the check was
+written.
+
+**What it did.** `where_the_symbol_chain_breaks.py` classifies a break by how the literal
+relates to the symbol's trace value — `v`, `v*2`, `v*4`, `v//2`, … — and `frozen_dims`
+reported only `relation == "v"`. A dimension frozen downstream of an upsample or a reshape
+breaks on a MULTIPLE of the trace value, never on the value itself, so it produced no row at
+all: the census printed `frozen: []`, `status: ok`, and harvested the model as if inspected.
+
+mochi's VAE breaks `height` and `width` at `aten._unsafe_view::1` on `v*2` — 28 from a trace
+of 14, 44 from 22. 180 of its 353 five-dimensional activation tensors then carry CONCRETE
+spatial dims.
+
+**What would it have done if the code were wrong?** Printed `frozen: []` — which is what it
+printed when the code WAS wrong. The check's healthy output and its blind output are the same
+string, and 20 of the 59 containers in this cache produced it.
+
+**What the silence cost, arithmetic rather than opinion.** The profiler sizes `aten.silu::26`
+at `[1, 256, 84, 56, 88]` = 0.20 GiB. The run allocates `[1, 128, 84, 480, 848]`, and
+`1*128*84*480*848*2 == 8752988160` — exactly the byte count the allocator refused. A **40x**
+under-estimate, so Prism accepted a plan that cannot run and the engine died for memory in a
+VAE its estimator called comfortable. Three sessions read that failure as a Prism defect, a
+lifecycle defect and a tiling defect in turn; it was none of them.
+
+**The fix.** The derived-relation row is now REPORTED and carried as `adjudicated: False`,
+and the census prints `UNADJUDICATED: N derived-relation break(s)` beside the model. The
+tool's caution is kept — an architecture constant can coincide with an arithmetic of the
+symbol, and a graph alone cannot tell them apart — so it is a question, not a verdict: `?`
+rather than a plausible reconstruction. A retrace is still queued only by an adjudicated row,
+because 20 of 59 containers must not all stop at once on a question nobody has answered.
+
+**The lesson, in one line.** A classifier that reports one of its own classes and silently
+drops the rest has an empty answer and a healthy answer that look identical — enumerate what
+a check does NOT report, and print the count even when you cannot judge it.
+### 89 — three cells whose subject is decided by a file that differs on every machine
+
+**Where.** `tests/unit/prism/test_the_census_imposes_a_rung_and_reads_no_ambient.py`, all
+three cells, from the file's birth (metal-first-light `81154c79`).
+
+**The shape.** The helper reads `load_profile("default")` — and `default.yml` is
+**gitignored**, generated per machine by hardware detection. The cell's own comment says
+`# apple, unified`, which is true where it was written and false here: on this rack
+`default.yml` carries four V100s, 2x16 GB and 2x32 GB. The helper then sets
+`profile.devices[0].unified_memory = True` and reads `_prepare_devices(profile)[0]`, but
+`_prepare_devices` ends with `devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))`,
+so index 0 of the RESULT is the largest card, not the device just modified. On one device
+the sort is a no-op and the two indices agree; on four they do not, and the cells measured
+**`cuda:2`, a 32 GB DISCRETE card**, whose budget is 32 462 MB whatever the host reads.
+
+**What would they have done if the code were wrong?** On THIS rack, two of the three pass
+regardless: they pin `NBX_PRISM_BUDGET_MB`, which applies to any device, so they were green
+about a card unrelated to their subject. The third could never pass here — it asks a
+discrete card to move with host pressure, the one thing the memory law says it must not do —
+and read `assert 32462.0 < 32462.0` on main and on the merge alike. It cost one bisection as
+a merge suspicion before the device strings were printed.
+
+**The engine was never wrong.** On the device the cell had actually made unified: budget
+**4 096 MB** at 6 000 MB free, **16 384 MB** at 20 000 MB free — tracking the ambient and
+landing on the commercial ladder, exactly `core/prism/memory_budget.py`.
+
+**The fix.** Select by NAME — `by_name[profile.devices[0].get_device_string()]` — and assert
+the name is present, so a future sort or rename fails loudly instead of measuring a neighbour.
+
+**The lesson, in one line.** A cell whose SUBJECT comes out of a gitignored, per-machine file
+is a different cell on every machine — 8 of this repo's 35 hardware profiles are ignored, and
+the same fact killed a frozen-worktree run an hour earlier in the same session; name the shape
+you need and build it, never inherit it from the room. (Second, smaller: mutating a collection
+by index and reading the result by index asserts that the call between them preserves order —
+write that assertion down, or select by name.)
+
+### 90 — a door that watches the command line cannot see a library that computes where it writes
+
+**Where.** `.claude/hooks/guard-cache-hacks.sh`, the blocking hook that refuses writes to the
+shared container cache, against `src/neurobrix/nbx/cache.py:extract()`.
+
+**The shape.** The hook inspects a SHELL COMMAND and refuses it when the command names the
+cache path. `NBXContainer.load()` takes a path to a `.nbx`, and `extract()` then resolves the
+DESTINATION itself — `cache_dir / <the .nbx's parent directory name>`. No argument on the
+command line names the cache, so there is nothing for the hook to match.
+
+**What it cost, 2026-09-22 17:44.** A call made to GATE a freshly built container's symbolic
+dims printed
+
+    [Cache] Extracting model.nbx -> ~/.neurobrix/<cache>/mochi-1-preview
+    [Cache] Done: 43 files, 41.05GB extracted
+
+and replaced the canonical `mochi-1-preview` — the census's own source of truth — with a new
+build. The command that did it named only a path under `nbx/builds/`. Both states survived as
+files (`models/video/mochi-1-preview/model.nbx`, 2026-07-07, and the new build), so nothing
+was lost; nothing REFUSED, which is the entry.
+
+**What would the hook have done if the code were wrong?** Exactly what it did: pass. It is
+green on every write of this class and always will be, because the string it looks for is
+produced inside the process after the hook has already run. Its healthy output and its blind
+output are the same silence.
+
+**How wide it was.** `is_cached()` returns False whenever `.cache_meta.json` is missing, and
+only **2 of the 59** containers in this cache carry one. So for 57 of them any load from a
+`.nbx` re-extracted over the installed tree.
+
+**The mirror nobody had named.** The same slot is keyed on the `.nbx`'s PARENT DIRECTORY
+NAME, so two builds of one model in different trees always collide. When the cache is NEWER
+than the requested file, `is_cached()` is True and the old code returned the cached tree —
+a DIFFERENT container under the requested name, with no line printed. That is worse than the
+overwrite, and it was reached by the same call.
+
+**The fix, as a door rather than a census.** `extract()` refuses at the LIBRARY seam, above
+the cached short-circuit, whenever the cache slot did not come from this `.nbx`: fresh
+install allowed, same recorded source allowed, anything else refused — and an ABSENT record
+refuses rather than assumes, because absence is the common case here and the least intended
+place to overwrite. The opening is named (`NBX_ALLOW_CACHE_REPLACE=1`, or
+`allow_replace=True`), and the refusal names the way to READ without replacing
+(`NEUROBRIX_CACHE=<scratch>`) — which had to be corrected once, because the first draft
+advertised `NEUROBRIX_CACHE_DIR`, a variable that does not exist.
+
+The RUNTIME path is deliberately untouched: `neurobrix run` passes the extracted DIRECTORY
+and `ensure_extracted` returns it without calling `extract()`. Measured after the fix: all
+59 containers load, 0 refused.
+
+**The lesson, in one line.** A guard that reads the command line only sees the writes whose
+destination is written on the command line — put the door where the write happens, in the
+library that computes the path, and test it by calling that function rather than by typing a
+command.
+
+
+### 91 — the stimulus-collision guard passed a trace it could not have failed
+
+**Where.** `forge/tracer/worker.py`, `_decollide_video_dims.collides()` — the guard that is
+supposed to refuse a trace stimulus whose values collide with the model's own constants.
+
+**What it passed.** `--trace-spatial 30,54` on mochi-1-preview's transformer. It printed
+`De-collided 5D trace dims: [1, 30, 54] -> [10, 30, 54]` and reported nothing wrong. The
+trace then completed, the container built, and the RUN died:
+
+    Failed at aten.mul::18 (aten::mul): Cannot broadcast (2, 22260, 24, 64) and (11872, 24, 120)
+
+`aten.cos::1::out_0` had been given dims `[4050, 24, {add(s1=10, s3=54), trace 64}]`. The last
+axis is the **head_dim** — an architectural constant — symbolised as `time + width`, because
+10 + 54 = 64. At the request's real extents that expression becomes 28 + 106 and the rotary
+table stops matching Q/K.
+
+**What would the guard have done if the stimulus were wrong?** Passed — which is what it did.
+It checks subset **PRODUCTS** of {b, T, H, W} against `occupied`, checks them for duplicates,
+and checks affine forms `(d-1)*k`, `d*k`, `(d+1)*k` for k in (2, 4, 8, 16). It never checks
+subset **SUMS**. Meanwhile the symbolisation deliberately MATCHES sums — the "bare-sum
+carrier" that single-value matching misses — so one half of the system can create a carrier
+the other half never looks for.
+
+**TWO gaps, and closing either alone still misses this case.** `occupied` is built from the
+config's literal ints and `b*v`. 64 is `attention_head_dim // 2` = 128 // 2, the rotate_half
+split: a DERIVED constant that was never in the set. So adding sums without seeding
+`occupied` with derived constants still passes 30,54, because there is nothing there for the
+sum to collide with; and seeding derived constants without adding sums also passes, because
+the carrier is a sum. (Named by the Mac on reading the first write-up of this, and correct.)
+
+**A THIRD constraint the guard does not apply to an operator's extent.** `--trace-spatial
+26,27` cleared the collision rule and died at
+`shape '[2, -1, 10, 26, 27]' is invalid for input of size 162240`: W must be divisible by
+`patch_size`. The nudge search knows this — "nudge in PATCH-SIZE steps so patchified models
+keep divisibility" — and the operator-supplied path does not go through it.
+
+**The rule that discriminates, measured in both directions.** With sums added, `occupied`
+seeded with {v, b*v, v//2, v//4, v*2}, and the BATCH exempt from sums as it already is from
+products:
+
+    T=10 H=30 W=54   (what I traced)    -> SUM[64]   correctly refused
+    T=10 H=60 W=106  (vendor default)   -> clean     history agrees
+    T=10 H=26 W=30                      -> clean, and it traced (OK, 11337 ops)
+
+Exempting the batch is not cosmetic: without it the vendor's own default is flagged on
+`b + T = 2 + 10 = 12 = in_channels`, rejecting an extent that has always worked.
+
+**NOT YET FIXED, and the entry is filed anyway** — which is the point of filing it. The
+change is three lines in `collides()`, but the blast radius needs `occupied` reconstructed
+per model from each `hf_snapshots/<model>/<component>/config.json`, because a rule that
+over-rejects makes models UNTRACEABLE rather than merely wrong. Filed now because the guard's
+green on that trace will otherwise read as coverage the next time someone looks.
+
+**The lesson, in one line.** A guard that enumerates one family of arithmetic — products —
+while the thing it guards against is built from another — sums — is green by construction on
+the whole second family, and its silence is indistinguishable from a clean stimulus.
+
+
+### 92 — the stability witness proves the regime held, not that the ranking was decided quietly
+
+**Where.** The certifier's stability witness, leaned on by BOTH machines as evidence that a
+sweep was trustworthy. Named by the Mac on 2026-09-22 (`c1fd98d7`) after they quarantined 313
+of their own entries; audited here the same day and found to be the larger problem of the two.
+
+**The shape.** The witness times a reference kernel before and after a sweep and compares at
+an 8 % tolerance. That is a real measurement and it works — it refused 38 of the Mac's sweeps,
+up to 33.6 % drift. But what it proves is that the REGIME did not move much across the sweep.
+
+The content of a certified entry is not the regime. It is the RANKING: which candidate config
+won. Contention that changes which config wins WITHOUT moving the witness by 8 % passes it
+untouched, and the entry is then a ranking decided on a busy machine, recorded as if decided
+on a quiet one.
+
+**What would the witness have done if the host were busy?** Passed, in every case where the
+contention was under 8 % — which is most of them. Its green and its blind are the same green.
+
+**The clock lock has the same shape and was leaned on the same way.** This rack locks every
+card to 877/1290 and verifies it. That proves the CLOCK held. It says nothing about whether
+the card was otherwise idle, and a certification is a timing measurement.
+
+**Audited here, from the entries' own `proof.date` against what else was writing:**
+
+| window | entries | independent model runs active |
+|---|---|---|
+| 09-16 16:29-23:59 | 7 596 | 29 |
+| 09-17 00:00-04:13 | 2 491 | **0** |
+| 09-20 18:12-18:42 | 62 | 23 |
+| 09-21 19:35-23:58 | 871 | 2 025 |
+| 09-22 00:00-06:30 | 1 713 | 3 402 |
+| 09-22 06:48-10:19 | 117 | **0** |
+
+**10 242 of 12 851 entries — 79.7 % of this directory — were measured in windows when model
+runs were on the rack.** The clean remainder is 2 608.
+
+**One entry is proven contaminated rather than merely suspect, and it is quarantined.**
+`baddbmm_kernel.fp16`, key
+`(64, 1024, 128, True, False, True, 'fp16', 'fp16', 'fp16', 'uint8')`, certified
+2026-09-22T14:10:30 while a mochi render and a Kokoro walk-extent run held cards. Removed
+rather than annotated, so `--only-missing` re-does it on a quiet host; the pre-quarantine file
+is kept whole at `docs/reference/quarantine/`. It is the uint8 bias key — the one the current
+mandate asks to finish.
+
+**What is NOT claimed.** That all 10 242 rankings are wrong. Contention may or may not flip a
+winner, and the audit cannot say which entries actually moved; the proxy is "a run log was
+written during the window", which proves the rack was busy, not that a given key's sweep
+overlapped a given run. The bulk is reported, not quarantined — 10 242 entries is the owner's
+decision, not a session's.
+
+**THE COROLLARY, and it is the Mac's, paid for.** Adopting "nothing runs beside a gate" is
+not enough: you must MEASURE which of your own tools touch the device. They described
+`coverage.py`, `classify_unnamed.py` and `switchover.py` to their owner twice as "no GPU,
+safe to run beside certification". Three lines proved otherwise —
+`autotune_certify._autotuners()` instantiates the Metal runtime, so those three open the
+device. They were policing the discipline with tools that violated it.
+
+Asked of this rack's tools, with the CUDA DRIVER rather than with torch
+(`cuDevicePrimaryCtxGetState` on device 0, which answers whether a primary context is live):
+
+    baseline                          False
+    import autotune_certify           False
+    tools/certified_checkpoint.py     False
+    tools/certified_census.py         False
+    tools/hub_cache_diff.py           False
+    tools/wait_for.py                 False
+
+None of them opens a context, and the census additionally runs behind
+`CUDA_VISIBLE_DEVICES=`, which is a door rather than a promise. So the corollary does not
+convict anything here — but the measurement is recorded because "we checked and it was clean"
+and "we assumed it was clean" are the same sentence until someone runs the probe. Limit,
+stated: this tests IMPORT, not execution; a tool that opens a context only when it does work
+would pass it.
+
+**The lesson, in one line.** A witness that measures the CONDITION either side of a
+measurement does not witness the measurement; when what you record is a choice between
+candidates, only a quiet host makes that choice mean anything, and no before/after reading
+substitutes for it.
+
+---
+
 ### 500 (was 88 — renumbered, see note) — `neurobrix`'s exit status could not express failure, so every gate over it was empty
 
 **2026-09-23, Apple/Metal campaign.** `src/neurobrix/__main__.py` was:
@@ -2432,6 +2699,44 @@ which is the most believable excuse there is.
 
 ---
 
+### 93 — a source-inspection gate that a COMMENT could satisfy, and then break
+
+`tests/unit/prism/test_a_strategy_that_loads_its_own_weights_is_installed_first.py::test_install_happens_before_the_skip_returns`
+asserted an ordering inside `RuntimeExecutor._ensure_weights_loaded` by searching its raw
+source text:
+
+```python
+block = src[src.find("loads_own_weights"):]
+i_install = block.find("install_fn(comp_name, executor)")
+i_return = block.find("return")
+assert i_install > -1 and i_return > i_install
+```
+
+**What it would do if the code were wrong**: on 2026-09-22 the code was made *more* correct —
+the unconditional `return` became `if took_over: ... return`, so a whole component the
+strategy manages but does not stream is loaded by the runtime instead of being skipped. The
+cell went RED: `assert (913 > -1 and 504 > 913)`. Nothing about the executable ordering had
+regressed. The explanatory comment added above the call contains the word *returns*, and
+`find("return")` matched it 400 characters before the statement it was looking for.
+
+The same weakness runs the other way and is the reason this is a register entry rather than a
+fixed typo: a `return` written only in a comment would have SATISFIED the ordering just as
+easily. The gate was reading prose and reporting it as structure. Its green never meant what
+it was read to mean, in either direction.
+
+**Repair.** The source is tokenised and its comments and docstrings removed before any
+`find`, and the search string is the tokenised spelling. The invariant is unchanged — what
+changed is that the instrument now looks at code. A second cell was added for the new
+invariant (the skip is taken only when the strategy SAYS it took the component over), and a
+third asserts it on the strategy's behaviour rather than on its source, because a behavioural
+cell cannot be satisfied by any sentence at all.
+
+**The lesson, in one line.** A gate that greps source text is measuring a document, not a
+program: strip the prose before you assert on the structure, and prefer a cell that calls the
+thing over one that reads about it.
+
+---
+
 ## Numbering: a per-machine range, because sequential numbers collided twice in one day
 
 Two entries written on this Mac (88, 89) collided with two written on the rack the same day,
@@ -2444,6 +2749,215 @@ either machine's.
 `88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
 before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
 are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
+
+---
+
+### 94 — the register's own gate went blind the moment the numbering scheme changed
+
+`tests/unit/docs/test_vacuous_gate_register_counts_itself.py` matched an entry heading with
+
+```python
+re.match(r"^### (\d+)(?:[-–](\d+))?\s+—", line)
+```
+
+— the em-dash required immediately after the number. When the rack and the Mac agreed on
+per-machine allocation blocks (rack 1-499, Mac 500-999) after appending the same number twice in
+one day, the Mac's renumbered entries arrived spelled
+
+    ### 500 (was 88 — renumbered, see note) — `neurobrix`'s exit status could not express failure
+
+with a parenthetical between the number and the dash, so the citation stays readable. **Those two
+entries matched nothing.** They were invisible to both cells: the stated count said 93 while 95
+entries were present, contiguity was computed over a list that silently excluded them, and the
+gate was **GREEN**.
+
+**What it would do if the register were wrong**: exactly what it did — nothing. A counter that
+cannot see an entry is worse than no counter, because its green is read as a count. And this file
+is the gate on the register that exists to catch precisely this.
+
+The failure was not introduced by carelessness in the heading; it was introduced by a CONVENTION
+CHANGE that the gate was never told about. A gate pinned to a spelling breaks silently the first
+time the document's own convention moves, and the direction it breaks in is always green-when-
+blind rather than red-when-blind.
+
+**Repair, and it is three cells rather than a looser regex.** The pattern now admits a
+parenthetical; the loosening immediately surfaced a second problem — an ADDENDUM heading
+(`### 62 (addendum, 2026-09-16 evening) — …`) deliberately re-uses its entry's number and would
+have been counted twice — so the counter reads the register's own word `addendum` and skips it,
+while asserting that any OTHER repeat is an error. Contiguity is checked per BLOCK, because from
+1 alone the Mac's 500 reads as a gap of 406. A third cell refuses any number outside every
+declared block, which is the collision that created the scheme.
+
+Seen RED on three injections: a number outside every block; a duplicate not marked an addendum;
+an entry deleted from the Mac's block rather than struck in place. Green on restore.
+
+**The lesson, in one line.** When a document's convention changes, the gate that reads it is part
+of the change: a pattern that no longer matches does not fail, it stops counting.
+
+---
+
+### 95 — this rack's certified directory does not record whether it was screened
+
+Raised by the Mac on 2026-09-22: on Apple, a shape whose arguments exceed a 1 GiB budget is
+seated without the consensus screen and the entry says so —
+`"provenance": "fastest among candidates nothing verified — NOT a validated setting"`. Measured
+here before answering:
+
+    total certified entries (nvidia): 12 871
+    entries with screened == False:        0
+    entries carrying the key at all:       0     <- every one is None
+
+`src/neurobrix/triton/autotune_cache.py` writes `screened` ONLY when the key appears in the
+`verified` or `unverified` map the screen builds. Not one CUDA entry carries either, so the
+honest reading of this directory is **not** "every entry here was screened" — it is "the field
+that would record the answer was never written".
+
+**What it would do if the entries were unscreened**: report nothing, which is what it reports
+now. Absent key = silence, read as assurance — the family this project already names as
+*instrumentation that lies by construction*. The Mac's artefact is noisy about its own
+provenance; ours is silent, and silence is the worse of the two.
+
+**Not repaired here, deliberately.** Writing the field is a one-line change; making it TRUE for
+12 871 existing entries is a re-certification, and choosing the screening rule is a separate
+decision — a fixed byte budget is a rule about COST while the question is CORRECTNESS, so
+scaling it only moves which shapes go unverified. The recommendation put to the Mac and owed to
+the owner is a windowed screen: a bounded slice of the output against the fp64 oracle at fixed
+cost, placed at the tile holding the largest linear index the shape reaches, which removes the
+constant instead of giving it a better value and lands exactly on the 2^31 class that motivates
+screening large shapes at all.
+
+Detail and the exchange: `nbx/campaigns/2026_09_22_mochi_prism/screening/UNSCREENED.md`.
+
+**Where the rule stops applying, on both machines.** The Mac's point, and it sharpens the
+entry: the shapes that skip the screen are not a corner of the budget, they are where the
+budget's rule ceases to apply at all. Their addmm key carries 4 646 662 144 bytes of arguments
+against a 1 073 741 824-byte budget; the conv shape this rack swept on 2026-09-22 carries
+4.6 GB. Neither is near the line. And large arguments are exactly where index arithmetic
+crosses 2^31, so the shapes the screen declines to check are the shapes most likely to need it.
+
+**The lesson, in one line.** "We screen our kernels" and "our artefact has no field saying
+whether we screen" are the same sentence until someone greps for the field.
+
+---
+
+### 96 — "certified" asserts FASTEST, and a third of the directory cannot support it
+
+A certified entry names one config and its proof carries `best_ms` and `second_ms`. The word
+the directory uses for that config is *fastest*. Measured on 2026-09-23 across the whole nvidia
+directory — 25 468 proofs, counting the 32 GB variants — the winner's margin over the runner-up:
+
+    p5       0.03 %      p25   0.42 %      median  3.13 %      p75  7.54 %      p95  20.44 %
+
+and the host's own run-to-run spread, measured on this rack through the engine's `do_bench`
+(one matmul config, 1024^3 fp16, 25 timings): **0.40 % stdev, 1.05 % p5..p95**.
+
+    proofs decided by a margin SMALLER than that spread:  8 443 of 25 468   (33.2 %)
+    under 0.1 %:  3 499  (13.7 %)
+
+**What this gate would do if the ranking were wrong**: nothing. There is no cell anywhere that
+compares a proof's margin against the machine's resolution, so a config chosen by a coin flip
+inside the noise is recorded, committed and served in exactly the same words as one that won by
+20 %. The artefact's confidence is uniform and its evidence is not.
+
+**What it does NOT mean.** Those entries are not incorrect: each carries its own `deviation`
+against the fp64 oracle, inside `tolerance`. And little performance is at stake — two configs
+within 1 % cost the same to run. What is unsupported is the claim, not the config.
+
+**Why it still matters here, specifically.** This project already holds that *a kernel's
+compiled arithmetic is part of the bytes*. If a re-certification seats a different config for a
+third of the directory — and by construction it may, since the two are indistinguishable — then
+the kernels change and byte-identical output across re-certifications is not guaranteed for
+those shapes. The determinism this rack depends on rests on the directory not being re-swept,
+rather than on the directory being reproducible. That is a load-bearing assumption nobody wrote
+down.
+
+**The repair is not a quieter host.** 13.7 % were decided under 0.1 %, which no host resolves.
+It is in what the entry claims: below the machine's measured spread, the honest record is
+"either config is certified, this one is PINNED for determinism and pinned arbitrarily" — and a
+re-certification then knows to keep the pin instead of silently re-seating. The margin is
+already recorded; only the claim needs to change.
+
+**Host note, and it is a person's terminal, not a defect to fix.** `watch -n 0.5 nvidia-smi` has
+run on `pts/0` for nine days, parented to an interactive shell — the owner's live view of the
+rack. It has been beside every timing this rack has taken. It was NOT killed and must not be;
+the counterfactual measurement is therefore unavailable, so the 1.05 % above is the spread under
+current conditions and not an attribution to any one cause. A second poller WAS closed: a
+2026-09-18 campaign's unbounded 30-second `nvidia-smi` loop, three days past its campaign's last
+write.
+
+**The lesson, in one line.** An artefact that records its evidence and then states a stronger
+claim than the evidence carries is not lying about the number — it is lying about the word, and
+the number sitting right beside it is what makes that findable.
+
+---
+
+### 97 — a `git checkout` restore is a no-op on an untracked file, and the injection harness assumed otherwise
+
+Three deliberate injections were run against
+`tests/unit/forge/test_a_weight_dim_is_never_a_request_symbol.py` and its detector
+`tools/weights_are_not_symbolic.py`, each followed by
+
+```bash
+git checkout tools/weights_are_not_symbolic.py 2>/dev/null
+```
+
+**The file was untracked.** `git checkout` had nothing to restore it from, failed silently into
+`2>/dev/null`, and two of the three injected edits stayed in the tool. The suite was left RED
+and — this is the part that matters — had the injections been made in the opposite order, or
+had the last one happened to be harmless, the tool would have been committed **carrying an
+injected defect, with a green suite over it**.
+
+**What this would do if the code were wrong**: exactly what it did. The restore reports nothing,
+`git status` shows `??` rather than `M`, and a `git diff` shows nothing either, because an
+untracked file has no baseline to differ from. Every instrument that would normally reveal a
+dirty tree is blind to a file git does not track.
+
+The same family as the self-matching `pgrep` that killed this session's own shell: a command
+that silently does nothing when its assumption about the world is wrong, inside a harness whose
+whole purpose is to leave the world as it found it.
+
+**Repair.** An injection harness copies the file to a scratch path FIRST and restores from that
+copy, never from git — the copy exists whatever git knows about the file. Where a gate's
+subject is new in the same change, that is always the case, and it is exactly when injection
+proofs are being run.
+
+**The lesson, in one line.** A restore that cannot fail is not a restore: back up what you are
+about to break, from somewhere that does not depend on the thing being tracked.
+
+---
+
+### 98 — a gate pinned to one container went stale when that container was retraced, and its red meant nothing
+
+`test_a_derived_relation_break_is_reported_not_swallowed.py` pinned `mochi-1-preview`, whose VAE
+broke `height` and `width` on `v*2` — the measurement that motivated splitting adjudicated from
+unadjudicated frozen dims in the first place. On **2026-09-22 at 17:44** that container was
+retraced and the spatial breaks went away. Good news, and it left the cell asserting something
+no longer true of the cache.
+
+It was RED from 17:44 until 2026-09-23, through several full suite runs, and nothing acted on
+it — because a red whose cause is "the world moved" reads exactly like a red whose cause is "the
+code broke", and the cheapest response to either is to look away.
+
+**This is the register's usual concern inverted.** A vacuous gate passes when it should fail; this
+one failed for a reason that had nothing to do with what it guards. Both end the same way: the
+signal is discarded. A gate that cries wolf is disabled, and a gate that is disabled is a gate
+that was not there when it mattered.
+
+**What made it fragile**: the subject was ONE container, and a container is DATA that another
+workstream retraces without knowing which cells depend on it. The defect class is alive — 9 of
+59 containers still report a derived spatial break (Flex.1-alpha `v//4`, Open-Sora-v2 `v+2`,
+four PixArt `v//8`, SANA-Video `v-1`, Sana-1600M `v*2`) — so nothing about the gate's purpose
+had expired. Only its example had.
+
+**Repair.** The subject is DISCOVERED: the fixture walks the cache for a container that
+currently reports a derived break, and skips loudly if none does, which would itself be news
+worth having. The relation check became arithmetic — `v*2` must give twice the trace value,
+whatever the container — instead of one model's remembered literals 28 and 44. The historical
+mochi measurement is kept as prose, where a number that can go stale belongs.
+
+**The lesson, in one line.** A gate whose subject is data is hostage to whoever next regenerates
+that data: assert the CLASS and discover the example, or your gate has an expiry date nobody
+wrote down.
 
 ### 502 — a verification on a warm replay cache measures the cache, not the directory
 

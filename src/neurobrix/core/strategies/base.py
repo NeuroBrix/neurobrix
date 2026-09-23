@@ -143,6 +143,14 @@ class ExecutionStrategy(ABC):
     #: did before this existed.
     manages_weight_residency: bool = False
 
+    #: Does this strategy load its component's weights ITSELF, rather than relying on the
+    #: runtime's whole-component load? NARROWER than the flag above and deliberately
+    #: separate: zero3 manages its own residency THROUGH the loader (it partitions blocks
+    #: onto pinned host inside `load_component_weights`), so it needs that load to happen.
+    #: layer_streaming loads per segment instead, so for it the whole-component load is not
+    #: merely redundant — it is fatal, and was.
+    loads_own_weights: bool = False
+
     def __init__(self, context: StrategyContext, strategy_name: str):
         """
         Initialize strategy with context.

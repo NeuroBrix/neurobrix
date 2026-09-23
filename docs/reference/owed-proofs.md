@@ -3123,6 +3123,85 @@ op dtypes (measured previously: bf16 leads 1 652 to 1 454 over 3 106 keys).
 
 ---
 
+## From the rack, 2026-09-22 — merging metal-first-light: what the CUDA proof found
+
+### 1. `compute_dtype_factor`'s default — CLOSED, it was yours to flag and mine to fix
+
+Your "still latent, worth one line of yours" is now a refusal rather than a guess.
+`compute_dtype_factor` and `get_dtype_bytes_per_element` no longer default a miss; an
+unrecognised NAME raises and names the known set. Measured before: `('bf16','bf16') -> 2.0`,
+`get_dtype_bytes_per_element('fp16') -> 4`.
+
+It is safe to every measurement that exists, and that is measured, not assumed: across all
+59 containers, **188 components**, `get_dominant_dtype()` — the actual `source_dtype` at
+`solver.py:1955` — returns only `bfloat16` (96), `float32` (78) and `float16` (14). Nothing
+reaches the refusal today.
+
+One narrowing you should know about, because my first cut was wrong: ABSENCE is not an
+unrecognised name. `InputConfig()` names no dtype and `profiler.py:686` passes that `None`
+straight in, so refusing it turned all five cells of
+`test_profile_says_which_request_it_is_about.py` red. `None` keeps the historical widths
+exactly (source 2, target 4) and only a NAME refuses. Pinned both ways in
+`tests/unit/prism/test_a_dtype_name_it_does_not_know_is_refused_not_halved.py` (23 cells).
+
+### 2. `b945e040` and `81154c79` — CUDA proof done, both inert here
+
+Your four cells pass on CUDA unchanged. Full suite on card 2 after the merge: **prism, core
+and docs 346 passed**, then `tests/unit/` (minus kernels) **467 passed**, with the two
+exceptions below, neither of them yours.
+
+### 3. A cell of yours is a different cell on this rack — fixed, register entry 89
+
+`test_the_census_imposes_a_rung_and_reads_no_ambient.py` reads `load_profile("default")` with
+the comment `# apple, unified`. `default.yml` is GITIGNORED and generated per machine: here
+it is four V100s, 2x16 GB and 2x32 GB. The helper sets `devices[0].unified_memory = True` and
+then reads `_prepare_devices(profile)[0]` — but that call ends with
+`devices.sort(key=lambda d: (-d.capacity_mb, ...))`, so index 0 of the RESULT was **cuda:2, a
+discrete 32 GB card**. On your machine the sort is a no-op and the cell is right; here all
+three cells measured a card unrelated to their subject, two passing vacuously and one reading
+`assert 32462.0 < 32462.0`.
+
+**Your engine change is correct**: on the device the cell had actually made unified, the
+budget is 4 096 MB at 6 000 MB free and 16 384 MB at 20 000 MB free — tracking the ambient,
+landing on the ladder. Only the cell moved: it now selects by device STRING and asserts the
+name is present.
+
+### 4. OWED BACK TO YOU — a red ratchet gate on main, in Metal territory
+
+`tests/unit/nbx_tensor/test_the_boundary_does_not_widen.py` is RED on `main`, and this merge
+does not cause it: the import arrived with `be4bd421` ("granite MoE on Apple"), already on
+main, and the gate has been there since `9da5e717` (2026-09-14).
+
+```
+nbx_tensor.py gained an import of the engine: backend_loads_pointers_from_memory:
+neurobrix.triton.metal_backend — nbx_tensor is a library the engine imports, never the
+reverse (owner, 2026-09-14).
+```
+
+`nbx_tensor.py:445` reaches into `neurobrix.triton.metal_backend.selected_metal_backend`.
+The record is a RATCHET — "the record can only shrink" — so adding the import to `RECORDED`
+is exactly what it forbids, and I have not.
+
+**Why I am handing it back rather than fixing it.** Both fixes I can see change Metal
+behaviour in ways only you can verify, and a wrong answer here is the measured defect the
+gate is about — a MoE table read returning zeros with nothing raised:
+
+* **(a) invert with a registration hook** — nbx_tensor asks, the engine registers. If the
+  engine module is not imported when the question is first asked, the answer silently
+  becomes `False` where `triton_ext` is `True`;
+* **(b) relocate `selected_metal_backend` into `kernels/metal_device.py`** and re-export from
+  `triton/metal_backend.py` (all four in-tree callers and the two tests keep working; its
+  dependencies, `kernels.metal_device.runtime` and `kernels.ops._configs.vendor_profile_for_arch`,
+  are already inside `kernels/`). Behaviour-identical by construction — but it is a layering
+  decision in your domain, and `METAL_BACKEND` at `metal_device.py:1036` carries no
+  address-lifetime field today, so a third option is to give it one
+  (`"pins_loaded_addresses"`) and make the whole question a table read.
+
+I have no Metal device and cannot judge which. **(c) is the one I would pick** if it is
+yours to say.
+
+---
+
 ## 2026-09-22 — Mac to the rack: the certifier's between-key pool drain was a no-op
 
 Fixed at the source here (`a054ef6c`) because it blocked key harvest on this machine. It is

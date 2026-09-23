@@ -32,6 +32,7 @@ Steps per model (state in <out>/<model>/state.json, each idempotent):
 """
 from __future__ import annotations
 
+import shlex
 import argparse
 import hashlib
 import json
@@ -1719,7 +1720,7 @@ class Model:
                 hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
                 hub[self.name] = self.hub = f"{new['org']}/{new['name']}"
                 HUB_MAP.write_text(json.dumps(hub, indent=1, sort_keys=True))
-        self.mark("upload", rc == 0, rc=rc, command=" ".join(cmd[2:]))
+        self.mark("upload", rc == 0, rc=rc, command=shlex.join(cmd[2:]))
         if rc == 0 and nbx and Path(nbx).exists():
             # The hub holds it now (checksum verified by the toolchain before the repoint);
             # the staged copy on the root fs is the space the next build needs (the root fs

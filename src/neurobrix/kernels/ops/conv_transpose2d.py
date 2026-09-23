@@ -94,7 +94,16 @@ def conv_transpose2d_kernel(
                     + ih * IW
                     + iw
                 )
-                in_val = tl.load(input_ptr + in_offset, mask=valid, other=0.0)
+                # Upcast AT THE LOAD, for every dtype. The accumulator is already
+                # fp32, so an fp32 product costs nothing and is strictly more accurate
+                # than a narrow one. Multiplying in the operands' own dtype is the shape
+                # that made depthwise_conv2d return 0.754 relative error in bf16 with
+                # padding on Metal (metal-first-light 393570c6, 2026-09-22): there the
+                # fp16 arm upcast and every other dtype did not, and bf16 took the
+                # native path. This kernel had no fp16 arm at all — neither operand was
+                # upcast — so it carries the same defect for any narrow dtype.
+                # Invisible on CUDA, which is not a reason to leave it.
+                in_val = tl.load(input_ptr + in_offset, mask=valid, other=0.0).to(tl.float32)
 
                 # Load weight[ci, co_local, kh, kw] — layout (C_in, C_out/groups, KH, KW)
                 w_offset = (
@@ -105,7 +114,7 @@ def conv_transpose2d_kernel(
                 )
                 # w_offset is scalar (one weight element for the whole output
                 # block) — load unmasked; per-position validity is applied below.
-                w_val = tl.load(weight_ptr + w_offset)
+                w_val = tl.load(weight_ptr + w_offset).to(tl.float32)
 
                 acc += tl.where(valid, in_val * w_val, 0.0)
 
