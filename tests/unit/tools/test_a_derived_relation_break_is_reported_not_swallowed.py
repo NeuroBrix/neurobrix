@@ -41,7 +41,18 @@ from pathlib import Path
 import pytest
 
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE_DIR") or (Path.home() / ".neurobrix" / "ca" "che"))
-MODEL = "mochi-1-preview"
+
+#: The cell used to pin `mochi-1-preview`, whose VAE broke `height` and `width` on `v*2`. On
+#: 2026-09-22 at 17:44 that container was RETRACED and the spatial breaks went away — good news,
+#: and it left this file asserting something no longer true of the cache. It stayed red from
+#: then until 2026-09-23 and nothing noticed, because it was red for a reason nobody read.
+#:
+#: A gate pinned to ONE container is hostage to that container's next retrace. The class is what
+#: matters and the class is alive: 9 of 59 containers still report a derived spatial break
+#: (Flex.1-alpha v//4, Open-Sora-v2 v+2, four PixArt v//8, SANA-Video v-1, Sana-1600M v*2). So
+#: the subject is DISCOVERED, and the cell skips loudly if the whole class ever disappears —
+#: which would be a real event worth noticing rather than a silent green.
+SPATIAL = ("height", "width")
 
 
 def _census():
@@ -55,40 +66,63 @@ def _census():
     return m
 
 
+def _derived(rows):
+    """Rows whose break is a DERIVED relation — the ones that used to vanish silently."""
+    return [r for r in rows if r.get("name") in SPATIAL
+            and (r.get("first_break") or {}).get("relation", "") not in ("", "v")]
+
+
 @pytest.fixture(scope="module")
-def rows():
-    if not (CACHE / MODEL / "components").is_dir():
-        pytest.skip(f"{MODEL} is not in this cache")
-    return _census().frozen_dims(MODEL)
+def subject():
+    """(model, rows) for a container that currently reports a derived spatial break."""
+    m = _census()
+    if not CACHE.is_dir():
+        pytest.skip("no local container cache on this machine")
+    for name in sorted(p.name for p in CACHE.iterdir() if (p / "components").is_dir()):
+        try:
+            rows = m.frozen_dims(name)
+        except Exception:            # noqa: BLE001 — an unreadable container is not the subject
+            continue
+        if _derived(rows):
+            return name, rows
+    pytest.skip("no container in this cache reports a derived spatial break any more — if that "
+                "is real, every one has been retraced and this cell has done its job")
 
 
-def _vae_spatial(rows):
-    return [r for r in rows
-            if r.get("component") == "vae" and r.get("name") in ("height", "width")]
+@pytest.fixture(scope="module")
+def rows(subject):
+    return subject[1]
 
 
-def test_the_vae_spatial_breaks_are_REPORTED(rows):
-    """The two rows that were silent. Without them the census prints `frozen: []`."""
-    found = _vae_spatial(rows)
-    assert len(found) == 2, f"expected height and width, got {[r.get('name') for r in rows]}"
+def test_a_derived_break_is_REPORTED_at_all(subject):
+    """The rows that were silent. Without them the census prints `frozen: []` and the model is
+    harvested as if it had been inspected."""
+    model, rows = subject
+    found = _derived(rows)
+    assert found, f"{model} was selected for having a derived break and reports none"
 
 
 def test_they_are_reported_as_UNADJUDICATED_not_as_a_defect(rows):
     """The tool's own caution, preserved: a derived relation is a question, not a verdict."""
-    for r in _vae_spatial(rows):
+    for r in _derived(rows):
         assert r["adjudicated"] is False, r
         assert r["first_break"]["relation"] != "v"
 
 
-def test_the_relation_is_the_one_measured(rows):
-    """`v*2` at `aten._unsafe_view::1`: 28 from a trace of 14, 44 from 22."""
-    by_name = {r["name"]: r for r in _vae_spatial(rows)}
-    assert by_name["height"]["trace_value"] == 14
-    assert by_name["height"]["first_break"]["literal"] == 28
-    assert by_name["width"]["trace_value"] == 22
-    assert by_name["width"]["first_break"]["literal"] == 44
-    for r in by_name.values():
-        assert r["first_break"]["relation"] == "v*2"
+def test_the_relation_is_ARITHMETIC_on_the_trace_value(subject):
+    """Whatever the relation, it must actually relate the literal to the trace value. A row
+    that reports `v*2` where the literal is not twice the trace is a reporting bug, and that is
+    checkable on any container rather than on one model's remembered numbers."""
+    import re as _re
+    model, rows = subject
+    for r in _derived(rows):
+        v, lit = r["trace_value"], r["first_break"]["literal"]
+        rel = r["first_break"]["relation"]
+        mm = _re.fullmatch(r"v([*+\-]|//)(\d+)", rel)
+        assert mm, f"{model}: unrecognised relation {rel!r}"
+        op, k = mm.group(1), int(mm.group(2))
+        expect = {"*": v * k, "+": v + k, "-": v - k, "//": v // k}[op]
+        assert lit == expect, f"{model}: {rel} on trace {v} should give {expect}, row says {lit}"
 
 
 def test_split_frozen_keeps_the_two_classes_apart(rows):

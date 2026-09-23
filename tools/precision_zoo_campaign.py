@@ -26,6 +26,7 @@ tools/r33_sys_modules_probe.py — torch in sys.modules at exit, the first
 import path when it is there, the run's exit code and the output's sha.
 `--src <dir>` puts a frozen worktree's src on the probe's PYTHONPATH.
 """
+import shlex
 import argparse
 import hashlib
 import json
@@ -206,7 +207,7 @@ def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
 def run(cmd, env, log: Path, timeout: int) -> tuple:
     t0 = time.time()
     with open(log, "w") as fh:
-        fh.write("$ " + " ".join(cmd) + "\n")
+        fh.write("$ " + shlex.join(cmd) + "\n")
         fh.flush()
         rc = run_group(cmd, env, fh, timeout)
         if rc == -9:

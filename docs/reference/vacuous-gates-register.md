@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-99 entries, 97 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 94 carry a site. Two
+100 entries, 98 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 95 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2923,3 +2923,38 @@ proofs are being run.
 
 **The lesson, in one line.** A restore that cannot fail is not a restore: back up what you are
 about to break, from somewhere that does not depend on the thing being tracked.
+
+---
+
+### 98 — a gate pinned to one container went stale when that container was retraced, and its red meant nothing
+
+`test_a_derived_relation_break_is_reported_not_swallowed.py` pinned `mochi-1-preview`, whose VAE
+broke `height` and `width` on `v*2` — the measurement that motivated splitting adjudicated from
+unadjudicated frozen dims in the first place. On **2026-09-22 at 17:44** that container was
+retraced and the spatial breaks went away. Good news, and it left the cell asserting something
+no longer true of the cache.
+
+It was RED from 17:44 until 2026-09-23, through several full suite runs, and nothing acted on
+it — because a red whose cause is "the world moved" reads exactly like a red whose cause is "the
+code broke", and the cheapest response to either is to look away.
+
+**This is the register's usual concern inverted.** A vacuous gate passes when it should fail; this
+one failed for a reason that had nothing to do with what it guards. Both end the same way: the
+signal is discarded. A gate that cries wolf is disabled, and a gate that is disabled is a gate
+that was not there when it mattered.
+
+**What made it fragile**: the subject was ONE container, and a container is DATA that another
+workstream retraces without knowing which cells depend on it. The defect class is alive — 9 of
+59 containers still report a derived spatial break (Flex.1-alpha `v//4`, Open-Sora-v2 `v+2`,
+four PixArt `v//8`, SANA-Video `v-1`, Sana-1600M `v*2`) — so nothing about the gate's purpose
+had expired. Only its example had.
+
+**Repair.** The subject is DISCOVERED: the fixture walks the cache for a container that
+currently reports a derived break, and skips loudly if none does, which would itself be news
+worth having. The relation check became arithmetic — `v*2` must give twice the trace value,
+whatever the container — instead of one model's remembered literals 28 and 44. The historical
+mochi measurement is kept as prose, where a number that can go stale belongs.
+
+**The lesson, in one line.** A gate whose subject is data is hostage to whoever next regenerates
+that data: assert the CLASS and discover the example, or your gate has an expiry date nobody
+wrote down.
