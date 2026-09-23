@@ -1007,6 +1007,81 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                 if isinstance(_tv, int):
                     _args[_i] = {"type": "scalar", "value": _tv}
 
+        # ---- a spatial symbol standing in for a WEIGHT extent -------------
+        # Sana has 70 heads of 32 and, at its traced 1024 px, a latent of 32.
+        # The tracer bound the head dim to the height symbol, so at 4096 px the
+        # head dim became 128 and the first attention op died on an invented
+        # batch: "bmm shape mismatch: (140, 33, 16384) @ (35, 16384, 128)".
+        #
+        # Taint cannot see this one — the tensor IS spatial, it is the POSITION
+        # that is not. The discriminator is structural: align the view's target
+        # against its input, and a group of entries that reconstructs an extent
+        # fixed by the weights cannot hold a request-dependent symbol. The same
+        # view's token entry reconstructs a request-dependent input dim and
+        # stays symbolic.
+        _weight_dims = set()
+        for _tid, _td in (tensors or {}).items():
+            if _tid.startswith("param::") or _tid.startswith("buffer::"):
+                for _d in (_td.get("shape") or []):
+                    if isinstance(_d, int) and _d > 1:
+                        _weight_dims.add(_d)
+
+        def _align(in_shape, out_shape):
+            """Map each out index to the in index its group reconstructs."""
+            groups, i, j = {}, 0, 0
+            while i < len(in_shape) and j < len(out_shape):
+                if in_shape[i] == out_shape[j]:
+                    groups[j] = (i, 1)
+                    i, j = i + 1, j + 1
+                    continue
+                p, k = 1, j
+                while k < len(out_shape) and p < in_shape[i]:
+                    p *= out_shape[k]
+                    k += 1
+                if p == in_shape[i]:
+                    for m in range(j, k):
+                        groups[m] = (i, k - j)
+                    i, j = i + 1, k
+                    continue
+                q, m = 1, i
+                while m < len(in_shape) and q < out_shape[j]:
+                    q *= in_shape[m]
+                    m += 1
+                if q == out_shape[j]:
+                    groups[j] = (None, 1)
+                    i, j = m, j + 1
+                    continue
+                return None
+            return groups
+
+        for _uid, _od in ops_meta.items():
+            if _od.get("op_type") not in ("aten::view", "aten::_unsafe_view",
+                                          "aten::reshape"):
+                continue
+            _ins = _od.get("input_shapes") or []
+            _outs = _od.get("output_shapes") or []
+            if not _ins or not _outs or not _ins[0] or not _outs[0]:
+                continue
+            _args = _od.get("attributes", {}).get("args") or []
+            if len(_args) < 2 or not isinstance(_args[1], dict):
+                continue
+            _items = _args[1].get("value")
+            if not isinstance(_items, list) or len(_items) != len(_outs[0]):
+                continue
+            _groups = _align(list(_ins[0]), list(_outs[0]))
+            if not _groups:
+                continue
+            for _k, _elem in enumerate(_items):
+                if not (isinstance(_elem, dict) and _elem.get("type") == "symbol"):
+                    continue
+                if (_elem.get("id") or _elem.get("symbol_id")) not in _spatial_ids:
+                    continue
+                _src_dim, _span = _groups.get(_k, (None, 1))
+                if _span < 2 or _src_dim is None:
+                    continue                 # not a split of one input dim
+                if _ins[0][_src_dim] in _weight_dims:
+                    _items[_k] = _outs[0][_k]
+
     _spatial_targets = (
         "aten::view", "aten::_unsafe_view", "aten::reshape", "aten::expand",
         "aten::expand_as", "aten::repeat",
