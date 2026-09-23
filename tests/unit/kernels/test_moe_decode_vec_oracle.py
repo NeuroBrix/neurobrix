@@ -77,6 +77,34 @@ _WHY = ("this backend cannot read through a pointer loaded from a tensor, so "
         "the MoE band cannot address its experts and the engine refuses; "
         "see _BACKEND_LOADS_POINTERS_FROM_MEMORY")
 
+# The SECOND Metal door, and it is the engine's own. Every cell below builds int4-g128-asym
+# expert tables, and `triton/moe.py:190` refuses them on Metal by design:
+#
+#   ZERO FALLBACK: quantized (int4) expert tables are not proven on Metal — the pinned-table
+#   contract was measured for the dense bf16 grouped GEMM only. Adding the quantized path is
+#   proving its triplet tables the same way, not assuming them.
+#
+# The door above covers a different Metal limitation (pointer loading) and does not open for
+# this one, so on an Apple machine these cells asserted a path the engine states it will not
+# take — six red cells that named a capability gap as a failure. Measured 2026-09-23 on a
+# QUIET host, after a first reading of them was spoiled by a concurrent model run whose
+# contention showed up as a 26.6 % witness drift.
+#
+# This is a SKIP, not a fix: the capability is owed, recorded in owed-proofs. When the triplet
+# tables are proven on Metal the refusal goes and this door goes with it.
+def _metal_refuses_quantized_experts() -> bool:
+    # The SAME import the engine uses (`triton/moe.py` line 33), not a guess at where it
+    # lives: an import that misses defaults this door to False, the cells run, and they fail
+    # with the engine's refusal — which is the safe direction but hides why.
+    from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+    return _detect_gpu_backend() == "metal"
+
+
+_QUANT_REFUSED = _metal_refuses_quantized_experts()
+_WHY_QUANT = ("the engine refuses int4 expert tables on Metal by design "
+              "(triton/moe.py: the pinned-table contract was measured for the dense bf16 "
+              "grouped GEMM only) — a capability owed, not a defect in these cells")
+
 # fp16 scales/activations, fp32 accumulation, K<=2048 sums + SwiGLU +
 # 8-expert combine: a correct chain sits ~1e-3 relative (the SwiGLU
 # nonlinearity amplifies fp16 input rounding); 5e-3 is the band bound,
@@ -183,6 +211,7 @@ def _ref_routing(logits, top_k):
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_matches_float64_from_packed_bytes() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
@@ -196,6 +225,7 @@ def test_moe_vec_matches_float64_from_packed_bytes() -> None:
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_is_deterministic() -> None:
     if not _has_gpu():
         pytest.skip("no GPU")
@@ -207,6 +237,7 @@ def test_moe_vec_is_deterministic() -> None:
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_router_weight_contract() -> None:
     """Doubling one expert's routing weight (pre-normalization scaling
     via its logit is nonlinear — instead compare two runs whose only
@@ -225,6 +256,7 @@ def test_moe_vec_router_weight_contract() -> None:
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_route_activation_and_guards() -> None:
     """COUNTED: "1" reaches the vec pass; unset does NOT (under
     judgment); M>1 does NOT (prefill guard). The fp16-expert zoo guard
@@ -265,6 +297,7 @@ def test_moe_vec_route_activation_and_guards() -> None:
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_dsplit_three_state() -> None:
     """COUNTED sub-path contract: unset (ADOPTED default) and "1"
     launch the split pair (down_split + part_reduce); "0" launches the
@@ -314,6 +347,7 @@ def test_moe_vec_dsplit_three_state() -> None:
 
 
 @pytest.mark.skipif(_CANNOT_ADDRESS_EXPERTS, reason=_WHY)
+@pytest.mark.skipif(_QUANT_REFUSED, reason=_WHY_QUANT)
 def test_moe_vec_agrees_with_grouped_path() -> None:
     """Cross-implementation: the vec band vs the proven grouped band on
     the same inputs — both within the float64 bound, and within a tight
