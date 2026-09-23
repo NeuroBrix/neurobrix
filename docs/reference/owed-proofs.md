@@ -3854,3 +3854,25 @@ The census tool and Prism are yours. The fix is not ours to design from here: it
 census learning what the wrapper does at launch, which is either a census that observes real
 launches rather than graph shapes, or a wrapper contract that declares its splits to the
 census. Both are your side of the seam. Nothing is owed back to this machine before it lands.
+
+### 2026-09-23 — 15 pre-existing kernel-test failures on this branch, named not fixed
+
+Found while checking my windowed screen for regressions. **They are not mine**: the identical
+selection fails identically on the tree before my change (15 failed, 201 passed, both runs).
+Named here because a red that nobody names becomes a red that nobody reads.
+
+| file | failures |
+|---|---|
+| `tests/unit/kernels/test_staged_dot_computes_not_merely_compiles.py` | most of them, incl. `test_the_output_agrees_with_the_fp64_oracle[64x64x32]`, `[64x64x64]`, `test_at_least_one_servable_config_computes_correctly` |
+| `tests/unit/kernels/test_the_matmul_oracle_is_windowed_by_rows_above_the_cap.py` | `test_a_large_product_is_windowed_by_rows_and_measured_on_them` |
+
+Both concern the same region my work touched — staged `tl.dot` correctness against the fp64
+oracle, and the certifier's row-windowed oracle — so whoever picks them up should read them
+beside `263fbb4a` (banding) and `6dabcb36` (the windowed screen), which are adjacent but did
+not cause them.
+
+One measurement worth carrying: the same selection takes **9.98 s** before the windowed
+screen and **313 s** after. That is the price of screening shapes the budget used to skip, and
+it is bounded by the window rather than by the shape. If it is judged too slow for a suite,
+the lever is `_SCREEN_WINDOWS` or the profile's `autotune_screen_max_bytes` — not returning to
+seating the largest shapes unverified.
