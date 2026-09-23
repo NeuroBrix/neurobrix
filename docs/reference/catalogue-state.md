@@ -344,3 +344,55 @@ failed, not that the model contributed nothing.
 The warning is still worth one line of someone's time — a path that reaches the Metal runtime
 inside a shadow is uncovered by the census, and the flash tile goes unchecked there — but it
 is a gap in coverage, not the reason any model is open.
+
+## 2026-09-24 — the shape class closes: four PixArt containers censused and certified
+
+The `ENGINE (trace / op defect)` row above was **6**. It is now **1**, and the arithmetic is
+named rather than asserted:
+
+| model | 2026-09-22 | now |
+|---|---|---|
+| PixArt-XL-1024 | `Cannot broadcast (2,1,1152) and (32,4096,1152)` | **closed** |
+| PixArt-Sigma-XL-1024 | `Cannot broadcast (2,1,1152) and (32,4096,1152)` | **closed** |
+| PixArt-XL-2-1024-MS | `addmm::0 AssertionError:` (empty) | **closed** |
+| PixArt-Sigma-XL-2-1024-MS | `addmm::0 AssertionError:` (empty) | **closed** |
+| Sana-1600M-MultiLing | `Cannot broadcast (1,32,128,128) and (1,128,128,32)` | closed earlier by the rack's `2a21e41e` |
+| Sana_1600M_1024px_MultiLing | `bmm shape mismatch: (140,33,16384) @ (35,16384,128)` | **named, NOT closed** — see below |
+
+**The four PixArt containers.** Three defect classes, each fixed red-then-green
+(`ae0d1908`, `86fa1ef4`, `15a1fbfb`, `a4361cf5`, `c76a4620`): a patchified token count the
+spatial pass could not see, a slice end bound to `height` by coincidence, and a head
+dimension bound to `height` by coincidence. Re-censused over 6 rungs and both modes:
+
+* **0 logs carry a shape error**, out of 24 — before, every probe died.
+* keys per model **8-9 -> 112-118**; 166 keys total against 51 before.
+* certified: **166 served, 0 to certify**, measured by re-running the census against the
+  directory rather than read off the certifier's exit code, which said `CERTIFY COMPLETE`
+  after a 4-second round and had to be checked.
+* the whole Apple directory now holds **3 293 entries, 0 without a passing fp64 proof**.
+* the regime witness opened at 4.4110 / 4.4087 / 4.4105 ms across three rounds — a 0.05 %
+  spread on an 8 % tolerance, so every configuration was pinned under the same quiet host.
+
+**Sana_1600M_1024px_MultiLing is named, not closed, and it is not ours to close.** Three of
+its defects were fixed here and each chained to the next; the fourth stands. The rack's
+`2a21e41e` names eleven containers awaiting retraces and **this one is first, with 174
+parameter dims bound to symbols**. Running their own detector here: all four PixArt
+containers 0, Sana 174. It closes when they retrace it. The three Sana corrections are kept
+— they are correct, tested, and change 0 entries in every non-Sana container — but **the
+model is not closed by them**, and a reader of the commit log should not infer otherwise.
+
+**What the four PixArt containers still refuse, and why it is not a shape.** The three
+lowest rungs (4096, 6144, 8192 MB) refuse all four with `This model cannot run on this
+machine`, naming `text_encoder at 9630MB (W=9083)`. A 9 GB T5 does not fit a 4 GB rung. That
+is the `APPLE (memory / rung)` class, which this document already says is closed by naming.
+Verified as pre-existing and not a regression: the same refusal appears in `logs_pixart_probe`,
+a run made **before any of these fixes**.
+
+**Cross-backend verdict.** Not Apple-only. The defect fires at plain 2048 px on shared code;
+the rack's PixArt green is unexercised above the traced 1024 px, not evidence of absence. A
+CUDA proof at 2048 px is owed and recorded in `owed-proofs.md`. What IS Apple-only is the
+rung ladder that exposed it.
+
+**Owed before this class is finished**: one `--compiled` run at 2048 px. The promotion pass
+is shared with mode 1 and the re-census covered `triton` and `triton-sequential` only — mode
+2 proven twice, mode 1 not at all, which R30 does not accept.
