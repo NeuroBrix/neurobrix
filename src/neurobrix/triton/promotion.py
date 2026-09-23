@@ -1031,11 +1031,16 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                         _weight_dims.add(_d)
 
         def _align(in_shape, out_shape):
-            """Map each out index to the in index its group reconstructs."""
+            """For each out index, the input dims it accounts for.
+
+            ("one", i)        — 1:1 with input dim i
+            ("split", i, n)   — one of n entries that together rebuild input dim i
+            ("merge", i0, i1) — this entry alone merges input dims [i0, i1)
+            """
             groups, i, j = {}, 0, 0
             while i < len(in_shape) and j < len(out_shape):
                 if in_shape[i] == out_shape[j]:
-                    groups[j] = (i, 1)
+                    groups[j] = ("one", i)
                     i, j = i + 1, j + 1
                     continue
                 p, k = 1, j
@@ -1044,7 +1049,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     k += 1
                 if p == in_shape[i]:
                     for m in range(j, k):
-                        groups[m] = (i, k - j)
+                        groups[m] = ("split", i, k - j)
                     i, j = i + 1, k
                     continue
                 q, m = 1, i
@@ -1052,11 +1057,26 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     q *= in_shape[m]
                     m += 1
                 if q == out_shape[j]:
-                    groups[j] = (None, 1)
+                    groups[j] = ("merge", i, m)
                     i, j = m, j + 1
                     continue
                 return None
             return groups
+
+        def _spatial_refs(expr):
+            """Which spatial symbols an entry references, at any depth."""
+            got = set()
+            if isinstance(expr, dict):
+                if expr.get("type") == "symbol":
+                    _s = expr.get("id") or expr.get("symbol_id")
+                    if _s in _spatial_ids:
+                        got.add(_s)
+                for _k2 in ("left", "right", "operand"):
+                    if _k2 in expr:
+                        got |= _spatial_refs(expr[_k2])
+                for _f in (expr.get("factors") or []):
+                    got |= _spatial_refs(_f)
+            return got
 
         for _uid, _od in ops_meta.items():
             if _od.get("op_type") not in ("aten::view", "aten::_unsafe_view",
@@ -1076,16 +1096,35 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             if not _groups:
                 continue
             for _k, _elem in enumerate(_items):
-                if not (isinstance(_elem, dict) and _elem.get("type") == "symbol"):
+                _refs = _spatial_refs(_elem)
+                if not _refs:
                     continue
-                if (_elem.get("id") or _elem.get("symbol_id")) not in _spatial_ids:
+                # An entry naming BOTH axes is a genuine spatial quantity — a token
+                # count, an area — however its position aligns. Sana writes its
+                # hidden size as mul(70, height) and its token count as
+                # mul(height, width), side by side in the same target.
+                if h_sym and w_sym and h_sym[0] in _refs and w_sym[0] in _refs:
                     continue
-                _src_dim, _span = _groups.get(_k, (None, 1))
-                if _src_dim is None:
-                    continue                 # this entry merges input dims
-                if _ins[0][_src_dim] not in _weight_dims:
-                    continue                 # the extent is not fixed by the weights
-                if _span < 2:
+                _g = _groups.get(_k)
+                if not _g:
+                    continue
+                if _g[0] == "merge":
+                    # The PRODUCT is what the entry has to reproduce, and it is the
+                    # product that the weights fix. Sana merges 70 heads with a head
+                    # dim of 32 into the hidden size 2240: 70 is not itself any
+                    # weight's extent, 2240 is every projection's. Safe because an
+                    # entry naming both axes was already let through above — which is
+                    # what a batch*tokens merge looks like.
+                    _prod = 1
+                    for _m in range(_g[1], _g[2]):
+                        _prod *= _ins[0][_m]
+                    if _prod not in _weight_dims:
+                        continue
+                else:
+                    if _ins[0][_g[1]] not in _weight_dims:
+                        continue             # the extent is not fixed by the weights
+                _bare = isinstance(_elem, dict) and _elem.get("type") == "symbol"
+                if _bare and _g[0] == "one":
                     # The entry maps 1:1 to an input dim, so there is no split to
                     # reason about, and at the traced size the head dim and the
                     # latent side can be the same number (Sana: 70 heads of 32, a
