@@ -245,17 +245,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `4a15f415` with the `triton-apple-backend` plugin. Every figure below is a
   run on that machine, not an inference from another mode.
 
-  > **The key count and the service verdict below are BEING RE-MEASURED and must
-  > not ship as they stand (2026-09-22).** They were taken before request-dependent
-  > dimensions were bucketed in the autotune key. The catalogue was then re-censused
-  > in bucketed form and asks **3 106** keys, against the 974 recorded here, so "974
-  > witnessed keys" and "service is at zero miss" describe a directory and a
-  > verification that the bucketing superseded. Certification against the new census
-  > is in progress; the figures are rewritten from that run, after it, never before.
-  > Two further things must land in this entry when they do: the 33 catalogue models
-  > still open, each with its cause (`docs/reference/catalogue-state.md`), and the
-  > `depthwise_conv2d` bf16-with-padding defect fixed in the meantime, which no
-  > release should describe as absent.
+  **The certified kernel directory, re-measured 2026-09-23.** The catalogue was
+  re-censused with request-dependent dimensions BUCKETED in the autotune key, so
+  a request one token longer no longer meets a key nobody certified. The census
+  asks **3 179** keys of 59 models; **3 178** are certified against an fp64
+  oracle at `src/neurobrix/config/autotune/apple/apple_m4_pro/`, each stamped
+  with the code generator that proved it (`triton 3.8.0+git4a15f415 mps`,
+  backend hash `msl-v0.1-b1c6226e82836d20`) and served only to the memory class
+  its proof names. The served directory was switched: 956 entries that carried
+  no generator record and that no census names were pruned, and the directory
+  gate re-reads every file (`neurobrix autotune check`: 16 files, 0 refused).
+
+  **One key is not certified, and it is named.** `addmm` with a bucketed M of
+  4 194 304 (output 2 264 924 160 elements, past 2^31) deviates 1.0 from the
+  fp64 oracle: rows past `2**31 // N` are never written. The same source is
+  exact on CUDA, so the defect is in the Metal backend's lowering, not in the
+  kernel — the published remedy (promote indices to int64 before the multiply)
+  is already present, and two further formulations were tried and failed. No
+  model output is affected: the only model whose census demands that shape,
+  `swinir-classical-x2`, does not form it on its real path and verifies clean.
+  Gate: `tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py`,
+  deliberately RED.
+
+  **33 of the 59 censused models are open**, each named with its cause and its
+  owner in `docs/reference/catalogue-state.md`: 11 are memory limits of an 18 GB
+  card, 6 wait on the rack's layer_streaming fix, 6 are trace or op defects, 3
+  were censused without the image their flow requires, 4 owe a re-trace for a
+  frozen symbol, 2 want a missing capability, 1 a Metal driver fix.
 
   **Three modes, ten catalogue cells each, judged outside the engine.** The
   same ten cells — six upscalers (swin2SR x2/x4-realworld, swinir x2/x4,
@@ -266,18 +282,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match its recording, the LLM text is compared literally, and images pass
   an external degeneracy judge.
 
-  - `--compiled` (plain PyTorch on mps): 10 attempted, 10 passing.
-    `Engine: COMPILED` in every log, planned on `mps:0`, zero fallback lines.
-  - `--triton`: 10 attempted, 10 passing, 0 autotune misses. The two text
-    cells are byte-identical to the compiled arm's output.
-  - `--triton-sequential`: 10 attempted, 10 passing, 0 misses, same judges.
+  - `--compiled` (plain PyTorch on mps): **10 of 10 clean, 0 autotune misses.**
+  - `--triton-sequential`: **10 of 10 clean, 0 misses.**
+  - `--triton`: **9 of 10 clean, 0 misses.** `chatterbox` is killed by the macOS
+    memory manager while loading its conditioning encoder — with classifier-free
+    guidance it carries roughly double the resident weights — and that is a limit
+    of an 18 GB card, not a coverage gap: its miss count is 0 and the same model
+    runs clean in the other two arms.
 
-  **The certified kernel directory.** 974 witnessed keys at
-  `src/neurobrix/config/autotune/apple/apple_m4_pro/`, every entry stamped
-  with the generator that proved it (`triton 3.8.0+git4a15f415 mps`) and
-  refused to any other. Service is at zero miss: the catalogue cells above
-  demand nothing uncertified, and the full unit suite (155 files, 1366
-  tests) passes with every file at rc=0.
+  **Zero autotune misses across all thirty cells**, measured on a quiet host with
+  the runtime config cache CLEARED before each arm, so a miss count is a property
+  of the certified directory and not of a warm cache. Re-run after the directory
+  switch and unchanged. 29 artefacts written and judged from outside the engine.
+  Per-cell commands and results: `docs/reference/apple-verification-2026-09-23.md`.
 
   **What an Apple user installs, and what it costs.** PyPI publishes no
   macOS Triton wheel, so the triton path is built from source: roughly
