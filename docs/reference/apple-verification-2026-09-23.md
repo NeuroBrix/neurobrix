@@ -1,5 +1,10 @@
 # Judged verification — Apple M4 Pro, 2026-09-23
 
+**Re-run after the switchover and unchanged: 29 of 30 cells clean, ZERO autotune misses.**
+The prune removed 956 entries and serving did not move, which is what the pre-flight
+measurement predicted — all 956 carried no generator record, so register 56 already served
+them to no card. Directory gate after the switchover: `rc=0`, 16 files, 0 refused.
+
 Three modes, ten catalogue cells each, replaying the CENSUS's own recorded command.
 Run on a QUIET host with the replay cache CLEARED before the arms, so a miss count is a
 property of the certified directory and not of a warm cache (register 502).
