@@ -81,10 +81,20 @@ def _to_f64(t) -> Optional[np.ndarray]:
         return None
 
 
-def _mm(named: Dict[str, Any]) -> Optional[np.ndarray]:
+def _mm(named: Dict[str, Any], rows: Optional[tuple] = None) -> Optional[np.ndarray]:
+    """The fp64 reference for `mm`/`addmm`, optionally on a ROW WINDOW only.
+
+    `rows=(r0, r1)` computes `a[r0:r1] @ b` instead of the whole product. That is the rack's
+    row-windowed oracle technique (autotune_certify.RowWindowedOracle), brought to the screen
+    so a shape over the screening budget is verified on named windows instead of not at all.
+    A whole fp64 reference for a 4 194 304 x 540 output is 18 GB; three row windows of it are
+    a few megabytes, and the per-element comparison is identical on them."""
     a, b = _to_f64(named.get("a_ptr")), _to_f64(named.get("b_ptr"))
     if a is None or b is None:
         return None
+    if rows is not None:
+        r0, r1 = rows
+        a = a[r0:r1]
     out = a @ b
     bias = named.get("bias_ptr")
     if bias is not None:
@@ -143,6 +153,31 @@ ORACLES.update({
     name: ((lambda named, _fn=fn: _fn(named, _to_f64)), out_name)
     for name, (fn, out_name) in _conv.ORACLES.items()
 })
+
+
+#: Kernels whose oracle can be computed on a ROW WINDOW of the output. The convolution
+#: oracle is not here: its output rows do not map to input rows by a slice, so windowing it
+#: needs the receptive-field arithmetic the certifier's `_conv2d_oracle` carries and is a
+#: separate piece of work. A kernel absent from this set falls back to windowed CONSENSUS,
+#: announced, rather than to nothing.
+ROW_WINDOWABLE = {"matmul_kernel", "addmm_kernel"}
+
+
+def windowed_reference(tuner, meta, rows) -> Optional[np.ndarray]:
+    """The fp64 reference for `rows` of the output, or None if this kernel cannot be windowed.
+
+    Returns the ARRAY, not bytes: the launcher slices the candidates' own bytes to the same
+    rows and compares, so both sides are the same rows of the same tensor."""
+    name = getattr(getattr(tuner, "base_fn", None), "__name__", "") or ""
+    if name not in ROW_WINDOWABLE:
+        return None
+    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
+    if not named:
+        return None
+    try:
+        return _mm(named, rows=rows)
+    except Exception:                                   # noqa: BLE001
+        return None
 
 
 def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
