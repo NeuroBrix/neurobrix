@@ -122,3 +122,91 @@ def test_the_token_dimension_still_follows_the_request(resolved):
 def test_the_whole_view_keeps_the_element_count(resolved):
     got = resolved()
     assert got[0] * got[1] * got[2] * got[3] == 2 * HIDDEN * RUN_TOKENS, got
+
+
+# --------------------------------------------------------------------------
+# The same coincidence at a position that maps 1:1 to an input dim, where the
+# alignment gives no split to reason about. Sana carries 124 of these. The
+# discriminator there is the PARTNER: a genuine spatial use names height and
+# width as bare entries together (the VAE keeps them as two adjacent dims),
+# while a misattributed one is a lone height with no width beside it. The
+# partner must be looked for at TOP LEVEL only -- Sana's token entry is
+# `mul(s6, s7)`, so a nested search would find s7 inside it and keep every
+# misattribution.
+# --------------------------------------------------------------------------
+
+def _lone_vs_pair_dag():
+    t = lambda tid: {"type": "tensor", "tensor_id": tid}
+    lst = lambda v: {"type": "list", "value": v}
+    h = {"type": "symbol", "id": "s6", "trace": TRACE_LATENT}
+    w = {"type": "symbol", "id": "s7", "trace": TRACE_LATENT}
+    return {
+        "symbolic_context": {"symbols": {
+            "s5": {"name": "batch", "trace_value": 1,
+                   "source": "input::sample::dim_0"},
+            "s6": {"name": "height", "trace_value": TRACE_LATENT,
+                   "source": "input::sample::dim_2"},
+            "s7": {"name": "width", "trace_value": TRACE_LATENT,
+                   "source": "input::sample::dim_3"},
+        }},
+        "tensors": {
+            "input::sample": {"shape": [1, 32, TRACE_LATENT, TRACE_LATENT]},
+            # HEAD_DIM is also a weight extent, which is the whole trap
+            "param::attn": {"shape": [HEAD_DIM, HEAD_DIM], "weight_name": "attn"},
+        },
+        "ops": {
+            # GENUINE: height and width kept as two bare adjacent entries
+            "aten.view::0": {
+                "op_type": "aten::view", "input_tensor_ids": ["input::sample"],
+                "output_tensor_ids": ["aten.view::0::out_0"],
+                "input_shapes": [[1, 32, 32, TRACE_LATENT, TRACE_LATENT]],
+                "output_shapes": [[1, TRACE_TOKENS, TRACE_LATENT, TRACE_LATENT]],
+                "attributes": {"args": [t("input::sample"),
+                                        lst([1, _tok(TRACE_TOKENS), h, w])]}},
+            # MISATTRIBUTED: a lone height standing in for the head dim
+            "aten.view::6": {
+                "op_type": "aten::view", "input_tensor_ids": ["input::sample"],
+                "output_tensor_ids": ["aten.view::6::out_0"],
+                "input_shapes": [[1, 64, TRACE_TOKENS, HEAD_DIM]],
+                "output_shapes": [[64, TRACE_TOKENS, HEAD_DIM]],
+                "attributes": {"args": [t("input::sample"),
+                                        lst([64, _tok(TRACE_TOKENS), dict(h)])]}},
+        },
+        "execution_order": ["aten.view::0", "aten.view::6"],
+    }
+
+
+@pytest.fixture()
+def lone_vs_pair():
+    dag = _lone_vs_pair_dag()
+    promote_seq_len_scalars(dag, dag["tensors"], dag["ops"], config_constants=None)
+    r = SymbolResolver(dag["symbolic_context"])
+    r._bind("s5", 1)
+    r._bind("s6", RUN_LATENT)
+    r._bind("s7", RUN_LATENT)
+
+    def target(uid):
+        out = []
+        for a in dag["ops"][uid]["attributes"]["args"][1]["value"]:
+            if isinstance(a, dict) and a.get("type") == "scalar":
+                out.append(a["value"])
+            elif isinstance(a, dict):
+                out.append(r.resolve(a))
+            else:
+                out.append(a)
+        return out
+
+    return target
+
+
+def test_a_lone_height_at_a_weight_extent_is_literalised(lone_vs_pair):
+    got = lone_vs_pair("aten.view::6")
+    assert got[2] == HEAD_DIM, (
+        f"the head dim resolved to {got[2]} — a lone height symbol standing in for "
+        "an extent the weights fix")
+
+
+def test_a_genuine_height_width_pair_is_left_alone(lone_vs_pair):
+    """The VAE really does keep H and W as two dims; freezing them breaks it."""
+    got = lone_vs_pair("aten.view::0")
+    assert got[2] == RUN_LATENT and got[3] == RUN_LATENT, got

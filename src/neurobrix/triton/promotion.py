@@ -1077,10 +1077,31 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                 if (_elem.get("id") or _elem.get("symbol_id")) not in _spatial_ids:
                     continue
                 _src_dim, _span = _groups.get(_k, (None, 1))
-                if _span < 2 or _src_dim is None:
-                    continue                 # not a split of one input dim
-                if _ins[0][_src_dim] in _weight_dims:
-                    _items[_k] = _outs[0][_k]
+                if _src_dim is None:
+                    continue                 # this entry merges input dims
+                if _ins[0][_src_dim] not in _weight_dims:
+                    continue                 # the extent is not fixed by the weights
+                if _span < 2:
+                    # The entry maps 1:1 to an input dim, so there is no split to
+                    # reason about, and at the traced size the head dim and the
+                    # latent side can be the same number (Sana: 70 heads of 32, a
+                    # 32x32 latent). The PARTNER decides: a genuine spatial use
+                    # names height AND width as bare entries together — Sana's VAE
+                    # keeps them as two adjacent dims — while a misattribution is a
+                    # lone height with no width beside it.
+                    #
+                    # Top level only. Sana's token entry is `mul(s6, s7)`, so a
+                    # nested search finds the partner inside every one of them and
+                    # would keep all 124.
+                    _partner = (w_sym[0] if (h_sym and
+                                             (_elem.get("id") or _elem.get("symbol_id"))
+                                             == h_sym[0] and w_sym)
+                                else (h_sym[0] if h_sym else None))
+                    if any(isinstance(_o, dict) and _o.get("type") == "symbol"
+                           and (_o.get("id") or _o.get("symbol_id")) == _partner
+                           for _n, _o in enumerate(_items) if _n != _k):
+                        continue             # a real (height, width) pair
+                _items[_k] = _outs[0][_k]
 
     _spatial_targets = (
         "aten::view", "aten::_unsafe_view", "aten::reshape", "aten::expand",
