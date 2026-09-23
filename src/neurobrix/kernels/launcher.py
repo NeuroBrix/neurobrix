@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import ctypes
 import os
+
+import numpy as np
 import struct
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
@@ -1021,6 +1023,139 @@ def _no_oracle_reason(oracle) -> str:
     return why or "the oracle produced no reference"
 
 
+
+def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, budget, total):
+    """Screen an over-budget shape on bounded row windows of its output. None if impossible.
+
+    The candidates' own bytes are sliced to the same rows as the oracle, so both sides are the
+    same rows of the same tensor. Only the OUTPUT is windowed and compared; the inputs are not
+    re-read, which is the one thing this screen checks less than the full one — said in the
+    seat line rather than left to be discovered."""
+    from neurobrix.kernels import screen_oracle as _so
+    out_name = None
+    entry = _so.ORACLES.get(getattr(getattr(tuner, "base_fn", None), "__name__", "") or "")
+    if entry is not None:
+        out_name = entry[1]
+    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
+    out_tensor = named.get(out_name) if out_name else None
+    if out_tensor is None:
+        return None
+    wins = _row_windows_for(out_tensor, budget)
+    if not wins:
+        return None
+    try:
+        shape = tuple(int(x) for x in out_tensor.shape)
+        M, N = shape
+        itemsize = int(out_tensor._nbytes) // max(1, M * N)
+        row_bytes = N * itemsize
+        out_addr = int(out_tensor.data_ptr())
+    except Exception:                                   # noqa: BLE001
+        return None
+    ranges = _rows_to_bytes(wins, row_bytes)
+    where = _describe_windows(wins, M)
+
+    shots = []
+    for config in configs:
+        try:
+            tuner.fn.run(*args, **{**dict(meta or {}), **config.all_kwargs()})
+            shots.append((config, _snapshot_ranges(out_addr, ranges)))
+        except Exception:                               # noqa: BLE001
+            pass
+    if len(shots) < 2:
+        return _seat_unscreened(kernel_name, _rk, configs, len(shots),
+                                f"over the screening budget ({total} bytes) and fewer than "
+                                f"two candidates ran on the windows {where}")
+
+    dtype_name = None
+    for _a, _n, dt in buffers:
+        if _a == out_addr:
+            dtype_name = dt
+            break
+
+    # ONE ORACLE PER WINDOW, never over their span. Passing (first_start, last_end) asks for
+    # every row between the first and last window — the whole product, which is the 18 GB
+    # computation the windowing exists to avoid, and it fails silently into the consensus
+    # path. Measured 2026-09-23: matmul_kernel fell through to consensus for exactly this
+    # reason while sitting in ROW_WINDOWABLE.
+    kept = None
+    try:
+        import numpy as _np
+        parts = []
+        for r0, r1 in wins:
+            piece = _so.windowed_reference(tuner, meta, (r0, r1))
+            if piece is None:
+                parts = None
+                break
+            # CAST TO THE OUTPUT'S DTYPE before comparing, exactly as the full-screen
+            # provider does. The reference is computed in float64; a candidate's bytes are
+            # fp16. Comparing them raw fails with a 4x shape mismatch — which is what the
+            # swallowed exception was hiding until it was made to speak.
+            if dtype_name in ("bf16", "bfloat16"):
+                from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
+                want = _np.ascontiguousarray(
+                    f32_to_bf16_bits(_np.ascontiguousarray(piece, dtype=_np.float32)))
+            else:
+                want = _np.ascontiguousarray(piece.astype(_so._NP.get(dtype_name, _np.float32)))
+            parts.append(want.tobytes())
+        if parts is not None:
+            ref_bytes = b"".join(parts)
+            kept = [(c, blob) for c, blob in shots
+                    if configs_agreeing_with_oracle([(c, blob)], ref_bytes, dtype_name)]
+        else:
+            print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle returned "
+                  f"nothing for a window of this key; falling back to consensus on the same "
+                  f"windows.", flush=True)
+    except Exception as exc:                            # noqa: BLE001
+        # SAY why. An `except: pass` here is the exact shape this session spent a day
+        # removing elsewhere: it turns "the oracle could not be computed" into "no oracle
+        # covers this kernel", which is a different and false statement.
+        print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle raised "
+              f"({type(exc).__name__}: {str(exc)[:160]}); falling back to consensus on the "
+              f"same windows.", flush=True)
+        kept = None
+    if kept is not None:
+        if not kept:
+            raise RuntimeError(
+                f"NeuroBrix autotune screen: {kernel_name} at key {_rk} — the fp64 oracle "
+                f"contradicts EVERY candidate on {where}. Screened on windows because the "
+                f"arguments ({total} bytes) exceed the screening budget; a window that "
+                f"disagrees is a disagreement. Refusing to seat any of them.")
+        print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total "
+              f"{total} bytes, over the screening budget {budget}. Screened against the fp64 "
+              f"oracle on {where} — {len(kept)} of {len(shots)} candidates kept. VERIFIED ON "
+              f"THOSE WINDOWS ONLY; the rest of the output and the input buffers were not "
+              f"compared.", flush=True)
+        _record_screen_windows(_rk, where, "fp64 oracle", len(kept), len(shots))
+        return [c for c, _ in kept]
+
+    # No windowed oracle for this kernel: cluster the candidates by agreement on the windows.
+    # Strictly less than an oracle and strictly more than nothing, and it says which it is.
+    groups = {}
+    for c, blob in shots:
+        groups.setdefault(blob, []).append(c)
+    best = max(groups.values(), key=len)
+    print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total {total} "
+          f"bytes, over the screening budget {budget}, and no row-windowed oracle covers this "
+          f"kernel. Screened by CONSENSUS on {where} — {len(best)} of {len(shots)} agree. "
+          f"No oracle adjudicated this key.", flush=True)
+    _record_screen_windows(_rk, where, "consensus (no windowed oracle)", len(best), len(shots))
+    return best
+
+
+#: What each windowed screen verified, so a proof can name it.
+SCREEN_WINDOWS: dict = {}
+
+
+def _record_screen_windows(key, where: str, by: str, kept: int, candidates: int) -> None:
+    SCREEN_WINDOWS[str(key)] = {"windows": where, "adjudicated_by": by,
+                                "kept": kept, "candidates": candidates}
+
+
+def screen_windows_of(key):
+    """The windows a key was screened on, for the proof. None when it was screened whole."""
+    return SCREEN_WINDOWS.get(str(key))
+
+
 def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
     """Return the configs, having said plainly that nothing verified them.
 
@@ -1071,6 +1206,71 @@ def _writable_buffers(values):
         out.append((int(value.data_ptr()), int(value._nbytes),
                     getattr(getattr(value, "dtype", None), "name", "?")))
     return out
+
+
+
+#: How many row windows an over-budget screen takes, and where. The LAST window is anchored
+#: at the final row deliberately: the failure class that motivates screening a large shape is
+#: index overflow, and it shows at the largest linear index or nowhere (the rack, 2026-09-23).
+_SCREEN_WINDOWS = 3
+
+
+def _row_windows_for(out_tensor, budget_bytes: int):
+    """Row ranges of a 2-D output whose total bytes fit the budget, or None.
+
+    None means the shape cannot be windowed by rows — the caller then says so rather than
+    pretending it screened something."""
+    try:
+        shape = tuple(int(x) for x in out_tensor.shape)
+        itemsize = int(out_tensor._nbytes) // max(1, int(np.prod(shape)))
+    except Exception:                                   # noqa: BLE001
+        return None
+    if len(shape) != 2 or itemsize <= 0:
+        return None
+    M, N = shape
+    row_bytes = N * itemsize
+    if row_bytes <= 0 or M <= 0:
+        return None
+    # Size the window by what the ORACLE costs, not by what the output costs. The reference
+    # is computed in float64 — 8 bytes a element against 2 for an fp16 output — so a window
+    # sized to the budget in output bytes needs four times the budget to adjudicate, and the
+    # oracle then raises and the screen silently degrades to consensus (measured 2026-09-23,
+    # matmul_kernel falling through while sitting in ROW_WINDOWABLE). The reference row is
+    # what it will actually occupy.
+    oracle_row_bytes = N * 8
+    per = max(1, int(budget_bytes) // (_SCREEN_WINDOWS * max(oracle_row_bytes, 1)))
+    if per >= M:
+        return [(0, M)]
+    mid = max(0, (M - per) // 2)
+    wins = [(0, per), (mid, mid + per), (M - per, M)]
+    # de-duplicate and order; overlapping windows on a short M collapse to fewer
+    out, seen = [], set()
+    for r0, r1 in wins:
+        r0, r1 = max(0, r0), min(M, r1)
+        if r1 > r0 and (r0, r1) not in seen:
+            seen.add((r0, r1)); out.append((r0, r1))
+    return out or None
+
+
+def _describe_windows(wins, M):
+    return "rows " + "; ".join(f"{r0}-{r1}" for r0, r1 in wins) + f" of {M}"
+
+
+def _rows_to_bytes(wins, row_bytes):
+    return [(r0 * row_bytes, (r1 - r0) * row_bytes) for r0, r1 in wins]
+
+
+def _snapshot_ranges(address, ranges):
+    """Copy only the given byte ranges of one device buffer to the host."""
+    import ctypes
+
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    blobs = []
+    for off, length in ranges:
+        host = (ctypes.c_char * length)()
+        DeviceAllocator.memcpy(ctypes.addressof(host), address + off, length, kind=2)
+        blobs.append(bytes(host))
+    return b"".join(blobs)
 
 
 def _snapshot(buffers):
@@ -1484,10 +1684,25 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
                 f"arguments total {total} bytes, over the profile's screening "
                 f"budget {int(budget)} and over the {_avail_mb} MB available: "
                 f"the sweep was cut to the first declared config, unmeasured")
+        # OVER THE SCREENING BUDGET — screen on NAMED ROW WINDOWS rather than not at all.
+        #
+        # A fixed budget made the LARGEST shapes the LEAST verified ones, which is backwards:
+        # the failure class that motivates screening a large shape is index overflow, and it
+        # lives exactly where the budget stopped looking (the 2^31 addmm, 2026-09-23). The
+        # budget is a rule about COST and the question is CORRECTNESS, so the cost is bounded
+        # instead — a few row windows of the output, compared to the rack's row-windowed fp64
+        # oracle, at a price set by the window and not by the shape (owner, 2026-09-23).
+        #
+        # The last window is anchored at the final row on purpose: an index that wraps shows
+        # at the largest linear index or nowhere.
+        windowed = _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta,
+                                      buffers, int(budget), total)
+        if windowed is not None:
+            return windowed
         return _seat_unscreened(
             kernel_name, _rk, configs, len(configs),
             f"arguments total {total} bytes, over the profile's screening "
-            f"budget {int(budget)}")
+            f"budget {int(budget)}, and the output could not be row-windowed")
 
     before = _snapshot(buffers)
     meta = dict(meta or {})

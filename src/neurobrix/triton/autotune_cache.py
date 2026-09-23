@@ -253,6 +253,23 @@ def capture() -> int:
                 rec["unscreened_reason"] = reason
                 rec["provenance"] = ("fastest among candidates nothing "
                                      "verified — NOT a validated setting")
+            # A shape over the screening budget is screened on ROW WINDOWS, and the proof
+            # names them: what was verified and what was not must always be readable
+            # (owner, 2026-09-23). Recorded for the key whether the windows were adjudicated
+            # by the fp64 oracle or, where no windowed oracle covers the kernel, by consensus.
+            try:
+                from neurobrix.kernels.launcher import screen_windows_of
+                win = screen_windows_of(key)
+            except Exception:                            # noqa: BLE001
+                win = None
+            if win is not None:
+                rec["screened"] = True
+                rec["screened_on_windows"] = win["windows"]
+                rec["screened_by"] = win["adjudicated_by"]
+                rec["screen_kept"] = f"{win['kept']} of {win['candidates']}"
+                rec["provenance"] = (
+                    f"verified on {win['windows']} by {win['adjudicated_by']}; the rest of "
+                    f"the output and the input buffers were NOT compared")
             entries[f"{qual}::{key!r}"] = rec
     if skipped_unmeasured:
         print(f"[AUTOTUNE_CACHE] {skipped_unmeasured} choice(s) made without "
