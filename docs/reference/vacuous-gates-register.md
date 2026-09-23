@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-100 entries, 98 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 95 carry a site. Two
+103 entries, 98 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 98 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2958,3 +2958,127 @@ mochi measurement is kept as prose, where a number that can go stale belongs.
 **The lesson, in one line.** A gate whose subject is data is hostage to whoever next regenerates
 that data: assert the CLASS and discover the example, or your gate has an expiry date nobody
 wrote down.
+
+### 502 — a verification on a warm replay cache measures the cache, not the directory
+
+**2026-09-23, Apple/Metal campaign.** Verification judges "zero miss" by counting
+`no certified setting` lines in each model's run. A key that is NOT certified but IS in
+`~/.neurobrix/replay_cache/autotune_configs_<arch>.json` is served from there, silently, and
+the run prints no such line. The count is then a property of the cache.
+
+**Measured.** After an earlier standalone run of the same cell:
+
+```
+runtime-swept configs cached:                          42
+cached configs NOT in the certified directory:          9
+```
+
+Kokoro-82M reported **8 autotune misses** when run with a cold cache and **0** an hour later,
+with nothing certified in between. Nine of the ten cells then read "0 misses" and the whole
+`--triton` arm looked clean. It was not: the arm had inherited a cache warmed by my own
+earlier probing.
+
+**Why it is not merely a stale-cache nuisance.** The replay cache is working as designed — the
+engine's own message says a runtime sweep "is kept in `~/.neurobrix/replay_cache`, never in
+the engine's directory". The cache is the correct place for an unverified setting. The defect
+is that the INSTRUMENT counting misses cannot distinguish "served from the certified
+directory" from "served from a runtime sweep", and those are the two things verification
+exists to tell apart.
+
+**The rack hit the same shape on CUDA the same night**, from the other side: their
+`test_a_conv_input_beyond_two_billion_elements` passed in 3.96 s warm and took 1 266 s cold,
+because warm there was no sweep at all — a seated config replayed. Warm caches make a gate
+fast and make it measure something else.
+
+**Fixed** by clearing `autotune_configs_*.json` before the arms run
+(`campagnes/2026_09_22_apple/scripts/verify_all.sh`), with the warm cache preserved beside the
+logs as evidence. The exclusions file is deliberately NOT cleared: it records configs proven
+to diverge, and deleting it would discard knowledge that protects correctness.
+
+**The lesson, in one line.** Before believing a "zero miss", ask what the run would have done
+had the cache been empty — and if you cannot answer, empty it.
+
+
+### 503 — 88 % of the Apple directory's speed rankings are inside this chip's own noise
+
+**2026-09-23.** Prompted by the rack's register 96, which measured the same thing on CUDA and
+found 33.2 %. Every proof records `best_ms` AND `second_ms`, so this is measurable rather than
+arguable. Measured over all **4 061** Apple proofs, comparing each winner's margin over the
+runner-up against this chip's p95 spread FOR THAT DURATION BAND
+(`apple_m4_pro.yml`, `autotune.loss_tolerance.bands`):
+
+```
+margin of winner over runner-up:  p5 0.12%   p25 0.76%   median 5.18%   p95 48.43%
+
+decided by a margin SMALLER than the chip's spread:  3 578 of 4 061   (88.1 %)
+under 0.1 %:                                            166           ( 4.1 %)
+
+by band:  p95 51.08% ->  1685/1798  (93.7 %)     [< 1 ms]
+          p95  7.91% ->   535/ 607  (88.1 %)     [1-2 ms]
+          p95  5.08% ->   473/ 550  (86.0 %)     [2-5 ms]
+          p95 14.77% ->   885/1106  (80.0 %)     [> 5 ms]
+```
+
+**88.1 % here against the rack's 33.2 %.** They predicted Apple would be worse under a
+unified-memory allocator with OS-managed clocks, and it is, by a factor of nearly three. Even
+in this chip's quietest band — 2-5 ms, the one this campaign's own doctrine says is the only
+place a timing verdict means anything — 86 % of rankings are inside the noise.
+
+**What this does NOT say.** It is not a correctness claim. Every entry's `deviation` against
+the fp64 oracle is inside tolerance; that part of "certified" is measured and holds. Two
+configs within the noise also cost the same to run, so nothing is slower than it should be.
+
+**What it does say.** The unsupported word is *fastest*. And it bites for a reason specific to
+this project: a kernel's compiled arithmetic is part of the bytes, so if a re-certification
+seats a different config — and for 88 % of entries it may, by construction — byte-identical
+output across re-certifications is not guaranteed. **The determinism this project relies on
+rests on the directory not being re-swept, and nobody had written that down.**
+
+The rack's recommendation, which I adopt: the fix is not a quieter host (4.1 % were decided
+under 0.1 %, which no host resolves) but a change to the CLAIM — below the machine's measured
+spread, record "either config is certified; this one is PINNED for determinism, and pinned
+arbitrarily", so a re-certification keeps the pin instead of silently re-seating. The margin
+is already in every proof; only the word changes.
+
+**Owner's call**, on both machines, since it restates what "certified" asserts for 3 578
+existing Apple proofs and 8 443 CUDA ones. Not implemented here.
+
+**The lesson, in one line.** A verdict of "fastest" needs the margin AND the host's spread;
+recording only the winner makes an unfalsifiable claim out of a measurement already in hand.
+
+
+### 504 — the certifier cannot validate a launch the wrapper split, and reports it as divergence
+
+**2026-09-23.** `mm`/`addmm` now band their launch above 2^31 output elements (`263fbb4a`),
+because the Metal lowering writes nothing past row `2**31 // N` in a single launch. The engine
+is correct after that change — measured 5.39e-07 against the fp64 oracle where it was 1.0.
+
+**The certifier still refuses the key, and its reason is now wrong.** `certifying_run`
+intercepts the wrapper's kernel launch and the config sweep re-runs `tuner.fn.run` on the
+args it captured. With banding those args are the FIRST BAND's — `M = 3 974 879`, `c` a view
+of rows 0..3 974 879 — while `oracle_fn()` is a closure over the SYNTHESIZED full arrays and
+`RowWindowedOracle` places its third window at rows 4 187 446-4 194 304. That window is
+outside the band. Comparing a band against a whole-output oracle yields deviation exactly
+1.0, and the certifier reports "every config diverges from the fp64 oracle", which is a true
+sentence about a comparison that should never have been made.
+
+**So the failure changed meaning without changing its message.** An hour earlier the same line
+meant "the kernel writes zeros past 2^31". It now means "the oracle and the launch cover
+different rows". Same text, same exit path, different defect — and nothing in the message
+distinguishes them. That is what puts this in this register: the instrument reports a
+divergence it is not entitled to measure.
+
+**Not fixed, and deliberately.** The fix is to build the oracle from the intercepted args
+rather than from the synthesized arrays, or to have a windowed oracle refuse a window that
+falls outside the tensor it is handed. Either changes oracle semantics for all 3 178 certified
+Apple proofs and 12 871 CUDA ones, and neither can be re-verified in the hours left. One key
+is not worth that trade taken blind.
+
+**What it costs today:** exactly one census key of 3 179 — `addmm M_BUCKET=4194304 N=540 K=180`,
+the only key in the census whose output exceeds the threshold, measured rather than assumed.
+No model output is affected: `swinir-classical-x2`, the only model whose census demands that
+shape, does not form it on its real path and verifies clean with 0 misses.
+
+**The lesson, in one line.** When a wrapper may split a launch, an oracle built for the whole
+operation is not the oracle for what actually ran — and a comparison across that mismatch
+fails loudly in the vocabulary of a numerical defect.

@@ -50,6 +50,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -191,6 +192,14 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
         lines = [l for l in log.read_text(errors="replace").splitlines() if "Error" in l or "ERROR" in l]
         tail = (lines[-1] if lines else "")[:300]
     return {"mode": mode, "rung_mb": rung_mb, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys, "error": tail,
+            # shlex.join, not " ".join: this string is REPLAYED (verification runs the
+            # census's own command), and a space-joined argv cannot be. Recorded that way,
+            # `--prompt The quick brown fox ...` split at every space and only `The` reached
+            # the flag — "unrecognized arguments" for 45 of the 59 censused models, found
+            # 2026-09-23 when three of the ten verification cells failed rc=2. shlex.join is
+            # the exact inverse of the shlex.split a shell does to it. The rack found the
+            # same defect at four further sites the same day (6e921a3d, by an AST walk after
+            # its own grep missed two of five).
             "command": shlex.join(cmd[2:])}
 
 

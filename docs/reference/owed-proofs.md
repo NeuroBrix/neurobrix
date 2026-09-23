@@ -3849,3 +3849,109 @@ from the program id. Recorded because it is the first thing anyone will try.
 Three things were tried — the published remedy (already present), a scalar base, and a scalar
 pointer advance with int32 indexing — and the shape is unchanged. It needs someone in the
 `triton-ext` fork, with the CUDA half as the reference for what correct lowering produces.
+
+### Four avenues tried on the 2^31 key, and what each proved
+
+Recorded so the next person does not repeat them. The engine defect IS fixed; only the
+certification of that one key is not.
+
+1. **Fix the kernel's addressing.** Three spellings — the published remedy (already present at
+   `matmul.py:257`), a scalar int64 row base, and a scalar int64 pointer advance with pure
+   int32 in-tile offsets. All three leave the rows past `2**31 // N` unwritten. The third puts
+   NOTHING large in vector arithmetic, so the truncation is below anything a kernel can
+   express. The rack ran the conv equivalent three ways on a bare V100 and it passes cold, so
+   the class is Metal's alone.
+2. **Band the launch** (`263fbb4a`, kept). Splits above 2^31 output elements the way
+   `conv2d_wrapper` already does. **This fixed the engine**: deviation 1.0 -> 5.39e-07, the red
+   gate passes, every row correct including past the boundary. It did not make the key
+   certifiable — see register 504.
+3. **Key each band on its own rows**, so the census's unbanded key would be reported
+   UNREACHABLE, the engine's own word for a key no run presents again. It did NOT produce
+   UNREACHABLE: the certifier's key check still saw the census key, so my model of where
+   `key_of` takes `M_BUCKET` from is incomplete. **Reverted rather than pursued** — the tree
+   keeps the validated banding and not this.
+4. **Re-census the one model that demands it** (`swinir-classical-x2`, all six rungs, both
+   modes, 28.7 s). It **still forms the key**: the census shadow derives keys from the graph
+   without executing, so a runtime wrapper behaviour like banding does not change what it
+   records. The census legitimately demands a shape the engine now reaches only in bands.
+
+**The residue is a bookkeeping mismatch, not a defect anyone can hit.** The census asks for a
+launch shape the engine no longer makes; the certifier validates a single launch against an
+oracle for the whole output. Closing it means changing either what the shadow records or what
+the certifier compares, and both touch every proof on both machines.
+
+
+---
+
+## 2026-09-23 — ENGINE DEFECT: the census is blind to what the wrapper does at launch
+
+Reclassified by the owner. I had filed this as a bookkeeping mismatch; it is not. It is the
+same class as mochi's, where the census walked past where the run dies.
+
+### The defect
+
+`certified_census` derives keys from the GRAPH. It never sees what the wrapper does when the
+launch actually happens. So a wrapper that splits one graph-level operation into several
+launches — `conv2d_wrapper` band-streaming a large output, and now `mm`/`addmm` banding above
+2^31 output elements (`263fbb4a`) — forms keys at runtime that the census does not record, and
+records a key the runtime never forms.
+
+Both halves were measured here on 2026-09-23:
+
+- **Keys formed but not recorded.** Once three verification cells could run at all, they
+  formed **73 keys** the 3 106-key census never named — 65 from chatterbox in
+  `--triton-sequential`, 8 from Kokoro in `--triton`. All 73 were certifiable and are now
+  certified.
+- **A key recorded but never formed.** `addmm M_BUCKET=4194304 N=540 K=180` is demanded by the
+  census of `swinir-classical-x2` at every rung. After the banding fix the engine never
+  launches that shape — it launches two bands — and `swinir-classical-x2` does not form it on
+  its real path at all (0 occurrences in its run log; the cell verifies clean with 0 misses).
+  **Re-censusing that model with the fix in place still records the key**, because the shadow
+  reads the graph and the banding is a launch-time behaviour.
+
+### Why it is the mochi class
+
+A census that reads the graph and stops there describes the program as written, not the
+program as run. It walked past mochi's failure for the same reason: the thing that decides
+what actually executes is below the level the census inspects. Here it produces both a false
+negative (73 keys unrecorded) and a false positive (one key recorded that no run forms), from
+one cause.
+
+### Consequence, and what it does NOT justify
+
+It is why `addmm M_BUCKET=4194304` cannot be certified: `certifying_run` intercepts the FIRST
+BAND's launch while the fp64 oracle is built for the whole output, so a window at rows
+4 187 446-4 194 304 falls outside the band and the comparison reads deviation 1.0 (register
+504). **The engine is correct** — banding took that shape from 1.0 to 5.39e-07 and fixed a
+silent wrong answer — and no model output is affected.
+
+**It does not hold the Apple chantier open** (owner, 2026-09-23).
+
+### Handed to the rack
+
+The census tool and Prism are yours. The fix is not ours to design from here: it means the
+census learning what the wrapper does at launch, which is either a census that observes real
+launches rather than graph shapes, or a wrapper contract that declares its splits to the
+census. Both are your side of the seam. Nothing is owed back to this machine before it lands.
+
+### 2026-09-23 — 15 pre-existing kernel-test failures on this branch, named not fixed
+
+Found while checking my windowed screen for regressions. **They are not mine**: the identical
+selection fails identically on the tree before my change (15 failed, 201 passed, both runs).
+Named here because a red that nobody names becomes a red that nobody reads.
+
+| file | failures |
+|---|---|
+| `tests/unit/kernels/test_staged_dot_computes_not_merely_compiles.py` | most of them, incl. `test_the_output_agrees_with_the_fp64_oracle[64x64x32]`, `[64x64x64]`, `test_at_least_one_servable_config_computes_correctly` |
+| `tests/unit/kernels/test_the_matmul_oracle_is_windowed_by_rows_above_the_cap.py` | `test_a_large_product_is_windowed_by_rows_and_measured_on_them` |
+
+Both concern the same region my work touched — staged `tl.dot` correctness against the fp64
+oracle, and the certifier's row-windowed oracle — so whoever picks them up should read them
+beside `263fbb4a` (banding) and `6dabcb36` (the windowed screen), which are adjacent but did
+not cause them.
+
+One measurement worth carrying: the same selection takes **9.98 s** before the windowed
+screen and **313 s** after. That is the price of screening shapes the budget used to skip, and
+it is bounded by the window rather than by the shape. If it is judged too slow for a suite,
+the lever is `_SCREEN_WINDOWS` or the profile's `autotune_screen_max_bytes` — not returning to
+seating the largest shapes unverified.
