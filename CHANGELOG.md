@@ -296,6 +296,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switch and unchanged. 29 artefacts written and judged from outside the engine.
   Per-cell commands and results: `docs/reference/apple-verification-2026-09-23.md`.
 
+  **What "certified" asserts, restated.** A certificate guarantees **correctness
+  and a pinned configuration** — not that the setting is the fastest. Every proof
+  records the winning time and the runner-up's, so the margin is in the artefact:
+  measured across two machines, **8 443 of 25 468 NVIDIA proofs (33.2 %) and
+  3 578 of 4 061 Apple proofs (88.1 %)** were decided by a margin smaller than
+  that host's own run-to-run spread. Two independent machines finding it makes it
+  a property of the method, not of a chip. A speed ranking means something only
+  above the measured spread; below it, either configuration is certified and this
+  one is pinned so that re-certification cannot silently re-seat it — which is
+  what keeps output byte-identical across re-certifications.
+  `docs/reference/what-certified-means.md`.
+
+  **Large shapes are no longer the least verified ones.** A tuning step whose
+  arguments exceeded a fixed byte budget used to skip the correctness screen
+  entirely and seat the fastest of several candidates that nothing had checked.
+  The budget is a rule about cost and the question is correctness, so the cost is
+  bounded instead: an over-budget shape is now screened on a few **row windows**
+  of its output against the fp64 oracle, at a price set by the window rather than
+  by the shape. The last window is anchored at the final row, because the failure
+  that motivates screening a large shape is an index that wraps, and it shows at
+  the largest index or nowhere. **Each proof names the windows it was verified
+  on**, so what was checked and what was not is readable from the artefact.
+
   **What an Apple user installs, and what it costs.** PyPI publishes no
   macOS Triton wheel, so the triton path is built from source: roughly
   40 minutes and ~8 GB (1.7 GB LLVM toolkit, 4.3 GB build tree, ~1 GB
