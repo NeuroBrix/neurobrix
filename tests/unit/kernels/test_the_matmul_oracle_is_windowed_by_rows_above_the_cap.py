@@ -13,6 +13,16 @@ import numpy as np
 
 from neurobrix.kernels import autotune_certify as CF
 
+#: The oracle computes `a @ b` in float64 and the test computes the same product the same
+#: way — but not necessarily through the same BLAS path: the windowed oracle multiplies a
+#: SLICE of `a`, and a slice takes a different kernel and a different summation order from
+#: the whole matrix. The difference is fp64 round-off, not disagreement. Asserting `== 0.0`
+#: made this cell fail on Apple's Accelerate at 7.4e-17 while passing on the rack's OpenBLAS,
+#: which is a property of the two libraries and not of the windowing this file guards.
+#: 1e-12 is ten thousand times the observed round-off and still refuses the 1.0 injection
+#: below by twelve orders of magnitude.
+ROUNDOFF = 1e-12
+
 
 def test_a_small_product_keeps_its_whole_oracle():
     rng = np.random.default_rng(0)
@@ -31,11 +41,11 @@ def test_a_large_product_is_windowed_by_rows_and_measured_on_them(monkeypatch):
     oracle = CF._matmul_oracle_fn(a, b)()
     assert isinstance(oracle, CF.RowWindowedOracle) and "row window" in oracle.describe
     full = a.astype(np.float64) @ b.astype(np.float64)
-    assert CF.oracle_deviation(full, oracle) == 0.0
+    assert CF.oracle_deviation(full, oracle) <= ROUNDOFF
     wrong = full.copy(); wrong[-1, -1] += 1.0                       # a masked-edge error at the last row
-    assert CF.oracle_deviation(wrong, oracle) > 0.0
+    assert CF.oracle_deviation(wrong, oracle) > ROUNDOFF
     bias = rng.standard_normal((2, 40, 8)).astype(np.float32)
     a3, b3 = np.stack([a, a]), np.stack([b, b])
     o3 = CF._matmul_oracle_fn(a3, b3, bias)()
     full3 = a3.astype(np.float64) @ b3.astype(np.float64) + bias.astype(np.float64)
-    assert CF.oracle_deviation(full3, o3) == 0.0
+    assert CF.oracle_deviation(full3, o3) <= ROUNDOFF
