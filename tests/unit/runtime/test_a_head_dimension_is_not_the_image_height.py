@@ -1,0 +1,124 @@
+"""A head dimension is fixed by the weights, not by the request (2026-09-23, Sana).
+
+Sana_1600M_1024px_MultiLing has 70 attention heads of 32, and at its traced 1024 px the
+latent is 32x32 — so the head dim and the latent height are both 32. The tracer bound the
+head dim to the HEIGHT symbol:
+
+    aten.view::12  (2, 2240, 1024) -> [s_batch, 70, s6(height), tokens]
+
+At the traced size s6 resolves to 32 and the split is right. At 4096 px s6 is 128, the
+head dim becomes 128, the element count no longer matches, and `metadata_ops._reshape`
+invents a shape — the run dies at the first attention op with
+
+    bmm shape mismatch: (140, 33, 16384) @ (35, 16384, 128)
+
+where 35 is an invented batch and 128 is the image height standing in for the head dim.
+
+The discriminator is structural, not a value: 70 * 32 = 2240 is the extent of the mm
+weight that produced the tensor. A group of target entries that reconstructs a WEIGHT
+extent cannot contain a request-dependent symbol — the weights do not change shape with
+the request. The same view's token entry, which reconstructs a request-dependent input
+dim, must stay symbolic.
+
+Runnable: PYTHONPATH=src python3 -m pytest \
+  tests/unit/runtime/test_a_head_dimension_is_not_the_image_height.py -v
+"""
+from __future__ import annotations
+
+import pytest
+
+from neurobrix.triton.promotion import promote_seq_len_scalars
+from neurobrix.triton.symbols import SymbolResolver
+
+HEADS, HEAD_DIM = 70, 32
+HIDDEN = HEADS * HEAD_DIM          # 2240 — a weight extent
+TRACE_LATENT = 32                  # 1024 px / vae scale 32
+RUN_LATENT = 128                   # a 4096 px request
+TRACE_TOKENS = TRACE_LATENT * TRACE_LATENT
+RUN_TOKENS = RUN_LATENT * RUN_LATENT
+
+
+def _tok(trace):
+    return {"type": "mul", "trace": trace,
+            "left": {"type": "symbol", "id": "s6", "trace": TRACE_LATENT},
+            "right": {"type": "symbol", "id": "s7", "trace": TRACE_LATENT}}
+
+
+def _dag():
+    t = lambda tid: {"type": "tensor", "tensor_id": tid}
+    lst = lambda v: {"type": "list", "value": v}
+    batch = {"type": "symbol", "id": "s5", "trace": 2}
+    height = {"type": "symbol", "id": "s6", "trace": TRACE_LATENT}
+    return {
+        "symbolic_context": {"symbols": {
+            "s5": {"name": "batch", "trace_value": 2,
+                   "source": "input::hidden_states::dim_0"},
+            "s6": {"name": "height", "trace_value": TRACE_LATENT,
+                   "source": "input::hidden_states::dim_2"},
+            "s7": {"name": "width", "trace_value": TRACE_LATENT,
+                   "source": "input::hidden_states::dim_3"},
+        }},
+        "tensors": {
+            "input::hidden_states": {"shape": [2, 32, TRACE_LATENT, TRACE_LATENT]},
+            "param::qkv": {"shape": [HIDDEN, HIDDEN], "weight_name": "qkv"},
+        },
+        "ops": {
+            "aten.mm::2": {
+                "op_type": "aten::mm",
+                "input_tensor_ids": ["input::hidden_states", "param::qkv"],
+                "output_tensor_ids": ["aten.mm::2::out_0"],
+                "input_shapes": [[2 * TRACE_TOKENS, HIDDEN], [HIDDEN, HIDDEN]],
+                "output_shapes": [[2 * TRACE_TOKENS, HIDDEN]],
+                "attributes": {"args": [t("input::hidden_states"), t("param::qkv")]}},
+            # the split into heads: entry 2 is the HEAD DIM, bound to height by coincidence
+            "aten.view::12": {
+                "op_type": "aten::view",
+                "input_tensor_ids": ["aten.mm::2::out_0"],
+                "output_tensor_ids": ["aten.view::12::out_0"],
+                "input_shapes": [[2, HIDDEN, TRACE_TOKENS]],
+                "output_shapes": [[2, HEADS, HEAD_DIM, TRACE_TOKENS]],
+                "attributes": {"args": [t("aten.mm::2::out_0"),
+                                        lst([batch, HEADS, height, _tok(TRACE_TOKENS)])]}},
+        },
+        "execution_order": ["aten.mm::2", "aten.view::12"],
+    }
+
+
+@pytest.fixture()
+def resolved():
+    dag = _dag()
+    promote_seq_len_scalars(dag, dag["tensors"], dag["ops"], config_constants=None)
+    r = SymbolResolver(dag["symbolic_context"])
+    r._bind("s5", 2)
+    r._bind("s6", RUN_LATENT)
+    r._bind("s7", RUN_LATENT)
+
+    def target():
+        out = []
+        for a in dag["ops"]["aten.view::12"]["attributes"]["args"][1]["value"]:
+            if isinstance(a, dict) and a.get("type") == "scalar":
+                out.append(a["value"])
+            elif isinstance(a, dict):
+                out.append(r.resolve(a))
+            else:
+                out.append(a)
+        return out
+
+    return target
+
+
+def test_the_head_dimension_stays_fixed(resolved):
+    got = resolved()
+    assert got[2] == HEAD_DIM, (
+        f"the head dim resolved to {got[2]} — it followed the image height, so the "
+        f"reshape no longer matches the element count and a shape gets invented")
+
+
+def test_the_token_dimension_still_follows_the_request(resolved):
+    """The correction must not freeze the entry that really is request-dependent."""
+    assert resolved()[3] == RUN_TOKENS
+
+
+def test_the_whole_view_keeps_the_element_count(resolved):
+    got = resolved()
+    assert got[0] * got[1] * got[2] * got[3] == 2 * HIDDEN * RUN_TOKENS, got
