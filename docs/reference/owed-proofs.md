@@ -4133,3 +4133,52 @@ open here for a class it cannot see, which is the measurement for that decision.
 
 **Still owed to the rack:** a CUDA proof at **2048 px** for the four PixArt containers on the
 merged trunk. Not 4096 px — that is an Apple rung question and this defect does not need it.
+
+### 2026-09-24 — a rung that admits the BIG request and refuses the small one (Prism, yours)
+
+Found while re-censusing the four PixArt containers after the shape fixes. The shape defects
+are gone — **0 logs carry a shape error across 24 logs, 4 models x 2 modes x 6 rungs** — and
+what remains reads as `failed` for a reason that is not a shape:
+
+    rung          4096  6144  8192  11264  12288  16384
+    plain 1024px    x     x     x     .      .      .      (x = "This model cannot run on this machine")
+
+identical for all four containers and both modes. The refusal names its cause honestly:
+
+    The last rung needs only the largest single component to fit in memory, and it does not:
+      largest component: text_encoder at 9630MB
+      text_encoder: 9630MB (W=9083, A=88)   vae: 1712MB (W=94, A=1536)   transformer: 1439MB
+
+A 9 GB T5 does not fit a 4 GB rung, and that is arithmetic, not a defect. **The asymmetry is.**
+At the SAME rung 4096, the census's own 4096x4096 probe — a far larger request — plans and
+records 31 keys:
+
+    probe  Strategy: op_level_tiling
+           Why: op_level_tiling scored 60 the only viable strategy
+           Devices: mps:0 (38586 MB planned)
+
+while the 1024x1024 request at that rung is refused, and the refusal's own list of what was
+tried does not contain `op_level_tiling`:
+
+    single_gpu, single_gpu_lifecycle, lazy_sequential, zero3 - ALL FAILED, cpu_execution, cpu_streaming
+
+So the strategy that makes the large request viable is not offered to the small one, and a
+rung is not a consistent constraint across requests: it admits 4096px and refuses 1024px.
+Two readings, and we cannot adjudicate between them from here because Prism is yours:
+
+1. `op_level_tiling` is gated on something the small request does not trigger, in which case
+   the refusal message is wrong to claim "every strategy was tried".
+2. It is offered and silently scores out, in which case the probe's plan of **38 586 MB on an
+   18 186 MB device at a 4 096 MB rung** is the thing to look at — that figure is the
+   component SUM (`total_mb += mem.total_mb`, solver.py:5509), so it may be sound for a
+   lifecycle and meaningless here, but it is what the census reads as viable.
+
+Not filed as a shape defect and not blocking: these four models are closed for the class they
+were open for. This is the residue, measured, and it belongs to whoever owns the cascade.
+
+**A print that cost two reads.** `(%.0f MB planned)` in `cli/commands/run.py:541` is
+`execution_plan.total_memory_mb`, the SUM over components, printed one line under
+`planning against 15378 MB actually free`. 17 872 against 15 378 reads as a plan accepted
+above its own clamp; it is not, because a lifecycle strategy is checked against
+`peak_mb = max(...)` (solver.py:5052). The clamp at `_prepare_devices` is correct. Only the
+label is misleading, and only to a reader who does not already know the two figures differ.
