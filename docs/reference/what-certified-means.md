@@ -10,6 +10,48 @@ proof exists.**
 
 Everywhere else, the guarantee is a **consensus**.
 
+## A certificate asserts CORRECT and PINNED — not FASTEST
+
+Engraved by the owner, 2026-09-23, after two machines measured the same thing:
+
+> A certificate guarantees correctness and a pinned configuration. A speed ranking means
+> something only ABOVE the measured noise spread of that machine.
+
+Every proof already records `best_ms` AND `second_ms`, so the margin between the seated
+configuration and its runner-up is in the artefact and can be compared to the host's own
+run-to-run spread. Measured across two machines:
+
+| | margin below the host's spread |
+|---|---|
+| NVIDIA V100 rack (register 96) | **8 443 of 25 468 proofs — 33.2 %** |
+| Apple M4 Pro (register 503) | **3 578 of 4 061 proofs — 88.1 %** |
+
+On the Apple chip even the quietest duration band (2-5 ms, the only band where this project's
+own doctrine says a timing verdict means anything) is 86 %. Two independent machines finding
+it at 33 % and 88 % makes this **a property of the METHOD, not of a chip**.
+
+**What a certificate therefore asserts:**
+
+1. **Correct** — the setting's output was compared to an fp64 oracle and its deviation is
+   inside the profile's tolerance. This is measured, and it holds.
+2. **Pinned** — this configuration is the one that will be used, deterministically, for this
+   key on this memory class under this code generator. It does not silently re-seat.
+3. **Faster than the alternatives ONLY where the margin exceeds the machine's measured
+   spread.** Below that, the honest reading is: either configuration is certified, and this
+   one is pinned arbitrarily.
+
+**Why the pin is load-bearing and not a formality.** This project holds that a kernel's
+compiled arithmetic is part of the bytes. If a re-certification seats a different
+configuration — and for the majority of entries on a noisy host it may, by construction —
+then byte-identical output across re-certifications is not guaranteed. **The determinism the
+engine relies on rests on the directory not being silently re-swept.** That is what the pin
+protects, and nobody had written it down until the margins were measured.
+
+**So: never write "the fastest configuration" about a certified entry** in a release note, a
+README, a benchmark page or an answer to a user, unless the margin for that entry exceeds the
+host's spread and you have looked. Write "certified" — correct and pinned — and if a speed
+claim is wanted, quote the margin beside the spread it must clear.
+
 ## The long form, because the distinction is not decorative
 
 Kernel settings reach a run by one of two roads.
