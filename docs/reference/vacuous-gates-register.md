@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-97 entries, 95 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 92 carry a site. Two
+98 entries, 96 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 93 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2837,3 +2837,54 @@ crosses 2^31, so the shapes the screen declines to check are the shapes most lik
 
 **The lesson, in one line.** "We screen our kernels" and "our artefact has no field saying
 whether we screen" are the same sentence until someone greps for the field.
+
+---
+
+### 96 — "certified" asserts FASTEST, and a third of the directory cannot support it
+
+A certified entry names one config and its proof carries `best_ms` and `second_ms`. The word
+the directory uses for that config is *fastest*. Measured on 2026-09-23 across the whole nvidia
+directory — 25 468 proofs, counting the 32 GB variants — the winner's margin over the runner-up:
+
+    p5       0.03 %      p25   0.42 %      median  3.13 %      p75  7.54 %      p95  20.44 %
+
+and the host's own run-to-run spread, measured on this rack through the engine's `do_bench`
+(one matmul config, 1024^3 fp16, 25 timings): **0.40 % stdev, 1.05 % p5..p95**.
+
+    proofs decided by a margin SMALLER than that spread:  8 443 of 25 468   (33.2 %)
+    under 0.1 %:  3 499  (13.7 %)
+
+**What this gate would do if the ranking were wrong**: nothing. There is no cell anywhere that
+compares a proof's margin against the machine's resolution, so a config chosen by a coin flip
+inside the noise is recorded, committed and served in exactly the same words as one that won by
+20 %. The artefact's confidence is uniform and its evidence is not.
+
+**What it does NOT mean.** Those entries are not incorrect: each carries its own `deviation`
+against the fp64 oracle, inside `tolerance`. And little performance is at stake — two configs
+within 1 % cost the same to run. What is unsupported is the claim, not the config.
+
+**Why it still matters here, specifically.** This project already holds that *a kernel's
+compiled arithmetic is part of the bytes*. If a re-certification seats a different config for a
+third of the directory — and by construction it may, since the two are indistinguishable — then
+the kernels change and byte-identical output across re-certifications is not guaranteed for
+those shapes. The determinism this rack depends on rests on the directory not being re-swept,
+rather than on the directory being reproducible. That is a load-bearing assumption nobody wrote
+down.
+
+**The repair is not a quieter host.** 13.7 % were decided under 0.1 %, which no host resolves.
+It is in what the entry claims: below the machine's measured spread, the honest record is
+"either config is certified, this one is PINNED for determinism and pinned arbitrarily" — and a
+re-certification then knows to keep the pin instead of silently re-seating. The margin is
+already recorded; only the claim needs to change.
+
+**Host note, and it is a person's terminal, not a defect to fix.** `watch -n 0.5 nvidia-smi` has
+run on `pts/0` for nine days, parented to an interactive shell — the owner's live view of the
+rack. It has been beside every timing this rack has taken. It was NOT killed and must not be;
+the counterfactual measurement is therefore unavailable, so the 1.05 % above is the spread under
+current conditions and not an attribution to any one cause. A second poller WAS closed: a
+2026-09-18 campaign's unbounded 30-second `nvidia-smi` loop, three days past its campaign's last
+write.
+
+**The lesson, in one line.** An artefact that records its evidence and then states a stronger
+claim than the evidence carries is not lying about the number — it is lying about the word, and
+the number sitting right beside it is what makes that findable.
