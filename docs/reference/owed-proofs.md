@@ -4024,3 +4024,112 @@ such a binding. **Merging main closed it**, which is the answer their commit mes
 for eleven containers and this is one of them.
 
 The remaining five are being reproduced the same way, one model at a time on a quiet host.
+
+### 2026-09-23 — the other four, and a correction to what the rack can reproduce
+
+**The claim above — "the rack cannot reproduce the red without making runtime != trace on
+its side" — is too strong, and this is the measurement that corrects it.** Runtime != trace
+does not need an imposed rung. It needs a request at a size other than the traced one, and
+`--height 2048 --width 2048` is such a request on any machine. Measured here on the census
+shadow, PixArt-XL-1024:
+
+| request | before the fixes | after |
+|---|---|---|
+| 1024² (the traced size) | clean | clean |
+| 1536² | clean | clean |
+| 2048² | `Cannot broadcast (2, 1, 1152) and (8, 4096, 1152)` | clean |
+| 4096² | `Cannot broadcast (2, 1, 1152) and (32, 4096, 1152)` | clean |
+
+So the rack **can** see these reds, by asking for 2048 px. What it cannot do is meet them
+while running these models the way it runs them today, at their traced size — which is why
+36/36 keys and a judged `bench.png` are not coverage above 1024 px. The green there is
+**unexercised, not evidence of absence**, and that is the sentence worth carrying.
+
+1536² is the instructive one: it is CORRECT, before and after, because its ratio to the trace
+is 2.25 and the invented reshape could not scale a batch by a fraction. The integer ratios
+are the ones that break. A gate that sampled only 1536 would have reported health.
+
+**Two defect classes, both fixed engine-side here** (`ae0d1908`, `86fa1ef4`):
+
+1. **The patchified token count was never promotable.** `_spatial_promotion_pass` knows H, W,
+   H*W and their *upscaled* multiples; a patch-embedded transformer divides, so its grid
+   (H/p)*(W/p) — 64, 4096, 8192 in PixArt — matched nothing and 224 target groups stayed
+   literal in PixArt-XL-1024 and PixArt-Sigma-XL-1024. The token expression is now harvested
+   from the graph's own correctly-symbolised patch-embed view; no patch size is inferred.
+
+2. **A request symbol standing in for a fixed extent** — the same class as your `2a21e41e`
+   ("a weight's dim is never a request symbol — 11 of 59 containers say otherwise"), met in
+   two further shapes that commit did not reach here:
+   - a **slice end**: the PixArt -MS timestep embedding is 256 wide and split in half, and at
+     the traced 1024 px the half (128) equals the latent height, so the tracer bound
+     `emb[:, :128]`'s end to `height`. Corrected by reachability — that tensor descends from
+     `input::timestep`, never from `input::hidden_states`.
+   - a **head dimension**: Sana_1600M_1024px_MultiLing has 70 heads of 32 and a latent of 32,
+     so the head dim was bound to `height`. Reachability cannot adjudicate it (the tensor *is*
+     spatial, the position is not); the discriminator is structural — a group of view-target
+     entries reconstructing a weight extent (70*32 = 2240) may not hold a request symbol.
+     **This one did NOT close the model.** Three of Sana's defects were fixed and a fourth
+     stands; it is named, not closed, and it closes by YOUR retrace — see the 2026-09-23
+     entry at the end of this file, which supersedes any reading of this line as a closure.
+
+Both are **load-time adaptations, not trace repairs**. The born-at-source fix is yours and it
+already exists: containers re-traced under `2a21e41e` will not carry these bindings. The
+adaptation is what lets the containers already built run before eleven re-traces land. If you
+re-trace these four, the corrections become no-ops rather than conflicts — they only fire on a
+symbol the container itself carries, and they run before any promotion this pass inserts.
+
+**Owed to the rack:** a CUDA proof at **2048 px** for the four PixArt containers and
+Sana_1600M_1024px_MultiLing, on the merged trunk. Not at 4096 px — that is an Apple rung
+question and this defect does not need it.
+
+**Owed by us, named not fixed:** `metadata_ops._reshape` does not refuse a target that no
+longer matches its input's element count. Its "BATCH-AWARE FALLBACK" and the relative-shape
+logic behind it INVENT a numel-preserving shape, which is how a baked literal became
+`(32, 4096, 1152)` instead of an error naming the op. Every defect above was found eleven ops
+downstream of where it happened. Making it refuse is a catalogue-wide change that cannot ship
+unmeasured — its docstring says it is load-bearing for CFG batch 2 -> 1 — so it is filed here
+with its evidence rather than changed quietly.
+
+### 2026-09-23 — Sana closes by YOUR retrace; PixArt is a sibling class your detector does not scan
+
+**Sana_1600M_1024px_MultiLing is yours, and you already have it.** `2a21e41e` names eleven
+containers and this one is first, with 174 parameter dims bound to symbols — the worst of the
+eleven — and the commit is explicit that they are "PINNED rather than asserted empty: data
+awaiting retraces". Ran your own detector here to be sure rather than infer it from the list:
+
+    PixArt-XL-1024                   offending PARAMETER dims: 0
+    PixArt-Sigma-XL-1024             offending PARAMETER dims: 0
+    PixArt-XL-2-1024-MS              offending PARAMETER dims: 0
+    PixArt-Sigma-XL-2-1024-MS        offending PARAMETER dims: 0
+    Sana_1600M_1024px_MultiLing      offending PARAMETER dims: 174
+
+Three of its defects were closed here, each chaining to the next the way the census shadow
+always does:
+
+    aten.bmm::0  (140, 33, 16384) @ (35, 16384, 128)    head dim bound to height
+    aten.mm::3   Incompatible dimensions: 4480 vs 2240  hidden size written as mul(70, height)
+    aten.add::6  (2, 4096, 2240) vs (2, 4224, 2240)     4224 = 4096 * 33/32
+
+The third is `aten.slice::8`, taking 32 of the linear attention's padded 33 with the height
+symbol as its end. Stopping there, deliberately. In this container 32 is at once the latent
+side, the head dim, the VAE channel count and the input channel count, so the next
+discriminator would start risking a genuine spatial slice — and no engine-side adaptation is
+the right answer to 174 misattributions in a container already queued for a retrace.
+**Sana is named, not closed. It closes when you retrace it.**
+
+**PixArt is not that.** Its four containers are clean by your detector, and correctly so:
+`offending_parameters` filters on `is_parameter` and reads `symbolic_shape.dims`. It never
+inspects op attributes. PixArt's misattribution lives in an ACTIVATION shape arg and a SLICE
+bound —
+
+    aten.slice::5  (2, 256) dim 1  start 0  end {"symbol": "s4" (height), "trace": 128}
+
+the timestep embedding's half-split, where the half (128) equals the latent height at the
+traced 1024 px. Your tool is right about PixArt; the class is simply a sibling of the one it
+covers. Whether it is worth widening `weights_are_not_symbolic.py` to shape args and slice
+bounds is your call — the detector is yours and register 91's lesson (the guard that checked
+products and affine forms and never sums) is the same shape of argument. Four containers were
+open here for a class it cannot see, which is the measurement for that decision.
+
+**Still owed to the rack:** a CUDA proof at **2048 px** for the four PixArt containers on the
+merged trunk. Not 4096 px — that is an Apple rung question and this defect does not need it.
