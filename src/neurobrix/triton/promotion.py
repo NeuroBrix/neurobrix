@@ -862,7 +862,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # symbol / scalar / unknown — leave alone
         return expr, False
 
-    def _walk_shape_list(items, in_shape=None):
+    def _walk_shape_list(items, in_shape=None, op_type=None):
         """Apply spatial promotion to a flat shape list.
 
         Three complementary signals:
@@ -931,7 +931,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # trace bakes the product as one int, so neither symbol is visible in
         # it. It carries exactly one unknown, which is what -1 is for — the
         # same form the tracer itself emits at the sibling `view([s3, -1, C])`.
-        if (tok_trace is not None and in_shape and len(in_shape) >= 2
+        # ONLY for the reshaping family. In `aten::expand` a -1 means "keep this
+        # dimension", not "infer it", so writing one there would silently change
+        # the op's meaning instead of its extent.
+        if (op_type in ("aten::view", "aten::_unsafe_view", "aten::reshape")
+                and tok_trace is not None and in_shape and len(in_shape) >= 2
                 and -1 not in out and len(out) >= 2
                 and isinstance(out[0], int) and tok_trace in tuple(in_shape)[:-1]):
             _collapsed = 1
@@ -1132,7 +1136,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
             continue
         _in_shapes = _op_data.get("input_shapes") or []
         _new_items, _changed = _walk_shape_list(
-            _items, _in_shapes[0] if _in_shapes else None)
+            _items, _in_shapes[0] if _in_shapes else None, _ot)
         if _changed:
             if _is_wrapped:
                 _args[_shape_idx] = {"type": "list", "value": _new_items}
