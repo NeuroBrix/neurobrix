@@ -3770,3 +3770,33 @@ from the program id. Recorded because it is the first thing anyone will try.
 Three things were tried — the published remedy (already present), a scalar base, and a scalar
 pointer advance with int32 indexing — and the shape is unchanged. It needs someone in the
 `triton-ext` fork, with the CUDA half as the reference for what correct lowering produces.
+
+### Four avenues tried on the 2^31 key, and what each proved
+
+Recorded so the next person does not repeat them. The engine defect IS fixed; only the
+certification of that one key is not.
+
+1. **Fix the kernel's addressing.** Three spellings — the published remedy (already present at
+   `matmul.py:257`), a scalar int64 row base, and a scalar int64 pointer advance with pure
+   int32 in-tile offsets. All three leave the rows past `2**31 // N` unwritten. The third puts
+   NOTHING large in vector arithmetic, so the truncation is below anything a kernel can
+   express. The rack ran the conv equivalent three ways on a bare V100 and it passes cold, so
+   the class is Metal's alone.
+2. **Band the launch** (`263fbb4a`, kept). Splits above 2^31 output elements the way
+   `conv2d_wrapper` already does. **This fixed the engine**: deviation 1.0 -> 5.39e-07, the red
+   gate passes, every row correct including past the boundary. It did not make the key
+   certifiable — see register 504.
+3. **Key each band on its own rows**, so the census's unbanded key would be reported
+   UNREACHABLE, the engine's own word for a key no run presents again. It did NOT produce
+   UNREACHABLE: the certifier's key check still saw the census key, so my model of where
+   `key_of` takes `M_BUCKET` from is incomplete. **Reverted rather than pursued** — the tree
+   keeps the validated banding and not this.
+4. **Re-census the one model that demands it** (`swinir-classical-x2`, all six rungs, both
+   modes, 28.7 s). It **still forms the key**: the census shadow derives keys from the graph
+   without executing, so a runtime wrapper behaviour like banding does not change what it
+   records. The census legitimately demands a shape the engine now reaches only in bands.
+
+**The residue is a bookkeeping mismatch, not a defect anyone can hit.** The census asks for a
+launch shape the engine no longer makes; the certifier validates a single launch against an
+oracle for the whole output. Closing it means changing either what the shadow records or what
+the certifier compares, and both touch every proof on both machines.
