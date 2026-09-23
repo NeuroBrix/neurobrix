@@ -3800,3 +3800,57 @@ certification of that one key is not.
 launch shape the engine no longer makes; the certifier validates a single launch against an
 oracle for the whole output. Closing it means changing either what the shadow records or what
 the certifier compares, and both touch every proof on both machines.
+
+
+---
+
+## 2026-09-23 — ENGINE DEFECT: the census is blind to what the wrapper does at launch
+
+Reclassified by the owner. I had filed this as a bookkeeping mismatch; it is not. It is the
+same class as mochi's, where the census walked past where the run dies.
+
+### The defect
+
+`certified_census` derives keys from the GRAPH. It never sees what the wrapper does when the
+launch actually happens. So a wrapper that splits one graph-level operation into several
+launches — `conv2d_wrapper` band-streaming a large output, and now `mm`/`addmm` banding above
+2^31 output elements (`263fbb4a`) — forms keys at runtime that the census does not record, and
+records a key the runtime never forms.
+
+Both halves were measured here on 2026-09-23:
+
+- **Keys formed but not recorded.** Once three verification cells could run at all, they
+  formed **73 keys** the 3 106-key census never named — 65 from chatterbox in
+  `--triton-sequential`, 8 from Kokoro in `--triton`. All 73 were certifiable and are now
+  certified.
+- **A key recorded but never formed.** `addmm M_BUCKET=4194304 N=540 K=180` is demanded by the
+  census of `swinir-classical-x2` at every rung. After the banding fix the engine never
+  launches that shape — it launches two bands — and `swinir-classical-x2` does not form it on
+  its real path at all (0 occurrences in its run log; the cell verifies clean with 0 misses).
+  **Re-censusing that model with the fix in place still records the key**, because the shadow
+  reads the graph and the banding is a launch-time behaviour.
+
+### Why it is the mochi class
+
+A census that reads the graph and stops there describes the program as written, not the
+program as run. It walked past mochi's failure for the same reason: the thing that decides
+what actually executes is below the level the census inspects. Here it produces both a false
+negative (73 keys unrecorded) and a false positive (one key recorded that no run forms), from
+one cause.
+
+### Consequence, and what it does NOT justify
+
+It is why `addmm M_BUCKET=4194304` cannot be certified: `certifying_run` intercepts the FIRST
+BAND's launch while the fp64 oracle is built for the whole output, so a window at rows
+4 187 446-4 194 304 falls outside the band and the comparison reads deviation 1.0 (register
+504). **The engine is correct** — banding took that shape from 1.0 to 5.39e-07 and fixed a
+silent wrong answer — and no model output is affected.
+
+**It does not hold the Apple chantier open** (owner, 2026-09-23).
+
+### Handed to the rack
+
+The census tool and Prism are yours. The fix is not ours to design from here: it means the
+census learning what the wrapper does at launch, which is either a census that observes real
+launches rather than graph shapes, or a wrapper contract that declares its splits to the
+census. Both are your side of the seam. Nothing is owed back to this machine before it lands.
