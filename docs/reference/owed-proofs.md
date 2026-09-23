@@ -3985,3 +3985,42 @@ The first pass over these failures was taken while a PixArt render was loading, 
 reported six moe cells failing for a reason that was not theirs. The quiet re-run separated
 them. **Measuring a test suite is a measurement**, and the quiet-host rule applies to it
 exactly as it applies to a certification sweep.
+
+---
+
+## 2026-09-23 — the shape defects: cross-backend verdict, and the first one closed by the rack's own fix
+
+### The verdict: shared code, LATENT on the rack, active here
+
+All six models run on the rack — `catalogue-state.md` shows the four PixArt variants and
+Sana-1600M-MultiLing passing on 16 GB **and** 32 GB cards, PixArt-XL-1024 with a judged
+`bench.png`. The code is shared, so the question was why only Apple sees it. The answer is in
+`_spatial_promotion_pass`'s own docstring:
+
+> Bit-perfect for trace == runtime models (Sana 1024, PixArt 1024, every LLM): the resolver
+> substitutes the symbol with its own trace_value, identical Python int output.
+
+**On the rack the pass is a NO-OP**, because trace == runtime for these containers. The Apple
+census imposes rungs (4 096 … 16 384 MB) that change the plan, so runtime != trace and the
+pass actually substitutes — and it disambiguates H from W **by position**, assuming
+channels-first. Sana's `height`@32 and `width`@32 are **weight-extent** bindings, i.e. a
+channel count, so the position rule put 32 where 128 belonged:
+`Cannot broadcast (1, 32, 128, 128) and (1, 128, 128, 32)`.
+
+**This means the rack cannot reproduce the red without making runtime != trace on its side.**
+It can prove a fix does not regress (trace == runtime stays bit-perfect); it cannot see the
+failure by running these models as it runs them today. Worth saying plainly before anyone
+reads a green there as coverage.
+
+### Sana-1600M-MultiLing — CLOSED, by the rack's fix, not by mine
+
+Reproduced on a quiet host after merging main: **rc=0, zero broadcast failures**, a
+1024x1024 artefact with std 57.4, structured, no all-zero rows (2 steps, so dark — the census
+uses 20; the point is the defect, not the image).
+
+The fix is theirs: `2a21e41e` *"forge: a weight's dim is never a request symbol — 11 of 59
+containers say otherwise"*, confirmed an ancestor of this HEAD. Sana's `height`@32 was exactly
+such a binding. **Merging main closed it**, which is the answer their commit message predicted
+for eleven containers and this is one of them.
+
+The remaining five are being reproduced the same way, one model at a time on a quiet host.
