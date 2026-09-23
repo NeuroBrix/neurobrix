@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-98 entries, 96 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 93 carry a site. Two
+99 entries, 97 in the rack's block (1-499) and 2 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 94 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2888,3 +2888,38 @@ write.
 **The lesson, in one line.** An artefact that records its evidence and then states a stronger
 claim than the evidence carries is not lying about the number — it is lying about the word, and
 the number sitting right beside it is what makes that findable.
+
+---
+
+### 97 — a `git checkout` restore is a no-op on an untracked file, and the injection harness assumed otherwise
+
+Three deliberate injections were run against
+`tests/unit/forge/test_a_weight_dim_is_never_a_request_symbol.py` and its detector
+`tools/weights_are_not_symbolic.py`, each followed by
+
+```bash
+git checkout tools/weights_are_not_symbolic.py 2>/dev/null
+```
+
+**The file was untracked.** `git checkout` had nothing to restore it from, failed silently into
+`2>/dev/null`, and two of the three injected edits stayed in the tool. The suite was left RED
+and — this is the part that matters — had the injections been made in the opposite order, or
+had the last one happened to be harmless, the tool would have been committed **carrying an
+injected defect, with a green suite over it**.
+
+**What this would do if the code were wrong**: exactly what it did. The restore reports nothing,
+`git status` shows `??` rather than `M`, and a `git diff` shows nothing either, because an
+untracked file has no baseline to differ from. Every instrument that would normally reveal a
+dirty tree is blind to a file git does not track.
+
+The same family as the self-matching `pgrep` that killed this session's own shell: a command
+that silently does nothing when its assumption about the world is wrong, inside a harness whose
+whole purpose is to leave the world as it found it.
+
+**Repair.** An injection harness copies the file to a scratch path FIRST and restores from that
+copy, never from git — the copy exists whatever git knows about the file. Where a gate's
+subject is new in the same change, that is always the case, and it is exactly when injection
+proofs are being run.
+
+**The lesson, in one line.** A restore that cannot fail is not a restore: back up what you are
+about to break, from somewhere that does not depend on the thing being tracked.
