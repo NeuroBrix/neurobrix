@@ -148,8 +148,12 @@ request on each SKU of this rack is served without a sweep — not what the
 directory holds. *Proven under* names the code generator (the Triton version)
 each served proof was made with, so a rank reads with its date: a setting stays
 correct under any generator — the fp64 oracle proved the SOURCE, not the
-compiler — and what a Triton upgrade may age is its rank as the fastest, by a few
-percent. A re-proof under a new generator is an optimisation pass on this rack,
+compiler — and what a Triton upgrade may age is its RANK, by a few percent.
+**A certificate asserts correct and pinned, not fastest** (owner, 2026-09-23):
+33.2 % of this rack's proofs and 88.1 % of the Apple chip's were decided by a
+margin smaller than that host's own run-to-run spread, so for most entries the
+rank is not established and the seated configuration is pinned for determinism.
+`docs/reference/what-certified-means.md`. A re-proof under a new generator is an optimisation pass on this rack,
 incremental, checkpointed, invisible to a request; the old proofs serve meanwhile
 (owner, 2026-09-16).
 

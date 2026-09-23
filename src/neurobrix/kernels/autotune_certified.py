@@ -300,10 +300,16 @@ def proof_backend(proof: Optional[Dict[str, Any]]) -> Optional[str]:
     """The code generator a proof was made with, as one label: `triton <version>`
     plus the backend name when it is not cuda (e.g. `triton 3.7.0 metal`). A
     setting stays correct under any generator — the oracle proved the source,
-    not the compiler; what a newer generator may age is its rank as the
-    fastest, by a few percent — so the directory is re-proven under a new one
-    as an optimisation pass and the document reads each rank with its
-    generator's date (owner, 2026-09-16)."""
+    not the compiler; what a newer generator may age is its RANK, by a few
+    percent — so the directory is re-proven under a new one as an optimisation
+    pass and the document reads each rank with its generator's date (owner,
+    2026-09-16).
+
+    A certificate asserts CORRECT and PINNED, not fastest: measured 2026-09-23,
+    88.1 % of Apple proofs and 33.2 % of CUDA ones were decided by a margin
+    smaller than that host's own spread, so for most entries the rank is not
+    established at all and the seated config is pinned for determinism. See
+    `docs/reference/what-certified-means.md`."""
     if not proof:
         return None
     b = proof.get("backend") or {}
