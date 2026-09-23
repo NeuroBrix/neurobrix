@@ -2531,3 +2531,40 @@ existing Apple proofs and 8 443 CUDA ones. Not implemented here.
 
 **The lesson, in one line.** A verdict of "fastest" needs the margin AND the host's spread;
 recording only the winner makes an unfalsifiable claim out of a measurement already in hand.
+
+
+### 504 — the certifier cannot validate a launch the wrapper split, and reports it as divergence
+
+**2026-09-23.** `mm`/`addmm` now band their launch above 2^31 output elements (`263fbb4a`),
+because the Metal lowering writes nothing past row `2**31 // N` in a single launch. The engine
+is correct after that change — measured 5.39e-07 against the fp64 oracle where it was 1.0.
+
+**The certifier still refuses the key, and its reason is now wrong.** `certifying_run`
+intercepts the wrapper's kernel launch and the config sweep re-runs `tuner.fn.run` on the
+args it captured. With banding those args are the FIRST BAND's — `M = 3 974 879`, `c` a view
+of rows 0..3 974 879 — while `oracle_fn()` is a closure over the SYNTHESIZED full arrays and
+`RowWindowedOracle` places its third window at rows 4 187 446-4 194 304. That window is
+outside the band. Comparing a band against a whole-output oracle yields deviation exactly
+1.0, and the certifier reports "every config diverges from the fp64 oracle", which is a true
+sentence about a comparison that should never have been made.
+
+**So the failure changed meaning without changing its message.** An hour earlier the same line
+meant "the kernel writes zeros past 2^31". It now means "the oracle and the launch cover
+different rows". Same text, same exit path, different defect — and nothing in the message
+distinguishes them. That is what puts this in this register: the instrument reports a
+divergence it is not entitled to measure.
+
+**Not fixed, and deliberately.** The fix is to build the oracle from the intercepted args
+rather than from the synthesized arrays, or to have a windowed oracle refuse a window that
+falls outside the tensor it is handed. Either changes oracle semantics for all 3 178 certified
+Apple proofs and 12 871 CUDA ones, and neither can be re-verified in the hours left. One key
+is not worth that trade taken blind.
+
+**What it costs today:** exactly one census key of 3 179 — `addmm M_BUCKET=4194304 N=540 K=180`,
+the only key in the census whose output exceeds the threshold, measured rather than assumed.
+No model output is affected: `swinir-classical-x2`, the only model whose census demands that
+shape, does not form it on its real path and verifies clean with 0 misses.
+
+**The lesson, in one line.** When a wrapper may split a launch, an oracle built for the whole
+operation is not the oracle for what actually ran — and a comparison across that mismatch
+fails loudly in the vocabulary of a numerical defect.
