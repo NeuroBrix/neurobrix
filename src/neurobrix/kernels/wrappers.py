@@ -2283,19 +2283,38 @@ def mm(a, b, _epilogue: int = 0) :
     # Phase 1.5 autotune: BLOCK_*/GROUP_M/num_warps/num_stages chosen
     # adaptively per (M, N, K, IEEE_PRECISION, PROMOTE_B). Grid uses
     # META lambda so autotune-selected blocks drive the launch shape.
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     _set_device(a)
-    _autotune_headroom_guard(matmul_kernel[grid])(
-        a, b, c,
-        M, N, K, _bucket_of("M", M),
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        IEEE_PRECISION=ieee,
-        PROMOTE_B=promote_b,
-        PROMOTE_A=promote_a,
-        EPILOGUE=_epilogue,
-    )
+    # ROW BANDING above 2^31 OUTPUT ELEMENTS. A launch whose C holds more than 2^31 elements
+    # writes nothing past row `2**31 // N` on the Metal backend: the offsets are promoted to
+    # int64 in the kernel (matmul.py:257) and CUDA is exact, but the Metal lowering does not
+    # honour it (2026-09-23; tests/unit/kernels/test_a_gemm_beyond_two_billion_elements.py).
+    # Three kernel-side spellings were tried and none helped, so the launch is split instead:
+    # each band's own C is under the boundary, and the arithmetic per band is untouched.
+    #
+    # The AUTOTUNE KEY IS PRESERVED. `M_BUCKET` is a separate argument from `M` and the key is
+    # keyed on the bucket, so every band is served the configuration certified for the whole
+    # shape — banding changes how many launches happen, never which entry answers for them.
+    bands = [(0, M)]
+    if N > 0 and M * N > _NBX_MM_MAX_OUTPUT_ELEMS:
+        per = max(1, _NBX_MM_MAX_OUTPUT_ELEMS // N)
+        bands = [(r, min(r + per, M)) for r in range(0, M, per)]
+    m_bucket = _bucket_of("M", M)
+    for r0, r1 in bands:
+        rows = r1 - r0
+        a_b = a[r0:r1] if len(bands) > 1 else a
+        c_b = c[r0:r1] if len(bands) > 1 else c
+        grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
+        _autotune_headroom_guard(matmul_kernel[grid])(
+            a_b, b, c_b,
+            rows, N, K, m_bucket,
+            a_b.stride(0), a_b.stride(1),
+            b.stride(0), b.stride(1),
+            c_b.stride(0), c_b.stride(1),
+            IEEE_PRECISION=ieee,
+            PROMOTE_B=promote_b,
+            PROMOTE_A=promote_a,
+            EPILOGUE=_epilogue,
+        )
     return c
 
 
@@ -2646,20 +2665,31 @@ def addmm(bias, a, b,
     out_dtype = _matmul_out_dtype(a, M, force_fp32=promote_a)
     c = NBXTensor.empty((M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
-    _autotune_headroom_guard(addmm_kernel[grid])(
-        a, b, bias, c,
-        M, N, K, _bucket_of("M", M),
-        a.stride(0), a.stride(1),
-        b.stride(0), b.stride(1),
-        c.stride(0), c.stride(1),
-        alpha, beta,
-        IEEE_PRECISION=ieee,
-        PROMOTE_B=promote_b,
-        PROMOTE_A=promote_a,
-        PROMOTE_BIAS=promote_bias,
-        EPILOGUE=_epilogue,
-    )
+    # Row banding above 2^31 output elements, exactly as `mm` — see the comment there. The
+    # bias is indexed by COLUMN and is shared by every band, so it is passed whole.
+    bands = [(0, M)]
+    if N > 0 and M * N > _NBX_MM_MAX_OUTPUT_ELEMS:
+        per = max(1, _NBX_MM_MAX_OUTPUT_ELEMS // N)
+        bands = [(r, min(r + per, M)) for r in range(0, M, per)]
+    m_bucket = _bucket_of("M", M)
+    for r0, r1 in bands:
+        rows = r1 - r0
+        a_b = a[r0:r1] if len(bands) > 1 else a
+        c_b = c[r0:r1] if len(bands) > 1 else c
+        grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
+        _autotune_headroom_guard(addmm_kernel[grid])(
+            a_b, b, bias, c_b,
+            rows, N, K, m_bucket,
+            a_b.stride(0), a_b.stride(1),
+            b.stride(0), b.stride(1),
+            c_b.stride(0), c_b.stride(1),
+            alpha, beta,
+            IEEE_PRECISION=ieee,
+            PROMOTE_B=promote_b,
+            PROMOTE_A=promote_a,
+            PROMOTE_BIAS=promote_bias,
+            EPILOGUE=_epilogue,
+        )
     return c
 
 
@@ -3677,6 +3707,10 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # activations and arena overhead on V100 32 GB. Override via env var
 # NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
 _NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 1024 * 1024 * 1024)))
+#: A matmul launch whose OUTPUT holds more than this many elements is split along M. The
+#: boundary is 2^31 because that is where an int32 element offset wraps; the margin below it
+#: is deliberate, so a tile that straddles the boundary is never the last one.
+_NBX_MM_MAX_OUTPUT_ELEMS = int(os.environ.get("NBX_MM_MAX_OUTPUT_ELEMS", str(2 ** 31 - 2 ** 20)))
 
 # P-TRITON-LIVE-SET-AUDIT (#37) — conv3d-via-conv2d eager-free threshold.
 # The temporal decomposition in _conv3d_via_conv2d materialises several full-
