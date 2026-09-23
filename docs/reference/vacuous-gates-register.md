@@ -2483,3 +2483,51 @@ to diverge, and deleting it would discard knowledge that protects correctness.
 
 **The lesson, in one line.** Before believing a "zero miss", ask what the run would have done
 had the cache been empty — and if you cannot answer, empty it.
+
+
+### 503 — 88 % of the Apple directory's speed rankings are inside this chip's own noise
+
+**2026-09-23.** Prompted by the rack's register 96, which measured the same thing on CUDA and
+found 33.2 %. Every proof records `best_ms` AND `second_ms`, so this is measurable rather than
+arguable. Measured over all **4 061** Apple proofs, comparing each winner's margin over the
+runner-up against this chip's p95 spread FOR THAT DURATION BAND
+(`apple_m4_pro.yml`, `autotune.loss_tolerance.bands`):
+
+```
+margin of winner over runner-up:  p5 0.12%   p25 0.76%   median 5.18%   p95 48.43%
+
+decided by a margin SMALLER than the chip's spread:  3 578 of 4 061   (88.1 %)
+under 0.1 %:                                            166           ( 4.1 %)
+
+by band:  p95 51.08% ->  1685/1798  (93.7 %)     [< 1 ms]
+          p95  7.91% ->   535/ 607  (88.1 %)     [1-2 ms]
+          p95  5.08% ->   473/ 550  (86.0 %)     [2-5 ms]
+          p95 14.77% ->   885/1106  (80.0 %)     [> 5 ms]
+```
+
+**88.1 % here against the rack's 33.2 %.** They predicted Apple would be worse under a
+unified-memory allocator with OS-managed clocks, and it is, by a factor of nearly three. Even
+in this chip's quietest band — 2-5 ms, the one this campaign's own doctrine says is the only
+place a timing verdict means anything — 86 % of rankings are inside the noise.
+
+**What this does NOT say.** It is not a correctness claim. Every entry's `deviation` against
+the fp64 oracle is inside tolerance; that part of "certified" is measured and holds. Two
+configs within the noise also cost the same to run, so nothing is slower than it should be.
+
+**What it does say.** The unsupported word is *fastest*. And it bites for a reason specific to
+this project: a kernel's compiled arithmetic is part of the bytes, so if a re-certification
+seats a different config — and for 88 % of entries it may, by construction — byte-identical
+output across re-certifications is not guaranteed. **The determinism this project relies on
+rests on the directory not being re-swept, and nobody had written that down.**
+
+The rack's recommendation, which I adopt: the fix is not a quieter host (4.1 % were decided
+under 0.1 %, which no host resolves) but a change to the CLAIM — below the machine's measured
+spread, record "either config is certified; this one is PINNED for determinism, and pinned
+arbitrarily", so a re-certification keeps the pin instead of silently re-seating. The margin
+is already in every proof; only the word changes.
+
+**Owner's call**, on both machines, since it restates what "certified" asserts for 3 578
+existing Apple proofs and 8 443 CUDA ones. Not implemented here.
+
+**The lesson, in one line.** A verdict of "fastest" needs the margin AND the host's spread;
+recording only the winner makes an unfalsifiable claim out of a measurement already in hand.
