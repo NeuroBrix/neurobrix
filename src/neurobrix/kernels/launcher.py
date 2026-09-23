@@ -1215,6 +1215,52 @@ def _writable_buffers(values):
 _SCREEN_WINDOWS = 3
 
 
+def _screen_windows() -> int:
+    """How many row windows an over-budget screen takes. `NBX_SCREEN_WINDOWS` is the door.
+
+    A tunable with no door cannot be tuned, and the instruction was to set this FROM a
+    measurement. Read WHEN USED, never frozen at import — a value frozen from the environment
+    at import is the same defect as a literal standing in for a runtime value, and this package
+    has been bitten by exactly that (`autotune_cache._dir` says so in its own docstring).
+
+    WHAT THE COUNT DOES, AND DOES NOT, measured 2026-09-23. `per` is
+    `budget // (n_win * oracle_row_bytes)`, so more windows means proportionally smaller ones
+    and the oracle's TOTAL work does not move (M=100 000, N=64, 4 MiB budget):
+
+        windows   rows each   total rows   places
+              1        8192         8192        1
+              3        2730         8190        3
+              8        1024         8192        8
+
+    **So this is not a cost knob.** It changes WHERE the screen looks, not what it costs; the
+    cost is set by the screening budget. A cell asserting the opposite went red on its first
+    run, which is how the property was found.
+
+    WHAT THE ORACLE COSTS, chatterbox on a 16 GB V100 where its 32g-certified keys do not serve
+    so all 65 keys sweep:
+
+        oracle OFF   379.9, 378.9 s    spread   1.0 s
+        oracle ON    500.3, 395.5 s    spread 104.8 s
+
+    Every ON run is slower than every OFF run — 1.04x at the closest bound, 1.32x at the widest,
+    1.18x on the means — but the ON arm's own spread is 105 s against the OFF arm's 1 s, so the
+    variance lives in the oracle path and a point factor from two reps is not a number. The
+    Apple side measured 31.4x for ONE selection on a 4.6 GB shape, so the factor scales with
+    what is windowed and there is no constant to adopt.
+    """
+    import os as _os
+    raw = _os.environ.get("NBX_SCREEN_WINDOWS")
+    if raw is None:
+        return _SCREEN_WINDOWS
+    try:
+        n = int(raw)
+    except ValueError:
+        raise ValueError(f"NBX_SCREEN_WINDOWS={raw!r} is not an integer") from None
+    if n < 1:
+        raise ValueError(f"NBX_SCREEN_WINDOWS={n} would screen nothing; 1 is the minimum")
+    return n
+
+
 def _row_windows_for(out_tensor, budget_bytes: int):
     """Row ranges of a 2-D output whose total bytes fit the budget, or None.
 
@@ -1238,11 +1284,19 @@ def _row_windows_for(out_tensor, budget_bytes: int):
     # matmul_kernel falling through while sitting in ROW_WINDOWABLE). The reference row is
     # what it will actually occupy.
     oracle_row_bytes = N * 8
-    per = max(1, int(budget_bytes) // (_SCREEN_WINDOWS * max(oracle_row_bytes, 1)))
+    n_win = _screen_windows()
+    per = max(1, int(budget_bytes) // (n_win * max(oracle_row_bytes, 1)))
     if per >= M:
         return [(0, M)]
-    mid = max(0, (M - per) // 2)
-    wins = [(0, per), (mid, mid + per), (M - per, M)]
+    # `n_win` windows spread across the rows, the LAST always anchored at the final row:
+    # the failure class that motivates screening a large shape is index overflow, and it shows
+    # at the largest linear index or nowhere.
+    if n_win == 1:
+        wins = [(M - per, M)]
+    else:
+        step = (M - per) / (n_win - 1)
+        wins = [(int(round(i * step)), int(round(i * step)) + per) for i in range(n_win - 1)]
+        wins.append((M - per, M))
     # de-duplicate and order; overlapping windows on a short M collapse to fewer
     out, seen = [], set()
     for r0, r1 in wins:
