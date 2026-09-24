@@ -24,6 +24,32 @@ BYTES_PER_MB = 1024 * 1024
 BYTES_PER_GB = 1024 * 1024 * 1024
 
 # Prism solver defaults
+def _ladder_gb(noise: float, lo_gb: int = 4, hi_gb: int = 512) -> list:
+    """The memory ladder, spaced at the MEASURED noise of a free-memory reading.
+
+    Consecutive rungs differ by `noise` (a fraction of the rung), so a swing of that size cannot
+    carry a reading across more than one rung — which is what the rounding exists to guarantee —
+    while discarding no more than the swing itself. A hand-picked absolute list cannot do both,
+    because the noise is relative and the rungs are not.
+
+    Values are GB and rounded to 3 decimals so the list stays readable; the low range is where
+    the difference bites, and the top is unchanged in practice because the old rungs were already
+    coarser than the noise there.
+    """
+    if not (0 < noise < 1):
+        raise ValueError(f"memory_reading_noise={noise!r} is not a fraction between 0 and 1")
+    out, x = [], float(lo_gb)
+    while x < hi_gb:
+        out.append(round(x, 3))
+        x *= (1.0 + noise)
+    # The top rung is the first geometric step AT or ABOVE `hi_gb`, never `hi_gb` pinned on as an
+    # extra: pinning it created a final step of 1.76 % against a 2.55 % swing, which is a step a
+    # reading can cross — the exact instability the rounding exists to prevent, reintroduced at
+    # the one rung nobody would look at. The gate caught it on its first run.
+    out.append(round(x, 3))
+    return out
+
+
 PRISM_DEFAULTS = {
     "safety_margin": 0.95,  # Use 95% of VRAM capacity (tight for large models)
     "default_seq_len": 128,  # Conservative default; actual value from defaults.json
@@ -37,10 +63,44 @@ PRISM_DEFAULTS = {
     # estimator term covers. Single source for the reserve used by
     # _try_single_gpu, _try_single_gpu_lifecycle and _place_component.
     "oom_reserve_mb": 3072,
-    # The commercial memory ladder (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
-    # reading rounds DOWN onto on a shared pool, and the nominal rung of a dedicated card. Data,
-    # 4 GB to 512 GB, read by `core/prism/memory_budget.py`; never a literal in the solver.
-    "memory_ladder_gb": [4, 6, 8, 11, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 192, 256, 384, 512],
+    # ── The memory ladder, and the measurement it is derived from ──────────────────────────
+    #
+    # The rungs a FREE reading rounds DOWN onto on a shared pool, and the nominal rung of a
+    # dedicated card. Read by `core/prism/memory_budget.py`; never a literal in the solver.
+    #
+    # WHY IT ROUNDS AT ALL. A free reading is not a constant. Measured on this rack 2026-09-24,
+    # host `MemAvailable`, 120 samples over 60 s with four cards busy — a LIVE machine, because
+    # that is the condition the rounding defends against:
+    #
+    #     median      218 785 MB
+    #     stdev         1 727 MB   (0.79 % of the median)
+    #     p5..p95       5 366 MB   (2.45 %)
+    #     full swing    5 571 MB   (2.55 %)
+    #
+    # A plan derived from an unrounded reading changes with the weather. This session watched
+    # exactly that happen from the other side: the same Prism call returned
+    # `single_gpu_lifecycle` during a 19-hour render holding ~19 GB of pinned host memory and
+    # `single_gpu` afterwards, from byte-identical code (vacuous-gates register 99). So the
+    # rounding stays, and only its SPACING is in question.
+    #
+    # WHY THE SPACING IS DERIVED AND NOT PICKED. The noise is RELATIVE — 2.55 % of the pool —
+    # and hand-picked rungs are ABSOLUTE, so one list cannot be right at both ends. Against the
+    # measured noise the old list's low range was 3.6x to 19.6x oversized:
+    #
+    #     rung MB   step MB   noise MB   step/noise
+    #        4096      2048        104        19.6
+    #        8192      3072        209        14.7      <- a reading of 10 638 fell to 8 192
+    #       16384      4096        418         9.8      <- a reading of 17 277 fell to 16 384
+    #
+    # and the cost is memory discarded for nothing: 2 206 MB at the first, 822 MB at the second.
+    # The second is not hypothetical — `granite-speech-3.3-8b`'s largest component is 16 769.6 MB
+    # against a card reporting 17 277, and the rung is what put it 386 MB out of reach.
+    #
+    # So the ladder is GENERATED at the measured noise ratio: consecutive rungs differ by the
+    # swing the reading actually shows, which is the smallest spacing that still absorbs it.
+    # Re-measure `MEMORY_READING_NOISE` on new hardware and the ladder follows; do not edit rungs.
+    "memory_reading_noise": 0.0255,   # full swing / median, measured; see above
+    "memory_ladder_gb": _ladder_gb(0.0255, lo_gb=4, hi_gb=512),
     # FGP (Fine-Grained Pipeline) settings
     "fgp_utilization_target": 0.85,  # Use 85% of GPU memory for FGP
     "fgp_max_blocks_per_stage": 7,   # Max transformer blocks per GPU (7 for 32GB, ~4 for 16GB)

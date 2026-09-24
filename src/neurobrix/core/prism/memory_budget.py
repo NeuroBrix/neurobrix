@@ -61,7 +61,12 @@ def memory_ladder_mb() -> List[int]:
     rungs = PRISM_DEFAULTS.get("memory_ladder_gb")
     if not rungs:
         raise RuntimeError("ZERO HARDCODE: PRISM_DEFAULTS['memory_ladder_gb'] declares no memory ladder")
-    out = sorted({int(g) * 1024 for g in rungs})
+    # int(g) TRUNCATED every rung to a whole GB, which silently destroyed the spacing the
+    # ladder is derived with: rungs 4.0, 4.102, 4.207, 4.314 ... all became 4, and the set
+    # collapsed back to the integers 4, 5, 6, 7 — a linear 1 GB ladder whose first step is
+    # 25 %, ten times the measured reading noise, precisely in the low range where the rungs
+    # decide between streaming and refusing. The ladder is data; rounding it here re-picked it.
+    out = sorted({int(round(float(g) * 1024)) for g in rungs})
     if out[0] <= 0:
         raise RuntimeError("the memory ladder's lowest rung must be positive")
     return out
