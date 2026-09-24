@@ -4420,3 +4420,50 @@ The rest: 76 MoE runs where the triton-ext driver cannot bind a pointer the allo
 record (the MoE door under a shadow), 56 broadcast or matmul mismatches (the shape-defect
 class), 10 Allegro-TI2V (its container lacks `pad_image_to_num_frames`, see the pass summary),
 6 VibeVoice KV path, and 4 others.
+
+### 2026-09-24 — the merged census's non-streaming failures, by class and owner
+
+From the same census (`4a3658d7`, 59 containers, default request only). The streamed-execution
+rows are in `docs/reference/streamed-execution-failures-2026-09-24.md`.
+
+**MoE, 76 runs, owner: the Mac.** Every run of the 7 MoE containers (DeepSeek-Coder-V2-Lite,
+deepseek-moe-16b-chat, granite-3.1-1b-a400m, Qwen3-30B-A3B-Thinking, Qwen3-Coder-30B-A3B and its
+two int4 builds) stops at its first MoE layer with the same error at a shadow address (all above
+`1 << 40`):
+
+    RuntimeError: the triton-ext driver cannot bind pointer 0x1....: the allocator does not
+    record it, so its length is unknown and it cannot be wrapped as a Metal buffer
+
+Site: `triton_ext_driver._containing_allocation` <- `_resident_acquire` <-
+`pinned_addresses.__enter__` <- `moe._build_ptr_tables`. Class: **a census shadow reaches the
+Metal pin.** Under `NBX_CENSUS=1`, allocations come from `census._shadow_malloc` and are never
+entered in `DeviceAllocator._range_size`, which is where the pin sizes its whole-allocation
+wrap. A shadow must not wrap memory at all ("the Metal device is deliberately unreachable").
+Consequence: no MoE container's census goes past its first MoE layer, so their later keys are
+uncensused. This is not a runtime defect: real allocations are recorded. Reproduced in 3 lines
+with no model (`census.install(...)`; `NBXTensor.empty(...)`;
+`pinned_addresses(t.select(0, 1))` -> the same RuntimeError at `0x10000001000`). Owed here: the
+pin, and the capture that follows it, become pure under a shadow.
+
+**Shape mismatches, 56 runs, in five classes:**
+
+| class | runs | containers | evidence | owner |
+|---|---:|---|---|---|
+| mismatch inside a streamed component | 8 | PixArt-XL-2-1024-MS, PixArt-Sigma-XL-2-1024-MS, Open-Sora-v2 (`aten.mm::4`: 4096 vs 10240 in `text_encoder`, rungs 6144/8192); Flex.1-alpha (`aten.mul`: (1,24,512,128) vs (1,1,4608,128), streamed `text_encoder_2` / `transformer`) | every one under `layer_streaming`; rows in the streamed extract | the Dell |
+| the known Sana 1024px defect, 33/32 | 12 | Sana_1600M_1024px_MultiLing (`aten.add::6`: (2,16384,2240) vs (2,16896,2240)) | 16896 / 16384 = 33/32, the ratio of the named `(140,33,16384) @ (35,16384,128)` bmm defect; reshape records at 1.0312 in the same container | the Dell (its retrace) |
+| a dim frozen at a trace value | 12 | Sana_1600M_4Kpx_BF16 (`aten.add::76`: (1,256,H,H) vs (1,H/8,H,2048) at H = 768, 1024, 1280) | the second operand keeps 2048 whatever the request, while its other dims follow H | the Dell (Forge, principle 1) |
+| channel-first against channel-last | 12 | Sana-1600M-MultiLing ((1,32,128,128) vs (1,128,128,32)) | every run, default request included; the newer Sana_1600M_1024px_MultiLing does not show it. Container built 2026-06-05 | the Dell (container; also a duplicate candidate against Sana_1600M_1024px_MultiLing, Hugging Face decides) |
+| a container without the flags the registry declares | 12 | Wan2.1-VACE-1.3B-diffusers (`aten.div::9`: (1,384,1,112,112) vs (1,**-1152**,1,112,112)) | see below | the Dell (container); the Mac owes a refusal of a non-positive extent |
+
+**Containers that do not carry their runtime flags, owner: the Dell.** Read on the rack
+(`forge/config/model_registry.yml`, committed tree): `pad_image_to_num_frames` is declared for
+Allegro-TI2V (line 3343), Wan2.1-VACE and the Wan I2V models; `vace_control_conditioning` for
+Wan2.1-VACE; `i2v_latent_conditioning` for the Wan I2V models. **None of these containers
+carries them** in `topology.json` `extracted_values` (checked on the canonical mount: Allegro,
+Allegro-TI2V, both CogVideoX, all four Wan carry none of the six flags). `6fb35c3b`
+(2026-09-20) made containers carry their flags, and these were built before it (Allegro-TI2V
+and Wan2.1-VACE on 2026-09-12). The rack runs them with the flags through its registry. This
+machine, and any installed engine, runs them without. Allegro-TI2V's -2 extent (its own row in
+the census summary) and Wan2.1-VACE's -1152 are this class. The Mac owes two engine refusals
+seen on the way: a convolution whose output extent is <= 0, and a `cat` of zero-extent tensors
+that returns rank 1.
