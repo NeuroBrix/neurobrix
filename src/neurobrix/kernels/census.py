@@ -185,10 +185,37 @@ def active() -> bool:
 # The shadow mode: installed once per process by the CLI when NBX_CENSUS=1.
 # --------------------------------------------------------------------------------------------
 
+# Every allocation the shadow hands out, recorded AS a shadow: base -> nbytes, bases sorted.
+# A consumer that must size an allocation (the Metal pin sizes its whole-allocation wrap) asks
+# `shadow_range` and gets an answer for a recorded shadow and None for anything else, so an
+# address nobody recorded keeps failing in every run, census or not. Measured 2026-09-24: the
+# 76 MoE census failures were the pin asking the allocator about addresses only this module had
+# handed out.
+_SHADOW_RANGES: Dict[int, int] = {}
+_SHADOW_BASES: List[int] = []
+
+
 def _shadow_malloc(nbytes: int, dev_idx: Optional[int] = None) -> int:
     ptr = _SHADOW_PTR[0]
     _SHADOW_PTR[0] += (int(nbytes) + 255) // 256 * 256 + 256
+    _SHADOW_RANGES[ptr] = int(nbytes)
+    _SHADOW_BASES.append(ptr)          # monotonic: appending keeps the list sorted
     return ptr
+
+
+def shadow_range(addr: int) -> Optional[tuple]:
+    """(base, nbytes) of the RECORDED shadow allocation containing `addr`, or None.
+
+    None for every address this shadow did not hand out, including every address of a real
+    run, where nothing is ever recorded here."""
+    import bisect
+    addr = int(addr)
+    i = bisect.bisect_right(_SHADOW_BASES, addr) - 1
+    if i < 0:
+        return None
+    base = _SHADOW_BASES[i]
+    size = _SHADOW_RANGES[base]
+    return (base, size) if addr < base + max(size, 1) else None
 
 
 def _noop(*_a, **_k):

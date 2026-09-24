@@ -410,6 +410,11 @@ def _resident_acquire(addr: int) -> int:
     size = DeviceAllocator._cuda_ptr_size.get(addr)
     base = addr
     if size is None:
+        if _recorded_shadow(addr) is not None:
+            # A census shadow allocation, recorded as one: memory that exists nowhere, so
+            # nothing to wrap and nothing to hold. Recognised, not skipped: an address that
+            # nobody recorded still fails below, in a shadow as in a real run.
+            return None
         base, size = _containing_allocation(addr)
     ent = _RESIDENT_WRAPS.get(base)
     if ent is not None:
@@ -437,6 +442,10 @@ def pinned_gpu_address(addr: int) -> int:
     size = DeviceAllocator._cuda_ptr_size.get(addr)
     base = addr
     if size is None:
+        if _recorded_shadow(addr) is not None:
+            # A recorded shadow has no GPU address to give; the shadow's own address stands
+            # for it, exactly as every other address in a shadow addresses nothing.
+            return int(addr)
         base, size = _containing_allocation(addr)
     ent = _RESIDENT_WRAPS.get(base)
     if ent is None:
@@ -447,7 +456,16 @@ def pinned_gpu_address(addr: int) -> int:
     return ent[2] + (addr - base)
 
 
-def _resident_release(base: int) -> None:
+def _recorded_shadow(addr: int):
+    """(base, nbytes) when `addr` is a census shadow allocation RECORDED as one, else None.
+    Never true in a real run: the census records nothing unless it is installed."""
+    from neurobrix.kernels import census
+    return census.shadow_range(addr)
+
+
+def _resident_release(base) -> None:
+    if base is None:                                   # a recorded shadow held nothing
+        return
     ent = _RESIDENT_WRAPS.get(base)
     if ent is None:
         return
