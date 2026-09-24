@@ -359,6 +359,11 @@ class TensorResolver:
         # Search for input tensor with matching input_name
         for tensor_id, tensor_info in tensors.items():
             if tensor_info.get("is_input") and tensor_info.get("input_name") == input_name:
+                # A seam tensor (a streamed piece's input) arrives in the dtype its producing op
+                # gave it, as inside the whole graph; casting it to the compute dtype narrowed an
+                # fp32 island (R30 mirror of TritonDtypeEngine._target_dtype_for_input).
+                if tensor_info.get("seam_alias_of"):
+                    return None
                 dtype_str = tensor_info.get("dtype")
                 if dtype_str:
                     graph_dtype = self.parse_dtype(dtype_str)

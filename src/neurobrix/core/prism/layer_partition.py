@@ -482,50 +482,63 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
 
-    # A symbol binds from an INPUT, and a segment's inputs are not the
-    # component's. `s0`/`s1` bind from `input_ids::dim_{0,1}`; the embedding
-    # reads `input_ids` in segment 0 and nothing reads it afterwards, so every
-    # later segment declared a symbol it had no way to bind and refused at the
-    # first op that resolved a shape.
+    # EVERY SYMBOL A SEGMENT USES BINDS WHERE THE WHOLE COMPONENT BINDS IT.
     #
-    # The seam tensors carry those same dims — they are the SAME activations,
-    # aliased — so each symbol is re-sourced to a tensor this segment actually
-    # receives. Re-sourcing, not dropping: an op inside the segment still names
-    # the symbol, and a segment with the symbol removed would fail resolving it
-    # rather than fail binding it. Nothing is invented — a symbol with no seam
-    # dim carrying it keeps its original source and refuses as before, which is
-    # the honest outcome for a dim that genuinely does not cross.
+    # A symbol binds from a component INPUT (`input::attention_mask::dim_1`), and a segment's
+    # inputs are the tensors crossing its seam. The first repair re-sourced each symbol to a seam
+    # dim carrying the SAME symbol id, and kept the original source when none did — which then
+    # refused. It could not serve a trace that minted two ids for one extent: PixArt's T5 binds
+    # seq_len twice, `s1` from attention_mask and `s3` from input_ids; the hidden states carry
+    # `s3`, a later piece uses `s1`, and the Mac's 2048x1024 render died after 1 821 s:
+    #     UnboundSymbolError: symbol 's1' (seq_len, binds from input::attention_mask::dim_1)
+    #     is not bound at runtime ... Bound: ['s0', 's3']          (the Mac, 8e786e70)
+    #
+    # So the segment CARRIES the component input its symbols bind from: that input is declared as
+    # one of the segment's inputs, the symbol keeps its original source, and the streaming
+    # strategy — which holds the component's inputs for the whole run — hands it in. Every piece
+    # then binds every symbol from exactly the tensor the whole component binds it from: nothing
+    # is equated, nothing re-sourced, a value-sourced symbol (`::val_`) reads the same data. A
+    # carried input no op reads is a binding source only; it adds no compute and no copy (it is
+    # already resident — it is the component's own input). A symbol whose source is NOT a
+    # component input keeps it and refuses by name, as before: that dim genuinely does not cross.
     sym_ctx = graph.get("symbolic_context")
     if isinstance(sym_ctx, dict) and isinstance(sym_ctx.get("symbols"), dict):
-        seg_input_ids = set(out["input_tensor_ids"])
-        # Where each symbol can be read on THIS segment's inputs.
-        available: Dict[str, str] = {}
-        for tid in seg_input_ids:
-            meta = out["tensors"].get(tid) or {}
-            dims = ((meta.get("symbolic_shape") or {}).get("dims")) or []
-            for axis, d in enumerate(dims):
-                if isinstance(d, dict) and d.get("type") == "symbol" and d.get("id"):
-                    # `tid` is already the seam's `input::<original>` alias; a
-                    # second prefix names a tensor that does not exist.
-                    _src = tid if tid.startswith("input::") else f"input::{tid}"
-                    available.setdefault(str(d["id"]), f"{_src}::dim_{axis}")
-        new_symbols = {}
+        used: Set[str] = set()
+
+        def _walk(obj):
+            if isinstance(obj, dict):
+                if obj.get("type") == "symbol" and obj.get("id"):
+                    used.add(str(obj["id"]))
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _walk(v)
+
+        _walk(out["tensors"])
+        _walk(out["ops"])
+        component_inputs = set(graph.get("input_tensor_ids") or [])
+        carried: List[str] = []
         for sid, info in sym_ctx["symbols"].items():
-            if not isinstance(info, dict):
-                new_symbols[sid] = info
+            if sid not in used or not isinstance(info, dict):
                 continue
             source = str(info.get("source") or "")
-            # `input::<name>::dim_N` — the source input as the executor binds it.
-            src_tid = source[7:].rsplit("::dim_", 1)[0] if source.startswith("input::") else ""
-            if src_tid and src_tid not in {t[7:] if t.startswith("input::") else t
-                                           for t in seg_input_ids} and sid in available:
-                info = dict(info)
-                info["source"] = available[sid]
-                info["seam_resourced_from"] = source
-            new_symbols[sid] = info
-        new_ctx = dict(sym_ctx)
-        new_ctx["symbols"] = new_symbols
-        out["symbolic_context"] = new_ctx
+            if not source.startswith("input::"):
+                continue
+            sep = "::dim_" if "::dim_" in source else "::val_" if "::val_" in source else None
+            if sep is None:
+                continue
+            src_tid = source.rsplit(sep, 1)[0]
+            if (src_tid in component_inputs and src_tid not in out["input_tensor_ids"]
+                    and src_tid not in carried):
+                carried.append(src_tid)
+        for tid in carried:
+            meta = dict(tensors.get(tid) or {})
+            meta["symbol_carrier"] = True
+            out["tensors"][tid] = meta
+            out["input_tensor_ids"].append(tid)
+            out["segment_input_names"].append(tid[7:])
+        out["symbol_carriers"] = carried
 
     return out
 
