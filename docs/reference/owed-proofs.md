@@ -4030,3 +4030,45 @@ rung but still cut segments against the capacity (3 red, the peak cell).
 3. Any Apple census whose keys came from a `layer_streaming` plan should be re-read: segments
    are now cut against the rung, not the capacity, so their boundaries can move where the two
    differ (a shared pool). On a dedicated card the two coincide and nothing moves.
+
+---
+
+## 2026-09-24 — answered from the rack: the 82 streamed-execution failures and the 62 silent refusals, by class (the Mac's 32110ef5 / 8e786e70)
+
+The Mac's reshape census on `4a3658d7` counted 82 streamed-execution failures and 62 refusals with
+weights over the rung whose message never said why `layer_streaming` declined. By class:
+
+| class | count (Mac) | cause, measured here | state |
+|---|---|---|---|
+| a piece cannot bind a symbol | 26 | a piece's symbol binds from a component input it does not receive, and the old seam re-sourcing only matched the SAME symbol id — PixArt's T5 minted s0/s1 from attention_mask and s2/s3 from input_ids, Open-Sora binds s2 from img_ids, Flex s7/s9 from txt_ids/img_ids | **FIXED** (landing below): a piece now CARRIES the component input its symbols bind from. Gate `test_every_streamed_piece_binds_every_symbol_it_uses.py` executes every piece's binding at trace / 2x / far: red on main for PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha, Open-Sora-v2 (`s2 ... input::img_ids::dim_1`, the Mac's); green for those and SANA-Video + the 8 streamed LLM / VLM / speech containers |
+| pieces compute something else than the whole | (not in the Mac's census — hidden behind the class above) | every piece cast its SEAM inputs to the compute dtype, narrowing fp32 islands: PixArt T5 pieces rel L2 0.46 % from whole; three cast sites (triton, torch sequential, compiled) | **FIXED**: seam tensors enter as produced. `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py`: 18/18 bit-identical, executed on a V100 (register 105) |
+| the plan's boundaries are not in the graph that runs | 26 | GLM-4.1V, Qwen3-VL, Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o. Every missing id in the Mac's extract (df2588e7) is `custom.swiglu_fused::N`: Prism cuts `normalize_for_branch(graph, mode, family)`, which applies the swiglu fusion, and the graph these LM stages execute does not carry it (or numbers it differently) | **OPEN** — the cut must be made on the graph the stage executes, by the same normalisation |
+| a streamed piece receives a weight untransposed | 8 (the Mac's df2588e7) | T5 text encoders (PixArt-XL-2-1024-MS, PixArt-Sigma, Open-Sora), triton compiled mode only, rungs 6144 / 8192: `aten.mm::4 ... 4096 vs 10240`. Hypothesis, not yet reproduced here: a cut between a weight-only op (`aten.t` of a weight) and its consumer puts a weight-derived tensor on a seam, which the compiled sequence folds | **OPEN** — reproduce with `tools/streamed_component_vs_whole.py` at the Mac's rung |
+| a streamed VLM / audio stage asks for its embedding weight | 30 | the same six: the flows read the LM's embedding table from the executor's weights; under `layer_streaming` the base executor is weightless by design (its pieces hold the weights) | **OPEN** — a flow must obtain the embedding through the component (a piece or a graph op), never by reading a streamed executor's weights |
+| refusal never says why streaming declined | 62 | `_try_layer_streaming` returned None at eight places, silently; the refusal's strategy list was hand-kept and never named it | **FIXED** (landing below): every decline carries its reason and figures; the refusal lists the strategies actually evaluated. Gate `test_a_refusal_names_why_layer_streaming_declined.py`, red on main |
+
+**A defect the new refusal text exposed at once (OPEN):** a VAE too large to hold whole by the
+whole-component estimate is cut by the partitioner into ONE segment ("it fits in ONE segment, which
+a whole-component rung serves"), so streaming declines it and no rung serves it — PixArt-XL-1024 at
+2048x1024 batch 2, rung 4 096; Open-Sora-v2 at its vendor default (192x336, 129 frames), rung 8 192.
+Two figures for one question again: the whole-component estimate and the partitioner's segment
+accounting disagree about the same component.
+
+**Owed back by the Mac:** the PixArt-XL-1024 2048x1024 render on the landed engine, judged. On this
+rack its text encoder runs in its 8 pieces bit-identical to whole, but the transformer then fails at
+2048x1024 (`aten.mul::11 ... (2, 1, 1152) and (4, 4096, 1152)`, a frozen patchify token count of the
+05-20 build above its traced size) — the class `apple-shape-defects` is working on, not streaming.
+
+**Two defects the executed gate met on the WHOLE component, before any piece exists (OPEN, named
+where they live, not streaming defects):**
+
+* compiled mode, T5 text encoder of both PixArt-XL-2-1024-MS containers, batch 2 and 8: the whole
+  component fails (`aten.add::7 ... tensor a (128) must match tensor b (64)`; a view to
+  `[8, -1, 512, 512]` carries the batch into the head count). Torch sequential and both triton
+  engines run the same graph at batch 2 and 8 bit-identical — a compiled-engine batch defect, in the
+  compiled sequence, not in the container.
+* the 2026-09-21 retrace of PixArt-XL-2-1024-MS, T5 at 300 tokens (the vendor's `max_sequence_length`):
+  the whole component fails (`Cannot broadcast (1, 64, 120, 300) and (1, 1, 300, 300)`) — the
+  relative-position bias froze 120, the traced extent. At 23 tokens pieces and whole are
+  bit-identical. A symbolic-coverage defect of the trace (principle 1), queued for Forge with the
+  Mac's trace defects (df2588e7), fixed at source and retraced.

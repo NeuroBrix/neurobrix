@@ -26,6 +26,26 @@ from typing import Any, Dict, List, Optional
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
+_ABSENT = object()
+
+
+def _piece_input(values: Dict[str, Any], name: str) -> Any:
+    """A piece's input by the name the executor strips from `input::<name>`: flat first (a seam
+    tensor id, a plain component input), then a DOTTED component input walked through the nested
+    dict the synthesizer builds (`added_cond_kwargs.resolution`) — the same resolution
+    `GraphExecutor` applies to its own inputs. A symbol CARRIER is a component input and may be
+    dotted; looked up flat it was refused as "nothing before it produced them"."""
+    if name in values:
+        return values[name]
+    cur: Any = values
+    for part in name.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return _ABSENT
+    return cur
+
+
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
 
@@ -182,13 +202,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
         for executor in executors:
             sub = executor._dag
             needed = sub.get("segment_input_names") or []
-            missing = [n for n in needed if n not in values]
+            seg_inputs = {n: _piece_input(values, n) for n in needed}
+            missing = [n for n, v in seg_inputs.items() if v is _ABSENT]
             if missing:
                 raise RuntimeError(
                     f"layer_streaming: segment {sub.get('segment_index')} of "
                     f"'{component_name}' needs {missing[:3]} and nothing "
                     f"before it produced them")
-            seg_inputs = {n: values[n] for n in needed}
 
             # This segment's weights, and only this segment's: the executor
             # asks its own dag what it consumes.
@@ -266,7 +286,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             for seg_exec in segments:
                 sub = seg_exec._dag
                 needed = sub.get("segment_input_names") or []
-                missing = [n for n in needed if n not in values]
+                feed = {n: _piece_input(values, n) for n in needed}
+                missing = [n for n, v in feed.items() if v is _ABSENT]
                 if missing:
                     raise RuntimeError(
                         f"layer_streaming: segment {sub.get('segment_index')} "
@@ -274,8 +295,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
                         f"nothing before it produced them")
                 seg_exec.load_weights(nbx_path, component_name)
                 try:
-                    out = seg_exec.run({n: values[n] for n in needed},
-                                       *args, **kwargs) or {}
+                    out = seg_exec.run(feed, *args, **kwargs) or {}
                 finally:
                     # Released before the next segment loads. This is the
                     # residency the plan was budgeted against.

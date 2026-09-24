@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model loaded onto the device in pieces now runs, and computes exactly what it computes
+  whole.** When a part of a model is too large for the memory a plan allows, it is split into
+  pieces loaded one at a time. Some pieces could not find the size of the text they were given and
+  stopped the run; others silently computed with less precision than the whole model, giving a
+  slightly different result. Both are fixed: the pieces now produce the same output, bit for bit,
+  as the part run whole.
+
 - **A model piece that just misses fitting whole now runs on the device instead of falling to the
   CPU.** A piece slightly too large to load whole, but too small to be split, was served by
   neither path and went to the much slower CPU route. Such a piece is now split and run on the
