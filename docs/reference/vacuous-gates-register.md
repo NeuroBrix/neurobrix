@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-107 entries, 102 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 102 carry a site. Two
+109 entries, 104 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 104 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3229,3 +3229,74 @@ gates touched this session — `test_no_component_falls_between_placing_whole_an
 
 **The lesson, in one line.** A gate that skips when its machine is missing has not been run; it
 must carry its machine, or fail.
+
+---
+
+### 103 — a plan census compared 177 identical errors and reported "0 differ"; a gate cell ran where the two figures it judged were equal
+
+Two instruments of the same afternoon, each seen empty before it was used, and one class: **the
+scenario could not produce the difference the instrument exists to detect.**
+
+**The census.** To measure which plans a Prism change moved, two solver trees ran the whole cache
+under a pinned machine, from frozen git worktrees. Result: 177 plans, **0 differ**. Every one of the
+177 rows in BOTH arms was `RAISED FileNotFoundError: Hardware profile 'default-…' not found` — the
+machine profiles are generated per machine and gitignored, so a worktree holds none (register 102's
+class, in my own instrument, an hour after writing 102). Two identical failures compare equal. Read
+before it was reported. Repair: the profiles are read from the live tree, and the census now REFUSES
+to finish when any plan could not be made for a reason outside the solver's own decision.
+
+**The cell.** `test_cpu_streaming_sizes_its_cache_against_the_host_it_runs_on` asserted that a host
+strategy's KV cache fits the HOST budget. It ran on the Mac's profile, where the host rung and the
+GPU rung are both 16 384 MB. With the defect injected (the cache judged against the GPUs), it
+**passed** — 22 of 22 green. Rebuilt on a dedicated V100-16GB (rung 15 564.8) beside a host with
+22 000 MB free (rung 20 480), serve mode, with a precondition that the two figures differ: the
+injection now fails it ("1 545.3 MB beside a 14 019.4 MB peak fits the GPU rung — sized against the
+GPU, not the 20 480 MB host").
+
+**The lesson, in one line.** A comparison is only as wide as the difference its scenario can
+produce: two arms that fail alike, or two figures that happen to be equal, agree for no reason.
+
+---
+
+### 104 — a gate pinned what a strategy's DOCSTRING says it holds, and the flow holds more
+
+The one-at-a-time gate (WIP branch, febc4842; ported into the Prism landing the same afternoon)
+asserted that `lazy_sequential`'s KV check combines component costs by MAX — "drops the requirement
+from sum(components) to max(component)", its own docstring — and pinned "MiniCPM-o-4_5 on the Mac
+plans lazy_sequential" as the fix it proved. Three injections turned it red; it looked earned.
+
+**What it did while the premise was wrong**: green. The strategy LOADS one component at a time; the
+FLOW decides what stays. The VLM flow unloads an encoder after its single use but runs the decode
+loop with the LM and its head resident together (`triton/flow/vlm.py`: vision unloaded at 298, the
+LM only after the loop at 635), and in serve mode (`persistent_mode`) it unloads nothing. MiniCPM's
+`llm.model` + `llm.lm_head` = **16 516.2 MB, over the Mac's 16 384 MB rung before any cache**. The
+plan the gate celebrated would hold that pair plus the cache on a budget it exceeds. The census had
+already recorded it as a success ("MiniCPM on the Mac: refused -> lazy_sequential"). The refusal on
+main was honest arithmetic, and the gate had pinned an over-acceptance as the fix.
+
+Every injection the gate went red on tested the ARITHMETIC of MAX (order independence, the zero3
+cost, the subtraction). None could test the PREMISE, because the premise came from the same
+docstring the cells were written from. Found by following a reviewer's unproven remark ("nothing
+proves the KV cache and co-used components are not resident together") into the flow code.
+
+**Repair.** The gate no longer pins a MAX; it pins main's own SUM — the bound that holds for every
+flow — and the measurement that shows why (the persistent pair over the rung). A first repair modelled the lifecycle (persistent together + the largest
+transient, the sum when served) and a review showed it was still incomplete in the out-of-memory
+direction: the speech legs load their talker groups beside the LM, the triton dual_ar flow loads its
+quantizer with the model resident (the compiled one unloads first — an R30 asymmetry), and served
+lazy plans are NOT persistent (`serving/engine.py` sets `persistent_mode` only for eager
+strategies), so "served = sum" was my premise, not the code's. A one-at-a-time combination waits
+on a lifecycle model that reads what each flow keeps. Two cells pin the measurement (MiniCPM's
+persistent pair exceeds the rung) and the consequence (the specific "No strategy can fit model +
+KV cache" refusal). The capability this exposes is named, not hidden: no rung streams a component
+that fits alone but not beside its co-resident partner.
+
+**The same premise, still live elsewhere (pre-existing, main-identical, named):** the
+`single_gpu_lifecycle` gate and its KV branch budget `persistent + max(transient)`; the `single_gpu`
+cold KV branch uses `max(total)` while its own gate uses `sum(weights) + max(activations)` (the
+strategy is eager) and a comment says the two "must match"; the `cpu_streaming` gate accepts on
+`max(component)`, so for a KV family whose SUM exceeds the host budget the "always runs, slowly"
+last rung is unreachable. Each is a docstring's claim about residency that no flow was read for.
+
+**The lesson, in one line.** A strategy's docstring says what it loads; the flow says what stays —
+test the second.

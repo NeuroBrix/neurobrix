@@ -28,15 +28,27 @@ PRISM_DEFAULTS = {
     "safety_margin": 0.95,  # Use 95% of VRAM capacity (tight for large models)
     "default_seq_len": 128,  # Conservative default; actual value from defaults.json
     "overhead_factor": 0.05,  # 5% fragmentation buffer (low for inference)
-    # Driver/library overhead reserve (MB) subtracted from a single GPU's
-    # planning capacity before ANY strategy parks the whole model on one
-    # device. Empirical derivation (P-PRISM-NEVER-REFUSE v2 B.4, 2026-05-12):
+    # Driver/library overhead reserve (MB). It was subtracted from a single GPU's planning capacity
+    # before any strategy parked the whole model on one device; see the READ TODAY note below for
+    # where it applies now. Empirical derivation (P-PRISM-NEVER-REFUSE v2 B.4, 2026-05-12):
     # ~13 GiB of live NBX tensors produced a 16.6 GiB runtime peak on a
     # 32 GiB V100 — CUDA context + cuDNN/cuBLAS workspaces + Triton kernel
     # cache + caching-allocator fragmentation ≈ 3 GiB that no activation
-    # estimator term covers. Single source for the reserve used by
-    # _try_single_gpu, _try_single_gpu_lifecycle and _place_component.
+    # estimator term covers. READ TODAY (2026-09-24) by the single-GPU KV-cache budget and the
+    # stated plan margin only: the acceptance gates hold plans against the rung since the
+    # 2026-09-21 memory law, which removed this reserve from them.
     "oom_reserve_mb": 3072,
+    # The fraction of the rung ONE component may occupy when it is held WHOLE on a device, beside
+    # the per-component overhead the estimator does not see. Read by `PrismSolver._usable_mb`,
+    # which both `_place_component` (the whole-component placement under lazy_sequential and
+    # friends) and `_try_layer_streaming` (what gets streamed, and the budget segments are cut
+    # against) consult — one figure, so no component can fit neither.
+    #
+    # PROVENANCE: unrecorded. It entered as a literal `capacity_mb * 0.92` in `_place_component`
+    # with v0.1.0-alpha (efe605b2) and was kept by 57b46db3; no measurement of 0.92 is in the
+    # history. It is data here so the next measurement has one place to land, not a claim that
+    # 0.92 is right.
+    "whole_component_fraction": 0.92,
     # The commercial memory ladder (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
     # reading rounds DOWN onto on a shared pool, and the nominal rung of a dedicated card. Data,
     # 4 GB to 512 GB, read by `core/prism/memory_budget.py`; never a literal in the solver.

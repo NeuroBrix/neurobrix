@@ -120,3 +120,15 @@ def impose_rung(monkeypatch, rung_mb) -> None:
 
 def no_door(monkeypatch) -> None:
     monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+
+
+def pin_shared_card(monkeypatch, driver_total_mb: int, held_by_others_mb: int, own_context_mb: int,
+                    why: str) -> None:
+    """Every discrete card reads as SHARED: another process holds `held_by_others_mb` of it, so the
+    law rounds the free reading down onto the ladder and the rung sits below the capacity."""
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    free = driver_total_mb - own_context_mb - held_by_others_mb
+    monkeypatch.setattr(solver_mod, "read_device_sharing", lambda _index: DeviceReading(
+        kind="device", capacity_mb=driver_total_mb, free_mb=free, held_by_others_mb=held_by_others_mb,
+        own_context_mb=own_context_mb, measured=True, source=f"injected: {why}"))
+    monkeypatch.setattr(DeviceAllocator, "free_memory_mb", staticmethod(lambda _index: free))

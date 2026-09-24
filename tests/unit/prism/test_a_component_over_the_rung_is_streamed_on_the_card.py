@@ -130,7 +130,7 @@ def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h
 
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
-def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch, model, h, w,
+def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monkeypatch, model, h, w,
                                                                     host_free, rung, mode):
     """The assertion that a strategy name cannot make. Segments cut against the capacity put the
     announced peak above the rung — a plan that is a function of the live reading again.
@@ -144,9 +144,9 @@ def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch,
     beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
-        assert peak <= rung, (
+        assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
             f"{model}.{name}: {len(part.segments)} segments peak at {peak:.1f} MB with what stays "
-            f"resident beside them, over the {rung} MB rung the plan is budgeted at")
+            f"resident beside them, over the usable part of the {rung} MB rung the plan is budgeted at")
 
 
 # ───────────────── the controls: the same model, the same machine, a rung that holds it ─────────────────
@@ -160,17 +160,21 @@ def test_the_same_component_under_the_rung_is_not_streamed(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_a_dedicated_card_cuts_what_it_cut_before(monkeypatch, mode):
+def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     """No door, a DEDICATED V100-16GB reading injected (driver 16 151 MB, own context 306 MB —
-    this rack's card 0 as measured). The dedicated law budgets min(16 151 - 306, capacity), which
-    is the capacity, so moving this rung from capacity to rung must move nothing here.
+    this rack's card 0 as measured). A control: it pins where DeepSeek-Coder-V2-Lite's single
+    17 777 MB component is cut on that card, so any change that moves the cut is SEEN.
 
-    Reaches `_try_layer_streaming` for real: DeepSeek-Coder-V2-Lite's single 17 777 MB component
-    is over the card, the rung is attempted (its partition is left on the solver), and
-    `lazy_sequential` then outscores it. The boundaries pinned below are the ones main's solver
-    cut against the capacity, measured identical in both modes before this change. A retrace of
-    this container moves these op ids (register 98): re-measure against main's cut, do not delete
-    the cell."""
+    It moved once, deliberately, and each move is recorded:
+      69c98647  capacity -> rung: nothing moved (the rung IS the capacity on a dedicated card)
+                [embedding::0, view::247] [moe_fused::block.12, view::467] [moe_fused::block.23, rms_norm::81]
+      next      rung -> its usable part (0.92 x 15 564.8 = 14 319.6 MB), the whole-component
+                standard (test_no_component_falls_between_placing_whole_and_streaming.py):
+                still 3 segments, the boundaries below, identical in both modes.
+
+    Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
+    solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
+    ids (register 98): re-measure against the previous cut, do not delete the cell."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 200000, "an idle rack host")
     pin_dedicated_card(monkeypatch, 16151, 306, "this rack's V100-16GB card 0 as measured")
@@ -181,6 +185,6 @@ def test_a_dedicated_card_cuts_what_it_cut_before(monkeypatch, mode):
         f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
-    assert cut == {"model": [["aten.embedding::0", "aten.view::247"],
-                             ["moe_fused::block.12", "aten.view::467"],
-                             ["moe_fused::block.23", "custom.rms_norm::81"]]}, cut
+    assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
+                             ["aten.slice::502", "aten.view::427"],
+                             ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut

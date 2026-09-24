@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.prism.loader import load_profile
+from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile as build_profile   # built, never a machine's own profile (register 102)
 from neurobrix.core.prism.solver import ComponentMemory, DeviceState, PrismSolver
 from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
 
@@ -28,8 +28,13 @@ class _NoComponents:
     from pathlib import Path as _P
     cache_path = _P("/nonexistent-prism-fixture")
 
+    # The components this fixture places, DECLARED, with the dtype the cells assumed. It returned
+    # [] and the solver answered every dtype question with an invented "bfloat16"; that default
+    # is now a refusal (`_get_component_dtype`), so the fixture says what it holds.
     def get_neural_components(self):
-        return []
+        from types import SimpleNamespace
+        return [SimpleNamespace(name=n, get_dominant_dtype=lambda: "bfloat16")
+                for n in ['model']]
 
 
 def _place(unified: bool):
@@ -37,7 +42,7 @@ def _place(unified: bool):
     ~10.7 GB (VM up) with the profile's 24 GB CPU RAM. A component whose
     activation exceeds the live GPU but whose total fits 70% of CPU RAM is
     exactly what Strategy 4 offloaded to the host."""
-    profile = load_profile("default")            # apple, has a 24 GB cpu section
+    profile = build_profile(APPLE_M4_PRO)            # apple, has a 24 GB cpu section
     profile.devices[0].unified_memory = unified
     solver = PrismSolver.__new__(PrismSolver)
     from neurobrix.core.config.system import PRISM_DEFAULTS
