@@ -4501,7 +4501,7 @@ table: `reshape-report-at-vendor-sizes-2026-09-24.md`.
 resolution locked by the vendor at 480x720). CogVideoX-2b, the PixArt family and Wan2.1-T2V-1.3B
 record no invention over their completed runs at any size.
 
-**Coverage, stated before anything reads a 0:** 216 of 708 runs completed (31 %). 368 were refused
+**Coverage, stated before anything reads a 0:** 164 of 708 runs completed (23 %), 176 failed for another reason, and 368 were refused
 at the rung: 254 activation-dominated (a VAE or a video transformer, tiling cases) and 114 with
 weights over the rung and still refused. None is in the 0.92x-rung band. The Wan2.1-I2V-14B,
 Wan2.2-I2V-A14B, mochi-1-preview and Open-Sora-v2 sizes have 0 completed runs, so they prove
