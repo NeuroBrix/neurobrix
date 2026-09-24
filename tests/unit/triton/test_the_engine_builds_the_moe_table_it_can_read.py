@@ -138,7 +138,7 @@ def test_the_pinned_authority_reads_across_command_buffers():
     """The decisive arm the capture design failed: a D2H sync between the
     table build and the read splits them into different command buffers,
     and an address from a transient wrap then reads zeros. The pin's
-    resident-wrap authority must survive exactly this."""
+    kept-wrap authority (a pinned lifetime) must survive exactly this."""
     drv = _metal_or_skip()
     import triton
     import triton.language as tl

@@ -207,7 +207,7 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
             pin.__enter__()
             tables.pins.append(pin)
 
-            # The pin's whole-allocation resident wrap is the ONE address
+            # The pin's whole-allocation kept wrap is the ONE address
             # authority: every MTLBuffer has its own GPU VA, so an address
             # captured through a transient launch wrap dies with that wrap
             # (zeros, nothing raised — measured 2026-09-21), and per-expert
