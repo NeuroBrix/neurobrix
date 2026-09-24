@@ -3,157 +3,173 @@
 The rung's own premise — its docstring says it "drops the requirement from sum(components) to
 max(component)" — was contradicted by the check that decides whether it may run. Every
 component's `total_bytes` went into `total_allocated`, `remaining` came out 0, the KV cache
-could not fit in 0, and the strategy was rejected in favour of something further down.
+could not fit in 0, and the strategy was rejected in favour of something further down:
 
-MEASURED 2026-09-23, and the census puts a bound on it
-------------------------------------------------------
-Over the whole cache — 59 containers x 3 profiles, 177 plans, none skipped — exactly **5** meet
-`max(component) <= capacity < sum(components)`, which is the condition where this rung is the
-right answer. Two of the five left the accelerator:
+    MiniCPM-o-4_5, Apple M4 Pro profile, 2026-09-23
+      14 components, largest 14 019 MB, every one under the 16 384 MB rung; sum 19 519 MB
+      against 17 277 MB of capacity.
+      rejected lazy_sequential: "KV cache does not fit: ... Remaining VRAM: 0MB, need >=94"
+      -> cpu_execution, off the accelerator, on a model whose every component fits it alone.
 
-    MiniCPM-o-4_5          max= 14019  cap= 17277  sum= 19519  -> cpu_execution
-    granite-speech-3.3-8b  max= 16770  cap= 17277  sum= 18082  -> cpu_streaming
+The residency arithmetic now lives in one method, `_resident_bytes_for_kv_check`: a cost per
+component (streamed segment peak; activations only when zero3 maps it to a DISCRETE card's
+host; the whole component otherwise), then MAX for lazy_sequential and SUM for every strategy
+that holds its components together. The first repair did the max inside the loop beside a
+`+=` for zero3 components, which made the answer depend on the order components were visited;
+combining after every cost is known removes that.
 
-They are NOT the same defect and only one is fixed here.
+THESE CELLS CONSTRUCT THEIR SCENARIO
+------------------------------------
+The arithmetic is tested on hand-built components, where the answer is known exactly. The
+plan-level cells pin the machine they plan for (injected host reading; the rung through the
+door, or an injected dedicated card reading), and a precondition cell proves the case really is
+`max(component) <= capacity < sum(components)`.
 
-**MiniCPM** has 14 components and every one fits the 16 384 MB budget; the largest is 14 019.
-`_try_lazy_sequential` returned a plan — the rung was viable — and the post-scoring check
-rejected it:
-
-    rejected lazy_sequential score=20.0
-      KV cache does not fit: ZERO FALLBACK: KV cache budget insuffisant.
-      Remaining VRAM: 0MB, need >=94
-
-**granite-speech** is the ladder question instead: its largest component is 16 770 MB, over the
-16 384 MB rung a shared pool is rounded down to, though under the 17 277 MB the card reports.
-That is doctrine and is deliberately untouched, which is why it appears here as a control: a
-fix that "helped" it too would have been reaching past its evidence.
-
-THE COMMENT THAT WAS ALREADY THERE
-----------------------------------
-The branch being fixed already carried a note about this exact failure — *"Counting the
-offloaded weights as resident rejected valid mixed plans (lazy_sequential mapping a 57GB LM to
-zero3:cuda:0 was 'over capacity' on a 32GB card -> the KV check failed -> the cascade fell
-through to cpu_execution on a GPU node)"* — and the repair was applied only to the
-zero3-mapped case. A component that is not zero3-mapped still summed, so the same rung still
-fell through the same hole for the same reason. Same defect, second doorway.
+RETIRED from the first version, with the reason
+-----------------------------------------------
+* `test_the_LADDER_case_is_untouched_and_still_leaves_the_accelerator` asserted granite-speech
+  plans `cpu_streaming`. That question was decided by the streaming fix on main (69c98647): a
+  component over the rung streams on the card. Its gate is
+  `test_a_component_over_the_rung_is_streamed_on_the_card.py`.
+* `test_the_max_rule_does_NOT_reach_a_rung_that_holds_everything` pinned four PixArt plans on the
+  rack's live multi-GPU profile. Register 99 established that the five transitions it was built
+  on were RACK STATE (a 19-hour render's pinned host memory), with 0 stable differences across 40
+  plans under controlled alternation. It could not discriminate the injection it named. The
+  over-application is now caught where it lives: the SUM cells below.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import neurobrix.core.host_memory as host_memory
+import neurobrix.core.prism.solver as solver_mod
+from neurobrix.core.host_memory import MemoryState
 from neurobrix.core.prism import InputConfig, PrismSolver, load_profile
+from neurobrix.core.prism.memory_budget import DeviceReading
 from neurobrix.nbx import NBXContainer
 
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
+APPLE = "default-9f169c79"          # unified mps:0, memory_mb 18 186, ram 24 576
+V100 = "default-ff6008b7"           # one discrete cuda:0, 16 384 MB
+MB = 1024 * 1024
 
 
-def _plan(model: str, profile_id: str):
-    root = CACHE / model
-    if not (root / "components").is_dir():
-        pytest.skip(f"{model} is not in this cache")
-    try:
-        dj = json.loads((root / "runtime" / "defaults.json").read_text())
-    except Exception:                                   # noqa: BLE001
-        dj = {}
-    kw = dict(batch_size=1, height=dj.get("height", 1024), width=dj.get("width", 1024))
+def _mem(total_mb, act_mb=0.0, over_mb=0.0):
+    return SimpleNamespace(total_bytes=int(total_mb * MB), activation_bytes=int(act_mb * MB),
+                           overhead_bytes=int(over_mb * MB))
+
+
+# three components: a resident 10 GB one, a 6 GB one, and a 20 GB one whose weights zero3 offloads
+COMPS = {"a": _mem(10_000), "b": _mem(6_000), "c": _mem(20_000, act_mb=500, over_mb=100)}
+ALLOCS_DISCRETE = {"a": ("cuda:0", {}), "b": ("cuda:0", {}), "c": ("zero3:cuda:0", {})}
+
+
+# ───────────────────── the arithmetic, on components whose answer is known ─────────────────────
+
+def test_one_at_a_time_is_the_MAX_of_what_each_component_holds():
     s = PrismSolver()
-    p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
-                      InputConfig(**kw), mode="compiled")
-    return getattr(p, "strategy", "?"), s
+    got = s._resident_bytes_for_kv_check("lazy_sequential", ALLOCS_DISCRETE, COMPS, load_profile(V100))
+    assert got == 10_000 * MB, got / MB          # max(10 000, 6 000, 500 + 100)
 
 
-# ───────────────────────── the defect, fixed ─────────────────────────
+@pytest.mark.parametrize("strategy", ["component_placement", "pipeline_parallel", "block_scatter",
+                                      "component_placement_lazy", "weight_sharding"])
+def test_every_strategy_that_holds_them_together_is_the_SUM(strategy):
+    """The over-application direction: a max applied here would under-budget a strategy that
+    really holds every component at once, and let it pass a check it should fail."""
+    s = PrismSolver()
+    got = s._resident_bytes_for_kv_check(strategy, ALLOCS_DISCRETE, COMPS, load_profile(V100))
+    assert got == (10_000 + 6_000 + 600) * MB, got / MB
 
-@pytest.mark.parametrize("profile_id", ["default-9f169c79", "default-ff6008b7"])
-def test_a_model_whose_every_component_fits_stays_on_the_accelerator(profile_id):
-    """MiniCPM: 14 components, largest 14 019 MB, all under budget; sum 19 519 over capacity."""
-    strategy, _ = _plan("MiniCPM-o-4_5", profile_id)
-    assert not strategy.startswith("cpu_"), (
-        f"every component fits the accelerator alone and the plan left it: {strategy}")
-    assert strategy == "lazy_sequential"
+
+def test_the_answer_does_not_depend_on_the_order_components_are_visited():
+    s = PrismSolver()
+    prof = load_profile(V100)
+    seen = set()
+    for order in itertools.permutations(COMPS):
+        comps = {k: COMPS[k] for k in order}
+        seen.add(s._resident_bytes_for_kv_check("lazy_sequential", ALLOCS_DISCRETE, comps, prof))
+    assert seen == {10_000 * MB}, sorted(x / MB for x in seen)
 
 
-def test_the_rung_is_no_longer_rejected_for_a_KV_cache_that_had_no_room():
-    """The rejection itself, pinned. `Remaining VRAM: 0MB` came from summing 14 components a
-    one-at-a-time rung never holds together."""
-    _, solver = _plan("MiniCPM-o-4_5", "default-9f169c79")
-    bad = [r for r in getattr(solver, "_rejected", [])
+def test_zero3_on_unified_memory_frees_nothing():
+    """On a unified device the "offloaded" weights stay in the same pool, so they count."""
+    s = PrismSolver()
+    allocs = {"a": ("mps:0", {}), "b": ("mps:0", {}), "c": ("zero3:mps:0", {})}
+    got = s._resident_bytes_for_kv_check("lazy_sequential", allocs, COMPS, load_profile(APPLE))
+    assert got == 20_000 * MB, got / MB
+
+
+# ───────────────────── the plan: MiniCPM, on a pinned machine ─────────────────────
+
+def _pin_apple(monkeypatch):
+    st = MemoryState(total_mb=24576, available_mb=18186, source="injected: an idle Mac")
+    monkeypatch.setattr(solver_mod, "memory_state", lambda: st)
+    monkeypatch.setattr(host_memory, "memory_state", lambda: st)
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "16384")
+
+
+def _pin_v100(monkeypatch):
+    big = MemoryState(total_mb=257530, available_mb=200000, source="injected: an idle host")
+    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    monkeypatch.setattr(solver_mod, "memory_state", lambda: big)
+    monkeypatch.setattr(host_memory, "memory_state", lambda: big)
+    monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
+        kind="device", capacity_mb=16151, free_mb=15845, own_context_mb=306, measured=True,
+        source="injected: a dedicated V100-16GB"))
+
+
+PINS = {APPLE: _pin_apple, V100: _pin_v100}
+
+
+def _plan(monkeypatch, profile_id, refusal_ok=False):
+    root = CACHE / "MiniCPM-o-4_5"
+    if not (root / "components").is_dir():
+        pytest.skip("MiniCPM-o-4_5 is not in this cache")
+    PINS[profile_id](monkeypatch)
+    dj_path = root / "runtime" / "defaults.json"
+    dj = json.loads(dj_path.read_text()) if dj_path.is_file() else {}
+    s = PrismSolver()
+    seen = {}
+    real = s._compute_memory
+
+    def spy(*a, **k):
+        out = real(*a, **k)
+        seen.update(out)
+        return out
+
+    s._compute_memory = spy
+    try:
+        p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
+                          InputConfig(batch_size=1, height=dj.get("height", 1024),
+                                      width=dj.get("width", 1024)), mode="compiled")
+    except RuntimeError:
+        if not (refusal_ok and seen):
+            raise
+        p = None
+    return p, s, seen
+
+
+@pytest.mark.parametrize("profile_id", [APPLE, V100])
+def test_the_case_is_max_under_the_capacity_and_sum_over_it(monkeypatch, profile_id):
+    _, s, seen = _plan(monkeypatch, profile_id, refusal_ok=True)
+    dev = s._prepare_devices(load_profile(profile_id))[0]
+    sizes = [m.total_bytes / MB for m in seen.values()]
+    cap = s._effective_capacity_mb(dev)
+    assert max(sizes) <= cap < sum(sizes), (
+        f"max {max(sizes):.1f} / rung {cap:.1f} / sum {sum(sizes):.1f}: not the one-at-a-time case")
+
+
+@pytest.mark.parametrize("profile_id", [APPLE, V100])
+def test_a_model_whose_every_component_fits_stays_on_the_accelerator(monkeypatch, profile_id):
+    p, s, _ = _plan(monkeypatch, profile_id)
+    bad = [r for r in getattr(s, "_rejected", [])
            if r[0] == "lazy_sequential" and "KV cache does not fit" in str(r[2])]
     assert not bad, f"lazy_sequential is still rejected on the KV check: {bad}"
-
-
-# ───────────────────── the control, deliberately NOT fixed ─────────────────────
-
-def test_the_LADDER_case_is_untouched_and_still_leaves_the_accelerator():
-    """granite-speech's largest component is over the rung a shared pool rounds down to, and
-    under the capacity the card reports. That is the memory law working as written, and it is
-    the owner's call, not a bug to reach for. If this cell ever goes green, the fix above grew
-    past its evidence."""
-    strategy, _ = _plan("granite-speech-3.3-8b", "default-9f169c79")
-    assert strategy == "cpu_streaming", (
-        "granite-speech now plans on the accelerator — either the ladder question was decided "
-        "and this cell should be retired, or a fix reached past the case it was measured on")
-
-
-# ───────── the OVER-application, which needs a multi-GPU profile to be visible ─────────
-
-MULTI_GPU = "default-c5d28c27"          # 4 GPUs, 96 GB — the rack's own shape
-
-
-@pytest.mark.parametrize("model,expected", [
-    ("PixArt-XL-2-1024-MS", "single_gpu_lifecycle"),
-    ("PixArt-Sigma-XL-2-1024-MS", "single_gpu_lifecycle"),
-])
-def test_the_max_rule_does_NOT_reach_a_rung_that_holds_everything(model, expected):
-    """The other direction of the injection, and it took a measurement to make visible.
-
-    Budgeting `lazy_sequential` at max(component) is correct because it holds one component at
-    a time. Applying the same max to EVERY rung under-budgets the strategies that genuinely hold
-    all components at once, and they then pass a capacity check they should fail.
-
-    **On a single-device profile that is invisible**, and the scoring table says why: the
-    strategies reaching the summing branch there are `op_level_tiling` (60), `layer_streaming`
-    (50, which has its own partition exception) and `cpu_streaming` (5) — all BELOW
-    `lazy_sequential` (300), which now passes anyway. Mis-budgeting them changes no chosen plan
-    at any rung. A 1 062-plan sweep across three solver states and three imposed rungs on the
-    two single-device profiles found nothing, because there was nothing there to find.
-
-    On a MULTI-GPU profile `pipeline_parallel` (850), `component_placement` (750),
-    `block_scatter` (700) and `component_placement_lazy` (400) reach the same branch, and the
-    first three outscore `lazy_sequential`. Measured on `default-c5d28c27`, 49 plans compared,
-    FIVE change under the over-applied max:
-
-        GLM-4.1V-9B-Thinking       component_placement_lazy -> single_gpu
-        PixArt-Sigma-XL-1024       single_gpu_lifecycle     -> component_placement_lazy
-        PixArt-Sigma-XL-2-1024-MS  single_gpu_lifecycle     -> component_placement_lazy
-        PixArt-XL-1024             single_gpu_lifecycle     -> component_placement_lazy
-        PixArt-XL-2-1024-MS        single_gpu_lifecycle     -> component_placement_lazy
-
-    The four PixArt rows are pinned here: same profile, same transition, four independent
-    containers, so one container being retraced cannot quietly retire the cell. GLM's move to
-    `single_gpu` is the starker harm — the plan comes to believe ONE GPU holds everything — but
-    it is a single row and is recorded in prose rather than asserted.
-    """
-    strategy, _ = _plan(model, MULTI_GPU)
-    assert strategy == expected, (
-        f"{model} on {MULTI_GPU} planned {strategy!r}, expected {expected!r}. If this changed "
-        f"because the one-at-a-time budget was applied to rungs that hold every component at "
-        f"once, those rungs are now under-budgeted and may accept plans that do not fit.")
-
-
-# ───────────────────── the arithmetic, so the cells are not folklore ─────────────────────
-
-def test_the_two_cases_really_are_different_arithmetic():
-    """Both meet max <= capacity < sum. Only one has every component under the BUDGET."""
-    BUDGET, CAP = 16384.0, 17277.0
-    mini_max, mini_sum = 14019.0, 19519.0
-    gran_max, gran_sum = 16770.0, 18082.0
-    for mx, sm in ((mini_max, mini_sum), (gran_max, gran_sum)):
-        assert mx <= CAP < sm                       # both meet the owner's condition
-    assert mini_max <= BUDGET                       # MiniCPM fits the rung
-    assert gran_max > BUDGET                        # granite-speech does not
+    assert p.strategy == "lazy_sequential", p.strategy

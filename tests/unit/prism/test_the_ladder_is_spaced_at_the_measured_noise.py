@@ -29,12 +29,8 @@ from __future__ import annotations
 
 import pytest
 
+from neurobrix.core.prism.memory_budget import rung_down_mb
 from neurobrix.core.config.system import PRISM_DEFAULTS, _ladder_gb
-
-
-def _rung_below(mb: float, ladder) -> float:
-    c = [g * 1024 for g in ladder if g * 1024 <= mb]
-    return max(c) if c else 0.0
 
 
 def test_the_noise_is_declared_beside_the_ladder():
@@ -46,11 +42,12 @@ def test_the_noise_is_declared_beside_the_ladder():
 def test_no_rung_discards_more_than_the_measured_noise():
     """The whole property. Rounding down must cost at most the swing it absorbs — otherwise it
     is not absorbing noise, it is discarding memory."""
-    lad = PRISM_DEFAULTS["memory_ladder_gb"]
+    # Through the function the ENGINE calls, never PRISM_DEFAULTS: reading the declared list
+    # passed while memory_ladder_mb() truncated it to whole GB (vacuous-gates register 100).
     noise = PRISM_DEFAULTS["memory_reading_noise"]
     worst, at = 0.0, None
     for mb in range(4096, 512 * 1024, 337):        # 337: a prime stride, so readings are not all on rungs
-        r = _rung_below(mb, lad)
+        r = rung_down_mb(mb)
         if r <= 0:
             continue
         loss = (mb - r) / mb
@@ -102,9 +99,10 @@ def test_no_step_is_so_fine_that_the_ladder_stops_absorbing_anything():
 
 def test_the_low_range_recovers_what_the_old_list_discarded():
     """The three readings this rack and the Mac actually measured."""
-    lad = PRISM_DEFAULTS["memory_ladder_gb"]
+    # Through the function the ENGINE calls, never PRISM_DEFAULTS: reading the declared list
+    # passed while memory_ladder_mb() truncated it to whole GB (vacuous-gates register 100).
     for reading, old_rung, floor in ((10638, 8192, 10000), (17277, 16384, 17000), (15565, 12288, 15000)):
-        new = _rung_below(reading, lad)
+        new = rung_down_mb(reading)
         assert new > old_rung, f"reading {reading}: new rung {new} is not above the old {old_rung}"
         assert new >= floor, f"reading {reading}: new rung {new} below the expected floor {floor}"
 
@@ -112,8 +110,9 @@ def test_the_low_range_recovers_what_the_old_list_discarded():
 def test_granite_speechs_component_now_fits_the_rung_its_card_reports():
     """The case the ladder created: 16 769.6 MB of component, a card reporting 17 277, and a
     rung of 16 384 that put it 386 MB out of reach."""
-    lad = PRISM_DEFAULTS["memory_ladder_gb"]
-    assert _rung_below(17277, lad) >= 16769.6, (
+    # Through the function the ENGINE calls, never PRISM_DEFAULTS: reading the declared list
+    # passed while memory_ladder_mb() truncated it to whole GB (vacuous-gates register 100).
+    assert rung_down_mb(17277) >= 16769.6, (
         "a 17 277 MB card still rounds below granite-speech's 16 769.6 MB component")
 
 
