@@ -4182,3 +4182,48 @@ were open for. This is the residue, measured, and it belongs to whoever owns the
 above its own clamp; it is not, because a lifecycle strategy is checked against
 `peak_mb = max(...)` (solver.py:5052). The clamp at `_prepare_devices` is correct. Only the
 label is misleading, and only to a reader who does not already know the two figures differ.
+
+### 2026-09-24 — the census shadow is not implemented for `--compiled`, and mode 1 is owed there
+
+Trying to give the PixArt shape fixes their R30 leg found this. `_spatial_promotion_pass` is
+shared: `graph_executor` calls it for triton-sequential, `compiled_sequence` calls it at two
+sites for mode 1. The Apple census runs `triton` and `triton-sequential` only, so mode 2 is
+proven twice and mode 1 not at all. Attempting mode 1 here gives two outcomes and neither is
+a measurement:
+
+    --compiled, no NBX_CENSUS   rc=1    clean refusal: "the streaming path needs 9630MB
+                                        for that one component"
+    --compiled, NBX_CENSUS=1    rc=138  Bus error: 10, immediately after "Engine: COMPILED",
+                                        EXC_BAD_ACCESS / SIGBUS / KERN_MEMORY_ERROR
+
+The chain, and it is not "the shadow opened the device":
+
+1. `_prepare_devices` deliberately does NOT clamp capacity to host availability under a
+   shadow (`not _census_shadow_active()`, and the reason given there is sound — a census that
+   is a function of what else is running is not a census).
+2. So under the shadow the plan is ACCEPTED where the real run refuses it.
+3. Compiled mode then proceeds to **load weights**, which a shadow must never do: key
+   formation is pure data. The triton path has a door for this and says so —
+   `census shadow: the Metal device is deliberately unreachable (NBX_CENSUS=1)`. Mode 1 has
+   no such door.
+4. The weights are mmap'd safetensors on an NFS mount over Wi-Fi. A page the filesystem
+   cannot deliver is `KERN_MEMORY_ERROR`, i.e. SIGBUS, which kills the process with no
+   traceback and loses every buffered line — my first two attempts reported **0 lines** and
+   looked like a hang.
+
+So `NBX_CENSUS=1 --compiled` is a crash, not a refusal, and the census cannot cover mode 1.
+That is a door mode 1 is missing, and it is the same class already named for Allegro and
+CogVideoX-2b in the triton path — a shadow that executes is a defect on our side.
+
+**What mode 1 IS covered by, here:** the three unit tests exercise the shared pass directly;
+the pass is **idempotent** on four real graphs (PixArt-XL-1024, PixArt-XL-2-1024-MS, both
+Sana components), which matters because mode 1 calls it twice; `compiled_sequence` resolves a
+symbol as `node.get("id", node.get("symbol_id"))`, so it reads both schemas; and mode 1
+already carries `_expr_symbols_in_input`, the foreign-symbol collision guard whose docstring
+names the SANA-Video "view split 13440 as 4x3360" case — the same shape of mistake as Sana's
+2240. **That guard is part of why these defects surfaced in triton-sequential and not in
+compiled**, and the fixes here bring mode 2 up to a protection mode 1 had all along.
+
+**Owed to the rack, added to the 2048 px proof:** run it in `--compiled` too. PixArt-XL-1024
+cannot run mode 1 on this machine at any size — a 9 630 MB component under torch against what
+is free — so the mode-1 leg of R30 is not refusable here, it is unreachable.
