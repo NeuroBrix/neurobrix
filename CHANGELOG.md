@@ -14,6 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model piece that just misses fitting whole now runs on the device instead of falling to the
+  CPU.** A piece slightly too large to load whole, but too small to be split, was served by
+  neither path and went to the much slower CPU route. Such a piece is now split and run on the
+  device.
+
+- **A language model split across the device, or served, no longer plans a conversation memory
+  larger than the device.** The memory kept for the conversation history was sized against the
+  device's total rather than the share the plan was allowed, and on a shared machine could exceed
+  the device itself. It now fits inside the plan.
+
+- **Planning a video model whose decoder is split into tiles no longer crashes** when that decoder
+  compresses time and needs splitting.
+
+- **A model piece the model does not describe is now reported instead of silently assumed to use
+  a default number format.**
+
 - **A model with one piece slightly too large for the memory it plans against now runs on the
   device instead of refusing.** On a machine whose memory is shared — a Mac, or a card another
   program is using — the engine plans against a rounded-down share of what is free. A model

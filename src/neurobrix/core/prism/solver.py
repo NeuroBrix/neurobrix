@@ -653,12 +653,13 @@ class PrismSolver:
         prism_defaults = get_prism_defaults()
         self.safety_margin = prism_defaults.get("safety_margin", safety_margin)
         self.overhead_factor = overhead_factor
-        # Driver/library overhead reserve for single-GPU acceptance gates.
-        # Value + empirical derivation: PRISM_DEFAULTS["oom_reserve_mb"]
-        # (config/system.py). One constant for every single-GPU gate —
-        # _try_single_gpu, _try_single_gpu_lifecycle, _place_component.
-        # No literal default here — config/system.py is the single source
-        # (a missing key is a config regression and must crash).
+        # Driver/library overhead reserve. Value + empirical derivation:
+        # PRISM_DEFAULTS["oom_reserve_mb"] (config/system.py). Where it is READ today (2026-09-24):
+        # the single-GPU KV-cache budget in the post-scoring check, and `_margin_mb` (the margin a
+        # plan states). The acceptance gates — _try_single_gpu, _try_single_gpu_lifecycle,
+        # _place_component — no longer subtract it: they hold a plan against the rung
+        # (`_effective_capacity_mb`) under the 2026-09-21 memory law. No literal default here —
+        # config/system.py is the single source (a missing key is a config regression and must crash).
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
         #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
         #: FIXED computation — the same op of the same request, refused three
@@ -695,10 +696,87 @@ class PrismSolver:
         """
         return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
 
+    def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
+                                     component_memory: Dict, profile,
+                                     kv_already_counted: int = 0) -> int:
+        """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
+
+        Each component costs what its allocation keeps resident: a `layer_streaming` segment's
+        announced peak; activations and overhead only when zero3 maps it to a DISCRETE card's
+        host (on a unified device the "offloaded" weights stay in the same pool, so they
+        count); its whole `total_bytes` otherwise. Counting offloaded weights as resident
+        rejected valid mixed plans (lazy_sequential mapping a 57 GB LM to zero3:cuda:0 was
+        "over capacity" on a 32 GB card, the KV check failed, the cascade fell to
+        cpu_execution on a GPU node).
+
+        The costs are SUMMED, for every strategy. `lazy_sequential` and `cpu_streaming` LOAD one
+        component at a time, but what stays resident is the FLOW's decision, and Prism does not model
+        it yet: the VLM decode loop keeps the LM and its head together (MiniCPM-o's pair is
+        16 516.2 MB, over the Mac's 16 384 rung — a MAX would have accepted it, register 104), the
+        speech legs load their talker groups beside or after the LM, and the triton dual_ar flow
+        loads its quantizer with the model still resident where the compiled one unloads first.
+        The SUM is the bound that holds for every one of those; a one-at-a-time combination waits
+        on a lifecycle model that reads what each flow keeps.
+
+        Combined only after every cost is known, so the result does not depend on the order the
+        components are visited in — an in-loop `max(total, x)` beside `total += y` did.
+        """
+        partitions = (getattr(self, "_layer_stream_partitions", {}) or {}) \
+            if strat_name == "layer_streaming" else {}
+        costs = {}
+        for name, m in component_memory.items():
+            alloc = strat_allocs.get(name)
+            dev = alloc[0] if isinstance(alloc, tuple) else alloc
+            part = partitions.get(name)
+            if part is not None:
+                costs[name] = int(part.peak_resident_bytes)   # a segment never held the cache
+                continue
+            if (isinstance(dev, str) and dev.startswith("zero3:")
+                    and not _device_is_unified(dev, profile)):
+                cost = int(m.activation_bytes + m.overhead_bytes)
+            else:
+                cost = int(m.total_bytes)
+            # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
+            # sizes the cache itself, so it comes out of THAT component's cost — before the costs
+            # are combined. Taken off the combined figure instead, it came off a MAX that could be
+            # another component's, and off plans where no LM was named and nothing carried it.
+            if name == self._lm_component_name:
+                cost = max(cost - int(kv_already_counted), 0)
+            costs[name] = cost
+        return sum(costs.values())
+
+    @property
+    def whole_component_fraction(self) -> float:
+        """PRISM_DEFAULTS["whole_component_fraction"], read where it is used — a property, so a
+        solver built without __init__ (several cells test one rung that way) reads the same
+        figure, and no copy of the value exists outside the configuration."""
+        return float(get_prism_defaults()["whole_component_fraction"])
+
+    def _usable_mb(self, dev: "DeviceState") -> float:
+        """What ONE component held whole may occupy on `dev`: the rung, times the whole-component
+        fraction (PRISM_DEFAULTS, provenance stated there).
+
+        The single authority for "does this component fit whole". `_place_component` accepts a
+        component whole against it, and `_try_layer_streaming` streams exactly the components it
+        refuses and cuts their segments against it. They used to read two different figures —
+        0.92 x rung to place whole, the rung itself to stream — and a component between the two
+        was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
+        the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
+        accelerator, on a device that holds it."""
+        return self._effective_capacity_mb(dev) * self.whole_component_fraction
+
+    def _whole_component_mb(self, container, comp_name: str, mem: "ComponentMemory",
+                            dev: "DeviceState") -> float:
+        """What `comp_name` costs held whole on `dev`: its weights at the device's cost for the
+        component's dtype, plus its activations. The figure `_usable_mb` is compared to."""
+        return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                + mem.activation_mb)
+
     def _effective_capacity_mb(self, dev: "DeviceState") -> float:
-        """What a whole plan may be budgeted against on `dev`: the card's
-        capacity less the margin, AND never more than the ladder rung of the
-        live free reading.
+        """What a whole plan may be budgeted against on `dev`: `dev.budget_mb`, the memory law's
+        answer for its reading (memory_budget.py) — a shared pool's free reading rounded down onto
+        the ladder, a dedicated card whole less its own context — capped at the capacity. No
+        margin is subtracted here; this docstring said one was.
 
         The second bound is the ladder law at the plan's ENTRY (owner,
         2026-09-20: the budget is what gets quantised, before anything is
@@ -815,6 +893,10 @@ class PrismSolver:
         # executor will still have. Default "compiled" keeps every existing caller's behaviour.
         self._mode = str(mode or "compiled")
         self._serve_mode = serve_mode
+        # The REQUEST's serve intent, never toggled. `_serve_mode` is set False for the cold
+        # re-evaluation and restored before the KV check; a reserve taken during the cold pass from
+        # the toggled flag was one turn while the check then demanded two.
+        self._serve_requested = serve_mode
         self._serve_cold_fallback = False  # Track if serve degraded to cold
 
         neural_components = container.get_neural_components()
@@ -1094,6 +1176,10 @@ class PrismSolver:
         if not candidates:
             if self._try_fp32_fallback(container, profile):
                 target_dtype_str = "float32"
+                # And the SOLVER's record of it: the strategies re-evaluated below (layer
+                # streaming's KV reserve) read `self._target_dtype_str`, which stayed at the
+                # dtype that had just failed — the cache reserved at half its fp32 bytes.
+                self._target_dtype_str = target_dtype_str
                 component_memory = self._compute_memory(
                     container, neural_components, input_config, target_dtype_str,
                     profile=profile,
@@ -1167,8 +1253,9 @@ class PrismSolver:
                 kv_already_counted = self._estimate_kv_cache_bytes(container, target_dtype_str)
 
                 # Strategy-aware capacity and allocation calculation
-                if strat_name == "cpu_execution":
-                    # CPU-only: capacity = host RAM budget. KV cache lives
+                if strat_name in ("cpu_execution", "cpu_streaming"):
+                    # Host strategies: capacity = host RAM budget. `cpu_streaming` fell to the
+                    # summing branch below and judged a HOST cache against the GPUs' capacity. KV cache lives
                     # in host RAM alongside weights and activations.
                     # Through `_host_budget_mb`: the free reading rounded DOWN onto the
                     # commercial ladder, honouring NBX_PRISM_BUDGET_MB. NOT a fraction of
@@ -1181,16 +1268,35 @@ class PrismSolver:
                         # will fail clean if RAM truly insufficient).
                         total_capacity = 2**62
                 elif strat_name in ("single_gpu", "single_gpu_lifecycle"):
-                    # Single GPU: capacity = largest GPU only, minus the same
-                    # driver/library overhead reserve the acceptance gates
-                    # subtract (PRISM_DEFAULTS["oom_reserve_mb"]) — the KV
-                    # budget must not be sized into the reserve the strategy
-                    # gate just refused to plan into.
+                    # Single GPU: the largest device's RUNG (`_effective_capacity_mb`, what the
+                    # strategy was accepted against), less the driver/library overhead reserve
+                    # (PRISM_DEFAULTS["oom_reserve_mb"], 3 GiB measured over a 13 GiB live set).
+                    # The reserve is applied HERE ONLY: the acceptance gates no longer subtract it
+                    # (this comment claimed they did), and in serve mode the cache takes every byte
+                    # of `remaining`, so this is where an unreserved budget would bite. It read the
+                    # raw `capacity_mb`, which on a shared pool is above the rung.
                     total_capacity = int(
-                        max(0.0, max(d.capacity_mb for d in strat_devices)
+                        max(0.0, max(self._effective_capacity_mb(d) for d in strat_devices)
                             - self.oom_reserve_mb) * 1024 * 1024)
+                elif strat_name == "layer_streaming":
+                    # The figure its segments were cut against: the usable part of the TARGET's
+                    # rung (`_usable_mb`), not the sum of every device's raw capacity. Judged
+                    # against the sum, a streamed LLM's KV cache was sized from memory the rung
+                    # does not grant — measured on the Mac's profile, serve mode:
+                    #   DeepSeek-Coder-V2-Lite  segments+resident 13 598.8 + KV 3 846.4 = 17 445 MB
+                    #   Qwen3-Coder-30B-A3B     segments+resident 11 966.3 + KV 8 394.4 = 20 361 MB
+                    # against a 16 384 MB rung, 15 073 usable, 17 277 capacity.
+                    total_capacity = int(self._usable_mb(strat_devices[0]) * 1024 * 1024)
                 else:
-                    total_capacity = sum(int(d.capacity_mb * 1024 * 1024) for d in strat_devices)
+                    # Every other GPU strategy: the RUNGS of its devices, not their raw capacity —
+                    # the raw figure ignores both the ladder and memory another process holds on a
+                    # shared card. OPEN DEFECT OF MAIN, narrowed here, not closed: this sums every
+                    # device the strategy returned, while the cache lives beside the LM on its own
+                    # card(s). Failure shape: serve mode, a multi-card lazy_sequential /
+                    # pipeline_parallel / component_placement plan — the cache is sized from memory
+                    # on cards other than the LM's, and the LM's own card is over-committed.
+                    total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
+                                         for d in strat_devices)
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
@@ -1250,33 +1356,28 @@ class PrismSolver:
                     # zero3:cuda:0 was "over capacity" on a 32GB card → the
                     # KV check failed → the cascade fell through to
                     # cpu_execution on a GPU node).
-                    total_allocated = 0
-                    for _comp_name, _m in component_memory.items():
-                        _alloc = strat_allocs.get(_comp_name)
-                        _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        _part = (getattr(self, "_layer_stream_partitions", {}) or {}).get(_comp_name) \
-                            if strat_name == "layer_streaming" else None
-                        if _part is not None:
-                            # It holds ONE segment at a time. The number the
-                            # partitioner announced is the number the executor
-                            # holds, which is the whole point of this rung.
-                            total_allocated += _part.peak_resident_bytes
-                        elif (isinstance(_dev, str) and _dev.startswith("zero3:")
-                                and not _device_is_unified(_dev, profile)):
-                            total_allocated += _m.activation_bytes + _m.overhead_bytes
-                        else:
-                            # Weights count. On a UNIFIED device this is the
-                            # zero3 branch too: "offload to host pinned
-                            # memory" moves the bytes to the same pool they
-                            # already occupy, so it frees nothing and the
-                            # budget must still see them.
-                            total_allocated += _m.total_bytes
+                    total_allocated = self._resident_bytes_for_kv_check(
+                        strat_name, strat_allocs, component_memory, profile, kv_already_counted)
 
-                # Remove KV cache double-count (already in LM activation_bytes)
-                total_allocated = max(total_allocated - kv_already_counted, 0)
+
+                if strat_name in ("zero3", "single_gpu", "single_gpu_lifecycle"):
+                    # main's arithmetic, unchanged except that nothing is subtracted when no LM is
+                    # named (the estimate was then added to no component). OPEN, not fixed here:
+                    # where the figure above is a MAX (single_gpu cold `max(total)`, hot `max(act)`,
+                    # lifecycle `max(transient)`) the MAX can be ANOTHER component's and the
+                    # subtraction then comes off the wrong one — the defect
+                    # `_resident_bytes_for_kv_check` fixes for every other strategy.
+                    if self._lm_component_name is not None:
+                        total_allocated = max(total_allocated - kv_already_counted, 0)
+                elif strat_name == "layer_streaming":
+                    # The graph constants the segment budget reserved, resident beside every
+                    # segment (constants of the streamed components).
+                    total_allocated += int(self._layer_stream_constant_bytes)
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
-                    kv_plan = self._compute_kv_cache_plan(container, target_dtype, remaining)
+                    # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
+                    # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
+                    kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining)
                 except RuntimeError as exc:
                     # Strategy rejected: KV cache doesn't fit — said in the plan
                     self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}"))
@@ -2024,6 +2125,7 @@ class PrismSolver:
 
         # Identify which component is the language model (for KV cache budgeting)
         lm_component_name = None
+        self._lm_component_name = None
         if needs_kv_cache:
             lm_config = self._read_lm_config(container)
             if lm_config:
@@ -2035,6 +2137,8 @@ class PrismSolver:
                         lm_component_name = candidate
                         break
 
+        # Kept: the post-scoring KV check must know which component's estimate carries the cache.
+        self._lm_component_name = lm_component_name
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
             # Per-component runtime dtype (the dtype this component ACTUALLY
@@ -2561,14 +2665,6 @@ class PrismSolver:
         if not lm_config:
             return 0
 
-        num_layers = lm_config.get("num_layers", 0)
-        num_heads = lm_config.get("num_heads", 0)
-        hidden_size = lm_config.get("hidden_size", 0)
-        num_kv_heads = lm_config.get("num_kv_heads", num_heads)
-        head_dim = lm_config.get("head_dim", hidden_size // max(num_heads, 1))
-        k_head_dim = lm_config.get("k_head_dim", head_dim)
-        v_head_dim = lm_config.get("v_head_dim", head_dim)
-
         defaults = self._read_defaults(container)
         max_tokens = defaults.get("max_tokens") if defaults else None
         max_pos = lm_config.get("max_position_embeddings", 0)
@@ -2580,9 +2676,41 @@ class PrismSolver:
         # where max_pos=262144 adds ~25GB vs max_tokens=32768 adding ~3.2GB).
         cache_len = (max_tokens + prompt_margin) if max_tokens else max_pos
 
-        dtype_bytes = 2 if target_dtype_str in ("float16", "bfloat16") else 4
-        per_token_bytes = num_layers * num_kv_heads * (k_head_dim + v_head_dim) * dtype_bytes
-        return cache_len * per_token_bytes
+        return cache_len * self._kv_per_token_bytes(lm_config, target_dtype_str)
+
+    @staticmethod
+    def _kv_per_token_bytes(lm_config: Dict[str, Any], dtype_str: str) -> int:
+        """Bytes one cached token costs: layers x kv_heads x (k_head_dim + v_head_dim) x the dtype's
+        width from the engine's dtype table. ONE brick: three copies of this arithmetic disagreed
+        on a zero `num_kv_heads` / `head_dim` and carried a `2 if fp16 else 4` width rule."""
+        num_heads = lm_config.get("num_heads", 0)
+        hidden_size = lm_config.get("hidden_size", 0)
+        num_kv_heads = lm_config.get("num_kv_heads", 0) or num_heads
+        head_dim = lm_config.get("head_dim", 0) or (hidden_size // max(num_heads, 1))
+        k_head_dim = lm_config.get("k_head_dim", head_dim)
+        v_head_dim = lm_config.get("v_head_dim", head_dim)
+        width = get_dtype_bytes()[dtype_str]          # an unknown dtype is a KeyError, never a guess
+        return lm_config.get("num_layers", 0) * num_kv_heads * (k_head_dim + v_head_dim) * width
+
+    def _kv_min_tokens(self, container) -> int:
+        """The fewest cache tokens a plan is accepted with — `_compute_kv_cache_plan` refuses
+        below it. Serve: two full turns (2 x max_tokens + margin); run: one (max_tokens + margin);
+        64 when the container declares no max_tokens. One authority, because `_try_layer_streaming`
+        must reserve at least this much beside its segments or the plan it cuts is refused (or,
+        judged against a looser capacity, overruns the device)."""
+        defaults = self._read_defaults(container)
+        max_tokens = (defaults.get("max_tokens") if defaults else None) or 0
+        prompt_margin = (defaults.get("prompt_margin", 128) if defaults else 128)
+        if not max_tokens:
+            return 64
+        return max_tokens * (2 if self._serve_requested else 1) + prompt_margin
+
+    def _kv_min_bytes(self, container, dtype_str: str) -> int:
+        """`_kv_min_tokens` in bytes, at the per-token cost `_compute_kv_cache_plan` uses."""
+        lm_config = self._read_lm_config(container)
+        if not lm_config:
+            return 0
+        return self._kv_min_tokens(container) * self._kv_per_token_bytes(lm_config, dtype_str)
 
     def _compute_kv_cache_plan(
         self, container, target_dtype: str, remaining_vram_bytes: int
@@ -2612,8 +2740,7 @@ class PrismSolver:
         v_head_dim_val: int = lm_config.get("v_head_dim", head_dim)
         max_pos: int = lm_config.get("max_position_embeddings") or 0
 
-        dtype_bytes = 2 if target_dtype in ("float16", "bfloat16") else 4
-        per_token_bytes: int = num_layers * num_kv_heads * (k_head_dim + v_head_dim_val) * dtype_bytes
+        per_token_bytes: int = self._kv_per_token_bytes(lm_config, target_dtype)
 
         # Prism decides max_cache_len from remaining VRAM budget
         defaults = self._read_defaults(container)
@@ -2624,12 +2751,10 @@ class PrismSolver:
         if getattr(self, '_serve_mode', False):
             # Serve mode: target full context window, VRAM is the constraint
             upper_bound = max_pos
-            # Minimum: at least 2 full turns must fit
-            min_tokens = max_tokens * 2 + prompt_margin if max_tokens else 64
         else:
             # Run mode: single-shot, only need max_tokens + margin
             upper_bound = (max_tokens + prompt_margin) if max_tokens else max_pos
-            min_tokens = (max_tokens + prompt_margin) if max_tokens else 64
+        min_tokens = self._kv_min_tokens(container)
 
         max_cache_len = min(max_affordable, upper_bound)
 
@@ -2956,14 +3081,11 @@ class PrismSolver:
         overhead_pct = 0.0 if needs_kv else 0.05
         total_required += total_required * overhead_pct
 
-        # P-PRISM-NEVER-REFUSE v2 B.4: blanket driver/library overhead
-        # reserve (single constant PRISM_DEFAULTS["oom_reserve_mb"] — see
-        # config/system.py for the empirical justification). Prevents
-        # `single_gpu` from accepting plans that fit the activation
-        # estimator but then runtime-OOM at the conv::62 boundary of Sana
-        # 4Kpx on 1× V100 16 GiB. The cascade can then fall through to
-        # `lazy_sequential` (which routes VAE to CPU via Strategy 4
-        # of `_place_component`) or `cpu_execution`.
+        # Held against the RUNG (`_effective_capacity_mb`). This gate subtracted the flat
+        # `oom_reserve_mb` until the 2026-09-21 memory law, which it was written to answer: Sana 4Kpx
+        # on 1x V100 16 GiB runtime-OOM'd at conv::62 on a plan that fit the estimator. The law
+        # removed the reserve from acceptance (a dedicated card is used whole less its own
+        # context). OPEN, the owner's call: nothing re-measured that Sana case under the law.
         effective_capacity = self._effective_capacity_mb(largest)
         if total_required > effective_capacity:
             return None
@@ -3074,8 +3196,12 @@ class PrismSolver:
 
         peak = persistent_mb + max_transient
 
-        # Same driver/library overhead reserve as `_try_single_gpu` and
-        # `_place_component` Strategy 1 (PRISM_DEFAULTS["oom_reserve_mb"]).
+        # HISTORY — the reserve this records is no longer applied here: since the 2026-09-21
+        # memory law this gate holds the peak against the rung (`_effective_capacity_mb`), with no
+        # `oom_reserve_mb`. The case below is the one that motivated the reserve; measured
+        # 2026-09-24 it no longer reaches this gate (DeepSeek-Coder-V2-Lite's component is now
+        # 32 392.9 MB, over a V100-32GB's 31 129.6 rung, so it plans lazy_sequential), but a
+        # resident set in [rung - 3 GiB, rung] is accepted eager unguarded — the owner's call.
         # This gate used to compare peak against the RAW 0.95-margined
         # capacity — the only single-GPU acceptance without the reserve —
         # so a model whose resident set lands in the [capacity − reserve,
@@ -3156,7 +3282,7 @@ class PrismSolver:
         if not needs_fgp:
             return None
 
-        fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
         # fgp_target is applied as per-block inflation, not capacity reduction.
         packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
@@ -3190,13 +3316,7 @@ class PrismSolver:
             if not blocks['blocks']:
                 return None
 
-            # Get model dtype
-            model_dtype = None
-            for comp in container.get_neural_components():
-                if comp.name == comp_name:
-                    model_dtype = comp.get_dominant_dtype()
-                    break
-            model_dtype = model_dtype or "bfloat16"
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
             n_blocks = len(blocks['blocks'])
             act_per_block = mem.activation_mb / n_blocks
@@ -3312,7 +3432,7 @@ class PrismSolver:
         if not needs_split:
             return None
 
-        fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
         # fgp_target is applied as per-block inflation, not capacity reduction.
         packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
@@ -3333,12 +3453,7 @@ class PrismSolver:
             if not blocks['blocks']:
                 return None
 
-            model_dtype = None
-            for comp in container.get_neural_components():
-                if comp.name == comp_name:
-                    model_dtype = comp.get_dominant_dtype()
-                    break
-            model_dtype = model_dtype or "bfloat16"
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
             n_blocks = len(blocks['blocks'])
             act_per_block = mem.activation_mb / n_blocks
@@ -3493,13 +3608,7 @@ class PrismSolver:
             if not available:
                 return None
 
-            # Get model dtype for cost multiplier (bf16→fp32 = 2x on V100)
-            model_dtype = None
-            for comp in container.get_neural_components():
-                if comp.name == comp_name:
-                    model_dtype = comp.get_dominant_dtype()
-                    break
-            model_dtype = model_dtype or "bfloat16"
+            model_dtype = self._get_component_dtype(container, comp_name)   # refuses an undeclared name
 
             # Determine if attention dominates (for smarter sharding)
             attn_per_block_mb = mem.attention_per_block_bytes / (1024 * 1024) if mem.attention_dominates else 0
@@ -3690,6 +3799,18 @@ class PrismSolver:
                 out_spatial = osh[-2]
                 out_spatial_w = osh[-1]
                 break
+        # HOCINE'S TILING STANDARD (2026-09-21): the tile is derived from the RUNG by a fixed
+        # rule, never from a raw reading — a dedicated card's nominal rung, a shared pool's free
+        # rung (memory_budget.tile_rung_mb) — so the tile is a pure function of (component, rung)
+        # and a census can enumerate every rung up to a card's capacity. The tile budget is 0.40
+        # OF THE RUNG (the CogVideoX-measured transient allowance documented at the call site).
+        #
+        # Derived HERE, before either branch reads it. It stood below the encoder branch, which
+        # passed `budget_bytes` down before it existed: every 5-D encoder that reached this point
+        # raised UnboundLocalError (test_the_encoder_tiling_path_is_reachable.py).
+        rung_mb = int(tile_rung_mb)
+        budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
+
         if out_spatial is not None and out_spatial < trace_size:
             # D2-ENCODER: the guard is lifted ONLY for the class the engine
             # can tile exactly — 5D encoders whose temporal map is
@@ -3701,7 +3822,7 @@ class PrismSolver:
             # and causal maps cannot be tiled mid-clip (identical doctrine
             # to the decode-side AFFINE decline).
             return self._encode_component_tiling(
-                graph, profile_j, mem, budget_bytes,
+                graph, profile_j, mem, budget_bytes, rung_mb,
                 trace_size, out_spatial)
 
         # Scale factor: upscale (upscalers) or VAE compression ratio.
@@ -3745,18 +3866,8 @@ class PrismSolver:
             return None
 
         full_act = mem.activation_bytes
-        # THE LADDER: the free reading rounds DOWN onto a whole-gigabyte rung
-        # and the tile budget is 0.40 OF THE RUNG (0.40 is the CogVideoX-
-        # measured transient allowance documented at the call site). Sizing
-        # from the rung is what makes the tile a pure function of the request;
-        # the LIVE reading keeps the feasibility check at the call site — the
-        # rung sizes, the truth validates.
-        # HOCINE'S TILING STANDARD (2026-09-21): the tile is derived from the RUNG by a fixed
-        # rule, never from a raw reading — a dedicated card's nominal rung, a shared pool's free
-        # rung (memory_budget.tile_rung_mb) — so the tile is a pure function of (component, rung)
-        # and a census can enumerate every rung up to a card's capacity.
-        rung_mb = int(tile_rung_mb)
-        budget_bytes = int(rung_mb * 0.40 * 1024 * 1024)
+        # The rung sizes the tile (`rung_mb`, `budget_bytes`, derived above); the LIVE reading
+        # keeps the feasibility check at the call site — the rung sizes, the truth validates.
         import os as _os_diag
         if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
             print(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
@@ -3903,7 +4014,7 @@ class PrismSolver:
 
     def _encode_component_tiling(
         self, graph: Dict, profile_j: Dict, mem: ComponentMemory,
-        budget_bytes: int, trace_size: int, out_spatial: int,
+        budget_bytes: int, rung_mb: int, trace_size: int, out_spatial: int,
     ) -> Optional[Dict[str, Any]]:
         """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
         encoder: pixel video -> compressed latent) that overflows the budget
@@ -4128,19 +4239,14 @@ class PrismSolver:
         largest = max(devices, key=lambda d: d.capacity_mb)
         cost_mult = largest.get_cost_multiplier(model_dtype)
         real_weight = mem.weight_mb * cost_mult
-        required = real_weight + mem.activation_mb
+        required = self._whole_component_mb(container, comp_name, mem, largest)
+        usable = self._usable_mb(largest)
 
-        # Strategy 1: single_gpu — component fits on largest GPU.
-        # Capacity discounted by a fixed driver/library overhead reserve
-        # (cuDNN/cuBLAS workspaces, Triton kernel cache, autotune state,
-        # PyTorch caching allocator fragmentation). Single constant
-        # PRISM_DEFAULTS["oom_reserve_mb"] — see config/system.py for the
-        # empirical derivation. Applying the reserve at planning time
-        # prevents per-component placements that fit the estimator but
-        # OOM at runtime, which then triggers Strategy 4 (CPU placement)
-        # below. P-PRISM-NEVER-REFUSE v2 B.4 — 2026-05-12.
-        effective_capacity = self._effective_capacity_mb(largest)
-        if required <= effective_capacity * 0.92:
+        # Strategy 1: single_gpu — the component fits whole on the largest GPU: its whole cost
+        # against the usable part of the rung (`_usable_mb`, the whole-component fraction of
+        # PRISM_DEFAULTS). No flat `oom_reserve_mb` is subtracted here — this comment said so
+        # until 2026-09-24 and the code never did; the fraction is the only headroom.
+        if required <= usable:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
 
@@ -4161,7 +4267,7 @@ class PrismSolver:
         # it then dies in zero3's CUDA machinery before an op runs
         # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
         # Selection consults the same device door the budget does.
-        if (mem.activation_mb <= effective_capacity * 0.92
+        if (mem.activation_mb <= usable
                 and not _device_is_unified(largest.device_string, profile)):
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
@@ -4190,7 +4296,7 @@ class PrismSolver:
             container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
         if tiling is not None:
             tiled_total_mb = real_weight + tiling["tiled_activation_bytes"] / (1024 * 1024)
-            if tiled_total_mb <= effective_capacity * 0.92:
+            if tiled_total_mb <= usable:
                 self._component_tiling[comp_name] = tiling
                 shard_map = {s: largest.device_string
                              for s in shard_sizes.get(comp_name, {})}
@@ -4259,7 +4365,7 @@ class PrismSolver:
         if not blocks['blocks']:
             return None
 
-        fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        fgp_target = PRISM_DEFAULTS["fgp_utilization_target"]
         block_devices = [
             DeviceState(
                 device_string=d.device_string,
@@ -4378,11 +4484,19 @@ class PrismSolver:
         return shard_map
 
     def _get_component_dtype(self, container: "NBXContainer", comp_name: str) -> str:
-        """Get the dominant dtype for a component."""
+        """The dominant dtype of a component the container declares.
+
+        A name the container does not declare is REFUSED. It returned "bfloat16" here — a dtype
+        invented for a component nobody described, which then set the device's cost multiplier
+        for every whole-component decision (`_whole_component_mb`) on a guess."""
+        names = []
         for comp in container.get_neural_components():
             if comp.name == comp_name:
                 return comp.get_dominant_dtype()
-        return "bfloat16"
+            names.append(comp.name)
+        raise RuntimeError(
+            f"ZERO FALLBACK: no neural component named {comp_name!r} in this container "
+            f"(it declares {names}); its dtype cannot be read and will not be invented")
 
     # =========================================================================
     # SCORE-BASED STRATEGY EVALUATION
@@ -4596,23 +4710,19 @@ class PrismSolver:
         bin_peaks = [0.0] * n_gpus
 
         for comp_name, mem in sorted_comps:
-            # Get model dtype for cost multiplier
-            model_dtype = None
-            for comp in container.get_neural_components():
-                if comp.name == comp_name:
-                    model_dtype = comp.get_dominant_dtype()
-                    break
-            model_dtype = model_dtype or "bfloat16"
-
-            cost = fresh[0].get_cost_multiplier(model_dtype)
-            required = mem.weight_mb * cost + mem.activation_mb
-
-            # Find best GPU where peak stays within capacity (best-fit)
+            # Find best GPU where peak stays within capacity (best-fit). The component's whole
+            # cost and the card's usable part of its rung are the same two figures
+            # `_place_component` and `_try_layer_streaming` read (`_whole_component_mb`,
+            # `_usable_mb`): this site held `capacity_mb * 0.92` — a second literal of the same
+            # fraction, on the raw capacity instead of the rung — and a `model_dtype or
+            # "bfloat16"` default for a component the container does not name.
             best_gpu = None
             best_headroom = float('inf')
+            required = 0.0
             for i in range(n_gpus):
+                required = self._whole_component_mb(container, comp_name, mem, fresh[i])
                 new_peak = max(bin_peaks[i], required)
-                capacity = fresh[i].capacity_mb * 0.92
+                capacity = self._usable_mb(fresh[i])
                 if new_peak <= capacity:
                     headroom = capacity - new_peak
                     if headroom < best_headroom:
@@ -4623,7 +4733,8 @@ class PrismSolver:
                 return None
 
             bins[best_gpu].append((comp_name, mem))
-            bin_peaks[best_gpu] = max(bin_peaks[best_gpu], required)
+            bin_peaks[best_gpu] = max(bin_peaks[best_gpu],
+                                      self._whole_component_mb(container, comp_name, mem, fresh[best_gpu]))
 
         # Build allocations
         allocations = {}
@@ -4667,8 +4778,10 @@ class PrismSolver:
                 return None
 
         for comp_name, mem in sorted_comps:
-            # Zero3: only activations need GPU memory
-            if mem.activation_mb > largest.capacity_mb * 0.92:
+            # Zero3: only activations need GPU memory — against the same usable figure
+            # `_place_component`'s zero3 rung reads (it held `capacity_mb * 0.92`, a second
+            # literal of the fraction, on the raw capacity instead of the rung).
+            if mem.activation_mb > self._usable_mb(largest):
                 return None
 
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
@@ -4881,11 +4994,13 @@ class PrismSolver:
         # Where this moves a plan: wherever the rung is below the capacity — a unified device,
         # a discrete card another process holds or a display drives, a card whose sharing
         # could not be read, and any device behind the NBX_PRISM_BUDGET_MB door (uncapped by
-        # design). A measured dedicated card is budgeted at min(driver total less its own
-        # context, capacity), which is the capacity while that context is under
-        # driver_total - capacity; measured on this rack's V100-16GB (306 MB context, budget
-        # 15 564.8 == capacity 15 564.8) the segments cut for DeepSeek-Coder-V2-Lite are
-        # identical before and after, in both modes.
+        # design). Moving from the capacity to the RUNG moved nothing on a measured dedicated card
+        # (budget min(driver total less its own context, capacity) == capacity on this rack's
+        # V100-16GB, 306 MB context: DeepSeek-Coder-V2-Lite's cut identical, both modes).
+        # Moving from the rung to its USABLE part (below) moves segments on EVERY device, dedicated
+        # included — DeepSeek on that card: still 3 segments, boundaries moved. That is the
+        # intended cost of holding a streamed peak to the whole-component standard; the plans
+        # it moved across the cache are in the commit that made it.
         #
         # KNOWN GAP, not closed here: a reading UNDER the ladder's lowest rung leaves
         # `budget_mb` at 0, which `DeviceState` also uses for "no reading was taken", and
@@ -4895,7 +5010,15 @@ class PrismSolver:
         # too, the plan refuse (measured: TinyLlama, Mac profile, 3 000 MB free — main plans
         # lazy_sequential at 2 850, the closed sentinel refuses), which collides with "Prism
         # never refuses"; that trade is the owner's call.
-        budget_bytes = int(self._effective_capacity_mb(target) * 1024 * 1024)
+        #
+        # And the figure is the rung's USABLE part (`_usable_mb`), the same one `_place_component`
+        # holds a whole component to. Streaming against the rung itself while placing whole against
+        # 0.92 x rung left a band where a component was too big to place whole and too small to
+        # stream (PixArt's text_encoder at a 9 700 MB rung went to cpu_streaming on the Mac's
+        # profile); and cutting segments against the rung would hold a streamed peak to a looser
+        # standard than a whole component, and would fit such a component in ONE segment, which
+        # this rung then declines. One figure for both decisions closes the band.
+        budget_bytes = int(self._usable_mb(target) * 1024 * 1024)
         if budget_bytes <= 0:
             return None
 
@@ -4923,7 +5046,7 @@ class PrismSolver:
         # against 950 MB of capacity. Same defect as sizing segments without
         # reserving the activations, one level up.
         streamed = {name for name, mem in sorted_comps
-                    if mem.total_bytes > budget_bytes}
+                    if self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
         resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
                               if name not in streamed)
         # And the graph's CONSTANTS, which are resident beside every segment and
@@ -4961,8 +5084,27 @@ class PrismSolver:
         # segments are cut. A model with no cache estimates zero and nothing changes.
         kv_bytes = 0
         if getattr(self, "_needs_kv_cache", False):
-            kv_bytes = self._estimate_kv_cache_bytes(
-                container, getattr(self, "_target_dtype_str", "float16"))
+            # The dtype `solve` decided (`_target_dtype_str`), the one the post-scoring KV check
+            # sizes the cache with. It read `getattr(..., "float16")`: a dtype invented when the
+            # decision was absent, sizing the reserve at 2 bytes whatever the plan ran at.
+            if not hasattr(self, "_target_dtype_str"):
+                raise RuntimeError(
+                    "ZERO FALLBACK: layer_streaming must reserve the KV cache at the dtype the "
+                    "solver decided, and no dtype was decided (_target_dtype_str unset); refusing "
+                    "rather than sizing it at an invented one")
+            # At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve
+            # mode two turns, twice the run estimate. Reserving only the run estimate cut segments
+            # that left too little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's
+            # profile, serve, was then refused (or, judged against the summed capacity, planned
+            # at 20 361 MB on a 17 277 MB device).
+            _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+            _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
+            # Reserved once. A WHOLE LM sits in `resident_beside` with the estimate already inside
+            # its total, so only what the plan's minimum needs beyond it is added; a streamed LM,
+            # or no named LM (the estimate is then in no component), reserves the whole need.
+            _lm = self._lm_component_name
+            kv_bytes = (max(0, _kv_need - _kv_est) if (_lm is not None and _lm not in streamed)
+                        else _kv_need)
         segment_budget = budget_bytes - resident_beside - constant_bytes - kv_bytes
         if segment_budget <= 0:
             return None
@@ -5023,6 +5165,7 @@ class PrismSolver:
         # What each streamed component actually holds, recorded so the
         # accounting sees the same number the executor will.
         self._layer_stream_partitions = partitions
+        self._layer_stream_constant_bytes = constant_bytes
         return allocations, devices
 
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
