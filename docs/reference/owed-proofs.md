@@ -4227,3 +4227,39 @@ compiled**, and the fixes here bring mode 2 up to a protection mode 1 had all al
 **Owed to the rack, added to the 2048 px proof:** run it in `--compiled` too. PixArt-XL-1024
 cannot run mode 1 on this machine at any size — a 9 630 MB component under torch against what
 is free — so the mode-1 leg of R30 is not refusable here, it is unreachable.
+
+### 2026-09-24 — the rung ladder's 8192→11264 gap turns a fit into a refusal
+
+Third attempt at a judged artefact above the traced size, this one at **2048x1024** (tokens
+8192, exactly 2x the traced 4096, so it fires the defect, at half the VAE of 2048x2048). It
+refused at plan time — cleanly, with numbers, which makes it the most useful of the three:
+
+    mps:0: unified memory — planning against 10638 MB actually free (machine: 11198 of 24576)
+    Every strategy was tried ... ALL FAILED
+    The last rung needs only the largest single component to fit, and it does not:
+      largest component: text_encoder at 9630MB
+    Total required: 14420MB
+
+**9 630 < 10 638, so the raw memory was there.** The refusal turns on the ladder:
+
+    rung_down_mb(10638) = 8192   ->  9630 MB component REFUSED
+    rung_down_mb(11671) = 11264  ->  fits
+
+11 671 MB is what the SAME model read earlier in this session, when it planned and ran its
+transformer to completion. The ladder is `[4096, 6144, 8192, 11264, 12288, 16384, ...]` and the
+**8192 -> 11264 step is 3 072 MB**, the widest in the low range. Any reading in that span is
+quantised to 8192, so up to 3 GB of genuinely usable memory is discarded, and a 9 630 MB
+component that fits the reading does not fit the rung.
+
+The quantisation itself is deliberate and the reason is good — `rung_down_mb`'s docstring says
+"never a value off the ladder", because a plan that is a function of a volatile reading is not
+reproducible, and `plan_advice.py` records that reading moving 12 598 -> 15 248 MB on an idle
+machine, a 21 % swing. So this is **not a bug report**; it is the cost of that choice, measured,
+at the one place it is largest. Whether the low range wants an intermediate rung (9 216?) is
+your call, and the measurement for it is that this model runs at 11 264 and is refused at 8 192
+with 10 638 MB free.
+
+**Consequence for the artefact, stated plainly:** it is obtainable on this machine, not blocked
+by the engine. It needs the reading above 11 264 MB. It was 11 671 earlier today and is 11 198
+now, because this session's own renders and sweeps left ~4 GB in swap. Freeing that is Hocine's
+call — the Windows VM's state is his and his alone, and a reboot is not mine to ask for.
