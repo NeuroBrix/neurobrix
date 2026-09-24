@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-103 entries, 98 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 98 carry a site. Two
+107 entries, 101 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 102 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3125,3 +3125,98 @@ proofs above come first.
 **The lesson, in one line.** An instrument's unit test proves its predicate. Only seeing the
 pass record something proves its reach, and a mode-scoped module is exactly where the two come
 apart.
+
+---
+
+### 99 — a Prism plan depends on live host memory, so any two arms taken at different times are confounded
+
+Chasing a gate hole, I ran two solver states over 177 plans each and found five that differed —
+`GLM-4.1V-9B-Thinking` moving to `single_gpu`, four PixArt containers moving from
+`single_gpu_lifecycle` to `component_placement_lazy`. It read as the discriminating case the
+gate needed.
+
+**It was not.** The same call that recorded `single_gpu_lifecycle` returns `single_gpu` now,
+with `solver.py` byte-identical to the file that produced the first reading, four consecutive
+runs all agreeing. Nothing in the code changed. What changed is the RACK:
+
+* the correct arm ran DURING a 19-hour mochi render holding ~19 GB of pinned host memory for
+  its zero3 partition, plus that render's page cache;
+* the injection arm ran partly after it finished, with 243 GB of 251 free.
+
+`_device_reading` bounds a unified reading by `profile.cpu.ram_mb` **and** by what the host
+actually has. So the plan is a function of the machine's momentary state, and two arms taken at
+different times measure that state as much as the change under test.
+
+**What this gate would do if the code were wrong**: report five differences with complete
+confidence, which is exactly what it did. The arms were internally reproducible — four identical
+plans in a row — so nothing looked unstable. Reproducibility WITHIN a condition says nothing
+about comparability ACROSS conditions, and that is the trap.
+
+**Why it is worse than an ordinary confound.** This project already holds that nothing runs
+beside a gate, and I applied that to timing measurements while treating a PLANNER as pure. A
+plan looks like arithmetic over a manifest; it is arithmetic over a manifest and a reading of
+the host. Every Prism comparison this session took while something else ran carries the same
+question — including the 177-plan refusal census, which ran while the render did.
+
+**Repair.** Arms alternate INSIDE one process, with two reps each, and a difference counts only
+when both reps of both arms agree. A plan census is a measurement with conditions, and its
+conditions get stated like any other.
+
+**The lesson, in one line.** Reproducible is not comparable: a measurement that repeats
+perfectly under one set of conditions tells you nothing about a measurement taken under another.
+
+---
+
+### 100 — a ladder gate read the ladder's configuration, while the engine's consumer rebuilt it into something else
+
+`tests/unit/prism/test_the_ladder_is_spaced_at_the_measured_noise.py` at `51e24662`, three
+cells — lines 49, 105 and 115 — read `PRISM_DEFAULTS["memory_ladder_gb"]`: the ladder as
+DECLARED. The engine never plans from that list. It plans from `memory_budget.memory_ladder_mb()`,
+which converted each rung with `int(g) * 1024`, TRUNCATING every derived rung to a whole GB.
+Rungs 4.0, 4.102, 4.207, 4.314 … all became 4, and the geometric ladder the change existed to
+introduce collapsed back to the integers 4, 5, 6, 7 — a first step of 25 %, ten times the noise
+the ladder was derived from, in exactly the low range the work was about.
+
+**What the gate did while the code was wrong**: 10 of 11 green. The three cells computed their
+spacing, their recovery and their granite-speech rung from a list the engine discards, so they
+measured a ladder that does not exist at runtime and certified it. The eleventh cell went
+through `memory_ladder_mb()` and was the only one that could see the collapse.
+
+**Why it is this register's class.** Configuration is the RECIPE; what the consumer builds from
+it is the DISH. A gate that tastes the recipe cannot tell whether the kitchen followed it, and
+the one step between them — a conversion, a rounding, a set — is precisely where a defect
+lives when the configuration itself is right. Both halves were individually correct-looking:
+the list was right, the conversion was a one-liner nobody reread.
+
+**Repair.** Every cell that asserts a property of the ladder reads it through the function the
+engine calls (`memory_ladder_mb`, `rung_down_mb`), never through `PRISM_DEFAULTS`. The truncation
+itself is fixed (`int(round(float(g) * 1024))`) on the same branch.
+
+**The lesson, in one line.** Test the value the engine consumes, not the value it was given: the
+conversion between the two is code, and code is where the defect is.
+
+---
+
+### 101 — a streaming gate asserted the strategy's NAME, and was green on a plan whose segments were cut against the wrong figure
+
+`tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py` at `51e24662`
+asserted `strategy == "layer_streaming"` for a component over the rung. The hunk it gated made
+`_try_layer_streaming` CLASSIFY a component as streamed against the rung, but still CUT its
+segments against the raw capacity (and fell back to the capacity with `or budget_bytes` when the
+rung read 0). Under the Mac's own reading — PixArt, `text_encoder` 9 630 MB, rung 8 192,
+capacity 10 638 — that plan names the right strategy, cuts 4 segments sized for 10 638, and
+announces a peak above the rung it is budgeted at: a plan that is again a function of the live
+reading, which is the one thing rounding the reading down exists to prevent.
+
+**What the gate did while the code was wrong**: green. A strategy name cannot say where the
+segments were cut. The same file also FOUND its scenario on the live machine instead of
+constructing it, so when the ladder was re-spaced its three cells went red for a reason that had
+nothing to do with streaming — red and green both meaningless, from one design.
+
+**Repair.** The gate now pins the machine (injected host reading, rung imposed through the
+`NBX_PRISM_BUDGET_MB` door), proves its scenario in a precondition cell from the solver's own
+component estimate, and asserts the INVARIANT — streamed peak plus what stays resident beside it
+≤ the rung. Seen failing: 6 red on main's solver, 3 red (the invariant cell alone) on the
+`51e24662` hunk, 11 green on the fix, where PixArt cuts 7 segments peaking at 8 105.6 MB.
+
+**The lesson, in one line.** Assert the property the strategy promises, not the label it wears.

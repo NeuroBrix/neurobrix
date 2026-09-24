@@ -88,6 +88,39 @@ So the shapes that make the test a test:
 why each dimension has the value it has, in the test, next to the value. A shape
 with no stated reason is a shape nobody chose.
 
+### The shape a MODEL runs at: runtime must differ from trace
+
+The same blindness has a second form, and it is the default on every machine
+that runs a model the way its container was traced.
+
+`triton/promotion.py:506`, `_spatial_promotion_pass`, rebinds a diffusion
+graph's `height`/`width` symbols from the trace values to the runtime ones. Its
+own docstring records what that means for a test:
+
+> For Sana 1024 / PixArt 1024 the trace size happens to equal the runtime size,
+> so missing rebind is a **silent no-op**.
+
+So a run at the container's own default resolution exercises the pass and
+verifies nothing: every substitution it would make is the identity. The Mac
+found six shape defects in that pass — **none of them could go red on this rack**,
+because this rack runs every model at its traced size. A CUDA green there proves
+non-regression and nothing about the class.
+
+**So a trunk change that touches shape resolution gets a second arm, and the
+door is `NBX_PRISM_BUDGET_MB`.** Imposing a rung below the model's natural one
+forces a placement that tiles or streams, the executed shape stops equalling the
+traced shape, and the substitution the pass exists to make actually happens. The
+arm costs one environment variable and it is the difference between testing a
+pass and watching it decline to act.
+
+The same door answers a second question that has nothing to do with shapes. A
+plan where every strategy holds every component at once cannot distinguish a
+budget rule that takes the MAX of components from one that takes the SUM — both
+give the same answer when only one arrangement is possible. Under an imposed
+rung some strategies hold one component and others hold them all, and the two
+rules separate. A capacity-rule change proved only at the default budget is
+proved against the one case that cannot see it.
+
 ---
 
 ## Third space: the PROSE nothing checks
