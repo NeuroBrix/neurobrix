@@ -56,6 +56,36 @@ dependency anywhere in the Triton path. Integration into `main` is under
 way, one proven piece at a time, each with its own gate on both kinds of
 hardware. Nothing here is claimed as shipped until it is on `main`.
 
+### Two capabilities the Apple census named, queued behind the current chantier
+
+Both come from the 2026-09-22 Apple census (`docs/reference/apple-own-queue-2026-09-24.md`).
+Neither is a bug: each is a capability the house family does not have yet, and the doctrine's
+answer to a missing capability is to EXTEND NBXTensor and the kernel family, never to reach
+back for torch. They wait until the current chantier closes; they are named here so they are
+scheduled rather than remembered.
+
+**C1 — `aten::index_put` with value broadcasting.** Today:
+
+    NotImplementedError: aten::index_put values numel 401408 != idx*tail 2048
+    and not scalar — value broadcasting unwired
+
+The kernel handles a scalar value and a value whose element count matches `idx * tail`; it
+does not handle a value that must BROADCAST across the indexed positions. *Unlocks:*
+`Qwen3-VL-30B-A3B-Thinking` in the Triton modes, and with it the deepstack VLM family, whose
+vision-token scatter is exactly this pattern. It is also the last op standing between that
+model and a census on both machines.
+
+**C2 — the KV-cache path for decode branches.** Today:
+
+    ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session)
+
+A flow whose generation splits into branches reaches decode without a KV wrapper bound to the
+session, and refuses rather than degrade. *Unlocks:* `VibeVoice-1.5B`, and more generally any
+flow whose decode is entered from more than one branch — the refusal is correct today and the
+capability is what removes it. Related to the `triton/flow` stage work that still imports from
+`core/flow/stages/` for VibeVoice's DDPM, a documented temporary violation of R33 that this
+chantier is the natural moment to close.
+
 ## Phase 4 — Optimization: benchmarks first, then the kill
 
 **Method before work.** A reproducible benchmark harness on well-known

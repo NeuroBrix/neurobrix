@@ -742,6 +742,37 @@ def cmd_run(args):
     # 6. Execute (engine resolved before the container gates, above)
     print("\n[Execute] Running pipeline...")
     print(f"   Engine: {execution_mode.upper()}")
+
+    # ---- the census shadow's door for mode 1 (2026-09-24) ------------------
+    # A shadow enumerates the keys a plan demands and EXECUTES NOTHING. The
+    # Triton branch is held to that by `metal_device.py`, which refuses to open
+    # the Metal runtime under NBX_CENSUS=1 and says so. Mode 1 goes through
+    # torch/MPS and never reaches that door, so it ran on — and because
+    # `_prepare_devices` deliberately skips the host-availability clamp for a
+    # shadow, the plan is ACCEPTED where a real run refuses it, and the engine
+    # went on to LOAD WEIGHTS.
+    #
+    # Those weights are mmap'd safetensors, on this machine over NFS. A page the
+    # filesystem cannot deliver is KERN_MEMORY_ERROR, i.e. SIGBUS: the process
+    # dies with no traceback and every buffered line is lost, so the run reports
+    # ZERO output and reads as a hang. Measured 2026-09-24 on PixArt-XL-1024;
+    # the same command without the shadow refuses cleanly at plan time.
+    #
+    # A door, not a census: the harmful state is made unreachable rather than
+    # measured as absent. Covering mode 1 properly means giving the ATen path
+    # its own pure key-formation walk, which is a chantier, not this guard.
+    if _os_dbg.environ.get("NBX_CENSUS") == "1" and execution_mode == "compiled":
+        raise RuntimeError(
+            "ZERO FALLBACK: the census shadow does not cover --compiled.\n"
+            "  A shadow forms keys from the graph and executes nothing, and the "
+            "ATen path has no pure walk: it would load weights here, which under "
+            "a shadow means a plan accepted above the real budget and, on an "
+            "mmap'd container, a SIGBUS with no traceback and no output.\n"
+            "  Census the Triton modes (`--triton`, `--triton-sequential`), which "
+            "are held to purity by the Metal device door, and run --compiled "
+            "WITHOUT NBX_CENSUS to get a real plan and a real refusal.\n"
+            "  Giving mode 1 its own key-formation walk is owed "
+            "(docs/reference/owed-proofs.md, 2026-09-24).")
     # Data-driven hardware capability surface for Triton kernel wrappers.
     # Set once per process from the resolved PrismProfile.
     #
