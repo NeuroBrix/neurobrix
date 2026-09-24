@@ -3985,3 +3985,36 @@ The first pass over these failures was taken while a PixArt render was loading, 
 reported six moe cells failing for a reason that was not theirs. The quiet re-run separated
 them. **Measuring a test suite is a measurement**, and the quiet-host rule applies to it
 exactly as it applies to a certification sweep.
+
+---
+
+## 2026-09-24 — answered from the rack: a component over the rung now streams on the card (the Mac's PixArt refusal, e904da83)
+
+The Mac's refusal on `apple-shape-defects` (e904da83) — PixArt-XL-2-1024-MS at 2048x1024,
+`text_encoder` 9 630 MB against 10 638 MB read as free, rung 8 192 — was filed as the cost of the
+ladder. It was not only that. `rung_down(10638) = 8192` is the ladder; what refused was
+`_try_layer_streaming`, the one rung that decided what to stream, and cut its segments, against
+the raw CAPACITY (10 638) while every rung above it measures the RUNG (8 192). A component
+landing between the two was served by nothing. The same defect sent granite-speech-3.3-8b to
+`cpu_streaming` under the Mac's profile on this rack.
+
+**Reproduced here** by pinning the Mac's own machine in a cell (host reading 11 198 MB injected,
+rung imposed at 8 192 through the door): main's solver refuses with the same largest component
+(`text_encoder at 9630MB`) and the same device line (`mps:0: 10638MB`). NOT byte for byte: the
+refusal totals **14 598 MB here against 14 420 MB there**, a 178 MB difference in vae/transformer
+that was not chased — `hub-cache-diff.md` records the PixArt pair as CACHE_NEWER, so the two
+machines may not hold the same container. With the fix the plan is
+`layer_streaming`, the text encoder in **7 segments**, peak 3 138.1 MB + 4 967.5 MB resident
+beside them (vae, transformer) = **8 105.6 MB ≤ 8 192**. The intermediate version that cut against
+the capacity gave 4 segments and a peak over the rung. Gate: `tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py`,
+seen failing on main's solver (6 red) and on an intermediate version that streamed against the
+rung but still cut segments against the capacity (3 red, the peak cell).
+
+**Owed back by the Mac** — the rack cannot produce this reading, only simulate it:
+1. The same render that refused: PixArt-XL-2-1024-MS, 2048x1024, with the machine reading
+   between 8 192 and 11 264 MB free. Expect `layer_streaming`, `text_encoder` streamed, and the
+   plan's announced peak ≤ the rung it names.
+2. The artefact judged from outside the engine (R29). A plan is not a render.
+3. Any Apple census whose keys came from a `layer_streaming` plan should be re-read: segments
+   are now cut against the rung, not the capacity, so their boundaries can move where the two
+   differ (a shared pool). On a dedicated card the two coincide and nothing moves.
