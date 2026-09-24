@@ -4360,3 +4360,63 @@ injected reading, the whole 178.3 MB is the transformer, 1 642.8 vs 1 464.5 MB. 
 reads `~/.neurobrix/cache` literally (line 51), so on this Mac, whose catalogue is the mount, all
 18 cells skip. Run against the mount: 16 passed, and 2 failed on `default-ff6008b7`, a profile
 only the rack has.
+
+### 2026-09-24 — the residency claim behind triton-ext #130 does not hold through upstream's API; the lifetime claim does
+
+Measured against PR #126's head `8b45b9aa` (not `42b7c2df`, which is an ancestor of our base
+`b9d5c06`) in a separate venv (served `venv-tritonext`, pin `6904de9`, untouched). Stage 1 is
+the plugin as is; stage 2 adds `6904de9`'s 45 lines. Torch-free cells, upstream API only (no
+NeuroBrix), in `nbx-atelier/campagnes/2026_09_22_apple/scripts/residency_cell_130*.py`.
+
+| arm | 8b45b9aa | +6904de9 | served b9d5c06+6904de9 |
+|---|---|---|---|
+| wrap alive, bound once, captured, read in the NEXT command buffer | correct | correct | correct |
+| same, 64 MiB, last window | correct | correct | correct |
+| same, after 256 wraps allocated and freed | correct | correct | correct |
+| `alloc()` never bound, host `gpu_address()` | — | correct | — |
+| wrap never bound, host `gpu_address()` | refused by upstream (a wrap has no readable address) | refused | — |
+| wrap DROPPED before the read, storage alive | **0/256, wrong, silent** | **wrong, silent** | **36/256, wrong** |
+| dropped by the caller, held by `retain_resident` | absent | **correct** | correct |
+| backend suite | 104 passed, 2 failed | 104 passed, 2 failed | — |
+| the engine's two residency test files | 3 failed (`AttributeError: retain_resident`) | 6 passed | — |
+
+**The arm written to be red (alive, unbound, next command buffer) was green everywhere.** That
+contradicts the 2026-09-21 sentence this repository and Draft A both rest on: "reads correctly
+when its covering buffer was an argument of an earlier dispatch in the same command buffer, and
+reads zeros from the next command buffer on". The failure that was measured then came through
+this engine's driver, which makes a FRESH wrap per launch. That is the dropped-wrap arm, a
+LIFETIME failure, and upstream's `gpu_address` docstring already scopes the address to the
+buffer's life. So what `retain_resident` buys, measured, is a pinned lifetime. No arm reachable
+through upstream's API shows `useResource` to be necessary. The suite 2 are
+`test_torch_free.py`'s `python -c` harness limitation, identical at `b9d5c06`.
+
+**Consequence here:** the engine's pin (`pinned_addresses`, `triton_ext_driver.py:412`) stays
+correct: it holds the wrap, and a transient wrap is exactly what fails. The explanation in its
+comments ("residency") is narrower than what was measured. The explanation needs correcting;
+the code does not. **Consequence upstream:** Draft A section 1 is not posted as written. Whether
+the patch is offered, and on what ground, is Hocine's call.
+
+### 2026-09-24 — what the merged solver exposes: layer_streaming is chosen where streamed execution is not ready (the Dell's)
+
+A reshape report-only census over all 59 containers on `4a3658d7` (main `69c98647` merged), run
+at each container's default request, 6 rungs x 2 modes x 2 requests. 532 of 1 008 shadow runs
+completed, 242 were refused and 234 failed for another reason. Summary:
+`nbx-atelier/campagnes/2026_09_22_apple/census/merged_4a3658d7/reshape_report_summary.md`.
+**None of the 242 refusals is in the 0.92x-rung band**: 180 are activation-dominated (a VAE
+whose activations alone exceed the rung, a tiling case) and 62 have weights over the rung and
+are still refused. The refusal text lists `single_gpu, single_gpu_lifecycle, lazy_sequential,
+zero3, cpu_execution, cpu_streaming` and never `layer_streaming`, so it cannot say why streaming
+declined (Ming `model.model`: 65 271 MB of weights, 16 MB of activations, refused at every rung
+up to 16 384).
+
+Of the 234 other failures, **82 are streamed execution**, the same class as the PixArt render
+above:
+* 26: a segment cannot bind a symbol (PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha `s6`
+  seq_len, Open-Sora-v2 `s2`, SANA-Video `s7` height);
+* 26: "the plan's segment boundaries are not in the graph it runs" (GLM-4.1V, Qwen3-VL,
+  Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o). The graph is transformed after Prism cut it;
+* 30: a streamed VLM or audio stage asks for its embedding weight (same six containers).
+The rest: 76 MoE runs where the triton-ext driver cannot bind a pointer the allocator does not
+record (the MoE door under a shadow), 56 broadcast or matmul mismatches (the shape-defect
+class), 10 Allegro-TI2V (its container lacks `pad_image_to_num_frames`, see the pass summary),
+6 VibeVoice KV path, and 4 others.
