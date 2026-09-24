@@ -230,6 +230,28 @@ A judged 2048 px artefact. The **transformer** ran to completion on the real pat
 `addmm M_BUCKET=32768` = 2 × 16 384 tokens — which is where the defect lives, so the fix is
 proven under real execution and not only in the shadow. The **VAE decode** at 2048 px exceeds
 this 18 GB device: killed twice, the second time with the kernel jettisoning daemons en masse.
-1536 px cannot substitute (ratio 2.25, the defect does not fire). The request that would both
-fire it and halve the VAE is **2048×1024**, tokens 8192, ratio exactly 2 — worth one attempt
-when the link is free.
+1536 px cannot substitute (ratio 2.25, the defect does not fire).
+
+**The 2048×1024 attempt was made** — tokens 8192, ratio exactly 2, half the VAE. It **refused at
+plan time**, cleanly and with numbers, which made it the most informative of the three:
+
+    planning against 10638 MB actually free (machine: 11198 of 24576)
+    largest component: text_encoder at 9630MB      Total required: 14420MB
+
+9 630 < 10 638, so the raw memory was there. The refusal turns on the **rung ladder**:
+
+    rung_down_mb(10638) = 8192   ->  refused
+    rung_down_mb(11671) = 11264  ->  fits — and 11 671 is what this same model read
+                                     earlier today, when it planned and ran its
+                                     transformer to completion
+
+The `8192 → 11264` step is **3 072 MB**, the widest in the low range, so a reading anywhere in
+that span is quantised down to 8192 and up to 3 GB of usable memory is discarded. That is the
+measured cost of a deliberate choice — `rung_down_mb` never returns a value off the ladder,
+because a plan that is a function of a volatile reading is not reproducible — and it is filed
+in `owed-proofs.md` as a cost, not a bug.
+
+**So the artefact is obtainable and not engine-blocked.** It needs the reading above 11 264 MB.
+It was 11 671 earlier today and is 11 198 now, because this session's own renders and sweeps
+left ~4 GB in swap. Freeing that is Hocine's call: the Windows VM's state is his alone and a
+reboot is not mine to ask for. **Fifth decision for him**, and the cheapest of the five.
