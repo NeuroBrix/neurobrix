@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-103 entries, 98 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 98 carry a site. Two
+104 entries, 99 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 99 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3082,3 +3082,42 @@ shape, does not form it on its real path and verifies clean with 0 misses.
 **The lesson, in one line.** When a wrapper may split a launch, an oracle built for the whole
 operation is not the oracle for what actually ran — and a comparison across that mismatch
 fails loudly in the vocabulary of a numerical defect.
+
+---
+
+### 99 — a Prism plan depends on live host memory, so any two arms taken at different times are confounded
+
+Chasing a gate hole, I ran two solver states over 177 plans each and found five that differed —
+`GLM-4.1V-9B-Thinking` moving to `single_gpu`, four PixArt containers moving from
+`single_gpu_lifecycle` to `component_placement_lazy`. It read as the discriminating case the
+gate needed.
+
+**It was not.** The same call that recorded `single_gpu_lifecycle` returns `single_gpu` now,
+with `solver.py` byte-identical to the file that produced the first reading, four consecutive
+runs all agreeing. Nothing in the code changed. What changed is the RACK:
+
+* the correct arm ran DURING a 19-hour mochi render holding ~19 GB of pinned host memory for
+  its zero3 partition, plus that render's page cache;
+* the injection arm ran partly after it finished, with 243 GB of 251 free.
+
+`_device_reading` bounds a unified reading by `profile.cpu.ram_mb` **and** by what the host
+actually has. So the plan is a function of the machine's momentary state, and two arms taken at
+different times measure that state as much as the change under test.
+
+**What this gate would do if the code were wrong**: report five differences with complete
+confidence, which is exactly what it did. The arms were internally reproducible — four identical
+plans in a row — so nothing looked unstable. Reproducibility WITHIN a condition says nothing
+about comparability ACROSS conditions, and that is the trap.
+
+**Why it is worse than an ordinary confound.** This project already holds that nothing runs
+beside a gate, and I applied that to timing measurements while treating a PLANNER as pure. A
+plan looks like arithmetic over a manifest; it is arithmetic over a manifest and a reading of
+the host. Every Prism comparison this session took while something else ran carries the same
+question — including the 177-plan refusal census, which ran while the render did.
+
+**Repair.** Arms alternate INSIDE one process, with two reps each, and a difference counts only
+when both reps of both arms agree. A plan census is a measurement with conditions, and its
+conditions get stated like any other.
+
+**The lesson, in one line.** Reproducible is not comparable: a measurement that repeats
+perfectly under one set of conditions tells you nothing about a measurement taken under another.
