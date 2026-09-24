@@ -4467,3 +4467,51 @@ machine, and any installed engine, runs them without. Allegro-TI2V's -2 extent (
 the census summary) and Wan2.1-VACE's -1152 are this class. The Mac owes two engine refusals
 seen on the way: a convolution whose output extent is <= 0, and a `cat` of zero-extent tensors
 that returns rank 1.
+
+### 2026-09-24 — the reshape report at vendor-sourced sizes: what the default input hid
+
+Hocine's rule 1 says a census at the default request proves nothing about symbolic shapes. So the
+report-only pass was rerun on the 19 image and video containers at the vendor's own sizes: a
+small size and the largest documented one, plus two frame counts for video. The sources are in
+`vendor-sizes-2026-09-24.md`: raw vendor files, each URL pinned to a commit. Where the vendor
+documents nothing above its default, that default is the "large" size. 59 (container, size)
+requests x 6 rungs x 2 modes, 708 shadow runs, engine `c02751c8` (src as `8f728cab`). Full
+table: `reshape-report-at-vendor-sizes-2026-09-24.md`.
+
+**Found only off the default** (each would have stayed invisible at the default request):
+* **Sana_1600M_4Kpx_BF16 at 1024x1024 completes, with 27 840 invented reshapes**:
+  `(2, 1024, 2240) -> (32768, 2240)`, ratio 1/16. The target is the 4K trace's token count
+  (2 x 128 x 128) frozen into the graph. All 12 runs COMPLETE, so a real render would reshape
+  silently wrong. At 2048x8192 it fails on a broadcast instead. Owner: the Dell (Forge,
+  principle 1).
+* **Flex.1-alpha at 512x512**: `(1, 512, 4096) -> (512, 1024)`, ratio 4, then `aten.addmm::7`
+  shape mismatch `(2048, 1024) @ (4096, 3072)`. A frozen dim that the 1024 default matched by
+  coincidence. Owner: the Dell.
+* **Allegro**: the same single site `(2, 79200, 2304) -> (104328, 2304)` fires at every size, with
+  a ratio that follows the request (0.388 at 368x640, 0.690 at 40 frames, 1.518 at 720x1280):
+  104 328 is a frozen token count. Owner: the Dell.
+* **Sana_1600M_1024px_MultiLing**: 9 sites at both 512x512 and 512x2048 (ratios 0.5, 1.9412,
+  2.0), the `(…, 33, …) -> (…, 17, …)` family of the named 33/32 defect, with the image dim
+  following the request (256 vs 1024). Every run then fails on a broadcast. Owner: the Dell (its
+  retrace).
+* **Allegro-TI2V**: the negative extent comes back at every size (44 records). The container
+  lacks `pad_image_to_num_frames` (see the flags entry). Owner: the Dell.
+
+**Unchanged by size:** CogVideoX-5b-I2V's 3 sites at ratio 0.5 (all three frame counts;
+resolution locked by the vendor at 480x720). CogVideoX-2b, the PixArt family and Wan2.1-T2V-1.3B
+record no invention over their completed runs at any size.
+
+**Coverage, stated before anything reads a 0:** 216 of 708 runs completed (31 %). 368 were refused
+at the rung: 254 activation-dominated (a VAE or a video transformer, tiling cases) and 114 with
+weights over the rung and still refused. None is in the 0.92x-rung band. The Wan2.1-I2V-14B,
+Wan2.2-I2V-A14B, mochi-1-preview and Open-Sora-v2 sizes have 0 completed runs, so they prove
+nothing yet either way. The other failures are the streamed-execution and shape classes already
+filed (unbound symbols in a piece for PixArt-XL-1024 / Sigma-1024 / SANA-Video / Open-Sora 17
+frames; Wan2.1-VACE's missing flags).
+
+**Vendor facts that bear on the catalogue** (sources in the size table): the containers' defaults
+break the vendor's frame rule for Open-Sora-v2 (51, rule 4k+1) and mochi-1-preview (84, rule
+6k+1, asserted in the vendor's `pipelines.py`). Real-ESRGAN-x4 and real-esrgan-x4 hold the same
+xinntao `RealESRGAN_x4plus` weights (702 of 702 tensors equal). That is a duplicate for the rack,
+Hugging Face deciding, and it is also the pair that collides on the Mac's case-insensitive
+volume.
