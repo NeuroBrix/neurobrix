@@ -4313,3 +4313,50 @@ rung but still cut segments against the capacity (3 red, the peak cell).
 3. Any Apple census whose keys came from a `layer_streaming` plan should be re-read: segments
    are now cut against the rung, not the capacity, so their boundaries can move where the two
    differ (a shared pool). On a dedicated card the two coincide and nothing moves.
+
+### 2026-09-24 — answered from the Mac: the plan streams, the render does not (a streamed segment cannot bind seq_len)
+
+The render the rack asked for, on `apple-shape-defects` at `4a3658d7` (main `69c98647` merged):
+PixArt-XL-1024, `--height 2048 --width 1024 --steps 8 --seed 42 --triton-sequential`, the exact
+command that refused in `e904da83`.
+
+**The plan is what the rack predicted, at the Mac's own reading.** The engine read **10 388 MB
+free** (machine 24 576, swap 2 837 MB, `prl_vm_app` 8 024 MB resident) and planned against
+**9 869 MB** (x 0.95), rung **8 192**. Strategy `layer_streaming`, the only viable one;
+`text_encoder` in **6 segments**; recomputed at that reading, peak segment 3 340.1 MB + 4 789.2 MB
+resident beside it = **8 129.3 MB <= 8 192**. The refusal of `e904da83` is gone.
+
+**The render failed in execution, rc=1, after 1 821 s** (4.8 s user; the rest is reading the
+segments' weights over the Wi-Fi mount; peak footprint 7.75 GB). No image, so nothing to judge (R29):
+
+    UnboundSymbolError: ZERO FALLBACK: symbol 's1' (seq_len, binds from
+    input::attention_mask::dim_1) is not bound at runtime ... Bound: ['s0', 's3'].
+
+Located plan-only, by building each segment with the engine's own `build_segment_graph`
+(`nbx-atelier/sondes/reshape_reach_2026_09_24/segment_symbols_pixart.py`):
+* segments 0-2 bind every symbol they use;
+* **segment 3** (`aten.t::85 .. custom.rms_norm::33`) uses `s1`, and no seam input carries it.
+  The hidden states carry `s3`, a second symbol for the same 120-token extent. The T5 position
+  bias `aten.slice::5::out_0` crosses the seam with its dims frozen at `[1, 64, 120, 120]`;
+* **segments 4-5** additionally lose `s0`: their seam tensors' batch dim is recorded as
+  `s3 * 16777216`, which is not a batch expression.
+
+`layer_partition.py:498-528` re-sources a symbol only from a seam dim that carries the SAME
+symbol id, and keeps the original source otherwise ("refuses as before"). So the partition is
+correct to refuse. What it cannot do is serve a component whose seq_len is split across two ids
+and whose position bias is frozen. **Owed to the rack (core/prism and the container's symbolic
+metadata; this machine does not touch core/prism):** a streamed T5 must bind seq_len in every
+segment. Either the seam carries `s1`, or `s1`/`s3` are known to be the same extent, or the
+position bias is symbolic. The gate `test_a_component_over_the_rung_is_streamed_on_the_card.py`
+cannot see this, because it asserts the plan. A cell that builds every segment and checks its
+symbols are bindable would. It fails today on PixArt-XL-1024 segment 3.
+
+**The 14 598 vs 14 420 MB gap is two containers.** The rack reproduced PixArt-XL-2-1024-MS
+(14 597.8 MB) and the Mac refused PixArt-XL-1024 (14 419.5 MB). Planned side by side at the same
+injected reading, the whole 178.3 MB is the transformer, 1 642.8 vs 1 464.5 MB. Orientation
+(h2048 x w1024 against h1024 x w2048) changes nothing.
+
+**Also measured, for the rack's gate:** `test_a_component_over_the_rung_is_streamed_on_the_card.py`
+reads `~/.neurobrix/cache` literally (line 51), so on this Mac, whose catalogue is the mount, all
+18 cells skip. Run against the mount: 16 passed, and 2 failed on `default-ff6008b7`, a profile
+only the rack has.
