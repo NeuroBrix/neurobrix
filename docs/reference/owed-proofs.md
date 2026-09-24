@@ -3999,13 +3999,25 @@ landing between the two was served by nothing. The same defect sent granite-spee
 `cpu_streaming` under the Mac's profile on this rack.
 
 **Reproduced here** by pinning the Mac's own machine in a cell (host reading 11 198 MB injected,
-rung imposed at 8 192 through the door): main's solver refuses with the same largest component
-(`text_encoder at 9630MB`) and the same device line (`mps:0: 10638MB`). NOT byte for byte: the
-refusal totals **14 598 MB here against 14 420 MB there**, a 178 MB difference in vae/transformer
-that was not chased — `hub-cache-diff.md` records the PixArt pair as CACHE_NEWER, so the two
-machines may not hold the same container. With the fix the plan is
-`layer_streaming`, the text encoder in **7 segments**, peak 3 138.1 MB + 4 967.5 MB resident
-beside them (vae, transformer) = **8 105.6 MB ≤ 8 192**. The intermediate version that cut against
+rung imposed at 8 192 through the door). **Correction, 2026-09-24 (the Mac, verified by the
+supervisor):** the first reproduction ran on a DIFFERENT container. The Mac refused on
+**PixArt-XL-1024** (14 419.5 MB total); the rack reproduced on **PixArt-XL-2-1024-MS**
+(14 597.8 MB). The whole 178.3 MB is the transformer, 1 464.5 against 1 642.8 MB. This entry first
+reported that difference as unexplained and guessed at stale containers; it was two models.
+
+The rack holds PixArt-XL-1024 too, and now reproduces the Mac's case on the Mac's container,
+same pinned machine, triton mode:
+
+    solver at 2f9a9986 (before the fix)   REFUSED, Total required: 14420MB   (the Mac: 14420)
+    solver at 69c98647 (the fix)          layer_streaming, text_encoder in 6 segments,
+                                          peak 8 129.3 MB <= 8 192           (the Mac's render: 6 pieces,
+                                                                               peak 8 129.3 MB)
+
+Both containers are now cells of the gate. The Mac reports rendering its container on the
+merged code with exactly that plan; the judged artefact is still owed back (item 2 below). With the fix the plan is
+`layer_streaming`: on PixArt-XL-2-1024-MS the text encoder in **7 segments**, peak 3 138.1 MB +
+4 967.5 MB resident beside them (vae, transformer) = **8 105.6 MB ≤ 8 192**; on the Mac's
+PixArt-XL-1024, 6 segments, 8 129.3 MB. The intermediate version that cut against
 the capacity gave 4 segments and a peak over the rung. Gate: `tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py`,
 seen failing on main's solver (6 red) and on an intermediate version that streamed against the
 rung but still cut segments against the capacity (3 red, the peak cell).
