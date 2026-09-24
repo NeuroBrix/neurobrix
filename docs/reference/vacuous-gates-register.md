@@ -3082,3 +3082,46 @@ shape, does not form it on its real path and verifies clean with 0 misses.
 **The lesson, in one line.** When a wrapper may split a launch, an oracle built for the whole
 operation is not the oracle for what actually ran — and a comparison across that mismatch
 fails loudly in the vocabulary of a numerical defect.
+
+### 505 — the reshape report sat in the compiled op set, and the census that ran it measured mode 2
+
+**2026-09-24.** The first step of the owner's two-step decision on `_reshape` is a report-only
+pass over the 59 containers: which ones would a refusing reshape reject? `9a7bb368` put the
+instrument in `kernels/metadata_ops._reshape` and pinned it with
+`test_the_reshape_report_counts_inventions_not_inferences.py`: it fires on an invention, and it
+stays silent on an inference, on an exact match, and when unset. The test was green.
+
+**The pass could not reach it.** `reshape_report.sh` runs the census with
+`--modes triton,triton-sequential`. Mode 2 dispatches `aten::view`, `aten::reshape` and
+`aten::_unsafe_view` through `kernels/dispatch._resolve_view_shape`. `metadata_ops` is the
+compiled op set, which nothing under `triton/` imports. Mode 1 under a census shadow is a door
+that refuses (`9a7bb368` itself). So every container would have reported 0 sites, whatever
+its graph. Three did (Allegro-TI2V, Allegro, CogVideoX-2b: 18 shadow runs, 0 sites) before the
+pass was stopped. A Kokoro-82M census with the variable set never created the report file,
+and the file is opened in append mode, so its absence means the function was never entered.
+
+**What would the test have done if the pass were wrong?** Pass. It called `_reshape`
+directly, so it proved the predicate and said nothing about reach. The pass was the other half
+of the proof, and nobody had seen it record anything.
+
+**Repaired at the site mode 2 reaches.** `dispatch._report_invented_shape`, called from
+`_resolve_view_shape`, uses the same predicate and the same record (plus `site`), and has no
+1-D exemption, because `NBXTensor.view` does not validate numel. Seen three ways:
+* the twin test `test_the_mode2_reshape_report_counts_inventions_not_inferences.py` was red
+  before the instrument (2 failed: the two invention cases) and green after (6 passed);
+* reach, from an entry counter loaded via `sitecustomize` (no engine change): a
+  PixArt-XL-1024 shadow at 1024x2048 enters the resolver **2 932** times (1 107 with a -1,
+  **0** mismatches without one), and Kokoro-82M enters it 427 times at both a 3-character
+  and a 110-character prompt, with 0 mismatches;
+* fired on a deliberate injection in a live Kokoro shadow (one target's first dim doubled):
+  exactly one record, `[1, 7, 128]` -> `[14, 128]`, ratio 0.5.
+
+**The report's scope, written before its count is read.** A census runs each container at its
+own default request, so the pass answers "which containers invent a shape at their default
+input". It does not answer "at any input". A near-zero count is then a finding about the
+default inputs, not a broken instrument. That distinction is why the reach and injection
+proofs above come first.
+
+**The lesson, in one line.** An instrument's unit test proves its predicate. Only seeing the
+pass record something proves its reach, and a mode-scoped module is exactly where the two come
+apart.
