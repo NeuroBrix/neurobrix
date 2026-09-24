@@ -382,19 +382,28 @@ _PTR_NP = {
 #: meaning the same storage from one launch to the next.
 _PINNED_WRAPS: dict = {}
 
-# Residency wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
-# tensor, registered with metal_native.retain_resident so every dispatch
-# declares it (useResource). This is the half of the pin that makes a LOADED
-# address readable: Metal only guarantees residency for bound resources, so a
-# kernel reading through a pointer-table entry gets zeros unless a covering
-# buffer is declared. Measured 2026-09-21 (granite): per-expert cover wraps
-# also worked but Metal declined the ~480th GB-scale alias — one wrap per
-# allocation is the shape that scales. base -> [wrap, refcount].
+# Pinned wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
+# tensor, held by metal_native.retain_resident for the scope's lifetime. What
+# that buys is a PINNED LIFETIME: the wrap, and so its GPU virtual address,
+# outlives the launch that made it. A kernel that reads through a
+# pointer-table entry needs the covering wrap ALIVE, and this driver otherwise
+# makes a fresh wrap per launch. Once that wrap is dropped, its captured
+# address reads wrong bytes with nothing raised. Upstream documents exactly
+# this: an address is valid only while its buffer lives (triton-ext
+# address.gpu_address). It is not a residency fix. Re-measured 2026-09-24
+# against PR #126's head 8b45b9aa: an ALIVE wrap left unbound reads correctly
+# from a later command buffer at 1 KiB, at 64 MiB and after churn, with or
+# without the useResource that retain_resident also adds; a DROPPED wrap reads
+# 0/256 (docs/reference/owed-proofs.md, 2026-09-24). Measured 2026-09-21
+# (granite): per-expert kept wraps also worked but Metal declined the ~480th
+# GB-scale alias, so one wrap per allocation is the shape that scales.
+# base -> [wrap, refcount, gpu_va].
 _RESIDENT_WRAPS: dict = {}
 
 
 def _resident_acquire(addr: int) -> int:
-    """Make the whole allocation containing `addr` resident; returns base."""
+    """Pin one wrap of the whole allocation containing `addr` for the scope's
+    lifetime (retain_resident holds it); returns base."""
     import numpy as np
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
 
@@ -420,7 +429,7 @@ def pinned_gpu_address(addr: int) -> int:
     Every MTLBuffer has its own GPU virtual address — a no-copy wrap of the
     same memory is a DIFFERENT VA, which is why an address captured through a
     transient launch wrap reads zeros once that wrap dies (measured,
-    probe_read_through 2026-09-21). The pin's whole-allocation resident wrap
+    probe_read_through 2026-09-21). The pin's whole-allocation kept wrap
     is therefore the one address authority: its gpu_address plus the CPU
     offset inside the allocation, computable on the host with no launch.
     """
