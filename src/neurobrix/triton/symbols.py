@@ -13,6 +13,29 @@ class UnboundSymbolError(RuntimeError):
     The trace value is a witnessed extent of one stimulus, never a value (2026-09-21)."""
 
 
+def impossible_extent_context(err, args, resolver) -> str:
+    """The suffix an executor appends to an `ImpossibleExtentError`: the op's input shapes and
+    every bound symbol with its name, so the refusal says which input extent led there.
+    Empty for any other exception (their messages are left exactly as they were)."""
+    from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+    if not isinstance(err, ImpossibleExtentError):
+        return ""
+    def _shape(a):
+        if hasattr(a, "shape"):
+            return str(tuple(a.shape))
+        if isinstance(a, (list, tuple)) and any(hasattr(x, "shape") for x in a):
+            return "[" + ", ".join(str(tuple(x.shape)) if hasattr(x, "shape") else repr(x) for x in a) + "]"
+        return repr(a) if isinstance(a, (int, float)) else type(a).__name__
+    shapes = ", ".join(_shape(a) for a in args)
+    if resolver is None:
+        syms = "no symbolic context"
+    else:
+        names = {k: (v or {}).get("name", "") for k, v in (resolver._symbols or {}).items()}
+        syms = ", ".join(f"{k}={v}" + (f" ({names[k]})" if names.get(k) else "")
+                         for k, v in sorted(resolver._bindings.items())) or "none bound"
+    return f" | input shapes: {shapes} | symbols: {syms}"
+
+
 class SymbolResolver:
     """Binds symbolic shape variables from actual input tensors."""
 

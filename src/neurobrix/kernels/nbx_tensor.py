@@ -889,6 +889,13 @@ def invalidate_current_device_cache() -> None:
 
 
 
+class ImpossibleExtentError(RuntimeError):
+    """An op would produce a tensor with an extent that cannot exist (<= 0 where the op defines
+    a length, or a rank the op does not produce). Raised at the op, with its input shapes and its
+    arithmetic, instead of letting an impossible tensor travel on and fail far away. The graph
+    executors add the op uid and the bound symbol values."""
+
+
 class DeviceOOMError(RuntimeError):
     """The device allocator could not honor a request: the driver refused
     the allocation after the deferred-free drain and the single retry.

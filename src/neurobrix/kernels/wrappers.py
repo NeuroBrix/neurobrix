@@ -3883,6 +3883,13 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
     dt, dh, dw = _triple(dilation)
     B, Cin, T, H, W = x.shape
     Cout, Cin_g, kt, kh, kw = weight.shape
+    _t_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
+    if _t_out <= 0:
+        from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+        raise ImpossibleExtentError(
+            f"convolution produces no frame: input {tuple(x.shape)}, weight "
+            f"{tuple(weight.shape)}, temporal stride {st}, padding {pt}, dilation {dt} -> "
+            f"T_out={_t_out}")
 
     # Temporal chunk-streaming gate (see _NBX_CONV3D_CHUNK_BYTES). Evaluated
     # BEFORE the temporal pad so the pad copy counts toward the one-shot
@@ -4127,6 +4134,12 @@ def conv2d_wrapper(
     out_c, _, kh, kw = weight.shape
     out_h = (in_h + 2 * pad_h - dil_h * (kh - 1) - 1) // stride_h + 1
     out_w = (in_w + 2 * pad_w - dil_w * (kw - 1) - 1) // stride_w + 1
+    if out_h <= 0 or out_w <= 0:
+        from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+        raise ImpossibleExtentError(
+            f"convolution produces no output: input {tuple(x.shape)}, weight "
+            f"{tuple(weight.shape)}, stride ({stride_h}, {stride_w}), padding ({pad_h}, "
+            f"{pad_w}), dilation ({dil_h}, {dil_w}) -> out_h={out_h}, out_w={out_w}")
 
     # Self-managed dtype doctrine — VRAM-preserving (different from the
     # mm/bmm/addmm doctrine which is accumulation-overflow-protected).
