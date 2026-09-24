@@ -246,12 +246,17 @@ plan time**, cleanly and with numbers, which made it the most informative of the
                                      transformer to completion
 
 The `8192 → 11264` step is **3 072 MB**, the widest in the low range, so a reading anywhere in
-that span is quantised down to 8192 and up to 3 GB of usable memory is discarded. That is the
-measured cost of a deliberate choice — `rung_down_mb` never returns a value off the ladder,
-because a plan that is a function of a volatile reading is not reproducible — and it is filed
-in `owed-proofs.md` as a cost, not a bug.
+that span is quantised down to 8192 and up to 3 GB of usable memory is discarded.
 
-**So the artefact is obtainable and not engine-blocked.** It needs the reading above 11 264 MB.
-It was 11 671 earlier today and is 11 198 now, because this session's own renders and sweeps
-left ~4 GB in swap. Freeing that is Hocine's call: the Windows VM's state is his alone and a
-reboot is not mine to ask for. **Fifth decision for him**, and the cheapest of the five.
+**Corrected 2026-09-24 afternoon.** This passage first filed the refusal as "the measured cost
+of a deliberate choice", said the artefact needed a reading above 11 264 MB, and asked Hocine
+to free memory. That was wrong on both counts. **It is a Prism doctrine defect: the engine
+never refuses, and a component larger than its rung is streamed.** The Dell owns the fix. It
+is uncommitted on metatron at `ce34bdea` (`core/prism/solver.py`, `core/prism/memory_budget.py`,
+`core/config/system.py`, plus three tests), and this machine does not touch `core/prism`. Memory
+was never the way out. The engine's own reading at 12:51 was 10 407 MB available, with
+`prl_vm_app` holding 8 400 MB resident. Swap (2 885 MB) is not part of that reading. With the
+0.95 margin the capacity is 9 887 MB, which is the 8 192 rung, so a reboot with the same working
+set refuses again. There is no fifth decision for Hocine. The artefact waits on the Dell's push,
+and it is then taken at whatever reading the machine gives and judged by looking at the image.
+Full entry in `owed-proofs.md`.

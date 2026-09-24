@@ -4228,7 +4228,7 @@ compiled**, and the fixes here bring mode 2 up to a protection mode 1 had all al
 cannot run mode 1 on this machine at any size — a 9 630 MB component under torch against what
 is free — so the mode-1 leg of R30 is not refusable here, it is unreachable.
 
-### 2026-09-24 — the rung ladder's 8192→11264 gap turns a fit into a refusal
+### 2026-09-24 — Prism refuses a component over its rung instead of streaming it (doctrine defect, owned by the Dell)
 
 Third attempt at a judged artefact above the traced size, this one at **2048x1024** (tokens
 8192, exactly 2x the traced 4096, so it fires the defect, at half the VAE of 2048x2048). It
@@ -4251,15 +4251,34 @@ transformer to completion. The ladder is `[4096, 6144, 8192, 11264, 12288, 16384
 quantised to 8192, so up to 3 GB of genuinely usable memory is discarded, and a 9 630 MB
 component that fits the reading does not fit the rung.
 
-The quantisation itself is deliberate and the reason is good — `rung_down_mb`'s docstring says
-"never a value off the ladder", because a plan that is a function of a volatile reading is not
-reproducible, and `plan_advice.py` records that reading moving 12 598 -> 15 248 MB on an idle
-machine, a 21 % swing. So this is **not a bug report**; it is the cost of that choice, measured,
-at the one place it is largest. Whether the low range wants an intermediate rung (9 216?) is
-your call, and the measurement for it is that this model runs at 11 264 and is refused at 8 192
-with 10 638 MB free.
+**Reclassified 2026-09-24 afternoon: this is a doctrine defect in Prism, owned by the Dell.**
+The first version of this entry (commit `e904da83`) filed the refusal as "the measured cost of a
+deliberate choice, not a bug", and put the artefact behind freeing memory. Both were wrong.
 
-**Consequence for the artefact, stated plainly:** it is obtainable on this machine, not blocked
-by the engine. It needs the reading above 11 264 MB. It was 11 671 earlier today and is 11 198
-now, because this session's own renders and sweeps left ~4 GB in swap. Freeing that is Hocine's
-call — the Windows VM's state is his and his alone, and a reboot is not mine to ask for.
+* **The doctrine: the engine never refuses.** A component larger than its rung is streamed.
+  Prism refused a 9 630 MB `text_encoder` against the 8 192 rung with 10 638 MB free, and that
+  refusal is the defect. Rung quantisation is still deliberate (`rung_down_mb` never returns a
+  value off the ladder, so a plan is not a function of a volatile reading). What breaks the
+  doctrine is refusing a component over its rung instead of streaming it. Whether the low range
+  wants another rung is a separate question, and it does not decide this one.
+* **Owner: the Dell.** On metatron, `HEAD` is still `ce34bdea` (read over ssh at 12:5x), with
+  uncommitted changes to `src/neurobrix/core/prism/solver.py`,
+  `src/neurobrix/core/prism/memory_budget.py` and `src/neurobrix/core/config/system.py`, and
+  three new tests in `tests/unit/prism/`:
+  `test_a_component_over_the_rung_is_streamed_on_the_card`,
+  `test_a_one_at_a_time_rung_is_budgeted_one_at_a_time` and
+  `test_the_ladder_is_spaced_at_the_measured_noise`. This machine does not touch `core/prism`.
+* **Memory was never the way out.** Measured here at 12:51 through the engine's own reading
+  (`host_memory._macos_state`): `available_mb` = 10 407 (free + inactive + purgeable +
+  speculative pages). Swap was 2 885 MB, but swap is not part of `available_mb`. The largest
+  resident is `prl_vm_app` at 8 400 MB. The planning capacity is `min(recommended, available x
+  safety_margin)` (`solver.py:2835`, margin 0.95), so 9 887 MB, which rounds down to the 8 192
+  rung. It lands on the 8 192 rung with or without the margin. The supervisor's 12:39 reading
+  agrees (swap 2 894 MB; free + inactive about 10 090 MiB, x 0.95, 8 192 rung). What the reading
+  subtracts is resident applications, so a reboot followed by the same working set would have
+  refused again.
+
+**Consequence for the artefact:** it waits on the Dell's fix reaching origin, not on memory.
+Once that fix is merged here, 2048x1024 is taken at whatever reading the machine gives. The
+artefact then proves two things at once, the shape defect at ratio 2 and the engine no longer
+refusing, and it is judged from outside the engine by looking at the image (R29).
