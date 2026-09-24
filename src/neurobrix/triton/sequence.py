@@ -29,7 +29,7 @@ from neurobrix.kernels.wrappers import (
     deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT)
 
 from .arena import Arena
-from .symbols import SymbolResolver
+from .symbols import SymbolResolver, impossible_extent_context
 from .dtype import TritonDtypeEngine
 from . import replay as _replay
 
@@ -3981,7 +3981,7 @@ class TritonSequence:
                         for i, a in enumerate(args)
                         if isinstance(a, NBXTensor))
                     _msg = _oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
                         f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
                         e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
@@ -4345,7 +4345,7 @@ class TritonSequence:
                 except Exception as e:
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
                         f"positions {_none_pos} of {len(args)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
@@ -4364,7 +4364,7 @@ class TritonSequence:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}", e,
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
 

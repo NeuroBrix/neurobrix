@@ -3159,12 +3159,14 @@ class GraphExecutor:
                               f"device_idx={getattr(_a,'_device_idx','?')} "
                               f"dtype={getattr(_a,'dtype','?')} "
                               f"shape={getattr(_a,'shape','?')}", flush=True)
+                from neurobrix.triton.symbols import impossible_extent_context
                 raise RuntimeError(
                     f"[triton-sequential] Failed at {op_uid} ({op_type}): "
                     f"{type(_e_seq).__name__}: {_e_seq} | None args at positions "
                     f"{_none_pos} of {len(resolved_args)}"
                     + (f" | None list elements: {_none_inner}" if _none_inner
-                       else "")) from _e_seq
+                       else "")
+                    + impossible_extent_context(_e_seq, resolved_args, sym_resolver)) from _e_seq
 
             # Store outputs
             if isinstance(result, tuple):

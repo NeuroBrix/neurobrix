@@ -196,14 +196,10 @@ class TritonSequentialDispatcher:
 
         # Cat: filter empty/scalar tensors
         if base == "cat" and inputs and isinstance(inputs[0], (list, tuple)):
-            valid = [t for t in inputs[0]
-                     if hasattr(t, 'ndim') and t.ndim > 0 and t.numel() > 0]
-            if len(valid) == 0:
-                return NBXTensor.empty((0,), self.compute_dtype,
-                                      f"cuda:{self.device_idx}")
-            if len(valid) == 1:
-                return valid[0]
-            inputs = [valid] + list(inputs[1:])
+            kind, value = self._cat_inputs_or_refuse(inputs)
+            if kind == "single":
+                return value
+            inputs = value
 
         # Lookup kernel and wrap with AMP rules (alias-canonical: the AMP
         # sets key on canonical names — aten::multiply must behave as mul).
@@ -218,6 +214,29 @@ class TritonSequentialDispatcher:
         if kwargs:
             return func(*inputs, **kwargs)
         return func(*inputs)
+
+    def _cat_inputs_or_refuse(self, inputs):
+        """Drop empty and 0-dim operands of a cat. ("single", t) when one operand remains,
+        ("inputs", inputs) otherwise.
+
+        When EVERY operand is empty there is no operand to return, and the old answer, a fresh
+        `(0,)`, changed the rank of the result (rank 5 -> 1 on Allegro-TI2V's VAE encoder,
+        2026-09-24) and let the failure surface 40 ops later as an IndexError. An all-empty cat
+        of tensors that have a rank is refused here, with their shapes."""
+        valid = [t for t in inputs[0]
+                 if hasattr(t, 'ndim') and t.ndim > 0 and t.numel() > 0]
+        if len(valid) == 0:
+            from neurobrix.kernels.nbx_tensor import ImpossibleExtentError
+            shapes = [tuple(getattr(t, "shape", ())) for t in inputs[0]]
+            dim = inputs[1] if len(inputs) > 1 else 0
+            raise ImpossibleExtentError(
+                f"cat of {len(shapes)} operand(s) that are all empty, along dim {dim}: "
+                f"{shapes}. There is no operand to return, and an empty result of a "
+                f"different rank would travel on as an impossible tensor; an upstream extent "
+                f"reached 0")
+        if len(valid) == 1:
+            return "single", valid[0]
+        return "inputs", [valid] + list(inputs[1:])
 
     def _dispatch_sdpa(self, base: str, inputs: List[Any],
                        attributes: Dict[str, Any]) -> Any:
