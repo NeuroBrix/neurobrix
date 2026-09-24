@@ -339,7 +339,8 @@ class TritonDtypeEngine:
         # run's own seam values, diverged 0.15-0.25 % from the same ops run whole, and the first
         # op to differ read an fp32 seam tensor the piece had narrowed to bf16. It enters as it
         # arrived, exactly as it would have flowed inside the whole graph.
-        if meta.get("seam_alias_of"):
+        from neurobrix.core.prism.layer_partition import is_seam_tensor
+        if is_seam_tensor(meta):
             return None
         dtype_str = meta.get("dtype")
         if not dtype_str:

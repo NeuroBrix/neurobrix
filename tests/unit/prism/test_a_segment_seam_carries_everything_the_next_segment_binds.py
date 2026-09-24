@@ -176,12 +176,46 @@ def test_a_symbol_the_segment_already_binds_carries_nothing():
     assert seg0["input_tensor_ids"].count("input::input_ids") == 1
 
 
-def test_a_symbol_no_seam_dim_carries_keeps_its_source_and_refuses_as_before():
-    """Nothing is invented. A dim that genuinely does not cross must still refuse, or the
-    seam would paper over a real symbolic-coverage hole."""
+def _with_s9(source):
+    """`s9` USED in segment 1 (the output tensor carries it), sourced from `source`."""
     g = _graph()
-    g["symbolic_context"]["symbols"]["s9"] = {"name": "other", "trace_value": 4,
-                                              "source": "input::absent::dim_0"}
-    seg = build_segment_graph(g, Segment(index=1, first_op="b", last_op="b",
-                                         op_count=1, weight_bytes=0))
+    g["symbolic_context"]["symbols"]["s9"] = {"name": "other", "trace_value": 4, "source": source}
+    g["tensors"]["out"]["symbolic_shape"] = {"dims": [{"type": "symbol", "id": "s9", "trace": 4}, 23, 8],
+                                             "concrete": [4, 23, 8]}
+    return g
+
+
+def test_a_symbol_whose_source_is_not_a_component_input_is_not_carried_and_stays_unbound():
+    """Nothing is invented. A dim that genuinely does not cross must refuse at binding — the
+    engine's own resolver leaves it unbound — or the seam would paper over a coverage hole."""
+    from types import SimpleNamespace
+    from neurobrix.triton.symbols import SymbolResolver
+    seg = build_segment_graph(_with_s9("input::absent::dim_0"),
+                              Segment(index=1, first_op="b", last_op="b", op_count=1, weight_bytes=0))
     assert seg["symbolic_context"]["symbols"]["s9"]["source"] == "input::absent::dim_0"
+    assert "input::absent" not in seg["symbol_carriers"]
+    r = SymbolResolver(seg["symbolic_context"])
+    r.bind_from_inputs({t: SimpleNamespace(shape=(1, 23, 8) if "aten" not in t else (1, 23, 8))
+                        for t in seg["input_tensor_ids"]}, seg["input_tensor_ids"], seg["tensors"])
+    assert "s9" not in r.bindings and {"s0", "s1"} <= set(r.bindings)
+
+
+def test_a_source_form_the_partitioner_cannot_carry_is_refused_at_partition_time():
+    with pytest.raises(ValueError, match="cannot carry"):
+        build_segment_graph(_with_s9("weights::x::dim_0"),
+                            Segment(index=1, first_op="b", last_op="b", op_count=1, weight_bytes=0))
+
+
+def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
+    """The seam rule where the engines apply it (register 105): the triton entry cast returns no
+    target for a seam tensor, and a component input of the same dtype string IS cast."""
+    from neurobrix.core.prism.layer_partition import is_seam_tensor
+    from neurobrix.triton.dtype import TritonDtypeEngine
+    seam = seg1["tensors"][_alias(seg1)]
+    assert is_seam_tensor(seam) and not is_seam_tensor(seg1["tensors"]["input::input_ids"])
+    eng = TritonDtypeEngine.__new__(TritonDtypeEngine)
+    from neurobrix.kernels.nbx_tensor import parse_dtype
+    eng.compute_dtype = parse_dtype("bfloat16")
+    assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None
+    plain = {"x": {"dtype": "float32"}}
+    assert eng._target_dtype_for_input("x", plain) == parse_dtype("bfloat16")

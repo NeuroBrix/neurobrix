@@ -264,6 +264,18 @@ class LayerPartitioner:
                          peak_live_bytes=peak_live)
 
 
+def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
+    """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
+    `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it
+    — never cast to the compute dtype or re-aligned to the graph's recorded (trace) dtype, as a
+    model input or a leaf would be: that narrowed fp32 islands at every piece's entry (PixArt T5
+    pieces rel L2 0.46 % from whole, register 105). ONE rule, read by every site that casts a
+    component input or re-aligns a leaf, in every engine (R30): TritonDtypeEngine, the torch
+    sequential input resolver and leaf re-alignment, and the compiled input map. Pure Python — the
+    triton branch may read it (R33)."""
+    return bool((meta or {}).get("seam_alias_of"))
+
+
 def build_segment_graph(graph: Dict[str, Any], segment: Segment,
                         order_index: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """One segment as a standalone, executable graph.
@@ -498,19 +510,34 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     # strategy — which holds the component's inputs for the whole run — hands it in. Every piece
     # then binds every symbol from exactly the tensor the whole component binds it from: nothing
     # is equated, nothing re-sourced, a value-sourced symbol (`::val_`) reads the same data. A
-    # carried input no op reads is a binding source only; it adds no compute and no copy (it is
-    # already resident — it is the component's own input). A symbol whose source is NOT a
-    # component input keeps it and refuses by name, as before: that dim genuinely does not cross.
+    # carried input no op reads is a binding source only, and it is already resident (the strategy
+    # holds the component's inputs for the whole run), so it adds a REFERENCE, not bytes. Its entry
+    # handling is a model input's, once per piece: an integer carrier on the device (the T5 case) is
+    # passed as is; a floating carrier not in the compute dtype is cast per piece, and a `::val_`
+    # carrier is read to the host per piece — not measured, and not counted by
+    # `live_activation_curve`, which has never counted component inputs. A symbol whose source is
+    # NOT a component input keeps it and refuses by name, as before: that dim genuinely does not
+    # cross. A source form this function does not know is refused HERE, at partition time.
     sym_ctx = graph.get("symbolic_context")
     if isinstance(sym_ctx, dict) and isinstance(sym_ctx.get("symbols"), dict):
         used: Set[str] = set()
 
+        known = set(sym_ctx["symbols"])
+
         def _walk(obj):
+            # Every form the resolvers accept: `{"type": "symbol", "id"}`, a `symbol_id` key
+            # (scaled / derived nodes, shape_resolver + triton/sequence), and a bare string that
+            # IS a symbol id (triton/symbols.resolve).
             if isinstance(obj, dict):
                 if obj.get("type") == "symbol" and obj.get("id"):
                     used.add(str(obj["id"]))
+                if isinstance(obj.get("symbol_id"), str):
+                    used.add(obj["symbol_id"])
                 for v in obj.values():
                     _walk(v)
+            elif isinstance(obj, str):
+                if obj in known:
+                    used.add(obj)
             elif isinstance(obj, list):
                 for v in obj:
                     _walk(v)
@@ -522,13 +549,19 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         for sid, info in sym_ctx["symbols"].items():
             if sid not in used or not isinstance(info, dict):
                 continue
-            source = str(info.get("source") or "")
-            if not source.startswith("input::"):
-                continue
-            sep = "::dim_" if "::dim_" in source else "::val_" if "::val_" in source else None
-            if sep is None:
-                continue
-            src_tid = source.rsplit(sep, 1)[0]
+            raw = info.get("source")
+            if isinstance(raw, dict) and raw.get("tensor_id") is not None:
+                src_tid = str(raw["tensor_id"])
+            else:
+                source = str(raw or "")
+                sep = ("::dim_" if "::dim_" in source else "::val_" if "::val_" in source
+                       else None)
+                if not source.startswith("input::") or sep is None:
+                    raise ValueError(
+                        f"symbol {sid!r} ({info.get('name')}) used in segment {segment.index} has "
+                        f"a source this partitioner cannot carry: {raw!r}. Refused at partition "
+                        f"time rather than left to refuse at runtime, pointing at the wrong place.")
+                src_tid = source.rsplit(sep, 1)[0]
             if (src_tid in component_inputs and src_tid not in out["input_tensor_ids"]
                     and src_tid not in carried):
                 carried.append(src_tid)
@@ -539,6 +572,10 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
             out["input_tensor_ids"].append(tid)
             out["segment_input_names"].append(tid[7:])
         out["symbol_carriers"] = carried
+        # The segment's OWN copy: a later pass (promotion) mutates `symbols` in place per segment
+        # executor, and a partition must not damage the graph it was cut from.
+        out["symbolic_context"] = {**sym_ctx, "symbols": {k: (dict(v) if isinstance(v, dict) else v)
+                                                          for k, v in sym_ctx["symbols"].items()}}
 
     return out
 

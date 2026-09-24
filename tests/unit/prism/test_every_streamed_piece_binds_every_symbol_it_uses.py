@@ -1,5 +1,4 @@
-"""Every piece a component is streamed in binds every symbol it uses, to the value the whole
-component binds it to — at the trace size and at two other sizes, one far from it.
+"""Every piece a component is streamed in binds every symbol it uses.
 
 The first gate for `layer_streaming` asserted the PLAN (strategy name, segment count, peak) and
 never ran a piece: the recipe, not the dish (register 100). The Mac then rendered the exact plan
@@ -18,17 +17,21 @@ WHAT THIS GATE EXECUTES. The binding every piece performs at runtime, with the e
 `SymbolResolver.bind_from_inputs` — the call that raised on the Mac — chained piece to piece:
 piece k receives the component's inputs it declares, and the seam tensors shaped by evaluating
 their symbolic dims under the WHOLE component's bindings (what the previous piece hands over).
-For each piece: every symbol referenced anywhere in it (tensors, op attributes) is bound, and to
-the whole component's value. No weights, no card: this is the binding, executed, not a plan.
-The real streamed render is the second tier (`validation_outputs/`).
+For each piece: every symbol referenced anywhere in it (tensors, op attributes, in every form the
+resolvers accept) is BOUND. No weights, no card: the binding, executed, not a plan.
 
-Sizes (rule 1): each symbol at its trace value, at 2x, and far (7x + 1), consistent across
-symbols of the same NAME (two ids for one batch get one value — they are one dimension).
+What this does NOT prove, stated: the VALUES bound. The inputs are shaped from the same symbolic
+dims the binding reads, so a value comparison would be true by construction (the reviewer's point,
+2026-09-24) and is not made; and binding does not depend on size, so the three sizes below guard
+only against a trace value leaking into a binding. The values, at batch 1/2/8 in every engine, are
+the executed gate's: `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py`
+(whole vs pieces, bit-identical).
+
+Sizes: each symbol at its trace value, at 2x, and far (7x + 1), one value per symbol NAME.
 """
 from __future__ import annotations
 
 import json
-import math
 from types import SimpleNamespace
 
 import pytest
@@ -56,25 +59,36 @@ SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p_diffusers", "DeepSeek-Coder-V2-Lite
          "Qwen3-30B-A3B-Thinking-2507", "Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Omni-30B-A3B-Instruct",
          "Qwen3-VL-30B-A3B-Thinking", "deepseek-moe-16b-chat", "granite-speech-3.3-8b"]
 RUNGS = [4096, 8192, 16384]
+# A container whose defaults declare no request is given one explicitly — without it the plan
+# refuses before streaming is tried and the cell proves nothing. Open-Sora-v2's 2026-09-13 build
+# declares no resolution (Forge dd2fa21 adds the vendor's); its traced extent is used here.
+REQUESTS = {"Open-Sora-v2": dict(height=112, width=176, num_frames=51, temporal_compression=4)}
 SCALES = {"trace": lambda t: t, "twice": lambda t: 2 * t, "far": lambda t: 7 * t + 1}
 
 
-def _walk_symbols(obj, out):
+def _walk_symbols(obj, out, known):
+    """Every symbol reference in every form the engine's resolvers accept (shape_resolver,
+    triton/symbols, triton/sequence): a symbol node, a `symbol_id` key, a bare id string."""
     if isinstance(obj, dict):
         if obj.get("type") == "symbol" and obj.get("id"):
             out.add(str(obj["id"]))
+        if isinstance(obj.get("symbol_id"), str):
+            out.add(obj["symbol_id"])
         for v in obj.values():
-            _walk_symbols(v, out)
+            _walk_symbols(v, out, known)
     elif isinstance(obj, list):
         for v in obj:
-            _walk_symbols(v, out)
+            _walk_symbols(v, out, known)
+    elif isinstance(obj, str) and obj in known:
+        out.add(obj)
 
 
 def _referenced(seg):
+    known = set((seg.get("symbolic_context") or {}).get("symbols") or {})
     out = set()
-    _walk_symbols(seg["tensors"], out)
-    _walk_symbols(seg["ops"], out)
-    return out & set((seg.get("symbolic_context") or {}).get("symbols") or {})
+    _walk_symbols(seg["tensors"], out, known)
+    _walk_symbols(seg["ops"], out, known)
+    return out & known
 
 
 def _plan(monkeypatch, model, h, w, host_free, rung, request=None):
@@ -95,7 +109,9 @@ def _whole_bindings(graph, scale):
     syms = (graph.get("symbolic_context") or {}).get("symbols") or {}
     by_name = {}
     for sid, info in syms.items():
-        by_name.setdefault(info.get("name") or sid, scale(int(info.get("trace_value") or 1)))
+        if not isinstance(info.get("trace_value"), int):
+            raise AssertionError(f"symbol {sid} declares no trace value: {info}")
+        by_name.setdefault(info.get("name") or sid, scale(int(info["trace_value"])))
     return {sid: by_name[info.get("name") or sid] for sid, info in syms.items()}
 
 
@@ -128,9 +144,6 @@ def _check_every_piece(model, root, plan, family, size):
                 f"{model}.{comp} piece {k}/{len(bounds)} at {size} uses {unbound} and none of "
                 f"its inputs carries them (sources: "
                 f"{[seg['symbolic_context']['symbols'][s]['source'] for s in unbound]})")
-            wrong = {s: (bound[s], whole[s]) for s in used if bound[s] != whole[s]}
-            assert not wrong, (f"{model}.{comp} piece {k} at {size} binds a symbol to a value "
-                               f"the whole component does not: {wrong}")
 
 
 @pytest.mark.parametrize("size", list(SCALES))
@@ -142,6 +155,8 @@ def test_every_piece_binds_every_symbol_it_uses_to_the_whole_components_value(
 
 
 def _default_request(root):
+    if root.name in REQUESTS:
+        return InputConfig(batch_size=1, **REQUESTS[root.name])
     dj_path = root / "runtime" / "defaults.json"
     dj = json.loads(dj_path.read_text()) if dj_path.is_file() else {}
     kw = {k: dj[k] for k in ("height", "width", "num_frames") if isinstance(dj.get(k), int)}

@@ -213,7 +213,10 @@ class TensorResolver:
         # LEAVES (producer_op_uid is None) get aligned to the Prism compute dtype.
         _meta_align = self._ctx.tensors_metadata.get(tensor_id) or {}
         _is_op_output = _meta_align.get("producer_op_uid") is not None
-        if tensor.is_floating_point() and not _is_op_output:
+        # A SEAM tensor looks like a leaf (no producer inside the piece) but is an op output of the
+        # previous piece: exactly the intermediate this guard exists to leave alone.
+        from neurobrix.core.prism.layer_partition import is_seam_tensor
+        if tensor.is_floating_point() and not _is_op_output and not is_seam_tensor(_meta_align):
             prism_dtype = self._ctx.dtype
             if prism_dtype is not None:
                 # If tensor is in graph's half-precision but Prism wants different half,
@@ -362,7 +365,8 @@ class TensorResolver:
                 # A seam tensor (a streamed piece's input) arrives in the dtype its producing op
                 # gave it, as inside the whole graph; casting it to the compute dtype narrowed an
                 # fp32 island (R30 mirror of TritonDtypeEngine._target_dtype_for_input).
-                if tensor_info.get("seam_alias_of"):
+                from neurobrix.core.prism.layer_partition import is_seam_tensor
+                if is_seam_tensor(tensor_info):
                     return None
                 dtype_str = tensor_info.get("dtype")
                 if dtype_str:

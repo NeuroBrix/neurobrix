@@ -4360,7 +4360,8 @@ class GraphExecutor:
                 # (PixArt T5, 2026-09-24). Same rule as `get_input_dtype` (sequential) and
                 # TritonDtypeEngine._target_dtype_for_input (both triton modes).
                 torch_dtype = self._placement_torch_dtype()
-                _seam = bool((tensors.get(tid) or {}).get("seam_alias_of"))
+                from neurobrix.core.prism.layer_partition import is_seam_tensor
+                _seam = is_seam_tensor(tensors.get(tid))
                 if value.dtype.is_floating_point and value.dtype != torch_dtype and not _seam:
                     value = value.to(torch_dtype)
                 # Move input to executor's device (critical for FGP/multi-device)

@@ -81,10 +81,18 @@ def main():
     from neurobrix.core.strategies.base import StrategyContext
     from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
     family = json.loads((root / "manifest.json").read_text()).get("family", "")
-    device = "cuda:0"
+    # The card this runs on, from this machine's own detected profile — never a vendor or an
+    # architecture written here (R23). The PLAN is the Mac's; the EXECUTION is this card's.
+    from neurobrix.core.prism.autodetect import load_default_profile
+    here = load_default_profile().devices[0]
+    vendor = str(getattr(here, "brand", "") or "").split(".")[-1].lower()
+    arch = str(getattr(here, "architecture", "") or "")
+    if not vendor or not arch:
+        raise SystemExit(f"this machine's profile names no vendor/architecture for its card: {here}")
+    device = here.get_device_string()
 
     def executor():
-        ex = GraphExecutor(family=family, vendor="nvidia", arch="volta", device=device,
+        ex = GraphExecutor(family=family, vendor=vendor, arch=arch, device=device,
                            dtype=dtype, mode=mode)
         ex.load_graph(root / "components" / comp / "graph.json")
         ex._cache_path = root
