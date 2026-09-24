@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model with one piece slightly too large for the memory it plans against now runs on the
+  device instead of refusing.** On a machine whose memory is shared — a Mac, or a card another
+  program is using — the engine plans against a rounded-down share of what is free. A model
+  piece larger than that share but smaller than the device was refused outright, or sent to the
+  much slower CPU path, even though the device could hold it. Such a piece is now loaded in
+  parts on the device, and the parts are sized so the whole plan stays inside the share it
+  planned against.
+
 - **The command printed in a drift report can now be copied and run.** Reports write the command
   that produced them so you can repeat it. Any argument containing a space — a prompt, a path
   with a space in it — lost its quotes on the way into the report, so copying the line back into

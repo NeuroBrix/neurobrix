@@ -4897,8 +4897,25 @@ class PrismSolver:
         # A component larger than the rung is STREAMED ON THE CARD, and its segments are cut
         # against the same rung: cutting them against the capacity would announce a peak
         # above the rung, a function of the live reading — the one thing rounding the reading
-        # down exists to prevent. A rung of 0 (a reading under the ladder's lowest rung)
-        # declines here exactly as it does on every other rung, and the refusal names it.
+        # down exists to prevent.
+        #
+        # Where this moves a plan: wherever the rung is below the capacity — a unified device,
+        # a discrete card another process holds or a display drives, a card whose sharing
+        # could not be read, and any device behind the NBX_PRISM_BUDGET_MB door (uncapped by
+        # design). A measured dedicated card is budgeted at min(driver total less its own
+        # context, capacity), which is the capacity while that context is under
+        # driver_total - capacity; measured on this rack's V100-16GB (306 MB context, budget
+        # 15 564.8 == capacity 15 564.8) the segments cut for DeepSeek-Coder-V2-Lite are
+        # identical before and after, in both modes.
+        #
+        # KNOWN GAP, not closed here: a reading UNDER the ladder's lowest rung leaves
+        # `budget_mb` at 0, which `DeviceState` also uses for "no reading was taken", and
+        # `_effective_capacity_mb` then derives the dedicated law from the state — on a
+        # unified device, its whole capacity. This rung inherits that answer exactly as every
+        # rung above it does. Closing it makes every rung decline and, with host RAM at rung 0
+        # too, the plan refuse (measured: TinyLlama, Mac profile, 3 000 MB free — main plans
+        # lazy_sequential at 2 850, the closed sentinel refuses), which collides with "Prism
+        # never refuses"; that trade is the owner's call.
         budget_bytes = int(self._effective_capacity_mb(target) * 1024 * 1024)
         if budget_bytes <= 0:
             return None

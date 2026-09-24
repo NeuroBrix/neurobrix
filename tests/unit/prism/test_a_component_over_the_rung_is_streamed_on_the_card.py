@@ -45,6 +45,7 @@ import neurobrix.core.host_memory as host_memory
 import neurobrix.core.prism.solver as solver_mod
 from neurobrix.core.host_memory import MemoryState
 from neurobrix.core.prism import InputConfig, PrismSolver, load_profile
+from neurobrix.core.prism.memory_budget import DeviceReading
 from neurobrix.nbx import NBXContainer
 
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
@@ -70,7 +71,10 @@ def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
     monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(rung_mb))
 
 
-def _plan(model, height, width, profile_id=APPLE, refusal_ok=False):
+MODES = ["compiled", "triton"]         # segments are cut on the graph each engine will run
+
+
+def _plan(model, height, width, profile_id=APPLE, refusal_ok=False, mode="compiled"):
     """(plan, solver, {component: memory}). With `refusal_ok`, a refusal returns plan=None and
     still hands back the component estimate — the precondition must hold whatever the solver
     decides, including before the fix, when this exact scenario refused."""
@@ -92,7 +96,7 @@ def _plan(model, height, width, profile_id=APPLE, refusal_ok=False):
     s._compute_memory = spy
     try:
         p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
-                          InputConfig(**kw), mode="compiled")
+                          InputConfig(**kw), mode=mode)
     except RuntimeError:
         if not (refusal_ok and seen):
             raise
@@ -117,22 +121,28 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
 
 # ───────────────── the law: streamed on the card ─────────────────
 
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
-def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h, w, host_free, rung):
+def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h, w, host_free, rung,
+                                                            mode):
     _pin_machine(monkeypatch, host_free, rung)
-    p, _, _ = _plan(model, h, w)
+    p, _, _ = _plan(model, h, w, mode=mode)
     assert p.strategy == "layer_streaming", (
         f"{model} planned {p.strategy!r} with a component over the {rung} MB rung that the "
         f"device holds; that overhang is what layer_streaming is for")
 
 
+@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
 def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch, model, h, w,
-                                                                    host_free, rung):
+                                                                    host_free, rung, mode):
     """The assertion that a strategy name cannot make. Segments cut against the capacity put the
-    announced peak above the rung — a plan that is a function of the live reading again."""
+    announced peak above the rung — a plan that is a function of the live reading again.
+
+    Looser than the solver by design of what it can see: the solver also reserves the graph's
+    constants and the KV cache beside the segments; this checks peak + resident components."""
     _pin_machine(monkeypatch, host_free, rung)
-    p, s, seen = _plan(model, h, w)
+    p, s, seen = _plan(model, h, w, mode=mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
     beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
@@ -153,8 +163,33 @@ def test_the_same_component_under_the_rung_is_not_streamed(monkeypatch):
     assert p.strategy != "layer_streaming" and not p.strategy.startswith("cpu_"), p.strategy
 
 
-def test_a_model_that_fits_whole_is_unchanged(monkeypatch):
-    """TinyLlama on a V100-16GB profile at that card's own rung: single_gpu, as before."""
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "16384")
-    p, _, _ = _plan("TinyLlama-1.1B-Chat-v1.0", None, None, profile_id="default-ff6008b7")
-    assert p.strategy == "single_gpu", p.strategy
+@pytest.mark.parametrize("mode", MODES)
+def test_a_dedicated_card_cuts_what_it_cut_before(monkeypatch, mode):
+    """No door, a DEDICATED V100-16GB reading injected (driver 16 151 MB, own context 306 MB —
+    this rack's card 0 as measured). The dedicated law budgets min(16 151 - 306, capacity), which
+    is the capacity, so moving this rung from capacity to rung must move nothing here.
+
+    Reaches `_try_layer_streaming` for real: DeepSeek-Coder-V2-Lite's single 17 777 MB component
+    is over the card, the rung is attempted (its partition is left on the solver), and
+    `lazy_sequential` then outscores it. The boundaries pinned below are the ones main's solver
+    cut against the capacity, measured identical in both modes before this change. A retrace of
+    this container moves these op ids (register 98): re-measure against main's cut, do not delete
+    the cell."""
+    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    big = MemoryState(total_mb=257530, available_mb=200000, source="injected: an idle host")
+    monkeypatch.setattr(solver_mod, "memory_state", lambda: big)
+    monkeypatch.setattr(host_memory, "memory_state", lambda: big)
+    monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
+        kind="device", capacity_mb=16151, free_mb=15845, own_context_mb=306, measured=True,
+        source="injected: a dedicated V100-16GB"))
+    p, s, _ = _plan("DeepSeek-Coder-V2-Lite-Instruct", None, None,
+                    profile_id="default-ff6008b7", mode=mode)
+    dev = s._prepare_devices(load_profile("default-ff6008b7"))[0]
+    assert dev.budget_mb == dev.capacity_mb, (
+        f"the dedicated law no longer budgets this card at its capacity ({dev.budget_mb} vs "
+        f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
+    parts = getattr(s, "_layer_stream_partitions", None) or {}
+    cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
+    assert cut == {"model": [["aten.embedding::0", "aten.view::247"],
+                             ["moe_fused::block.12", "aten.view::467"],
+                             ["moe_fused::block.23", "custom.rms_norm::81"]]}, cut
