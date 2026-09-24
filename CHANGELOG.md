@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slightly different result. Both are fixed: the pieces now produce the same output, bit for bit,
   as the part run whole.
 
+- **When a model cannot be planned, the message now says why splitting it into pieces did not
+  help,** with the figures, instead of leaving that option out of the explanation.
+
 - **A model piece that just misses fitting whole now runs on the device instead of falling to the
   CPU.** A piece slightly too large to load whole, but too small to be split, was served by
   neither path and went to the much slower CPU route. Such a piece is now split and run on the

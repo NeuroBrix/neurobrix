@@ -686,6 +686,13 @@ class PrismSolver:
     #: still override it.
     reading_volatility = 0.12
 
+    #: What the last `solve()` evaluated and why `layer_streaming` declined, for its refusals.
+    #: Reset at the top of every `solve()`; class-level (immutable) so a solver built without
+    #: __init__ can still reach a refusal and say that nothing was evaluated.
+    _strategies_tried: tuple = ()
+    _layer_streaming_declined = None
+    _rejected: tuple = ()
+
     def _margin_mb(self, capacity_mb: float) -> int:
         """The band the plan keeps back, and says it keeps back.
 
@@ -898,6 +905,12 @@ class PrismSolver:
         # the toggled flag was one turn while the check then demanded two.
         self._serve_requested = serve_mode
         self._serve_cold_fallback = False  # Track if serve degraded to cold
+        # Per-SOLVE record of what was tried and why a rung declined, read by every refusal. Reset
+        # here, never left to the rung that writes it: a rung the force door filters out never runs,
+        # and a reused solver then printed the previous solve's reason.
+        self._strategies_tried = []
+        self._layer_streaming_declined = None
+        self._rejected = []
 
         neural_components = container.get_neural_components()
         if not neural_components:
@@ -1148,11 +1161,13 @@ class PrismSolver:
         # "this strategy does not fit" signal without Prism retrying
         # alternatives.
         if forced and not candidates:
+            _why = (f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+                    if self._layer_streaming_declined else "")
             raise RuntimeError(
                 f"ZERO FALLBACK: NBX_FORCE_STRATEGY={forced} cannot fit "
                 f"the model on the given hardware profile. Remove the env "
                 f"var to let Prism's cascade select an alternative, or "
-                f"use a larger hardware profile."
+                f"use a larger hardware profile.{_why}"
             )
 
         # Serve mode fallback: if hot mode failed, retry with cold budget
@@ -1392,9 +1407,15 @@ class PrismSolver:
             break
 
         if allocations is None:
+            # Every candidate was REJECTED after scoring — the KV check. Say which and why, and why
+            # streaming declined, rather than only that nothing fit.
+            _why = "".join(f"\n  {n} rejected: {str(w).splitlines()[0][:200]}"
+                           for n, _s, w in self._rejected)
+            if self._layer_streaming_declined:
+                _why += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
             raise RuntimeError(
                 "ZERO FALLBACK: No strategy can fit model + KV cache on "
-                "available hardware.\n" + self._memory_verdict(devices)
+                "available hardware." + _why + "\n" + self._memory_verdict(devices)
             )
 
         devices = chosen_devices
@@ -4506,6 +4527,8 @@ class PrismSolver:
         self, strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
     ) -> List[Tuple[float, str, Dict, List]]:
         """Try ALL strategies and return scored candidates."""
+        # What was actually tried, for the refusal to name — never a hand-kept list.
+        self._strategies_tried = [name for name, _ in strategies]
         candidates = []
         for strategy_name, strategy_fn in strategies:
             result = strategy_fn(sorted_components, component_memory, devices, shard_sizes, profile, container)
@@ -4968,8 +4991,18 @@ class PrismSolver:
         """
         from neurobrix.core.prism.layer_partition import LayerPartitioner
 
-        if not devices:
+        # WHY this rung declined, in numbers, for the refusal to print. It returned None at eight
+        # places and said nothing: 62 of the Mac's 242 refusals (4a3658d7) listed every strategy
+        # tried except this one, so a model with 65 271 MB of weights and 16 MB of activations
+        # (Ming) was refused at every rung with no word on why streaming could not serve it.
+        self._layer_streaming_declined = None
+
+        def _decline(reason: str):
+            self._layer_streaming_declined = reason
             return None
+
+        if not devices:
+            return _decline("the profile has no accelerator to stream onto")
         target = devices[0]
         # The RUNG — `_effective_capacity_mb`, the one figure every rung above this one is
         # measured against — both to decide which component is streamed and to size its
@@ -5020,7 +5053,8 @@ class PrismSolver:
         # this rung then declines. One figure for both decisions closes the band.
         budget_bytes = int(self._usable_mb(target) * 1024 * 1024)
         if budget_bytes <= 0:
-            return None
+            return _decline(f"the usable part of {target.device_string}'s rung is "
+                            f"{self._usable_mb(target):.0f} MB: nothing to cut against")
 
         graphs = {}
         try:
@@ -5028,10 +5062,11 @@ class PrismSolver:
                 g = getattr(comp, "graph", None)
                 if isinstance(g, dict):
                     graphs[comp.name] = g
-        except Exception:
-            return None
+        except Exception as exc:  # noqa: BLE001 — said, not swallowed
+            return _decline(f"the component graphs could not be read "
+                            f"({type(exc).__name__}: {exc})")
         if not graphs:
-            return None
+            return _decline("no component carries a graph to cut")
 
         sizes_by_comp = self._weight_sizes_by_component(container)
 
@@ -5107,7 +5142,12 @@ class PrismSolver:
                         else _kv_need)
         segment_budget = budget_bytes - resident_beside - constant_bytes - kv_bytes
         if segment_budget <= 0:
-            return None
+            _mb = 1024 * 1024
+            return _decline(
+                f"no room for a single segment: the usable {budget_bytes / _mb:.0f} MB of the "
+                f"rung is filled by what stays resident beside the streamed "
+                f"{sorted(streamed)} — whole components {resident_beside / _mb:.0f} MB, graph "
+                f"constants {constant_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB")
 
         for comp_name, mem in sorted_comps:
             if comp_name not in streamed:
@@ -5115,7 +5155,7 @@ class PrismSolver:
                 continue
             graph = graphs.get(comp_name)
             if graph is None:
-                return None            # cannot cut what we cannot read
+                return _decline(f"'{comp_name}' must be streamed and carries no graph to cut")
             # Cut the graph the EXECUTOR will run, not the one the container holds. Each
             # sequence rewrites the graph in place before running it, so a boundary chosen on
             # the raw graph can name an op the fusions have already folded away — measured:
@@ -5149,7 +5189,11 @@ class PrismSolver:
                 # Either genuinely impossible, or one segment — in which case
                 # a rung above this one already serves it and this must not
                 # take the plan.
-                return None
+                return _decline(
+                    f"'{comp_name}' cannot be cut into segments of "
+                    f"{segment_budget / (1024 * 1024):.0f} MB: "
+                    + (part.refusal if not part.fits else
+                       "it fits in ONE segment, which a whole-component rung serves"))
             partitions[comp_name] = part
             # The device string stays a plain device. A `layer_stream:` prefix
             # was tried and is wrong: several places parse an allocation by
@@ -5160,7 +5204,8 @@ class PrismSolver:
             allocations[comp_name] = (dev_str, {})
 
         if not partitions:
-            return None                # nothing needed cutting: not our plan
+            return _decline("no component exceeds the usable part of the rung — a rung that "
+                            "keeps components whole serves this plan")
 
         # What each streamed component actually holds, recorded so the
         # accounting sees the same number the executor will.
@@ -5763,21 +5808,14 @@ class PrismSolver:
         total_avail = sum(d.capacity_mb for d in devices)
         comp_info = "\n".join(f"  {n}: {m.total_mb:.0f}MB (W={m.weight_mb:.0f}, A={m.activation_mb:.0f})" for n, m in sorted_comps)
         dev_info = "\n".join(f"  {d.device_string}: {d.capacity_mb:.0f}MB" for d in devices)
-        # The full cascade depends on the device count (single-GPU vs multi-GPU
-        # profile). The error message lists what Prism actually tried so the
-        # user can correlate the failure with the strategy set in scope.
-        # Hardcoded list previously only mentioned 5 of the 9 strategies,
-        # misleading the diagnosis at P-SANA-4KPX-RUNTIME POINT 9.
-        if len(devices) == 1:
-            tried_str = ("single_gpu, single_gpu_lifecycle, lazy_sequential, "
-                         "zero3 - ALL FAILED")
-        else:
-            tried_str = (
-                "single_gpu, single_gpu_lifecycle, pipeline_parallel, "
-                "component_placement, block_scatter, weight_sharding, "
-                "component_placement_lazy, lazy_sequential, zero3 - "
-                "ALL FAILED"
-            )
+        # The strategies the cascade actually evaluated (`_evaluate_all_strategies`), not a list
+        # kept by hand: the hand list named part of the cascade and never `layer_streaming`, so
+        # a refusal could not say that streaming was tried, let alone why it declined (the
+        # Mac's 62 weight-over-rung refusals, 4a3658d7; earlier, P-SANA-4KPX-RUNTIME POINT 9).
+        tried = list(self._strategies_tried)
+        tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
+        if self._layer_streaming_declined:
+            tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
         # Reaching here now means REAL impossibility, not a gap in the
         # cascade. The ladder ends in `cpu_streaming`, which needs only the
         # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
@@ -5818,7 +5856,7 @@ class PrismSolver:
         raise RuntimeError(
             f"This model cannot run on this machine.\n\n"
             f"Every strategy was tried, down to streaming one component at a "
-            f"time from disk:\n  {tried_str}, cpu_execution, cpu_streaming\n\n"
+            f"time from disk:\n  {tried_str}\n\n"
             f"The last rung needs only the largest single component to fit in "
             f"memory, and it does not:\n"
             f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n"

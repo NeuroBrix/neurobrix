@@ -153,6 +153,10 @@ def test_the_remaining_refusal_names_the_blocking_component(solver):
     """When it does refuse, it must say what would make it run rather than
     listing strategies the user cannot act on."""
     comps = [("small", _Mem(100)), ("enormous", _Mem(90000))]
+    # The refusal lists what the cascade EVALUATED (no longer a list kept by hand): the cell
+    # states the cascade that ran, ending on the rung that needs only the largest component.
+    solver._strategies_tried = ["single_gpu", "lazy_sequential", "zero3", "cpu_execution",
+                                "cpu_streaming"]
     with pytest.raises(RuntimeError) as excinfo:
         solver._fail_error(comps, [])
     message = str(excinfo.value)

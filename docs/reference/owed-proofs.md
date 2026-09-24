@@ -4072,3 +4072,10 @@ where they live, not streaming defects):**
   relative-position bias froze 120, the traced extent. At 23 tokens pieces and whole are
   bit-identical. A symbolic-coverage defect of the trace (principle 1), queued for Forge with the
   Mac's trace defects (df2588e7), fixed at source and retraced.
+
+**The "weight received untransposed" class (8, the Mac's df2588e7) does not reproduce on the landed
+engine here:** `tools/streamed_component_vs_whole.py PixArt-XL-2-1024-MS text_encoder triton 1 120
+11198 <rung>` on a V100, the Mac's reading, rung 6 144 (9 pieces) and 8 192 (5 pieces): pieces
+BIT-identical to whole, no `aten.mm::4 ... 4096 vs 10240`. The Mac's rows were taken on `4a3658d7`,
+before pieces carried their symbols and kept their seam dtype. **Owed by the Mac:** the same rows on
+the landed engine; a row that still fails there reopens the class with its exact command.
