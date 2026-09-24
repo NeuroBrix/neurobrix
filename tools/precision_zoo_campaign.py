@@ -156,11 +156,32 @@ def family_stimulus(family: str) -> list:
 
 def _declares_image_input(model: str) -> bool:
     """A container whose topology names `global.image` takes an image (TI2V,
-    I2V) — the campaign feeds the asset image, data-driven, never by family."""
+    I2V) — the campaign feeds the asset image, data-driven, never by family.
+
+    ZERO FALLBACK on an unreadable topology. `except OSError: return False` made
+    "I could not look" indistinguishable from "this model needs no image", and on
+    this Mac the container cache is an NFS mount over Wi-Fi where a slow or stale
+    read raises OSError. Three models of the 2026-09-22 Apple census ran without
+    `--input-image` and died on
+
+        ZERO FALLBACK: None of the sources resolved: ['global.image']
+
+    which was then filed as a census-harness gap — a request the flow could not
+    satisfy, reported as if the model had been measured. Absence of the key is a
+    real answer; being unable to read the file is not, and it has to be loud.
+    """
+    p = CACHE / model / "topology.json"
     try:
-        return '"global.image"' in (CACHE / model / "topology.json").read_text()
-    except OSError:
-        return False
+        return '"global.image"' in p.read_text()
+    except OSError as e:
+        raise RuntimeError(
+            f"ZERO FALLBACK: cannot read the topology of {model!r} at {p} ({e}), so "
+            "whether it takes an image input is UNKNOWN.\n"
+            "  Answering 'no image' here drops a required input and the run dies at "
+            "`None of the sources resolved: ['global.image']`, which reads as an engine "
+            "defect instead of an unread file.\n"
+            "  Check the container cache is mounted and readable, then re-run."
+        ) from e
 
 
 def request_args(model: str, family: str, extra: list) -> list:
