@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-106 entries, 101 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 101 carry a site. Two
+107 entries, 102 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 102 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3177,3 +3177,55 @@ component estimate, and asserts the INVARIANT — streamed peak plus what stays 
 `51e24662` hunk, 11 green on the fix, where PixArt cuts 7 segments peaking at 8 105.6 MB.
 
 **The lesson, in one line.** Assert the property the strategy promises, not the label it wears.
+
+---
+
+### 102 — a gate built to prove the Mac's fix skipped every cell on the Mac, because it found its machine instead of carrying it
+
+`tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py` at `69c98647` — the
+gate landed to prove the Mac's PixArt refusal was fixed — read three things off the rack:
+
+* the CACHE as a literal, `os.path.expanduser("~/.neurobrix/ca" + "che")`, the word split so a
+  text search would not find it. Hiding a hardcode from the search that exists to find it is
+  worse than writing it plainly. The engine resolves its cache through one door,
+  `neurobrix.core.paths.cache_dir()` (`NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`, then the
+  default), and on the Mac the models live on the mount that door names;
+* a MISSING model answered with `pytest.skip`;
+* two HARDWARE PROFILES by machine-local id — `default-9f169c79` and `default-ff6008b7`, both
+  generated per machine and gitignored. The rack's V100 profile does not exist on the Mac, and
+  neither exists on a third machine.
+
+**What the gate did where it mattered**: on the Mac, **18 of 18 cells skipped**, in silence. The
+gate that proves the Mac's fix proved nothing on the Mac. Pointed at the canonical mount, 16
+passed; the other 2 needed the rack's profile. Found by the Mac, verified by the supervisor
+2026-09-24 15:12 CEST. Reproduced here under the Mac's conditions (a HOME without the literal
+path, the models reachable only through `NEUROBRIX_CACHE`, a tree without the gitignored
+profiles): main's gate **18 skipped**.
+
+**Why it is this register's class, and why entries 100 and 101 did not prevent it.** 100 said
+test the value the engine consumes; 101 said construct the scenario instead of finding it. This
+gate constructed the host reading and the rung — and found everything else: where the models
+are, which machine the profile describes. A scenario is only constructed if ALL of its inputs
+are, and a skip turns every input the gate forgot to construct into a silent pass.
+
+**Repair.** `tests/unit/prism/_pinned_machine.py`, one brick for every prism gate that plans a
+real container: the cache through `core.paths.cache_dir()`; a missing container FAILS, naming the
+path and who configured it; each profile written from the values it had when the scenario was
+measured and loaded through the engine's own loader; the host reading, both readings of a
+discrete card (sharing facts AND the driver's free figure) and the rung pinned. Under the Mac's
+conditions the rebuilt gate is **18 passed** (19 with the Mac's own container added); with a cache
+that lacks the models it is **18 failed**, never skipped.
+
+**Same pattern elsewhere, named** (cache literal and/or skip and/or a machine-local profile id):
+gates touched this session — `test_no_component_falls_between_placing_whole_and_streaming.py`,
+`test_the_encoder_tiling_path_is_reachable.py`, `test_a_one_at_a_time_rung_is_budgeted_one_at_a_time.py`
+(rebuilt on the brick on their branches); gates on main from earlier sessions, not yet rebuilt —
+`test_a_dtype_name_it_does_not_know_is_refused_not_halved.py`,
+`test_a_plan_under_a_profile_assumes_no_more_host_than_it_declares.py`,
+`test_a_segment_boundary_names_an_op_the_executor_still_has.py`,
+`test_a_segment_budget_reserves_the_constants_it_runs_beside.py`,
+`test_a_strategy_that_loads_its_own_weights_is_installed_first.py`,
+`test_only_a_whole_view_describes_the_machine.py`.
+
+**The lesson, in one line.** A gate that skips when its machine is missing has not been run; it
+must carry its machine, or fail.
