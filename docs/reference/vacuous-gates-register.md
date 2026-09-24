@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-109 entries, 104 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 104 carry a site. Two
+110 entries, 105 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 105 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3300,3 +3300,30 @@ last rung is unreachable. Each is a docstring's claim about residency that no fl
 
 **The lesson, in one line.** A strategy's docstring says what it loads; the flow says what stays —
 test the second.
+
+---
+
+### 105 — every streaming gate judged the plan or the binding; the pieces computed something else, and only running them whole-against-pieces could say so
+
+Four gates stood over `layer_streaming` by 2026-09-24: the plan's strategy (101), its peak under the
+rung, the binding of every symbol in every piece at three sizes, and the plan census. All green on
+PixArt's T5. The Mac rendered the plan and it died on an unbound symbol (8e786e70) — the binding gate
+then caught that, red on main. But with the binding fixed, the pieces RAN and computed a different
+answer: rel L2 0.46 % from the same component run whole, while the whole component run twice was
+bit-identical. Each piece fed the whole run's own seam values diverged 0.15-0.25 % by itself: the
+executor cast every SEAM input to the compute dtype, as if it were a model input, narrowing an fp32
+island to bf16 at every piece's entry. The same rule was written three times (triton, torch
+sequential, compiled), so the fix was three sites.
+
+**What every earlier gate did while the pieces were wrong**: green. A plan cell cannot see
+arithmetic; a binding cell sees shapes; neither executes a kernel. A render could have "passed" on
+a picture that looked right.
+
+**Repair.** `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py` with
+`tools/streamed_component_vs_whole.py`: the component run WHOLE (twice, so a difference can be
+attributed) and through the real `LayerStreamingStrategy`, same inputs, BIT-identity required, at
+batch 1 / 2 / 8 in every engine where the whole component runs. Seen failing on main: the Mac's
+UnboundSymbolError on PixArt-XL-1024, rel L2 0.42 % on PixArt-XL-2-1024-MS. 18/18 bit-identical after.
+
+**The lesson, in one line.** A decomposition is proven by recomposing it: run the parts and the
+whole on the same input, and require the same bytes.

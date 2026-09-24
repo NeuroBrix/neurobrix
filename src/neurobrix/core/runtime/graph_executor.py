@@ -4353,9 +4353,16 @@ class GraphExecutor:
 
             # Apply Prism dtype + device conversion (same logic as sequential mode)
             if is_torch_tensor(value):
-                # For floating-point tensors, convert to Prism dtype
+                # For floating-point tensors, convert to Prism dtype — except a SEAM tensor (a
+                # streamed piece's input): it arrives in the dtype its producing op gave it, as
+                # inside the whole graph. Narrowed here, an fp32 island became bf16 at every piece
+                # entry and the compiled pieces diverged 1.1 % from the whole component
+                # (PixArt T5, 2026-09-24). Same rule as `get_input_dtype` (sequential) and
+                # TritonDtypeEngine._target_dtype_for_input (both triton modes).
                 torch_dtype = self._placement_torch_dtype()
-                if value.dtype.is_floating_point and value.dtype != torch_dtype:
+                from neurobrix.core.prism.layer_partition import is_seam_tensor
+                _seam = is_seam_tensor(tensors.get(tid))
+                if value.dtype.is_floating_point and value.dtype != torch_dtype and not _seam:
                     value = value.to(torch_dtype)
                 # Move input to executor's device (critical for FGP/multi-device)
                 if str(value.device) != str(self.device):
