@@ -264,8 +264,8 @@ addendum of that day is explicit that nothing may read as complete while they ar
 |---|---|
 | APPLE (memory / rung) | 9 |
 | DELL (layer_streaming) | 6 |
-| ENGINE (trace / op defect) | 6 |
-| CENSUS HARNESS (input never supplied) | 3 |
+| ENGINE (trace / op defect) | 6 → **1** (2026-09-24, see the section at the end) |
+| CENSUS HARNESS (input never supplied) | 3 → **0** (cause found and fixed, `96cc16ea`) |
 | FORGE (frozen symbol, re-trace owed) | 3 |
 | ENGINE (census shadow opened the device) | 2 |
 | ENGINE (missing capability) | 2 |
