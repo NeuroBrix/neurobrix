@@ -1,32 +1,37 @@
-"""A component larger than the rung is streamed ON THE CARD, never dropped to the host.
+"""A component larger than the rung is streamed ON THE CARD, never refused, never sent to the host.
 
-`_try_layer_streaming` classified a component as STREAMED when it exceeded the raw
-`capacity_mb`. Every rung above it is judged against the `budget_mb` — the commercial-ladder
-rung a shared pool's free reading is rounded down to. The two differ by the rounding, and a
-component landing between them was served by nothing:
+`_try_layer_streaming` decided which component to stream, and cut its segments, against the raw
+`capacity_mb`. Every rung above it is judged against the RUNG — `_effective_capacity_mb`, the
+free reading rounded down onto the ladder on a shared pool. A component landing between the two
+was served by nothing. The Mac hit it on PixArt at 2048x1024 (e904da83):
 
-    granite-speech-3.3-8b, Apple M4 Pro profile, measured 2026-09-24
-      language_model  16 769.6 MB   (W=15 584.7, A=386.4)
-      budget          16 384 MB     the rung every other strategy is measured against
-      capacity        17 277 MB     what the device reports
+    mps:0: unified memory — planning against 10638 MB actually free (machine: 11198 of 24576)
+    ... ALL FAILED. The last rung needs only the largest single component to fit, and it does not:
+      largest component: text_encoder at 9630MB
 
-Every higher rung refused it, because 16 769.6 > 16 384. This rung found nothing over 17 277,
-had nothing to cut, and declined. The cascade fell to `cpu_streaming` — an 8-billion-parameter
-model sent to the host over a **386 MB overhang**, on a card that physically holds it.
+    text_encoder   9 630 MB
+    rung           8 192 MB     rung_down(10 638)
+    capacity      10 638 MB     11 198 x 0.95
 
-THE ROUNDING IS NOT THE DEFECT AND IS NOT TOUCHED
--------------------------------------------------
-Rounding a shared pool's free reading down onto the ladder is what makes a plan REPRODUCIBLE:
-the free reading swings by around a fifth on a live machine, and a plan derived from an
-unrounded reading is a plan that changes with the weather. This session measured that directly
-in another coordinate — the same Prism call returned `single_gpu_lifecycle` during a 19-hour
-render holding ~19 GB of pinned host memory and `single_gpu` afterwards, from byte-identical
-code (register 99). The rounding is the defence against exactly that.
+and this rack hit it on granite-speech-3.3-8b under the same profile (16 769.6 MB against a
+16 384 rung and a 17 277 capacity), which fell to `cpu_streaming`.
 
-So the law is: the engine never refuses and never leaves the accelerator over an overhang. A
-component larger than the rung is STREAMED ON THE CARD. The streaming path is what changes.
+THESE CELLS CONSTRUCT THEIR SCENARIO
+------------------------------------
+The first version of this file FOUND its scenario: it planned against whatever rung the ladder
+gave this rack's reading, and when the ladder was re-spaced the rung moved above the component,
+the overhang vanished, and three cells went red for a reason that had nothing to do with
+streaming. A gate for "a component over the rung streams" must not depend on which rungs the
+ladder happens to have, nor on what this rack holds in RAM at the moment it runs (register 99).
 
-The two instances measured on this cache are both pinned below.
+So each cell pins the machine it plans for: the host reading is injected (the Mac's own measured
+figures), the rung is imposed through the `NBX_PRISM_BUDGET_MB` door, and a precondition cell
+proves from the solver's own component estimate that the largest component really does sit
+strictly between the rung and the capacity. If a retrace ever moves a component out of that
+window, the precondition says so instead of the verdict cells passing or failing for the wrong
+reason.
+
+Rounding the reading down onto the ladder is NOT touched: it is what makes a plan reproducible.
 """
 from __future__ import annotations
 
@@ -36,74 +41,120 @@ from pathlib import Path
 
 import pytest
 
+import neurobrix.core.host_memory as host_memory
+import neurobrix.core.prism.solver as solver_mod
+from neurobrix.core.host_memory import MemoryState
 from neurobrix.core.prism import InputConfig, PrismSolver, load_profile
 from neurobrix.nbx import NBXContainer
 
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
-APPLE = "default-9f169c79"
+APPLE = "default-9f169c79"              # Apple M4 Pro: unified, memory_mb 18 186, ram 24 576
+MB = 1024 * 1024
+
+# (model, height, width, host MB free, imposed rung MB) — the machine each case was measured on.
+# PixArt is the Mac's refusal at its own reading; granite-speech and Flex are the two instances
+# this rack's census found, at the rung the Mac's profile reads when its host is idle.
+OVER = [
+    ("PixArt-XL-2-1024-MS", 1024, 2048, 11198, 8192),
+    ("granite-speech-3.3-8b", None, None, 18186, 16384),
+    ("Flex.1-alpha", None, None, 18186, 16384),
+]
+IDS = [c[0] for c in OVER]
 
 
-def _plan(model: str, profile_id: str):
+def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
+    state = MemoryState(total_mb=24576, available_mb=host_free_mb,
+                        source="injected by the cell: the machine this case was measured on")
+    monkeypatch.setattr(solver_mod, "memory_state", lambda: state)
+    monkeypatch.setattr(host_memory, "memory_state", lambda: state)
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(rung_mb))
+
+
+def _plan(model, height, width, profile_id=APPLE, refusal_ok=False):
+    """(plan, solver, {component: memory}). With `refusal_ok`, a refusal returns plan=None and
+    still hands back the component estimate — the precondition must hold whatever the solver
+    decides, including before the fix, when this exact scenario refused."""
     root = CACHE / model
     if not (root / "components").is_dir():
         pytest.skip(f"{model} is not in this cache")
+    dj_path = root / "runtime" / "defaults.json"
+    dj = json.loads(dj_path.read_text()) if dj_path.is_file() else {}
+    kw = dict(batch_size=1, height=height or dj.get("height", 1024), width=width or dj.get("width", 1024))
+    s = PrismSolver()
+    seen = {}
+    real = s._compute_memory
+
+    def spy(*a, **k):
+        out = real(*a, **k)
+        seen.update(out)
+        return out
+
+    s._compute_memory = spy
     try:
-        dj = json.loads((root / "runtime" / "defaults.json").read_text())
-    except Exception:                                   # noqa: BLE001
-        dj = {}
-    kw = dict(batch_size=1, height=dj.get("height", 1024), width=dj.get("width", 1024))
-    s = PrismSolver()
-    p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
-                      InputConfig(**kw), mode="compiled")
-    return getattr(p, "strategy", "?"), s
+        p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
+                          InputConfig(**kw), mode="compiled")
+    except RuntimeError:
+        if not (refusal_ok and seen):
+            raise
+        p = None
+    return p, s, seen
 
 
-# ───────────────── the law: never the host over an overhang ─────────────────
+# ───────────────── the scenario, proved constructed before anything is judged ─────────────────
 
-@pytest.mark.parametrize("model", ["granite-speech-3.3-8b", "Flex.1-alpha"])
-def test_a_component_over_the_rung_stays_on_the_accelerator(model):
-    """The two instances on this cache. Both planned `cpu_streaming` before the fix."""
-    strategy, _ = _plan(model, APPLE)
-    assert not strategy.startswith("cpu_"), (
-        f"{model} left the accelerator for {strategy!r}. A component larger than the rung is "
-        f"streamed on the card; the host is not where an overhang is answered.")
-
-
-@pytest.mark.parametrize("model", ["granite-speech-3.3-8b", "Flex.1-alpha"])
-def test_and_the_rung_that_answers_it_is_the_STREAMING_one(model):
-    """Named rather than left as 'not cpu': this overhang is what layer_streaming is for."""
-    strategy, _ = _plan(model, APPLE)
-    assert strategy == "layer_streaming", f"{model} planned {strategy!r}"
-
-
-# ───────────────── the thresholds, so the cells are not folklore ─────────────────
-
-def test_the_component_really_does_fall_BETWEEN_the_two_thresholds():
-    """Without this the fix reads as a preference. granite-speech's largest component is over
-    the rung and under the capacity — which is the only reason nothing served it."""
-    BUDGET, CAPACITY, COMPONENT = 16384.0, 17277.0, 16769.6
-    assert COMPONENT > BUDGET, "it would have fitted a higher rung and never reached this one"
-    assert COMPONENT < CAPACITY, "it would have been classified streamed even before the fix"
-    assert COMPONENT - BUDGET < 400, "the overhang that sent an 8 B model to the host"
-
-
-def test_the_rung_and_the_capacity_are_actually_different_on_this_profile():
-    """If they ever coincide the cells above pass for the wrong reason."""
-    s = PrismSolver()
+@pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
+def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatch, model, h, w,
+                                                                     host_free, rung):
+    _pin_machine(monkeypatch, host_free, rung)
+    _, s, seen = _plan(model, h, w, refusal_ok=True)
     dev = s._prepare_devices(load_profile(APPLE))[0]
-    assert dev.budget_mb < dev.capacity_mb, (
-        f"budget {dev.budget_mb} is not below capacity {dev.capacity_mb}; this profile can no "
-        f"longer exhibit the defect and these cells prove nothing on it")
+    largest = max(m.total_bytes for m in seen.values()) / MB
+    assert dev.budget_mb == rung, f"the door did not impose the rung: {dev.budget_mb}"
+    assert rung < largest < dev.capacity_mb, (
+        f"{model}: largest component {largest:.1f} MB is not strictly between the rung {rung} and "
+        f"the capacity {dev.capacity_mb:.1f} — the scenario these cells judge is not the one planned")
 
 
-# ───────────────── the controls: the fix must not reach past its case ─────────────────
+# ───────────────── the law: streamed on the card ─────────────────
 
-@pytest.mark.parametrize("model,profile,expected", [
-    ("MiniCPM-o-4_5", APPLE, "lazy_sequential"),
-    ("TinyLlama-1.1B-Chat-v1.0", "default-ff6008b7", "single_gpu"),
-])
-def test_a_model_that_was_already_served_is_unchanged(model, profile, expected):
-    """MiniCPM's every component fits the rung — it is the one-at-a-time case, not this one.
-    TinyLlama fits whole. Neither should move because the streaming classifier changed."""
-    strategy, _ = _plan(model, profile)
-    assert strategy == expected, f"{model} moved to {strategy!r}; the fix reached past its case"
+@pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
+def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h, w, host_free, rung):
+    _pin_machine(monkeypatch, host_free, rung)
+    p, _, _ = _plan(model, h, w)
+    assert p.strategy == "layer_streaming", (
+        f"{model} planned {p.strategy!r} with a component over the {rung} MB rung that the "
+        f"device holds; that overhang is what layer_streaming is for")
+
+
+@pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
+def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch, model, h, w,
+                                                                    host_free, rung):
+    """The assertion that a strategy name cannot make. Segments cut against the capacity put the
+    announced peak above the rung — a plan that is a function of the live reading again."""
+    _pin_machine(monkeypatch, host_free, rung)
+    p, s, seen = _plan(model, h, w)
+    parts = getattr(s, "_layer_stream_partitions", None) or {}
+    assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
+    beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
+    for name, part in parts.items():
+        peak = (part.peak_resident_bytes + beside) / MB
+        assert peak <= rung, (
+            f"{model}.{name}: {len(part.segments)} segments peak at {peak:.1f} MB with what stays "
+            f"resident beside them, over the {rung} MB rung the plan is budgeted at")
+
+
+# ───────────────── the controls: the same model, the same machine, a rung that holds it ─────────────────
+
+def test_the_same_component_under_the_rung_is_not_streamed(monkeypatch):
+    """PixArt at the rung the Mac read earlier the same day (11 671 free -> 11 264), where it
+    planned and ran. A component under the rung stays whole."""
+    _pin_machine(monkeypatch, 11671, 11264)
+    p, _, _ = _plan("PixArt-XL-2-1024-MS", 1024, 2048)
+    assert p.strategy != "layer_streaming" and not p.strategy.startswith("cpu_"), p.strategy
+
+
+def test_a_model_that_fits_whole_is_unchanged(monkeypatch):
+    """TinyLlama on a V100-16GB profile at that card's own rung: single_gpu, as before."""
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "16384")
+    p, _, _ = _plan("TinyLlama-1.1B-Chat-v1.0", None, None, profile_id="default-ff6008b7")
+    assert p.strategy == "single_gpu", p.strategy

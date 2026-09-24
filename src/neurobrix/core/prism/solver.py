@@ -695,6 +695,52 @@ class PrismSolver:
         """
         return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
 
+    def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
+                                     component_memory: Dict, profile) -> int:
+        """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
+
+        Each component costs what its allocation keeps resident: a `layer_streaming` segment's
+        announced peak; activations and overhead only when zero3 maps it to a DISCRETE card's
+        host (on a unified device the "offloaded" weights stay in the same pool, so they
+        count); its whole `total_bytes` otherwise. Counting offloaded weights as resident
+        rejected valid mixed plans (lazy_sequential mapping a 57 GB LM to zero3:cuda:0 was
+        "over capacity" on a 32 GB card, the KV check failed, the cascade fell to
+        cpu_execution on a GPU node).
+
+        The costs are then COMBINED by what the strategy holds at once. `lazy_sequential`
+        holds one component at a time — its own docstring says it "drops the requirement from
+        sum(components) to max(component)" — so its peak is the MAX. Every other strategy that
+        reaches this check holds its components together, so its peak is the SUM. Summing for
+        lazy_sequential rejected a rung that fits:
+
+          MiniCPM-o-4_5, Apple M4 Pro profile, 2026-09-23: 14 components, the largest
+          14 019 MB, every one under the 16 384 MB rung; sum 19 519 MB against 17 277 of
+          capacity. lazy_sequential was REJECTED, "KV cache does not fit: Remaining VRAM:
+          0MB, need >=94", and the cascade fell to cpu_execution.
+
+        and applying the max to every strategy would under-budget the ones that do hold all
+        components at once. The combination is decided after every cost is known, so the
+        result does not depend on the order the components are visited in — an in-loop
+        `max(total, x)` beside `total += y` did.
+        """
+        partitions = (getattr(self, "_layer_stream_partitions", {}) or {}) \
+            if strat_name == "layer_streaming" else {}
+        costs = []
+        for name, m in component_memory.items():
+            alloc = strat_allocs.get(name)
+            dev = alloc[0] if isinstance(alloc, tuple) else alloc
+            part = partitions.get(name)
+            if part is not None:
+                costs.append(int(part.peak_resident_bytes))
+            elif (isinstance(dev, str) and dev.startswith("zero3:")
+                    and not _device_is_unified(dev, profile)):
+                costs.append(int(m.activation_bytes + m.overhead_bytes))
+            else:
+                costs.append(int(m.total_bytes))
+        if strat_name == "lazy_sequential":
+            return max(costs, default=0)
+        return sum(costs)
+
     def _effective_capacity_mb(self, dev: "DeviceState") -> float:
         """What a whole plan may be budgeted against on `dev`: the card's
         capacity less the margin, AND never more than the ladder rung of the
@@ -1242,61 +1288,10 @@ class PrismSolver:
                         # Cold: peak of one component at a time
                         total_allocated = max(m.total_bytes for m in component_memory.values())
                 else:
-                    # Allocation-aware GPU residency: a component mapped to
-                    # zero3:* keeps its weights on CPU pinned memory — only
-                    # its activations (+overhead) occupy GPU. Counting the
-                    # offloaded weights as resident rejected valid mixed
-                    # plans (lazy_sequential mapping a 57GB LM to
-                    # zero3:cuda:0 was "over capacity" on a 32GB card → the
-                    # KV check failed → the cascade fell through to
-                    # cpu_execution on a GPU node).
-                    total_allocated = 0
-                    # `lazy_sequential` holds ONE component at a time — that is the whole rung,
-                    # and its own docstring says it "drops the requirement from sum(components)
-                    # to max(component)". Summing them here contradicts the strategy being
-                    # checked, and the contradiction is not theoretical:
-                    #
-                    #   MiniCPM-o-4_5, Apple M4 Pro profile, 2026-09-23
-                    #     14 components, the largest 14 019 MB, every one under the 16 384 MB
-                    #     budget; sum 19 519 MB against a capacity of 17 277.
-                    #     lazy_sequential scored 20.0 and was REJECTED:
-                    #       "KV cache does not fit: Remaining VRAM: 0MB, need >=94"
-                    #     and the cascade fell to `cpu_execution` — off the accelerator, on a
-                    #     model where every component fits it alone.
-                    #
-                    # The comment below already records this exact failure for the zero3-mapped
-                    # case and fixed it there only. A component that is NOT zero3-mapped still
-                    # summed, so the same rung still fell through for the same reason.
-                    #
-                    # Census over the whole cache (59 containers x 3 profiles, 177 plans): 5
-                    # meet max(component) <= capacity < sum(components), and this was 1 of the 2
-                    # that left the accelerator. The other, granite-speech-3.3-8b, is a
-                    # different cause — its largest component is over the ladder BUDGET though
-                    # under the capacity — and is deliberately not touched here.
-                    _one_at_a_time = strat_name == "lazy_sequential"
-                    for _comp_name, _m in component_memory.items():
-                        _alloc = strat_allocs.get(_comp_name)
-                        _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        _part = (getattr(self, "_layer_stream_partitions", {}) or {}).get(_comp_name) \
-                            if strat_name == "layer_streaming" else None
-                        if _part is not None:
-                            # It holds ONE segment at a time. The number the
-                            # partitioner announced is the number the executor
-                            # holds, which is the whole point of this rung.
-                            total_allocated += _part.peak_resident_bytes
-                        elif (isinstance(_dev, str) and _dev.startswith("zero3:")
-                                and not _device_is_unified(_dev, profile)):
-                            total_allocated += _m.activation_bytes + _m.overhead_bytes
-                        else:
-                            # Weights count. On a UNIFIED device this is the
-                            # zero3 branch too: "offload to host pinned
-                            # memory" moves the bytes to the same pool they
-                            # already occupy, so it frees nothing and the
-                            # budget must still see them.
-                            if _one_at_a_time:
-                                total_allocated = max(total_allocated, _m.total_bytes)
-                            else:
-                                total_allocated += _m.total_bytes
+                    # Allocation-aware residency, combined by what the strategy holds at once
+                    # (one at a time: max; together: sum) — see the method.
+                    total_allocated = self._resident_bytes_for_kv_check(
+                        strat_name, strat_allocs, component_memory, profile)
 
                 # Remove KV cache double-count (already in LM activation_bytes)
                 total_allocated = max(total_allocated - kv_already_counted, 0)
@@ -4884,11 +4879,27 @@ class PrismSolver:
         if not devices:
             return None
         target = devices[0]
-        # The device's CAPACITY, which is what the other rungs are measured
-        # against and what the memory check will compare this plan to. Using
-        # the nominal memory_mb would announce a budget 5% larger than the one
-        # the plan is then judged by.
-        budget_bytes = int(float(getattr(target, "capacity_mb", 0)) * 1024 * 1024)
+        # The RUNG — `_effective_capacity_mb`, the one figure every rung above this one is
+        # measured against — both to decide which component is streamed and to size its
+        # segments. This rung used the raw `capacity_mb` for both, and a component landing
+        # between the two was served by nothing:
+        #
+        #   PixArt-XL-2-1024-MS at 2048x1024, Apple M4 Pro, the Mac 2026-09-24 (e904da83)
+        #     text_encoder   9 630 MB
+        #     rung           8 192 MB   free 10 638 rounded down onto the ladder
+        #     capacity      10 638 MB
+        #   granite-speech-3.3-8b, same profile: language_model 16 769.6 against 16 384 / 17 277
+        #
+        #   Every rung above refused the component against the rung. This one found nothing over
+        #   the capacity, had nothing to cut, declined — and the plan refused (PixArt) or fell to
+        #   `cpu_streaming` (granite-speech), on a device that holds the component.
+        #
+        # A component larger than the rung is STREAMED ON THE CARD, and its segments are cut
+        # against the same rung: cutting them against the capacity would announce a peak
+        # above the rung, a function of the live reading — the one thing rounding the reading
+        # down exists to prevent. A rung of 0 (a reading under the ladder's lowest rung)
+        # declines here exactly as it does on every other rung, and the refusal names it.
+        budget_bytes = int(self._effective_capacity_mb(target) * 1024 * 1024)
         if budget_bytes <= 0:
             return None
 
@@ -4915,27 +4926,8 @@ class PrismSolver:
         # TinyLlama at 1000 MB: a 992.5 MB segment plus a 264.1 MB lm_head
         # against 950 MB of capacity. Same defect as sizing segments without
         # reserving the activations, one level up.
-        # A component is STREAMED when it does not fit the rung every other strategy is judged
-        # against — the BUDGET — not when it exceeds the raw capacity. The two differ by the
-        # ladder rounding, and a component that lands between them was served by nothing:
-        #
-        #   granite-speech-3.3-8b, Apple M4 Pro profile, 2026-09-24
-        #     language_model  16 769.6 MB   (W=15 584.7, A=386.4)
-        #     budget          16 384 MB     the rung a shared pool is rounded down to
-        #     capacity        17 277 MB     what the device reports
-        #
-        #   Every rung above this one measures against the BUDGET, so they all refused it. This
-        #   rung classified against the CAPACITY, found nothing over 17 277, had nothing to cut
-        #   and declined — and the cascade fell to `cpu_streaming`. The component fits the card
-        #   and not the rung, and a 386 MB overhang sent an 8 B model to the host.
-        #
-        # The law is that the engine never refuses and never leaves the accelerator over an
-        # overhang: a component larger than the rung is STREAMED ON THE CARD. Rounding the
-        # reading down stays exactly as it is — it is what makes a plan reproducible when a free
-        # reading swings 21 % — and the streaming path is what changes.
-        _rung_bytes = int(float(getattr(target, "budget_mb", 0) or 0) * 1024 * 1024) or budget_bytes
         streamed = {name for name, mem in sorted_comps
-                    if mem.total_bytes > _rung_bytes}
+                    if mem.total_bytes > budget_bytes}
         resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
                               if name not in streamed)
         # And the graph's CONSTANTS, which are resident beside every segment and
