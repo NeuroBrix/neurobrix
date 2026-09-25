@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-111 entries, 106 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 106 carry a site. Two
+112 entries, 107 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 107 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3376,3 +3376,39 @@ when the pieces are built.
 
 **The lesson, in one line.** An invariant between two graphs must name both graphs, and one of them
 must be the graph the other side actually holds.
+
+---
+
+### 107 — every streaming gate ran the component; the flow reads its executor by name, and no gate ran a flow
+
+By 2026-09-25 four gates stood over `layer_streaming` and executed real pieces: the binding of every
+symbol (A), whole-against-pieces bit identity (105), the cut on the graph Prism cut (106) and the
+plan's reserves. All green. The Mac then counted 30 streamed VLM and audio-LLM runs refused before
+their first piece (df2588e7): `Audio-LLM stage 'language_model' requires embed_tokens weight.` A
+flow reads the token embedding BY NAME from its LM's executor, outside the graph; a whole
+executor holds it because the loader keeps every non-block key for that reader; a streamed base
+held nothing. Behind it, a second defect no gate could see either: every PIECE loaded every
+non-block key with every run — the embedding into pieces that never read it — and the plan
+reserved none of it (0 MB beside the pieces against 384-1 600 MB held on the four models measured).
+
+**What the gates did while the flow could not start**: green. Each drove the component through
+`streamed_component_vs_whole.py`, which feeds it its inputs directly; the flow's by-name read never
+happened in any of them.
+
+**And behind it, a third a token gate alone would have passed:** GLM-4.1V streamed decoded the
+same tokens as whole with logits off (30.3190 vs 30.3169 at step 0) while whole run twice was
+identical — every piece had its calibration record REFUSED ("measured on another graph": the
+record is keyed to the whole graph's signature) and ran the conservative precision contract.
+
+**Repair.** For a component whose flow reads it by name (its graph takes `inputs_embeds`), the base
+holds every non-block weight resident (`load_flow_read_weights`) and Prism reserves them beside the
+pieces; a piece loads only what its ops consume (`_flow_reads_weights = False`) and borrows a
+non-block weight it consumes from the base — one copy; every piece runs under its COMPONENT's
+precision contract, resolved once on the whole graph and lent (`_contract_from`). `tests/regression/test_a_streamed_stage_serves_the_flow.py` runs the real flow through
+the CLI, whole and streamed, and requires the decoded token ids — or the top-4 ids AND logit values —
+identical: red on main with the Mac's exact refusal; with the contract lent, the logits too. The
+plan's reserve: `tests/unit/prism/test_a_streamed_stage_reserves_what_its_flow_reads.py`, red on
+main (0 MB reserved), its oracle read from the index.
+
+**The lesson, in one line.** A component is judged inside the thing that uses it: its caller's
+reads are part of its contract, and a gate that feeds it by hand cannot see them.

@@ -51,7 +51,9 @@ BOUNDARY_CELLS = [
     for m, c, rungs in [
         ("granite-speech-3.3-8b", "language_model", (4096, 6144, 12288)),
         ("Janus-Pro-7B", "language_model", (6144,)),
-        ("GLM-4.1V-9B-Thinking", "model.language_model", (6144, 12288)),
+        # 6 144 no longer streams GLM: the 1 184 MB its flow reads by name, now reserved beside
+        # the pieces, leave 40 MB for pieces against a 216 MB activation peak — declined honestly.
+        ("GLM-4.1V-9B-Thinking", "model.language_model", (12288,)),
         ("MiniCPM-o-4_5", "llm.model", (8192, 12288)),
         ("Qwen3-VL-30B-A3B-Thinking", "model.language_model", (11264, 12288)),
         # The MoE LM the runtime fuses on its flow's declaration (12 132 ops -> 4 300, 48

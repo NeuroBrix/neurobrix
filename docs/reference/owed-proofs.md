@@ -4106,3 +4106,24 @@ Mac:** its 26 rows on the landed engine.
 `position_ids` as `[s2, s0, s3]` with `s2` named `batch` and traced at 3 — the M-RoPE section axis, a
 constant, not the batch. Anything binding by name (a harness, a request) binds it to the batch.
 Queued with the Mac's trace defects (df2588e7), fixed at source and retraced.
+
+**Update 2026-09-25 — "a streamed stage is asked for its embedding weight" (30): FIXED on the
+rack, measured.** The flows read the token embedding by name from the LM's BASE executor; a
+streamed base held nothing, while every piece loaded every non-block weight with every run, in no
+plan's budget (0 MB reserved against 384 MB on granite-speech, 1 184 GLM-4.1V, 1 186 MiniCPM-o,
+1 600 Janus-Pro). Fixed: for a component a flow reads by name (its graph takes `inputs_embeds`)
+the base holds the non-block weights resident and Prism reserves them; a piece loads only what its
+ops consume and borrows from the base; every piece runs under its component's precision contract
+(before, each piece's calibration record was refused and it ran the conservative contract: GLM-4.1V
+same tokens, logits off). granite-speech streamed at the 8 192 MB rung decodes the same 8 tokens as
+whole, triton and triton-sequential. **Named gap:** a flow that ties a decoder head to its
+embedding (encoder-decoder, TTS) reads a component whose graph takes token ids; streamed, that read
+is not served yet (no row of the Mac's reaches it). Gates
+`tests/regression/test_a_streamed_stage_serves_the_flow.py`,
+`tests/unit/prism/test_a_streamed_stage_reserves_what_its_flow_reads.py` (register 107). **Owed by
+the Mac:** its 30 rows on the landed engine.
+
+**Where the 82 stand after this:** unbound symbol 26 FIXED, seam dtype FIXED, boundaries 26 FIXED,
+embedding 30 FIXED, refusal reason 62 FIXED; the 6 T5 shape rows do not reproduce here (the Mac
+reruns); the 2 Flex.1-alpha triton-sequential rows (`aten.mul::24 ... (1, 24, 512, 128) and
+(1, 1, 4608, 128)`) OPEN, next.

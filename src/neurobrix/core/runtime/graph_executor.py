@@ -123,6 +123,23 @@ class GraphExecutor:
         outputs = executor.run(inputs)
     """
 
+    #: Whether this executor serves the FLOW's by-name reads (the token embedding, the head,
+    #: the norms, outside the graph) — so its load keeps every non-block key. False for a
+    #: `layer_streaming` piece: the flow reads its component's BASE executor, which holds those
+    #: keys resident, and a piece loads only what its own ops consume. Class-level so an executor
+    #: built without __init__ (several cells) keeps the whole-executor rule.
+    _flow_reads_weights = True
+    #: The executor whose weights this one BORROWS instead of loading (a `layer_streaming` piece
+    #: borrows its base's resident non-block weights: one copy, held by the base). None: load all.
+    _borrow_from = None
+    #: The executor whose precision contract this one runs under when it is not its own to
+    #: resolve: a `layer_streaming` piece runs under its COMPONENT's, resolved through the base
+    #: on the whole graph. Resolved on the piece's graph, the calibration record — keyed to the
+    #: whole graph's signature — was refused for every piece, and each piece ran the
+    #: conservative contract: GLM-4.1V streamed, same tokens, logits off from whole (30.3190 vs
+    #: 30.3169 at step 0) while whole run twice was identical. None: resolve as a component.
+    _contract_from = None
+
     def __init__(
         self,
         family: str,
@@ -1124,6 +1141,19 @@ class GraphExecutor:
         from neurobrix.core.runtime.precision_contract import registry_model_name
         return registry_model_name(getattr(self, "_cache_path", None))
 
+    def precision_contract(self, compute_dtype, supports_op_pins: bool = True) -> tuple:
+        """(activations_fp16_safe, fp32_op_uids, narrow_op_uids): a streamed piece's is its
+        component's, resolved through its base on the whole graph at the caller's compute dtype
+        (`_contract_from`); anything else resolves its own (`precision_contract.resolve`). The
+        ONE entry every engine's resolve site goes through — compiled and sequential at graph
+        load, triton and triton-sequential at compile."""
+        if self._contract_from is not None:
+            return self._contract_from.precision_contract(compute_dtype, supports_op_pins)
+        from neurobrix.core.runtime.precision_contract import resolve
+        return resolve(getattr(self, "_cache_path", None), self._component_name,
+                       getattr(self, "_dag", None), compute_dtype=compute_dtype,
+                       supports_op_pins=supports_op_pins)
+
     def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
         """(activations_fp16_safe, fp32_op_uids, narrow_op_uids) for the DtypeEngine — the
         shared resolver in core/runtime/precision_contract.py: the component's
@@ -1131,10 +1161,7 @@ class GraphExecutor:
         conservative default. This is the compiled / sequential consumer, with
         per-op islands. While a calibration runs, the component's census is
         bound to this graph so the record can be written at the end."""
-        from neurobrix.core.runtime.precision_contract import resolve
-        dag = getattr(self, "_dag", None)
-        cache_path = getattr(self, "_cache_path", None)
-        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)   # binds the census
+        return self.precision_contract(compute_dtype)   # binds the census
 
     def _placement_torch_dtype(self):
         """The dtype this component computes in and holds its data in, on the
@@ -1609,7 +1636,8 @@ class GraphExecutor:
         return consumed
 
     @staticmethod
-    def consumed_in_loader_space(consumed, index_keys, graph_params, encodes=None):
+    def consumed_in_loader_space(consumed, index_keys, graph_params, encodes=None,
+                                 flow_reads=True):
         """The loader keys to load for a graph that consumes `consumed`.
 
         Three readers of the weight dict, three rules, all in the LOADER's
@@ -1645,7 +1673,7 @@ class GraphExecutor:
         binding is ambiguous the safe direction is to load."""
         if consumed is None:
             return None
-        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
         encodes = encodes or {}
         probe = {wk: encodes.get(wk, wk) for wk in index_keys}
         probed = list(dict.fromkeys(probe.values()))          # index order, once
@@ -1658,14 +1686,15 @@ class GraphExecutor:
         consumed_keys = {wk for name, wk in binding.items() if name in consumed}
         wanted = set()
         for wk in index_keys:
-            if not _BLOCK_RE.search(wk):
+            if probe[wk] in consumed_keys:
                 wanted.add(wk)
-            elif probe[wk] in consumed_keys:
+            elif flow_reads and not is_block_key(wk):
                 wanted.add(wk)
         return wanted
 
     @staticmethod
-    def binding_of_the_loaded(consumed, index_keys, graph_params, encodes=None):
+    def binding_of_the_loaded(consumed, index_keys, graph_params, encodes=None,
+                              flow_reads=True):
         """The binding the post-load reconcile must apply: name → loaded key,
         computed over the WHOLE index before the load. Recomputed over the
         filtered dict it would fail pass 0's coverage test (the unconsumed
@@ -1677,7 +1706,8 @@ class GraphExecutor:
         probed = list(dict.fromkeys(probe.values()))
         binding = GraphExecutor.bind_weight_keys(set(graph_params), probed) \
             or {k: k for k in probed}
-        wanted = GraphExecutor.consumed_in_loader_space(consumed, index_keys, graph_params, encodes)
+        wanted = GraphExecutor.consumed_in_loader_space(consumed, index_keys, graph_params, encodes,
+                                                        flow_reads)
         loaded = {probe[wk] for wk in wanted}
         out = {name: wk for name, wk in binding.items() if wk in loaded}
         for wk in loaded:
@@ -1704,8 +1734,75 @@ class GraphExecutor:
         encodes = {k: v["encodes"] for k, v in tensors.items()
                    if isinstance(v, dict) and v.get("encodes")}
         keys = list(tensors.keys()); params = self._graph_param_names()
-        self._pending_weight_binding = self.binding_of_the_loaded(consumed, keys, params, encodes)
-        return self.consumed_in_loader_space(consumed, keys, params, encodes)
+        self._pending_weight_binding = self.binding_of_the_loaded(
+            consumed, keys, params, encodes, self._flow_reads_weights)
+        return self.consumed_in_loader_space(consumed, keys, params, encodes,
+                                             self._flow_reads_weights)
+
+    def load_flow_read_weights(self, nbx_path, component, shard_map=None, keys=None) -> int:
+        """Load the component's NON-BLOCK weights onto this executor, and nothing else.
+
+        For a `layer_streaming` base executor: its pieces hold the weights their ops read, and
+        the flow reads the token embedding (and, per flow, a head or a norm) BY NAME from this
+        executor, outside the graph (`_get_embed_weight`, the audio-LLM stage, the triton
+        session). The loader's rule for a whole component already keeps every non-block key for
+        exactly that reader (`consumed_in_loader_space`); a weightless base broke it — the
+        Mac's 30 "requires embed_tokens weight" refusals. `_load_args` is left unset on purpose,
+        so a later rewrite (`set_moe_config`) does not load the whole component onto the base.
+        Idempotent: a key already held is not loaded again. `keys`, when given, is the
+        component's non-block set already read (`non_block_keys`). Returns the number loaded."""
+        if keys is None:
+            keys = self.non_block_keys(nbx_path, component)
+        held = self._weights or {}
+        keys = {k for k in keys if self._held_as(k, held) is None}   # idempotent, encoded too
+        if not keys:
+            return 0
+        if self.mode in ("triton", "triton_sequential"):
+            self._load_weights_triton(nbx_path, component, shard_map, only=keys)
+        else:
+            self._load_weights_native(nbx_path, component, shard_map, only=keys)
+        return len(keys)
+
+    @staticmethod
+    def non_block_keys(nbx_path, component) -> set:
+        """The component's non-block weight keys (`is_block_key`), read from its index. An
+        unreadable index is refused: the base cannot be told what the flow reads."""
+        import json as _json
+        import os as _os
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
+        index = _os.path.join(str(nbx_path), "components", component, "weights_index.json")
+        with open(index) as f:
+            return {k for k in (_json.load(f).get("tensors") or {}) if not is_block_key(k)}
+
+    @staticmethod
+    def _held_as(key, weights):
+        """The name under which `weights` holds the loader key `key`, or None: the key itself,
+        or — for an encoded build — the `<base>.weight` its storage leaf was assembled into
+        (`assemble_quantized` folds `.qweight`/`.scales`/`.qmins` into one tensor)."""
+        if key in weights and key != "_arenas":
+            return key
+        from neurobrix.kernels.quantized_tensor import STORAGE_LEAVES
+        for leaf in STORAGE_LEAVES:
+            if key.endswith("." + leaf):
+                name = key[: -len(leaf) - 1] + ".weight"
+                return name if name in weights else None
+        return None
+
+    def _borrow(self, only):
+        """Split a load set: the keys this executor's lender already holds (taken by reference,
+        under the name the lender holds them — an encoded triplet as its assembled tensor) and
+        the rest (loaded). A piece and its base then hold ONE copy of a non-block weight."""
+        lender = getattr(self._borrow_from, "_weights", None) if self._borrow_from is not None else None
+        if not lender or only is None:
+            return only, {}
+        taken, keep = {}, set()
+        for k in only:
+            name = self._held_as(k, lender)
+            if name is None:
+                keep.add(k)
+            else:
+                taken[name] = lender[name]
+        return keep, taken
 
     def _graph_param_names(self) -> set:
         """Every parameter and buffer the graph names — the set the
@@ -1815,6 +1912,7 @@ class GraphExecutor:
         # (2026-09-13, four native MoE cells: planned 5-19 GB, loaded 30-57).
         _only = only if only is not None else self._consumed_in_loader_space(
             self.consumed_weight_names(), nbx_path, component)
+        _only, _taken = self._borrow(_only) if only is None else (_only, {})
         with WeightLoader(nbx_path) as loader:
             if shard_map:
                 loaded = loader.load_component_with_shard_map(
@@ -1826,6 +1924,10 @@ class GraphExecutor:
             self._weights.update(loaded)          # a rewrite added readers
         else:
             self._weights = loaded
+            self._weights.update(_taken)          # borrowed, not loaded: the lender's copy
+        if _taken:
+            print(f"   [Compiled] '{component}': {len(_taken)} weights borrowed from the "
+                  f"base, not loaded", flush=True)
         if _only is not None:
             print(f"   [Compiled] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
@@ -1877,6 +1979,9 @@ class GraphExecutor:
         # the reconcile's own rule before the loader sees it.
         _only = only if only is not None else \
             self._consumed_in_loader_space(_only, nbx_path, component)
+        # A streamed piece takes the non-block weights its base holds by reference (`_borrow`):
+        # one copy on the device, the base's, whose arenas outlive every piece's run.
+        _only, _taken = self._borrow(_only) if only is None else (_only, {})
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only)
@@ -1892,6 +1997,10 @@ class GraphExecutor:
             self._weights.update(self._join_arenas(self._weights, loaded))
         else:
             self._weights = loaded
+            self._weights.update(_taken)          # borrowed, not loaded: the lender's copy
+        if _taken:
+            print(f"   [Triton] '{component}': {len(_taken)} weights borrowed from the "
+                  f"base, not loaded", flush=True)
         if _only is not None:
             print(f"   [Triton] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
@@ -2784,12 +2893,8 @@ class GraphExecutor:
         # engine: the same resolver as the compiled and triton paths, flag
         # only — no per-op island in that dispatcher yet, so the contract is
         # taken only when the record needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
-        from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract_seq
-        _seq_safe, _seq_pins, _seq_narrow = _resolve_contract_seq(
-            getattr(self, "_cache_path", None), self._component_name,
-            getattr(self, "_dag", None),
-            compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=True)
+        _seq_safe, _seq_pins, _seq_narrow = self.precision_contract(
+            "float16" if str(self.dtype) in ("float16", "torch.float16") else "float32")
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
             activations_fp16_safe=bool(_seq_safe),
@@ -3525,12 +3630,8 @@ class GraphExecutor:
         # Triton dtype engine pins the record's fp32 islands and narrows the
         # narrowable ops exactly as the compiled one (R30;
         # D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
-        from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract
-        _safe, _pins, _narrow = _resolve_contract(
-            getattr(self, "_cache_path", None), self._component_name,
-            getattr(self, "_dag", None),
-            compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=True)
+        _safe, _pins, _narrow = self.precision_contract(
+            "float16" if str(self.dtype) in ("float16", "torch.float16") else "float32")
         self._triton_seq.set_precision_contract(bool(_safe), _pins, _narrow)
 
         self._triton_seq.compile()

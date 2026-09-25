@@ -264,6 +264,17 @@ class LayerPartitioner:
                          peak_live_bytes=peak_live)
 
 
+def flow_embeds_into(graph: Optional[Dict[str, Any]]) -> bool:
+    """Whether the FLOW supplies this component's embeddings — its graph takes `inputs_embeds`,
+    the convention both autoregressive flows read (`uses_embeds`) — and so reads the token
+    embedding BY NAME from the component's executor, outside the graph. Such a component,
+    streamed, keeps its non-block weights resident on its base executor
+    (`LayerStreamingStrategy._ensure_flow_reads`) and Prism reserves them; any other component
+    (a VAE, a DiT, an encoder fed token ids) is read by no flow and its pieces load exactly what
+    they consume."""
+    return "input::inputs_embeds" in ((graph or {}).get("input_tensor_ids") or [])
+
+
 def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
     """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
     `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it
