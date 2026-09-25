@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A convolution with a very large biased output no longer faults.** When a convolution's
+  output held more than two billion elements — a video decoder at a large frame count and size,
+  or an upscaler at a large tile — adding the bias faulted with an illegal address past that
+  boundary. The bias step now addresses every element.
+
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
   in the first attention block with a shape mismatch. The grid now follows the request's own
