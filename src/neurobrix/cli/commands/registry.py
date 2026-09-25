@@ -466,6 +466,20 @@ def _import_body(args):
     import zipfile
     if not zipfile.is_zipfile(store_path):
         _die(args, "ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
+    # The cache slot carries the MANIFEST's model name, never the hub slug: a hub record is
+    # a name someone typed, the manifest's is the name the container was built under (the
+    # Hugging Face repository's). Twenty-nine hub records carried a hand case or a hand
+    # shortening of their repository (2026-09-26); installing under the slug would have
+    # produced a directory the runtime's naming door refuses. Read from the archive
+    # before anything is written.
+    with zipfile.ZipFile(store_path) as _zf:
+        _declared = json.loads(_zf.read("manifest.json")).get("model_name")
+    if not _declared:
+        _die(args, "ERROR: the downloaded .nbx declares no model_name in its manifest.")
+    if _declared != cache_path.name:
+        print(f"   The container declares model_name {_declared!r}; the hub record is named "
+              f"{cache_path.name!r}. Installing under the container's own name.")
+        cache_path = CACHE_DIR / _declared
     # The staging tree, the lock and the two-rename swap are one brick, shared
     # with `NBXCache.extract`: the cache is often a mounted export, and the old
     # code here removed the live tree BEFORE renaming staging over it, leaving
