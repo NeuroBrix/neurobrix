@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Non-square requests on FLUX-family image models now run.** The image position grid was
+  rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
+  in the first attention block with a shape mismatch. The grid now follows the request's own
+  height and width in both execution modes.
+
 - **Concatenating very large tensors no longer fails to compile.** When one input to a
   concatenation or stack held more than two billion elements while the others were small — the
   video decoder of Open-Sora at 129 frames — the kernel refused to compile with a type mismatch.
