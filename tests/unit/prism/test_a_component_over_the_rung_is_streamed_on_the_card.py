@@ -35,55 +35,51 @@ Rounding the reading down onto the ladder is NOT touched: it is what makes a pla
 """
 from __future__ import annotations
 
-import json
-import os
-from pathlib import Path
-
 import pytest
 
-import neurobrix.core.host_memory as host_memory
-import neurobrix.core.prism.solver as solver_mod
-from neurobrix.core.host_memory import MemoryState
-from neurobrix.core.prism import InputConfig, PrismSolver, load_profile
-from neurobrix.core.prism.memory_budget import DeviceReading
+from neurobrix.core.prism import InputConfig, PrismSolver
 from neurobrix.nbx import NBXContainer
+from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, impose_rung,
+                                              no_door, pin_dedicated_card, pin_host, profile)
 
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
-APPLE = "default-9f169c79"              # Apple M4 Pro: unified, memory_mb 18 186, ram 24 576
+# The machine each cell plans for is BUILT here (register 102): the Mac's profile and reading, a
+# dedicated V100-16GB — never a profile id or a cache path this machine happens to have.
+APPLE = APPLE_M4_PRO
 MB = 1024 * 1024
 
 # (model, height, width, host MB free, imposed rung MB) — the machine each case was measured on.
-# PixArt is the Mac's refusal at its own reading; granite-speech and Flex are the two instances
-# this rack's census found, at the rung the Mac's profile reads when its host is idle.
+# PixArt-XL-1024 is the Mac's OWN refusal, its container at its reading (refused at 14 420 MB
+# before the fix; after it, 6 segments peaking at 8 129.3 MB — the figures the Mac's render
+# reports); PixArt-XL-2-1024-MS is the same class on the sibling container (transformer 1 642.8 MB
+# against 1 464.5, the whole 178.3 MB between the two refusals); granite-speech and Flex are the two instances
+# this rack's census found, at the rung the Mac's profile reads when its host is idle. The request
+# is stated: Flex at 1024 x 1024 (neither Flex nor granite-speech declares a resolution, and an
+# audio model has none).
 OVER = [
+    ("PixArt-XL-1024", 1024, 2048, 11198, 8192),
     ("PixArt-XL-2-1024-MS", 1024, 2048, 11198, 8192),
     ("granite-speech-3.3-8b", None, None, 18186, 16384),
-    ("Flex.1-alpha", None, None, 18186, 16384),
+    ("Flex.1-alpha", 1024, 1024, 18186, 16384),
 ]
 IDS = [c[0] for c in OVER]
 
 
 def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
-    state = MemoryState(total_mb=24576, available_mb=host_free_mb,
-                        source="injected by the cell: the machine this case was measured on")
-    monkeypatch.setattr(solver_mod, "memory_state", lambda: state)
-    monkeypatch.setattr(host_memory, "memory_state", lambda: state)
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(rung_mb))
+    pin_host(monkeypatch, 24576, host_free_mb, "the Mac's reading this case was measured at")
+    impose_rung(monkeypatch, rung_mb)
 
 
 MODES = ["compiled", "triton"]         # segments are cut on the graph each engine will run
 
 
-def _plan(model, height, width, profile_id=APPLE, refusal_ok=False, mode="compiled"):
+def _plan(model, height, width, spec=APPLE, refusal_ok=False, mode="compiled"):
     """(plan, solver, {component: memory}). With `refusal_ok`, a refusal returns plan=None and
     still hands back the component estimate — the precondition must hold whatever the solver
     decides, including before the fix, when this exact scenario refused."""
-    root = CACHE / model
-    if not (root / "components").is_dir():
-        pytest.skip(f"{model} is not in this cache")
-    dj_path = root / "runtime" / "defaults.json"
-    dj = json.loads(dj_path.read_text()) if dj_path.is_file() else {}
-    kw = dict(batch_size=1, height=height or dj.get("height", 1024), width=width or dj.get("width", 1024))
+    root = container_root(model)
+    kw = dict(batch_size=1)
+    if height is not None:
+        kw.update(height=height, width=width)
     s = PrismSolver()
     seen = {}
     real = s._compute_memory
@@ -95,7 +91,7 @@ def _plan(model, height, width, profile_id=APPLE, refusal_ok=False, mode="compil
 
     s._compute_memory = spy
     try:
-        p = s.solve_smart(NBXContainer.load(str(root)), load_profile(profile_id),
+        p = s.solve_smart(NBXContainer.load(str(root)), profile(spec),
                           InputConfig(**kw), mode=mode)
     except RuntimeError:
         if not (refusal_ok and seen):
@@ -111,7 +107,7 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
                                                                      host_free, rung):
     _pin_machine(monkeypatch, host_free, rung)
     _, s, seen = _plan(model, h, w, refusal_ok=True)
-    dev = s._prepare_devices(load_profile(APPLE))[0]
+    dev = s._prepare_devices(profile(APPLE))[0]
     largest = max(m.total_bytes for m in seen.values()) / MB
     assert dev.budget_mb == rung, f"the door did not impose the rung: {dev.budget_mb}"
     assert rung < largest < dev.capacity_mb, (
@@ -134,7 +130,7 @@ def test_a_component_over_the_rung_is_streamed_on_the_card(monkeypatch, model, h
 
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("model,h,w,host_free,rung", OVER, ids=IDS)
-def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch, model, h, w,
+def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monkeypatch, model, h, w,
                                                                     host_free, rung, mode):
     """The assertion that a strategy name cannot make. Segments cut against the capacity put the
     announced peak above the rung — a plan that is a function of the live reading again.
@@ -148,9 +144,9 @@ def test_and_its_segments_are_cut_against_the_rung_not_the_capacity(monkeypatch,
     beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
-        assert peak <= rung, (
+        assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
             f"{model}.{name}: {len(part.segments)} segments peak at {peak:.1f} MB with what stays "
-            f"resident beside them, over the {rung} MB rung the plan is budgeted at")
+            f"resident beside them, over the usable part of the {rung} MB rung the plan is budgeted at")
 
 
 # ───────────────── the controls: the same model, the same machine, a rung that holds it ─────────────────
@@ -164,32 +160,31 @@ def test_the_same_component_under_the_rung_is_not_streamed(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_a_dedicated_card_cuts_what_it_cut_before(monkeypatch, mode):
+def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     """No door, a DEDICATED V100-16GB reading injected (driver 16 151 MB, own context 306 MB —
-    this rack's card 0 as measured). The dedicated law budgets min(16 151 - 306, capacity), which
-    is the capacity, so moving this rung from capacity to rung must move nothing here.
+    this rack's card 0 as measured). A control: it pins where DeepSeek-Coder-V2-Lite's single
+    17 777 MB component is cut on that card, so any change that moves the cut is SEEN.
 
-    Reaches `_try_layer_streaming` for real: DeepSeek-Coder-V2-Lite's single 17 777 MB component
-    is over the card, the rung is attempted (its partition is left on the solver), and
-    `lazy_sequential` then outscores it. The boundaries pinned below are the ones main's solver
-    cut against the capacity, measured identical in both modes before this change. A retrace of
-    this container moves these op ids (register 98): re-measure against main's cut, do not delete
-    the cell."""
-    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
-    big = MemoryState(total_mb=257530, available_mb=200000, source="injected: an idle host")
-    monkeypatch.setattr(solver_mod, "memory_state", lambda: big)
-    monkeypatch.setattr(host_memory, "memory_state", lambda: big)
-    monkeypatch.setattr(solver_mod, "read_device_sharing", lambda i: DeviceReading(
-        kind="device", capacity_mb=16151, free_mb=15845, own_context_mb=306, measured=True,
-        source="injected: a dedicated V100-16GB"))
-    p, s, _ = _plan("DeepSeek-Coder-V2-Lite-Instruct", None, None,
-                    profile_id="default-ff6008b7", mode=mode)
-    dev = s._prepare_devices(load_profile("default-ff6008b7"))[0]
+    It moved once, deliberately, and each move is recorded:
+      69c98647  capacity -> rung: nothing moved (the rung IS the capacity on a dedicated card)
+                [embedding::0, view::247] [moe_fused::block.12, view::467] [moe_fused::block.23, rms_norm::81]
+      next      rung -> its usable part (0.92 x 15 564.8 = 14 319.6 MB), the whole-component
+                standard (test_no_component_falls_between_placing_whole_and_streaming.py):
+                still 3 segments, the boundaries below, identical in both modes.
+
+    Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
+    solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
+    ids (register 98): re-measure against the previous cut, do not delete the cell."""
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 257530, 200000, "an idle rack host")
+    pin_dedicated_card(monkeypatch, 16151, 306, "this rack's V100-16GB card 0 as measured")
+    p, s, _ = _plan("DeepSeek-Coder-V2-Lite-Instruct", None, None, spec=V100_16GB, mode=mode)
+    dev = s._prepare_devices(profile(V100_16GB))[0]
     assert dev.budget_mb == dev.capacity_mb, (
         f"the dedicated law no longer budgets this card at its capacity ({dev.budget_mb} vs "
         f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
-    assert cut == {"model": [["aten.embedding::0", "aten.view::247"],
-                             ["moe_fused::block.12", "aten.view::467"],
-                             ["moe_fused::block.23", "custom.rms_norm::81"]]}, cut
+    assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
+                             ["aten.slice::502", "aten.view::427"],
+                             ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut

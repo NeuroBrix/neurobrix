@@ -4294,13 +4294,25 @@ landing between the two was served by nothing. The same defect sent granite-spee
 `cpu_streaming` under the Mac's profile on this rack.
 
 **Reproduced here** by pinning the Mac's own machine in a cell (host reading 11 198 MB injected,
-rung imposed at 8 192 through the door): main's solver refuses with the same largest component
-(`text_encoder at 9630MB`) and the same device line (`mps:0: 10638MB`). NOT byte for byte: the
-refusal totals **14 598 MB here against 14 420 MB there**, a 178 MB difference in vae/transformer
-that was not chased — `hub-cache-diff.md` records the PixArt pair as CACHE_NEWER, so the two
-machines may not hold the same container. With the fix the plan is
-`layer_streaming`, the text encoder in **7 segments**, peak 3 138.1 MB + 4 967.5 MB resident
-beside them (vae, transformer) = **8 105.6 MB ≤ 8 192**. The intermediate version that cut against
+rung imposed at 8 192 through the door). **Correction, 2026-09-24 (the Mac, verified by the
+supervisor):** the first reproduction ran on a DIFFERENT container. The Mac refused on
+**PixArt-XL-1024** (14 419.5 MB total); the rack reproduced on **PixArt-XL-2-1024-MS**
+(14 597.8 MB). The whole 178.3 MB is the transformer, 1 464.5 against 1 642.8 MB. This entry first
+reported that difference as unexplained and guessed at stale containers; it was two models.
+
+The rack holds PixArt-XL-1024 too, and now reproduces the Mac's case on the Mac's container,
+same pinned machine, triton mode:
+
+    solver at 2f9a9986 (before the fix)   REFUSED, Total required: 14420MB   (the Mac: 14420)
+    solver at 69c98647 (the fix)          layer_streaming, text_encoder in 6 segments,
+                                          peak 8 129.3 MB <= 8 192           (the Mac's render: 6 pieces,
+                                                                               peak 8 129.3 MB)
+
+Both containers are now cells of the gate. The Mac reports rendering its container on the
+merged code with exactly that plan; the judged artefact is still owed back (item 2 below). With the fix the plan is
+`layer_streaming`: on PixArt-XL-2-1024-MS the text encoder in **7 segments**, peak 3 138.1 MB +
+4 967.5 MB resident beside them (vae, transformer) = **8 105.6 MB ≤ 8 192**; on the Mac's
+PixArt-XL-1024, 6 segments, 8 129.3 MB. The intermediate version that cut against
 the capacity gave 4 segments and a peak over the rung. Gate: `tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py`,
 seen failing on main's solver (6 red) and on an intermediate version that streamed against the
 rung but still cut segments against the capacity (3 red, the peak cell).
@@ -4539,3 +4551,129 @@ read only 8 or 9 of its 24 runs. A rerun at 10 800 s per container is under way 
 coverage. DeepSeek-Coder-V2-Lite's decode failure is inside a streamed segment, so it joins the
 streamed-execution class (the Dell's). deepseek-moe-16b-chat's `aten.mm::4` mismatch is new
 and unclassified until the full rerun reads it.
+
+---
+
+## 2026-09-24 — answered from the rack: the 82 streamed-execution failures and the 62 silent refusals, by class (the Mac's 32110ef5 / 8e786e70)
+
+The Mac's reshape census on `4a3658d7` counted 82 streamed-execution failures and 62 refusals with
+weights over the rung whose message never said why `layer_streaming` declined. By class:
+
+| class | count (Mac) | cause, measured here | state |
+|---|---|---|---|
+| a piece cannot bind a symbol | 26 | a piece's symbol binds from a component input it does not receive, and the old seam re-sourcing only matched the SAME symbol id — PixArt's T5 minted s0/s1 from attention_mask and s2/s3 from input_ids, Open-Sora binds s2 from img_ids, Flex s7/s9 from txt_ids/img_ids | **FIXED** (landing below): a piece now CARRIES the component input its symbols bind from. Gate `test_every_streamed_piece_binds_every_symbol_it_uses.py` executes every piece's binding at trace / 2x / far: red on main for PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha, Open-Sora-v2 (`s2 ... input::img_ids::dim_1`, the Mac's); green for those and SANA-Video + the 8 streamed LLM / VLM / speech containers |
+| pieces compute something else than the whole | (not in the Mac's census — hidden behind the class above) | every piece cast its SEAM inputs to the compute dtype, narrowing fp32 islands: PixArt T5 pieces rel L2 0.46 % from whole; three cast sites (triton, torch sequential, compiled) | **FIXED**: seam tensors enter as produced. `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py`: 18/18 bit-identical, executed on a V100 (register 105) |
+| the plan's boundaries are not in the graph that runs | 26 | GLM-4.1V, Qwen3-VL, Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o. Every missing id in the Mac's extract (df2588e7) is `custom.swiglu_fused::N`: Prism cuts `normalize_for_branch(graph, mode, family)`, which applies the swiglu fusion, and the graph these LM stages execute does not carry it (or numbers it differently) | **OPEN** — the cut must be made on the graph the stage executes, by the same normalisation |
+| a streamed piece receives a weight untransposed | 8 (the Mac's df2588e7) | T5 text encoders (PixArt-XL-2-1024-MS, PixArt-Sigma, Open-Sora), triton compiled mode only, rungs 6144 / 8192: `aten.mm::4 ... 4096 vs 10240`. Hypothesis, not yet reproduced here: a cut between a weight-only op (`aten.t` of a weight) and its consumer puts a weight-derived tensor on a seam, which the compiled sequence folds | **OPEN** — reproduce with `tools/streamed_component_vs_whole.py` at the Mac's rung |
+| a streamed VLM / audio stage asks for its embedding weight | 30 | the same six: the flows read the LM's embedding table from the executor's weights; under `layer_streaming` the base executor is weightless by design (its pieces hold the weights) | **OPEN** — a flow must obtain the embedding through the component (a piece or a graph op), never by reading a streamed executor's weights |
+| refusal never says why streaming declined | 62 | `_try_layer_streaming` returned None at eight places, silently; the refusal's strategy list was hand-kept and never named it | **FIXED** (landing below): every decline carries its reason and figures; the refusal lists the strategies actually evaluated. Gate `test_a_refusal_names_why_layer_streaming_declined.py`, red on main |
+
+**A defect the new refusal text exposed at once (OPEN):** a VAE too large to hold whole by the
+whole-component estimate is cut by the partitioner into ONE segment ("it fits in ONE segment, which
+a whole-component rung serves"), so streaming declines it and no rung serves it — PixArt-XL-1024 at
+2048x1024 batch 2, rung 4 096; Open-Sora-v2 at its vendor default (192x336, 129 frames), rung 8 192.
+Two figures for one question again: the whole-component estimate and the partitioner's segment
+accounting disagree about the same component.
+
+**Owed back by the Mac:** the PixArt-XL-1024 2048x1024 render on the landed engine, judged. On this
+rack its text encoder runs in its 8 pieces bit-identical to whole, but the transformer then fails at
+2048x1024 (`aten.mul::11 ... (2, 1, 1152) and (4, 4096, 1152)`, a frozen patchify token count of the
+05-20 build above its traced size) — the class `apple-shape-defects` is working on, not streaming.
+
+**Two defects the executed gate met on the WHOLE component, before any piece exists (OPEN, named
+where they live, not streaming defects):**
+
+* compiled mode, T5 text encoder of both PixArt-XL-2-1024-MS containers, batch 2 and 8: the whole
+  component fails (`aten.add::7 ... tensor a (128) must match tensor b (64)`; a view to
+  `[8, -1, 512, 512]` carries the batch into the head count). Torch sequential and both triton
+  engines run the same graph at batch 2 and 8 bit-identical — a compiled-engine batch defect, in the
+  compiled sequence, not in the container.
+* the 2026-09-21 retrace of PixArt-XL-2-1024-MS, T5 at 300 tokens (the vendor's `max_sequence_length`):
+  the whole component fails (`Cannot broadcast (1, 64, 120, 300) and (1, 1, 300, 300)`) — the
+  relative-position bias froze 120, the traced extent. At 23 tokens pieces and whole are
+  bit-identical. A symbolic-coverage defect of the trace (principle 1), queued for Forge with the
+  Mac's trace defects (df2588e7), fixed at source and retraced.
+
+**The "weight received untransposed" class (8, the Mac's df2588e7) does not reproduce on the landed
+engine here:** `tools/streamed_component_vs_whole.py PixArt-XL-2-1024-MS text_encoder triton 1 120
+11198 <rung>` on a V100, the Mac's reading, rung 6 144 (9 pieces) and 8 192 (5 pieces): pieces
+BIT-identical to whole, no `aten.mm::4 ... 4096 vs 10240`. The Mac's rows were taken on `4a3658d7`,
+before pieces carried their symbols and kept their seam dtype. **Owed by the Mac:** the same rows on
+the landed engine; a row that still fails there reopens the class with its exact command.
+
+**Update, same day — "the plan's boundaries are not in the graph that runs" (26): FIXED on the
+rack, measured.** Not the swiglu numbering (identical, 40/40 / 30/30 / 40/40 / 36/36 pairs, on
+the four dense LMs): the graph. A streamed base executor holds no weights and never compiles, so
+`layer_streaming` checked the graph as loaded while Prism had cut the normalised one — granite-speech
+at 4 096 MB: 2 of 16 boundary ids on `custom.swiglu_fused`, those 2 absent, 0 fused ops in the base
+graph. `triton_sequential` never fuses, so its plans were cut on a graph it does not run; Qwen3-Omni's
+thinker is MoE-fused by the runtime on its flow's declaration (12 132 ops -> 4 300), which Prism did
+not make (Qwen3-VL's stacked experts are not fused by that pass; its rows were the swiglu cause).
+Fixed: the strategy cuts `normalize_for_branch(base graph)`, only `triton` gets the branch rewrites,
+Prism's MoE declaration travels on the plan to the strategy (the vlm flows declare only after the
+pieces exist), and the plan carries the fingerprint of the graph it cut — the strategy refuses any
+other, at the cut and again before the first run.
+
+**Named, not fixed here (pre-existing):** `GraphExecutor.set_moe_config`'s docstring says it
+"patches the DAG" so the fused ops carry the declared `norm_topk_prob`; its body only stores the
+value, and an `llm`-family MoE is fused at load with the default (True). Whether a single-gate
+routing then applies the wrong normalisation for DeepSeek (`norm_topk_prob` False) is unmeasured;
+the multi-gate binding applies none. Owed: a cell reading the fused ops' attribute after the flow's
+declaration. Gate
+`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py` (register 106). **Owed by the
+Mac:** its 26 rows on the landed engine.
+
+**A symbol misnamed at trace (Forge, OPEN):** GLM-4.1V-9B-Thinking's `model.language_model` declares
+`position_ids` as `[s2, s0, s3]` with `s2` named `batch` and traced at 3 — the M-RoPE section axis, a
+constant, not the batch. Anything binding by name (a harness, a request) binds it to the batch.
+Queued with the Mac's trace defects (df2588e7), fixed at source and retraced.
+
+**Update 2026-09-25 — "a streamed stage is asked for its embedding weight" (30): FIXED on the
+rack, measured.** The flows read the token embedding by name from the LM's BASE executor; a
+streamed base held nothing, while every piece loaded every non-block weight with every run, in no
+plan's budget (0 MB reserved against 384 MB on granite-speech, 1 184 GLM-4.1V, 1 186 MiniCPM-o,
+1 600 Janus-Pro). Fixed: for a component a flow reads by name (its graph takes `inputs_embeds`)
+the base holds the non-block weights resident and Prism reserves them; a piece loads only what its
+ops consume and borrows from the base; every piece runs under its component's precision contract
+(before, each piece's calibration record was refused and it ran the conservative contract: GLM-4.1V
+same tokens, logits off). granite-speech streamed at the 8 192 MB rung decodes the same 8 tokens as
+whole, triton and triton-sequential. **Named gap:** a flow that ties a decoder head to its
+embedding (encoder-decoder, TTS) reads a component whose graph takes token ids; streamed, that read
+is not served yet (no row of the Mac's reaches it). Gates
+`tests/regression/test_a_streamed_stage_serves_the_flow.py`,
+`tests/unit/prism/test_a_streamed_stage_reserves_what_its_flow_reads.py` (register 107). **Owed by
+the Mac:** its 30 rows on the landed engine.
+
+**Where the 82 stand after this:** unbound symbol 26 FIXED, seam dtype FIXED, boundaries 26 FIXED,
+embedding 30 FIXED, refusal reason 62 FIXED; the 6 T5 shape rows do not reproduce here (the Mac
+reruns); the 2 Flex.1-alpha triton-sequential rows (`aten.mul::24 ... (1, 24, 512, 128) and
+(1, 1, 4608, 128)`) OPEN, next.
+
+**Update 2026-09-25 — the 2 Flex.1-alpha triton-sequential rows: FIXED on the rack, measured.**
+Reproduced on the landed engine with the Mac's plan (4 096 and 16 384 MB), in the pieces only: a
+seam named inside a `tensor_tuple` (`aten.cat::19`, the joint attention's query concat) was not
+aliased by the seam builder, and triton-sequential passed the kernel a shorter list (compiled
+triton met a string). One argument walk now serves the builder and both sequences, and a list
+naming a tensor nobody holds is refused in every engine. Flex's transformer streamed is bit-identical to whole in triton and
+triton-sequential at both rungs (register 108). The extended binding gate found the same defect in
+Open-Sora-v2's transformer at 8 192 MB and no longer finds it after the fix — a static check of the
+pieces' references; Open-Sora's pieces were not executed against the whole here (its container is
+the one awaiting the rebuild).
+
+**A symbol-naming defect of the Flex.1-alpha trace (Forge, OPEN):** its 512-token text axis and
+4 096-token image axis are both named `seq_len`, `txt_ids`/`img_ids` name their token axis
+`batch`, and a coordinate width of 3 is named `seq_len`. No request can be bound by name, so the
+executed Flex cells run at the trace size only. Queued with the Mac's trace defects (df2588e7).
+
+**Where the 82 stand:** unbound symbol 26, seam dtype, boundaries 26, embedding 30, Flex shapes 2,
+refusal reason 62 — FIXED on this rack; the 6 T5 shape rows do not reproduce here. **Owed by the
+Mac:** its 90 rows on the landed engine.
+
+**A frozen dim of the granite-speech-3.3-8b trace (Forge, OPEN):** its `language_model` graph declares
+the causal mask `aten.where::0` as `[23, 23]`, concrete — the traced sequence length. At batch 1 the
+runtime still computes the right mask; at batch 2 it evaluates to `[b*s, b*s]` and the WHOLE LM
+fails in every engine (`The expanded size of the tensor (64) must match the existing size (128) ...
+Target sizes: [2, 32, 64, 64]. Tensor sizes: [128, 128]`, measured 2026-09-25 on a V100, before
+any piece exists). A symbolic-coverage defect of the trace (principle 1), queued with the Mac's
+trace defects (df2588e7), fixed at source and retraced; the streamed LM gates run granite-speech at
+batch 1 until then (`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`).

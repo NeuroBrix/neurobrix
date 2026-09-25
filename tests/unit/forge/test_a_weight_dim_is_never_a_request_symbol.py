@@ -60,7 +60,7 @@ KNOWN_OFFENDERS = {
     "Sana_1600M_1024px_MultiLing":   {"vae"},
     "Ming-Lite-Omni-1.5":            {"image_vae"},
     "Real-ESRGAN-x4":                {"model"},
-    "real-esrgan-x4":                {"model"},
+    "Real-ESRGAN-x4":                {"model"},
     "real-esrgan-x8":                {"model"},
     "SANA-Video_2B_720p_diffusers":  {"transformer"},
     "MiniCPM-o-4_5":                 {"flow_dit"},

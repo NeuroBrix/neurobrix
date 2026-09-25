@@ -32,8 +32,12 @@ DeepSeek-Coder-V2-Lite-Instruct (16 GB V100, `NBX_FORCE_STRATEGY=layer_streaming
 
 3. **A symbol's SOURCE still named an input the segment does not have.** Carrying the
    symbolic shape is not enough — the binding must point at a tensor this segment receives.
-   Re-sourced, never dropped: an op inside the segment still names the symbol, and removing it
-   would fail resolving rather than fail binding.
+   The first repair RE-SOURCED the symbol to a seam dim with the same id; it could not serve a
+   trace with two ids for one extent (PixArt's T5: `s1` from attention_mask, `s3` from
+   input_ids; the hidden states carry `s3`, a later piece uses `s1` — the Mac's render died
+   there, 8e786e70). Now the segment CARRIES the component input the symbol binds from: the
+   source is unchanged, the input is declared, the strategy hands it in. The executed binding
+   is gated at three sizes in `test_every_streamed_piece_binds_every_symbol_it_uses.py`.
 
 After all three, the same command ran all three segments. The cells below assert the
 invariants — no op name, no attribute name, no symbol id in an assertion — because a fused op
@@ -51,7 +55,9 @@ def _graph():
     input in an ATTRIBUTE, the way `custom::moe_fused` does, not only positionally."""
     return {
         "tensors": {
-            "input_ids": {"tensor_id": "input_ids", "is_input": True, "shape": [1, 23],
+            # A component input is named `input::<name>` — the engine's convention, and the one
+            # a symbol's source (`input::input_ids::dim_0`) names.
+            "input::input_ids": {"tensor_id": "input::input_ids", "is_input": True, "shape": [1, 23],
                           "dtype": "int64",
                           "symbolic_shape": {"dims": [{"type": "symbol", "id": "s0", "trace": 1},
                                                       {"type": "symbol", "id": "s1", "trace": 23}],
@@ -65,7 +71,7 @@ def _graph():
                     "dtype": "float16", "output_name": "logits"},
         },
         "ops": {
-            "a": {"op_type": "aten::embedding", "input_tensor_ids": ["input_ids"],
+            "a": {"op_type": "aten::embedding", "input_tensor_ids": ["input::input_ids"],
                   "output_tensor_ids": ["h"]},
             "b": {"op_type": "custom::moe_fused", "input_tensor_ids": ["h"],
                   "output_tensor_ids": ["out"],
@@ -75,7 +81,7 @@ def _graph():
                                  "top_k": 6, "num_experts": 64}},
         },
         "execution_order": ["a", "b"],
-        "input_tensor_ids": ["input_ids"],
+        "input_tensor_ids": ["input::input_ids"],
         "output_tensor_ids": ["out"],
         "symbolic_context": {
             "symbols": {
@@ -144,41 +150,115 @@ def test_the_seam_tensor_keeps_its_symbolic_shape(seg1):
 
 # ───────────────────────── 3. a symbol binds from what the segment HAS ────────────────
 
-def test_a_symbol_is_RE_SOURCED_to_a_tensor_this_segment_receives(seg1):
-    """`input_ids` is read by segment 0 and by nothing after it."""
+def test_a_symbol_binds_where_the_whole_component_binds_it(seg1):
+    """`input_ids` is read by segment 0 and by nothing after it: the segment CARRIES it, and the
+    symbol keeps its original source — the same tensor the whole component binds from."""
     for sid in ("s0", "s1"):
-        src = seg1["symbolic_context"]["symbols"][sid]["source"]
-        assert not src.startswith("input::input_ids::"), (
-            f"{sid} still binds from an input this segment does not receive: {src}")
-        assert src.startswith(_alias(seg1) + "::dim_")
+        assert seg1["symbolic_context"]["symbols"][sid]["source"].startswith("input::input_ids::dim_")
+    assert "input::input_ids" in seg1["input_tensor_ids"]
+    assert seg1["symbol_carriers"] == ["input::input_ids"]
+    assert seg1["tensors"]["input::input_ids"]["symbol_carrier"] is True
 
 
-def test_the_re_source_is_not_double_prefixed(seg1):
-    """The alias already carries `input::`; a second one names a tensor that does not
-    exist, and the refusal then reads `input::input::aten.add::113::out_0::dim_0`."""
-    for sid in ("s0", "s1"):
-        assert "input::input::" not in seg1["symbolic_context"]["symbols"][sid]["source"]
+def test_the_carrier_is_named_the_way_the_caller_hands_it_in(seg1):
+    """`segment_input_names` is the key set the strategy passes; the carrier is the component's
+    own input, so it is looked up under the name the component was called with."""
+    assert "input_ids" in seg1["segment_input_names"]
+    assert "input::input_ids" not in seg1["segment_input_names"]
 
 
-def test_the_original_source_is_RECORDED_not_erased(seg1):
-    assert seg1["symbolic_context"]["symbols"]["s0"]["seam_resourced_from"] == \
-        "input::input_ids::dim_0"
-
-
-def test_a_symbol_the_segment_CAN_bind_is_left_alone():
-    """Segment 0 holds `input_ids` itself. Re-sourcing it would be a change for nothing."""
+def test_a_symbol_the_segment_already_binds_carries_nothing():
+    """Segment 0 holds `input_ids` itself: nothing to carry, nothing declared twice."""
     seg0 = build_segment_graph(_graph(), Segment(index=0, first_op="a", last_op="a",
                                                  op_count=1, weight_bytes=0))
     assert seg0["symbolic_context"]["symbols"]["s0"]["source"] == "input::input_ids::dim_0"
-    assert "seam_resourced_from" not in seg0["symbolic_context"]["symbols"]["s0"]
+    assert seg0["symbol_carriers"] == []
+    assert seg0["input_tensor_ids"].count("input::input_ids") == 1
 
 
-def test_a_symbol_no_seam_dim_carries_keeps_its_source_and_refuses_as_before():
-    """Nothing is invented. A dim that genuinely does not cross must still refuse, or the
-    seam would paper over a real symbolic-coverage hole."""
+def _with_s9(source):
+    """`s9` USED in segment 1 (the output tensor carries it), sourced from `source`."""
     g = _graph()
-    g["symbolic_context"]["symbols"]["s9"] = {"name": "other", "trace_value": 4,
-                                              "source": "input::absent::dim_0"}
-    seg = build_segment_graph(g, Segment(index=1, first_op="b", last_op="b",
-                                         op_count=1, weight_bytes=0))
+    g["symbolic_context"]["symbols"]["s9"] = {"name": "other", "trace_value": 4, "source": source}
+    g["tensors"]["out"]["symbolic_shape"] = {"dims": [{"type": "symbol", "id": "s9", "trace": 4}, 23, 8],
+                                             "concrete": [4, 23, 8]}
+    return g
+
+
+def test_a_symbol_whose_source_is_not_a_component_input_is_not_carried_and_stays_unbound():
+    """Nothing is invented. A dim that genuinely does not cross must refuse at binding — the
+    engine's own resolver leaves it unbound — or the seam would paper over a coverage hole."""
+    from types import SimpleNamespace
+    from neurobrix.triton.symbols import SymbolResolver
+    seg = build_segment_graph(_with_s9("input::absent::dim_0"),
+                              Segment(index=1, first_op="b", last_op="b", op_count=1, weight_bytes=0))
     assert seg["symbolic_context"]["symbols"]["s9"]["source"] == "input::absent::dim_0"
+    assert "input::absent" not in seg["symbol_carriers"]
+    r = SymbolResolver(seg["symbolic_context"])
+    r.bind_from_inputs({t: SimpleNamespace(shape=(1, 23, 8))
+                        for t in seg["input_tensor_ids"]}, seg["input_tensor_ids"], seg["tensors"])
+    assert "s9" not in r.bindings and {"s0", "s1"} <= set(r.bindings)
+
+
+def test_a_source_form_the_partitioner_cannot_carry_is_refused_at_partition_time():
+    with pytest.raises(ValueError, match="cannot carry"):
+        build_segment_graph(_with_s9("weights::x::dim_0"),
+                            Segment(index=1, first_op="b", last_op="b", op_count=1, weight_bytes=0))
+
+
+def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
+    """The seam rule where the engines apply it (register 105): the triton entry cast returns no
+    target for a seam tensor, and a component input of the same dtype string IS cast."""
+    from neurobrix.core.prism.layer_partition import is_seam_tensor
+    from neurobrix.triton.dtype import TritonDtypeEngine
+    seam = seg1["tensors"][_alias(seg1)]
+    assert is_seam_tensor(seam) and not is_seam_tensor(seg1["tensors"]["input::input_ids"])
+    eng = TritonDtypeEngine.__new__(TritonDtypeEngine)
+    from neurobrix.kernels.nbx_tensor import parse_dtype
+    eng.compute_dtype = parse_dtype("bfloat16")
+    assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None
+    plain = {"x": {"dtype": "float32"}}
+    assert eng._target_dtype_for_input("x", plain) == parse_dtype("bfloat16")
+
+
+# ───────────── 2026-09-25: a seam inside a LIST argument is aliased too ─────────────
+
+def test_the_one_walk_aliases_every_form_an_argument_takes():
+    """`rewire_arg` is the walk the seam builder and the triton sequence share. The builder's
+    own walk handled a single `tensor_id` and missed a `tensor_tuple` — Flex.1-alpha's joint
+    attention `aten.cat::19` kept its seam's raw id, and triton-sequential concatenated the
+    text queries with nothing (df2588e7)."""
+    from neurobrix.core.prism.layer_partition import rewire_arg
+    alias = {"h": "input::h"}
+    assert rewire_arg({"type": "tensor", "tensor_id": "h"}, alias)["tensor_id"] == "input::h"
+    assert rewire_arg({"tensor_id": "h"}, alias)["tensor_id"] == "input::h"
+    assert rewire_arg({"type": "tensor_tuple", "tensor_ids": ["q", "h"]}, alias)["tensor_ids"] \
+        == ["q", "input::h"]
+    nested = {"type": "list", "value": [{"type": "tensor_tuple", "tensor_ids": ["h"]},
+                                        {"type": "scalar", "value": 2}]}
+    assert rewire_arg(nested, alias)["value"][0]["tensor_ids"] == ["input::h"]
+    untouched = {"type": "tensor_tuple", "tensor_ids": ["q"]}
+    assert rewire_arg(untouched, alias) is untouched
+
+
+def test_a_seam_in_a_list_argument_reaches_the_piece_under_its_alias():
+    g = {"tensors": {"x": {"shape": [2]}, "h": {"shape": [2]}, "q": {"shape": [2]},
+                     "y": {"shape": [4]}},
+         "ops": {"a": {"op_type": "aten::relu", "input_tensor_ids": ["x"],
+                       "output_tensor_ids": ["h"], "attributes": {}},
+                 "b": {"op_type": "aten::relu", "input_tensor_ids": ["x"],
+                       "output_tensor_ids": ["q"], "attributes": {}},
+                 "c": {"op_type": "aten::cat", "input_tensor_ids": ["q", "h"],
+                       "output_tensor_ids": ["y"],
+                       "attributes": {"args": [{"type": "tensor_tuple", "tensor_ids": ["q", "h"]},
+                                               {"type": "scalar", "value": 0}]}}},
+         "execution_order": ["a", "b", "c"], "input_tensor_ids": ["input::x"],
+         "output_tensor_ids": ["y"]}
+    g["tensors"]["input::x"] = g["tensors"].pop("x")
+    for o in g["ops"].values():
+        o["input_tensor_ids"] = ["input::x" if t == "x" else t for t in o["input_tensor_ids"]]
+    order = {u: i for i, u in enumerate(g["execution_order"])}
+    seg = build_segment_graph(g, Segment(index=1, first_op="b", last_op="c", op_count=2,
+                                         weight_bytes=0), order)
+    tids = seg["ops"]["c"]["attributes"]["args"][0]["tensor_ids"]
+    assert tids == ["q", "input::h"], tids

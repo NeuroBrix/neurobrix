@@ -61,7 +61,7 @@ OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
 OFF_TRACE_RECT_HW = (240, 320)
 
 CELLS = [
-    pytest.param("real-esrgan-x4", id="realesrgan"),
+    pytest.param("Real-ESRGAN-x4", id="realesrgan"),
     # Hard PASS since 2026-08-28: the collision-free stimulus plus the
     # window-count recovery closed D-RETRACE-SWIN2SR-SYMBOLIC, and this
     # cell XPASSed on all four combinations. The xfail was removed with

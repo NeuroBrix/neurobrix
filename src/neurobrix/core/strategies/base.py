@@ -61,6 +61,11 @@ class StrategyContext:
     # These are the segments the budget was ACCEPTED under, so the strategy
     # executes them rather than deriving its own and hoping they match.
     layer_segments: Dict[str, Any] = field(default_factory=dict)
+    # component -> fingerprint of the graph those segments were cut on (`graph_fingerprint`);
+    # `layer_streaming` refuses to cut a different one.
+    layer_graphs: Dict[str, str] = field(default_factory=dict)
+    # component -> norm_topk_prob for a streamed MoE LM the plan declared (`layer_stream_moe`).
+    layer_moe: Dict[str, bool] = field(default_factory=dict)
 
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can

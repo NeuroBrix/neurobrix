@@ -26,6 +26,26 @@ from typing import Any, Dict, List, Optional
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
+_ABSENT = object()
+
+
+def _piece_input(values: Dict[str, Any], name: str) -> Any:
+    """A piece's input by the name the executor strips from `input::<name>`: flat first (a seam
+    tensor id, a plain component input), then a DOTTED component input walked through the nested
+    dict the synthesizer builds (`added_cond_kwargs.resolution`) — the same resolution
+    `GraphExecutor` applies to its own inputs. A symbol CARRIER is a component input and may be
+    dotted; looked up flat it was refused as "nothing before it produced them"."""
+    if name in values:
+        return values[name]
+    cur: Any = values
+    for part in name.split("."):
+        if isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return _ABSENT
+    return cur
+
+
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
 
@@ -52,6 +72,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         super().__init__(context, strategy_name)
         self._segment_executors: Dict[str, List[Any]] = {}
         self._installed: set = set()
+        self._cut_verified: set = set()
+        self._non_block: Dict[str, set] = {}
 
     # -- segment executors -------------------------------------------------
 
@@ -65,6 +87,65 @@ class LayerStreamingStrategy(ExecutionStrategy):
         """Delegates to the strategy brick — one resolver for every strategy."""
         return self.resolve_artifact_path(component_name)
 
+
+    def _graph_prism_cut(self, component_name: str, base: Any) -> Dict[str, Any]:
+        """The base executor's graph as Prism cut it, or a refusal.
+
+        The SAME normalisation, with the SAME MoE declaration, over the base executor's graph. A
+        streamed base holds no weights and never compiles, so its graph is the one loaded (plus
+        the MoE fusion its load performed for an `llm` family); the 26 refusals the Mac counted
+        were exactly the boundaries on a fused op. The declaration comes from the PLAN: the vlm
+        flows declare a MoE LM only after its pieces are built. The normalisation leaves an
+        already-normalised graph unchanged (unit-gated); a base compiled whole would carry the
+        sequence's other in-place rewrites and be refused — unreachable for a weightless base.
+
+        The door: the graph must BE the graph Prism cut (`graph_fingerprint`), not merely contain
+        its boundary ids — a fusion made on one side only can leave every boundary of a
+        few-piece plan on an untouched op (register 106). Checked when the pieces are built AND
+        again before the component first runs, after its flow has declared what it declares: a
+        flow that fuses what the plan did not is refused rather than run on unfused pieces.
+        """
+        from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
+        dag = getattr(base, "_dag", None)
+        if not isinstance(dag, dict):
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}' has no graph to cut")
+        dag = normalize_for_branch(dag, base.mode, base.family,
+                                   declared_moe=(getattr(self.context, "layer_moe", None) or {})
+                                   .get(component_name))
+        planned = (getattr(self.context, "layer_graphs", None) or {}).get(component_name)
+        here = graph_fingerprint(dag)
+        if planned is None:
+            raise RuntimeError(
+                f"layer_streaming: the plan carries no fingerprint of the graph "
+                f"'{component_name}' was cut on, so the graph cut here cannot be shown to be "
+                f"the same one. Re-plan with a solver that records it.")
+        if planned != here:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}'s graph is not the one Prism cut "
+                f"(planned {planned}, here {here} — op count first). A fusion or rewrite ran "
+                f"on one side only; executing its boundaries here would run pieces nothing "
+                f"budgeted.")
+        return dag
+
+    def _ensure_flow_reads(self, component_name: str, base: Any) -> None:
+        """Hold the component's non-block weights on its BASE executor, once, when a flow reads
+        it by name (`flow_embeds_into`: the flow embeds its tokens from this executor's table) —
+        what a whole executor holds and a streamed base did not: the Mac's 30 "requires
+        embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
+        key is not reloaded), and called on every entry, so a base unloaded between phases gets
+        them back."""
+        from neurobrix.core.prism.layer_partition import flow_embeds_into
+        if not flow_embeds_into(getattr(base, "_dag", None)):
+            return                    # no flow reads this component by name: nothing to hold
+        nbx_path = self._nbx_path(component_name)
+        if component_name not in self._non_block:            # read once, not per step
+            self._non_block[component_name] = base.non_block_keys(nbx_path, component_name)
+        n = base.load_flow_read_weights(nbx_path, component_name,
+                                        keys=self._non_block[component_name])
+        if n and os.environ.get("NBX_LAYER_DIAG") == "1":
+            print(f"   [LAYERDIAG] '{component_name}': {n} non-block weights resident on the "
+                  f"base for the flow's by-name reads", flush=True)
 
     def _build_segment_executors(self, component_name: str) -> List[Any]:
         """One executor per segment, each carrying that segment's graph.
@@ -81,10 +162,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if base is None:
             raise RuntimeError(
                 f"ZERO FALLBACK: no executor for '{component_name}'")
-        dag = getattr(base, "_dag", None)
-        if not isinstance(dag, dict):
-            raise RuntimeError(
-                f"layer_streaming: '{component_name}' has no graph to cut")
+        dag = self._graph_prism_cut(component_name, base)
 
         bounds = self._segments_for(component_name)
         if not bounds:
@@ -132,8 +210,22 @@ class LayerStreamingStrategy(ExecutionStrategy):
             cache_path = getattr(base, "_cache_path", None)
             if cache_path is not None:
                 seg_exec._cache_path = cache_path
+            # Set BEFORE the graph loads: loading resolves the compiled engines' precision
+            # contract (`_init_from_dag`), and a piece must resolve its COMPONENT's — through the
+            # base, on the whole graph its calibration record was measured on, at the piece's own
+            # compute dtype. Resolved on a piece's graph the record was refused ("measured on
+            # another graph") and every piece ran the conservative contract: GLM-4.1V streamed,
+            # same tokens, logits off from whole. A piece's op uids index the whole's sets.
+            seg_exec._contract_from = base
+            seg_exec._flow_reads_weights = False
+            seg_exec._borrow_from = base
             seg_exec.load_graph_from_dict(sub)
             seg_exec._component_name = component_name
+            # A piece loads what its own ops consume, and BORROWS any non-block key it consumes
+            # from the base, which holds them all resident for the flow's by-name reads
+            # (`_ensure_flow_reads`): one copy. Before, every piece reloaded every non-block
+            # weight with every run — the embedding into pieces that never read it, in no
+            # plan's budget.
             executors.append(seg_exec)
         return executors
 
@@ -173,6 +265,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if component_name not in self._segment_executors:
             self._segment_executors[component_name] = \
                 self._build_segment_executors(component_name)
+        self._ensure_flow_reads(component_name,
+                                self.context.component_executors.get(component_name))
+        if component_name not in self._cut_verified:
+            # Once, before the first run: the flow has declared what it declares by now.
+            self._graph_prism_cut(component_name,
+                                  self.context.component_executors.get(component_name))
+            self._cut_verified.add(component_name)
         executors = self._segment_executors[component_name]
 
         values: Dict[str, Any] = dict(inputs or {})
@@ -182,13 +281,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
         for executor in executors:
             sub = executor._dag
             needed = sub.get("segment_input_names") or []
-            missing = [n for n in needed if n not in values]
+            seg_inputs = {n: _piece_input(values, n) for n in needed}
+            missing = [n for n, v in seg_inputs.items() if v is _ABSENT]
             if missing:
                 raise RuntimeError(
                     f"layer_streaming: segment {sub.get('segment_index')} of "
                     f"'{component_name}' needs {missing[:3]} and nothing "
                     f"before it produced them")
-            seg_inputs = {n: values[n] for n in needed}
 
             # This segment's weights, and only this segment's: the executor
             # asks its own dag what it consumes.
@@ -223,6 +322,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # Saying so is the caller's only way to tell the two apart.
             return False
         if component_name in self._installed:
+            self._ensure_flow_reads(component_name, executor)   # a base unloaded between phases
             return True
         self._installed.add(component_name)
 
@@ -259,14 +359,22 @@ class LayerStreamingStrategy(ExecutionStrategy):
             print(f"   [LAYERDIAG] released {released} base-executor constants of "
                   f"'{component_name}' — the segment executors carry them",
                   flush=True)
+        # What the flow reads by name from this executor, which it holds like a whole one.
+        self._ensure_flow_reads(component_name, executor)
 
         def segmented_run(inputs=None, *args, **kwargs):
+            if component_name not in self._cut_verified:
+                # Once, before the first run: the flow has declared what it declares by now
+                # (the vlm flows' `set_moe_config` comes after this install).
+                self._graph_prism_cut(component_name, executor)
+                self._cut_verified.add(component_name)
             values = dict(inputs or {})
             last = {}
             for seg_exec in segments:
                 sub = seg_exec._dag
                 needed = sub.get("segment_input_names") or []
-                missing = [n for n in needed if n not in values]
+                feed = {n: _piece_input(values, n) for n in needed}
+                missing = [n for n, v in feed.items() if v is _ABSENT]
                 if missing:
                     raise RuntimeError(
                         f"layer_streaming: segment {sub.get('segment_index')} "
@@ -274,8 +382,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
                         f"nothing before it produced them")
                 seg_exec.load_weights(nbx_path, component_name)
                 try:
-                    out = seg_exec.run({n: values[n] for n in needed},
-                                       *args, **kwargs) or {}
+                    out = seg_exec.run(feed, *args, **kwargs) or {}
                 finally:
                     # Released before the next segment loads. This is the
                     # residency the plan was budgeted against.
