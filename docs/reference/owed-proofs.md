@@ -4147,3 +4147,12 @@ executed Flex cells run at the trace size only. Queued with the Mac's trace defe
 **Where the 82 stand:** unbound symbol 26, seam dtype, boundaries 26, embedding 30, Flex shapes 2,
 refusal reason 62 — FIXED on this rack; the 6 T5 shape rows do not reproduce here. **Owed by the
 Mac:** its 90 rows on the landed engine.
+
+**A frozen dim of the granite-speech-3.3-8b trace (Forge, OPEN):** its `language_model` graph declares
+the causal mask `aten.where::0` as `[23, 23]`, concrete — the traced sequence length. At batch 1 the
+runtime still computes the right mask; at batch 2 it evaluates to `[b*s, b*s]` and the WHOLE LM
+fails in every engine (`The expanded size of the tensor (64) must match the existing size (128) ...
+Target sizes: [2, 32, 64, 64]. Tensor sizes: [128, 128]`, measured 2026-09-25 on a V100, before
+any piece exists). A symbolic-coverage defect of the trace (principle 1), queued with the Mac's
+trace defects (df2588e7), fixed at source and retraced; the streamed LM gates run granite-speech at
+batch 1 until then (`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`).
