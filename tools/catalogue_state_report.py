@@ -119,7 +119,7 @@ VITRINE = {
         artefact="pixart/bench.png",
         instrument="looked at, beside the degeneracy facts",
         answer="the request's own scene — a red wooden bench under a blossoming cherry tree, petals on the ground, afternoon light; std 75.28, 525 544 distinct colours, 0 uniform rows"),
-    "real-esrgan-x4": dict(
+    "Real-ESRGAN-x4": dict(
         artefact="real_esrgan/apple_x4.png",
         instrument="looked at, beside the degeneracy facts and the correlation with the input's bicubic upscale",
         answer="the input's scene at 1792x1792, sharp: correlation 0.998, std 104.65, 199 358 distinct colours — not white, not flat"),

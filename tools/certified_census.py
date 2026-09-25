@@ -33,7 +33,7 @@ keys, shadow == live served set == replay set. `--prove <replay dir or census fi
 comparison here.
 
     python tools/certified_census.py --hardware default-c5d28c27 --out nbx/campaigns/.../census.json
-    python tools/certified_census.py --hardware default-c5d28c27 --models TinyLlama-1.1B-Chat --prove ~/.neurobrix/replay_cache/...
+    python tools/certified_census.py --hardware default-c5d28c27 --models TinyLlama-1.1B-Chat-v1.0 --prove ~/.neurobrix/replay_cache/...
 
 The request each model is shadowed at is the family's judged request — the calibration section
 of `config/families/<family>.yml` plus the campaign's media and bounds (`tools/

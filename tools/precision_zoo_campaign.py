@@ -18,7 +18,7 @@ Artefacts per model under <out>/<model>/ (R29); `table` renders the per-lever
 table: who won, by how much, who did not move, who regressed.
 
     python tools/precision_zoo_campaign.py run --family stt --gpu 1
-    python tools/precision_zoo_campaign.py run --models TinyLlama-1.1B-Chat --gpu 1
+    python tools/precision_zoo_campaign.py run --models TinyLlama-1.1B-Chat-v1.0 --gpu 1
     python tools/precision_zoo_campaign.py table
 
 The R33 lever (`--probe`): one complete `--triton` request per model under

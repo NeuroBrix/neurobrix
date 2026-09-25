@@ -45,7 +45,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 
-UPSCALER_MODEL = "real-esrgan-x4"
+UPSCALER_MODEL = "Real-ESRGAN-x4"
 UPSCALE_FACTOR = 4
 INPUT_SIZE = 64  # synthetic input — self-contained, no asset debt
 

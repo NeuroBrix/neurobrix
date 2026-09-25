@@ -106,7 +106,7 @@ def test_the_scale_comes_from_the_graph_when_the_config_is_silent():
 
 
 @pytest.mark.parametrize("model,expected", [
-    ("real-esrgan-x2", 2), ("real-esrgan-x4", 4), ("real-esrgan-x8", 8),
+    ("real-esrgan-x2", 2), ("Real-ESRGAN-x4", 4), ("real-esrgan-x8", 8),
 ])
 def test_every_upscaler_in_the_cache_is_reached(model, expected):
     """One model could pass by coincidence; the family cannot."""
