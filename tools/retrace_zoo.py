@@ -492,6 +492,16 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
         if b == INT64_MAX and isinstance(a, dict) and _is_dim_node(a) and json.dumps(a, sort_keys=True) in input_dims:
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-to-the-end"})
             continue
+        # SLICE START NEGATED (2026-09-25): a suffix slice ``x[-S:]`` whose start was the negated
+        # trace value of the axis it cuts now reads ``neg(<that axis's dim>)`` — the same slice,
+        # spelled with the dim the op's inputs/outputs carry (transformers' T5
+        # ``position_bias[:, :, -seq_length:, :]``, PixArt-XL-2-1024-MS: start -120 → neg(s3)).
+        if (isinstance(a, int) and not isinstance(a, bool) and a < 0 and isinstance(b, dict)
+                and b.get("type") == "neg" and isinstance(b.get("operand"), dict)
+                and _is_dim_node(b["operand"]) and _trace_value(b["operand"]) == -a
+                and json.dumps(b["operand"], sort_keys=True) in input_dims):
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-start-negated"})
+            continue
         # INFERENCE RESTORED: an integer the injection had written into a view became the vendor's
         # -1 again (numel-inferred at runtime; never wrong) — the integer must be the extent.
         if b == -1 and isinstance(a, int) and not isinstance(a, bool) and path and isinstance(path[-1], int):
@@ -1661,6 +1671,7 @@ class Model:
             f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}, "
             f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}, "
             f"slice end to the end {sum(r.get('arg_kinds', {}).get('slice-end-to-the-end', 0) for r in gd['components'].values())}, "
+            f"slice start negated {sum(r.get('arg_kinds', {}).get('slice-start-negated', 0) for r in gd['components'].values())}, "
             f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
             f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
