@@ -4515,3 +4515,27 @@ break the vendor's frame rule for Open-Sora-v2 (51, rule 4k+1) and mochi-1-previ
 xinntao `RealESRGAN_x4plus` weights (702 of 702 tensors equal). That is a duplicate for the rack,
 Hugging Face deciding, and it is also the pair that collides on the Mac's case-insensitive
 volume.
+
+### 2026-09-25 — the MoE census goes past its first MoE layer (the shadow pin, 473173e5)
+
+Answer to the MoE entry above, measured on `0c4b3b2d` with the repair: the census records
+its shadow allocations as shadows, the pin holds nothing for a recorded one, and an unknown
+address fails in every run. The same 7 containers that all stopped at their first MoE layer
+(76 runs, `cannot bind pointer ... the allocator does not record it`):
+
+| container | shadow runs read | pin errors | past prefill (every MoE layer) | outcome |
+|---|---:|---:|---:|---|
+| granite-3.1-1b-a400m-instruct | 12 | 0 | 12 | 12 complete |
+| deepseek-moe-16b-chat | 12 | 0 | 12 | 6 complete; 6 fail at `aten.mm::4` (incompatible dimensions) after prefill, 6 reshape inventions recorded |
+| DeepSeek-Coder-V2-Lite-Instruct | 8 | 0 | 8 | triton-sequential completes; triton fails in `decode_step`, in a `layer_streaming` segment, at the segment's `aten.mm::0`: `Incompatible dimensions: 2048 vs 3072` |
+| Qwen3-30B-A3B-Thinking-2507 | 9 | 0 | 5 | 2 refused at the rung; runs complete |
+| Qwen3-Coder-30B-A3B-Instruct | 8 | 0 | 6 | 2 refused; runs complete |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128 | 8 | 0 | 5 | 2 refused |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly | 8 | 0 | 5 | 2 refused |
+
+**Pin errors: 0 of 65 runs read.** The five large containers hit the pass's 1 800 s cap
+per container. An MoE shadow now walks every layer instead of stopping at the first, so each
+read only 8 or 9 of its 24 runs. A rerun at 10 800 s per container is under way for full
+coverage. DeepSeek-Coder-V2-Lite's decode failure is inside a streamed segment, so it joins the
+streamed-execution class (the Dell's). deepseek-moe-16b-chat's `aten.mm::4` mismatch is new
+and unclassified until the full rerun reads it.
