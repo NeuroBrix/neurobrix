@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Image models split into pieces no longer lose part of their attention input.** When a piece
+  boundary fell inside the joint text-and-image attention of models like Flex.1, one half of the
+  combined input was dropped and the run failed. Every input an operation lists is now carried
+  across the boundary, and the pieces produce the same output, bit for bit, as the model whole.
+
 - **Vision-language and speech models split into pieces to fit in memory now run.** They
   stopped before generating, saying the language model's embedding was missing. The model's
   embedding and norms are now kept loaded beside the pieces and counted in the memory plan, and

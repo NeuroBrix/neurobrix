@@ -19,7 +19,11 @@ usage: streamed_component_vs_whole.py MODEL COMPONENT MODE BATCH SEQ HOST_FREE_M
 The component's inputs: token ids with a full attention mask when it takes exactly those; any
 other component (an LM stage fed `inputs_embeds`) gets inputs built from its OWN declared graph
 inputs — every symbolic dim bound by the symbol's declared NAME (`batch` -> BATCH, `seq_len`
--> SEQ, any other name refused), floating inputs drawn N(0, 0.02) in float32 (the executor casts
+-> SEQ, any other name refused; BATCH and SEQ both `trace` bind every symbol — the batch among
+them — at its own trace value instead,
+for a trace whose names cannot be bound — Flex.1-alpha names its 512-token text axis and its
+4 096-token image axis both `seq_len`, and a coordinate width of 3 `seq_len` too), floating inputs
+drawn N(0, 0.02) in float32 (the executor casts
 component inputs to its compute dtype), integer inputs counting 0..n-1 along their last axis
 (positions), boolean inputs all False. The values are arbitrary; the gate compares the SAME
 inputs whole and in pieces, so they need only be finite and in range.
@@ -88,6 +92,9 @@ def _declared_inputs(dag, by_name, rng):
             if sid is None:
                 shape.append(int(d))
                 continue
+            if by_name.get("seq_len") == "trace":
+                shape.append(int((syms.get(sid) or {})["trace_value"]))
+                continue
             name = (syms.get(sid) or {}).get("name")
             if name not in by_name:
                 raise SystemExit(f"input {tid} dim {sid} is named {name!r}; this harness binds "
@@ -106,7 +113,11 @@ def _declared_inputs(dag, by_name, rng):
 
 def main():
     model, comp, mode, batch, seq, host_free, rung, out_path = sys.argv[1:9]
-    batch, seq, host_free, rung = int(batch), int(seq), int(host_free), int(rung)
+    if (batch == "trace") != (seq == "trace"):
+        raise SystemExit("BATCH and SEQ are both `trace` or both numbers: the trace mode binds "
+                         "every symbol, the batch among them, at its trace value")
+    host_free, rung = int(host_free), int(rung)
+    batch, seq = (batch, seq) if seq == "trace" else (int(batch), int(seq))
     h, w = (int(sys.argv[9]), int(sys.argv[10])) if len(sys.argv) > 10 else (None, None)
     root, plan = _plan(model, mode, host_free, rung, h, w)
     bounds = (plan.layer_stream_plan or {}).get(comp)
@@ -140,6 +151,9 @@ def main():
     whole_ex = executor()
     wanted = [t[7:] for t in whole_ex._dag["input_tensor_ids"]]
     if sorted(wanted) == ["attention_mask", "input_ids"]:
+        if seq == "trace":
+            raise SystemExit("SEQ `trace` binds a component's declared inputs; a token component "
+                             "takes BATCH x SEQ ids — give SEQ a number")
         arrays = {"input_ids": rng.integers(0, 32000, size=(batch, seq), dtype=np.int64),
                   "attention_mask": np.ones((batch, seq), dtype=np.int64)}
     else:

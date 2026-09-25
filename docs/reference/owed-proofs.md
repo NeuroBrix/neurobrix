@@ -4127,3 +4127,23 @@ the Mac:** its 30 rows on the landed engine.
 embedding 30 FIXED, refusal reason 62 FIXED; the 6 T5 shape rows do not reproduce here (the Mac
 reruns); the 2 Flex.1-alpha triton-sequential rows (`aten.mul::24 ... (1, 24, 512, 128) and
 (1, 1, 4608, 128)`) OPEN, next.
+
+**Update 2026-09-25 — the 2 Flex.1-alpha triton-sequential rows: FIXED on the rack, measured.**
+Reproduced on the landed engine with the Mac's plan (4 096 and 16 384 MB), in the pieces only: a
+seam named inside a `tensor_tuple` (`aten.cat::19`, the joint attention's query concat) was not
+aliased by the seam builder, and triton-sequential passed the kernel a shorter list (compiled
+triton met a string). One argument walk now serves the builder and both sequences, and a list
+naming a tensor nobody holds is refused in every engine. Flex's transformer streamed is bit-identical to whole in triton and
+triton-sequential at both rungs (register 108). The extended binding gate found the same defect in
+Open-Sora-v2's transformer at 8 192 MB and no longer finds it after the fix — a static check of the
+pieces' references; Open-Sora's pieces were not executed against the whole here (its container is
+the one awaiting the rebuild).
+
+**A symbol-naming defect of the Flex.1-alpha trace (Forge, OPEN):** its 512-token text axis and
+4 096-token image axis are both named `seq_len`, `txt_ids`/`img_ids` name their token axis
+`batch`, and a coordinate width of 3 is named `seq_len`. No request can be bound by name, so the
+executed Flex cells run at the trace size only. Queued with the Mac's trace defects (df2588e7).
+
+**Where the 82 stand:** unbound symbol 26, seam dtype, boundaries 26, embedding 30, Flex shapes 2,
+refusal reason 62 — FIXED on this rack; the 6 T5 shape rows do not reproduce here. **Owed by the
+Mac:** its 90 rows on the landed engine.

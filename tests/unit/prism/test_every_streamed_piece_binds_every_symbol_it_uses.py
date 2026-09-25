@@ -88,6 +88,49 @@ def _walk_symbols(obj, out, known):
         out.add(obj)
 
 
+def _arg_tids(arg, out):
+    """Every tensor id an op argument names, in every form the engines resolve (`tensor`,
+    `tensor_ref`, `tensor_tuple`, nested `list`) — written here, not imported, so a builder
+    that forgets a form fails this check instead of sharing its blind spot."""
+    if isinstance(arg, dict):
+        if arg.get("type") in ("tensor", "tensor_ref") and arg.get("tensor_id"):
+            out.add(arg["tensor_id"])
+        elif arg.get("type") == "tensor_tuple":
+            out.update(arg.get("tensor_ids") or [])
+        elif arg.get("type") == "list":
+            for v in arg.get("value") or []:
+                _arg_tids(v, out)
+
+
+def _dangling(seg):
+    """Tensor ids an op of the piece names that the piece neither produces, receives, nor holds
+    (a weight, a buffer, a constant). A seam named by its raw id instead of its `input::` alias
+    is one: the piece holds it under the alias, and the op meets nothing (Flex.1-alpha's joint
+    attention `aten.cat::19`, whose second query list entry stayed raw, df2588e7)."""
+    produced = {t for o in seg["ops"].values() for t in (o.get("output_tensor_ids") or [])}
+    have = produced | set(seg["input_tensor_ids"])
+    out = []
+    for uid, op in seg["ops"].items():
+        names = set(op.get("input_tensor_ids") or [])
+        attrs = op.get("attributes") or {}
+        for a in attrs.get("args") or []:
+            _arg_tids(a, names)
+        for a in (attrs.get("kwargs") or {}).values():
+            _arg_tids(a, names)
+        for t in names:
+            if t in have:
+                continue
+            # A weight, a buffer or a baked constant is held by the piece only if the piece
+            # DECLARES it — an id the piece's tensors do not carry is dangling whatever its name
+            # (a seam produced by `aten.constant_pad_nd` has "constant" in its name).
+            meta = seg["tensors"].get(t)
+            if meta is not None and (meta.get("is_parameter") or meta.get("is_constant")
+                                     or t.startswith(("param::", "buffer::"))):
+                continue
+            out.append((uid, t))
+    return out
+
+
 def _referenced(seg):
     known = set((seg.get("symbolic_context") or {}).get("symbols") or {})
     out = set()
@@ -148,6 +191,10 @@ def _check_every_piece(model, root, plan, family, size):
                 op_count=order_index[last] - order_index[first] + 1), order_index)
             inputs = {tid: SimpleNamespace(shape=_shape(seg["tensors"][tid], whole))
                       for tid in seg["input_tensor_ids"]}
+            dangling = _dangling(seg)
+            assert not dangling, (
+                f"{model}.{comp} piece {k}/{len(bounds)}: ops name tensors the piece does not "
+                f"hold: {dangling[:4]}")
             resolver = SymbolResolver(seg["symbolic_context"])
             resolver.bind_from_inputs(inputs, seg["input_tensor_ids"], seg["tensors"])
             bound = resolver.bindings

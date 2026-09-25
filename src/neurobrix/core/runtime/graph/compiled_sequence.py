@@ -713,26 +713,11 @@ class CompiledSequence:
 
         # Apply rewire to all tensor references in remaining ops
         def _rewire_arg(arg: Any) -> Any:
-            if not isinstance(arg, dict):
-                return arg
-            arg_type = arg.get("type")
-            if arg_type == "tensor":
-                tid = arg.get("tensor_id")
-                if tid in rewire:
-                    arg = dict(arg)
-                    arg["tensor_id"] = rewire[tid]
-            elif arg_type == "tensor_tuple":
-                tids = arg.get("tensor_ids", [])
-                new_tids = [rewire.get(t, t) for t in tids]
-                if new_tids != tids:
-                    arg = dict(arg)
-                    arg["tensor_ids"] = new_tids
-            elif arg_type == "list":
-                items = arg.get("value", [])
-                new_items = [_rewire_arg(item) for item in items]
-                arg = dict(arg)
-                arg["value"] = new_items
-            return arg
+            # The one argument walk (`core/prism/layer_partition.rewire_arg`): a `tensor_id` of
+            # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
+            # `tensor_tuple` and `list` only.
+            from neurobrix.core.prism.layer_partition import rewire_arg
+            return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:
             if op_uid in detach_uids:
@@ -1087,26 +1072,11 @@ class CompiledSequence:
 
         # Reuse the same rewire logic as detach elimination
         def _rewire_arg(arg: Any) -> Any:
-            if not isinstance(arg, dict):
-                return arg
-            arg_type = arg.get("type")
-            if arg_type == "tensor":
-                tid = arg.get("tensor_id")
-                if tid in rewire:
-                    arg = dict(arg)
-                    arg["tensor_id"] = rewire[tid]
-            elif arg_type == "tensor_tuple":
-                tids = arg.get("tensor_ids", [])
-                new_tids = [rewire.get(t, t) for t in tids]
-                if new_tids != tids:
-                    arg = dict(arg)
-                    arg["tensor_ids"] = new_tids
-            elif arg_type == "list":
-                items = arg.get("value", [])
-                new_items = [_rewire_arg(item) for item in items]
-                arg = dict(arg)
-                arg["value"] = new_items
-            return arg
+            # The one argument walk (`core/prism/layer_partition.rewire_arg`): a `tensor_id` of
+            # any type, a `tensor_tuple`, a nested `list` — this private copy knew `tensor`,
+            # `tensor_tuple` and `list` only.
+            from neurobrix.core.prism.layer_partition import rewire_arg
+            return rewire_arg(arg, rewire)
 
         for op_uid in execution_order:
             if op_uid in transpose_uids:
@@ -2898,11 +2868,14 @@ class CompiledSequence:
                 tensor_ids = arg.get("tensor_ids", [])
                 slots = []
                 for tid in tensor_ids:
-                    if tid in self._tensor_id_to_slot:
-                        slots.append(TensorSlot(self._tensor_id_to_slot[tid]))
-                    else:
-                        # Unknown tensor - shouldn't happen
-                        slots.append(tid)
+                    if tid not in self._tensor_id_to_slot:
+                        # It happened: a streamed piece's list named a seam by its raw id (Flex
+                        # joint attention, df2588e7) and the id went to the kernel as a string.
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: a tensor list argument names {tid!r}, which no slot "
+                            f"of this sequence holds (a seam not aliased, or a producer that never "
+                            f"ran) — refused rather than passing its name as a tensor")
+                    slots.append(TensorSlot(self._tensor_id_to_slot[tid]))
                 return ListArg(tuple(slots))
 
             if arg_type == "dtype":

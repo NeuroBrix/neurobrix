@@ -219,3 +219,46 @@ def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
     assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None
     plain = {"x": {"dtype": "float32"}}
     assert eng._target_dtype_for_input("x", plain) == parse_dtype("bfloat16")
+
+
+# ───────────── 2026-09-25: a seam inside a LIST argument is aliased too ─────────────
+
+def test_the_one_walk_aliases_every_form_an_argument_takes():
+    """`rewire_arg` is the walk the seam builder and the triton sequence share. The builder's
+    own walk handled a single `tensor_id` and missed a `tensor_tuple` — Flex.1-alpha's joint
+    attention `aten.cat::19` kept its seam's raw id, and triton-sequential concatenated the
+    text queries with nothing (df2588e7)."""
+    from neurobrix.core.prism.layer_partition import rewire_arg
+    alias = {"h": "input::h"}
+    assert rewire_arg({"type": "tensor", "tensor_id": "h"}, alias)["tensor_id"] == "input::h"
+    assert rewire_arg({"tensor_id": "h"}, alias)["tensor_id"] == "input::h"
+    assert rewire_arg({"type": "tensor_tuple", "tensor_ids": ["q", "h"]}, alias)["tensor_ids"] \
+        == ["q", "input::h"]
+    nested = {"type": "list", "value": [{"type": "tensor_tuple", "tensor_ids": ["h"]},
+                                        {"type": "scalar", "value": 2}]}
+    assert rewire_arg(nested, alias)["value"][0]["tensor_ids"] == ["input::h"]
+    untouched = {"type": "tensor_tuple", "tensor_ids": ["q"]}
+    assert rewire_arg(untouched, alias) is untouched
+
+
+def test_a_seam_in_a_list_argument_reaches_the_piece_under_its_alias():
+    g = {"tensors": {"x": {"shape": [2]}, "h": {"shape": [2]}, "q": {"shape": [2]},
+                     "y": {"shape": [4]}},
+         "ops": {"a": {"op_type": "aten::relu", "input_tensor_ids": ["x"],
+                       "output_tensor_ids": ["h"], "attributes": {}},
+                 "b": {"op_type": "aten::relu", "input_tensor_ids": ["x"],
+                       "output_tensor_ids": ["q"], "attributes": {}},
+                 "c": {"op_type": "aten::cat", "input_tensor_ids": ["q", "h"],
+                       "output_tensor_ids": ["y"],
+                       "attributes": {"args": [{"type": "tensor_tuple", "tensor_ids": ["q", "h"]},
+                                               {"type": "scalar", "value": 0}]}}},
+         "execution_order": ["a", "b", "c"], "input_tensor_ids": ["input::x"],
+         "output_tensor_ids": ["y"]}
+    g["tensors"]["input::x"] = g["tensors"].pop("x")
+    for o in g["ops"].values():
+        o["input_tensor_ids"] = ["input::x" if t == "x" else t for t in o["input_tensor_ids"]]
+    order = {u: i for i, u in enumerate(g["execution_order"])}
+    seg = build_segment_graph(g, Segment(index=1, first_op="b", last_op="c", op_count=2,
+                                         weight_bytes=0), order)
+    tids = seg["ops"]["c"]["attributes"]["args"][0]["tensor_ids"]
+    assert tids == ["q", "input::h"], tids
