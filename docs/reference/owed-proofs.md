@@ -4156,3 +4156,39 @@ Target sizes: [2, 32, 64, 64]. Tensor sizes: [128, 128]`, measured 2026-09-25 on
 any piece exists). A symbolic-coverage defect of the trace (principle 1), queued with the Mac's
 trace defects (df2588e7), fixed at source and retraced; the streamed LM gates run granite-speech at
 batch 1 until then (`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`).
+
+## 2026-09-25 — the dead band, measured on this rack's two series (the supervisor's design, approved 10:53 UTC)
+
+`rung = floor_ladder(reading − pool noise)`, and for serve a climb hysteresis (climb only once the
+reading clears the next rung by 2 × noise; descend at once). Measured with the ladder table's own
+method (`nbx/campaigns/2026_09_24_ladder_noise/dead_band.py`, output `dead_band.log`): the same
+render-tail series (1 490 samples) and model-load series (736 samples) of the host pool, the same
+pairs ≥ 30 s apart, the same 113 pool sizes 4.5–32 GB, noise = the table's 5 366 MB (2.17 % of
+the pool). Same-rung rate of pairs, and memory discarded below the reading, mean / worst:
+
+| ladder | floor(reading) | floor(reading − noise) | + serve hysteresis |
+|---|---|---|---|
+| render tail — old hand list (19) | 98.70 / 56.83 % · 12.80 / 31.73 % | 98.65 / 49.83 · 14.48 / 34.46 | 97.09 / 51.73 · 14.97 / 34.38 |
+| render tail — geo k=1 (227) | 81.08 / 49.84 · 1.12 / 2.12 | 81.40 / 49.70 · 3.24 / 4.21 | 61.35 / 51.50 · 4.07 / 4.71 |
+| render tail — geo k=2 (115) | 91.99 / 50.72 · 2.22 / 4.15 | 90.53 / 49.52 · 4.18 / 6.22 | 77.90 / 51.50 · 5.08 / 6.03 |
+| render tail — geo k=4 (59) | 94.88 / 50.62 · 4.03 / 7.96 | 96.16 / 51.53 · 6.13 / 9.87 | 89.50 / 51.50 · 6.98 / 9.71 |
+| render tail — geo k=8 (31) | 97.86 / 60.16 · 8.02 / 14.73 | 97.88 / 58.91 · 9.82 / 16.58 | 95.20 / 51.50 · 10.52 / 16.36 |
+| model load — old hand list | 96.57 / 47.71 · 12.80 / 31.73 | 97.01 / 47.54 · 14.48 / 34.46 | 97.70 / 58.68 · 15.55 / 34.37 |
+| model load — geo k=1 | 60.30 / 46.90 · 1.07 / 2.03 | 59.25 / 46.84 · 3.23 / 4.26 | 78.03 / 58.57 · 4.75 / 5.23 |
+| model load — geo k=2 | 79.11 / 47.20 · 2.19 / 4.16 | 78.88 / 47.20 · 4.27 / 6.25 | 89.54 / 58.57 · 5.77 / 7.09 |
+| model load — geo k=4 | 89.56 / 47.29 · 4.01 / 8.00 | 90.17 / 47.20 · 6.12 / 9.97 | 94.70 / 58.68 · 7.65 / 10.90 |
+| model load — geo k=8 | 95.76 / 49.13 · 7.82 / 14.60 | 94.45 / 47.36 · 9.63 / 16.68 | 97.68 / 58.57 · 11.03 / 17.52 |
+
+What the numbers say: subtracting the noise costs ~2 points of memory and moves the same-rung
+rate by less than a point on every ladder — the worst pool size straddles a boundary whatever is
+subtracted, since the band shifts the boundary, it does not remove it. The hysteresis helps on the
+model-load series (whose swing is one-sided: loads take memory and give it back) on every ladder,
+and HURTS on the render tail for the fine ladders (geo k=1: 81 → 61 %): with rungs one noise
+apart, the climb target (reading − 2 noise) and the descent point (reading − noise) sit one rung
+apart, and a swing of one noise walks the held rung up and down. On the 4×-noise ladder the design
+holds: 89.5 / 94.7 % same-rung, 7–8 % discarded, the worst pool size at 51.5–58.7 %.
+
+**Owed by the Mac:** its own series (host `MemAvailable`, or the unified pool's free reading, at
+1 s over a render tail and over a model load — `sample_free.py` is the sampler) so the same table
+can be produced for its pool; only two readings of it exist here (12 598 → 15 248 MB), not a
+series.
