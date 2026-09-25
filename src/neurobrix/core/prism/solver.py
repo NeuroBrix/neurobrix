@@ -5124,6 +5124,29 @@ class PrismSolver:
         # segments that fit, instead of a plan that cannot run.
         constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
                              for name in streamed)
+        # And the weights a FLOW reads by name outside the graph — every non-block weight of a
+        # streamed component (the token embedding, a head, the norms, `is_block_key`): its base
+        # executor holds them resident beside every piece
+        # (`LayerStreamingStrategy._ensure_flow_reads`), the way a whole executor holds them, and
+        # a piece that consumes one BORROWS it — one copy, reserved here once, and the pieces
+        # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
+        # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
+        # piece loaded all of them, in no budget.
+        # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
+        # `inputs_embeds`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
+        # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
+        # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
+        from neurobrix.core.prism.layer_partition import flow_embeds_into
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
+        _read = [name for name in streamed if flow_embeds_into(graphs.get(name))]
+        _unsized = [name for name in _read if not sizes_by_comp.get(name)]
+        if _unsized:
+            return _decline(
+                f"{_unsized} must be streamed and their weights index gives no sizes: the weights "
+                f"their flow reads by name, held beside the pieces, cannot be reserved")
+        flow_read_bytes = sum(int(size) for name in _read
+                              for key, size in sizes_by_comp[name].items()
+                              if not is_block_key(key))
         # And the KV CACHE, for the same reason and with the same blind spot. It is
         # inside the streamed component's `total_bytes` — which is why that component
         # is correctly classified as streamed — but the PARTITIONER sizes segments from
@@ -5165,14 +5188,15 @@ class PrismSolver:
             _lm = self._lm_component_name
             kv_bytes = (max(0, _kv_need - _kv_est) if (_lm is not None and _lm not in streamed)
                         else _kv_need)
-        segment_budget = budget_bytes - resident_beside - constant_bytes - kv_bytes
+        segment_budget = budget_bytes - resident_beside - constant_bytes - flow_read_bytes - kv_bytes
         if segment_budget <= 0:
             _mb = 1024 * 1024
             return _decline(
                 f"no room for a single segment: the usable {budget_bytes / _mb:.0f} MB of the "
                 f"rung is filled by what stays resident beside the streamed "
                 f"{sorted(streamed)} — whole components {resident_beside / _mb:.0f} MB, graph "
-                f"constants {constant_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB")
+                f"constants {constant_bytes / _mb:.0f} MB, flow-read weights "
+                f"{flow_read_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB")
 
         for comp_name, mem in sorted_comps:
             if comp_name not in streamed:
@@ -5217,8 +5241,13 @@ class PrismSolver:
                 moe_declared[comp_name] = _moe
             graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family,
                                          declared_moe=_moe)
-            part = LayerPartitioner(
-                graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
+            # A piece borrows the non-block weights the base holds (reserved above), so it is
+            # sized over its block weights: a non-block weight counts 0 here, not its bytes a
+            # second time (and not the graph's own size for it, the partitioner's fallback).
+            _piece_sizes = ({k: (v if is_block_key(k) else 0)
+                             for k, v in sizes_by_comp[comp_name].items()}
+                            if comp_name in _read else sizes_by_comp.get(comp_name))
+            part = LayerPartitioner(graph, _piece_sizes).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
                 # Either genuinely impossible, or one segment — in which case
                 # a rung above this one already serves it and this must not
@@ -5247,7 +5276,9 @@ class PrismSolver:
         self._layer_stream_partitions = partitions
         self._layer_stream_graphs = fingerprints
         self._layer_stream_moe = {k: v for k, v in moe_declared.items() if k in partitions}
-        self._layer_stream_constant_bytes = constant_bytes
+        # Resident beside the pieces and outside any component's figure: the graph constants and
+        # the flow-read weights the base holds.
+        self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
         return allocations, devices
 
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:

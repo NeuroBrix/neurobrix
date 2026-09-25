@@ -40,6 +40,15 @@ _BLOCK_RE = re.compile(
     r'(?:blocks?|layers|model\.layers|encoder\.layers|decoder\.layers)\.(\d+)\.')
 
 
+def is_block_key(key: str) -> bool:
+    """Whether a weight belongs to a numbered block. Its complement — the token embedding, a
+    head, the norms, the embedders — is what a flow may read by name outside the graph; the ONE
+    definition the loader's filter, a streamed base's resident set and Prism's reserve for it
+    all read (`GraphExecutor.consumed_in_loader_space`, `load_flow_read_weights`,
+    `PrismSolver._try_layer_streaming`)."""
+    return bool(_BLOCK_RE.search(key))
+
+
 # safetensors dtype → (numpy dtype for reading, NBXDtype, bytes per element)
 _SF_DTYPE_INFO = {
     "F16":  (np.float16,  NBXDtype.float16,  2),

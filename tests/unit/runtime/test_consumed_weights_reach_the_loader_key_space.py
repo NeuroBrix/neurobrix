@@ -172,3 +172,54 @@ def test_an_unreadable_index_loads_everything(tmp_path):
     ex = GraphExecutor.__new__(GraphExecutor)
     ex._dag = {"tensors": {}, "ops": {}, "execution_order": []}
     assert ex._consumed_in_loader_space({"a.weight"}, tmp_path, "absent") is None
+
+
+# ─────────── 2026-09-25: a layer_streaming piece is not a reader for the flow ───────────
+#
+# The flow reads its component's BASE executor by name; under `layer_streaming` the base holds
+# every non-block weight resident (`load_flow_read_weights`) and a piece loads only what its own
+# ops consume. Before, every piece loaded every non-block key with every run — granite-speech's
+# 8 pieces loaded 48-53 weights each for ~46 they read, the embedding among them, in no plan's
+# budget — while the base the flow reads held none (the Mac's 30 "requires embed_tokens weight").
+
+def test_a_piece_loads_only_what_its_ops_consume():
+    # A piece holding block 0 and the final norm; the embedding and the head are elsewhere.
+    consumed = {"block.0.attn.key.weight", "norm.weight"}
+    index = ["token_embed.weight", "norm.weight", "lm_head.weight",
+             "block.0.attn.key.weight", "block.1.attn.key.weight"]
+    graph_params = consumed
+    wanted = filt(consumed, index, graph_params, flow_reads=False)
+    assert wanted == {"block.0.attn.key.weight", "norm.weight"}, wanted
+
+
+def test_a_whole_executor_still_serves_the_flow():
+    consumed = {"block.0.attn.key.weight"}
+    index = ["token_embed.weight", "norm.weight", "block.0.attn.key.weight"]
+    assert filt(consumed, index, consumed) == {"token_embed.weight", "norm.weight",
+                                                "block.0.attn.key.weight"}
+
+
+def test_the_binding_follows_the_same_rule():
+    consumed = {"block.0.attn.key.weight"}
+    index = ["token_embed.weight", "block.0.attn.key.weight"]
+    loaded = GraphExecutor.binding_of_the_loaded(consumed, index, consumed, flow_reads=False)
+    assert set(loaded.values()) == {"block.0.attn.key.weight"}, loaded
+
+
+def test_an_encoded_weight_is_held_and_borrowed_as_the_tensor_it_was_assembled_into():
+    """An int4 build stores `head.weight` as `head.qweight`/`.scales`/`.qmins`, and the loader
+    assembles them into ONE tensor under `head.weight` (`assemble_quantized`). A base that holds
+    it must count the triplet as held (else every call reloads it, and the joined arenas grow),
+    and a piece that consumes it must take the assembled tensor, not load a second copy — the
+    guardian's review of 2026-09-25."""
+    assembled = object()
+    lender = {"head.weight": assembled, "norm.weight": object()}
+    for leaf in ("qweight", "scales", "qmins"):
+        assert GraphExecutor._held_as(f"head.{leaf}", lender) == "head.weight"
+    assert GraphExecutor._held_as("block.0.w.qweight", lender) is None
+    piece = GraphExecutor.__new__(GraphExecutor)
+    piece._borrow_from = type("Base", (), {"_weights": lender})()
+    keep, taken = piece._borrow({"head.qweight", "head.scales", "head.qmins",
+                                 "norm.weight", "block.0.w.weight"})
+    assert keep == {"block.0.w.weight"}, keep
+    assert taken == {"head.weight": assembled, "norm.weight": lender["norm.weight"]}, taken

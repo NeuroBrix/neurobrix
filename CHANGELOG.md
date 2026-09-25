@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Vision-language and speech models split into pieces to fit in memory now run.** They
+  stopped before generating, saying the language model's embedding was missing. The model's
+  embedding and norms are now kept loaded beside the pieces and counted in the memory plan, and
+  each piece loads only the weights it uses; the output is the same as with the model whole.
+
 - **A language model split into pieces to fit in memory now runs in both Triton engines.** Some
   vision-language and speech models stopped before generating, saying the plan's pieces were not
   in the model's graph. The pieces are now cut from the same graph the plan was made on, and they
