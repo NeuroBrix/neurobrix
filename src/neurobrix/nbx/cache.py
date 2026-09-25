@@ -325,6 +325,11 @@ class NBXCache:
             json.dump(cache_meta, f, indent=2)
 
         print(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
+        # The naming door at extraction: the slot is keyed on the .nbx's parent directory
+        # (`get_cache_path`), so a container built under a hand-chosen directory would install
+        # under that name. Refused here, in staging, before the swap makes it visible.
+        with open(cache_path / "manifest.json") as f:
+            refuse_misnamed(final_path, json.load(f))
         return final_path
 
     def clear(self, model_name: Optional[str] = None):
@@ -393,6 +398,33 @@ def get_cache() -> NBXCache:
     return _cache
 
 
+def refuse_misnamed(cache_path, manifest: dict) -> None:
+    """A container's directory carries its manifest's model name, or the engine refuses it.
+
+    The name of a model is the name of its Hugging Face repository — never invented, never
+    hand-suffixed, never renamed — and two traces of one repository under two names are a
+    duplication whatever the graphs (the owner, 2026-09-26). The shared cache held four such
+    directories (`PixArt-XL-1024` over a manifest declaring `PixArt-XL-2-1024-MS`, the Sigma
+    and Sana pairs, a `.pre-G-backup`), each a second trace nobody could tell from the first
+    by name. A census says "not this time"; this door says "never": a directory whose name is
+    not the name its manifest declares is refused at every entry — extraction, the directory
+    short-cut, and the runtime loader — so the state cannot be reached by any path.
+    """
+    declared = manifest.get("model_name")
+    if not declared:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the manifest at {Path(cache_path) / 'manifest.json'} declares no "
+            f"model_name; a container without its model's name cannot be told from another.")
+    actual = Path(cache_path).name
+    if actual != declared:
+        raise RuntimeError(
+            f"NeuroBrix refuses the container at {cache_path}: its directory is named "
+            f"{actual!r} but its manifest declares model_name {declared!r}. A container carries "
+            f"its model's name — the Hugging Face repository's — and one repository under two "
+            f"names is a duplicate, not two models. Rename the directory to {declared!r}, or "
+            f"remove it if {declared!r} already exists (`neurobrix remove {actual}`).")
+
+
 def ensure_extracted(nbx_path: Path) -> Path:
     """Ensure NBX is extracted and return cache path.
 
@@ -406,6 +438,8 @@ def ensure_extracted(nbx_path: Path) -> Path:
     if nbx_path.is_dir():
         manifest_path = nbx_path / "manifest.json"
         if manifest_path.exists():
+            import json as _json
+            refuse_misnamed(nbx_path, _json.loads(manifest_path.read_text()))
             return nbx_path
         else:
             raise FileNotFoundError(
