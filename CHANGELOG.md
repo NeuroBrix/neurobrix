@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A large convolution at an uncertified size no longer exhausts host memory while its
+  kernel configurations are checked.** When a convolution's input was large and its output
+  small — the last layer of an image decoder at 2048x1024 — the runtime check of candidate
+  configurations computed its reference over the whole input in double precision, which took
+  gigabytes of host memory and could end the run on a machine with little of it. The check now
+  reads only a few output rows and their receptive field, whatever the family of the kernel.
+
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
   in the first attention block with a shape mismatch. The grid now follows the request's own

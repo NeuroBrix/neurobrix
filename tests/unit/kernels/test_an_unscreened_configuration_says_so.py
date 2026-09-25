@@ -75,6 +75,11 @@ def test_the_reason_names_the_provider_state():
     reason = launcher._no_oracle_reason(None)
     assert ("no oracle provider is installed" in reason) or ("covers no oracle for this kernel" in reason)
     launcher.set_screen_oracle(lambda *a: None)
+    # The refusal register is per call and the launcher clears it before each provider call;
+    # this test calls the reason function directly, so it clears what an earlier test in the
+    # same process recorded (the non-finite reference cell), as the launcher would have.
+    from neurobrix.kernels.screen_oracle import set_last_refusal
+    set_last_refusal(None)
     try:
         assert "covers no oracle" in launcher._no_oracle_reason(None)
         assert "produced no reference" in launcher._no_oracle_reason(object())
