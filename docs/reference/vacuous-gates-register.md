@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-112 entries, 107 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 107 carry a site. Two
+113 entries, 108 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3412,3 +3412,36 @@ main (0 MB reserved), its oracle read from the index.
 
 **The lesson, in one line.** A component is judged inside the thing that uses it: its caller's
 reads are part of its contract, and a gate that feeds it by hand cannot see them.
+
+---
+
+### 108 — the binding gate checked the symbols a piece binds, not the tensors its ops name
+
+`test_every_streamed_piece_binds_every_symbol_it_uses.py` (A) walked every symbol reference of
+every piece and required it bound, at three sizes, for twelve streamed containers — green,
+Flex.1-alpha among them. The Mac's two Flex rows then failed in the pieces, triton-sequential
+(df2588e7): `Cannot broadcast (1, 24, 512, 128) and (1, 1, 4608, 128)`. Flex's joint attention
+concatenates its text and image queries through a `tensor_tuple` argument (`aten.cat::19`); the
+image half was a seam, held by the piece as `input::aten.mul::97::out_0`, while the list still
+named `aten.mul::97::out_0` — the seam builder aliased a single `tensor_id` and nothing inside a
+list. Triton-sequential resolved the raw id to None and handed the kernel a shorter list; the
+compiled triton engine met a string (`'str' object has no attribute 'ndim'`).
+
+**What the gate did while the pieces named tensors they did not hold**: green. It asked whether a
+symbol was bound; no cell asked whether a tensor an op names exists in the piece.
+
+**Repair.** One argument walk (`layer_partition.rewire_arg`: `tensor_id` of any type,
+`tensor_tuple`, nested `list`) shared by the seam builder, the triton sequence and the compiled
+sequence's two rewrites (which had private copies without `tensor_ref` or an untyped id); a list
+argument naming a tensor nobody holds refused in every engine — triton-sequential met None,
+both compiled sequences passed the NAME as a tensor ("unknown tensor — shouldn't happen"), the
+torch resolver already refused. The binding gate now also requires every
+tensor an op of a piece names — inputs, argument lists, kwargs — to be produced in the piece,
+received, or held as a weight or constant, with its own walk: red on main for Flex.1-alpha at all
+three sizes and for Open-Sora-v2's transformer at 8 192 MB (a second model the rows had not
+named). `tests/regression/test_a_streamed_piece_receives_every_list_member.py`: Flex's transformer
+whole vs its pieces, bit-identical, triton and triton-sequential, both of the Mac's rungs — red on
+main in both engines.
+
+**The lesson, in one line.** A piece is a graph: check it the way the engine will read it —
+every id every op names, in every form an argument takes.

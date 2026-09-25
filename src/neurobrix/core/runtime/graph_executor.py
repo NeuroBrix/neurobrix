@@ -3519,7 +3519,17 @@ class GraphExecutor:
                     t = NBXTensor.zeros([], NBXDtype.float32, "cuda:0")
                 return t
             if atype == "tensor_tuple":
-                return [store.get(tid) for tid in arg.get("tensor_ids", [])]
+                # Every element or a refusal. A missing element was handed to the kernel as
+                # None and a `cat` joined what remained — Flex.1-alpha's streamed joint
+                # attention concatenated its text queries with nothing (df2588e7).
+                items = [store.get(tid) for tid in arg.get("tensor_ids", [])]
+                missing = [tid for tid, t in zip(arg.get("tensor_ids", []), items) if t is None]
+                if missing:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: a tensor list argument names {missing} and no tensor "
+                        f"is held under that id (a seam not aliased, or a producer that never "
+                        f"ran) — refused rather than passing a shorter list")
+                return items
             if atype == "symbol":
                 # Delegate to the resolver's own symbol semantics
                 # (bindings + offset, trace fallback + offset) — the

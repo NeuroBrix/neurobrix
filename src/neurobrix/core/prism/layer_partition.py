@@ -264,6 +264,42 @@ class LayerPartitioner:
                          peak_live_bytes=peak_live)
 
 
+def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
+    """One op argument with every tensor id it references mapped through `rewire` — every form
+    the engines resolve: `tensor` / `tensor_ref` (`tensor_id`), `tensor_tuple` (`tensor_ids`, the
+    list `aten::cat` takes), and nested `list` (`value`); an untyped dict's `tensor_id` too. Returns
+    the argument unchanged, or a copy.
+
+    The ONE walk, shared by the triton sequence's in-place rewrites (`TritonSequence._rewire_arg`)
+    and a streamed piece's seam aliasing (`build_segment_graph`). The second walked `tensor_id`
+    only: a seam inside a `tensor_tuple` kept its raw id, the piece held it under `input::<tid>`,
+    and triton-sequential met None — Flex.1-alpha's joint attention `aten.cat::19` concatenated
+    512 text queries with nothing, and the next `mul` failed `(1, 24, 512, 128)` against the
+    4 608-token RoPE table (the Mac's two Flex rows, df2588e7)."""
+    if not isinstance(arg, dict):
+        return arg
+    arg_type = arg.get("type")
+    # A `tensor_id` is rewired whatever the dict's `type` says (`tensor`, `tensor_ref`, or none —
+    # the seam builder always rewired untyped ones, and the union of the two walks it replaces
+    # is what this one must cover).
+    if arg.get("tensor_id") in rewire:
+        arg = dict(arg)
+        arg["tensor_id"] = rewire[arg["tensor_id"]]
+    elif arg_type == "tensor_tuple":
+        tids = arg.get("tensor_ids", [])
+        new_tids = [rewire.get(t, t) for t in tids]
+        if new_tids != tids:
+            arg = dict(arg)
+            arg["tensor_ids"] = new_tids
+    elif arg_type == "list":
+        items = arg.get("value", [])
+        new_items = [rewire_arg(item, rewire) for item in items]
+        if new_items != items:
+            arg = dict(arg)
+            arg["value"] = new_items
+    return arg
+
+
 def flow_embeds_into(graph: Optional[Dict[str, Any]]) -> bool:
     """Whether the FLOW supplies this component's embeddings — its graph takes `inputs_embeds`,
     the convention both autoregressive flows read (`uses_embeds`) — and so reads the token
@@ -427,14 +463,10 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         if isinstance(attrs, dict):
             new_attrs = dict(attrs)
             if attrs.get("args"):
-                new_args = []
-                for arg in attrs["args"]:
-                    if (isinstance(arg, dict)
-                            and arg.get("tensor_id") in alias_of):
-                        arg = dict(arg)
-                        arg["tensor_id"] = alias_of[arg["tensor_id"]]
-                    new_args.append(arg)
-                new_attrs["args"] = new_args
+                new_attrs["args"] = [rewire_arg(arg, alias_of) for arg in attrs["args"]]
+            if isinstance(attrs.get("kwargs"), dict):
+                new_attrs["kwargs"] = {k: rewire_arg(v, alias_of)
+                                       for k, v in attrs["kwargs"].items()}
             # Every OTHER tensor id the op carries in its attributes. A fused op
             # does not take all of its inputs positionally: `custom::moe_fused`
             # names its hidden states, its gate scores and its pre-computed
@@ -458,7 +490,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
             # carries activations — so expert weight lists pass through
             # untouched.
             for key, val in attrs.items():
-                if key == "args":
+                if key in ("args", "kwargs"):
                     continue
                 if isinstance(val, str) and val in alias_of:
                     new_attrs[key] = alias_of[val]
