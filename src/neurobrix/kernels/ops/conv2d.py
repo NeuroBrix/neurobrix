@@ -164,7 +164,7 @@ def conv2d_bias_inplace_kernel(out_ptr, bias_ptr, n, HW, C, BLOCK: tl.constexpr)
     2026-09-21). Elementwise same-offset read/write, so aliasing the input
     as the output is exact by construction. Fixed launch config — this
     kernel takes no autotune key and adds nothing to any census."""
-    i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    i = tl.program_id(0).to(tl.int64) * BLOCK + tl.arange(0, BLOCK)
     m = i < n
     c = (i // HW) % C
     v = tl.load(out_ptr + i, mask=m)
