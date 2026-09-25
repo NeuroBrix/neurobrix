@@ -47,20 +47,22 @@ def stack_copy_kernel(
 
     if pid_y == 0:
         in_ptr = in_ptr_a
-        dim_offset = dim_offset_a
-        total_elements = total_elements_a
     elif pid_y == 1:
         in_ptr = in_ptr_b
-        dim_offset = dim_offset_b
-        total_elements = total_elements_b
     elif pid_y == 2:
         in_ptr = in_ptr_c
-        dim_offset = dim_offset_c
-        total_elements = total_elements_c
     else:
         in_ptr = in_ptr_d
-        dim_offset = dim_offset_d
-        total_elements = total_elements_d
+
+    # The per-input scalars are selected OUTSIDE the pointer branches, by tl.where,
+    # which unifies their types: Triton specialises a Python int as int32 when it
+    # fits, int64 when it does not, and as a constexpr when it equals 1 — so one
+    # input past 2^31 elements beside a small one made the if/elif branches
+    # disagree (`Mismatched type for total_elements`, Open-Sora-v2 VAE decode,
+    # 2026-09-25), and a `.to(tl.int64)` inside the branches broke on the
+    # constexpr form ('int' object has no attribute 'to', Flex.1-alpha).
+    dim_offset = tl.where(pid_y == 0, dim_offset_a, tl.where(pid_y == 1, dim_offset_b, tl.where(pid_y == 2, dim_offset_c, dim_offset_d)))
+    total_elements = tl.where(pid_y == 0, total_elements_a, tl.where(pid_y == 1, total_elements_b, tl.where(pid_y == 2, total_elements_c, total_elements_d)))
 
     block_start = pid_x * BLOCK_X
     offsets = tl.arange(0, BLOCK_X)
