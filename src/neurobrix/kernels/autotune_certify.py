@@ -948,6 +948,58 @@ def _backend() -> Dict[str, Any]:
     return dict(C.generator_identity())
 
 
+def launch_oracle(qual: str, named: Dict[str, Any]):
+    """The fp64 oracle of THE LAUNCH THE AUTOTUNER SEES, from the kernel's own named operands —
+    or None for a family whose census key already names a single launch.
+
+    Why the launch and not the synthesized shape (measured 2026-09-26 on this rack): the `mm`
+    wrapper band-streams a product above `NBX_MM_MAX_OUTPUT_ELEMS` output elements (Metal's
+    boundary, applied on every backend) and keys every band on the WHOLE shape's bucket, so the
+    census key `(4194304, 512, 256, ...)` — mochi's — is served by two launches of 4 192 256 and
+    2 048 rows. The certifier computed one oracle over the whole synthesized product and cut its
+    comparison windows (rows 0-5086, the middle, 4 189 218-4 194 304) on whichever band tensor the
+    launch carried: past the band it read memory the kernel never wrote, every candidate read as
+    wrong (best deviation 1.0), and a correct kernel (relative deviation under 1e-6 on the
+    production path at exactly 2^31 output elements) was refused. An oracle of a launch is
+    computed from that launch's operands — the runtime screen's brick (`screen_oracle._mm`,
+    row-windowed) — so it is band-agnostic by construction; the same brick now serves both
+    instruments.
+
+    The convolution family is left to the synthesized oracle: its census keys are recorded per
+    launch (a band changes `out_height` and therefore the key), so a banded launch is refused by
+    the key check before any comparison.
+    """
+    from neurobrix.kernels import screen_oracle as _so
+    short = C.kernel_short(qual)
+    if short in ("matmul_kernel", "addmm_kernel"):
+        m, n, k = int(named["M"]), int(named["N"]), int(named["K"])
+        wins = _row_windows(m, n, k)
+        if wins is None:
+            whole = _so._mm(named)
+            if whole is None:
+                raise RuntimeError(f"{qual}: the launch's operands could not be read for the oracle")
+            return whole
+        blocks = []
+        for r0, r1 in wins:
+            ref = _so._mm(named, rows=(r0, r1))
+            if ref is None:
+                raise RuntimeError(f"{qual}: the launch's operands could not be read for the oracle")
+            blocks.append(((r0, r1), ref))
+        return RowWindowedOracle(blocks, m)
+    if short == "baddbmm_kernel":
+        b_, m, n, k = (int(named.get(x, 0)) for x in ("B", "M", "N", "K"))
+        if b_ and m and n and k and b_ * m * n * k > ORACLE_MAX_MACS:
+            raise RuntimeError(
+                f"{qual}: the launch's batched product ({b_}x{m}x{n}x{k}) exceeds the oracle cap "
+                f"({ORACLE_MAX_MACS} multiply-adds) and a batched launch is not row-windowed yet — "
+                f"not certified rather than compared against the wrong rows")
+        whole = _so._baddbmm(named)
+        if whole is None:
+            raise RuntimeError(f"{qual}: the launch's operands could not be read for the oracle")
+        return whole
+    return None
+
+
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
@@ -973,10 +1025,20 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             raise UnreachableCensusKey(
                 f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
                 f"and the kernel disagree — nothing certified for this key")
-        oracle = oracle_box.get("v")
+        if "config" in state:
+            # A SECOND launch of the same key inside one wrapper call — a band of a product the
+            # wrapper streams (see `launch_oracle`). The key is certified on its first launch;
+            # every later band runs the configuration chosen, exactly as the runtime serves it.
+            state["launches"] = int(state.get("launches", 1)) + 1
+            return tuner.fn.run(*args, **{**kwargs, **state["best_config"].all_kwargs()})
         t_or = time.time()
-        if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
-            oracle = oracle_box["v"] = oracle_fn()
+        # The oracle is THIS LAUNCH's, from its own operands, wherever the family allows it;
+        # the synthesized whole only for the families whose key names a single launch.
+        oracle = launch_oracle(qual, tuner.nargs)
+        if oracle is None:
+            oracle = oracle_box.get("v")
+            if oracle is None:
+                oracle = oracle_box["v"] = oracle_fn()
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
         configs = list(upstream_prune(tuner, kwargs))
@@ -1112,6 +1174,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                       "excluded": excluded, "unrun": unrun,
                       "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
+        state["best_config"] = best
+        state["launches"] = 1
         poison()
         return tuner.fn.run(*args, **{**kwargs, **best.all_kwargs()})
 
@@ -1155,6 +1219,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         raise RuntimeError(f"{qual} at {key!r}: the wrapper never reached the autotuner")
     proof = {"date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
+             "launches": int(state.get("launches", 1)),
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
              "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
