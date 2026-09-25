@@ -106,7 +106,7 @@ def _plan(monkeypatch, model, h, w, host_free, rung, request=None):
     assert p.strategy == "layer_streaming" and p.layer_stream_plan, (
         f"{model}: planned {p.strategy!r}; this gate judges streamed pieces")
     family = json.loads((root / "manifest.json").read_text()).get("family", "")
-    return root, p.layer_stream_plan, family
+    return root, p, family
 
 
 def _whole_bindings(graph, scale):
@@ -129,16 +129,17 @@ def _shape(meta, whole):
 
 
 @functools.lru_cache(maxsize=4)
-def _normalized(root, comp, family):
+def _normalized(root, comp, family, declared_moe):
     """The graph Prism cuts, once per component: it depends on neither the size nor the rung,
-    and the MoE fusion on a 30B graph costs minutes. Callers only read it."""
+    and the MoE fusion on a 30B graph costs minutes. Callers only read it. `declared_moe` is the
+    plan's own MoE declaration for the component (`layer_stream_moe`), as the strategy uses it."""
     raw = json.loads((root / "components" / comp / "graph.json").read_text())
-    return normalize_for_branch(raw, "triton", family)
+    return normalize_for_branch(raw, "triton", family, declared_moe=declared_moe)
 
 
 def _check_every_piece(model, root, plan, family, size):
-    for comp, bounds in plan.items():
-        graph = _normalized(root, comp, family)
+    for comp, bounds in plan.layer_stream_plan.items():
+        graph = _normalized(root, comp, family, plan.layer_stream_moe.get(comp))
         whole = _whole_bindings(graph, SCALES[size])
         order_index = {u: i for i, u in enumerate(graph["execution_order"])}
         for k, (first, last) in enumerate(bounds):

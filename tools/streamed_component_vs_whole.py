@@ -13,8 +13,16 @@ What it does, in one process, one card:
   4. writes both outputs' summary and their difference as JSON.
 
 usage: streamed_component_vs_whole.py MODEL COMPONENT MODE BATCH SEQ HOST_FREE_MB RUNG_MB OUT.json
-       [H W]   (the image request the plan is made for; the component's own inputs are
-               BATCH x SEQ token ids with a full attention mask)
+       [H W]   (the image request the plan is made for; without it the plan is made at batch 1
+               with no request size)
+
+The component's inputs: token ids with a full attention mask when it takes exactly those; any
+other component (an LM stage fed `inputs_embeds`) gets inputs built from its OWN declared graph
+inputs — every symbolic dim bound by the symbol's declared NAME (`batch` -> BATCH, `seq_len`
+-> SEQ, any other name refused), floating inputs drawn N(0, 0.02) in float32 (the executor casts
+component inputs to its compute dtype), integer inputs counting 0..n-1 along their last axis
+(positions), boolean inputs all False. The values are arbitrary; the gate compares the SAME
+inputs whole and in pieces, so they need only be finite and in range.
 """
 from __future__ import annotations
 
@@ -41,8 +49,9 @@ def _plan(model, mode, host_free, rung, h, w):
         impose_rung(mp, rung)
         root = container_root(model)
         s = PrismSolver()
-        p = s.solve_smart(NBXContainer.load(str(root)), profile(APPLE_M4_PRO),
-                          InputConfig(batch_size=1, height=h, width=w), mode=mode)
+        ic = (InputConfig(batch_size=1, height=h, width=w) if h is not None
+              else InputConfig(batch_size=1))
+        p = s.solve_smart(NBXContainer.load(str(root)), profile(APPLE_M4_PRO), ic, mode=mode)
     finally:
         mp.undo()
     return root, p
@@ -66,10 +75,39 @@ def _to_numpy(t):
     return np.asarray(t.numpy(), dtype=np.float32)
 
 
+def _declared_inputs(dag, by_name, rng):
+    """The component's inputs from its own declaration (see the module docstring)."""
+    syms = (dag.get("symbolic_context") or {}).get("symbols") or {}
+    out = {}
+    for tid in dag["input_tensor_ids"]:
+        meta = dag["tensors"][tid]
+        dims = (meta.get("symbolic_shape") or {}).get("dims") or meta.get("shape") or []
+        shape = []
+        for d in dims:
+            sid = d.get("id") if isinstance(d, dict) else (d if isinstance(d, str) else None)
+            if sid is None:
+                shape.append(int(d))
+                continue
+            name = (syms.get(sid) or {}).get("name")
+            if name not in by_name:
+                raise SystemExit(f"input {tid} dim {sid} is named {name!r}; this harness binds "
+                                 f"only {sorted(by_name)} and will not guess another")
+            shape.append(int(by_name[name]))
+        dt = str(meta.get("dtype") or "")
+        if "bool" in dt:
+            a = np.zeros(shape, dtype=bool)
+        elif "int" in dt:
+            a = np.broadcast_to(np.arange(shape[-1], dtype=np.int64), shape).copy()
+        else:
+            a = rng.normal(0.0, 0.02, size=shape).astype(np.float32)
+        out[tid[7:]] = a
+    return out
+
+
 def main():
     model, comp, mode, batch, seq, host_free, rung, out_path = sys.argv[1:9]
     batch, seq, host_free, rung = int(batch), int(seq), int(host_free), int(rung)
-    h, w = (int(sys.argv[9]), int(sys.argv[10])) if len(sys.argv) > 10 else (1024, 1024)
+    h, w = (int(sys.argv[9]), int(sys.argv[10])) if len(sys.argv) > 10 else (None, None)
     root, plan = _plan(model, mode, host_free, rung, h, w)
     bounds = (plan.layer_stream_plan or {}).get(comp)
     if not bounds:
@@ -99,14 +137,13 @@ def main():
         return ex
 
     rng = np.random.default_rng(0)
-    arrays = {"input_ids": rng.integers(0, 32000, size=(batch, seq), dtype=np.int64),
-              "attention_mask": np.ones((batch, seq), dtype=np.int64)}
     whole_ex = executor()
     wanted = [t[7:] for t in whole_ex._dag["input_tensor_ids"]]
-    missing = [n for n in wanted if n not in arrays]
-    if missing:
-        raise SystemExit(f"{model}.{comp} takes inputs {wanted}; this harness builds token "
-                         f"inputs only and cannot make {missing}")
+    if sorted(wanted) == ["attention_mask", "input_ids"]:
+        arrays = {"input_ids": rng.integers(0, 32000, size=(batch, seq), dtype=np.int64),
+                  "attention_mask": np.ones((batch, seq), dtype=np.int64)}
+    else:
+        arrays = _declared_inputs(whole_ex._dag, {"batch": batch, "seq_len": seq}, rng)
     inputs = {n: _to_engine(arrays[n], mode, device) for n in wanted}
 
     whole_ex.load_weights(str(root), comp)
@@ -120,13 +157,15 @@ def main():
     ctx = StrategyContext(strategy_name="layer_streaming", allocations={comp: (device, {})},
                           component_executors={comp: base},
                           runtime_package=SimpleNamespace(cache_path=root),
-                          layer_segments={comp: bounds})
+                          layer_segments={comp: bounds},
+                          layer_graphs=dict(plan.layer_stream_graph),
+                          layer_moe=dict(plan.layer_stream_moe))
     strat = LayerStreamingStrategy(ctx, "layer_streaming")
     pieces = strat.execute_component(comp, "once", dict(inputs))
 
     report = {"model": model, "component": comp, "mode": mode, "batch": batch, "seq": seq,
               "request": [h, w], "rung_mb": rung, "pieces": len(bounds), "dtype": dtype,
-              "outputs": {}}
+              "inputs": {n: list(arrays[n].shape) for n in wanted}, "outputs": {}}
     for key, val in whole.items():
         a = _to_numpy(val)
         if key not in pieces:
