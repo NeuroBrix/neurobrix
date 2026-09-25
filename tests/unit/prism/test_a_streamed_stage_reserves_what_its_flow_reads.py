@@ -72,7 +72,7 @@ def test_a_component_no_flow_reads_reserves_nothing(monkeypatch):
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, 8192)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
-    root = container_root("PixArt-XL-1024")
+    root = container_root("PixArt-XL-2-1024-MS")
     s = PrismSolver()
     p = s.solve_smart(NBXContainer.load(str(root)), profile(APPLE_M4_PRO),
                       InputConfig(batch_size=1, height=2048, width=1024), mode="triton")
