@@ -3445,3 +3445,25 @@ main in both engines.
 
 **The lesson, in one line.** A piece is a graph: check it the way the engine will read it —
 every id every op names, in every form an argument takes.
+
+### 109 — the retrace gate's arms ran on the live tree under a frozen worktree's name
+
+`tools/retrace_zoo.py --src <worktree>` put the worktree ROOT on `PYTHONPATH`; the package lives
+under `<worktree>/src`, so the import fell through to the editable install — the live tree — and
+every "old" and "new" arm of 2026-09-25 (PixArt-XL-2-1024-MS twice, Flex.1-alpha) ran on whatever
+the live tree held at that minute, while the operator believed the arm frozen. The same path made
+the frozen autotune state read `0 certified entries` (it looked for `<root>/neurobrix/config/autotune`),
+so both arms swept every key and the old arms took thirty minutes instead of one. The first sign
+was a kernel edit made in the live tree at 18:44 (the concat/stack int64 selection) appearing in
+Flex's new arm at 18:46 — a change that could not have reached a frozen tree.
+
+**What the gate did while it ran on the wrong tree**: PASS with bytes identical on both arms —
+true, and proven on the same tree for both arms, so the PixArt verdicts stand; but a gate whose
+arms follow the live tree measures the operator's last edit, not the commit it names.
+
+**Repair.** `--src` refuses a directory without `neurobrix/__init__.py` (ZERO FALLBACK, names the
+`<checkout>/src` form); the campaign scripts name `<worktree>/src`. Flex's new arm and gate re-run
+on the frozen tree.
+
+**The lesson, in one line.** A frozen tree is only frozen if the import resolves inside it — put the
+package on the path and refuse a path that holds none.

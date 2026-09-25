@@ -336,6 +336,13 @@ def stimulus_change(old_ctx, new_ctx) -> dict | None:
     Reported by dimension name so the verdict can say what moved."""
     o = ((old_ctx or {}).get("symbols") or {})
     n = ((new_ctx or {}).get("symbols") or {})
+    # The stimulus is the SET of extents the inputs carried, whatever the tracer named them:
+    # the signature brick (2026-09-25) renames axes — a width once called seq_len becomes a
+    # constant, a token axis once called batch takes the sequence's symbol — with the same
+    # tensors traced. Values equal, names moved = a naming change of the closed defect, not
+    # a different stimulus; the per-name diff below only speaks when a value itself moved.
+    if sorted({m.get("trace_value") for m in o.values()}) == sorted({m.get("trace_value") for m in n.values()}):
+        return None
     moved = {}
     for name in {str(m.get("name")) for m in o.values()} & {str(m.get("name")) for m in n.values()}:
         ov = sorted({m.get("trace_value") for m in o.values() if str(m.get("name")) == name})
@@ -429,6 +436,28 @@ def _literal_symbolized_within(a, b) -> int:
         return n
     return 0 if a == b else -1
 
+
+def _leaf_symbol_ids(op: dict, tensors: dict) -> set:
+    """Every symbol id a dim of the op's inputs/outputs carries, bare or as a leaf of an
+    expression node (add/mul/sub/floordiv/mod/neg/product)."""
+    out = set()
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "symbol" and n.get("id"):
+                out.add(n["id"])
+            for k in ("left", "right", "operand"):
+                if k in n:
+                    walk(n[k])
+            for f in n.get("factors") or []:
+                if isinstance(f, str):
+                    out.add(f)
+                else:
+                    walk(f)
+    for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
+        for d in ((tensors.get(tid) or {}).get("symbolic_shape") or {}).get("dims") or []:
+            walk(d)
+    return out
+
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors_old: dict = None):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
@@ -491,6 +520,16 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
         # is now "to the end" (INT64_MAX); relative by nature, never wrong.
         if b == INT64_MAX and isinstance(a, dict) and _is_dim_node(a) and json.dumps(a, sort_keys=True) in input_dims:
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-to-the-end"})
+            continue
+        # SLICE START SYMBOLIZED (2026-09-25): a prefix split ``hidden[txt_len:]`` whose start was
+        # the frozen prefix length now reads the symbol traced at it — a symbol the op's own input
+        # dims carry (bare, or as a leaf of the concat's add()). Flex.1-alpha: the two symbols at
+        # 512 (encoder_hidden_states and txt_ids each minted one) had left this pass ambiguous; the
+        # signature brick mints the axis once and the start follows it (aten.slice::25/37/49/61/73).
+        if (isinstance(a, int) and not isinstance(a, bool) and a > 2 and isinstance(b, dict)
+                and b.get("type") == "symbol" and _trace_value(b) == a
+                and b.get("id") in _leaf_symbol_ids(new_op, tensors_new)):
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-start-symbolized"})
             continue
         # SLICE START NEGATED (2026-09-25): a suffix slice ``x[-S:]`` whose start was the negated
         # trace value of the axis it cuts now reads ``neg(<that axis's dim>)`` — the same slice,
@@ -1672,6 +1711,7 @@ class Model:
             f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}, "
             f"slice end to the end {sum(r.get('arg_kinds', {}).get('slice-end-to-the-end', 0) for r in gd['components'].values())}, "
             f"slice start negated {sum(r.get('arg_kinds', {}).get('slice-start-negated', 0) for r in gd['components'].values())}, "
+            f"slice start symbolized {sum(r.get('arg_kinds', {}).get('slice-start-symbolized', 0) for r in gd['components'].values())}, "
             f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
             f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
@@ -1809,6 +1849,17 @@ def main():
                     help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
                          "(an upload loop must never trace or build — a reset state once made one trace Kokoro beside a pass)")
     args = ap.parse_args()
+    if args.src:
+        _src = Path(args.src).resolve()
+        if not (_src / "neurobrix" / "__init__.py").is_file():
+            # The door (2026-09-25): a --src naming a directory without the package
+            # put it on PYTHONPATH to no effect and every run imported the EDITABLE
+            # install — the live tree — while the operator believed the arm frozen;
+            # its autotune directory read 0 certified entries for the same reason.
+            # Today's PixArt/Flex arms ran on the live tree under a worktree's name.
+            sys.exit(f"ZERO FALLBACK: --src {args.src} holds no neurobrix/__init__.py — "
+                     f"name the engine SOURCE tree (<checkout>/src), or the runs import the "
+                     f"editable install instead of the tree you froze")
     import shlex
     args.extra = shlex.split(args.extra)
     summary = {}

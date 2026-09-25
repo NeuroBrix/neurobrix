@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Concatenating very large tensors no longer fails to compile.** When one input to a
+  concatenation or stack held more than two billion elements while the others were small — the
+  video decoder of Open-Sora at 129 frames — the kernel refused to compile with a type mismatch.
+  Both kernels now select each input's size in a form that compiles for every mix of sizes.
+
 - **Image models split into pieces no longer lose part of their attention input.** When a piece
   boundary fell inside the joint text-and-image attention of models like Flex.1, one half of the
   combined input was dropped and the run failed. Every input an operation lists is now carried
