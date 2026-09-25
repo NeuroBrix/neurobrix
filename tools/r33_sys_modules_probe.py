@@ -7,7 +7,7 @@ An import hook on `sys.meta_path` records the Python stack at the first request
 for `torch` (before anything is loaded), so the answer names the frame — ours,
 or upstream Triton's — that pulled it, with its file and line.
 
-    python tools/r33_sys_modules_probe.py --triton --model TinyLlama-1.1B-Chat \\
+    python tools/r33_sys_modules_probe.py --triton --model TinyLlama-1.1B-Chat-v1.0 \\
         --prompt "The sky is" --max-tokens 8 --output /tmp/x.txt
 Exit code 1 when torch is in sys.modules at the end of a --triton run.
 `--warm` runs the serving engine in-process instead of the CLI (two requests,

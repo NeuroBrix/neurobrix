@@ -23,7 +23,7 @@ Output is a PNG at `input × scale`.
 | `swin2SR-classical-sr-x4-64` | 4× | Swin2SR transformer | clean images | all 4 |
 | `swin2SR-realworld-sr-x4-64-bsrgan-psnr` | 4× | Swin2SR transformer | degraded / real-world photos | all 4 |
 | `real-esrgan-x2` | 2× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
-| `real-esrgan-x4` | 4× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
+| `Real-ESRGAN-x4` | 4× | RRDBNet CNN (GAN) | photos, detail synthesis | all 4 |
 | `real-esrgan-x8` | 8× | RRDBNet CNN (GAN) | large upscales | all 4 |
 | `swinir-classical-x2` | 2× | SwinIR transformer | high-fidelity clean images | all 4 |
 | `swinir-classical-x4` | 4× | SwinIR transformer | high-fidelity clean images | all 4 |
@@ -51,7 +51,7 @@ Output is a PNG at `input × scale`.
 
 ## Distribution
 
-The four x4 classical variants — `hat-l-x4`, `real-esrgan-x4`,
+The four x4 classical variants — `hat-l-x4`, `Real-ESRGAN-x4`,
 `swinir-classical-x4`, `swin2SR-classical-x4` — are published on
 the NeuroBrix hub (neurobrix.es) and downloadable now. The other
 variants in the catalogue are validated by the engine and are
