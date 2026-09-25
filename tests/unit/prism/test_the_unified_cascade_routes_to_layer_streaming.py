@@ -36,7 +36,7 @@ import inspect
 
 import pytest
 
-from neurobrix.core.prism.loader import load_profile
+from tests.unit.prism._pinned_machine import APPLE_M4_PRO, profile as build_profile   # built, never a machine's own profile (register 102)
 from neurobrix.core.prism.solver import (
     ComponentMemory, DeviceState, PrismSolver)
 from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
@@ -48,8 +48,13 @@ class _NoComponents:
     from pathlib import Path as _P
     cache_path = _P("/nonexistent-prism-fixture")
 
+    # The components this fixture places, DECLARED, with the dtype the cells assumed. It returned
+    # [] and the solver answered every dtype question with an invented "bfloat16"; that default
+    # is now a refusal (`_get_component_dtype`), so the fixture says what it holds.
     def get_neural_components(self):
-        return []
+        from types import SimpleNamespace
+        return [SimpleNamespace(name=n, get_dominant_dtype=lambda: "bfloat16")
+                for n in ['text_encoder', 'vae']]
 
 
 def _solver_and_scene(unified: bool):
@@ -57,7 +62,7 @@ def _solver_and_scene(unified: bool):
     24 GB CPU. A 'text_encoder' whose activations exceed the GPU but whose total
     fits host RAM is exactly what lazy_sequential offloaded to the host. A small
     'vae' fits whole beside it."""
-    profile = load_profile("default")            # apple, unified, 24 GB cpu
+    profile = build_profile(APPLE_M4_PRO)            # apple, unified, 24 GB cpu
     profile.devices[0].unified_memory = unified
     solver = PrismSolver.__new__(PrismSolver)
     from neurobrix.core.config.system import PRISM_DEFAULTS

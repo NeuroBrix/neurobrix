@@ -571,36 +571,12 @@ class TritonSequence:
 
     @staticmethod
     def _rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
-        """Rewire tensor_id references in a single arg dict.
-
-        Handles type=tensor, type=tensor_tuple, and nested type=list.
-        Shared by _eliminate_detach_ops and _eliminate_weight_transpose_ops.
-        """
-        if not isinstance(arg, dict):
-            return arg
-        arg_type = arg.get("type")
-        # tensor_ref carries the same tensor_id field (_compile_arg
-        # accepts both) — a ref left unrewired would keep pointing at a
-        # tid the dropped producer never writes (gardien 2026-08-10,
-        # shared-helper hardening, pre-existing blind spot).
-        if arg_type in ("tensor", "tensor_ref"):
-            tid = arg.get("tensor_id")
-            if tid in rewire:
-                arg = dict(arg)
-                arg["tensor_id"] = rewire[tid]
-        elif arg_type == "tensor_tuple":
-            tids = arg.get("tensor_ids", [])
-            new_tids = [rewire.get(t, t) for t in tids]
-            if new_tids != tids:
-                arg = dict(arg)
-                arg["tensor_ids"] = new_tids
-        elif arg_type == "list":
-            items = arg.get("value", [])
-            new_items = [TritonSequence._rewire_arg(item, rewire)
-                         for item in items]
-            arg = dict(arg)
-            arg["value"] = new_items
-        return arg
+        """Rewire tensor_id references in a single arg dict — the one shared walk
+        (`core/prism/layer_partition.rewire_arg`, torch-free): type=tensor / tensor_ref,
+        type=tensor_tuple and nested type=list. Shared by _eliminate_detach_ops and
+        _eliminate_weight_transpose_ops, and by a streamed piece's seam aliasing."""
+        from neurobrix.core.prism.layer_partition import rewire_arg
+        return rewire_arg(arg, rewire)
 
     def _apply_rewire_to_remaining_ops(
         self,
@@ -2583,10 +2559,14 @@ class TritonSequence:
                 tids = arg.get("tensor_ids", [])
                 slots = []
                 for tid in tids:
-                    if tid in self._tid_to_slot:
-                        slots.append(TensorSlot(self._tid_to_slot[tid]))
-                    else:
-                        slots.append(tid)
+                    if tid not in self._tid_to_slot:
+                        # A streamed piece's list named a seam by its raw id (Flex joint
+                        # attention, df2588e7) and the name reached the kernel as a "tensor".
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: a tensor list argument names {tid!r}, which no slot "
+                            f"of this sequence holds (a seam not aliased, or a producer that never "
+                            f"ran) — refused rather than passing its name as a tensor")
+                    slots.append(TensorSlot(self._tid_to_slot[tid]))
                 return ListArg(tuple(slots))
 
             if arg_type == "dtype":

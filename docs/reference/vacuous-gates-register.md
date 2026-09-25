@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-107 entries, 101 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 102 carry a site. Two
+114 entries, 108 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 109 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3220,3 +3220,271 @@ component estimate, and asserts the INVARIANT — streamed peak plus what stays 
 `51e24662` hunk, 11 green on the fix, where PixArt cuts 7 segments peaking at 8 105.6 MB.
 
 **The lesson, in one line.** Assert the property the strategy promises, not the label it wears.
+
+---
+
+### 102 — a gate built to prove the Mac's fix skipped every cell on the Mac, because it found its machine instead of carrying it
+
+`tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py` at `69c98647` — the
+gate landed to prove the Mac's PixArt refusal was fixed — read three things off the rack:
+
+* the CACHE as a literal, `os.path.expanduser("~/.neurobrix/ca" + "che")`, the word split so a
+  text search would not find it. Hiding a hardcode from the search that exists to find it is
+  worse than writing it plainly. The engine resolves its cache through one door,
+  `neurobrix.core.paths.cache_dir()` (`NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`, then the
+  default), and on the Mac the models live on the mount that door names;
+* a MISSING model answered with `pytest.skip`;
+* two HARDWARE PROFILES by machine-local id — `default-9f169c79` and `default-ff6008b7`, both
+  generated per machine and gitignored. The rack's V100 profile does not exist on the Mac, and
+  neither exists on a third machine.
+
+**What the gate did where it mattered**: on the Mac, **18 of 18 cells skipped**, in silence. The
+gate that proves the Mac's fix proved nothing on the Mac. Pointed at the canonical mount, 16
+passed; the other 2 needed the rack's profile. Found by the Mac, verified by the supervisor
+2026-09-24 15:12 CEST. Reproduced here under the Mac's conditions (a HOME without the literal
+path, the models reachable only through `NEUROBRIX_CACHE`, a tree without the gitignored
+profiles): main's gate **18 skipped**.
+
+**Why it is this register's class, and why entries 100 and 101 did not prevent it.** 100 said
+test the value the engine consumes; 101 said construct the scenario instead of finding it. This
+gate constructed the host reading and the rung — and found everything else: where the models
+are, which machine the profile describes. A scenario is only constructed if ALL of its inputs
+are, and a skip turns every input the gate forgot to construct into a silent pass.
+
+**Repair.** `tests/unit/prism/_pinned_machine.py`, one brick for every prism gate that plans a
+real container: the cache through `core.paths.cache_dir()`; a missing container FAILS, naming the
+path and who configured it; each profile written from the values it had when the scenario was
+measured and loaded through the engine's own loader; the host reading, both readings of a
+discrete card (sharing facts AND the driver's free figure) and the rung pinned. Under the Mac's
+conditions the rebuilt gate is **18 passed** (19 with the Mac's own container added); with a cache
+that lacks the models it is **18 failed**, never skipped.
+
+**Same pattern elsewhere, named** (cache literal and/or skip and/or a machine-local profile id):
+gates touched this session — `test_no_component_falls_between_placing_whole_and_streaming.py`,
+`test_the_encoder_tiling_path_is_reachable.py`, `test_a_one_at_a_time_rung_is_budgeted_one_at_a_time.py`
+(rebuilt on the brick on their branches); gates on main from earlier sessions, not yet rebuilt —
+`test_a_dtype_name_it_does_not_know_is_refused_not_halved.py`,
+`test_a_plan_under_a_profile_assumes_no_more_host_than_it_declares.py`,
+`test_a_segment_boundary_names_an_op_the_executor_still_has.py`,
+`test_a_segment_budget_reserves_the_constants_it_runs_beside.py`,
+`test_a_strategy_that_loads_its_own_weights_is_installed_first.py`,
+`test_only_a_whole_view_describes_the_machine.py`.
+
+**The lesson, in one line.** A gate that skips when its machine is missing has not been run; it
+must carry its machine, or fail.
+
+---
+
+### 103 — a plan census compared 177 identical errors and reported "0 differ"; a gate cell ran where the two figures it judged were equal
+
+Two instruments of the same afternoon, each seen empty before it was used, and one class: **the
+scenario could not produce the difference the instrument exists to detect.**
+
+**The census.** To measure which plans a Prism change moved, two solver trees ran the whole cache
+under a pinned machine, from frozen git worktrees. Result: 177 plans, **0 differ**. Every one of the
+177 rows in BOTH arms was `RAISED FileNotFoundError: Hardware profile 'default-…' not found` — the
+machine profiles are generated per machine and gitignored, so a worktree holds none (register 102's
+class, in my own instrument, an hour after writing 102). Two identical failures compare equal. Read
+before it was reported. Repair: the profiles are read from the live tree, and the census now REFUSES
+to finish when any plan could not be made for a reason outside the solver's own decision.
+
+**The cell.** `test_cpu_streaming_sizes_its_cache_against_the_host_it_runs_on` asserted that a host
+strategy's KV cache fits the HOST budget. It ran on the Mac's profile, where the host rung and the
+GPU rung are both 16 384 MB. With the defect injected (the cache judged against the GPUs), it
+**passed** — 22 of 22 green. Rebuilt on a dedicated V100-16GB (rung 15 564.8) beside a host with
+22 000 MB free (rung 20 480), serve mode, with a precondition that the two figures differ: the
+injection now fails it ("1 545.3 MB beside a 14 019.4 MB peak fits the GPU rung — sized against the
+GPU, not the 20 480 MB host").
+
+**The lesson, in one line.** A comparison is only as wide as the difference its scenario can
+produce: two arms that fail alike, or two figures that happen to be equal, agree for no reason.
+
+---
+
+### 104 — a gate pinned what a strategy's DOCSTRING says it holds, and the flow holds more
+
+The one-at-a-time gate (WIP branch, febc4842; ported into the Prism landing the same afternoon)
+asserted that `lazy_sequential`'s KV check combines component costs by MAX — "drops the requirement
+from sum(components) to max(component)", its own docstring — and pinned "MiniCPM-o-4_5 on the Mac
+plans lazy_sequential" as the fix it proved. Three injections turned it red; it looked earned.
+
+**What it did while the premise was wrong**: green. The strategy LOADS one component at a time; the
+FLOW decides what stays. The VLM flow unloads an encoder after its single use but runs the decode
+loop with the LM and its head resident together (`triton/flow/vlm.py`: vision unloaded at 298, the
+LM only after the loop at 635), and in serve mode (`persistent_mode`) it unloads nothing. MiniCPM's
+`llm.model` + `llm.lm_head` = **16 516.2 MB, over the Mac's 16 384 MB rung before any cache**. The
+plan the gate celebrated would hold that pair plus the cache on a budget it exceeds. The census had
+already recorded it as a success ("MiniCPM on the Mac: refused -> lazy_sequential"). The refusal on
+main was honest arithmetic, and the gate had pinned an over-acceptance as the fix.
+
+Every injection the gate went red on tested the ARITHMETIC of MAX (order independence, the zero3
+cost, the subtraction). None could test the PREMISE, because the premise came from the same
+docstring the cells were written from. Found by following a reviewer's unproven remark ("nothing
+proves the KV cache and co-used components are not resident together") into the flow code.
+
+**Repair.** The gate no longer pins a MAX; it pins main's own SUM — the bound that holds for every
+flow — and the measurement that shows why (the persistent pair over the rung). A first repair modelled the lifecycle (persistent together + the largest
+transient, the sum when served) and a review showed it was still incomplete in the out-of-memory
+direction: the speech legs load their talker groups beside the LM, the triton dual_ar flow loads its
+quantizer with the model resident (the compiled one unloads first — an R30 asymmetry), and served
+lazy plans are NOT persistent (`serving/engine.py` sets `persistent_mode` only for eager
+strategies), so "served = sum" was my premise, not the code's. A one-at-a-time combination waits
+on a lifecycle model that reads what each flow keeps. Two cells pin the measurement (MiniCPM's
+persistent pair exceeds the rung) and the consequence (the specific "No strategy can fit model +
+KV cache" refusal). The capability this exposes is named, not hidden: no rung streams a component
+that fits alone but not beside its co-resident partner.
+
+**The same premise, still live elsewhere (pre-existing, main-identical, named):** the
+`single_gpu_lifecycle` gate and its KV branch budget `persistent + max(transient)`; the `single_gpu`
+cold KV branch uses `max(total)` while its own gate uses `sum(weights) + max(activations)` (the
+strategy is eager) and a comment says the two "must match"; the `cpu_streaming` gate accepts on
+`max(component)`, so for a KV family whose SUM exceeds the host budget the "always runs, slowly"
+last rung is unreachable. Each is a docstring's claim about residency that no flow was read for.
+
+**The lesson, in one line.** A strategy's docstring says what it loads; the flow says what stays —
+test the second.
+
+---
+
+### 105 — every streaming gate judged the plan or the binding; the pieces computed something else, and only running them whole-against-pieces could say so
+
+Four gates stood over `layer_streaming` by 2026-09-24: the plan's strategy (101), its peak under the
+rung, the binding of every symbol in every piece at three sizes, and the plan census. All green on
+PixArt's T5. The Mac rendered the plan and it died on an unbound symbol (8e786e70) — the binding gate
+then caught that, red on main. But with the binding fixed, the pieces RAN and computed a different
+answer: rel L2 0.46 % from the same component run whole, while the whole component run twice was
+bit-identical. Each piece fed the whole run's own seam values diverged 0.15-0.25 % by itself: the
+executor cast every SEAM input to the compute dtype, as if it were a model input, narrowing an fp32
+island to bf16 at every piece's entry. The same rule was written three times (triton, torch
+sequential, compiled), so the fix was three sites.
+
+**What every earlier gate did while the pieces were wrong**: green. A plan cell cannot see
+arithmetic; a binding cell sees shapes; neither executes a kernel. A render could have "passed" on
+a picture that looked right.
+
+**Repair.** `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py` with
+`tools/streamed_component_vs_whole.py`: the component run WHOLE (twice, so a difference can be
+attributed) and through the real `LayerStreamingStrategy`, same inputs, BIT-identity required, at
+batch 1 / 2 / 8 in every engine where the whole component runs. Seen failing on main: the Mac's
+UnboundSymbolError on PixArt-XL-1024, rel L2 0.42 % on PixArt-XL-2-1024-MS. 18/18 bit-identical after.
+
+**The lesson, in one line.** A decomposition is proven by recomposing it: run the parts and the
+whole on the same input, and require the same bytes.
+
+---
+
+### 106 — the boundary gate compared the plan's graph with itself; the strategy cut another one
+
+`test_a_segment_boundary_names_an_op_the_executor_still_has.py` landed (2026-09-22) the invariant
+"every boundary the partition produced is present in the graph that will run", and asserted it as
+`boundaries_present(normalize_for_branch(raw), bounds)` — the boundaries cut on the normalised
+graph, looked up in the SAME normalised graph. True by construction. The graph that runs was
+assumed to be the normalised one because a sequence rewrites its graph in place; but a streamed
+component's base executor holds no weights and never compiles, so the graph `layer_streaming`
+checks is the one LOADED. The Mac then counted 26 refusals, six models, both triton engines
+(df2588e7): `the plan's segment boundaries are not in 'language_model's graph (1 of 14 op ids
+absent, e.g. 'custom.swiglu_fused::18')` — every absent id a fused op, every other boundary
+present. Two more holes behind the same assumption: `triton_sequential` never fuses, so its plans
+were cut on a graph it does not run; and a MoE LM packaged under `multimodal` is fused by the
+runtime once its flow declares it, which the plan did not do — Qwen3-Omni's thinker, 12 132 ops
+-> 4 300 (Qwen3-VL's stacked experts are not touched by that pass; its 48 absent of 192 were the
+swiglu cause).
+
+**What the gate did while the strategy refused**: green, 10 cells, at four rungs.
+
+**And the first repair's own gate was empty for one half.** With the MoE declaration injected OFF,
+the Qwen3-Omni cell stayed green: its 2-piece plan put its four boundary ids on ops the fusion does
+not touch. A presence check fails only by the luck of where the cut falls.
+
+**And the repair's first cell rebuilt the runtime in another order.** It declared the MoE on the
+base executor before cutting; the vlm flows load the LM — which builds its pieces — and declare
+only AFTER. Green on an order production never runs (the guardian, 2026-09-25); in production
+order the door refused Omni (planned 4 300 ops, cut 12 132).
+
+**Repair.** The strategy cuts `normalize_for_branch(base graph)` — one function, both sides; only
+mode `triton` gets the branch rewrites; Prism decides the MoE declaration by the one rule its
+weight sizing already used (`_moe_declaration`) and the decision TRAVELS ON THE PLAN to the
+strategy, so the pieces are cut fused whatever order the flow declares in; and a DOOR: the plan
+carries the fingerprint of the graph it cut (op count + sha256 of the execution order) and
+`layer_streaming` refuses any other — when it builds the pieces, and again before the first run,
+once the flow has declared what it declares. `tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py` builds the base
+executor the way the runtime builds it and the pieces through the real strategy, for the Mac's six
+models at the Mac's rungs, and runs granite-speech's LM whole against its pieces — red on the
+engine before the repair with the Mac's exact refusal (`2 of 16 op ids absent, e.g.
+'custom.swiglu_fused::15'`, triton and triton-sequential; 8 cells red), bit-identical after. Each
+part SEEN failing by injection: triton-sequential fusing again turns the executed cells red (pieces
+not bit-identical); Prism not declaring the MoE turns the Omni cell red at the first-run check (the
+flow fused what the plan cut unfused); the strategy ignoring the plan's declaration turns it red
+when the pieces are built.
+
+**The lesson, in one line.** An invariant between two graphs must name both graphs, and one of them
+must be the graph the other side actually holds.
+
+---
+
+### 107 — every streaming gate ran the component; the flow reads its executor by name, and no gate ran a flow
+
+By 2026-09-25 four gates stood over `layer_streaming` and executed real pieces: the binding of every
+symbol (A), whole-against-pieces bit identity (105), the cut on the graph Prism cut (106) and the
+plan's reserves. All green. The Mac then counted 30 streamed VLM and audio-LLM runs refused before
+their first piece (df2588e7): `Audio-LLM stage 'language_model' requires embed_tokens weight.` A
+flow reads the token embedding BY NAME from its LM's executor, outside the graph; a whole
+executor holds it because the loader keeps every non-block key for that reader; a streamed base
+held nothing. Behind it, a second defect no gate could see either: every PIECE loaded every
+non-block key with every run — the embedding into pieces that never read it — and the plan
+reserved none of it (0 MB beside the pieces against 384-1 600 MB held on the four models measured).
+
+**What the gates did while the flow could not start**: green. Each drove the component through
+`streamed_component_vs_whole.py`, which feeds it its inputs directly; the flow's by-name read never
+happened in any of them.
+
+**And behind it, a third a token gate alone would have passed:** GLM-4.1V streamed decoded the
+same tokens as whole with logits off (30.3190 vs 30.3169 at step 0) while whole run twice was
+identical — every piece had its calibration record REFUSED ("measured on another graph": the
+record is keyed to the whole graph's signature) and ran the conservative precision contract.
+
+**Repair.** For a component whose flow reads it by name (its graph takes `inputs_embeds`), the base
+holds every non-block weight resident (`load_flow_read_weights`) and Prism reserves them beside the
+pieces; a piece loads only what its ops consume (`_flow_reads_weights = False`) and borrows a
+non-block weight it consumes from the base — one copy; every piece runs under its COMPONENT's
+precision contract, resolved once on the whole graph and lent (`_contract_from`). `tests/regression/test_a_streamed_stage_serves_the_flow.py` runs the real flow through
+the CLI, whole and streamed, and requires the decoded token ids — or the top-4 ids AND logit values —
+identical: red on main with the Mac's exact refusal; with the contract lent, the logits too. The
+plan's reserve: `tests/unit/prism/test_a_streamed_stage_reserves_what_its_flow_reads.py`, red on
+main (0 MB reserved), its oracle read from the index.
+
+**The lesson, in one line.** A component is judged inside the thing that uses it: its caller's
+reads are part of its contract, and a gate that feeds it by hand cannot see them.
+
+---
+
+### 108 — the binding gate checked the symbols a piece binds, not the tensors its ops name
+
+`test_every_streamed_piece_binds_every_symbol_it_uses.py` (A) walked every symbol reference of
+every piece and required it bound, at three sizes, for twelve streamed containers — green,
+Flex.1-alpha among them. The Mac's two Flex rows then failed in the pieces, triton-sequential
+(df2588e7): `Cannot broadcast (1, 24, 512, 128) and (1, 1, 4608, 128)`. Flex's joint attention
+concatenates its text and image queries through a `tensor_tuple` argument (`aten.cat::19`); the
+image half was a seam, held by the piece as `input::aten.mul::97::out_0`, while the list still
+named `aten.mul::97::out_0` — the seam builder aliased a single `tensor_id` and nothing inside a
+list. Triton-sequential resolved the raw id to None and handed the kernel a shorter list; the
+compiled triton engine met a string (`'str' object has no attribute 'ndim'`).
+
+**What the gate did while the pieces named tensors they did not hold**: green. It asked whether a
+symbol was bound; no cell asked whether a tensor an op names exists in the piece.
+
+**Repair.** One argument walk (`layer_partition.rewire_arg`: `tensor_id` of any type,
+`tensor_tuple`, nested `list`) shared by the seam builder, the triton sequence and the compiled
+sequence's two rewrites (which had private copies without `tensor_ref` or an untyped id); a list
+argument naming a tensor nobody holds refused in every engine — triton-sequential met None,
+both compiled sequences passed the NAME as a tensor ("unknown tensor — shouldn't happen"), the
+torch resolver already refused. The binding gate now also requires every
+tensor an op of a piece names — inputs, argument lists, kwargs — to be produced in the piece,
+received, or held as a weight or constant, with its own walk: red on main for Flex.1-alpha at all
+three sizes and for Open-Sora-v2's transformer at 8 192 MB (a second model the rows had not
+named). `tests/regression/test_a_streamed_piece_receives_every_list_member.py`: Flex's transformer
+whole vs its pieces, bit-identical, triton and triton-sequential, both of the Mac's rungs — red on
+main in both engines.
+
+**The lesson, in one line.** A piece is a graph: check it the way the engine will read it —
+every id every op names, in every form an argument takes.

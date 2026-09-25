@@ -264,6 +264,65 @@ class LayerPartitioner:
                          peak_live_bytes=peak_live)
 
 
+def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
+    """One op argument with every tensor id it references mapped through `rewire` — every form
+    the engines resolve: `tensor` / `tensor_ref` (`tensor_id`), `tensor_tuple` (`tensor_ids`, the
+    list `aten::cat` takes), and nested `list` (`value`); an untyped dict's `tensor_id` too. Returns
+    the argument unchanged, or a copy.
+
+    The ONE walk, shared by the triton sequence's in-place rewrites (`TritonSequence._rewire_arg`)
+    and a streamed piece's seam aliasing (`build_segment_graph`). The second walked `tensor_id`
+    only: a seam inside a `tensor_tuple` kept its raw id, the piece held it under `input::<tid>`,
+    and triton-sequential met None — Flex.1-alpha's joint attention `aten.cat::19` concatenated
+    512 text queries with nothing, and the next `mul` failed `(1, 24, 512, 128)` against the
+    4 608-token RoPE table (the Mac's two Flex rows, df2588e7)."""
+    if not isinstance(arg, dict):
+        return arg
+    arg_type = arg.get("type")
+    # A `tensor_id` is rewired whatever the dict's `type` says (`tensor`, `tensor_ref`, or none —
+    # the seam builder always rewired untyped ones, and the union of the two walks it replaces
+    # is what this one must cover).
+    if arg.get("tensor_id") in rewire:
+        arg = dict(arg)
+        arg["tensor_id"] = rewire[arg["tensor_id"]]
+    elif arg_type == "tensor_tuple":
+        tids = arg.get("tensor_ids", [])
+        new_tids = [rewire.get(t, t) for t in tids]
+        if new_tids != tids:
+            arg = dict(arg)
+            arg["tensor_ids"] = new_tids
+    elif arg_type == "list":
+        items = arg.get("value", [])
+        new_items = [rewire_arg(item, rewire) for item in items]
+        if new_items != items:
+            arg = dict(arg)
+            arg["value"] = new_items
+    return arg
+
+
+def flow_embeds_into(graph: Optional[Dict[str, Any]]) -> bool:
+    """Whether the FLOW supplies this component's embeddings — its graph takes `inputs_embeds`,
+    the convention both autoregressive flows read (`uses_embeds`) — and so reads the token
+    embedding BY NAME from the component's executor, outside the graph. Such a component,
+    streamed, keeps its non-block weights resident on its base executor
+    (`LayerStreamingStrategy._ensure_flow_reads`) and Prism reserves them; any other component
+    (a VAE, a DiT, an encoder fed token ids) is read by no flow and its pieces load exactly what
+    they consume."""
+    return "input::inputs_embeds" in ((graph or {}).get("input_tensor_ids") or [])
+
+
+def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
+    """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
+    `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it
+    — never cast to the compute dtype or re-aligned to the graph's recorded (trace) dtype, as a
+    model input or a leaf would be: that narrowed fp32 islands at every piece's entry (PixArt T5
+    pieces rel L2 0.46 % from whole, register 105). ONE rule, read by every site that casts a
+    component input or re-aligns a leaf, in every engine (R30): TritonDtypeEngine, the torch
+    sequential input resolver and leaf re-alignment, and the compiled input map. Pure Python — the
+    triton branch may read it (R33)."""
+    return bool((meta or {}).get("seam_alias_of"))
+
+
 def build_segment_graph(graph: Dict[str, Any], segment: Segment,
                         order_index: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """One segment as a standalone, executable graph.
@@ -404,14 +463,10 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         if isinstance(attrs, dict):
             new_attrs = dict(attrs)
             if attrs.get("args"):
-                new_args = []
-                for arg in attrs["args"]:
-                    if (isinstance(arg, dict)
-                            and arg.get("tensor_id") in alias_of):
-                        arg = dict(arg)
-                        arg["tensor_id"] = alias_of[arg["tensor_id"]]
-                    new_args.append(arg)
-                new_attrs["args"] = new_args
+                new_attrs["args"] = [rewire_arg(arg, alias_of) for arg in attrs["args"]]
+            if isinstance(attrs.get("kwargs"), dict):
+                new_attrs["kwargs"] = {k: rewire_arg(v, alias_of)
+                                       for k, v in attrs["kwargs"].items()}
             # Every OTHER tensor id the op carries in its attributes. A fused op
             # does not take all of its inputs positionally: `custom::moe_fused`
             # names its hidden states, its gate scores and its pre-computed
@@ -435,7 +490,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
             # carries activations — so expert weight lists pass through
             # untouched.
             for key, val in attrs.items():
-                if key == "args":
+                if key in ("args", "kwargs"):
                     continue
                 if isinstance(val, str) and val in alias_of:
                     new_attrs[key] = alias_of[val]
@@ -482,50 +537,88 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
 
-    # A symbol binds from an INPUT, and a segment's inputs are not the
-    # component's. `s0`/`s1` bind from `input_ids::dim_{0,1}`; the embedding
-    # reads `input_ids` in segment 0 and nothing reads it afterwards, so every
-    # later segment declared a symbol it had no way to bind and refused at the
-    # first op that resolved a shape.
+    # EVERY SYMBOL A SEGMENT USES BINDS WHERE THE WHOLE COMPONENT BINDS IT.
     #
-    # The seam tensors carry those same dims — they are the SAME activations,
-    # aliased — so each symbol is re-sourced to a tensor this segment actually
-    # receives. Re-sourcing, not dropping: an op inside the segment still names
-    # the symbol, and a segment with the symbol removed would fail resolving it
-    # rather than fail binding it. Nothing is invented — a symbol with no seam
-    # dim carrying it keeps its original source and refuses as before, which is
-    # the honest outcome for a dim that genuinely does not cross.
+    # A symbol binds from a component INPUT (`input::attention_mask::dim_1`), and a segment's
+    # inputs are the tensors crossing its seam. The first repair re-sourced each symbol to a seam
+    # dim carrying the SAME symbol id, and kept the original source when none did — which then
+    # refused. It could not serve a trace that minted two ids for one extent: PixArt's T5 binds
+    # seq_len twice, `s1` from attention_mask and `s3` from input_ids; the hidden states carry
+    # `s3`, a later piece uses `s1`, and the Mac's 2048x1024 render died after 1 821 s:
+    #     UnboundSymbolError: symbol 's1' (seq_len, binds from input::attention_mask::dim_1)
+    #     is not bound at runtime ... Bound: ['s0', 's3']          (the Mac, 8e786e70)
+    #
+    # So the segment CARRIES the component input its symbols bind from: that input is declared as
+    # one of the segment's inputs, the symbol keeps its original source, and the streaming
+    # strategy — which holds the component's inputs for the whole run — hands it in. Every piece
+    # then binds every symbol from exactly the tensor the whole component binds it from: nothing
+    # is equated, nothing re-sourced, a value-sourced symbol (`::val_`) reads the same data. A
+    # carried input no op reads is a binding source only, and it is already resident (the strategy
+    # holds the component's inputs for the whole run), so it adds a REFERENCE, not bytes. Its entry
+    # handling is a model input's, once per piece: an integer carrier on the device (the T5 case) is
+    # passed as is; a floating carrier not in the compute dtype is cast per piece, and a `::val_`
+    # carrier is read to the host per piece — not measured, and not counted by
+    # `live_activation_curve`, which has never counted component inputs. A symbol whose source is
+    # NOT a component input keeps it and refuses by name, as before: that dim genuinely does not
+    # cross. A source form this function does not know is refused HERE, at partition time.
     sym_ctx = graph.get("symbolic_context")
     if isinstance(sym_ctx, dict) and isinstance(sym_ctx.get("symbols"), dict):
-        seg_input_ids = set(out["input_tensor_ids"])
-        # Where each symbol can be read on THIS segment's inputs.
-        available: Dict[str, str] = {}
-        for tid in seg_input_ids:
-            meta = out["tensors"].get(tid) or {}
-            dims = ((meta.get("symbolic_shape") or {}).get("dims")) or []
-            for axis, d in enumerate(dims):
-                if isinstance(d, dict) and d.get("type") == "symbol" and d.get("id"):
-                    # `tid` is already the seam's `input::<original>` alias; a
-                    # second prefix names a tensor that does not exist.
-                    _src = tid if tid.startswith("input::") else f"input::{tid}"
-                    available.setdefault(str(d["id"]), f"{_src}::dim_{axis}")
-        new_symbols = {}
+        used: Set[str] = set()
+
+        known = set(sym_ctx["symbols"])
+
+        def _walk(obj):
+            # Every form the resolvers accept: `{"type": "symbol", "id"}`, a `symbol_id` key
+            # (scaled / derived nodes, shape_resolver + triton/sequence), and a bare string that
+            # IS a symbol id (triton/symbols.resolve).
+            if isinstance(obj, dict):
+                if obj.get("type") == "symbol" and obj.get("id"):
+                    used.add(str(obj["id"]))
+                if isinstance(obj.get("symbol_id"), str):
+                    used.add(obj["symbol_id"])
+                for v in obj.values():
+                    _walk(v)
+            elif isinstance(obj, str):
+                if obj in known:
+                    used.add(obj)
+            elif isinstance(obj, list):
+                for v in obj:
+                    _walk(v)
+
+        _walk(out["tensors"])
+        _walk(out["ops"])
+        component_inputs = set(graph.get("input_tensor_ids") or [])
+        carried: List[str] = []
         for sid, info in sym_ctx["symbols"].items():
-            if not isinstance(info, dict):
-                new_symbols[sid] = info
+            if sid not in used or not isinstance(info, dict):
                 continue
-            source = str(info.get("source") or "")
-            # `input::<name>::dim_N` — the source input as the executor binds it.
-            src_tid = source[7:].rsplit("::dim_", 1)[0] if source.startswith("input::") else ""
-            if src_tid and src_tid not in {t[7:] if t.startswith("input::") else t
-                                           for t in seg_input_ids} and sid in available:
-                info = dict(info)
-                info["source"] = available[sid]
-                info["seam_resourced_from"] = source
-            new_symbols[sid] = info
-        new_ctx = dict(sym_ctx)
-        new_ctx["symbols"] = new_symbols
-        out["symbolic_context"] = new_ctx
+            raw = info.get("source")
+            if isinstance(raw, dict) and raw.get("tensor_id") is not None:
+                src_tid = str(raw["tensor_id"])
+            else:
+                source = str(raw or "")
+                sep = ("::dim_" if "::dim_" in source else "::val_" if "::val_" in source
+                       else None)
+                if not source.startswith("input::") or sep is None:
+                    raise ValueError(
+                        f"symbol {sid!r} ({info.get('name')}) used in segment {segment.index} has "
+                        f"a source this partitioner cannot carry: {raw!r}. Refused at partition "
+                        f"time rather than left to refuse at runtime, pointing at the wrong place.")
+                src_tid = source.rsplit(sep, 1)[0]
+            if (src_tid in component_inputs and src_tid not in out["input_tensor_ids"]
+                    and src_tid not in carried):
+                carried.append(src_tid)
+        for tid in carried:
+            meta = dict(tensors.get(tid) or {})
+            meta["symbol_carrier"] = True
+            out["tensors"][tid] = meta
+            out["input_tensor_ids"].append(tid)
+            out["segment_input_names"].append(tid[7:])
+        out["symbol_carriers"] = carried
+        # The segment's OWN copy: a later pass (promotion) mutates `symbols` in place per segment
+        # executor, and a partition must not damage the graph it was cut from.
+        out["symbolic_context"] = {**sym_ctx, "symbols": {k: (dict(v) if isinstance(v, dict) else v)
+                                                          for k, v in sym_ctx["symbols"].items()}}
 
     return out
 

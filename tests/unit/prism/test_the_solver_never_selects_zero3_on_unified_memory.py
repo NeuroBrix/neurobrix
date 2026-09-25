@@ -24,8 +24,13 @@ class _NoComponents:
     from pathlib import Path as _P
     cache_path = _P("/nonexistent-prism-fixture")
 
+    # The components this fixture places, DECLARED, with the dtype the cells assumed. It returned
+    # [] and the solver answered every dtype question with an invented "bfloat16"; that default
+    # is now a refusal (`_get_component_dtype`), so the fixture says what it holds.
     def get_neural_components(self):
-        return []
+        from types import SimpleNamespace
+        return [SimpleNamespace(name=n, get_dominant_dtype=lambda: "bfloat16")
+                for n in ['model']]
 
 
 def _place(profile, device_string):

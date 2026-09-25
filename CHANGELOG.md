@@ -14,6 +14,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Image models split into pieces no longer lose part of their attention input.** When a piece
+  boundary fell inside the joint text-and-image attention of models like Flex.1, one half of the
+  combined input was dropped and the run failed. Every input an operation lists is now carried
+  across the boundary, and the pieces produce the same output, bit for bit, as the model whole.
+
+- **Vision-language and speech models split into pieces to fit in memory now run.** They
+  stopped before generating, saying the language model's embedding was missing. The model's
+  embedding and norms are now kept loaded beside the pieces and counted in the memory plan, and
+  each piece loads only the weights it uses; the output is the same as with the model whole.
+
+- **A language model split into pieces to fit in memory now runs in both Triton engines.** Some
+  vision-language and speech models stopped before generating, saying the plan's pieces were not
+  in the model's graph. The pieces are now cut from the same graph the plan was made on, and they
+  produce the same output, bit for bit, as the model run whole.
+
+- **A model loaded onto the device in pieces now runs, and computes exactly what it computes
+  whole.** When a part of a model is too large for the memory a plan allows, it is split into
+  pieces loaded one at a time. Some pieces could not find the size of the text they were given and
+  stopped the run; others silently computed with less precision than the whole model, giving a
+  slightly different result. Both are fixed: the pieces now produce the same output, bit for bit,
+  as the part run whole.
+
+- **When a model cannot be planned, the message now says why splitting it into pieces did not
+  help,** with the figures, instead of leaving that option out of the explanation.
+
+- **A model piece that just misses fitting whole now runs on the device instead of falling to the
+  CPU.** A piece slightly too large to load whole, but too small to be split, was served by
+  neither path and went to the much slower CPU route. Such a piece is now split and run on the
+  device.
+
+- **A language model split across the device, or served, no longer plans a conversation memory
+  larger than the device.** The memory kept for the conversation history was sized against the
+  device's total rather than the share the plan was allowed, and on a shared machine could exceed
+  the device itself. It now fits inside the plan.
+
+- **Planning a video model whose decoder is split into tiles no longer crashes** when that decoder
+  compresses time and needs splitting.
+
+- **A model piece the model does not describe is now reported instead of silently assumed to use
+  a default number format.**
+
 - **A model with one piece slightly too large for the memory it plans against now runs on the
   device instead of refusing.** On a machine whose memory is shared — a Mac, or a card another
   program is using — the engine plans against a rounded-down share of what is free. A model

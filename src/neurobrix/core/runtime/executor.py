@@ -1076,6 +1076,10 @@ class RuntimeExecutor:
                 getattr(self.plan, "transient_components", None) or ()),
             layer_segments=dict(
                 getattr(self.plan, "layer_stream_plan", None) or {}),
+            layer_graphs=dict(
+                getattr(self.plan, "layer_stream_graph", None) or {}),
+            layer_moe=dict(
+                getattr(self.plan, "layer_stream_moe", None) or {}),
             mode=self.mode,
         )
 
