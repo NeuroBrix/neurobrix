@@ -370,6 +370,13 @@ class ExecutionPlan:
     # boundary recomputed on a different graph is not the boundary the budget
     # was accepted under.
     layer_stream_plan: Dict[str, List[List[str]]] = field(default_factory=dict)
+    # component -> `graph_fingerprint` of the graph those segments were cut on. The strategy
+    # refuses to cut a graph with another fingerprint (register 106).
+    layer_stream_graph: Dict[str, str] = field(default_factory=dict)
+    # component -> norm_topk_prob for a streamed component whose MoE the plan declared (cut
+    # fused). The strategy cuts with the SAME declaration: the vlm flows declare only after the
+    # pieces are built, so the base graph at the cut is not yet fused.
+    layer_stream_moe: Dict[str, bool] = field(default_factory=dict)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -1453,6 +1460,8 @@ class PrismSolver:
             plan.layer_stream_plan = {
                 name: [[seg.first_op, seg.last_op] for seg in part.segments]
                 for name, part in _parts.items()}
+            plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
+            plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
             if not plan.layer_stream_plan:
                 raise RuntimeError(
                     "layer_streaming was chosen and carries no segments: the "
@@ -2431,28 +2440,42 @@ class PrismSolver:
         graph = getattr(comp, "graph", None)
         if not isinstance(graph, dict):
             return comp
-        lm = self._read_lm_config(container) or {}
-        n = lm.get("num_experts")
-        if n is None or int(n) <= 1:
+        _moe = self._moe_declaration(graph, container)
+        if _moe is None:
             return comp
-        ops = (graph.get("ops") or {}).values()
-        if any(op.get("op_type") == "custom::moe_fused" for op in ops):
-            return comp
-        if not any(op.get("op_type") == "aten::topk" for op in ops):
-            return comp          # no router: the pass would be a no-op, spare the copy
         import copy as _copy
         from types import SimpleNamespace
         from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-        # norm_topk_prob does not change which weights the fused op reads;
-        # the sizing passes the declared value when present and the pass's
-        # default otherwise (the flows refuse a missing one at execute).
+        # norm_topk_prob does not change which weights the fused op reads; the
+        # declared value is passed so the sizing and the cut fuse identically.
         fused = detect_and_fuse_moe(_copy.deepcopy(graph), "declared",
-                                    norm_topk_prob=bool(lm.get("norm_topk_prob", True)),
-                                    declared=True)
+                                    norm_topk_prob=_moe, declared=True)
         return SimpleNamespace(
             graph=fused,
             weights_index=getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None),
             name=getattr(comp, "name", None))
+
+    def _moe_declaration(self, graph, container) -> Optional[bool]:
+        """The declaration the runtime fuses this graph's experts on, as the `norm_topk_prob` the
+        fused op carries, or None: the package declares `lm_config.num_experts > 1`, the graph
+        holds a router (`aten::topk`) and is not fused yet. One rule for the weight sizing
+        (`_graph_as_executed`) and the layer cut (`_try_layer_streaming`), so a plan sizes and
+        cuts the same graph. A declared MoE without `norm_topk_prob` is refused, as the flows
+        refuse it."""
+        lm = self._read_lm_config(container) or {}
+        n = lm.get("num_experts")
+        if n is None or int(n) <= 1:
+            return None
+        ops = (graph.get("ops") or {}).values()
+        if any(op.get("op_type") == "custom::moe_fused" for op in ops):
+            return None
+        if not any(op.get("op_type") == "aten::topk" for op in ops):
+            return None
+        if lm.get("norm_topk_prob") is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: norm_topk_prob missing from lm_config for a MoE model — the "
+                "flows refuse it at execute, and a plan cannot cut a fusion it cannot describe.")
+        return bool(lm["norm_topk_prob"])
 
     def _read_lm_config(self, container) -> Optional[Dict]:
         """Read lm_config from defaults.json. Returns None if not LLM."""
@@ -5072,6 +5095,8 @@ class PrismSolver:
 
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}
+        fingerprints: Dict[str, str] = {}
+        moe_declared: Dict[str, bool] = {}
         dev_str = target.spec.get_device_string()
 
         # A streamed component does not get the whole device: every component
@@ -5163,7 +5188,8 @@ class PrismSolver:
             # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
             # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
             # and both sides then speak about the same ops.
-            from neurobrix.core.optim.passes.normalize import normalize_for_branch
+            from neurobrix.core.optim.passes.normalize import (graph_fingerprint,
+                                                               normalize_for_branch)
             # The family lives in the MANIFEST, not the topology — checked, because reading
             # the wrong file returned "" and silently skipped the MoE fusion, which is the
             # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
@@ -5182,7 +5208,15 @@ class PrismSolver:
                     _family = str(_topo.get("family") or "")
             except Exception:  # noqa: BLE001 — a container without a family still plans
                 _family = ""
-            graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family)
+            # A MoE LM packaged under another family is fused by the runtime once its flow
+            # declares it (`GraphExecutor.set_moe_config`); the plan must cut that fused graph —
+            # Qwen3-Omni's thinker, 12 132 ops -> 4 300. The same rule the weight sizing applies
+            # (`_declares_moe`), so a plan sizes and cuts one graph.
+            _moe = self._moe_declaration(graph, container)
+            if _moe is not None:
+                moe_declared[comp_name] = _moe
+            graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family,
+                                         declared_moe=_moe)
             part = LayerPartitioner(
                 graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
@@ -5195,6 +5229,7 @@ class PrismSolver:
                     + (part.refusal if not part.fits else
                        "it fits in ONE segment, which a whole-component rung serves"))
             partitions[comp_name] = part
+            fingerprints[comp_name] = graph_fingerprint(graph)
             # The device string stays a plain device. A `layer_stream:` prefix
             # was tried and is wrong: several places parse an allocation by
             # splitting on ":" and taking the index, so a three-part string
@@ -5210,6 +5245,8 @@ class PrismSolver:
         # What each streamed component actually holds, recorded so the
         # accounting sees the same number the executor will.
         self._layer_stream_partitions = partitions
+        self._layer_stream_graphs = fingerprints
+        self._layer_stream_moe = {k: v for k, v in moe_declared.items() if k in partitions}
         self._layer_stream_constant_bytes = constant_bytes
         return allocations, devices
 

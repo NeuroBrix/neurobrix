@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A language model split into pieces to fit in memory now runs in both Triton engines.** Some
+  vision-language and speech models stopped before generating, saying the plan's pieces were not
+  in the model's graph. The pieces are now cut from the same graph the plan was made on, and they
+  produce the same output, bit for bit, as the model run whole.
+
 - **A model loaded onto the device in pieces now runs, and computes exactly what it computes
   whole.** When a part of a model is too large for the memory a plan allows, it is split into
   pieces loaded one at a time. Some pieces could not find the size of the text they were given and

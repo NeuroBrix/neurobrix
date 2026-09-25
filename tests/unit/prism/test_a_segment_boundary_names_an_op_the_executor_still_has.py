@@ -137,3 +137,36 @@ def test_a_compiled_plan_is_normalized_too_but_only_by_the_shared_fusion():
     triton = normalize_for_branch(raw, "triton", _family(MOE_MODEL))
     assert len(compiled["execution_order"]) < len(raw["execution_order"])   # MoE fusion ran
     assert len(triton["execution_order"]) < len(compiled["execution_order"])  # plus branch passes
+
+
+# ───────────── 2026-09-24: the graph the STRATEGY cuts, not the one Prism cut ─────────────
+#
+# The cells above compare the normalised graph with ITSELF: they never looked at the graph
+# `layer_streaming` checks, which for a weightless streamed base is the graph as LOADED (register
+# 106). The strategy now cuts `normalize_for_branch(base graph)`; that is sound only if the
+# normalisation is idempotent — the base graph may already carry the MoE fusion (its load) or the
+# branch rewrites (a base compiled whole). The executed half is
+# `tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`.
+
+DENSE_MODEL, DENSE_COMP = "granite-speech-3.3-8b", "language_model"
+
+
+@pytest.mark.parametrize("model,comp", [(MOE_MODEL, "model"), (DENSE_MODEL, DENSE_COMP)])
+@pytest.mark.parametrize("mode", ["triton", "triton_sequential", "compiled"])
+def test_normalizing_a_normalized_graph_changes_nothing(model, comp, mode):
+    once = normalize_for_branch(_graph(model, comp), mode, _family(model))
+    twice = normalize_for_branch(once, mode, _family(model))
+    assert twice["execution_order"] == once["execution_order"]
+    assert set(twice["ops"]) == set(once["ops"])
+
+
+def test_triton_sequential_cuts_the_graph_it_runs_op_by_op():
+    """Only `TritonSequence.compile` (mode `triton`) performs the branch rewrites; the op-by-op
+    engine runs the loaded graph. Its plan fused silu+mul and named `custom.swiglu_fused` ops it
+    never has (the Mac's triton-sequential rows)."""
+    raw = _graph(DENSE_MODEL, DENSE_COMP)
+    fam = _family(DENSE_MODEL)
+    tseq = normalize_for_branch(raw, "triton_sequential", fam)
+    assert tseq["execution_order"] == normalize_for_branch(raw, "compiled", fam)["execution_order"]
+    assert not any("swiglu_fused" in u for u in tseq["execution_order"])
+    assert any("swiglu_fused" in u for u in normalize_for_branch(raw, "triton", fam)["execution_order"])

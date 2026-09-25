@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-110 entries, 105 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 105 carry a site. Two
+111 entries, 106 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 106 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3327,3 +3327,52 @@ UnboundSymbolError on PixArt-XL-1024, rel L2 0.42 % on PixArt-XL-2-1024-MS. 18/1
 
 **The lesson, in one line.** A decomposition is proven by recomposing it: run the parts and the
 whole on the same input, and require the same bytes.
+
+---
+
+### 106 — the boundary gate compared the plan's graph with itself; the strategy cut another one
+
+`test_a_segment_boundary_names_an_op_the_executor_still_has.py` landed (2026-09-22) the invariant
+"every boundary the partition produced is present in the graph that will run", and asserted it as
+`boundaries_present(normalize_for_branch(raw), bounds)` — the boundaries cut on the normalised
+graph, looked up in the SAME normalised graph. True by construction. The graph that runs was
+assumed to be the normalised one because a sequence rewrites its graph in place; but a streamed
+component's base executor holds no weights and never compiles, so the graph `layer_streaming`
+checks is the one LOADED. The Mac then counted 26 refusals, six models, both triton engines
+(df2588e7): `the plan's segment boundaries are not in 'language_model's graph (1 of 14 op ids
+absent, e.g. 'custom.swiglu_fused::18')` — every absent id a fused op, every other boundary
+present. Two more holes behind the same assumption: `triton_sequential` never fuses, so its plans
+were cut on a graph it does not run; and a MoE LM packaged under `multimodal` is fused by the
+runtime once its flow declares it, which the plan did not do — Qwen3-Omni's thinker, 12 132 ops
+-> 4 300 (Qwen3-VL's stacked experts are not touched by that pass; its 48 absent of 192 were the
+swiglu cause).
+
+**What the gate did while the strategy refused**: green, 10 cells, at four rungs.
+
+**And the first repair's own gate was empty for one half.** With the MoE declaration injected OFF,
+the Qwen3-Omni cell stayed green: its 2-piece plan put its four boundary ids on ops the fusion does
+not touch. A presence check fails only by the luck of where the cut falls.
+
+**And the repair's first cell rebuilt the runtime in another order.** It declared the MoE on the
+base executor before cutting; the vlm flows load the LM — which builds its pieces — and declare
+only AFTER. Green on an order production never runs (the guardian, 2026-09-25); in production
+order the door refused Omni (planned 4 300 ops, cut 12 132).
+
+**Repair.** The strategy cuts `normalize_for_branch(base graph)` — one function, both sides; only
+mode `triton` gets the branch rewrites; Prism decides the MoE declaration by the one rule its
+weight sizing already used (`_moe_declaration`) and the decision TRAVELS ON THE PLAN to the
+strategy, so the pieces are cut fused whatever order the flow declares in; and a DOOR: the plan
+carries the fingerprint of the graph it cut (op count + sha256 of the execution order) and
+`layer_streaming` refuses any other — when it builds the pieces, and again before the first run,
+once the flow has declared what it declares. `tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py` builds the base
+executor the way the runtime builds it and the pieces through the real strategy, for the Mac's six
+models at the Mac's rungs, and runs granite-speech's LM whole against its pieces — red on the
+engine before the repair with the Mac's exact refusal (`2 of 16 op ids absent, e.g.
+'custom.swiglu_fused::15'`, triton and triton-sequential; 8 cells red), bit-identical after. Each
+part SEEN failing by injection: triton-sequential fusing again turns the executed cells red (pieces
+not bit-identical); Prism not declaring the MoE turns the Omni cell red at the first-run check (the
+flow fused what the plan cut unfused); the strategy ignoring the plan's declaration turns it red
+when the pieces are built.
+
+**The lesson, in one line.** An invariant between two graphs must name both graphs, and one of them
+must be the graph the other side actually holds.

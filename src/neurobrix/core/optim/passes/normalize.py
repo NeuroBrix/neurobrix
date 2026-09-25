@@ -34,19 +34,37 @@ The others are deliberately NOT applied, and the reason is not tidiness:
   `_lower_fusion_vertical` read `self.dag` or planner annotations that exist only once a
   sequence is built.
 
+WHICH GRAPH THE STRATEGY CUTS (2026-09-24). The header above assumed the executor's graph is
+rewritten before `layer_streaming` reads it. A streamed component's base executor holds no
+weights and never compiles, so its graph is the one loaded — and the Mac's 26 "boundaries not in
+the graph" refusals were exactly the boundaries the partition had put ON a fused op
+(`custom.swiglu_fused::15` and `::31` of granite-speech at 4 096 MB: 2 of 16, both absent, the
+base graph holding no fused op at all). So the strategy now cuts `normalize_for_branch(base
+graph)` — this function, both sides — and each piece's own sequence compiles what it receives.
+
+ONLY `triton` REWRITES. The rewrites below are performed by `TritonSequence.compile`, which only
+mode `triton` builds. `triton_sequential` executes the graph as loaded, op by op — the kernel
+oracle — so its plan must cut that graph, not a fused one it never runs.
+
+Two OPT-IN load-time passes rewrite the execution order and are NOT mirrored here:
+`NBX_OPTIM_DEAD_CODE` and `NBX_OPTIM_FUSION_HORIZONTAL` (`GraphExecutor`). With either on, the
+graph the strategy cuts differs from the one planned and `layer_streaming` refuses at its
+fingerprint check — a refusal, not a wrong cut.
+
 That is a real limit and it is stated rather than hidden: a boundary removed by one of those
 would still go absent. The measured cases all fall to the swiglu fusion, and the gate asserts
 the INVARIANT — every boundary present in the graph that will run — so if one of the others
 ever takes a boundary, the gate says so instead of passing.
 
-The env gates are honoured exactly as the sequence honours them: a fusion the run will not
+The env gates of the three rewrites below are honoured exactly as the sequence honours them: a fusion the run will not
 perform must not be performed here either, or the two disagree in the other direction.
 """
 from __future__ import annotations
 
 import copy
+import hashlib
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 def _triton_pure_passes():
@@ -67,11 +85,14 @@ def _triton_pure_passes():
     ]
 
 
-def _is_triton(mode: str) -> bool:
-    return str(mode or "").lower().startswith("triton")
+def _sequence_rewrites_graph(mode: str) -> bool:
+    """The mode whose sequence performs the rewrites of `_triton_pure_passes` (`TritonSequence.
+    compile`). `triton_sequential` runs the loaded graph op by op and performs none of them."""
+    return str(mode or "").lower() == "triton"
 
 
-def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "") -> Dict[str, Any]:
+def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "",
+                         declared_moe: Optional[bool] = None) -> Dict[str, Any]:
     """A COPY of `graph` rewritten the way `mode`'s sequence will rewrite it.
 
     Never mutates the caller's graph: the container's graph is read by other components and
@@ -79,9 +100,13 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "") -> 
     the one this exists to fix.
 
     `family` enables the MoE fusion, which is shared by both modes; without it that rewrite
-    is skipped and a MoE model's boundaries will still move.
+    is skipped and a MoE model's boundaries will still move. `declared_moe` is the declaration
+    a flow makes for a MoE LM packaged under another family (`GraphExecutor.set_moe_config`):
+    None when there is none, else the `norm_topk_prob` the fused op carries. The runtime fuses
+    such an LM, so a plan for it must cut the fused graph too — and the pieces must be cut from
+    it, whatever order the flow declares in (the vlm flows declare AFTER the pieces exist).
 
-    An unknown or compiled mode returns a copy with the MoE fusion applied and nothing else — the compiled branch's two
+    Any mode but `triton` (compiled, sequential, triton_sequential) returns a copy with the MoE fusion applied and nothing else — the compiled branch's two
     transforms both need weights or a built sequence, so there is nothing pure to apply.
     """
     out = copy.deepcopy(graph)
@@ -95,7 +120,10 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "") -> 
     if family:
         try:
             from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-            detect_and_fuse_moe(out, family)
+            if declared_moe is None:
+                detect_and_fuse_moe(out, family)
+            else:
+                detect_and_fuse_moe(out, family, norm_topk_prob=bool(declared_moe), declared=True)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"normalize_for_branch: the MoE fusion failed on this graph "
@@ -104,7 +132,7 @@ def normalize_for_branch(graph: Dict[str, Any], mode: str, family: str = "") -> 
                 f"cannot find — a refusal rather than a silent fallback."
             ) from exc
 
-    if not _is_triton(mode):
+    if not _sequence_rewrites_graph(mode):
         return out
 
     tensors = out.get("tensors")
@@ -140,3 +168,13 @@ def boundaries_present(graph: Dict[str, Any], bounds) -> list:
     """
     order = set(graph.get("execution_order") or [])
     return [b for pair in (bounds or []) for b in pair if b not in order]
+
+
+def graph_fingerprint(graph: Dict[str, Any]) -> str:
+    """The identity of the graph a plan was cut on: its op count and a sha256 of its execution
+    order. Prism records it for every streamed component and `layer_streaming` refuses to cut a
+    graph whose fingerprint differs — the door behind which a boundary check cannot pass by the
+    luck of where the cut fell (register 106: a MoE fusion the plan did not make left the few
+    boundaries of a 2-piece plan on untouched ops, and the presence check passed)."""
+    order = list(graph.get("execution_order") or [])
+    return f"{len(order)}:" + hashlib.sha256("\n".join(order).encode()).hexdigest()[:16]

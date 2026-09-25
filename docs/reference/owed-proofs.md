@@ -4079,3 +4079,30 @@ engine here:** `tools/streamed_component_vs_whole.py PixArt-XL-2-1024-MS text_en
 BIT-identical to whole, no `aten.mm::4 ... 4096 vs 10240`. The Mac's rows were taken on `4a3658d7`,
 before pieces carried their symbols and kept their seam dtype. **Owed by the Mac:** the same rows on
 the landed engine; a row that still fails there reopens the class with its exact command.
+
+**Update, same day — "the plan's boundaries are not in the graph that runs" (26): FIXED on the
+rack, measured.** Not the swiglu numbering (identical, 40/40 / 30/30 / 40/40 / 36/36 pairs, on
+the four dense LMs): the graph. A streamed base executor holds no weights and never compiles, so
+`layer_streaming` checked the graph as loaded while Prism had cut the normalised one — granite-speech
+at 4 096 MB: 2 of 16 boundary ids on `custom.swiglu_fused`, those 2 absent, 0 fused ops in the base
+graph. `triton_sequential` never fuses, so its plans were cut on a graph it does not run; Qwen3-Omni's
+thinker is MoE-fused by the runtime on its flow's declaration (12 132 ops -> 4 300), which Prism did
+not make (Qwen3-VL's stacked experts are not fused by that pass; its rows were the swiglu cause).
+Fixed: the strategy cuts `normalize_for_branch(base graph)`, only `triton` gets the branch rewrites,
+Prism's MoE declaration travels on the plan to the strategy (the vlm flows declare only after the
+pieces exist), and the plan carries the fingerprint of the graph it cut — the strategy refuses any
+other, at the cut and again before the first run.
+
+**Named, not fixed here (pre-existing):** `GraphExecutor.set_moe_config`'s docstring says it
+"patches the DAG" so the fused ops carry the declared `norm_topk_prob`; its body only stores the
+value, and an `llm`-family MoE is fused at load with the default (True). Whether a single-gate
+routing then applies the wrong normalisation for DeepSeek (`norm_topk_prob` False) is unmeasured;
+the multi-gate binding applies none. Owed: a cell reading the fused ops' attribute after the flow's
+declaration. Gate
+`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py` (register 106). **Owed by the
+Mac:** its 26 rows on the landed engine.
+
+**A symbol misnamed at trace (Forge, OPEN):** GLM-4.1V-9B-Thinking's `model.language_model` declares
+`position_ids` as `[s2, s0, s3]` with `s2` named `batch` and traced at 3 — the M-RoPE section axis, a
+constant, not the batch. Anything binding by name (a harness, a request) binds it to the batch.
+Queued with the Mac's trace defects (df2588e7), fixed at source and retraced.
