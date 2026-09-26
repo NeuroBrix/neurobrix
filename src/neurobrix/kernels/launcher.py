@@ -1067,9 +1067,9 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
                                 f"two candidates ran on the windows {where}")
 
     dtype_name = None
-    for _a, _n, dt in buffers:
-        if _a == out_addr:
-            dtype_name = dt
+    for b in buffers:
+        if b.address == out_addr:
+            dtype_name = b.dtype
             break
 
     # ONE ORACLE PER WINDOW, never over their span. Passing (first_start, last_end) asks for
@@ -1183,28 +1183,67 @@ def _screen_rtol(dtype_name: str):
     return table.get(dtype_name)
 
 
-def _writable_buffers(values):
-    """Every device buffer among these arguments, with its byte length.
+class ScreenedBuffer(NamedTuple):
+    """One device buffer the screen snapshots, restores and compares.
 
-    Returns None when any of them is a NON-CONTIGUOUS view, and the caller
-    then skips screening rather than guessing.
+    A contiguous buffer is `nbytes` at `address` (`view` is None). A strided VIEW carries its
+    layout in `view` = (extent_lo, shape, byte_strides, itemsize): its elements live inside the
+    covering extent [address + extent_lo, address + extent_lo + nbytes), which is copied in ONE
+    transfer; the elements are gathered on the host in logical (row-major) order — the same
+    bytes an fp64 oracle of the logical tensor is compared with — and scattered back into a
+    fresh read of the extent, so the bytes between the elements are written back as they ARE,
+    never as a stale copy. `nbytes` is the extent: what the screen actually moves, and what the
+    screening budget is charged."""
+    address: int
+    nbytes: int
+    dtype: str
+    view: Optional[Tuple[int, Tuple[int, ...], Tuple[int, ...], int]] = None
 
-    The snapshot and restore below copy a CONTIGUOUS span from `data_ptr()`.
-    For a strided view that span is not the tensor: it covers the gaps
-    between the view's elements, which belong to other tensors in the same
-    allocation. Restoring it writes stale bytes over live data somewhere
-    else entirely — which is exactly what happened, and it showed up as eight
-    unrelated tests failing in the full suite while passing alone.
+
+def _view_extent(shape, byte_strides, itemsize: int) -> Tuple[int, int]:
+    """(lo, length) of the byte extent, relative to the view's data pointer, that covers every
+    element of a view of `shape` and `byte_strides` (negative strides included)."""
+    if not shape or 0 in shape:
+        return 0, 0
+    lo = sum(min(0, (n - 1) * s) for n, s in zip(shape, byte_strides))
+    hi = sum(max(0, (n - 1) * s) for n, s in zip(shape, byte_strides))
+    return lo, hi - lo + itemsize
+
+
+def _view_elements(extent: "np.ndarray", view) -> "np.ndarray":
+    """The view's elements inside a host copy of its extent, as a (*shape, itemsize) byte array
+    (writable when `extent` is), laid over the copy with the view's own byte strides."""
+    lo, shape, byte_strides, itemsize = view
+    return np.lib.stride_tricks.as_strided(
+        extent[-lo:], shape=tuple(shape) + (itemsize,), strides=tuple(byte_strides) + (1,))
+
+
+def _writable_buffers(values) -> List[ScreenedBuffer]:
+    """Every device buffer among these arguments, with what the screen must copy of it.
+
+    A CONTIGUOUS buffer is one span of `_nbytes` at `data_ptr()`. A strided VIEW is not: the
+    span from its pointer covers the gaps between its elements, which belong to other tensors
+    in the same allocation, and restoring a stale copy of that span wrote over live data (eight
+    unrelated tests failing in the full suite while passing alone). Until 2026-09-26 the
+    answer to a view was None and the caller seated the fastest candidate UNSCREENED — the
+    Mac's finding on its PixArt render (its gate, RED at bd39b288). Now a view carries its
+    layout (`ScreenedBuffer.view`) and is screened on exactly its elements.
     """
-    out = []
+    out: List[ScreenedBuffer] = []
     for value in values:
         if not (hasattr(value, "data_ptr") and hasattr(value, "_nbytes")):
             continue
+        dtype = getattr(getattr(value, "dtype", None), "name", "?")
         contiguous = getattr(value, "is_contiguous", None)
         if callable(contiguous) and not contiguous():
-            return None
-        out.append((int(value.data_ptr()), int(value._nbytes),
-                    getattr(getattr(value, "dtype", None), "name", "?")))
+            itemsize = int(value.element_size())
+            shape = tuple(int(s) for s in value.shape)
+            byte_strides = tuple(int(s) * itemsize for s in value.stride())
+            lo, length = _view_extent(shape, byte_strides, itemsize)
+            out.append(ScreenedBuffer(int(value.data_ptr()), length, dtype,
+                                      (lo, shape, byte_strides, itemsize)))
+            continue
+        out.append(ScreenedBuffer(int(value.data_ptr()), int(value._nbytes), dtype))
     return out
 
 
@@ -1327,15 +1366,28 @@ def _snapshot_ranges(address, ranges):
     return b"".join(blobs)
 
 
+def _read_extent(b: ScreenedBuffer) -> "np.ndarray":
+    """ONE device-to-host copy of a view's covering extent."""
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    lo = b.view[0]
+    host = np.empty(b.nbytes, dtype=np.uint8)
+    if b.nbytes:
+        DeviceAllocator.memcpy(int(host.ctypes.data), b.address + lo, b.nbytes, kind=2)
+    return host
+
+
 def _snapshot(buffers):
     import ctypes
 
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
 
     shots = []
-    for address, nbytes, _name in buffers:
-        host = (ctypes.c_char * nbytes)()
-        DeviceAllocator.memcpy(ctypes.addressof(host), address, nbytes, kind=2)
+    for b in buffers:
+        if b.view is not None:
+            shots.append(np.ascontiguousarray(_view_elements(_read_extent(b), b.view)).tobytes())
+            continue
+        host = (ctypes.c_char * b.nbytes)()
+        DeviceAllocator.memcpy(ctypes.addressof(host), b.address, b.nbytes, kind=2)
         shots.append(bytes(host))
     return shots
 
@@ -1345,9 +1397,18 @@ def _restore(buffers, shots):
 
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
 
-    for (address, nbytes, _name), blob in zip(buffers, shots):
-        host = (ctypes.c_char * nbytes).from_buffer_copy(blob)
-        DeviceAllocator.memcpy(address, ctypes.addressof(host), nbytes, kind=1)
+    for b, blob in zip(buffers, shots):
+        if b.view is not None:
+            # Read the extent as it is NOW, put the saved elements back into it, write it back:
+            # the bytes between the elements go back exactly as they were read an instant ago.
+            extent = _read_extent(b)
+            elements = _view_elements(extent, b.view)
+            elements[...] = np.frombuffer(blob, dtype=np.uint8).reshape(elements.shape)
+            if b.nbytes:
+                DeviceAllocator.memcpy(b.address + b.view[0], int(extent.ctypes.data), b.nbytes, kind=1)
+            continue
+        host = (ctypes.c_char * b.nbytes).from_buffer_copy(blob)
+        DeviceAllocator.memcpy(b.address, ctypes.addressof(host), b.nbytes, kind=1)
 
 
 #: The engine spells a dtype "fp16"; the hardware profiles and numpy spell it
@@ -1475,7 +1536,8 @@ def _oracle_keeps(results, oracle, buffers):
     kept = []
     for entry in results:
         agrees = True
-        for (_a, _n, dtype_name), produced, reference in zip(buffers, entry[1], oracle):
+        for b, produced, reference in zip(buffers, entry[1], oracle):
+            dtype_name = b.dtype
             if not configs_agreeing_with_oracle([(entry[0], produced)],
                                                 reference, dtype_name):
                 agrees = False
@@ -1489,7 +1551,8 @@ def _make_agree(buffers):
     """The screen's agreement predicate for one set of screened buffers."""
     def agree(one, other):
         worst, tol, name = 0.0, 0.0, "?"
-        for (_a, _n, dtype_name), x, y in zip(buffers, one, other):
+        for b, x, y in zip(buffers, one, other):
+            dtype_name = b.dtype
             if x == y:
                 continue
             deviation, tolerance = _deviation(x, y, dtype_name)
@@ -1694,10 +1757,6 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
                                 "screen has nothing to compare")
     args = [named[name] for name in tuner.arg_names if name in named]
     buffers = _writable_buffers(args)
-    if buffers is None:
-        return _seat_unscreened(kernel_name, _rk, configs, len(configs),
-                                "a strided view among the arguments, which the "
-                                "screen cannot snapshot")
     if not buffers:
         return _seat_unscreened(kernel_name, _rk, configs, len(configs),
                                 "no writable buffer to compare")
@@ -1710,7 +1769,7 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
             "the hardware profile declares no `autotune_screen_max_bytes`: "
             "the screen will not decide for itself how much memory traffic a "
             "tuning step may cost")
-    total = sum(nbytes for _a, nbytes, _d in buffers)
+    total = sum(b.nbytes for b in buffers)
     if total > int(budget):
         # Two doors meet here and both stay. Beyond the SCREEN budget the compare
         # is skipped (the Dell's ruling of 2026-09-12: the seat is announced as
@@ -1749,6 +1808,14 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
         #
         # The last window is anchored at the final row on purpose: an index that wraps shows
         # at the largest linear index or nowhere.
+        strided = [b for b in buffers if b.view is not None]
+        if strided:
+            raise RuntimeError(
+                f"NeuroBrix refuses to sweep {kernel_name} at key {key}: the arguments total "
+                f"{total} bytes, over the profile's screening budget {int(budget)}, and "
+                f"{len(strided)} of them are strided views the row-windowed screen cannot "
+                f"read — a candidate seated here would be one nothing verified. Hand the "
+                f"kernel contiguous arguments, or certify the key.")
         windowed = _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta,
                                       buffers, int(budget), total)
         if windowed is not None:
