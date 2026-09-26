@@ -480,6 +480,15 @@ def _import_body(args):
         print(f"   The container declares model_name {_declared!r}; the hub record is named "
               f"{cache_path.name!r}. Installing under the container's own name.")
         cache_path = CACHE_DIR / _declared
+        # The "already installed" answer, asked again on the name that will be written — the
+        # pre-check above could only ask on the slug, before the archive existed. `--force`
+        # keeps its contract: without it nothing installed is swapped over.
+        if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
+            print(f"\nModel already installed under its own name: {cache_path}")
+            print("Use --force to re-download.")
+            _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=True)
+            _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path))
+            sys.exit(0)
     # The staging tree, the lock and the two-rename swap are one brick, shared
     # with `NBXCache.extract`: the cache is often a mounted export, and the old
     # code here removed the live tree BEFORE renaming staging over it, leaving
@@ -492,7 +501,7 @@ def _import_body(args):
     except InstallHeldByAnother as e:
         _die(args, f"ERROR: {e}")
     print(f"   Extracted: {cache_path}")
-    _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=False)
+    _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=False)
 
     # Delete .nbx from store if --no-keep
     if args.no_keep:
@@ -505,9 +514,13 @@ def _import_body(args):
     print("IMPORT COMPLETE")
     print("=" * 70)
     print(f"Model: {org}/{name}")
+    if _declared != name:
+        print(f"Installed as: {_declared}  (the hub record is named {name!r}; the container carries "
+              f"its own name — use it with `run` and `remove`)")
     print(f"Cache: {cache_path}")
-    print(f"\nRun with: {_suggest_run_command(name, cache_path)}")
-    _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path),
+    print(f"\nRun with: {_suggest_run_command(_declared, cache_path)}")
+    print(f"Remove with: neurobrix remove {_declared}")
+    _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path),
         store=None if args.no_keep else str(store_path))
 
 

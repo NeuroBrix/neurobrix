@@ -185,7 +185,17 @@ class NBXCache:
         self._refuse_incidental_replacement(nbx_path, cache_path,
                                             declared=bool(force or allow_replace))
 
+        # THE NAMING DOOR, also above the cached short-circuit, read from the ARCHIVE's own
+        # manifest before a byte is unpacked (the same member the import reads up front): the
+        # slot is keyed on the .nbx's parent directory, so a build placed under a hand-chosen
+        # directory would install under that name. And the CACHED tree passes the same door:
+        # a directory extracted misnamed before this door existed — the shared cache held four
+        # — would otherwise be served here to every `.nbx`-path caller, the door a census
+        # instead of a door (the guardian, 2026-09-26).
+        refuse_misnamed(cache_path, _manifest_of_archive(nbx_path))
         if self.is_cached(nbx_path) and not force:
+            with open(cache_path / "manifest.json") as f:
+                refuse_misnamed(cache_path, json.load(f))
             print(f"[Cache] Using cached: {cache_path}")
             return cache_path
 
@@ -325,11 +335,6 @@ class NBXCache:
             json.dump(cache_meta, f, indent=2)
 
         print(f"[Cache] Done: {total} files, {total_bytes/1e9:.2f}GB extracted")
-        # The naming door at extraction: the slot is keyed on the .nbx's parent directory
-        # (`get_cache_path`), so a container built under a hand-chosen directory would install
-        # under that name. Refused here, in staging, before the swap makes it visible.
-        with open(cache_path / "manifest.json") as f:
-            refuse_misnamed(final_path, json.load(f))
         return final_path
 
     def clear(self, model_name: Optional[str] = None):
@@ -398,6 +403,30 @@ def get_cache() -> NBXCache:
     return _cache
 
 
+def _on_disk_name(path: Path) -> str:
+    """The directory's name AS THE FILESYSTEM STORES IT — on a case-insensitive store (APFS, the
+    Mac's cache) a path typed in another case opens the same directory, and the door must
+    compare the stored name, not the typed one (R23). A path that does not exist yet (a slot
+    about to be created) has only its typed name."""
+    try:
+        for entry in path.parent.iterdir():
+            if entry.name.lower() == path.name.lower() and entry.samefile(path):
+                return entry.name
+    except (OSError, ValueError):
+        pass
+    return path.name
+
+
+def _manifest_of_archive(nbx_path: Path) -> dict:
+    """The manifest inside a `.nbx`, read without unpacking anything — a zip member."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(nbx_path) as zf:
+            return json.loads(zf.read("manifest.json"))
+    except KeyError:
+        raise RuntimeError(f"ZERO FALLBACK: {nbx_path} carries no manifest.json; it is not an NBX container") from None
+
+
 def refuse_misnamed(cache_path, manifest: dict) -> None:
     """A container's directory carries its manifest's model name, or the engine refuses it.
 
@@ -415,7 +444,7 @@ def refuse_misnamed(cache_path, manifest: dict) -> None:
         raise RuntimeError(
             f"ZERO FALLBACK: the manifest at {Path(cache_path) / 'manifest.json'} declares no "
             f"model_name; a container without its model's name cannot be told from another.")
-    actual = Path(cache_path).name
+    actual = _on_disk_name(Path(cache_path))
     if actual != declared:
         raise RuntimeError(
             f"NeuroBrix refuses the container at {cache_path}: its directory is named "
@@ -438,8 +467,7 @@ def ensure_extracted(nbx_path: Path) -> Path:
     if nbx_path.is_dir():
         manifest_path = nbx_path / "manifest.json"
         if manifest_path.exists():
-            import json as _json
-            refuse_misnamed(nbx_path, _json.loads(manifest_path.read_text()))
+            refuse_misnamed(nbx_path, json.loads(manifest_path.read_text()))
             return nbx_path
         else:
             raise FileNotFoundError(
