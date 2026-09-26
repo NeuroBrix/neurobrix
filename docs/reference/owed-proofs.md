@@ -4237,6 +4237,7 @@ inputs because the launch it certifies is the key's — a compile-only caller on
 (`msl_census.py`) is the consumer the bound must be designed for, and its invocation is in the
 proof directory.
 
-**Owed by the Mac:** the four paths above copied under `models/_agents/mac.proofs.2026-09-26/`
-with their sha256 beside them, and one line naming which caller of `synthesize` compiles
-without running.
+**Owed by the Mac:** the four paths above and `census/rerun_streamed_6cd3002b/rerun_summary.md`
+(the 36 next-defect rows and 31 MoE decode rows the supervisor queued for the rack) copied under
+`models/_agents/mac.proofs.2026-09-26/` with their sha256 beside them, and one line naming which
+caller of `synthesize` compiles without running.
