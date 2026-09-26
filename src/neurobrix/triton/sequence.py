@@ -3303,46 +3303,59 @@ class TritonSequence:
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
-    def _maybe_dump_raw(self, op: 'CompiledOp') -> None:
-        """NBX_DUMP_RAW mirror of the torch-side hook (graph_executor):
-        "<dir>:<csv of tid/op_uid substrings>" — saves matching output
-        tensors as .npy at the diagnostic boundary (NBXTensor → numpy,
-        R33-clean CPU glue) for value-level engine-vs-engine diffs.
-        First-write-only per tid, same filename sanitization as the .pt
-        side so a comparator pairs `<tid>.pt` ↔ `<tid>.npy` directly.
-        Default-off; added for the D6 band column-mapping (the stats
-        dump gives norms, not spatial structure)."""
-        import os as _os_r
-        spec = _os_r.environ.get("NBX_DUMP_RAW")
-        if not spec:
-            return
+    @staticmethod
+    def nbx_dump_raw(spec: str, component: str, op_uid: str, tids, get) -> None:
+        """NBX_DUMP_RAW for the Triton engine — ONE brick for its two op loops
+        (the compiled sequence below and graph_executor's triton-sequential
+        loop). `spec` = "<dir>:<csv of tid/op_uid substrings>"; `get(tid)`
+        returns the NBXTensor for a tid or None. Each matching output is
+        saved ONCE as `<component>_<tid>.npy` — the ATen branch's sequential
+        dump writes `<component>_<tid>.pt` under the same sanitization, so a
+        comparator pairs the two files by name.
+
+        R33: the copy crosses the diagnostic boundary through NBXTensor →
+        numpy, never through torch (the triton-sequential loop used to
+        `import torch` and call `.cpu()`, a method an NBXTensor does not
+        have: the run died on the first matching op — the Mac's report,
+        2026-09-26). A bf16 output is widened to float32 (exact: bf16 is the
+        top half of an fp32) because numpy's 2-byte void carrier cannot be
+        read as numbers.
+        """
+        from neurobrix.kernels.nbx_tensor import bf16_carrier_to_float32
+        import numpy as _np_r
         raw_dir, _, raw_csv = spec.partition(":")
         filters = [f for f in raw_csv.split(",") if f]
-        if not hasattr(self, "_slot_to_tid"):
-            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
-        for out_slot in op.output_slots:
-            tid = self._slot_to_tid.get(out_slot, f"slot::{out_slot}")
-            if filters and not any(f in tid or f in op.op_uid
-                                   for f in filters):
+        for tid in tids:
+            if filters and not any(f in tid or f in op_uid for f in filters):
                 continue
-            tensor = self._arena[out_slot] if self._arena else None
-            if tensor is None:
+            tensor = get(tid)
+            if tensor is None or not hasattr(tensor, "data_ptr"):
                 continue
-            comp = str(self.dag.get("component_name", "comp"))
-            fn = _os_r.path.join(
+            fn = os.path.join(
                 raw_dir,
-                comp + "_" + tid.replace(":", "_").replace("/", "_")
-                + ".npy")
-            if _os_r.path.exists(fn):
+                component + "_" + tid.replace(":", "_").replace("/", "_") + ".npy")
+            if os.path.exists(fn):
                 continue
             try:
-                import numpy as _np_r
-                _np_r.save(fn, tensor.numpy())
+                _np_r.save(fn, bf16_carrier_to_float32(tensor.numpy()))
                 print(f"[NBX_DUMP_RAW triton] {tid} {list(tensor.shape)} "
                       f"-> {fn}", flush=True)
             except Exception as e:
-                print(f"[NBX_DUMP_RAW triton] failed on {tid}: {e}",
-                      flush=True)
+                print(f"[NBX_DUMP_RAW triton] failed on {tid}: {e}", flush=True)
+
+    def _maybe_dump_raw(self, op: 'CompiledOp') -> None:
+        """NBX_DUMP_RAW in the compiled sequence (default-off): the arena's
+        output slots through `nbx_dump_raw`. Added for the D6 band
+        column-mapping (the stats dump gives norms, not spatial structure)."""
+        spec = os.environ.get("NBX_DUMP_RAW")
+        if not spec:
+            return
+        if not hasattr(self, "_slot_to_tid"):
+            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
+        by_tid = {self._slot_to_tid.get(s, f"slot::{s}"): s for s in op.output_slots}
+        self.nbx_dump_raw(
+            spec, str(self.dag.get("component_name", "comp")), op.op_uid, list(by_tid),
+            lambda tid: self._arena[by_tid[tid]] if self._arena else None)
 
     def _maybe_fingerprint(self, op: 'CompiledOp', arena, path: str) -> None:
         """Run-to-run op-output fingerprint (P-TRITON-MOE-DETERMINISM-RESIDUAL,
