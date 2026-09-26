@@ -42,6 +42,7 @@ never write one JSON store at once.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -90,8 +91,8 @@ def off_trace_size(model: str, family: str):
 
 def first_error(log: Path) -> str:
     text = log.read_text(errors="replace") if log.exists() else ""
-    for pat in (r"(ZERO FALLBACK[^\n]*)", r"((?:Runtime|Value|Shape\w*|OutOfMemory|Key|Index)Error[^\n]*)",
-                r"(Traceback[^\n]*)", r"(TIMEOUT[^\n]*)"):
+    for pat in (r"(KILLED by SIGKILL[^\n]*)", r"(TIMEOUT after[^\n]*)", r"(ZERO FALLBACK[^\n]*)",
+                r"((?:Runtime|Value|Shape\w*|OutOfMemory|Key|Index)Error[^\n]*)", r"(Traceback[^\n]*)"):
         m = re.findall(pat, text)
         if m:
             return m[-1][:300]
@@ -118,7 +119,31 @@ def mechanical(path: Path, family: str, expect_hw=None) -> dict:
     return {"path": str(path), "bytes": path.stat().st_size}
 
 
+def container_bytes(model: str) -> int:
+    return sum(f.stat().st_size for f in (CACHE / model).glob("components/*/weights/*"))
+
+
+def host_heavy(model: str) -> bool:
+    """A container whose weights exceed an eighth of the host's memory runs ALONE among the cards:
+    on 2026-09-26 three 30B-class models loading at once on a 251 GB host drew the OOM killer."""
+    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    return container_bytes(model) > total // 8
+
+
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
+    if host_heavy(model):
+        with open(out / "host_heavy.lock", "a") as lk:
+            print(f"[matrix] {model} {mode}: host-heavy ({container_bytes(model) / 2**30:.0f} GiB of weights) "
+                  f"— waiting for the host lock", flush=True)
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                return _run_cell(model, mode, gpu, out, timeout, src)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+    return _run_cell(model, mode, gpu, out, timeout, src)
+
+
+def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
     req = Z.request_args(model, family, [])
     size = off_trace_size(model, family)

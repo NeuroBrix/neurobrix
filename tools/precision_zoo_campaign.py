@@ -36,6 +36,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -195,14 +196,35 @@ def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
         return -9
 
 
+def oom_kills() -> Optional[int]:
+    """The kernel's OOM-kill counter since boot (`/proc/vmstat`), or None where it does not exist."""
+    try:
+        for line in Path("/proc/vmstat").read_text().splitlines():
+            if line.startswith("oom_kill "):
+                return int(line.split()[1])
+    except OSError:
+        return None
+    return None
+
+
 def run(cmd, env, log: Path, timeout: int) -> tuple:
+    """-9 is what `run_group` returns for a timeout — and what ANY SIGKILL returns. The log said
+    "TIMEOUT after 3600s" for a Qwen3-30B cell the kernel killed at 323 s (2026-09-26, host
+    memory: three 30B models loading at once). A -9 before the timeout is written as a KILL, with
+    the OOM-kill counter read around the run."""
     t0 = time.time()
+    oom0 = oom_kills()
     with open(log, "w") as fh:
         fh.write("$ " + shlex.join(cmd) + "\n")
         fh.flush()
         rc = run_group(cmd, env, fh, timeout)
-        if rc == -9:
+        wall = time.time() - t0
+        if rc == -9 and wall >= timeout:
             fh.write(f"\nTIMEOUT after {timeout}s\n")
+        elif rc == -9:
+            oom1 = oom_kills()
+            fh.write(f"\nKILLED by SIGKILL at {wall:.0f}s, before the {timeout}s timeout; kernel OOM kills "
+                     f"during the run: {'unknown' if None in (oom0, oom1) else oom1 - oom0}\n")
     return rc, time.time() - t0
 
 
