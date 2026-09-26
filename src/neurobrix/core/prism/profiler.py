@@ -244,6 +244,40 @@ def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
     return None
 
 
+def temporal_causal_downscale_ratio(dag: Dict) -> Optional[tuple]:
+    """CAUSAL temporal map classifier for downsampler (encoder) graphs: t_out = 1 + (t_in - 1) // r.
+
+    The class `temporal_downscale_ratio` declines on purpose (Wan / CogVideoX / Mochi encoders:
+    the first frame encodes alone). A TEMPORAL tile cannot be taken mid-clip in this class — it
+    would re-apply the clip-start semantics — but a SPATIAL tile carrying the whole clip can: the
+    vendor's own tiled encode for these VAEs (diffusers `AutoencoderKLWan.tiled_encode`) tiles
+    height and width and runs the full causal time pass in every tile.
+
+    Returns (r, out_t_axis) when some rank-5 output dim is exactly 1 + (t - 1) // r over a probe
+    set (r read from the graph, never assumed), else None."""
+    tensors = dag.get("tensors", {})
+    t_symbol = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) == 5 and isinstance(dims[2], dict) and dims[2].get("type") == "symbol":
+            t_symbol = dims[2].get("id")
+            break
+    if t_symbol is None:
+        return None
+    for oid in dag.get("output_tensor_ids", []):
+        dims = _symbolic_dims(tensors, oid)
+        if len(dims) != 5:
+            continue
+        for axis in range(1, 5):
+            expr = dims[axis]
+            if not isinstance(expr, dict) or _eval_symbolic_expr(expr, t_symbol, 1) != 1:
+                continue
+            for r in range(2, 17):
+                if all(_eval_symbolic_expr(expr, t_symbol, k * r + 1) == k + 1 for k in (1, 2, 5, 20, 64)):
+                    return (r, axis)
+    return None
+
+
 def is_linear_downscale_graph(dag: Dict) -> bool:
     """True iff the graph is a rank-5 spatial DOWNSAMPLER (output spatial
     trace extent < input's — a VAE encoder) whose temporal map is in the
