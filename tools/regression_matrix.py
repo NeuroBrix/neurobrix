@@ -274,11 +274,10 @@ def cmd_run(a) -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
-    done = set()
-    if rows_path.exists():
-        for line in rows_path.read_text().splitlines():
-            r = json.loads(line)
-            done.add((r["model"], r["mode"]))
+    # The matrix is one: a cell with a row on ANY card is done, so a model's remaining cells can be
+    # handed to another card without running its finished ones twice.
+    done = {(r["model"], r["mode"]) for f in out.glob("rows_card*.jsonl")
+            for r in map(json.loads, f.read_text().splitlines())}
     todo = [(m.strip(), mode) for m in a.models.split(",") if m.strip() for mode in a.modes.split(",")
             if (m.strip(), mode) not in done]
     while todo:
