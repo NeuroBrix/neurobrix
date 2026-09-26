@@ -126,7 +126,7 @@ FAMILY_ROWS = [
         {"prompt": "a red apple on a wooden table", "mode": "image"},
         "media:png", id="multimodal"),
     pytest.param(
-        "Sana-1600M-MultiLing",
+        "Sana_1600M_1024px_MultiLing",
         {"prompt": "a red apple on a wooden table", "steps": 4},
         "media:png", id="image"),
     pytest.param(
