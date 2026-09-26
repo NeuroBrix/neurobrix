@@ -132,11 +132,35 @@ HOST_PER_WEIGHT_BYTE = 1.7
 #: The share of the host the matrix may hold at once: the rest belongs to the census, the gate's
 #: harness and the kernel. Three concurrent cells at 180 GB of 251 drove memory pressure to 33 %
 #: "full" and the gate's cells to their timeouts (2026-09-26).
-HOST_SHARE = 0.55
+HOST_SHARE = 0.8
+#: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness).
+HOST_HEADROOM = 16 << 30
 
 
 def _host_bytes() -> int:
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+def _mem_available() -> int:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) << 10
+    raise SystemExit("/proc/meminfo has no MemAvailable: the host budget cannot be measured")
+
+
+def _rss_tree(pid: int) -> int:
+    """Resident bytes of a runner and every process under it (its cell)."""
+    total, todo = 0, [pid]
+    while todo:
+        p = todo.pop()
+        try:
+            for line in Path(f"/proc/{p}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1]) << 10
+            todo += [int(c) for c in Path(f"/proc/{p}/task/{p}/children").read_text().split()]
+        except OSError:
+            continue
+    return total
 
 
 def _ledger(out: Path, change):
@@ -162,6 +186,13 @@ def reserve_host(out: Path, need: int) -> bool:
             raise SystemExit(f"a cell needing {need >> 30} GiB of host exceeds the matrix's whole budget "
                              f"({budget >> 30} GiB): refused by name")
         if sum(led.values()) + need > budget:
+            return False
+        # MEASURED as well as reserved: a running cell owes at most its reservation minus what it
+        # already holds; the new cell starts only if the host's available memory covers it, that
+        # owed growth, and a headroom. Reservations alone held three cards idle at 22:57 with
+        # 201 GB available (2026-09-26); measurement alone let three 30B loads OOM the host at 18:40.
+        owed = sum(max(0, n - _rss_tree(int(p))) for p, n in led.items())
+        if _mem_available() < need + owed + HOST_HEADROOM:
             return False
         led[str(os.getpid())] = need
         return True
