@@ -50,7 +50,11 @@ import repo_env  # noqa: E402  — the repository's .env, loaded the way the bui
 
 repo_env.load()
 
-PY = "/home/mlops/ml/venv/bin/python"          # the BUILD TOOLCHAIN's interpreter (trace, build, local, replace)
+# The BUILD TOOLCHAIN's interpreter (trace, build, local, replace). One door, `NBX_FORGE_PYTHON`:
+# Forge moves onto the engine environment behind the executed graph gate (2026-09-26, queue
+# item 7), and that gate is this tool run with Forge's python switched — a literal here would
+# have made the switch a code edit instead of a measurement.
+PY = os.environ.get("NBX_FORGE_PYTHON", "/home/mlops/ml/venv/bin/python")
 # The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
 # one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
 # moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
