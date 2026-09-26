@@ -256,6 +256,12 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
             continue
         name = spec.get("weight_name") or tid.split("::", 1)[1]
         shape = tuple(int(d) for d in spec.get("shape", []))
+        # The loader reads a weight's shape from its FILE. A weight whose aten::t was eliminated
+        # carries the transposed shape in the graph (`pretransposed`, stamped by the compile), and
+        # the bind transposes the loaded tensor itself; shaped from the stamped metadata, the
+        # shadow's weight was transposed twice on every pass after the first compile.
+        if spec.get("pretransposed") and len(shape) == 2:
+            shape = (shape[1], shape[0])
         if not spec.get("dtype"):
             raise RuntimeError(
                 f"ZERO FALLBACK: {component}: the graph states no dtype for {tid} — a container "

@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The kernel census no longer fails a text encoder that is streamed in many pieces.** A weight
+  whose transpose is folded into the plan is now recorded once however many times its piece is
+  compiled, and the census sizes its placeholder weights as the files store them.
+
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
   generated in their own precision, so a certification run's host memory stays close to the size
