@@ -2441,12 +2441,38 @@ def _build_notes(
     return "\n".join(lines)
 
 
+def _board_of(index: int, rows: Dict[int, Dict[str, Any]]) -> "Optional[int]":
+    """The driver's board index of the process's device `index`.
+
+    The plan numbers devices as the process sees them (CUDA renumbers the visible set 0..N-1,
+    `_apply_visible_filter`); nvidia-smi numbers boards. Under `CUDA_VISIBLE_DEVICES=1` the
+    process's device 0 IS board 1 — read as board 0 it took another card's sharing facts
+    (2026-09-27). An entry may name a board or a GPU UUID (or its prefix, as CUDA accepts);
+    one that matches no board is None — the caller then reads the card as unmeasured.
+    """
+    import os as _os
+    raw = _os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw is None:
+        return index
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not 0 <= index < len(entries):
+        return None
+    entry = entries[index]
+    if entry.isdigit():
+        return int(entry) if int(entry) in rows else None
+    for board, row in rows.items():
+        if row["uuid"] == entry or row["uuid"].startswith(entry):
+            return board
+    return None
+
+
 def device_sharing(index: int):
     """The sharing facts of one card, from the driver's own tool: whether it drives a display,
     how much memory OTHER processes hold on it, and this process's own context. Vendor seam of
     `core/prism/memory_budget.py`; `None` when no tool answers here (the budget then treats the
-    card as shared, the safe side). The index is the driver's board index — the mirror of
-    `_nvidia_board_count`'s authority, outside `CUDA_VISIBLE_DEVICES`."""
+    card as shared, the safe side). `index` is the device as this process numbers it — the same
+    index the allocator's free figure is read at; the board nvidia-smi is asked about is mapped
+    from it through `CUDA_VISIBLE_DEVICES` (`_board_of`)."""
     import os as _os
     try:
         q = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid,display_active,memory.used,memory.total",
@@ -2459,7 +2485,8 @@ def device_sharing(index: int):
             if len(parts) >= 5 and parts[0].isdigit():
                 rows[int(parts[0])] = {"uuid": parts[1], "display": parts[2].lower() == "enabled",
                                         "used_mb": float(parts[3]), "total_mb": float(parts[4])}
-        if index not in rows:
+        board = _board_of(index, rows)
+        if board is None:
             return None
         apps = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
                                "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
@@ -2468,13 +2495,13 @@ def device_sharing(index: int):
             me = _os.getpid()
             for line in apps.stdout.strip().splitlines():
                 parts = [x.strip() for x in line.split(",")]
-                if len(parts) >= 3 and parts[0] == rows[index]["uuid"] and parts[1].isdigit():
+                if len(parts) >= 3 and parts[0] == rows[board]["uuid"] and parts[1].isdigit():
                     mb = float(parts[2]) if parts[2].replace(".", "", 1).isdigit() else 0.0
                     if int(parts[1]) == me:
                         own += mb
                     else:
                         others += mb
-        r = rows[index]
+        r = rows[board]
         return {"display_active": r["display"], "held_by_others_mb": others, "own_context_mb": own,
                 "total_mb": r["total_mb"], "free_mb": r["total_mb"] - r["used_mb"], "source": "nvidia-smi"}
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
