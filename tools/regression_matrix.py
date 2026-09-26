@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -119,6 +120,7 @@ def mechanical(path: Path, family: str, expect_hw=None) -> dict:
     return {"path": str(path), "bytes": path.stat().st_size}
 
 
+@functools.lru_cache(maxsize=None)
 def container_bytes(model: str) -> int:
     return sum(f.stat().st_size for f in (CACHE / model).glob("components/*/weights/*"))
 
@@ -130,13 +132,18 @@ def host_heavy(model: str) -> bool:
     return container_bytes(model) > total // 8
 
 
-def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
+def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
+    """The cell's row; None when the cell is host-heavy, the host lock is taken and `wait` is False
+    (the card runs its light cells meanwhile and comes back)."""
     if host_heavy(model):
         with open(out / "host_heavy.lock", "a") as lk:
-            print(f"[matrix] {model} {mode}: host-heavy ({container_bytes(model) / 2**30:.0f} GiB of weights) "
-                  f"— waiting for the host lock", flush=True)
-            fcntl.flock(lk, fcntl.LOCK_EX)
             try:
+                fcntl.flock(lk, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+            except BlockingIOError:
+                return None
+            try:
+                print(f"[matrix] {model} {mode}: host-heavy ({container_bytes(model) / 2**30:.0f} GiB of "
+                      f"weights), the host lock held", flush=True)
                 return _run_cell(model, mode, gpu, out, timeout, src)
             finally:
                 fcntl.flock(lk, fcntl.LOCK_UN)
@@ -189,15 +196,24 @@ def cmd_run(a) -> int:
         for line in rows_path.read_text().splitlines():
             r = json.loads(line)
             done.add((r["model"], r["mode"]))
-    for model in [m.strip() for m in a.models.split(",") if m.strip()]:
-        for mode in a.modes.split(","):
-            if (model, mode) in done:
+    todo = [(m.strip(), mode) for m in a.models.split(",") if m.strip() for mode in a.modes.split(",")
+            if (m.strip(), mode) not in done]
+    while todo:
+        deferred = []
+        for model, mode in todo:
+            # A host-heavy cell whose lock is taken is deferred while light cells remain; once only
+            # deferred cells are left, the card waits for the lock.
+            row = run_cell(model, mode, a.gpu, out, a.timeout, Path(a.src),
+                           wait=not any(not host_heavy(m) for m, _ in todo if (m, _) not in deferred
+                                        and (m, _) != (model, mode)))
+            if row is None:
+                deferred.append((model, mode))
                 continue
-            row = run_cell(model, mode, a.gpu, out, a.timeout, Path(a.src))
             with open(rows_path, "a") as f:
                 f.write(json.dumps(row) + "\n")
             print(f"[matrix] {model} {mode} rc={row['rc']} {row.get('wall_s')}s "
                   f"{row.get('error', '')[:120]}", flush=True)
+        todo = deferred
     return 0
 
 
