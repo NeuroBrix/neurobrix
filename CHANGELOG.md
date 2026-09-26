@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Certifying a very large matrix product no longer fails on a correct kernel.** A product
   whose output exceeds two billion elements is run in row bands; the certification tool compared
   each band against a reference of the whole product and refused the shape. It now checks each
-  launch against its own reference, and records how many launches served the shape.
+  launch against its own reference — every band, not only the first — and records how many
+  launches served the shape, with each one's deviation.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
