@@ -245,7 +245,7 @@ def cmd_export(a) -> int:
             "repo_id": repos.get(r["model"]),
             "container": r["model"],
             "container_sha256": sha256(manifest) if manifest.exists() else None,
-            "stack": "cuda",
+            "stack": a.stack,
             "python": r.get("python"),
             "mode": "compiled" if r["mode"] == "native" else r["mode"],
             "request": " ".join(r["request"]),
@@ -282,6 +282,8 @@ def main() -> int:
     e.add_argument("--catalogue", required=True, help="the Mac's CATALOGUE.md")
     e.add_argument("--proofs", default=None)
     e.add_argument("--dest", required=True)
+    e.add_argument("--stack", required=True, choices=("cuda", "metal"),
+                   help="the machine's stack, written in every row (the joint table has two halves)")
     a = ap.parse_args()
     return {"run": cmd_run, "table": cmd_table, "export": cmd_export}[a.cmd](a)
 
