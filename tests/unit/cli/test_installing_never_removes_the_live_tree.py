@@ -193,7 +193,7 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     nbx_dir.mkdir(parents=True)
     nbx = nbx_dir / "model.nbx"
     with zipfile.ZipFile(nbx, "w") as z:
-        z.writestr("manifest.json", json.dumps({"version": "NEW"}))
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "NEW"}))
         for i in range(200):
             z.writestr(f"shard_{i}.bin", "x" * 2048)
 
@@ -205,14 +205,14 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     # no record is the undeclared replacement the door refuses — the cell met the door there
     # on 2026-09-26 instead of the staging it measures.
     with zipfile.ZipFile(nbx, "w") as z:
-        z.writestr("manifest.json", json.dumps({"version": "OLD"}))
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "OLD"}))
         for i in range(200):
             z.writestr(f"shard_{i}.bin", "o" * 2048)
     assert c.extract(nbx) == final
     assert json.loads((final / "manifest.json").read_text())["version"] == "OLD"
     time.sleep(0.05)                                     # the NEW build is newer than the cache
     with zipfile.ZipFile(nbx, "w") as z:
-        z.writestr("manifest.json", json.dumps({"version": "NEW"}))
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "NEW"}))
         for i in range(200):
             z.writestr(f"shard_{i}.bin", "x" * 2048)
 
