@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
+  Such a shape is now reported as too large before its inputs are generated, and inputs are
+  generated in their own precision, so a certification run's host memory stays close to the size
+  of the operands it tests.
+
 - **Certifying a very large matrix product no longer fails on a correct kernel.** A product
   whose output exceeds two billion elements is run in row bands; the certification tool compared
   each band against a reference of the whole product and refused the shape. It now checks each
