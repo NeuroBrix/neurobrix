@@ -155,28 +155,90 @@ ORACLES.update({
 })
 
 
-#: Kernels whose oracle can be computed on a ROW WINDOW of the output. The convolution
-#: oracle is not here: its output rows do not map to input rows by a slice, so windowing it
-#: needs the receptive-field arithmetic the certifier's `_conv2d_oracle` carries and is a
-#: separate piece of work. A kernel absent from this set falls back to windowed CONSENSUS,
-#: announced, rather than to nothing.
-ROW_WINDOWABLE = {"matmul_kernel", "addmm_kernel"}
+#: Kernels whose oracle can be computed on a ROW WINDOW of the output — the output read as
+#: `[prod(leading dims), last dim]`, which for the matrix kernels is the matrix and for the
+#: convolution family is `[N*Cout*Ho, Wo]`. The convolution rows map to input rows through the
+#: receptive field (`conv2d_fp64.receptive_slab`, the certifier's arithmetic since 2026-09-07);
+#: until 2026-09-26 the family was absent here and an over-budget conv key fell to windowed
+#: CONSENSUS or to no screen at all, while an under-budget one read its WHOLE input in float64
+#: (a 128-channel 2048x1024 input: 2.1 GB, the Mac's 27.5 GB footprint). A kernel absent from
+#: this set falls back to windowed consensus, announced, rather than to nothing.
+ROW_WINDOWABLE = {"matmul_kernel", "addmm_kernel"} | set(_conv.ROW_ORACLES)
+
+
+def _slab_reader(tensor, shape):
+    """Read `[n0:n1, :, u0:u1, v0:v1]` of a contiguous NCHW device tensor to the host in float64
+    — ONLY that slab crosses, cut where the tensor lives. `shape` is the `[N, C, H, W]` the
+    kernel's named extents declare; the live argument may be flat."""
+    def slab(n0, n1, u0, u1, v0, v1):
+        view = tensor.view(*shape) if tuple(tensor.shape) != tuple(shape) else tensor
+        piece = view[n0:n1, :, u0:u1, v0:v1].contiguous()
+        return _to_f64(piece)
+    return slab
+
+
+def oracle_row_bytes(tuner, meta) -> Optional[int]:
+    """What one flat output row costs THIS kernel's float64 reference on the host, or None for
+    a kernel the row table does not window (the default: the row's own elements in float64).
+    Raises `ValueError` for a kernel the table windows whose cost cannot be formed — the
+    launcher then seats the key unscreened and says why, rather than sizing the window to the
+    output row."""
+    name = getattr(getattr(tuner, "base_fn", None), "__name__", "") or ""
+    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
+    return _conv.oracle_row_bytes(name, named)
+
+
+def fp64_footprint(buffers) -> int:
+    """The host bytes a FULL reference would hold for these device buffers: every element in
+    float64, whatever it is on the device. The screening budget is a rule about cost, and the
+    oracle's cost is this number, not the buffers' device bytes — a 537 MB bf16 input is 2.1 GB
+    of float64 before the first tap is computed. The element size comes from `NBXDtype`, the
+    one authority (`_writable_buffers` records `dtype.name`, the enum's own name); a name the
+    enum does not know is a refusal, never a guess."""
+    from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size, parse_dtype
+    total = 0
+    for _addr, nbytes, dtype in buffers:
+        # `_writable_buffers` records `value.dtype.name`, and `NBXTensor.dtype` is the TRITON
+        # dtype (`fp16`, `bf16`, `fp32`, ...) — the engine's own parser knows those spellings
+        # beside the enum's; anything neither knows is refused, never guessed.
+        name = str(dtype)
+        try:
+            nbx = NBXDtype[name] if name in NBXDtype.__members__ else parse_dtype(name)
+        except (KeyError, ValueError):
+            raise ValueError(f"the screen cannot size a buffer of dtype {dtype!r}: not an NBXDtype") from None
+        total += int(nbytes) * 8 // dtype_size(nbx)
+    return total
 
 
 def windowed_reference(tuner, meta, rows) -> Optional[np.ndarray]:
-    """The fp64 reference for `rows` of the output, or None if this kernel cannot be windowed.
+    """The fp64 reference for flat `rows` of the output, or None if this kernel cannot be windowed.
 
     Returns the ARRAY, not bytes: the launcher slices the candidates' own bytes to the same
-    rows and compares, so both sides are the same rows of the same tensor."""
+    rows and compares, so both sides are the same rows of the same tensor. A refusal by a
+    row oracle is recorded through `set_last_refusal`, so the launcher's seat line can say
+    "the oracle refused, and why" instead of "no oracle covers this kernel"."""
     name = getattr(getattr(tuner, "base_fn", None), "__name__", "") or ""
     if name not in ROW_WINDOWABLE:
         return None
     named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
     if not named:
         return None
+    entry = _conv.ROW_ORACLES.get(name)
+    if entry is None:
+        try:
+            return _mm(named, rows=rows)
+        except Exception:                               # noqa: BLE001
+            return None
     try:
-        return _mm(named, rows=rows)
-    except Exception:                                   # noqa: BLE001
+        x, w = named.get(entry.input_name), named.get(entry.weight_name)
+        if x is None or w is None:
+            raise ValueError(f"its arguments {entry.input_name!r}/{entry.weight_name!r} are not among the live arguments")
+        weight = _to_f64(w)
+        if weight is None:
+            raise ValueError("its weight could not be read here")
+        return entry.rows(named, _slab_reader(x, entry.input_shape(named)), weight, rows)
+    except (KeyError, TypeError, ValueError) as exc:
+        set_last_refusal(f"{name}: the row-windowed oracle refused — {exc}")
         return None
 
 

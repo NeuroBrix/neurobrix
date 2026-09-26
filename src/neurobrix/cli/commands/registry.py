@@ -466,6 +466,29 @@ def _import_body(args):
     import zipfile
     if not zipfile.is_zipfile(store_path):
         _die(args, "ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
+    # The cache slot carries the MANIFEST's model name, never the hub slug: a hub record is
+    # a name someone typed, the manifest's is the name the container was built under (the
+    # Hugging Face repository's). Twenty-nine hub records carried a hand case or a hand
+    # shortening of their repository (2026-09-26); installing under the slug would have
+    # produced a directory the runtime's naming door refuses. Read from the archive
+    # before anything is written.
+    with zipfile.ZipFile(store_path) as _zf:
+        _declared = json.loads(_zf.read("manifest.json")).get("model_name")
+    if not _declared:
+        _die(args, "ERROR: the downloaded .nbx declares no model_name in its manifest.")
+    if _declared != cache_path.name:
+        print(f"   The container declares model_name {_declared!r}; the hub record is named "
+              f"{cache_path.name!r}. Installing under the container's own name.")
+        cache_path = CACHE_DIR / _declared
+        # The "already installed" answer, asked again on the name that will be written — the
+        # pre-check above could only ask on the slug, before the archive existed. `--force`
+        # keeps its contract: without it nothing installed is swapped over.
+        if cache_path.exists() and (cache_path / "manifest.json").exists() and not args.force:
+            print(f"\nModel already installed under its own name: {cache_path}")
+            print("Use --force to re-download.")
+            _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=True)
+            _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path))
+            sys.exit(0)
     # The staging tree, the lock and the two-rename swap are one brick, shared
     # with `NBXCache.extract`: the cache is often a mounted export, and the old
     # code here removed the live tree BEFORE renaming staging over it, leaving
@@ -478,7 +501,7 @@ def _import_body(args):
     except InstallHeldByAnother as e:
         _die(args, f"ERROR: {e}")
     print(f"   Extracted: {cache_path}")
-    _ev(args, "installed", model=f"{org}/{name}", cache=str(cache_path), already=False)
+    _ev(args, "installed", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path), already=False)
 
     # Delete .nbx from store if --no-keep
     if args.no_keep:
@@ -491,9 +514,13 @@ def _import_body(args):
     print("IMPORT COMPLETE")
     print("=" * 70)
     print(f"Model: {org}/{name}")
+    if _declared != name:
+        print(f"Installed as: {_declared}  (the hub record is named {name!r}; the container carries "
+              f"its own name — use it with `run` and `remove`)")
     print(f"Cache: {cache_path}")
-    print(f"\nRun with: {_suggest_run_command(name, cache_path)}")
-    _ev(args, "done", model=f"{org}/{name}", cache=str(cache_path),
+    print(f"\nRun with: {_suggest_run_command(_declared, cache_path)}")
+    print(f"Remove with: neurobrix remove {_declared}")
+    _ev(args, "done", model=f"{org}/{name}", installed_as=_declared, cache=str(cache_path),
         store=None if args.no_keep else str(store_path))
 
 

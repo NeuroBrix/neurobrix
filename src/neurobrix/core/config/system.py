@@ -49,6 +49,17 @@ PRISM_DEFAULTS = {
     # history. It is data here so the next measurement has one place to land, not a claim that
     # 0.92 is right.
     "whole_component_fraction": 0.92,
+    # What the TRITON engine's arena holds live, over the profiled activation peak, while a
+    # component runs. The profile measures the peak tensor set under the compiled engine's
+    # caching allocator; the triton arena's live watermark runs above it — the tiling call site
+    # in `PrismSolver._place_component` documents ~1.3x on CogVideoX-5b's VAE tile (2026-09:
+    # 24 GB compiled, 31 GB+ triton for the same tile) and budgets TILES by it. The WHOLE test
+    # did not, and mochi-1-preview's VAE at 85 frames 320x576 (profiled activation 24 561 MB,
+    # 346 MB of weights) was placed whole on a 32 GB card and died at 25 202 MB live asking
+    # 8 493 MB more — at least 33 695 MB, 1.35x the whole figure (2026-09-26, card 2). Read by
+    # `PrismSolver._whole_component_mb` for the triton modes only; the compiled engine runs
+    # under the allocator the profile measured.
+    "triton_arena_activation_factor": 1.3,
     # The commercial memory ladder (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
     # reading rounds DOWN onto on a shared pool, and the nominal rung of a dedicated card. Data,
     # 4 GB to 512 GB, read by `core/prism/memory_budget.py`; never a literal in the solver.

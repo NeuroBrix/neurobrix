@@ -39,7 +39,7 @@ def _model(root: Path, name: str, marker: str) -> Path:
     """A directory shaped like an installed model: a manifest and a weight."""
     d = root / name
     d.mkdir(parents=True)
-    (d / "manifest.json").write_text(json.dumps({"version": marker}))
+    (d / "manifest.json").write_text(json.dumps({"version": marker, "model_name": name}))
     (d / "weights.safetensors").write_bytes(marker.encode() * 4096)
     return d
 
@@ -82,7 +82,7 @@ def test_the_live_tree_is_readable_at_every_instant_of_a_reinstall(tmp_path):
     reader.start()
     try:
         with installing(target, label="test") as staging:
-            (staging / "manifest.json").write_text(json.dumps({"version": "NEW"}))
+            (staging / "manifest.json").write_text(json.dumps({"version": "NEW", "model_name": target.name}))
             (staging / "weights.safetensors").write_bytes(b"NEW" * 4096)
             time.sleep(0.05)          # the extraction the reader must survive
     finally:
@@ -193,13 +193,28 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     nbx_dir.mkdir(parents=True)
     nbx = nbx_dir / "model.nbx"
     with zipfile.ZipFile(nbx, "w") as z:
-        z.writestr("manifest.json", json.dumps({"version": "NEW"}))
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "NEW"}))
         for i in range(200):
             z.writestr(f"shard_{i}.bin", "x" * 2048)
 
     c = NBXCache(cache_dir=cache_dir)
     final = c.get_cache_path(nbx)
-    _model(cache_dir, final.name, "OLD")
+    # The installed OLD tree comes from THIS .nbx through the extractor itself, so the cache
+    # records its source (.cache_meta.json) and the NEW build at the same path is the ordinary
+    # rebuilt-in-place update the replacement door allows (f3e38045). A hand-made OLD tree with
+    # no record is the undeclared replacement the door refuses — the cell met the door there
+    # on 2026-09-26 instead of the staging it measures.
+    with zipfile.ZipFile(nbx, "w") as z:
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "OLD"}))
+        for i in range(200):
+            z.writestr(f"shard_{i}.bin", "o" * 2048)
+    assert c.extract(nbx) == final
+    assert json.loads((final / "manifest.json").read_text())["version"] == "OLD"
+    time.sleep(0.05)                                     # the NEW build is newer than the cache
+    with zipfile.ZipFile(nbx, "w") as z:
+        z.writestr("manifest.json", json.dumps({"model_name": "demo-model", "version": "NEW"}))
+        for i in range(200):
+            z.writestr(f"shard_{i}.bin", "x" * 2048)
 
     observations: list[int] = []
     stop = threading.Event()
@@ -220,10 +235,10 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
 
     assert out == final
     assert json.loads((final / "manifest.json").read_text())["version"] == "NEW"
-    # Every observation is either the complete OLD tree (2 files) or the complete
-    # NEW one (200 shards + manifest + the `.cache_meta.json` the extractor writes
-    # last = 202). A count in between is a half-written model made visible.
-    assert set(observations) <= {2, 202}, (
+    # Every observation is a complete tree: the OLD one and the NEW one both hold 200 shards,
+    # the manifest and the `.cache_meta.json` the extractor writes last = 202. A count in
+    # between is a half-written model made visible.
+    assert set(observations) <= {202}, (
         f"a partially extracted model was visible at {final}: sizes {sorted(set(observations))}")
 
 

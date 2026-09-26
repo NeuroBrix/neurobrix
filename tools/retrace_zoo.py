@@ -50,7 +50,11 @@ import repo_env  # noqa: E402  — the repository's .env, loaded the way the bui
 
 repo_env.load()
 
-PY = "/home/mlops/ml/venv/bin/python"          # the BUILD TOOLCHAIN's interpreter (trace, build, local, replace)
+# The BUILD TOOLCHAIN's interpreter (trace, build, local, replace). One door, `NBX_FORGE_PYTHON`:
+# Forge moves onto the engine environment behind the executed graph gate (2026-09-26, queue
+# item 7), and that gate is this tool run with Forge's python switched — a literal here would
+# have made the switch a code edit instead of a measurement.
+PY = os.environ.get("NBX_FORGE_PYTHON", "/home/mlops/ml/venv/bin/python")
 # The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
 # one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
 # moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
@@ -79,6 +83,26 @@ NAMING_KEYS = {"parent_module", "output_name"}   # output_name: absent in the Ju
 # decomposed mul, not the fused rms_norm — Voxtral, VibeVoice, canary 2026-09-07). Never
 # compared old-vs-new; the new graph's lists are verified against its own ops instead.
 DERIVED_KEYS = {"consumer_op_uids"}
+
+
+def constants_equal(a, b) -> bool:
+    """Two `constant_data` fields carry the same tensor — compared by VALUE, never by the pickled
+    bytes: torch 2.14 serialises a tensor differently from torch 2.5 (a longer archive, the
+    same values), so a graph traced on the engine environment differed from the July container
+    in every rotary table while `torch.equal` held on each (TinyLlama, 2026-09-26 04:24 UTC).
+    Unreadable or absent data is a difference."""
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return False
+    try:
+        import base64, io
+        import torch
+        ta = torch.load(io.BytesIO(base64.b64decode(a)), weights_only=True, map_location="cpu")
+        tb = torch.load(io.BytesIO(base64.b64decode(b)), weights_only=True, map_location="cpu")
+    except Exception:
+        return False
+    if not (hasattr(ta, "shape") and hasattr(tb, "shape")):
+        return ta == tb
+    return tuple(ta.shape) == tuple(tb.shape) and ta.dtype == tb.dtype and bool(torch.equal(ta, tb))
 
 
 def derived_consumers_consistent(graph: dict) -> int:
@@ -336,6 +360,13 @@ def stimulus_change(old_ctx, new_ctx) -> dict | None:
     Reported by dimension name so the verdict can say what moved."""
     o = ((old_ctx or {}).get("symbols") or {})
     n = ((new_ctx or {}).get("symbols") or {})
+    # The stimulus is the SET of extents the inputs carried, whatever the tracer named them:
+    # the signature brick (2026-09-25) renames axes — a width once called seq_len becomes a
+    # constant, a token axis once called batch takes the sequence's symbol — with the same
+    # tensors traced. Values equal, names moved = a naming change of the closed defect, not
+    # a different stimulus; the per-name diff below only speaks when a value itself moved.
+    if sorted({m.get("trace_value") for m in o.values()}) == sorted({m.get("trace_value") for m in n.values()}):
+        return None
     moved = {}
     for name in {str(m.get("name")) for m in o.values()} & {str(m.get("name")) for m in n.values()}:
         ov = sorted({m.get("trace_value") for m in o.values() if str(m.get("name")) == name})
@@ -429,6 +460,28 @@ def _literal_symbolized_within(a, b) -> int:
         return n
     return 0 if a == b else -1
 
+
+def _leaf_symbol_ids(op: dict, tensors: dict) -> set:
+    """Every symbol id a dim of the op's inputs/outputs carries, bare or as a leaf of an
+    expression node (add/mul/sub/floordiv/mod/neg/product)."""
+    out = set()
+    def walk(n):
+        if isinstance(n, dict):
+            if n.get("type") == "symbol" and n.get("id"):
+                out.add(n["id"])
+            for k in ("left", "right", "operand"):
+                if k in n:
+                    walk(n[k])
+            for f in n.get("factors") or []:
+                if isinstance(f, str):
+                    out.add(f)
+                else:
+                    walk(f)
+    for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
+        for d in ((tensors.get(tid) or {}).get("symbolic_shape") or {}).get("dims") or []:
+            walk(d)
+    return out
+
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors_old: dict = None):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
@@ -491,6 +544,26 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
         # is now "to the end" (INT64_MAX); relative by nature, never wrong.
         if b == INT64_MAX and isinstance(a, dict) and _is_dim_node(a) and json.dumps(a, sort_keys=True) in input_dims:
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-to-the-end"})
+            continue
+        # SLICE START SYMBOLIZED (2026-09-25): a prefix split ``hidden[txt_len:]`` whose start was
+        # the frozen prefix length now reads the symbol traced at it — a symbol the op's own input
+        # dims carry (bare, or as a leaf of the concat's add()). Flex.1-alpha: the two symbols at
+        # 512 (encoder_hidden_states and txt_ids each minted one) had left this pass ambiguous; the
+        # signature brick mints the axis once and the start follows it (aten.slice::25/37/49/61/73).
+        if (isinstance(a, int) and not isinstance(a, bool) and a > 2 and isinstance(b, dict)
+                and b.get("type") == "symbol" and _trace_value(b) == a
+                and b.get("id") in _leaf_symbol_ids(new_op, tensors_new)):
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-start-symbolized"})
+            continue
+        # SLICE START NEGATED (2026-09-25): a suffix slice ``x[-S:]`` whose start was the negated
+        # trace value of the axis it cuts now reads ``neg(<that axis's dim>)`` — the same slice,
+        # spelled with the dim the op's inputs/outputs carry (transformers' T5
+        # ``position_bias[:, :, -seq_length:, :]``, PixArt-XL-2-1024-MS: start -120 → neg(s3)).
+        if (isinstance(a, int) and not isinstance(a, bool) and a < 0 and isinstance(b, dict)
+                and b.get("type") == "neg" and isinstance(b.get("operand"), dict)
+                and _is_dim_node(b["operand"]) and _trace_value(b["operand"]) == -a
+                and json.dumps(b["operand"], sort_keys=True) in input_dims):
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-start-negated"})
             continue
         # INFERENCE RESTORED: an integer the injection had written into a view became the vendor's
         # -1 again (numel-inferred at runtime; never wrong) — the integer must be the extent.
@@ -1358,7 +1431,19 @@ class Model:
         return True
 
     def step_install(self):
-        if self.done("install"): return True
+        reinstall = None
+        if self.done("install"):
+            if self.cache_holds_backup() is not True:
+                return True
+            # The state says installed; the cache holds the PREVIOUS container (the hub's object put
+            # back by hand, or by a restore). A resumed chain measures the container it BUILT: with
+            # the install skipped, new_outputs ran on the old one and the gate compared the June graph
+            # with itself (granite-speech, 2026-09-26 02:43 UTC). Reinstall the recorded .nbx and drop
+            # the arms and the verdict that were measured on the wrong container.
+            reinstall = "the state said installed but the cache held the previous container"
+            log(f"{self.name}: install is marked done but the cache holds the previous container — reinstalling the built .nbx")
+            for stale in ("new_outputs", "gate"):
+                self.state["steps"].pop(stale, None)
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
         if not nbx or not Path(nbx).exists():
             self.mark("install", False, error="no built .nbx"); return False
@@ -1371,7 +1456,7 @@ class Model:
         rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
         ok = rc == 0 and (CACHE / installed / "manifest.json").exists()
         self.new_name = installed
-        self.mark("install", ok, rc=rc, installed_name=installed)
+        self.mark("install", ok, rc=rc, installed_name=installed, **({"reinstalled": reinstall} if reinstall else {}))
         return ok
 
     def step_new_outputs(self):
@@ -1499,7 +1584,7 @@ class Model:
                 for k in set(a) | set(b):
                     if k in PROVENANCE_KEYS or k in DERIVED_KEYS or k in NAMING_KEYS:
                         continue                       # a name (output_name: absent in the June encoding), never a value
-                    if a.get(k) != b.get(k):
+                    if a.get(k) != b.get(k) and not (k == "constant_data" and constants_equal(a.get(k), b.get(k))):
                         if k in ANNOTATION_KEYS:
                             rec["annotation_changes"] += 1
                         else:
@@ -1661,6 +1746,8 @@ class Model:
             f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}, "
             f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}, "
             f"slice end to the end {sum(r.get('arg_kinds', {}).get('slice-end-to-the-end', 0) for r in gd['components'].values())}, "
+            f"slice start negated {sum(r.get('arg_kinds', {}).get('slice-start-negated', 0) for r in gd['components'].values())}, "
+            f"slice start symbolized {sum(r.get('arg_kinds', {}).get('slice-start-symbolized', 0) for r in gd['components'].values())}, "
             f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
             f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
@@ -1798,6 +1885,17 @@ def main():
                     help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
                          "(an upload loop must never trace or build — a reset state once made one trace Kokoro beside a pass)")
     args = ap.parse_args()
+    if args.src:
+        _src = Path(args.src).resolve()
+        if not (_src / "neurobrix" / "__init__.py").is_file():
+            # The door (2026-09-25): a --src naming a directory without the package
+            # put it on PYTHONPATH to no effect and every run imported the EDITABLE
+            # install — the live tree — while the operator believed the arm frozen;
+            # its autotune directory read 0 certified entries for the same reason.
+            # Today's PixArt/Flex arms ran on the live tree under a worktree's name.
+            sys.exit(f"ZERO FALLBACK: --src {args.src} holds no neurobrix/__init__.py — "
+                     f"name the engine SOURCE tree (<checkout>/src), or the runs import the "
+                     f"editable install instead of the tree you froze")
     import shlex
     args.extra = shlex.split(args.extra)
     summary = {}

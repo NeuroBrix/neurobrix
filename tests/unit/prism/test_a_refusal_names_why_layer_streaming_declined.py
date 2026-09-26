@@ -19,6 +19,15 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
                                               profile)
 
 
+#: The request these cells refuse. It was batch 2 at 2048x1024 on the `PixArt-XL-1024` container
+#: (the 2026-05-20 trace, the Mac's own refusal at 14 420 MB); that container was a second trace
+#: of PixArt-alpha/PixArt-XL-2-1024-MS under an invented name and went (2026-09-26). On the
+#: re-traced `PixArt-XL-2-1024-MS` (2026-09-25, the signature brick) the SAME request PLANS under
+#: layer_streaming at this rung — measured 2026-09-26 (`test_the_retraced_container_plans_what_the_old_one_refused`
+#: holds it) — so the refusal these cells explain is taken at batch 8, which no plan fits.
+REFUSED_REQUEST = dict(batch_size=8, height=2048, width=1024)
+
+
 def _refusal(monkeypatch, rung, force):
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, rung)
@@ -28,9 +37,23 @@ def _refusal(monkeypatch, rung, force):
         monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
     s = PrismSolver()
     with pytest.raises(RuntimeError) as err:
-        s.solve_smart(NBXContainer.load(str(container_root("PixArt-XL-1024"))), profile(APPLE_M4_PRO),
-                      InputConfig(batch_size=2, height=2048, width=1024), mode="triton")
+        s.solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))), profile(APPLE_M4_PRO),
+                      InputConfig(**REFUSED_REQUEST), mode="triton")
     return str(err.value)
+
+
+def test_the_retraced_container_plans_what_the_old_one_refused(monkeypatch):
+    """The Mac's 2048x1024 refusal (14 420 MB against the rung) was the OLD container's: its
+    transformer declared `seq_len` at two symbol ids, and the reserve followed. The re-traced
+    container plans batch 2 at 2048x1024 under layer_streaming at the 4096 MB rung — a claim
+    the Mac can now check on its own card."""
+    pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
+    impose_rung(monkeypatch, 4096)
+    monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
+    plan = PrismSolver().solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))),
+                                     profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024),
+                                     mode="triton")
+    assert "layer_streaming" in str(getattr(plan, "strategy", plan)), plan
 
 
 def test_a_forced_streaming_refusal_says_why_it_declined(monkeypatch):
@@ -73,15 +96,13 @@ def test_a_reused_solver_does_not_carry_a_previous_solves_reason(monkeypatch):
     filters streaming out so it never runs: the second refusal must not print the first's reason."""
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, 4096)
-    c = NBXContainer.load(str(container_root("PixArt-XL-1024")))
+    c = NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS")))
     s = PrismSolver()
     monkeypatch.setenv("NBX_FORCE_STRATEGY", "layer_streaming")
     with pytest.raises(RuntimeError):
-        s.solve_smart(c, profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024),
-                      mode="triton")
+        s.solve_smart(c, profile(APPLE_M4_PRO), InputConfig(**REFUSED_REQUEST), mode="triton")
     assert s._layer_streaming_declined, "precondition: the first solve recorded a decline"
     monkeypatch.setenv("NBX_FORCE_STRATEGY", "single_gpu")
     with pytest.raises(RuntimeError) as err:
-        s.solve_smart(c, profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024),
-                      mode="triton")
+        s.solve_smart(c, profile(APPLE_M4_PRO), InputConfig(**REFUSED_REQUEST), mode="triton")
     assert "layer_streaming declined" not in str(err.value), str(err.value)[-400:]

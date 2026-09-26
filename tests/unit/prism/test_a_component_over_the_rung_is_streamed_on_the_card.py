@@ -56,7 +56,7 @@ MB = 1024 * 1024
 # is stated: Flex at 1024 x 1024 (neither Flex nor granite-speech declares a resolution, and an
 # audio model has none).
 OVER = [
-    ("PixArt-XL-1024", 1024, 2048, 11198, 8192),
+    ("PixArt-XL-2-1024-MS", 1024, 2048, 11198, 8192),
     ("PixArt-XL-2-1024-MS", 1024, 2048, 11198, 8192),
     ("granite-speech-3.3-8b", None, None, 18186, 16384),
     ("Flex.1-alpha", 1024, 1024, 18186, 16384),

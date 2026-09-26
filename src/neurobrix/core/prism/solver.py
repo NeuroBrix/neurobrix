@@ -779,12 +779,31 @@ class PrismSolver:
         accelerator, on a device that holds it."""
         return self._effective_capacity_mb(dev) * self.whole_component_fraction
 
+    def _live_activation_mb(self, mem: "ComponentMemory") -> float:
+        """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
+        device: the profiled peak under the compiled engine's caching allocator, times
+        `PRISM_DEFAULTS["triton_arena_activation_factor"]` under the triton modes.
+
+        Measured where it is applied and nowhere further: ~1.3x on CogVideoX-5b's VAE tile
+        (2026-09, the tiling call site budgets tiles by it) and 1.35x on mochi-1-preview's whole
+        VAE at 85 frames 320x576 (profiled 24 561 MB, placed whole on a 32 GB card by the bare
+        figure, dead at 25 202 MB live asking 8 493 MB more — 2026-09-26). Read by the three
+        decisions that hold a component whole on a card — `_place_component`'s whole, zero3 and
+        tiling-trigger tests — and by nothing else: the streamed segments of a language model
+        keep the profiled figure and their own reserve rules (pinned on the Mac's readings), for
+        no measurement of the factor exists on them, and a factor applied where it was not
+        measured is a guess wearing a number."""
+        if str(getattr(self, "_mode", "compiled")).startswith("triton"):
+            return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
+        return float(mem.activation_mb)
+
     def _whole_component_mb(self, container, comp_name: str, mem: "ComponentMemory",
                             dev: "DeviceState") -> float:
         """What `comp_name` costs held whole on `dev`: its weights at the device's cost for the
-        component's dtype, plus its activations. The figure `_usable_mb` is compared to."""
+        component's dtype, plus its activations as the arena holds them (`_live_activation_mb`).
+        The figure `_usable_mb` is compared to."""
         return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
-                + mem.activation_mb)
+                + self._live_activation_mb(mem))
 
     def _effective_capacity_mb(self, dev: "DeviceState") -> float:
         """What a whole plan may be budgeted against on `dev`: `dev.budget_mb`, the memory law's
@@ -4311,7 +4330,7 @@ class PrismSolver:
         # it then dies in zero3's CUDA machinery before an op runs
         # (Sana 4Kpx compiled on mps, torch.cuda.set_device, 2026-09-21).
         # Selection consults the same device door the budget does.
-        if (mem.activation_mb <= usable
+        if (self._live_activation_mb(mem) <= usable
                 and not _device_is_unified(largest.device_string, profile)):
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)

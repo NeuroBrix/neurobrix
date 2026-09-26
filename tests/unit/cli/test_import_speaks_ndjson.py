@@ -47,7 +47,7 @@ class _Resp:
 def _archive(tmp_path: Path, manifest=None) -> bytes:
     p = tmp_path / "src.nbx"
     with zipfile.ZipFile(p, "w") as zf:
-        zf.writestr("manifest.json", json.dumps(manifest or {"name": NAME, "family": "llm"}))
+        zf.writestr("manifest.json", json.dumps(manifest or {"model_name": NAME, "name": NAME, "family": "llm"}))
         zf.writestr("components/x/graph.json", "{}")
     return p.read_bytes()
 
