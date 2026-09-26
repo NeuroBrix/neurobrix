@@ -199,7 +199,22 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
 
     c = NBXCache(cache_dir=cache_dir)
     final = c.get_cache_path(nbx)
-    _model(cache_dir, final.name, "OLD")
+    # The installed OLD tree comes from THIS .nbx through the extractor itself, so the cache
+    # records its source (.cache_meta.json) and the NEW build at the same path is the ordinary
+    # rebuilt-in-place update the replacement door allows (f3e38045). A hand-made OLD tree with
+    # no record is the undeclared replacement the door refuses — the cell met the door there
+    # on 2026-09-26 instead of the staging it measures.
+    with zipfile.ZipFile(nbx, "w") as z:
+        z.writestr("manifest.json", json.dumps({"version": "OLD"}))
+        for i in range(200):
+            z.writestr(f"shard_{i}.bin", "o" * 2048)
+    assert c.extract(nbx) == final
+    assert json.loads((final / "manifest.json").read_text())["version"] == "OLD"
+    time.sleep(0.05)                                     # the NEW build is newer than the cache
+    with zipfile.ZipFile(nbx, "w") as z:
+        z.writestr("manifest.json", json.dumps({"version": "NEW"}))
+        for i in range(200):
+            z.writestr(f"shard_{i}.bin", "x" * 2048)
 
     observations: list[int] = []
     stop = threading.Event()
@@ -213,20 +228,17 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     w = threading.Thread(target=watch, daemon=True)
     w.start()
     try:
-        # A NEW container over an installed OLD one is a replacement, and since f3e38045 a
-        # replacement is refused unless declared (the 2026-09-22 mochi incident). This cell
-        # measures the staging of a declared one; the refusal has its own cells below.
-        out = c.extract(nbx, allow_replace=True)
+        out = c.extract(nbx)
     finally:
         stop.set()
         w.join(timeout=5)
 
     assert out == final
     assert json.loads((final / "manifest.json").read_text())["version"] == "NEW"
-    # Every observation is either the complete OLD tree (2 files) or the complete
-    # NEW one (200 shards + manifest + the `.cache_meta.json` the extractor writes
-    # last = 202). A count in between is a half-written model made visible.
-    assert set(observations) <= {2, 202}, (
+    # Every observation is a complete tree: the OLD one and the NEW one both hold 200 shards,
+    # the manifest and the `.cache_meta.json` the extractor writes last = 202. A count in
+    # between is a half-written model made visible.
+    assert set(observations) <= {202}, (
         f"a partially extracted model was visible at {final}: sizes {sorted(set(observations))}")
 
 
