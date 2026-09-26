@@ -68,10 +68,13 @@ def test_the_values_survive_the_conversion():
     np.testing.assert_allclose(got.astype(np.float32), values, rtol=1e-3)
 
 
-def test_fp32_to_bf16_takes_the_top_16_bits():
-    """An fp32 encoder (PixArt / CogVideoX T5) staged to a bf16 compute target
-    must truncate to the top 16 bits — the SAME transform the GPU arena loader
-    uses — not reach the copy 4 bytes wide and overflow the 2-byte buffer."""
+def test_fp32_to_bf16_is_two_bytes_wide_and_rounded_to_nearest_even():
+    """An fp32 encoder (PixArt / CogVideoX T5) staged to a bf16 compute target must not reach
+    the copy 4 bytes wide and overflow the 2-byte buffer. Until 2026-09-26 this test also
+    asserted the TRUNCATION to the top 16 bits (then the arena loader's transform too); both now
+    round to nearest even, as torch and the device cast do — 12345.0 is the value here whose
+    two roundings differ. The rounding itself is proven in
+    test_bf16_narrowing_rounds_to_nearest_even.py."""
     values = np.array([1.0, 2.0, -1.0, 0.5, 12345.0], dtype=np.float32)
     staged = _load_to_pinned_cpu(values.tobytes(), (values.size,),
                                  NBXDtype.float32, NBXDtype.bfloat16)
@@ -81,8 +84,7 @@ def test_fp32_to_bf16_takes_the_top_16_bits():
     got = np.ctypeslib.as_array(
         ctypes.cast(staged.data_ptr(), ctypes.POINTER(ctypes.c_uint16)),
         shape=(values.size,)).copy()
-    want = (values.view(np.uint32) >> 16).astype(np.uint16)
-    np.testing.assert_array_equal(got, want)
+    np.testing.assert_array_equal(got, np.array([0x3F80, 0x4000, 0xBF80, 0x3F00, 0x4641], dtype=np.uint16))
 
 
 def test_bf16_to_fp16_still_takes_its_bit_exact_path():
