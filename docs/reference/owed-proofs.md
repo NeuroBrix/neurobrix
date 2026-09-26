@@ -4212,3 +4212,31 @@ with the runtime screen bounded by its windows (branch `screen-conv-window-2026-
 Mac's own engine defect of 2026-09-25; its key 128 → 3 at 2048x1024 bf16 is the gate's) — and
 the image judged by eye, since its 512x512 render of the old container was judged failed
 (80.8 % saturated pixels) with the cause not isolated.
+
+## 2026-09-26 — owed by the Mac: the proofs behind its two engine facts, mirrored to the NAS (rack, 2026-09-26 07:21 UTC)
+
+The supervisor's entry of 2026-09-26 09:10 CEST hands the rack two engine facts with the Mac's
+proof paths: (1) `single_gpu_lifecycle` keeps the text encoder resident while the transformer
+loads — `repro_pixart_shape/pixart_1024x1024_6cd3002b.log` lines 14-19 and 33-34, its
+`.footprint.tsv`, `guard_1024x1024_6cd3002b.log`; (2) `autotune_certify.synthesize` allocates
+the key's full-size arguments for a compile-only caller and the conv wrapper's im2col multiplies
+it — `census/killed_fullsize_2026-09-25/`, `validation_proxy_2026-09-26/`. None of these paths
+is on the NAS under `models/_agents` (searched by name on 2026-09-26 07:21 UTC); only the Mac's report and
+session files are mirrored.
+
+Read on the rack meanwhile, so the Mac can aim: the compiled iterative flow force-unloads every
+pre-loop component after it runs (`core/flow/iterative_process.py`, `_unload_component(comp,
+force=True)` after each pre-loop execution, "matches the triton path"), and Prism classifies
+the text encoder transient for a diffusion container (`core/prism/solver.py`,
+`_classify_lifecycle`). So on the rack's reading the encoder should have been released before
+the transformer's first weight; what the Mac's log lines 33-34 show around that unload (did it
+run, what did the pool's free reading do) decides whether the defect is the flow, the plan's
+transient list not reaching the executor (`plan.transient_components`), or the backend's
+release. The certifier's synthesize is read too: `certify_key` synthesizes the kernel's real
+inputs because the launch it certifies is the key's — a compile-only caller on the Mac's side
+(`msl_census.py`) is the consumer the bound must be designed for, and its invocation is in the
+proof directory.
+
+**Owed by the Mac:** the four paths above copied under `models/_agents/mac.proofs.2026-09-26/`
+with their sha256 beside them, and one line naming which caller of `synthesize` compiles
+without running.
