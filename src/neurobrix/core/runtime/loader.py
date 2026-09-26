@@ -87,6 +87,20 @@ class NBXRuntimeLoader:
                     f"  FIX: upgrade neurobrix, or use the full-precision "
                     f"build published next to this variant.")
 
+        # 1c. The neurotaxe's version (NeuroTax 5.0, 2026-09-26): the keys are the parser's names,
+        # and a container named by another version holds keys the engine's readers no longer
+        # match — the MoE fusion would find no expert and run unfused, silently. Refused here,
+        # by name, before any weight I/O.
+        from neurobrix.nbx.neurotax import NEUROTAX_VERSION
+        ntx = core_data["manifest"].get("neurotax_version")
+        if ntx != NEUROTAX_VERSION:
+            raise RuntimeError(
+                f"NEUROTAX VERSION: this container's tensor keys were written under NeuroTax "
+                f"{ntx!r}; this engine reads NeuroTax {NEUROTAX_VERSION!r}.\n"
+                f"  Container: {cache_path}\n"
+                f"  FIX: rename its keys in place (Forge `tools/neurotax_rename.py`, outputs "
+                f"byte-identical) or install the container published for this engine.")
+
         # 2. Discover and Load Components from cache
         # Components are in 'components/<name>/runtime.json'
         components = {}
