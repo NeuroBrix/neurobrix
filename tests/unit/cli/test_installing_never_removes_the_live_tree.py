@@ -213,7 +213,10 @@ def test_the_cache_extractor_stages_and_does_not_unpack_at_the_final_name(tmp_pa
     w = threading.Thread(target=watch, daemon=True)
     w.start()
     try:
-        out = c.extract(nbx)
+        # A NEW container over an installed OLD one is a replacement, and since f3e38045 a
+        # replacement is refused unless declared (the 2026-09-22 mochi incident). This cell
+        # measures the staging of a declared one; the refusal has its own cells below.
+        out = c.extract(nbx, allow_replace=True)
     finally:
         stop.set()
         w.join(timeout=5)
