@@ -948,6 +948,58 @@ def _backend() -> Dict[str, Any]:
     return dict(C.generator_identity())
 
 
+def launch_oracle(qual: str, tuner, meta, out_tensor):
+    """The fp64 oracle of THE LAUNCH THE AUTOTUNER SEES, from the kernel's own named operands —
+    or None for a launch this brick does not cover, whose synthesized oracle then stands.
+
+    Why the launch and not the synthesized shape (measured 2026-09-26 on this rack): the `mm`
+    wrapper band-streams a product above `NBX_MM_MAX_OUTPUT_ELEMS` output elements (Metal's
+    boundary, applied on every backend) and keys every band on the WHOLE shape's bucket, so the
+    census key `(4194304, 512, 256, ...)` — mochi's — is served by two launches of 4 192 256 and
+    2 048 rows. The certifier computed one oracle over the whole synthesized product and cut its
+    comparison windows on whichever band tensor the launch carried: past the band it read memory
+    the kernel never wrote, every candidate read as wrong (best deviation 1.0), and a correct
+    kernel (relative deviation under 1e-6 on the production path at exactly 2^31 output
+    elements) was refused. An oracle of a launch is computed from that launch's operands — the
+    runtime screen's brick, `screen_oracle.windowed_reference`, which merges the positional
+    arguments with the launch kwargs (a constexpr such as `HAS_BIAS` travels as a kwarg) and is
+    row-windowed on the launch's own rows — so it is band-agnostic by construction, and one
+    brick serves both instruments.
+
+    WHICH LAUNCHES, read from the screen's own table and the output's structure, never from a
+    name list: a kernel the screen row-windows (`screen_oracle.ROW_WINDOWABLE`) whose output is
+    a 2-D matrix — the rows `RowWindowedOracle` slices. Everything else keeps the synthesized
+    oracle: the batched family (`bmm`/`baddbmm`: single launches, chunked only at the grid's z
+    extent, whose batch-aware oracle `_matmul_oracle_fn` already windows) and the convolution
+    family (census keys recorded per launch; a banded launch changes `out_height` and fails the
+    key check before any comparison).
+    """
+    from neurobrix.kernels import screen_oracle as _so
+    name = C.kernel_short(qual)
+    if name not in _so.ROW_WINDOWABLE:
+        return None
+    try:
+        shape = tuple(int(x) for x in out_tensor.shape)
+    except Exception:                                    # noqa: BLE001
+        return None
+    if len(shape) != 2:
+        return None
+    m, n = shape
+    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
+    k = int(named.get("K", 0) or 0)
+    wins = _row_windows(m, n, k) if k else None
+    if wins is None:
+        wins = [(0, m)]
+    blocks = []
+    for r0, r1 in wins:
+        ref = _so.windowed_reference(tuner, meta, (r0, r1))
+        if ref is None:
+            raise RuntimeError(f"{qual}: the launch's operands could not be read for the oracle "
+                               f"(rows {r0}-{r1} of {m})")
+        blocks.append(((r0, r1), ref))
+    return RowWindowedOracle(blocks, m)
+
+
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
@@ -973,10 +1025,42 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             raise UnreachableCensusKey(
                 f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
                 f"and the kernel disagree — nothing certified for this key")
-        oracle = oracle_box.get("v")
+        names0 = list(tuner.arg_names)
+        out_idx0 = next((i for i, n in enumerate(names0) if n == out_name), None)
+        out0 = args[out_idx0] if out_idx0 is not None and out_idx0 < len(args) else None
+        if "config" in state:
+            # A LATER launch of the same key inside one wrapper call — a band of a product the
+            # wrapper streams (see `launch_oracle`). It runs the configuration chosen on the
+            # first launch, exactly as the runtime serves it, AND IS MEASURED against its own
+            # oracle: the last band has another M, another grid and another edge mask, and an
+            # entry that answers for N launch shapes is proven on each of them. A count is not
+            # a comparison (the guardian, 2026-09-26).
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            oracle_k = launch_oracle(qual, tuner, kwargs, out0)
+            if oracle_k is None:
+                raise RuntimeError(f"{qual} at {key!r}: a second launch of this key inside one "
+                                   f"wrapper call, and no launch oracle covers it — nothing can "
+                                   f"vouch for that band; not certified")
+            ret = tuner.fn.run(*args, **{**kwargs, **state["best_config"].all_kwargs()})
+            DeviceAllocator.stream_synchronize(0)
+            dev_k = deviation_against(out0, oracle_k)
+            state["launches"] = int(state.get("launches", 1)) + 1
+            state.setdefault("launch_deviations", [state["deviation"]]).append(dev_k)
+            if not (dev_k <= state["tolerance"]):
+                raise RuntimeError(f"{qual} at {key!r}: launch {state['launches']} of this key "
+                                   f"({oracle_k.describe}) diverges from the fp64 oracle: "
+                                   f"{dev_k:.3g} against {state['tolerance']:g} — the chosen "
+                                   f"configuration does not hold on every band; not certified")
+            state["deviation"] = max(float(state["deviation"]), float(dev_k))
+            return ret
         t_or = time.time()
-        if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
-            oracle = oracle_box["v"] = oracle_fn()
+        # The oracle is THIS LAUNCH's, from its own operands, wherever the brick covers it; the
+        # synthesized oracle for the families whose key names a single launch.
+        oracle = launch_oracle(qual, tuner, kwargs, out0)
+        if oracle is None:
+            oracle = oracle_box.get("v")
+            if oracle is None:
+                oracle = oracle_box["v"] = oracle_fn()
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
         configs = list(upstream_prune(tuner, kwargs))
@@ -1112,6 +1196,9 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                       "excluded": excluded, "unrun": unrun,
                       "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
+        state["best_config"] = best
+        state["launches"] = 1
+        state["tolerance"] = float(tolerance)
         poison()
         return tuner.fn.run(*args, **{**kwargs, **best.all_kwargs()})
 
@@ -1155,6 +1242,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         raise RuntimeError(f"{qual} at {key!r}: the wrapper never reached the autotuner")
     proof = {"date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
+             "launches": int(state.get("launches", 1)),
+             "launch_deviations": [float(d) for d in state.get("launch_deviations", [state.get("deviation")])],
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
              "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
