@@ -103,3 +103,15 @@ def test_a_causal_encoder_is_sized_at_the_requests_pixels_not_its_latent():
     m = ActivationProfiler(g).build_symbol_map(
         InputConfig(batch_size=1, height=352, width=832, num_frames=81, temporal_compression=4))
     assert (m["s1"], m["s2"], m["s3"]) == (81, 352, 832), m
+
+
+def test_an_encode_alias_without_a_block_list_takes_its_ratio_from_its_graph(tmp_path):
+    """Wan's `vae_encoder` is an encode alias of the VAE: its profile carries no block list (the
+    configuration lives on the decode component). The ratio is then the graph's traced in/out
+    extent; on the old solver the spec is None (declined for want of a config)."""
+    comp = tmp_path / "components" / "enc"
+    comp.mkdir(parents=True)
+    (comp / "graph.json").write_text(json.dumps(_encoder_graph(True)))
+    (comp / "profile.json").write_text(json.dumps({"config": {"_class_name": "AutoencoderKLWan"}}))
+    spec = _decide(SimpleNamespace(_cache_path=tmp_path), 81, 80 * GB)
+    assert spec is not None and spec["scale_factor"] == 8 and "t_tile" not in spec, spec

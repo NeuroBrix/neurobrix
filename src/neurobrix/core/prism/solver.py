@@ -4138,9 +4138,16 @@ class PrismSolver:
         blocks = (config.get("encoder_block_out_channels")
                   or config.get("block_out_channels")
                   or config.get("decoder_block_out_channels"))
-        if not blocks:
+        if blocks:
+            sp_ratio = 2 ** (len(blocks) - 1)
+        elif out_spatial and trace_size % out_spatial == 0:
+            # No block list in this component's profile: an ENCODE alias of the VAE (Wan's
+            # `vae_encoder`, module=vae, method=encode) whose configuration was written on the
+            # decode component. The ratio is then the graph's own traced in/out extent — a fact of
+            # this graph, which the check below would have held the config to anyway.
+            sp_ratio = trace_size // out_spatial
+        else:
             return None
-        sp_ratio = 2 ** (len(blocks) - 1)
         # Trace coherence: the graph's own in/out spatial traces must agree
         # with the config-derived ratio, else decline (never guess geometry).
         if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
