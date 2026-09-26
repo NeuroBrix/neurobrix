@@ -397,7 +397,12 @@ def component_input_axes(dag: Optional[dict]) -> Optional[Tuple[Tuple[int, ...],
             or tid.startswith("input::")
         )
         if is_input:
-            shape = spec.get("shape", [])
+            # The container writes the concrete trace shape in `shape` and the symbolic
+            # dims beside it in `symbolic_shape.dims` (a dict per symbolic axis); older
+            # encodings carried the dicts inside `shape` itself. Read the symbolic form
+            # when it is there: reading `shape` alone sees every axis as frozen.
+            sym = (spec.get("symbolic_shape") or {}).get("dims")
+            shape = sym if isinstance(sym, list) and len(sym) == len(spec.get("shape") or sym) else spec.get("shape", [])
             resolved, symbolic = [], set()
             for i, dim in enumerate(shape):
                 if isinstance(dim, dict):

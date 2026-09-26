@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such a stage at every key class of that length, on the largest memory rung.
 
 ### Fixed
-- Audio models whose encoder takes a variable number of frames now receive the clip's real length; every clip used to be zero-padded or cut to one fixed frame count, so audio longer than that window was silently truncated (granite-speech-3.3-8b: 700 frames). Models whose encoder input is fixed by the vendor (Whisper's 30 s window) are unchanged.
+- Audio models whose encoder takes a variable number of frames now receive the clip's real length; every clip used to be zero-padded or cut to one fixed frame count, so audio longer than that window was silently truncated (granite-speech-3.3-8b: 700 frames, about 14 s). Models whose encoder input is fixed by the vendor (Whisper's 30 s window) are unchanged.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped

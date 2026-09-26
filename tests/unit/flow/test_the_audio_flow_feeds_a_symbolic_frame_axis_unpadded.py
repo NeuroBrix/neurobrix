@@ -18,14 +18,21 @@ import torch
 
 from neurobrix.core.flow.audio_utils import component_input_axes, fit_features_to_trace
 
-SYM = {"type": "symbol", "id": "s1", "trace_value": 700}
-GRANITE_DAG = {"tensors": {"input::hidden_states": {"type": "input", "shape": [{"type": "symbol", "id": "s0", "trace_value": 1}, SYM, 160]}}}
-WHISPER_DAG = {"tensors": {"input::input_features": {"type": "input", "shape": [{"type": "symbol", "id": "s0", "trace_value": 1}, 128, 3000]}}}
+S0 = {"type": "symbol", "id": "s0", "trace": 1}
+S1 = {"type": "symbol", "id": "s1", "trace": 700}
+# The container's own encoding: the concrete trace shape in `shape`, the symbolic dims beside it.
+GRANITE_DAG = {"tensors": {"input::hidden_states": {"type": "input", "shape": [1, 700, 160],
+                                                     "symbolic_shape": {"dims": [S0, S1, 160]}}}}
+WHISPER_DAG = {"tensors": {"input::input_features": {"type": "input", "shape": [1, 128, 3000],
+                                                      "symbolic_shape": {"dims": [S0, 128, 3000]}}}}
+# The older encoding, dicts inside `shape` itself, is still read.
+LEGACY_DAG = {"tensors": {"input::x": {"type": "input", "shape": [S0, {"type": "symbol", "id": "s1", "trace_value": 700}, 160]}}}
 
 
 def test_the_reader_tells_a_symbolic_axis_from_a_frozen_one():
     assert component_input_axes(GRANITE_DAG) == ((1, 700, 160), frozenset({0, 1}))
     assert component_input_axes(WHISPER_DAG) == ((1, 128, 3000), frozenset({0}))
+    assert component_input_axes(LEGACY_DAG) == ((1, 700, 160), frozenset({0, 1}))
     assert component_input_axes({"tensors": {}}) is None and component_input_axes(None) is None
 
 
