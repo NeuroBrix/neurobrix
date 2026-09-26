@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output held more than two billion elements — a video decoder at a large frame count and size,
   or an upscaler at a large tile — adding the bias faulted with an illegal address past that
   boundary. The bias step now addresses every element.
+- **A large convolution at an uncertified size no longer exhausts host memory while its
+  kernel configurations are checked.** When a convolution's input was large and its output
+  small — the last layer of an image decoder at 2048x1024 — the runtime check of candidate
+  configurations computed its reference over the whole input in double precision, which took
+  gigabytes of host memory and could end the run on a machine with little of it. The check now
+  reads only a few output rows and their receptive field, whatever the family of the kernel,
+  and sizes every buffer by the engine's own element widths.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
