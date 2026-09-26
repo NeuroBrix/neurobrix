@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A video encoder whose first frame is encoded alone can now be tiled when it does not fit.**
+  Such an encoder (the Wan family's) was always planned whole, so a long clip at a large size ran
+  out of memory before its first layer. It is now tiled in height and width with the whole clip in
+  every tile, the way the model's own tiled encoding works; it is never split in time.
+
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
   generated in their own precision, so a certification run's host memory stays close to the size

@@ -4111,7 +4111,7 @@ class PrismSolver:
           encoder too).
         """
         import math
-        from neurobrix.core.prism.profiler import temporal_downscale_ratio
+        from neurobrix.core.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
 
         ic = getattr(self, "_input_config", None)
         if ic is None:
@@ -4122,8 +4122,16 @@ class PrismSolver:
             return None  # fits untiled — guard's decline stands
 
         tmap = temporal_downscale_ratio(graph)
+        causal = False
         if tmap is None:
-            return None  # causal / 4D / unreadable temporal map — declined
+            # The causal class (1 + (t-1)//r): no temporal tile, ever — but a spatial tile carrying
+            # the whole clip is exact in time, the vendor's own tiled encode for these VAEs. The
+            # Wan encoders traced as one causal pass (2026-09-26) need it: at 81 frames of 352x832
+            # the first activation alone is 8.5 GiB, and the plan declined, so the run died.
+            tmap = temporal_causal_downscale_ratio(graph)
+            if tmap is None:
+                return None  # 4D / unreadable temporal map — declined
+            causal = True
         t_ratio, t_axis_out = tmap
 
         config = profile_j.get("config", {})
@@ -4144,7 +4152,8 @@ class PrismSolver:
         num_frames = getattr(ic, "num_frames", None)
         if not height or not width or not num_frames:
             return None
-        if height % sp_ratio or width % sp_ratio or num_frames % t_ratio:
+        if height % sp_ratio or width % sp_ratio or (
+                (num_frames - 1) % t_ratio if causal else num_frames % t_ratio):
             return None  # off-lattice runtime extents — invalid untiled too
 
         window_alignment = config.get("window_size", 1) or 1
@@ -4162,7 +4171,10 @@ class PrismSolver:
         g = frac ** (1.0 / 3.0)
         t_tile = _snap_down(int(num_frames * g), t_ratio, 2 * t_ratio)
         t_tile = min(t_tile, num_frames)
-        if t_tile < num_frames:
+        if causal:
+            t_tile = num_frames  # the whole clip in every tile: space is tiled, time never
+            sp_frac = frac
+        elif t_tile < num_frames:
             sp_frac = min(1.0, frac / (t_tile / float(num_frames)))
         else:
             t_tile = num_frames  # temporal axis carried whole
@@ -4179,7 +4191,7 @@ class PrismSolver:
         # lattice, spatial first (cheapest seams), then temporal. Bounded.
         while _tiled_act(sp_tile, t_tile) > budget_bytes and sp_tile > 2 * lat:
             sp_tile -= lat
-        while _tiled_act(sp_tile, t_tile) > budget_bytes \
+        while not causal and _tiled_act(sp_tile, t_tile) > budget_bytes \
                 and t_tile > 2 * t_ratio:
             t_tile -= t_ratio
         tiled_act = _tiled_act(sp_tile, t_tile)
