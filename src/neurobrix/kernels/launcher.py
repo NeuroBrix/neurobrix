@@ -1024,6 +1024,29 @@ def _no_oracle_reason(oracle) -> str:
 
 
 
+def _needs_windowing(buffers, budget: int) -> Optional[str]:
+    """Why the FULL screen must not run on these buffers — None when it may.
+
+    The budget is a rule about COST, and the full screen's cost is not the buffers' device
+    bytes: it snapshots every buffer to the host and computes the reference in float64 —
+    every element at 8 bytes. A convolution whose OUTPUT is small and whose INPUT is not
+    (128 -> 3 channels at 2048x1024: 12 MB out, 537 MB in) passed the device-byte test and
+    then held 2.1 GB of float64 input on the host before the first tap; on a 24 GB Apple
+    machine that was a 27.5 GB footprint and a kill (the Mac, 2026-09-25). So the full screen
+    is taken only when its float64 footprint fits the budget too; otherwise the windowed
+    screen, whose cost is set by the windows and not by the shape. On a 32 MiB budget this
+    moves nearly every convolution whose input exceeds 4 MiB to the windowed screen."""
+    from neurobrix.kernels import screen_oracle as _so_
+    total = sum(nbytes for _a, nbytes, _d in buffers)
+    if total > budget:
+        return f"the arguments total {total} bytes, over the screening budget {budget}"
+    footprint = _so_.fp64_footprint(buffers)
+    if footprint > budget:
+        return (f"the reference's float64 footprint is {footprint} bytes for {total} bytes of "
+                f"arguments, over the screening budget {budget}")
+    return None
+
+
 def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, budget, total):
     """Screen an over-budget shape on bounded row windows of its output. None if impossible.
 
@@ -1040,13 +1063,19 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
     out_tensor = named.get(out_name) if out_name else None
     if out_tensor is None:
         return None
-    wins = _row_windows_for(out_tensor, budget)
+    try:
+        row_cost = _so.oracle_row_bytes(tuner, meta)
+    except ValueError as exc:
+        return _seat_unscreened(kernel_name, _rk, configs, len(configs),
+                                f"over the screening budget ({total} bytes), and {exc}")
+    wins = _row_windows_for(out_tensor, budget, row_cost)
     if not wins:
         return None
+    flat = _flat_rows(out_tensor)
+    if flat is None:
+        return None
     try:
-        shape = tuple(int(x) for x in out_tensor.shape)
-        M, N = shape
-        itemsize = int(out_tensor._nbytes) // max(1, M * N)
+        M, N, itemsize = flat
         row_bytes = N * itemsize
         out_addr = int(out_tensor.data_ptr())
     except Exception:                                   # noqa: BLE001
@@ -1078,6 +1107,7 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
     # path. Measured 2026-09-23: matmul_kernel fell through to consensus for exactly this
     # reason while sitting in ROW_WINDOWABLE.
     kept = None
+    _so.set_last_refusal(None)
     try:
         import numpy as _np
         parts = []
@@ -1103,8 +1133,9 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
                     if configs_agreeing_with_oracle([(c, blob)], ref_bytes, dtype_name)]
         else:
             print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name}: the windowed oracle returned "
-                  f"nothing for a window of this key; falling back to consensus on the same "
-                  f"windows.", flush=True)
+                  f"nothing for a window of this key"
+                  + (f" ({_so.last_refusal()})" if _so.last_refusal() else "")
+                  + "; falling back to consensus on the same windows.", flush=True)
     except Exception as exc:                            # noqa: BLE001
         # SAY why. An `except: pass` here is the exact shape this session spent a day
         # removing elsewhere: it turns "the oracle could not be computed" into "no oracle
@@ -1134,11 +1165,15 @@ def _screen_on_windows(tuner, kernel_name, _rk, configs, args, meta, buffers, bu
     for c, blob in shots:
         groups.setdefault(blob, []).append(c)
     best = max(groups.values(), key=len)
+    refused = _so.last_refusal()
+    why = (f"the row-windowed oracle REFUSED this key ({refused})" if refused
+           else "no row-windowed oracle covers this kernel")
     print(f"[AUTOTUNE_SCREEN_WINDOWED] {kernel_name} at key {_rk}: arguments total {total} "
-          f"bytes, over the screening budget {budget}, and no row-windowed oracle covers this "
-          f"kernel. Screened by CONSENSUS on {where} — {len(best)} of {len(shots)} agree. "
-          f"No oracle adjudicated this key.", flush=True)
-    _record_screen_windows(_rk, where, "consensus (no windowed oracle)", len(best), len(shots))
+          f"bytes, over the screening budget {budget}, and {why}. Screened by CONSENSUS on "
+          f"{where} — {len(best)} of {len(shots)} agree. No oracle adjudicated this key.", flush=True)
+    _record_screen_windows(_rk, where,
+                           f"consensus (windowed oracle refused: {refused})" if refused
+                           else "consensus (no windowed oracle)", len(best), len(shots))
     return best
 
 
@@ -1261,19 +1296,36 @@ def _screen_windows() -> int:
     return n
 
 
-def _row_windows_for(out_tensor, budget_bytes: int):
-    """Row ranges of a 2-D output whose total bytes fit the budget, or None.
-
-    None means the shape cannot be windowed by rows — the caller then says so rather than
-    pretending it screened something."""
+def _flat_rows(out_tensor):
+    """A contiguous output read as `[M, N]` rows: `(M, N, itemsize)`, or None. A 2-D output is
+    the matrix; an N-D one (the convolution family's `[N, Cout, Ho, Wo]`) is
+    `[prod(leading), last]` — rows of the same contiguous memory, so the candidates' bytes and
+    the reference slice identically. Until 2026-09-26 only 2-D outputs qualified and every conv
+    key over the budget was seated without a screen."""
     try:
         shape = tuple(int(x) for x in out_tensor.shape)
         itemsize = int(out_tensor._nbytes) // max(1, int(np.prod(shape)))
     except Exception:                                   # noqa: BLE001
         return None
-    if len(shape) != 2 or itemsize <= 0:
+    if len(shape) < 2 or itemsize <= 0:
         return None
-    M, N = shape
+    M, N = int(np.prod(shape[:-1])), shape[-1]
+    if M <= 0 or N <= 0:
+        return None
+    return M, N, itemsize
+
+
+def _row_windows_for(out_tensor, budget_bytes: int, oracle_row_cost: Optional[int] = None):
+    """Row ranges of an output whose total bytes fit the budget, or None.
+
+    None means the shape cannot be windowed by rows — the caller then says so rather than
+    pretending it screened something. `oracle_row_cost` is what ONE row costs the reference on
+    the host when the kernel knows better than "the row in float64" (the convolution family:
+    its receptive field, not its output row)."""
+    flat = _flat_rows(out_tensor)
+    if flat is None:
+        return None
+    M, N, itemsize = flat
     row_bytes = N * itemsize
     if row_bytes <= 0 or M <= 0:
         return None
@@ -1283,7 +1335,7 @@ def _row_windows_for(out_tensor, budget_bytes: int):
     # oracle then raises and the screen silently degrades to consensus (measured 2026-09-23,
     # matmul_kernel falling through while sitting in ROW_WINDOWABLE). The reference row is
     # what it will actually occupy.
-    oracle_row_bytes = N * 8
+    oracle_row_bytes = max(N * 8, int(oracle_row_cost or 0))
     n_win = _screen_windows()
     per = max(1, int(budget_bytes) // (n_win * max(oracle_row_bytes, 1)))
     if per >= M:
@@ -1711,7 +1763,7 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
             "the screen will not decide for itself how much memory traffic a "
             "tuning step may cost")
     total = sum(nbytes for _a, nbytes, _d in buffers)
-    if total > int(budget):
+    if _needs_windowing(buffers, int(budget)) is not None:
         # Two doors meet here and both stay. Beyond the SCREEN budget the compare
         # is skipped (the Dell's ruling of 2026-09-12: the seat is announced as
         # UNSCREENED, never written to the certified directory). And Triton
@@ -1809,6 +1861,11 @@ def _screen_configs(tuner, configs, key, meta=None, record_key=None):
             # returned None on every live key (2026-09-13, real-esrgan-x4 on
             # card 0) while its own suite was green. So the launch kwargs go to
             # the provider too, when it accepts them.
+            # A refusal recorded for a PREVIOUS key is never read as this key's: the record is
+            # per call, cleared before the provider speaks (a stale one surfaced as the reason
+            # of an unrelated key, 2026-09-26 — a pre-existing pollution).
+            from neurobrix.kernels.screen_oracle import set_last_refusal as _clear_refusal
+            _clear_refusal(None)
             oracle = _call_screen_oracle(_SCREEN_ORACLE, tuner, key, buffers, meta)
         except Exception as exc:      # an oracle that fails is not a launch failure
             print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle provider raised "

@@ -2,7 +2,7 @@
 whole — the executed half of the streaming gate (the bound half is
 `tests/unit/prism/test_every_streamed_piece_binds_every_symbol_it_uses.py`).
 
-The T5 text encoder of the two PixArt-XL-2-1024-MS containers this cache holds — `PixArt-XL-1024`
+The T5 text encoder of the PixArt-XL-2-1024-MS container (the second trace of the same repository, `PixArt-XL-1024`, went on 2026-09-26; its cells with it) — formerly `PixArt-XL-1024`
 (the 2026-05-20 build the Mac rendered) and `PixArt-XL-2-1024-MS` (the 2026-09-21 retrace, the name
 Hugging Face uses) — planned under the Mac's own reading (11 198 MB free) with the 8 192 MB rung
 imposed, at the Mac's 2048x1024 request: the plan that died in piece 3 on the Mac (8e786e70). Each
@@ -47,8 +47,7 @@ TOOL = REPO / "tools" / "streamed_component_vs_whole.py"
 CELLS = ([("PixArt-XL-2-1024-MS", m, b) for m in ("triton_sequential", "triton", "sequential")
           for b in (1, 2, 8)]
          + [("PixArt-XL-2-1024-MS", "compiled", 1)]
-         + [("PixArt-XL-1024", m, b) for m in ("triton_sequential", "triton") for b in (1, 2, 8)]
-         + [("PixArt-XL-1024", m, 1) for m in ("sequential", "compiled")])
+)
 
 
 @pytest.mark.slow
