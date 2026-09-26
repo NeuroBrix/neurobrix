@@ -176,9 +176,38 @@ def cmd_run(a) -> int:
     return 0
 
 
+def load_rows(out: Path) -> list:
+    """Every cell's row, with the latest outside judgment of that (model, mode) merged in
+    (`judgments.jsonl`, appended by `judge` — the rows files belong to the running cards)."""
+    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    judged = {}
+    jf = out / "judgments.jsonl"
+    if jf.exists():
+        for l in jf.read_text().splitlines():
+            j = json.loads(l)
+            judged[(j["model"], j["mode"])] = j
+    for r in rows:
+        j = judged.get((r["model"], r["mode"]))
+        if j:
+            r.update(judged=j["judged"], verdict=j["verdict"], judged_on=j["date"])
+    return rows
+
+
+def cmd_judge(a) -> int:
+    """Record the OUTSIDE judgment of one cell (R29): the instrument and what it saw, and the verdict."""
+    if a.verdict not in ("works", "broken") and not a.verdict.startswith("not-runnable-here("):
+        raise SystemExit("verdict: works | broken | not-runnable-here(<reason>)")
+    rec = {"model": a.model, "mode": a.mode, "judged": a.judged, "verdict": a.verdict,
+           "date": time.strftime("%Y-%m-%d %H:%M %Z")}
+    with open(Path(a.out) / "judgments.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    print(json.dumps(rec))
+    return 0
+
+
 def cmd_table(a) -> int:
     out = Path(a.out)
-    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    rows = load_rows(out)
     proofs = json.loads(Path(a.proofs).read_text()) if a.proofs and Path(a.proofs).exists() else {}
     by = {}
     for r in rows:
@@ -196,7 +225,7 @@ def cmd_table(a) -> int:
             else:
                 mech = r.get("mechanical") or {}
                 cells.append(("DEGENERATE " + "; ".join(mech.get("reasons", []))[:80]) if mech.get("degenerate")
-                             else f"ran {r['wall_s']} s, judge: {r.get('judged', 'pending')}")
+                             else f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}")
         lines.append(f"| {model} | {by[model][next(iter(by[model]))]['family']} | "
                      f"{lp.get('date') or '—'} {lp.get('verdict') or ''} | " + " | ".join(cells) + " |")
     (out / "table.md").write_text("\n".join(lines) + "\n")
@@ -228,7 +257,7 @@ def cmd_export(a) -> int:
     out = Path(a.out)
     repos = catalogue_repo_ids(Path(a.catalogue))
     proofs = json.loads(Path(a.proofs).read_text()) if a.proofs and Path(a.proofs).exists() else {}
-    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    rows = load_rows(out)
     lines = []
     for r in rows:
         manifest = CACHE / r["model"] / "manifest.json"
@@ -277,6 +306,12 @@ def main() -> int:
     t = sub.add_parser("table")
     t.add_argument("--out", required=True)
     t.add_argument("--proofs", default=None)
+    j = sub.add_parser("judge", help="record a cell's outside judgment (R29)")
+    j.add_argument("--out", required=True)
+    j.add_argument("--model", required=True)
+    j.add_argument("--mode", required=True, choices=list(MODES))
+    j.add_argument("--judged", required=True, help="the instrument and what it saw")
+    j.add_argument("--verdict", required=True)
     e = sub.add_parser("export", help="the joint row schema shared with the Mac's Metal half")
     e.add_argument("--out", required=True)
     e.add_argument("--catalogue", required=True, help="the Mac's CATALOGUE.md")
@@ -285,7 +320,7 @@ def main() -> int:
     e.add_argument("--stack", required=True, choices=("cuda", "metal"),
                    help="the machine's stack, written in every row (the joint table has two halves)")
     a = ap.parse_args()
-    return {"run": cmd_run, "table": cmd_table, "export": cmd_export}[a.cmd](a)
+    return {"run": cmd_run, "table": cmd_table, "export": cmd_export, "judge": cmd_judge}[a.cmd](a)
 
 
 if __name__ == "__main__":
