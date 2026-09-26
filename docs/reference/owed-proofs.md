@@ -4192,3 +4192,23 @@ holds: 89.5 / 94.7 % same-rung, 7–8 % discarded, the worst pool size at 51.5�
 1 s over a render tail and over a model load — `sample_free.py` is the sampler) so the same table
 can be produced for its pool; only two readings of it exist here (12 598 → 15 248 MB), not a
 series.
+
+## The re-traced PixArt-XL-2-1024-MS plans the 2048x1024 request the Mac refused (rack, 2026-09-25)
+
+Measured on the rack with no card, through Prism alone: on the Mac's own profile (Apple M4 Pro,
+18 186 MB device, host 24 576 MB with 11 198 MB available — the pinned reading of 2026-09-24)
+at the 4096 MB rung, the container re-traced on 2026-09-25 with the signature brick plans
+**batch 2 at 2048x1024 under `layer_streaming`** in `triton` mode, where the container the Mac
+rendered from (`PixArt-XL-1024`, the 2026-05-20 trace, a second trace of the same repository
+under an invented name) was refused at 14 420 MB — its transformer declared `seq_len` at two
+symbol ids and the reserve followed. Batch 8 at 2048x1024 and batch 2 at 4096x2048 are refused
+under every strategy. The cell that holds it:
+`tests/unit/prism/test_a_refusal_names_why_layer_streaming_declined.py::test_the_retraced_container_plans_what_the_old_one_refused`
+(branch `dedup-references-2026-09-26`). The hub's `PixArt/PixArt-XL-1024` record is being
+replaced with this container on the same day.
+
+**Owed by the Mac:** the 2048x1024 render itself on its card from the replaced hub object —
+with the runtime screen bounded by its windows (branch `screen-conv-window-2026-09-26`, the
+Mac's own engine defect of 2026-09-25; its key 128 → 3 at 2048x1024 bf16 is the gate's) — and
+the image judged by eye, since its 512x512 render of the old container was judged failed
+(80.8 % saturated pixels) with the cause not isolated.
