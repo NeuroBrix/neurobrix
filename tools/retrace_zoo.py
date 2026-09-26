@@ -85,6 +85,26 @@ NAMING_KEYS = {"parent_module", "output_name"}   # output_name: absent in the Ju
 DERIVED_KEYS = {"consumer_op_uids"}
 
 
+def constants_equal(a, b) -> bool:
+    """Two `constant_data` fields carry the same tensor — compared by VALUE, never by the pickled
+    bytes: torch 2.14 serialises a tensor differently from torch 2.5 (a longer archive, the
+    same values), so a graph traced on the engine environment differed from the July container
+    in every rotary table while `torch.equal` held on each (TinyLlama, 2026-09-26 04:24 UTC).
+    Unreadable or absent data is a difference."""
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return False
+    try:
+        import base64, io
+        import torch
+        ta = torch.load(io.BytesIO(base64.b64decode(a)), weights_only=True, map_location="cpu")
+        tb = torch.load(io.BytesIO(base64.b64decode(b)), weights_only=True, map_location="cpu")
+    except Exception:
+        return False
+    if not (hasattr(ta, "shape") and hasattr(tb, "shape")):
+        return ta == tb
+    return tuple(ta.shape) == tuple(tb.shape) and ta.dtype == tb.dtype and bool(torch.equal(ta, tb))
+
+
 def derived_consumers_consistent(graph: dict) -> int:
     """How many tensors of `graph` carry a consumer list that disagrees with the ops' inputs."""
     ops = graph["ops"] if isinstance(graph.get("ops"), list) else list((graph.get("ops") or {}).values())
@@ -1564,7 +1584,7 @@ class Model:
                 for k in set(a) | set(b):
                     if k in PROVENANCE_KEYS or k in DERIVED_KEYS or k in NAMING_KEYS:
                         continue                       # a name (output_name: absent in the June encoding), never a value
-                    if a.get(k) != b.get(k):
+                    if a.get(k) != b.get(k) and not (k == "constant_data" and constants_equal(a.get(k), b.get(k))):
                         if k in ANNOTATION_KEYS:
                             rec["annotation_changes"] += 1
                         else:
