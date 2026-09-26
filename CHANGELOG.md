@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses a container whose directory was renamed by hand — at extraction, when a directory is
   opened directly, and when a model is loaded — and `neurobrix import` installs a downloaded
   model under the name in its manifest, which is its Hugging Face repository's, rather than
-  under the hub record's name. One repository under two names is a duplicate, not two models.
+  under the hub record's name, and prints the name to use with `run` and `remove`. A model
+  extracted under a hand-chosen name before this release is refused the same way, whichever path
+  opens it. One repository under two names is a duplicate, not two models.
 
 ### Fixed
 
