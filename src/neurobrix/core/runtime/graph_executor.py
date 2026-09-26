@@ -3326,25 +3326,13 @@ class GraphExecutor:
                               f"{_e_td}", flush=True)
 
             # === NBX_DUMP_RAW (raw tensor capture, default-off) ===
-            # "<dir>:<csv of tid/op_uid substrings>" — saves matching output
-            # tensors as .pt for value-level oracle diffs (rope tables etc.).
+            # The Triton engine's brick (R33: NBXTensor -> numpy, no torch);
+            # `<component>_<tid>.npy` pairs with the ATen sequential `.pt`.
             _raw_spec = _os_td.environ.get("NBX_DUMP_RAW")
             if _raw_spec and output_tids:
-                _raw_dir, _, _raw_csv = _raw_spec.partition(":")
-                _raw_filters = [f for f in _raw_csv.split(",") if f]
-                for _ot in output_tids:
-                    if not any(f in _ot or f in op_uid for f in _raw_filters):
-                        continue
-                    _t = store.get(_ot)
-                    if _t is not None and hasattr(_t, "data_ptr"):
-                        import os as _os_raw
-                        _fn = _os_raw.path.join(
-                            _raw_dir, _ot.replace(":", "_").replace("/", "_") + ".pt")
-                        if not _os_raw.path.exists(_fn):
-                            import torch
-                            torch.save(_t.detach().cpu(), _fn)
-                            print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
-                                  flush=True)
+                from neurobrix.triton.sequence import TritonSequence as _TS_raw
+                _TS_raw.nbx_dump_raw(_raw_spec, str(self._component_name), op_uid,
+                                     output_tids, store.get)
 
             # === NBX_DEVICE_TRACE (device-drift diagnosis, default-off) ===
             # Logs the first op whose output tensor lands on a device_idx !=
