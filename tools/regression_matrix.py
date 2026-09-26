@@ -100,6 +100,15 @@ def first_error(log: Path) -> str:
     return text.strip().splitlines()[-1][:300] if text.strip() else ""
 
 
+def last_stage(log: Path) -> dict:
+    """Where a cell was when it ended without an artefact: its last progress line and its last
+    line of output. A TIMEOUT row carries it, so a red cell names the stage it held its card in."""
+    lines = [l.strip() for l in (log.read_text(errors="replace") if log.exists() else "").splitlines()
+             if l.strip() and not l.startswith(("TIMEOUT after", "KILLED by SIGKILL"))]
+    progress = [l for l in lines if l.startswith("[progress]")]
+    return {"progress": progress[-1][:300] if progress else None, "last_line": lines[-1][:300] if lines else None}
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -257,6 +266,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
                    mechanical=mechanical(art, family, size))
     else:
         row["error"] = first_error(log) if rc != 0 else "rc 0 and no artefact"
+        row["last_stage"] = last_stage(log)
     return row
 
 
@@ -413,7 +423,7 @@ def main() -> int:
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--modes", default=",".join(MODES))
-    r.add_argument("--timeout", type=int, default=3600)
+    r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
     t = sub.add_parser("table")
     t.add_argument("--out", required=True)
