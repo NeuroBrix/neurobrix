@@ -50,7 +50,11 @@ import repo_env  # noqa: E402  — the repository's .env, loaded the way the bui
 
 repo_env.load()
 
-PY = "/home/mlops/ml/venv/bin/python"          # the BUILD TOOLCHAIN's interpreter (trace, build, local, replace)
+# The BUILD TOOLCHAIN's interpreter (trace, build, local, replace). One door, `NBX_FORGE_PYTHON`:
+# Forge moves onto the engine environment behind the executed graph gate (2026-09-26, queue
+# item 7), and that gate is this tool run with Forge's python switched — a literal here would
+# have made the switch a code edit instead of a measurement.
+PY = os.environ.get("NBX_FORGE_PYTHON", "/home/mlops/ml/venv/bin/python")
 # The ENGINE's interpreter for the two gate arms — the stack the rack serves with. Read through
 # one door (`NBX_PYTHON`, the name `certify_the_catalogue.py` already reads) so a stack switch
 # moves every tool at once; the toolchain keeps its own venv (2026-09-20, the torch 2.14 /
@@ -79,6 +83,26 @@ NAMING_KEYS = {"parent_module", "output_name"}   # output_name: absent in the Ju
 # decomposed mul, not the fused rms_norm — Voxtral, VibeVoice, canary 2026-09-07). Never
 # compared old-vs-new; the new graph's lists are verified against its own ops instead.
 DERIVED_KEYS = {"consumer_op_uids"}
+
+
+def constants_equal(a, b) -> bool:
+    """Two `constant_data` fields carry the same tensor — compared by VALUE, never by the pickled
+    bytes: torch 2.14 serialises a tensor differently from torch 2.5 (a longer archive, the
+    same values), so a graph traced on the engine environment differed from the July container
+    in every rotary table while `torch.equal` held on each (TinyLlama, 2026-09-26 04:24 UTC).
+    Unreadable or absent data is a difference."""
+    if not (isinstance(a, str) and isinstance(b, str)):
+        return False
+    try:
+        import base64, io
+        import torch
+        ta = torch.load(io.BytesIO(base64.b64decode(a)), weights_only=True, map_location="cpu")
+        tb = torch.load(io.BytesIO(base64.b64decode(b)), weights_only=True, map_location="cpu")
+    except Exception:
+        return False
+    if not (hasattr(ta, "shape") and hasattr(tb, "shape")):
+        return ta == tb
+    return tuple(ta.shape) == tuple(tb.shape) and ta.dtype == tb.dtype and bool(torch.equal(ta, tb))
 
 
 def derived_consumers_consistent(graph: dict) -> int:
@@ -1407,7 +1431,19 @@ class Model:
         return True
 
     def step_install(self):
-        if self.done("install"): return True
+        reinstall = None
+        if self.done("install"):
+            if self.cache_holds_backup() is not True:
+                return True
+            # The state says installed; the cache holds the PREVIOUS container (the hub's object put
+            # back by hand, or by a restore). A resumed chain measures the container it BUILT: with
+            # the install skipped, new_outputs ran on the old one and the gate compared the June graph
+            # with itself (granite-speech, 2026-09-26 02:43 UTC). Reinstall the recorded .nbx and drop
+            # the arms and the verdict that were measured on the wrong container.
+            reinstall = "the state said installed but the cache held the previous container"
+            log(f"{self.name}: install is marked done but the cache holds the previous container — reinstalling the built .nbx")
+            for stale in ("new_outputs", "gate"):
+                self.state["steps"].pop(stale, None)
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
         if not nbx or not Path(nbx).exists():
             self.mark("install", False, error="no built .nbx"); return False
@@ -1420,7 +1456,7 @@ class Model:
         rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
         ok = rc == 0 and (CACHE / installed / "manifest.json").exists()
         self.new_name = installed
-        self.mark("install", ok, rc=rc, installed_name=installed)
+        self.mark("install", ok, rc=rc, installed_name=installed, **({"reinstalled": reinstall} if reinstall else {}))
         return ok
 
     def step_new_outputs(self):
@@ -1548,7 +1584,7 @@ class Model:
                 for k in set(a) | set(b):
                     if k in PROVENANCE_KEYS or k in DERIVED_KEYS or k in NAMING_KEYS:
                         continue                       # a name (output_name: absent in the June encoding), never a value
-                    if a.get(k) != b.get(k):
+                    if a.get(k) != b.get(k) and not (k == "constant_data" and constants_equal(a.get(k), b.get(k))):
                         if k in ANNOTATION_KEYS:
                             rec["annotation_changes"] += 1
                         else:
