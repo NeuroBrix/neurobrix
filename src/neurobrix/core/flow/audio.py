@@ -176,22 +176,15 @@ class AudioEngine(FlowHandler):
             input_shape=input_shape,
         )
 
-        # Pad/truncate to match trace-time dimensions for encoders
-        # with non-symbolic position ops (relative PE, repeat, etc.)
-        if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):  # Skip batch dim
-                trace_size = input_shape[dim_idx]
-                actual_size = features.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(features.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        features = features[tuple(slices)]
-                    else:
-                        pad_shape = list(features.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = torch.zeros(pad_shape, device=features.device, dtype=features.dtype)
-                        features = torch.cat([features, pad], dim=dim_idx)
+        # Fit to the trace shape on the axes the graph FROZE only; a symbolic axis carries
+        # the clip's own extent into the graph (one brick, shared with the triton mirror).
+        from neurobrix.core.flow.audio_utils import fit_features_to_trace
+        symbolic_axes = self._component_input_symbolic_axes(first_comp)
+        fed = fit_features_to_trace(features, input_shape, symbolic_axes)
+        if input_shape and tuple(fed.shape) != tuple(input_shape) and fed.shape == features.shape:
+            print(f"   [Audio] Symbolic axes {sorted(symbolic_axes)} fed at the clip's own extent "
+                  f"{tuple(features.shape)} (trace {tuple(input_shape)})")
+        features = fed
 
         print(f"   [Audio] Features: {features.shape} ({preprocessing})")
 
@@ -751,34 +744,14 @@ class AudioEngine(FlowHandler):
 
     def _get_component_input_shape(self, comp_name: Optional[str]) -> Optional[Tuple[int, ...]]:
         """Read first input tensor shape from component's graph.json (DATA-DRIVEN)."""
-        if comp_name is None:
-            return None
-        executor = self.ctx.executors.get(comp_name)
-        if executor is None:
-            return None
-        dag = getattr(executor, '_dag', None)
-        if dag is None:
-            return None
-        for tid, spec in dag.get("tensors", {}).items():
-            # Match input tensors by: type field, input_name field, or tensor ID prefix
-            is_input = (
-                spec.get("type") == "input"
-                or spec.get("input_name") is not None
-                or tid.startswith("input::")
-            )
-            if is_input:
-                shape = spec.get("shape", [])
-                # Resolve any symbolic dims to trace_value for shape hint
-                resolved = []
-                for dim in shape:
-                    if isinstance(dim, dict):
-                        resolved.append(dim.get("trace_value", dim.get("trace", 0)))
-                    elif isinstance(dim, int):
-                        resolved.append(dim)
-                    else:
-                        resolved.append(0)
-                return tuple(resolved)
-        return None
+        from neurobrix.core.flow.audio_utils import get_component_input_shape
+        return get_component_input_shape(self.ctx, comp_name)
+
+    def _component_input_symbolic_axes(self, comp_name: Optional[str]) -> frozenset:
+        """The axes of the component's first input the graph carries symbolically."""
+        from neurobrix.core.flow.audio_utils import get_component_input_axes
+        axes = get_component_input_axes(self.ctx, comp_name)
+        return axes[1] if axes else frozenset()
 
     def _get_compute_dtype(self) -> torch.dtype:
         """Get compute dtype from the Prism-resolved plan (FlowContext.compute_dtype)."""

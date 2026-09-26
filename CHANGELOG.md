@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opens it. One repository under two names is a duplicate, not two models.
 
 ### Fixed
+- Audio models whose encoder takes a variable number of frames now receive the clip's real length; every clip used to be zero-padded or cut to one fixed frame count, so audio longer than that window was silently truncated (granite-speech-3.3-8b: 700 frames, about 14 s). Models whose encoder input is fixed by the vendor (Whisper's 30 s window) are unchanged.
 
 - **Certifying a very large matrix product no longer fails on a correct kernel.** A product
   whose output exceeds two billion elements is run in row bands; the certification tool compared
