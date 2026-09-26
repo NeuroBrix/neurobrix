@@ -173,7 +173,7 @@ rows:
     seed: 42
     # 384x384 / 30 FlowMatchEuler steps / CFG 5.0 / seed 42 = the
     # closure-config geometry from the 4/4 matrix verdict
-    # (validation_outputs/ming_imagegen_smoke_2026_08_01) — geometry
+    # (models/_agents/archives/dell/validation_outputs_pre_2026_09_01/ming_imagegen_smoke_2026_08_01) — geometry
     # and CFG come from package data (topology.flow.image_gen +
     # defaults), so the row does NOT pass height/width.
     serving_configs: [pinned, machine]   # 50 GB fp16 > one 32 GB V100
@@ -187,7 +187,7 @@ rows:
     # Capability row (R16 verdict 2026-08-08): no third-party runtime
     # serves Ming, and the vendor's own stack cannot run it on V100 —
     # NeuroBrix renders Ming t2i on this hardware (4/4 matrix,
-    # validation_outputs/ming_imagegen_smoke_2026_08_01).
+    # models/_agents/archives/dell/validation_outputs_pre_2026_09_01/ming_imagegen_smoke_2026_08_01).
     dnr_columns:
       vendor_transformers: "The vendor's official recipe cannot run on
         V100: their single-device loading path needs ~42 GB bf16
@@ -211,7 +211,7 @@ rows:
     diffusers_checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
     # 2026-08-26: local artifact renamed to the hub slug — the legacy
     # Sana_1600M_1024px_MultiLing cache copy was PROVEN byte-identical
-    # and removed (validation_outputs/hub_benchmark_2026_08/
+    # and removed (models/_agents/archives/dell/validation_outputs_pre_2026_09_01/hub_benchmark_2026_08/
     # SANA_DUPLICATE_PROOF.md). Same artifact, same row identity.
     neurobrix_model: Sana_1600M_1024px_MultiLing
     prompt: "a red apple on a wooden table"
@@ -330,7 +330,7 @@ rows:
       # verify-first byte-gated against the normal path in-process, and
       # the cross-run byte gate (32-tok and 250-tok incl. a bucket
       # boundary) matched the replay-off output exactly (ce0c22a3 /
-      # 250-tok pair in validation_outputs/replay_kv_decode_2026_08_17).
+      # 250-tok pair in models/_agents/archives/dell/validation_outputs_pre_2026_09_01/replay_kv_decode_2026_08_17).
       NBX_TRITON_REPLAY: "1"
       NBX_REPLAY_KV_DECODE: "1"
       # Phase 4b adoption (2026-08-17): per-bucket CUDA-graph launch of
@@ -351,7 +351,7 @@ rows:
     columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
 
   # ---- S3 upscaler segment (hub benchmark 2026-08; prereg:
-  # validation_outputs/hub_benchmark_2026_08/S3_IMAGE_PREREG.md).
+  # models/_agents/archives/dell/validation_outputs_pre_2026_09_01/hub_benchmark_2026_08/S3_IMAGE_PREREG.md).
   # Competitor = the vendor/reference stack in its pinned venv
   # (upscaler_cell.py; venv name per row — basicsr version conflicts
   # force separate venvs, see the R16 synthesis). Same pinned input

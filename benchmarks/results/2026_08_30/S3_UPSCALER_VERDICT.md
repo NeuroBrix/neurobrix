@@ -51,7 +51,7 @@ swin2sr-x2 engine-divergence defect (unpublished, tracked strict).
 Warm serve: 17 passed, 0 failed, including the exact-size unaligned
 cells on both engines. Vendor tone arms banked and mutation-proved for
 every published artifact. Full trail:
-`validation_outputs/upscaler_floordiv_republish_2026_08_29/VERDICT.md`.
+`models/_agents/archives/dell/validation_outputs_pre_2026_09_01/upscaler_floordiv_republish_2026_08_29/VERDICT.md`.
 
 ## Companion — Sana-4Kpx 4-mode matrix CLOSED (same night)
 
