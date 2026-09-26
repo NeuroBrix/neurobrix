@@ -133,12 +133,16 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
         art.unlink()
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src),
            "NEUROBRIX_REPLAY_CACHE": str(out / f"replay_card{gpu}"), "PYTHONNOUSERSITE": "1"}
-    cmd = [*Z.nbx_cmd(), "run", "--model", model, *req, *MODES[mode], "--output", str(art)]
+    # The cell runs under the interpreter the matrix was launched with (the pinned engine
+    # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *req, *MODES[mode],
+           "--output", str(art)]
     rc, wall = Z.run(cmd, env, log, timeout)
     tree = src.parent
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
            "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
            "off_trace_size": list(size) if size else None, "log": str(log),
+           "python": sys.executable,
            "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "engine": subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"],
                                     capture_output=True, text=True).stdout.strip(),
@@ -200,6 +204,59 @@ def cmd_table(a) -> int:
     return 0
 
 
+def catalogue_repo_ids(path: Path) -> dict:
+    """cache directory -> repository id, from the catalogue's table (the repository id is the
+    name; the directory is the 'cache directory if it differs' column, else the manifest's
+    model_name, else the repository's basename — the first that exists in the cache)."""
+    out = {}
+    for line in path.read_text().splitlines():
+        cols = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cols) < 9 or not cols[0].isdigit():
+            continue
+        repo = cols[1].strip("`")
+        for cand in (cols[8].strip("`"), cols[2], repo.split("/")[-1]):
+            if cand and (CACHE / cand).is_dir():
+                out[cand] = repo
+                break
+    return out
+
+
+def cmd_export(a) -> int:
+    """The joint row schema agreed with the Mac on the peer channel (2026-09-26 17:42 CEST): one
+    JSON line per (model, stack, mode). 'native' is written 'compiled'; the container's sha256 is
+    its manifest.json's; the verdict is the judge's, 'pending' until an outside judgment is written."""
+    out = Path(a.out)
+    repos = catalogue_repo_ids(Path(a.catalogue))
+    proofs = json.loads(Path(a.proofs).read_text()) if a.proofs and Path(a.proofs).exists() else {}
+    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    lines = []
+    for r in rows:
+        manifest = CACHE / r["model"] / "manifest.json"
+        judged = r.get("judged")
+        verdict = r.get("verdict") or ("broken" if r["rc"] != 0 else "pending")
+        lp = (proofs.get(r["model"]) or {}).get("last_proof")
+        lines.append({
+            "repo_id": repos.get(r["model"]),
+            "container": r["model"],
+            "container_sha256": sha256(manifest) if manifest.exists() else None,
+            "stack": "cuda",
+            "mode": "compiled" if r["mode"] == "native" else r["mode"],
+            "request": " ".join(r["request"]),
+            "today": {"date": r["date"], "engine": r["engine"], "rc": r["rc"],
+                      "artifact": r.get("artefact"), "judged": judged, "verdict": verdict,
+                      "error": r.get("error")},
+            "last_proof": lp,
+            "regression": r.get("regression"),
+            "bisect": r.get("bisect"),
+            "cause_class": r.get("cause_class"),
+        })
+    dest = Path(a.dest)
+    dest.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    unnamed = sorted({x["container"] for x in lines if x["repo_id"] is None})
+    print(f"{len(lines)} rows -> {dest}; containers without a catalogue line: {unnamed or 'none'}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -213,8 +270,13 @@ def main() -> int:
     t = sub.add_parser("table")
     t.add_argument("--out", required=True)
     t.add_argument("--proofs", default=None)
+    e = sub.add_parser("export", help="the joint row schema shared with the Mac's Metal half")
+    e.add_argument("--out", required=True)
+    e.add_argument("--catalogue", required=True, help="the Mac's CATALOGUE.md")
+    e.add_argument("--proofs", default=None)
+    e.add_argument("--dest", required=True)
     a = ap.parse_args()
-    return cmd_run(a) if a.cmd == "run" else cmd_table(a)
+    return {"run": cmd_run, "table": cmd_table, "export": cmd_export}[a.cmd](a)
 
 
 if __name__ == "__main__":

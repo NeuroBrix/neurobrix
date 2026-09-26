@@ -39,41 +39,32 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-_LEGACY_NBX = "/home/mlops/ml/venv/bin/neurobrix"
-_LEGACY_PY = "/home/mlops/ml/venv/bin/python"
 
 
 def zoo_python() -> str:
-    """The interpreter the arms run under.
+    """The interpreter the arms run under: `NBX_ZOO_PYTHON`, else the engine python the launch
+    pinned (`NEUROBRIX_PYTHON`, then `NBX_PYTHON`), else the interpreter running this tool.
 
-    This was the rig's absolute venv path and nothing else. That is correct on
-    the rig and does not exist anywhere else, so the tool — and with it the
-    audio gate's transcript fallback — could not run off that one machine.
-    Measured on Apple 2026-09-18: the gate returned
-    `transcribe: [Errno 2] No such file or directory:
-    '/home/mlops/ml/venv/bin/neurobrix'`, i.e. it reported a stochastic
-    synthesis as FAILING the gate when what had actually failed was locating a
-    recognizer.
+    It used to prefer the rig's absolute `ml/venv` path whenever that path existed — correct when
+    that venv was the engine's, and a trap once the engine moved to its own stack (2026-09-16,
+    `docs/internal/environments.md`: `ml/venv` is Forge's python in transition). Measured
+    2026-09-26: the regression matrix, launched under the engine python, ran its first cell under
+    the old venv's `neurobrix` binary (torch 2.5.1) because the legacy path existed. A machine
+    path that answers "which stack" is a constant answering a live question; the launch answers it.
 
-    The rig keeps exactly what it had — the legacy path is preferred whenever it
-    exists — so this changes nothing there.
+    Measured on Apple 2026-09-18, the reason this never names a machine path: the audio gate's
+    transcript fallback returned `[Errno 2] No such file or directory` for the rig's venv.
     """
-    return os.environ.get("NBX_ZOO_PYTHON") or (
-        _LEGACY_PY if os.path.exists(_LEGACY_PY) else sys.executable)
+    return (os.environ.get("NBX_ZOO_PYTHON") or os.environ.get("NEUROBRIX_PYTHON")
+            or os.environ.get("NBX_PYTHON") or sys.executable)
 
 
 def nbx_cmd() -> list:
-    """The `neurobrix` entry point, as a command LIST.
-
-    `python -m neurobrix` is the portable spelling of the console script, and it
-    is what the console script does; the rig's own binary is still preferred
-    where it exists.
-    """
+    """The `neurobrix` entry point, as a command LIST: `NBX_ZOO_NEUROBRIX` when set, else
+    `python -m neurobrix` under `zoo_python()` — the portable spelling of the console script."""
     env = os.environ.get("NBX_ZOO_NEUROBRIX")
     if env:
         return [env]
-    if os.path.exists(_LEGACY_NBX):
-        return [_LEGACY_NBX]
     return [zoo_python(), "-m", "neurobrix"]
 
 
