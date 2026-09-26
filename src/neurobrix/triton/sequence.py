@@ -3180,8 +3180,14 @@ class TritonSequence:
         fbuf = (_ct.c_float * N)()
         DeviceAllocator.memcpy(_ct.addressof(fbuf), full.data_ptr(),
                                N * 4, kind=2)
-        vals = list(fbuf)
-        norm = (sum(v * v for v in vals)) ** 0.5
+        # numpy, never a Python loop: the norm was a per-element Python sum over a list of the
+        # whole tensor — minutes per op on a video-sized output, so an NBX_DUMP_TIDS run of
+        # Wan2.1-VACE triton-sequential stalled after the VAE encoder for 50 minutes where the
+        # run itself takes 77 s (2026-09-26). Same float64 accumulation as before.
+        import numpy as _np_st
+        vals = _np_st.frombuffer(fbuf, dtype=_np_st.float32)
+        _v64 = vals.astype(_np_st.float64)
+        norm = float(_np_st.sqrt(_np_st.dot(_v64, _v64)))
         # Last-position window — mirror of the compiled and sequential
         # dumpers (D-TSEQ-ORPHEUS-STEP110): first ten elements of the last
         # index along axis 1 (rank >= 3, batch 0) or axis 0 (rank 2) of the
@@ -3194,16 +3200,16 @@ class TritonSequence:
             for _d in _sshp[2:]:
                 _row *= _d
             _off = (_sshp[1] - 1) * _row
-            last = vals[_off:_off + min(10, _row)]     # never past the row
+            last = vals[_off:_off + min(10, _row)].tolist()     # never past the row
         elif len(_sshp) == 2:
             _off = (_sshp[0] - 1) * _sshp[1]
-            last = vals[_off:_off + min(10, _sshp[1])]
+            last = vals[_off:_off + min(10, _sshp[1])].tolist()
         _batch_norms = None
         _shp = list(tensor.shape)
         if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
             _per = N // _shp[0]
             _batch_norms = [
-                (sum(v * v for v in vals[bi * _per:(bi + 1) * _per])) ** 0.5
+                float(_np_st.sqrt(_np_st.dot(_v64[bi * _per:(bi + 1) * _per], _v64[bi * _per:(bi + 1) * _per])))
                 for bi in range(_shp[0])]
         # NBX_DUMP_LASTROW=<dir>: write the FULL last-position row, not just
         # its first ten values. `last_pos10` is a window, and a window cannot
