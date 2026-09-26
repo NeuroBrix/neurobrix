@@ -304,32 +304,44 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
     return row
 
 
-def directory_idents(vendor_profile: str) -> set:
-    """Every ident the certified directory SERVES for `<vendor>/<profile>` — read through the
-    engine's own loader and lookup, never the raw files: the loader drops an entry whose proof
-    names no card (register 56 — a legacy proof serves no memory class until re-proven), and a
-    coverage counted from the raw files read 6 served for a model the directory holds nothing
-    for (TinyLlama, 2026-09-21). `any_class=True`: served on SOME memory class of the profile."""
+def census_memory_class(hardware: str) -> int:
+    """The memory class (GB) the census is taken for: its profile's cards, one class. A census is
+    per (profile, memory class) — a profile mixing classes has no single answer and is refused."""
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.core.prism.structure import memory_class_gb
+    classes = {memory_class_gb(d.memory_mb) for d in load_profile(hardware).devices}
+    if len(classes) != 1 or None in classes:
+        raise SystemExit(f"profile {hardware!r} spans memory classes {sorted(map(str, classes))}: "
+                         "a census's coverage is per class — take it on a single-class profile")
+    return classes.pop()
+
+
+def directory_idents(vendor_profile: str, idents, memory_class: int) -> set:
+    """The census idents the certified directory SERVES on this memory class — `--only-missing`'s
+    own question (`entry_covers` on the entries the engine's loader accepts), asked with the
+    directory named explicitly.
+
+    It used to ask `lookup`, which resolves the vendor profile from the DRIVER; the census's main
+    process sees no card, the resolution failed, and a bare `except: continue` turned every
+    failure into "not served": the 2026-09-26 census printed "0 served, 743 to certify" over a
+    directory holding thousands of entries. It also asked `any_class`, which calls an entry
+    proven on a 32 GB card served to a 16 GB census. Nothing is swallowed here."""
     from neurobrix.kernels import autotune_certified as C
     from neurobrix.triton.autotune_cache import _autotuners
-    out = set()
-    root = REPO / "src" / "neurobrix" / "config" / "autotune" / vendor_profile
+    vendor, _, profile = vendor_profile.partition("/")
     tuners = {qual: at for qual, at in _autotuners()}
-    for p in root.glob("*.json"):
-        doc = json.loads(p.read_text())
-        qual = doc.get("kernel")
-        at = tuners.get(qual)
-        if at is None:
-            continue
-        for ktext in (doc.get("entries") or {}):
-            key = C.parse_key(ktext)
-            if key is None:
-                continue
-            try:
-                if C.lookup(qual, at, key, any_class=True) is not None:
-                    out.add(f"{qual}::{ktext}")
-            except Exception:
-                continue
+    out = set()
+    for ident in idents:
+        qual, _, ktext = ident.partition("::")
+        tuner = tuners.get(qual)
+        if tuner is None:
+            continue                          # no autotuner in this engine: nothing can serve it
+        key = C.parse_key(ktext)
+        if key is None:
+            raise SystemExit(f"census key {ident!r} does not parse")
+        entries = C._load(vendor, profile, qual, C.output_dtype(tuner, key), tuner) or {}
+        if C.entry_covers(entries, C.key_repr(key), memory_class):
+            out.add(ident)
     return out
 
 
@@ -421,8 +433,10 @@ def main() -> int:
               "probe_failed": sorted(m for m, r in rows.items() if "probe_failed" in r["status"]),
               "entries": entries}
     if a.directory:
-        served = directory_idents(a.directory)
-        census["coverage"] = {"directory": a.directory, "served": sum(1 for k in entries if k in served),
+        cls = census_memory_class(a.hardware)
+        served = directory_idents(a.directory, entries, cls)
+        census["coverage"] = {"directory": a.directory, "memory_class_gb": cls,
+                              "served": sum(1 for k in entries if k in served),
                               "to_certify": sorted(k for k in entries if k not in served)}
     if a.prove:
         census["proof"] = prove(census, a.prove)
@@ -432,7 +446,8 @@ def main() -> int:
           f"failed {len(census['failed'])}; {census['wall_s']} s; written {out}")
     if a.directory:
         c = census["coverage"]
-        print(f"[census] directory {a.directory}: {c['served']} served, {len(c['to_certify'])} to certify")
+        print(f"[census] directory {a.directory}, {c['memory_class_gb']} GB class: {c['served']} served, "
+              f"{len(c['to_certify'])} to certify")
     if a.prove:
         p = census["proof"]
         print(f"[census] proof against {p['reference']}: {'IDENTICAL' if p['identical'] else 'DIFFERS'} — "
