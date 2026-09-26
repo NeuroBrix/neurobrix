@@ -305,6 +305,25 @@ def is_linear_downscale_graph(dag: Dict) -> bool:
     return temporal_downscale_ratio(dag) is not None
 
 
+def is_downscale_graph(dag: Dict) -> bool:
+    """A rank-5 spatial DOWNSAMPLER (a video VAE encoder) whose temporal map is linear OR causal:
+    either way it reads PIXELS, and its time/height/width symbols bind to the request's pixel
+    extents. Binding a causal encoder latent-side sized the Wan encoder at 1.1 GB of activations
+    for 81 frames of 352x832 where its first layer alone holds 8.5 GiB (2026-09-26): the plan saw
+    no overflow, never tiled, and the run died. The temporal CLASS decides how it may be tiled
+    (linear: in time and space; causal: in space only), never which space it reads."""
+    if is_linear_downscale_graph(dag):
+        return True
+    tensors = dag.get("tensors", {})
+    shapes_in = [tensors.get(str(i), {}).get("shape", []) for i in dag.get("input_tensor_ids", [])]
+    shapes_out = [tensors.get(str(o), {}).get("shape", []) for o in dag.get("output_tensor_ids", [])]
+    s_in = next((s for s in shapes_in if isinstance(s, list) and len(s) == 5), None)
+    s_out = next((s for s in shapes_out if isinstance(s, list) and len(s) == 5), None)
+    if not s_in or not s_out or s_out[-2] >= s_in[-2]:
+        return False
+    return temporal_causal_downscale_ratio(dag) is not None
+
+
 @dataclass
 class ActivationProfile:
     """Result of activation profiling."""
@@ -523,7 +542,7 @@ class ActivationProfiler:
         # overflow from the placement cascade). Strictly additive: False for
         # every non-downsampler / causal-encoder graph, whose bindings are
         # byte-identical to before.
-        pixel_space = is_linear_downscale_graph(self.dag)
+        pixel_space = is_downscale_graph(self.dag)
         for sid, info in syms.items():
             if not isinstance(info, dict):
                 continue
