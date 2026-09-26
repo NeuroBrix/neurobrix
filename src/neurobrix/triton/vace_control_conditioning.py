@@ -32,6 +32,7 @@ from neurobrix.core.runtime.registry_flags import get_component_flag
 
 CONTROL_VAR = "global.control_hidden_states"
 SCALE_VAR = "global.control_hidden_states_scale"
+MASK_VAR = "global.vace_pixel_mask"
 
 
 def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
@@ -83,11 +84,16 @@ def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
 
 
 def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
-    """Build control_hidden_states = cat([inactive, reactive, mask], dim=1) NBX.
+    """Build control_hidden_states = cat([inactive, reactive, mask], dim=1) as the vendor does.
 
-    All-generate path: inactive == reactive == encode(0); mask all-ones. Returns
-    None if the vae_encoder output is not yet resolved.
+    R30 mirror of the compiled brick: the vae_encoder encoded the CLI's pair (batch 0 =
+    ``V * (1 - M)``, batch 1 = ``V * M``); both are normalized as the vendor normalizes and the
+    pixel mask ``global.vace_pixel_mask`` is folded into the mask channels on the latent grid
+    (image_dsp.vace_fold_mask_np, numpy). Returns None if the vae_encoder output is not yet
+    resolved.
     """
+    from neurobrix.core.module.vision.image_dsp import vace_fold_mask_np
+
     cond_comp = spec["condition_component"]
     res = ctx.variable_resolver.resolved
     latent = res.get(f"{cond_comp}.output_0")
@@ -95,9 +101,16 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
         latent = res.get(f"{cond_comp}.output")
     if not isinstance(latent, NBXTensor):
         return None
+    pixel_mask = res.get(MASK_VAR)
+    if pixel_mask is None:
+        raise RuntimeError(f"ZERO FALLBACK: VACE control needs {MASK_VAR}, the pixel mask the CLI builds")
 
     mean, std, latent_channels = _vae_latent_stats(ctx)
     latent = _to_channels_first(latent, latent_channels).float()
+    if latent.shape[0] != 2:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the VACE control encoder must see the (inactive, reactive) pair on its "
+            f"batch axis, got batch {latent.shape[0]}")
     dev_idx = latent._device_idx
     b, _c, lt, lh, lw = latent.shape
 
@@ -112,11 +125,11 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
             np.broadcast_to((1.0 / np.asarray(std, np.float32)).reshape(1, -1, 1, 1, 1), shape))
         latent = (latent - _nbx_on(mean_full, dev_idx)) * _nbx_on(inv_std_full, dev_idx)
 
-    # inactive == reactive == encode(0) for the zeros control clip; channel-cat.
-    video_latents = NBXTensor.cat([latent, latent], dim=1)  # [B, 2*z_dim, T, H, W]
-    mask_np = np.ones((b, int(spec["mask_channels"]), lt, lh, lw), dtype=np.float32)
-    mask_t = _nbx_on(mask_np, dev_idx)
-    control = NBXTensor.cat([video_latents, mask_t], dim=1)  # [B, 2*z_dim+mask_ch, ...]
+    video_latents = NBXTensor.cat(
+        [latent.narrow(0, 0, 1).contiguous(), latent.narrow(0, 1, 1).contiguous()], dim=1)
+    pm = pixel_mask.numpy() if isinstance(pixel_mask, NBXTensor) else np.asarray(pixel_mask)
+    mask_t = _nbx_on(vace_fold_mask_np(pm, lt, lh, lw, int(spec["mask_channels"])), dev_idx)
+    control = NBXTensor.cat([video_latents, mask_t], dim=1)  # [1, 2*z_dim+mask_ch, ...]
 
     import os as _os
     if _os.environ.get("NBX_DIAG_VACE") == "1":

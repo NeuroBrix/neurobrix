@@ -637,30 +637,30 @@ def cmd_run(args):
         for _k, _v in _vid.items():
             inputs[f"global.{_k}"] = _v
 
-    # VACE control conditioning with no explicit control video: the all-generate
-    # (unconditional / pure text→video) path. The vae_encoder encodes a zeros
-    # control clip [1,3,num_frames,H,W]; the brick builds control_hidden_states
-    # = cat([encode(0), encode(0), ones_mask]). Data-driven via the transformer's
-    # vace_control_conditioning flag; only synthesized when global.image is absent.
-    if "global.image" not in inputs:
-        from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
-        if _gcf(getattr(args, "model", None), "transformer",
-                "vace_control_conditioning", default=None):
-            _nf = int(getattr(args, "num_frames", 0) or 1)
-            _h = int(args.height) if args.height else 480
-            _w = int(args.width) if args.width else 832
-            if execution_mode in ("triton", "triton_sequential"):
-                # The Triton branch's container (R33: no torch in this process).
-                import numpy as _np
-                from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
-                inputs["global.image"] = _NBXT.from_numpy(
-                    _np.zeros((1, 3, _nf, _h, _w), dtype=_np.float32))
-            else:
-                import torch as _torch
-                inputs["global.image"] = _torch.zeros(1, 3, _nf, _h, _w,
-                                                      dtype=_torch.float32)
-            print(f"   VACE all-generate control: zeros clip "
-                  f"[1,3,{_nf},{_h},{_w}] -> vae_encoder")
+    # VACE control conditioning (vendor WanVACEPipeline): the control encoder takes the pair
+    # [V * (1 - M), V * M] — inactive and reactive — stacked on the batch axis, and the brick
+    # folds the pixel mask M into the mask channels. No --input-image: V is zeros and M ones
+    # (the all-generate path); an image: V is its padded clip and its frame is the kept one.
+    # Data-driven by the transformer's vace_control_conditioning flag.
+    from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
+    if _gcf(getattr(args, "model", None), "transformer", "vace_control_conditioning", default=None):
+        import numpy as _np
+        from neurobrix.core.module.vision.image_dsp import vace_control_pair_np
+        _clip = inputs.get("global.image")
+        if _clip is not None and not isinstance(_clip, _np.ndarray):
+            raise RuntimeError(
+                f"ZERO FALLBACK: the VACE control clip must reach the CLI as an array, got {type(_clip)}")
+        if _clip is None and None in (height, width, num_frames):
+            raise RuntimeError(
+                "ZERO FALLBACK: the VACE all-generate control needs a resolved height, width and "
+                f"frame count (got {height}, {width}, {num_frames})")
+        _pair, _mask = vace_control_pair_np(
+            _clip, 0 if _clip is None else 1, int(num_frames or 0), int(height or 0), int(width or 0))
+        # Arrays, like every CLI input: the resolver puts them in the engine's container.
+        inputs["global.image"] = _pair
+        inputs["global.vace_pixel_mask"] = _mask
+        print(f"   VACE control: pair {list(_pair.shape)} ({'image frame kept' if _clip is not None else 'all-generate'}) "
+              f"-> vae_encoder, pixel mask {list(_mask.shape)}")
 
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg

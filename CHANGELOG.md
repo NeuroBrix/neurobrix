@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wan2.1-VACE conditions on an input image the way the reference pipeline does.** The control
+  signal now encodes the kept frames and the frames to generate separately and folds the frame
+  mask as the vendor does, instead of reusing the image's encoding for both halves.
+
 - **A video encoder whose first frame is encoded alone can now be tiled when it does not fit.**
   Such an encoder (the Wan family's) was always planned whole, so a long clip at a large size ran
   out of memory before its first layer. It is now tiled in height and width with the whole clip in
