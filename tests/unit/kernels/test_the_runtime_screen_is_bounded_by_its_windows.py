@@ -142,6 +142,9 @@ def test_the_full_screen_is_measured_by_its_float64_footprint_not_the_device_byt
     why = L._needs_windowing(small_device_big_reference, budget)
     assert why is not None and "float64 footprint" in why, why
     assert L._needs_windowing([(0, 4096, "float32"), (1, 4096, "float32")], budget) is None
+    # the names `_writable_buffers` actually records are the TRITON dtype names (`NBXTensor.dtype`
+    # is the Triton dtype): 62 kernel cells went red when only the enum's spellings were known
+    assert S.fp64_footprint([(0, 4096, "fp16"), (1, 4096, "bf16"), (2, 4096, "fp32")]) == 4096 * 4 + 4096 * 4 + 4096 * 2
     with pytest.raises(ValueError, match="not an NBXDtype"):
         S.fp64_footprint([(0, 8, "nonsense")])
     assert "conv2d_forward_kernel" in S.ROW_WINDOWABLE and "depthwise_conv2d_kernel" in S.ROW_WINDOWABLE

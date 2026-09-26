@@ -195,14 +195,18 @@ def fp64_footprint(buffers) -> int:
     of float64 before the first tap is computed. The element size comes from `NBXDtype`, the
     one authority (`_writable_buffers` records `dtype.name`, the enum's own name); a name the
     enum does not know is a refusal, never a guess."""
-    from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size
+    from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size, parse_dtype
     total = 0
     for _addr, nbytes, dtype in buffers:
+        # `_writable_buffers` records `value.dtype.name`, and `NBXTensor.dtype` is the TRITON
+        # dtype (`fp16`, `bf16`, `fp32`, ...) — the engine's own parser knows those spellings
+        # beside the enum's; anything neither knows is refused, never guessed.
+        name = str(dtype)
         try:
-            itemsize = dtype_size(NBXDtype[str(dtype)])
-        except KeyError:
+            nbx = NBXDtype[name] if name in NBXDtype.__members__ else parse_dtype(name)
+        except (KeyError, ValueError):
             raise ValueError(f"the screen cannot size a buffer of dtype {dtype!r}: not an NBXDtype") from None
-        total += int(nbytes) * 8 // itemsize
+        total += int(nbytes) * 8 // dtype_size(nbx)
     return total
 
 
