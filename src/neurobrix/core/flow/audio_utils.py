@@ -46,7 +46,9 @@ def preprocess_audio_input(
 
     # Read expected input shape from first stage's graph (DATA-DRIVEN)
     first_comp = stages[0]["component"] if stages else None
-    input_shape = get_component_input_shape(ctx, first_comp)
+    _axes = get_component_input_axes(ctx, first_comp)
+    input_shape = _axes[0] if _axes else None
+    symbolic_axes = _axes[1] if _axes else frozenset()
 
     # Auto-correct preprocessing type from graph input shape
     if input_shape and len(input_shape) >= 3:
@@ -71,21 +73,7 @@ def preprocess_audio_input(
     # the truncating path for diagnosis.
     import os as _os_sw
     def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
-        if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
-                actual_size = feats.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(feats.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        feats = feats[tuple(slices)]
-                    else:
-                        pad_shape = list(feats.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
-                        feats = torch.cat([feats, pad], dim=dim_idx)
-        return feats
+        return fit_features_to_trace(feats, input_shape, symbolic_axes)
 
     ctx._stt_seek = None
     features = None
@@ -397,17 +385,10 @@ def find_model_config_path(ctx: FlowContext) -> Path:
     )
 
 
-def get_component_input_shape(
-    ctx: FlowContext, comp_name: Optional[str],
-) -> Optional[Tuple[int, ...]]:
-    """Read first input tensor shape from component's graph (DATA-DRIVEN)."""
-    if comp_name is None:
-        return None
-    executor = ctx.executors.get(comp_name)
-    if executor is None:
-        return None
-    dag = getattr(executor, '_dag', None)
-    if dag is None:
+def component_input_axes(dag: Optional[dict]) -> Optional[Tuple[Tuple[int, ...], frozenset]]:
+    """The first input tensor of a component's graph: its trace shape and the set of axis
+    indices the graph carries SYMBOLICALLY (a dict dim), from the DAG alone."""
+    if not dag:
         return None
     for tid, spec in dag.get("tensors", {}).items():
         is_input = (
@@ -417,16 +398,68 @@ def get_component_input_shape(
         )
         if is_input:
             shape = spec.get("shape", [])
-            resolved = []
-            for dim in shape:
+            resolved, symbolic = [], set()
+            for i, dim in enumerate(shape):
                 if isinstance(dim, dict):
                     resolved.append(dim.get("trace_value", dim.get("trace", 0)))
+                    symbolic.add(i)
                 elif isinstance(dim, int):
                     resolved.append(dim)
                 else:
                     resolved.append(0)
-            return tuple(resolved)
+            return tuple(resolved), frozenset(symbolic)
     return None
+
+
+def get_component_input_axes(
+    ctx: FlowContext, comp_name: Optional[str],
+) -> Optional[Tuple[Tuple[int, ...], frozenset]]:
+    """(trace shape, symbolic axes) of a component's first input (DATA-DRIVEN)."""
+    if comp_name is None:
+        return None
+    executor = ctx.executors.get(comp_name)
+    if executor is None:
+        return None
+    return component_input_axes(getattr(executor, '_dag', None))
+
+
+def get_component_input_shape(
+    ctx: FlowContext, comp_name: Optional[str],
+) -> Optional[Tuple[int, ...]]:
+    """Read first input tensor shape from component's graph (DATA-DRIVEN)."""
+    axes = get_component_input_axes(ctx, comp_name)
+    return axes[0] if axes else None
+
+
+def fit_features_to_trace(feats, input_shape, symbolic_axes=frozenset()):
+    """Pad or truncate `feats` to the trace shape on the axes the graph FROZE, and leave a
+    SYMBOLIC axis at the clip's own extent.
+
+    Until 2026-09-26 every non-batch axis was fitted to the trace extent: granite-speech's
+    encoder, whose frame axis is symbolic, received every clip zero-padded or cut to the
+    700 frames of its trace, so no clip ever reached the graph at another length and a
+    pad-to-window defect in the container stayed invisible to the family protocol. A
+    frozen axis keeps the fit: whisper's mel is 3 000 frames by the vendor's own contract."""
+    if not (input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3):
+        return feats
+    import torch
+    for dim_idx in range(1, len(input_shape)):  # the batch axis is never fitted
+        if dim_idx in symbolic_axes:
+            continue
+        trace_size = input_shape[dim_idx]
+        actual_size = feats.shape[dim_idx]
+        if actual_size == trace_size:
+            continue
+        if actual_size > trace_size:
+            slices = [slice(None)] * len(feats.shape)
+            slices[dim_idx] = slice(None, trace_size)
+            feats = feats[tuple(slices)]
+        else:
+            pad_shape = list(feats.shape)
+            pad_shape[dim_idx] = trace_size - actual_size
+            pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
+            feats = torch.cat([feats, pad], dim=dim_idx)
+    return feats
 
 
 def get_component_output(
