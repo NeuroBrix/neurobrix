@@ -185,7 +185,17 @@ class NBXCache:
         self._refuse_incidental_replacement(nbx_path, cache_path,
                                             declared=bool(force or allow_replace))
 
+        # THE NAMING DOOR, also above the cached short-circuit, read from the ARCHIVE's own
+        # manifest before a byte is unpacked (the same member the import reads up front): the
+        # slot is keyed on the .nbx's parent directory, so a build placed under a hand-chosen
+        # directory would install under that name. And the CACHED tree passes the same door:
+        # a directory extracted misnamed before this door existed — the shared cache held four
+        # — would otherwise be served here to every `.nbx`-path caller, the door a census
+        # instead of a door (the guardian, 2026-09-26).
+        refuse_misnamed(cache_path, _manifest_of_archive(nbx_path))
         if self.is_cached(nbx_path) and not force:
+            with open(cache_path / "manifest.json") as f:
+                refuse_misnamed(cache_path, json.load(f))
             print(f"[Cache] Using cached: {cache_path}")
             return cache_path
 
@@ -393,6 +403,57 @@ def get_cache() -> NBXCache:
     return _cache
 
 
+def _on_disk_name(path: Path) -> str:
+    """The directory's name AS THE FILESYSTEM STORES IT — on a case-insensitive store (APFS, the
+    Mac's cache) a path typed in another case opens the same directory, and the door must
+    compare the stored name, not the typed one (R23). A path that does not exist yet (a slot
+    about to be created) has only its typed name."""
+    try:
+        for entry in path.parent.iterdir():
+            if entry.name.lower() == path.name.lower() and entry.samefile(path):
+                return entry.name
+    except (OSError, ValueError):
+        pass
+    return path.name
+
+
+def _manifest_of_archive(nbx_path: Path) -> dict:
+    """The manifest inside a `.nbx`, read without unpacking anything — a zip member."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(nbx_path) as zf:
+            return json.loads(zf.read("manifest.json"))
+    except KeyError:
+        raise RuntimeError(f"ZERO FALLBACK: {nbx_path} carries no manifest.json; it is not an NBX container") from None
+
+
+def refuse_misnamed(cache_path, manifest: dict) -> None:
+    """A container's directory carries its manifest's model name, or the engine refuses it.
+
+    The name of a model is the name of its Hugging Face repository — never invented, never
+    hand-suffixed, never renamed — and two traces of one repository under two names are a
+    duplication whatever the graphs (the owner, 2026-09-26). The shared cache held four such
+    directories (`PixArt-XL-1024` over a manifest declaring `PixArt-XL-2-1024-MS`, the Sigma
+    and Sana pairs, a `.pre-G-backup`), each a second trace nobody could tell from the first
+    by name. A census says "not this time"; this door says "never": a directory whose name is
+    not the name its manifest declares is refused at every entry — extraction, the directory
+    short-cut, and the runtime loader — so the state cannot be reached by any path.
+    """
+    declared = manifest.get("model_name")
+    if not declared:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the manifest at {Path(cache_path) / 'manifest.json'} declares no "
+            f"model_name; a container without its model's name cannot be told from another.")
+    actual = _on_disk_name(Path(cache_path))
+    if actual != declared:
+        raise RuntimeError(
+            f"NeuroBrix refuses the container at {cache_path}: its directory is named "
+            f"{actual!r} but its manifest declares model_name {declared!r}. A container carries "
+            f"its model's name — the Hugging Face repository's — and one repository under two "
+            f"names is a duplicate, not two models. Rename the directory to {declared!r}, or "
+            f"remove it if {declared!r} already exists (`neurobrix remove {actual}`).")
+
+
 def ensure_extracted(nbx_path: Path) -> Path:
     """Ensure NBX is extracted and return cache path.
 
@@ -406,6 +467,7 @@ def ensure_extracted(nbx_path: Path) -> Path:
     if nbx_path.is_dir():
         manifest_path = nbx_path / "manifest.json"
         if manifest_path.exists():
+            refuse_misnamed(nbx_path, json.loads(manifest_path.read_text()))
             return nbx_path
         else:
             raise FileNotFoundError(

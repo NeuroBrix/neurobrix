@@ -12,7 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
   such a stage at every key class of that length, on the largest memory rung.
 
+### Changed
+
+- **A model's directory in the cache carries the name its manifest declares.** The engine now
+  refuses a container whose directory was renamed by hand — at extraction, when a directory is
+  opened directly, and when a model is loaded — and `neurobrix import` installs a downloaded
+  model under the name in its manifest, which is its Hugging Face repository's, rather than
+  under the hub record's name, and prints the name to use with `run` and `remove`. A model
+  extracted under a hand-chosen name before this release is refused the same way, whichever path
+  opens it. One repository under two names is a duplicate, not two models.
+
 ### Fixed
+
+- **Certifying a very large matrix product no longer fails on a correct kernel.** A product
+  whose output exceeds two billion elements is run in row bands; the certification tool compared
+  each band against a reference of the whole product and refused the shape. It now checks each
+  launch against its own reference — every band, not only the first — and records how many
+  launches served the shape, with each one's deviation.
+- **A convolution with a very large biased output no longer faults.** When a convolution's
+  output held more than two billion elements — a video decoder at a large frame count and size,
+  or an upscaler at a large tile — adding the bias faulted with an illegal address past that
+  boundary. The bias step now addresses every element.
+- **A large convolution at an uncertified size no longer exhausts host memory while its
+  kernel configurations are checked.** When a convolution's input was large and its output
+  small — the last layer of an image decoder at 2048x1024 — the runtime check of candidate
+  configurations computed its reference over the whole input in double precision, which took
+  gigabytes of host memory and could end the run on a machine with little of it. The check now
+  reads only a few output rows and their receptive field, whatever the family of the kernel,
+  and sizes every buffer by the engine's own element widths.
+- **A video decoder no longer runs out of memory after the plan placed it whole on the card.**
+  Under the Triton engine a component held whole on one device needs more memory than the
+  profile measured; the plan compared the measured figure alone and placed a decoder whole where
+  it then failed (85 frames at 320x576 on a 32 GB card), while tiling it at a larger size. The
+  plan now budgets a whole component under the Triton engine's own footprint and tiles the
+  decoder at both sizes.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
