@@ -379,8 +379,10 @@ autotune:
   # autotune between ns=1 and ns=2 and use the best" (the triton-ext AppleGPU author,
   # https://github.com/triton-lang/triton-ext/pull/126#issuecomment-5847709477, 2026-09-26). Measured here the
   # same day: at PR #126 head e3c0d60 our pinned depth 4 ran the two named fp32 GEMMs 3.3x slower than depth 1,
-  # and at a46d171 depths 1 and 2 time within 0.3 % of each other on five 3x3 convolutions. Fewer candidates,
-  # faster certification. Entries already certified at depth 3-5 stay served until re-certified.
+  # and at a46d171 depths 1 and 2 time within 0.3 % of each other on five 3x3 convolutions. Every tile is offered at
+  # both depths, so there are MORE candidates, not fewer, counted 2026-09-26: matmul, addmm and baddbmm 10 -> 14,
+  # conv2d 18 -> 32, depthwise 7 -> 12 (the tiles were listed at depths 2-5, each once). Entries already certified
+  # at depth 3-5 stay served until re-certified.
   certify_num_stages: [1, 2]
   loss_tolerance:
     bands:
