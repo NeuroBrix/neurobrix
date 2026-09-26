@@ -374,6 +374,14 @@ autotune:
   # The rows ARE the measurement: p95 of the spread, by the band the kernel ran in. A single
   # figure would hide that this chip is worst below 1 ms AND rises again above 5 ms, where
   # unified memory is bandwidth-bound and shared with every other process on the machine.
+  # Certification tries software-pipelining depths 1 and 2 only (the owner's decision, 2026-09-26, inbox 19:14).
+  # Upstream's pipeliner is "best effort and helps only in specific configurations, my recommendation is to
+  # autotune between ns=1 and ns=2 and use the best" (the triton-ext AppleGPU author,
+  # https://github.com/triton-lang/triton-ext/pull/126#issuecomment-5847709477, 2026-09-26). Measured here the
+  # same day: at PR #126 head e3c0d60 our pinned depth 4 ran the two named fp32 GEMMs 3.3x slower than depth 1,
+  # and at a46d171 depths 1 and 2 time within 0.3 % of each other on five 3x3 convolutions. Fewer candidates,
+  # faster certification. Entries already certified at depth 3-5 stay served until re-certified.
+  certify_num_stages: [1, 2]
   loss_tolerance:
     bands:
       - {up_to_ms: 1.0, pct: 51.08}
