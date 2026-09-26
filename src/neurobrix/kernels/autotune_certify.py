@@ -1036,8 +1036,10 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             raise RuntimeError(f"{qual}: output argument {out_name!r} not among the kernel's arguments")
         out_tensor = args[out_idx]
         buffers = L._writable_buffers(args)
-        if buffers is None:
-            raise RuntimeError(f"{qual}: a strided view among the arguments — not certifiable")
+        if any(b.view is not None for b in buffers):
+            # The certifier synthesizes contiguous arguments; a view here is a synthesizer defect,
+            # and the poison below memsets the output's whole span, which a view does not own.
+            raise RuntimeError(f"{qual}: a strided view among the synthesized arguments — not certifiable")
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
         out_addr, out_nbytes = int(out_tensor.data_ptr()), int(out_tensor._nbytes)
 

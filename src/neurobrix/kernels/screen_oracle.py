@@ -197,7 +197,8 @@ def fp64_footprint(buffers) -> int:
     enum does not know is a refusal, never a guess."""
     from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size, parse_dtype
     total = 0
-    for _addr, nbytes, dtype in buffers:
+    for b in buffers:
+        nbytes, dtype = b.element_bytes, b.dtype
         # `_writable_buffers` records `value.dtype.name`, and `NBXTensor.dtype` is the TRITON
         # dtype (`fp16`, `bf16`, `fp32`, ...) — the engine's own parser knows those spellings
         # beside the enum's; anything neither knows is refused, never guessed.
@@ -328,7 +329,10 @@ def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
             continue
 
     out: List[bytes] = []
-    for addr, nbytes, dtype_name in buffers:
+    for b in buffers:
+        # A strided view's snapshot is its gathered elements, so its reference is compared with
+        # `element_bytes`, never with the covering extent the screen copies.
+        addr, nbytes, dtype_name = b.address, b.element_bytes, b.dtype
         if int(addr) == out_addr:                      # the output, BY ADDRESS
             if dtype_name in ("bf16", "bfloat16"):
                 # bfloat16 is not a numpy dtype, so `_NP.get` fell through to

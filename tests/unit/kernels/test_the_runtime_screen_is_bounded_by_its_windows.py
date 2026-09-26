@@ -134,19 +134,20 @@ def test_the_full_screen_is_measured_by_its_float64_footprint_not_the_device_byt
     from neurobrix.kernels import launcher as L
     from neurobrix.kernels import screen_oracle as S
     budget = 32 * 1024 * 1024
-    macs = [(0, 128 * 2048 * 1024 * 2, "bfloat16"), (1, 3 * 128 * 9 * 2, "bfloat16"),
-            (2, 3 * 2048 * 1024 * 2, "bfloat16")]
-    assert S.fp64_footprint(macs) == 4 * sum(b for _a, b, _d in macs)
+    SB = L.ScreenedBuffer
+    macs = [SB(0, 128 * 2048 * 1024 * 2, "bfloat16"), SB(1, 3 * 128 * 9 * 2, "bfloat16"),
+            SB(2, 3 * 2048 * 1024 * 2, "bfloat16")]
+    assert S.fp64_footprint(macs) == 4 * sum(b.nbytes for b in macs)
     assert "over the screening budget" in L._needs_windowing(macs, budget)
-    small_device_big_reference = [(0, budget // 2, "int8"), (1, 4096, "float16")]   # 16 MiB on the device, 128 MiB in float64
+    small_device_big_reference = [SB(0, budget // 2, "int8"), SB(1, 4096, "float16")]   # 16 MiB on the device, 128 MiB in float64
     why = L._needs_windowing(small_device_big_reference, budget)
     assert why is not None and "float64 footprint" in why, why
-    assert L._needs_windowing([(0, 4096, "float32"), (1, 4096, "float32")], budget) is None
+    assert L._needs_windowing([SB(0, 4096, "float32"), SB(1, 4096, "float32")], budget) is None
     # the names `_writable_buffers` actually records are the TRITON dtype names (`NBXTensor.dtype`
     # is the Triton dtype): 62 kernel cells went red when only the enum's spellings were known
-    assert S.fp64_footprint([(0, 4096, "fp16"), (1, 4096, "bf16"), (2, 4096, "fp32")]) == 4096 * 4 + 4096 * 4 + 4096 * 2
+    assert S.fp64_footprint([SB(0, 4096, "fp16"), SB(1, 4096, "bf16"), SB(2, 4096, "fp32")]) == 4096 * 4 + 4096 * 4 + 4096 * 2
     with pytest.raises(ValueError, match="not an NBXDtype"):
-        S.fp64_footprint([(0, 8, "nonsense")])
+        S.fp64_footprint([SB(0, 8, "nonsense")])
     assert "conv2d_forward_kernel" in S.ROW_WINDOWABLE and "depthwise_conv2d_kernel" in S.ROW_WINDOWABLE
 
 

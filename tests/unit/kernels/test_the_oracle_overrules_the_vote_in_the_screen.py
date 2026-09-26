@@ -75,7 +75,7 @@ class _Tuner:
 def screen(monkeypatch):
     """Drive the real decision path with the device memcpys stubbed out."""
     state = {"out": RIGHT}
-    buffers = [(0, len(RIGHT), "float32")]
+    buffers = [L.ScreenedBuffer(0, len(RIGHT), "float32")]
 
     monkeypatch.setattr(L, "_writable_buffers", lambda values: buffers)
     monkeypatch.setattr(L, "_snapshot", lambda b: [state["out"]])
@@ -148,7 +148,7 @@ def test_a_provider_that_raises_falls_back_loudly(screen, capsys, monkeypatch):
     state_tuner = _Tuner({"out": RIGHT}, produces)
     L.set_screen_oracle(lambda t, k, b: (_ for _ in ()).throw(ValueError("no oracle here")))
     try:
-        monkeypatch.setattr(L, "_writable_buffers", lambda v: [(0, len(RIGHT), "float32")])
+        monkeypatch.setattr(L, "_writable_buffers", lambda v: [L.ScreenedBuffer(0, len(RIGHT), "float32")])
         monkeypatch.setattr(L, "_snapshot", lambda b: [RIGHT])
         monkeypatch.setattr(L, "_restore", lambda b, s: None)
         monkeypatch.setattr(L, "_SCREEN_CACHE", {})

@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plan now budgets a whole component under the Triton engine's own footprint and tiles the
   decoder at both sizes.
 
+- **Kernel tuning verifies its choice when an argument is a strided view.** When a kernel received
+  a non-contiguous argument (a transposed or sliced tensor), the runtime tuner skipped its
+  correctness check and kept the fastest configuration unverified. It now checks every candidate
+  against the reference on exactly the view's elements, and refuses by name when such a shape is
+  too large to check.
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
   in the first attention block with a shape mismatch. The grid now follows the request's own
