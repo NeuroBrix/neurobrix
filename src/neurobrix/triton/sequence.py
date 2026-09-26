@@ -3326,7 +3326,9 @@ class TritonSequence:
         raw_dir, _, raw_csv = spec.partition(":")
         filters = [f for f in raw_csv.split(",") if f]
         for tid in tids:
-            if filters and not any(f in tid or f in op_uid for f in filters):
+            # An empty filter list matches nothing — the ATen branch's two dumps read it the
+            # same way (R30): one spec, one set of files, whichever engine runs it.
+            if not any(f in tid or f in op_uid for f in filters):
                 continue
             tensor = get(tid)
             if tensor is None or not hasattr(tensor, "data_ptr"):
