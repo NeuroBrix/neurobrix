@@ -74,6 +74,11 @@ _CHILD = textwrap.dedent('''
     import os
     assert sorted(os.listdir(out_dir)) == ["transformer_attn__out.npy",
                                            "transformer_mlp_gate_out.npy"], os.listdir(out_dir)
+    # An empty filter list matches nothing, as on the ATen side (R30).
+    empty = out_dir + "/empty"
+    os.mkdir(empty)
+    TritonSequence.nbx_dump_raw(empty + ":", "transformer", "op::7", list(store), store.get)
+    assert os.listdir(empty) == [], os.listdir(empty)
     assert "torch" not in sys.modules
     print("OK")
 ''')
