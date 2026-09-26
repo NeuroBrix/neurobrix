@@ -135,11 +135,41 @@ def test_the_SCREENING_BUDGET_is_what_moves_the_cost(monkeypatch):
 
 
 def test_a_shape_that_cannot_be_windowed_says_so(monkeypatch):
-    """None means 'I did not screen this', and the caller prints that rather than pretending."""
+    """None means 'I did not screen this', and the caller prints that rather than pretending.
+
+    Until 2026-09-26 a 3-D output was such a shape and every convolution key over the budget
+    (a 4-D `[N, Cout, Ho, Wo]`) was seated without a screen. An N-D contiguous output is rows
+    of its last dimension — `[prod(leading), last]` — and windows like a matrix; what cannot be
+    windowed by rows is an output with no rows at all."""
     monkeypatch.setenv("NBX_SCREEN_WINDOWS", "3")
     m = _launcher()
 
-    class _ThreeD:
-        shape = (4, 8, 8)
-        _nbytes = 4 * 8 * 8 * 2
-    assert m._row_windows_for(_ThreeD(), budget_bytes=1024) is None
+    class _OneD:
+        shape = (256,)
+        _nbytes = 256 * 2
+    assert m._row_windows_for(_OneD(), budget_bytes=1024) is None
+
+    class _FourD:                                      # a conv output: 1 x 3 x 2048 x 1024, fp16
+        shape = (1, 3, 2048, 1024)
+        _nbytes = 3 * 2048 * 1024 * 2
+    wins = m._row_windows_for(_FourD(), budget_bytes=32 * 1024 * 1024)
+    assert wins and wins[-1][1] == 3 * 2048, f"the flat rows are N*Cout*Ho = 6144: {wins}"
+    assert all(r1 - r0 <= 32 * 1024 * 1024 // (3 * 1024 * 8) for r0, r1 in wins), wins
+
+
+def test_the_oracle_row_cost_shrinks_the_window_when_the_kernel_says_so(monkeypatch):
+    """A 3-channel output row is 24 KB of float64; its 128-channel receptive field is 2 MB. The
+    convolution family sizes its windows by the latter, or a window of a few hundred rows reads
+    gigabytes (the Mac's key, 2026-09-25)."""
+    monkeypatch.setenv("NBX_SCREEN_WINDOWS", "3")
+    m = _launcher()
+
+    class _FourD:
+        shape = (1, 3, 2048, 1024)
+        _nbytes = 3 * 2048 * 1024 * 2
+    budget = 32 * 1024 * 1024
+    by_row = m._row_windows_for(_FourD(), budget_bytes=budget)
+    by_field = m._row_windows_for(_FourD(), budget_bytes=budget, oracle_row_cost=2_121_728)
+    assert by_field and by_row
+    assert max(r1 - r0 for r0, r1 in by_field) < max(r1 - r0 for r0, r1 in by_row), (by_field, by_row)
+    assert max(r1 - r0 for r0, r1 in by_field) * 2_121_728 * 3 <= budget, by_field
