@@ -39,7 +39,7 @@ def _model(root: Path, name: str, marker: str) -> Path:
     """A directory shaped like an installed model: a manifest and a weight."""
     d = root / name
     d.mkdir(parents=True)
-    (d / "manifest.json").write_text(json.dumps({"version": marker}))
+    (d / "manifest.json").write_text(json.dumps({"version": marker, "model_name": name}))
     (d / "weights.safetensors").write_bytes(marker.encode() * 4096)
     return d
 
@@ -82,7 +82,7 @@ def test_the_live_tree_is_readable_at_every_instant_of_a_reinstall(tmp_path):
     reader.start()
     try:
         with installing(target, label="test") as staging:
-            (staging / "manifest.json").write_text(json.dumps({"version": "NEW"}))
+            (staging / "manifest.json").write_text(json.dumps({"version": "NEW", "model_name": target.name}))
             (staging / "weights.safetensors").write_bytes(b"NEW" * 4096)
             time.sleep(0.05)          # the extraction the reader must survive
     finally:
