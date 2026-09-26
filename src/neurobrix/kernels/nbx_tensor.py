@@ -270,6 +270,33 @@ def bf16_carrier_to_float32(arr):
     bits = np.ascontiguousarray(a).view(np.uint16).astype(np.uint32)
     return (bits << np.uint32(16)).view(np.float32).reshape(a.shape)
 
+def float32_to_bf16_bits(arr):
+    """Narrow float32 values to bfloat16, returned as their uint16 bit patterns
+    (numpy has no bfloat16), rounding to nearest with ties to even.
+
+    This is the rounding `torch.Tensor.to(torch.bfloat16)` applies, the one the
+    vendors' weights meet, and the one this engine's own device cast
+    (`NBXTensor.to(bfloat16)`) applies. Keeping the top sixteen bits instead is
+    a truncation toward zero: every value loses on average half a bf16 ulp of
+    magnitude, the same sign every time. The Triton weight loaders did that
+    until 2026-09-26 (measured on PixArt-XL-2-1024-MS: the Triton copy of a
+    weight equalled the truncation of the container's fp32 on 100 % of its
+    elements and the oracle's round-to-nearest copy on 49.9 %).
+
+    `+0x7FFF` alone rounds an exact half down; `((u >> 16) & 1)` adds the one
+    that makes it ties-to-even. A NaN whose payload lives only in the dropped
+    bits would become an infinity, so every NaN is written as a quiet NaN.
+    Infinities and values that round past the bf16 maximum become infinities,
+    as they do in torch."""
+    import numpy as np
+    a = np.ascontiguousarray(arr, dtype=np.float32)
+    u = a.view(np.uint32)
+    bits = ((u + (np.uint32(0x7FFF) + ((u >> np.uint32(16)) & np.uint32(1)))) >> np.uint32(16)).astype(np.uint16)
+    nan = np.isnan(a)
+    if nan.any():
+        bits[nan] = (((u[nan] >> np.uint32(16)) & np.uint32(0x8000)) | np.uint32(0x7FC0)).astype(np.uint16)
+    return bits.reshape(a.shape)
+
 _COMPLEX_DTYPES = frozenset({NBXDtype.complex64, NBXDtype.complex128})
 
 
