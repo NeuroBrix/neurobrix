@@ -1407,7 +1407,19 @@ class Model:
         return True
 
     def step_install(self):
-        if self.done("install"): return True
+        reinstall = None
+        if self.done("install"):
+            if self.cache_holds_backup() is not True:
+                return True
+            # The state says installed; the cache holds the PREVIOUS container (the hub's object put
+            # back by hand, or by a restore). A resumed chain measures the container it BUILT: with
+            # the install skipped, new_outputs ran on the old one and the gate compared the June graph
+            # with itself (granite-speech, 2026-09-26 02:43 UTC). Reinstall the recorded .nbx and drop
+            # the arms and the verdict that were measured on the wrong container.
+            reinstall = "the state said installed but the cache held the previous container"
+            log(f"{self.name}: install is marked done but the cache holds the previous container — reinstalling the built .nbx")
+            for stale in ("new_outputs", "gate"):
+                self.state["steps"].pop(stale, None)
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
         if not nbx or not Path(nbx).exists():
             self.mark("install", False, error="no built .nbx"); return False
@@ -1420,7 +1432,7 @@ class Model:
         rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
         ok = rc == 0 and (CACHE / installed / "manifest.json").exists()
         self.new_name = installed
-        self.mark("install", ok, rc=rc, installed_name=installed)
+        self.mark("install", ok, rc=rc, installed_name=installed, **({"reinstalled": reinstall} if reinstall else {}))
         return ok
 
     def step_new_outputs(self):
