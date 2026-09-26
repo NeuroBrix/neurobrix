@@ -233,13 +233,20 @@ def cmd_export(a) -> int:
     for r in rows:
         manifest = CACHE / r["model"] / "manifest.json"
         judged = r.get("judged")
-        verdict = r.get("verdict") or ("broken" if r["rc"] != 0 else "pending")
+        # A failed cell is 'pending' until judged: a harness cause (a timeout, an input not fed,
+        # a card too small) is 'not-runnable-here(<reason>)', never 'broken' by its rc alone.
+        verdict = r.get("verdict") or "pending"
         lp = (proofs.get(r["model"]) or {}).get("last_proof")
+        if lp is not None and "stack" not in lp:
+            # A proof whose python is unread is no regression baseline: the batteries ran on the
+            # old venv until 2026-09-26 (the zoo brick), and an ATen DAG is not stable across torch.
+            lp = {**lp, "stack": "unknown"}
         lines.append({
             "repo_id": repos.get(r["model"]),
             "container": r["model"],
             "container_sha256": sha256(manifest) if manifest.exists() else None,
             "stack": "cuda",
+            "python": r.get("python"),
             "mode": "compiled" if r["mode"] == "native" else r["mode"],
             "request": " ".join(r["request"]),
             "today": {"date": r["date"], "engine": r["engine"], "rc": r["rc"],
