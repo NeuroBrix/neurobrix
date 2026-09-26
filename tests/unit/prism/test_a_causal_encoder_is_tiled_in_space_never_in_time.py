@@ -88,3 +88,18 @@ def test_a_causal_encoder_over_its_budget_is_tiled_in_space_with_the_whole_clip(
 def test_a_causal_encoder_off_its_frame_lattice_or_within_budget_is_left_alone(causal_encoder):
     assert _decide(causal_encoder, 88, 80 * GB) is None      # (88 - 1) % 4 != 0
     assert _decide(causal_encoder, 81, 1 * GB) is None       # fits untiled
+
+
+def test_a_causal_encoder_is_sized_at_the_requests_pixels_not_its_latent():
+    """The tiling above only triggers if the plan SEES the overflow: a causal encoder's
+    time/height/width bind to the request's pixel extents, as a linear encoder's always did. On
+    the old binding this binds the latent extents (21, 44, 104) and the Wan encoder was sized at
+    1.1 GB for 81 frames of 352x832."""
+    from neurobrix.core.prism.profiler import ActivationProfiler
+    g = _encoder_graph(True)
+    g["symbolic_context"] = {"symbols": {
+        "s0": {"name": "batch", "trace_value": 1}, "s1": {"name": "time", "trace_value": 9},
+        "s2": {"name": "height", "trace_value": 112}, "s3": {"name": "width", "trace_value": 176}}}
+    m = ActivationProfiler(g).build_symbol_map(
+        InputConfig(batch_size=1, height=352, width=832, num_frames=81, temporal_compression=4))
+    assert (m["s1"], m["s2"], m["s3"]) == (81, 352, 832), m
