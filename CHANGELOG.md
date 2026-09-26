@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it then failed (85 frames at 320x576 on a 32 GB card), while tiling it at a larger size. The
   plan now budgets a whole component under the Triton engine's own footprint and tiles the
   decoder at both sizes.
+- **`NBX_DUMP_RAW` works in `--triton-sequential`.** The raw tensor dump stopped the run on the
+  first matching op; it now writes each matching output as `<component>_<tensor>.npy`, bf16 widened
+  exactly to float32, the same files as `--triton`, without loading PyTorch.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
