@@ -149,7 +149,8 @@ def test_an_already_extracted_directory_never_reaches_the_door(tmp_path):
     from neurobrix.nbx.cache import ensure_extracted
     d = tmp_path / "cache" / "some-model"
     d.mkdir(parents=True)
-    (d / "manifest.json").write_text("{}")
+    # a real manifest declares its model name (the naming door reads it; 2026-09-26)
+    (d / "manifest.json").write_text(json.dumps({"model_name": d.name}))
     assert ensure_extracted(d) == d
 
 

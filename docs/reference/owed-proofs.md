@@ -4677,3 +4677,88 @@ Target sizes: [2, 32, 64, 64]. Tensor sizes: [128, 128]`, measured 2026-09-25 on
 any piece exists). A symbolic-coverage defect of the trace (principle 1), queued with the Mac's
 trace defects (df2588e7), fixed at source and retraced; the streamed LM gates run granite-speech at
 batch 1 until then (`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`).
+
+## 2026-09-25 — the dead band, measured on this rack's two series (the supervisor's design, approved 10:53 UTC)
+
+`rung = floor_ladder(reading − pool noise)`, and for serve a climb hysteresis (climb only once the
+reading clears the next rung by 2 × noise; descend at once). Measured with the ladder table's own
+method (`nbx/campaigns/2026_09_24_ladder_noise/dead_band.py`, output `dead_band.log`): the same
+render-tail series (1 490 samples) and model-load series (736 samples) of the host pool, the same
+pairs ≥ 30 s apart, the same 113 pool sizes 4.5–32 GB, noise = the table's 5 366 MB (2.17 % of
+the pool). Same-rung rate of pairs, and memory discarded below the reading, mean / worst:
+
+| ladder | floor(reading) | floor(reading − noise) | + serve hysteresis |
+|---|---|---|---|
+| render tail — old hand list (19) | 98.70 / 56.83 % · 12.80 / 31.73 % | 98.65 / 49.83 · 14.48 / 34.46 | 97.09 / 51.73 · 14.97 / 34.38 |
+| render tail — geo k=1 (227) | 81.08 / 49.84 · 1.12 / 2.12 | 81.40 / 49.70 · 3.24 / 4.21 | 61.35 / 51.50 · 4.07 / 4.71 |
+| render tail — geo k=2 (115) | 91.99 / 50.72 · 2.22 / 4.15 | 90.53 / 49.52 · 4.18 / 6.22 | 77.90 / 51.50 · 5.08 / 6.03 |
+| render tail — geo k=4 (59) | 94.88 / 50.62 · 4.03 / 7.96 | 96.16 / 51.53 · 6.13 / 9.87 | 89.50 / 51.50 · 6.98 / 9.71 |
+| render tail — geo k=8 (31) | 97.86 / 60.16 · 8.02 / 14.73 | 97.88 / 58.91 · 9.82 / 16.58 | 95.20 / 51.50 · 10.52 / 16.36 |
+| model load — old hand list | 96.57 / 47.71 · 12.80 / 31.73 | 97.01 / 47.54 · 14.48 / 34.46 | 97.70 / 58.68 · 15.55 / 34.37 |
+| model load — geo k=1 | 60.30 / 46.90 · 1.07 / 2.03 | 59.25 / 46.84 · 3.23 / 4.26 | 78.03 / 58.57 · 4.75 / 5.23 |
+| model load — geo k=2 | 79.11 / 47.20 · 2.19 / 4.16 | 78.88 / 47.20 · 4.27 / 6.25 | 89.54 / 58.57 · 5.77 / 7.09 |
+| model load — geo k=4 | 89.56 / 47.29 · 4.01 / 8.00 | 90.17 / 47.20 · 6.12 / 9.97 | 94.70 / 58.68 · 7.65 / 10.90 |
+| model load — geo k=8 | 95.76 / 49.13 · 7.82 / 14.60 | 94.45 / 47.36 · 9.63 / 16.68 | 97.68 / 58.57 · 11.03 / 17.52 |
+
+What the numbers say: subtracting the noise costs ~2 points of memory and moves the same-rung
+rate by less than a point on every ladder — the worst pool size straddles a boundary whatever is
+subtracted, since the band shifts the boundary, it does not remove it. The hysteresis helps on the
+model-load series (whose swing is one-sided: loads take memory and give it back) on every ladder,
+and HURTS on the render tail for the fine ladders (geo k=1: 81 → 61 %): with rungs one noise
+apart, the climb target (reading − 2 noise) and the descent point (reading − noise) sit one rung
+apart, and a swing of one noise walks the held rung up and down. On the 4×-noise ladder the design
+holds: 89.5 / 94.7 % same-rung, 7–8 % discarded, the worst pool size at 51.5–58.7 %.
+
+**Owed by the Mac:** its own series (host `MemAvailable`, or the unified pool's free reading, at
+1 s over a render tail and over a model load — `sample_free.py` is the sampler) so the same table
+can be produced for its pool; only two readings of it exist here (12 598 → 15 248 MB), not a
+series.
+
+## The re-traced PixArt-XL-2-1024-MS plans the 2048x1024 request the Mac refused (rack, 2026-09-25)
+
+Measured on the rack with no card, through Prism alone: on the Mac's own profile (Apple M4 Pro,
+18 186 MB device, host 24 576 MB with 11 198 MB available — the pinned reading of 2026-09-24)
+at the 4096 MB rung, the container re-traced on 2026-09-25 with the signature brick plans
+**batch 2 at 2048x1024 under `layer_streaming`** in `triton` mode, where the container the Mac
+rendered from (`PixArt-XL-1024`, the 2026-05-20 trace, a second trace of the same repository
+under an invented name) was refused at 14 420 MB — its transformer declared `seq_len` at two
+symbol ids and the reserve followed. Batch 8 at 2048x1024 and batch 2 at 4096x2048 are refused
+under every strategy. The cell that holds it:
+`tests/unit/prism/test_a_refusal_names_why_layer_streaming_declined.py::test_the_retraced_container_plans_what_the_old_one_refused`
+(branch `dedup-references-2026-09-26`). The hub's `PixArt/PixArt-XL-1024` record is being
+replaced with this container on the same day.
+
+**Owed by the Mac:** the 2048x1024 render itself on its card from the replaced hub object —
+with the runtime screen bounded by its windows (branch `screen-conv-window-2026-09-26`, the
+Mac's own engine defect of 2026-09-25; its key 128 → 3 at 2048x1024 bf16 is the gate's) — and
+the image judged by eye, since its 512x512 render of the old container was judged failed
+(80.8 % saturated pixels) with the cause not isolated.
+
+## 2026-09-26 — owed by the Mac: the proofs behind its two engine facts, mirrored to the NAS (rack, 2026-09-26 07:21 UTC)
+
+The supervisor's entry of 2026-09-26 09:10 CEST hands the rack two engine facts with the Mac's
+proof paths: (1) `single_gpu_lifecycle` keeps the text encoder resident while the transformer
+loads — `repro_pixart_shape/pixart_1024x1024_6cd3002b.log` lines 14-19 and 33-34, its
+`.footprint.tsv`, `guard_1024x1024_6cd3002b.log`; (2) `autotune_certify.synthesize` allocates
+the key's full-size arguments for a compile-only caller and the conv wrapper's im2col multiplies
+it — `census/killed_fullsize_2026-09-25/`, `validation_proxy_2026-09-26/`. None of these paths
+is on the NAS under `models/_agents` (searched by name on 2026-09-26 07:21 UTC); only the Mac's report and
+session files are mirrored.
+
+Read on the rack meanwhile, so the Mac can aim: the compiled iterative flow force-unloads every
+pre-loop component after it runs (`core/flow/iterative_process.py`, `_unload_component(comp,
+force=True)` after each pre-loop execution, "matches the triton path"), and Prism classifies
+the text encoder transient for a diffusion container (`core/prism/solver.py`,
+`_classify_lifecycle`). So on the rack's reading the encoder should have been released before
+the transformer's first weight; what the Mac's log lines 33-34 show around that unload (did it
+run, what did the pool's free reading do) decides whether the defect is the flow, the plan's
+transient list not reaching the executor (`plan.transient_components`), or the backend's
+release. The certifier's synthesize is read too: `certify_key` synthesizes the kernel's real
+inputs because the launch it certifies is the key's — a compile-only caller on the Mac's side
+(`msl_census.py`) is the consumer the bound must be designed for, and its invocation is in the
+proof directory.
+
+**Owed by the Mac:** the four paths above and `census/rerun_streamed_6cd3002b/rerun_summary.md`
+(the 36 next-defect rows and 31 MoE decode rows the supervisor queued for the rack) copied under
+`models/_agents/mac.proofs.2026-09-26/` with their sha256 beside them, and one line naming which
+caller of `synthesize` compiles without running.

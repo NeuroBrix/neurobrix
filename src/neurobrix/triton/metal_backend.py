@@ -355,6 +355,20 @@ def _refuse_if_ephemeral(name: str) -> None:
             "against an install a cleaner can remove mid-campaign.")
 
 
+def _declare_selected(name: str) -> str:
+    """The selection DECLARES to nbx_tensor what the selected launcher proved: on triton_ext a
+    loaded address reads correctly through its pinned scope
+    (test_the_moe_table_reads_through_a_pinned_scope, 2026-09-20); any other backend answers
+    False until it proves its own lifetime contract. nbx_tensor is a library with a boundary and
+    asks the engine nothing — until 2026-09-26 it imported this module to ask, and its ratchet
+    cell was red on main. Every selection (the launcher's driver seam, the autotune key
+    resolution, the refusal reader) passes through `selected_metal_backend` before a kernel is
+    launched, so the declaration precedes the first launch."""
+    from neurobrix.kernels.nbx_tensor import declare_backend_capability
+    declare_backend_capability("metal", loads_pointers_from_memory=(name == "triton_ext"))
+    return name
+
+
 def selected_metal_backend() -> str:
     """WHICH Metal backend this machine runs, decided by the PROFILE.
 
@@ -413,7 +427,7 @@ def selected_metal_backend() -> str:
                 f"than running on the other backend and attributing the numbers to "
                 f"the declared one. Install it, or change the profile.")
         _refuse_if_ephemeral(declared)
-        return declared
+        return _declare_selected(declared)
 
     present = [n for n in METAL_BACKENDS if _installed(n)]
     if not present:
@@ -428,7 +442,7 @@ def selected_metal_backend() -> str:
             f"must say which, or its measurements cannot name the backend that "
             f"produced them.")
     _refuse_if_ephemeral(present[0])
-    return present[0]
+    return _declare_selected(present[0])
 
 
 def backend_target_name() -> str:
@@ -639,6 +653,7 @@ def ensure_triton_metal_or_raise() -> None:
             "\n"
             "Status and known gaps: docs/internal/metal_adoption_plan_2026_09_03.md"
         )
+
 
 
 def nbx_driver_module() -> str:

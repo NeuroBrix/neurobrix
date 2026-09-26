@@ -587,33 +587,24 @@ def _synthesize_position_ids(ctx: 'FlowContext', comp_inputs: list, comp_shapes:
         else:
             n_dims = img_shape[1] if len(img_shape) > 1 else 3
 
-        # Compute n_pos from RUNTIME latent dimensions (not trace-time topology shapes).
-        # At synthesis time, the state variable hasn't been packed yet, so we derive
-        # the packed position count from runtime latent dims in defaults.
-        n_pos = None
+        # The grid IS the request's patch grid (2026-09-25): the FLUX packing turns the
+        # latent [B, C, H, W] into [B, (H/2)*(W/2), C*4], so the ids are (H/2) rows by
+        # (W/2) columns — never a square rebuilt from the token count: at 512x1536 the
+        # old int(sqrt(3072)) = 55 gave 3025 ids against 3072 tokens (Flex.1-alpha, the
+        # RoPE multiply: `Cannot broadcast (1, 24, 3584, 128) and (1, 1, 3537, 128)`),
+        # and a square request hid it. A request that names no latent size is refused.
         comp_hs_shape = comp_shapes.get("hidden_states", [])
         packing = len(comp_hs_shape) == 3  # 3D hidden_states = Flux-style packing
-
         latent_h_rt = ctx.variable_resolver.defaults.get("latent_height")
         latent_w_rt = ctx.variable_resolver.defaults.get("latent_width")
-
-        if latent_h_rt is not None and latent_w_rt is not None and packing:
-            # Flux-style packing: [B,C,H,W] -> [B, (H/2)*(W/2), C*4]
-            # patch_size=2 consistent with _pack_latents/_unpack_latents
-            patch_h = int(latent_h_rt) // 2
-            patch_w = int(latent_w_rt) // 2
-            n_pos = patch_h * patch_w
-
-        # Fallback to topology shapes if runtime dims not available
-        if n_pos is None:
-            state_shape = comp_shapes.get("hidden_states", [])
-            if len(state_shape) >= 2:
-                n_pos = state_shape[1] if len(state_shape) == 3 else state_shape[0]
-            else:
-                n_pos = img_shape[1] if len(img_shape) == 3 else img_shape[0]
-
-        latent_h = int(math.sqrt(n_pos))
-        latent_w = n_pos // latent_h
+        if latent_h_rt is None or latent_w_rt is None or not packing:
+            raise RuntimeError(
+                "ZERO FALLBACK: the FLUX image position ids need the request's latent "
+                f"height and width (got latent_height={latent_h_rt!r}, "
+                f"latent_width={latent_w_rt!r}, packing={packing}); a square grid guessed "
+                "from the token count is wrong for every non-square request")
+        latent_h = int(latent_h_rt) // 2
+        latent_w = int(latent_w_rt) // 2
 
         # Build position grid: [latent_h, latent_w, n_dims]
         # dim 0 = batch_idx (0), dim 1 = row, dim 2 = col, rest = 0

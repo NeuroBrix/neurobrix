@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-114 entries, 108 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 109 carry a site. Two
+116 entries, 110 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3488,3 +3488,56 @@ main in both engines.
 
 **The lesson, in one line.** A piece is a graph: check it the way the engine will read it —
 every id every op names, in every form an argument takes.
+
+### 109 — the retrace gate's arms ran on the live tree under a frozen worktree's name
+
+`tools/retrace_zoo.py --src <worktree>` put the worktree ROOT on `PYTHONPATH`; the package lives
+under `<worktree>/src`, so the import fell through to the editable install — the live tree — and
+every "old" and "new" arm of 2026-09-25 (PixArt-XL-2-1024-MS twice, Flex.1-alpha) ran on whatever
+the live tree held at that minute, while the operator believed the arm frozen. The same path made
+the frozen autotune state read `0 certified entries` (it looked for `<root>/neurobrix/config/autotune`),
+so both arms swept every key and the old arms took thirty minutes instead of one. The first sign
+was a kernel edit made in the live tree at 18:44 (the concat/stack int64 selection) appearing in
+Flex's new arm at 18:46 — a change that could not have reached a frozen tree.
+
+**What the gate did while it ran on the wrong tree**: PASS with bytes identical on both arms —
+true, and proven on the same tree for both arms, so the PixArt verdicts stand; but a gate whose
+arms follow the live tree measures the operator's last edit, not the commit it names.
+
+**Repair.** `--src` refuses a directory without `neurobrix/__init__.py` (ZERO FALLBACK, names the
+`<checkout>/src` form); the campaign scripts name `<worktree>/src`. Flex's new arm and gate re-run
+on the frozen tree.
+
+**The lesson, in one line.** A frozen tree is only frozen if the import resolves inside it — put the
+package on the path and refuse a path that holds none.
+
+### 110 — the certifier compared a band of the output against an oracle of the whole
+
+`neurobrix autotune certify` synthesizes a key's inputs, calls the wrapper, and certifies at the
+autotuner's seam — one oracle per key, computed over the whole synthesized product, its
+comparison windows cut on the output tensor the LAUNCH carries. The `mm` wrapper band-streams a
+product above `NBX_MM_MAX_OUTPUT_ELEMS` output elements (Metal's boundary, applied on every
+backend) and keys every band on the whole shape's bucket, so mochi-1-preview's key
+`matmul_kernel (4194304, 512, 256, IEEE, PROMOTE_B, fp32, fp16, fp32)` — an output of exactly
+2^31 elements — reached the seam as two launches of 4 192 256 and 2 048 rows. The windows (rows
+0-5086, the middle, 4 189 218-4 194 304) lay past the band tensor; the certifier read memory the
+kernel never wrote (zeros, not the poison's NaN, which covered the band only) and refused the
+key: "every config diverges from the fp64 oracle, best 1.0" (2026-09-25 22:47 UTC, card 3). The
+same wrapper on the production path was correct at every sampled row around the boundary
+(relative deviation under 1e-6, card 3, 2026-09-26 00:20 UTC).
+
+**What the gate said about a correct kernel**: "kernel defect". An instrument that compares a
+band against the whole cannot tell a wrong kernel from a streamed one, and its FAILED reads as
+the doctrine's "do not certify around it".
+
+**Repair.** The certifier's oracle is the oracle of THE LAUNCH, from the kernel's own named
+operands (`autotune_certify.launch_oracle`, the runtime screen's `screen_oracle._mm` brick,
+row-windowed on the launch's M) — band-agnostic by construction, one brick for both instruments;
+a later launch of an already certified key inside one wrapper call runs the chosen
+configuration; the proof records the launch count. Gate
+`tests/unit/kernels/test_the_certifier_measures_the_launch_it_sees.py`: with the band door
+lowered so a (256 x 32) product streams in two bands, red on d2285fc2, green after. The key
+certified at once (deviation 7.4e-7, 17 of 17 accepted).
+
+**The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
+kernel was handed, never from what the caller was asked for.
