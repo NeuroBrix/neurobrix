@@ -54,7 +54,8 @@ class _Tuner:
 
 
 def _buffers(*tensors):
-    return [(t.data_ptr(), t._nbytes, "fp32") for t in tensors]
+    from neurobrix.kernels.launcher import ScreenedBuffer
+    return [ScreenedBuffer(t.data_ptr(), t._nbytes, "fp32") for t in tensors]
 
 
 def test_the_oracle_lands_on_the_output_not_on_a_same_sized_input():
@@ -103,7 +104,8 @@ def test_a_size_disagreement_refuses_instead_of_guessing(capsys):
     c = _Tensor(np.zeros((4, 8)))
     tuner = _Tuner("matmul_kernel", {"a_ptr": a, "b_ptr": b, "c_ptr": c})
     # a buffer claiming c's address but the wrong length
-    bad = [(c.data_ptr(), c._nbytes + 4, "fp32")]
+    from neurobrix.kernels.launcher import ScreenedBuffer
+    bad = [ScreenedBuffer(c.data_ptr(), c._nbytes + 4, "fp32")]
     assert SO.provider(tuner, ("k",), bad) is None
     assert "bytes" in capsys.readouterr().out
 
