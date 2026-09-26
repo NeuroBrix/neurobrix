@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gigabytes of host memory and could end the run on a machine with little of it. The check now
   reads only a few output rows and their receptive field, whatever the family of the kernel,
   and sizes every buffer by the engine's own element widths.
+- **A video decoder no longer runs out of memory after the plan placed it whole on the card.**
+  Under the Triton engine a component held whole on one device needs more memory than the
+  profile measured; the plan compared the measured figure alone and placed a decoder whole where
+  it then failed (85 frames at 320x576 on a 32 GB card), while tiling it at a larger size. The
+  plan now budgets a whole component under the Triton engine's own footprint and tiles the
+  decoder at both sizes.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped
