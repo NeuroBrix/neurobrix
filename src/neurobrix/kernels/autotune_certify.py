@@ -167,6 +167,33 @@ def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
             << np.uint32(16)).view(np.float32)
 
 
+class KeyTooLargeForClass(RuntimeError):
+    """The key's operands alone exceed the certifying card: refused BEFORE a value is drawn.
+
+    The census can record a shape its class never forms (a plan tiles before it — see
+    `oversize_for_class`). It used to be discovered only when the device allocation failed,
+    AFTER the host had drawn every operand in float64: on 2026-09-26 a 16 GB certifier held
+    65 GB of host memory and a 32 GB one 52 GB, for an hour, on keys asking 37 GiB of a
+    31.7 GiB card, with 30 GB of the host left for everything else."""
+
+    def __init__(self, asked: int, card: int, what: str):
+        super().__init__(f"the key's operands ask {asked} bytes of a {card}-byte card ({what})")
+        self.asked, self.card = asked, card
+
+
+def _itemsize(dtype_name: str) -> int:
+    return 2 if dtype_name == "bf16" else np.dtype(_NP[dtype_name]).itemsize
+
+
+def _refuse_oversize(card_bytes, specs, what: str) -> None:
+    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw."""
+    if card_bytes is None:
+        return
+    asked = sum(int(np.prod(shape, dtype=np.int64)) * _itemsize(dt) for shape, dt in specs)
+    if asked > card_bytes:
+        raise KeyTooLargeForClass(asked, int(card_bytes), what)
+
+
 def _arr(rng, shape, dtype_name, scale=0.1):
     if dtype_name not in _NP:
         # ZERO FALLBACK. A dtype this table does not know used to become float32 in silence,
@@ -180,15 +207,47 @@ def _arr(rng, shape, dtype_name, scale=0.1):
         # An integral operand in these kernels is a MASK or an index, not a sample from a
         # normal distribution: zeros and ones, which is what a mask carries and what the
         # oracle can reproduce exactly.
-        a = rng.integers(0, 2, size=shape)
-        return _Synth(a.astype(_NP[dtype_name]), dtype_name)
-    a = (rng.standard_normal(shape) * scale)
+        a = rng.integers(0, 2, size=shape, dtype=np.int8)
+        return _Synth(a.astype(_NP[dtype_name], copy=False), dtype_name)
+    # Drawn in float32 (float64 only for an fp64 operand) and scaled IN PLACE: the float64 draw
+    # and its scaled copy held five times the operand's bytes on the host before its final cast.
+    draw = np.float64 if dtype_name == "fp64" else np.float32
+    a = rng.standard_normal(shape, dtype=draw)
+    a *= draw(scale)
     if dtype_name == "bf16":
-        # The VALUES are made exactly representable in bf16, so the oracle
-        # reading this array reads what the kernel will receive.
-        exact = bf16_bits_to_f32(f32_to_bf16_bits(a.astype(np.float32)))
-        return _Synth(exact.reshape(np.shape(a)), "bf16")
-    return _Synth(a.astype(_NP[dtype_name]), dtype_name)
+        # The VALUES are made exactly representable in bf16 (round to nearest, ties to even —
+        # `f32_to_bf16_bits`' rule), in place, so the oracle reading this array reads what the
+        # kernel will receive.
+        flat = a.reshape(-1).view(np.uint32)
+        step = 1 << 18                                   # a 1 MB temporary, whatever the operand
+        for i in range(0, flat.size, step):
+            u = flat[i:i + step]
+            t = np.right_shift(u, np.uint32(16))
+            np.bitwise_and(t, np.uint32(1), out=t)
+            np.add(t, np.uint32(0x7FFF), out=t)
+            np.add(u, t, out=u)
+            np.bitwise_and(u, np.uint32(0xFFFF0000), out=u)
+        return _Synth(a, "bf16")
+    return _Synth(a.astype(_NP[dtype_name], copy=False), dtype_name)
+
+
+class _ArgSpec:
+    """An operand known by its shape and dtype only (`synthesize(values=False)`)."""
+    __slots__ = ("shape", "dtype_name")
+
+    def __init__(self, shape, dtype_name):
+        self.shape, self.dtype_name = tuple(int(v) for v in shape), dtype_name
+
+
+#: A key's dtype spelling where NBXTensor's differs (Triton's `int1` is a boolean tensor).
+_SPEC_NBX = {"int1": "bool"}
+
+
+def _spec(rng, shape, dtype_name, scale=0.1):
+    """`_arr`'s signature, no draw: the same ZERO FALLBACK on a dtype the table cannot build."""
+    if dtype_name not in _NP:
+        raise RuntimeError(f"certify: no synthesis for dtype {dtype_name!r}")
+    return _ArgSpec(shape, dtype_name)
 
 
 def _conv_out_hw(h, wd, kh, kw, stride, padding, dilation):
@@ -335,17 +394,26 @@ def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     return lambda: WindowedOracle([(w, _conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w)) for w in wins], oh, ow, n)
 
 
-def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[], Any], Callable[[], np.ndarray], str]]:
+def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None,
+               values: bool = True) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], np.ndarray]], str]]:
     """(call, oracle_fn, output_arg_name): a callable that runs the wrapper on
     inputs of this key's shape and dtypes, a callable computing the fp64
     oracle of the same inputs (LAZY: only once the wrapper's key is known to
     be the census's — an oracle for a mismatched key is minutes wasted), and
     the name of the kernel argument that is the output. None when this
-    kernel has no synthesizer here."""
+    kernel has no synthesizer here.
+
+    `values=False`: the arguments only — each operand allocated on the device with the key's
+    shape and dtype (so its strides, alignment and integer specialisation are the real key's),
+    nothing drawn on the host, no oracle (None). For a caller that compiles without running (the
+    Mac's `msl_census.py`, 2026-09-26: it needs the key's dtypes, strides and `==1`/`%16`/i32
+    specialisation, never the values)."""
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
     from neurobrix.kernels import wrappers as W
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
+    arr = _arr if values else _spec
+
     def to(a):
         """The NBXTensor the kernel must receive, with the dtype the key names.
 
@@ -354,41 +422,59 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
         are. Passing the fp32 carrier instead is what made every bf16 shape
         uncertifiable.
         """
+        if isinstance(a, _ArgSpec):
+            return NBXTensor.empty(a.shape, dtype=_SPEC_NBX.get(a.dtype_name, a.dtype_name))
         if getattr(a, "_nbx_dtype", None) == "bf16":
             bits = f32_to_bf16_bits(np.ascontiguousarray(np.asarray(a)))
             return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
         return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)))
+    out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
     if short in ("matmul_kernel", "addmm_kernel"):
         M, N, K = int(key[0]), int(key[1]), int(key[2])
-        a = _arr(rng, (M, K), dts[0] if dts else "fp16")
-        b = _arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
+        _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
+                                      ((K, N), dts[1] if len(dts) > 1 else "fp16"),
+                                      ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
+                                      ((M, N), out_dt)], short)
+        a = arr(rng, (M, K), dts[0] if dts else "fp16")
+        b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
-            return (lambda: W.mm(to(a), to(b))), _matmul_oracle_fn(a, b), "c_ptr"
-        bias = _arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
-        return ((lambda: W.addmm(to(bias), to(a), to(b))), _matmul_oracle_fn(a, b, bias[None, :]), "c_ptr")
+            return (lambda: W.mm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "c_ptr"
+        bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
+        return ((lambda: W.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
     if short == "baddbmm_kernel":
         M, N, K = int(key[0]), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
         B = 2
-        a = _arr(rng, (B, M, K), dts[0] if dts else "fp16")
-        b = _arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
+        _refuse_oversize(card_bytes, [((B, M, K), dts[0] if dts else "fp16"),
+                                      ((B, K, N), dts[1] if len(dts) > 1 else "fp16"),
+                                      ((B, M, N), out_dt)]
+                         + ([((B, M, N), dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16"))]
+                            if has_bias else []), short)
+        a = arr(rng, (B, M, K), dts[0] if dts else "fp16")
+        b = arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
         if has_bias:
             bias_dt = dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16")
-            bias = _arr(rng, (B, M, N), bias_dt)
-            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), _matmul_oracle_fn(a, b, bias), "out_ptr")
-        return (lambda: W.bmm(to(a), to(b))), _matmul_oracle_fn(a, b), "out_ptr"
+            bias = arr(rng, (B, M, N), bias_dt)
+            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias) if values else None), "out_ptr")
+        return (lambda: W.bmm(to(a), to(b))), (_matmul_oracle_fn(a, b) if values else None), "out_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
-        x = _arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
-        wt = _arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
+        _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
+                                      ((co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16"),
+                                      ((n, co, _oh, _ow), out_dt)], short)
+        x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
+        wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
-                _conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups), "output_pointer")
+                (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups) if values else None), "output_pointer")
     if short == "depthwise_conv2d_kernel":
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
-        x = _arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
-        wt = _arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
+        _refuse_oversize(card_bytes, [((1, c, h, w), dts[0] if dts else "fp16"),
+                                      ((c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16"),
+                                      ((1, c, _oh, _ow), out_dt)], short)
+        x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
+        wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
-                _conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (1, 1), c), "out_ptr")
+                (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (1, 1), c) if values else None), "out_ptr")
     return None
 
 
@@ -966,14 +1052,15 @@ def launch_oracle(qual: str, tuner, meta, out_tensor):
     return RowWindowedOracle(blocks, m)
 
 
-def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None) -> Dict[str, Any]:
+def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
+                card_bytes: Optional[int] = None) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
     proof, excluded) for the directory. Raises when nothing survives."""
     from neurobrix.kernels import launcher as L
     from neurobrix.triton import autotune_cache as atc
     from triton.runtime.autotuner import Autotuner
-    made = synthesize(qual, tuner, key, rng)
+    made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes)
     if made is None:
         raise RuntimeError(f"no synthesizer for {qual}")
     call, oracle_fn, out_name = made
@@ -1330,6 +1417,8 @@ def oversize_for_class(exc: BaseException):
     16 GB run never forms that key — Prism tiles the decode long before it — so no certified
     entry is owed for it and reporting it beside genuine failures buries both. Named, counted
     apart, and left for the census to stop recording (2026-09-22)."""
+    if isinstance(exc, KeyTooLargeForClass):
+        return (exc.asked, exc.card)
     m = _OVERSIZE.search(str(exc))
     if not m:
         return None
@@ -1518,7 +1607,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             t0 = time.time()
             try:
                 tol = _tolerance(vendor, profile, dtype)
-                entry = certify_key(qual, tuner, key, tol, rng)
+                entry = certify_key(qual, tuner, key, tol, rng,
+                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20)
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
                 # again. Counted apart so the exit code can still mean something.

@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
+  Such a shape is now reported as too large before its inputs are generated, and inputs are
+  generated in their own precision, so a certification run's host memory stays close to the size
+  of the operands it tests.
+
 - **Certifying a very large matrix product no longer fails on a correct kernel.** A product
   whose output exceeds two billion elements is run in row bands; the certification tool compared
   each band against a reference of the whole product and refused the shape. It now checks each
@@ -46,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it then failed (85 frames at 320x576 on a 32 GB card), while tiling it at a larger size. The
   plan now budgets a whole component under the Triton engine's own footprint and tiles the
   decoder at both sizes.
+- **`NBX_DUMP_RAW` works in `--triton-sequential`.** The raw tensor dump stopped the run on the
+  first matching op; it now writes each matching output as `<component>_<tensor>.npy`, bf16 widened
+  exactly to float32, the same files as `--triton`, without loading PyTorch.
 
 - **Non-square requests on FLUX-family image models now run.** The image position grid was
   rebuilt as a square from the token count, so a request such as 512x1536 on Flex.1-alpha stopped

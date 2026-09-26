@@ -36,44 +36,36 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-_LEGACY_NBX = "/home/mlops/ml/venv/bin/neurobrix"
-_LEGACY_PY = "/home/mlops/ml/venv/bin/python"
 
 
 def zoo_python() -> str:
-    """The interpreter the arms run under.
+    """The interpreter the arms run under: `NBX_ZOO_PYTHON`, else the engine python the launch
+    pinned (`NEUROBRIX_PYTHON`, then `NBX_PYTHON`), else the interpreter running this tool.
 
-    This was the rig's absolute venv path and nothing else. That is correct on
-    the rig and does not exist anywhere else, so the tool — and with it the
-    audio gate's transcript fallback — could not run off that one machine.
-    Measured on Apple 2026-09-18: the gate returned
-    `transcribe: [Errno 2] No such file or directory:
-    '/home/mlops/ml/venv/bin/neurobrix'`, i.e. it reported a stochastic
-    synthesis as FAILING the gate when what had actually failed was locating a
-    recognizer.
+    It used to prefer the rig's absolute `ml/venv` path whenever that path existed — correct when
+    that venv was the engine's, and a trap once the engine moved to its own stack (2026-09-16,
+    `docs/internal/environments.md`: `ml/venv` is Forge's python in transition). Measured
+    2026-09-26: the regression matrix, launched under the engine python, ran its first cell under
+    the old venv's `neurobrix` binary (torch 2.5.1) because the legacy path existed. A machine
+    path that answers "which stack" is a constant answering a live question; the launch answers it.
 
-    The rig keeps exactly what it had — the legacy path is preferred whenever it
-    exists — so this changes nothing there.
+    Measured on Apple 2026-09-18, the reason this never names a machine path: the audio gate's
+    transcript fallback returned `[Errno 2] No such file or directory` for the rig's venv.
     """
-    return os.environ.get("NBX_ZOO_PYTHON") or (
-        _LEGACY_PY if os.path.exists(_LEGACY_PY) else sys.executable)
+    return (os.environ.get("NBX_ZOO_PYTHON") or os.environ.get("NEUROBRIX_PYTHON")
+            or os.environ.get("NBX_PYTHON") or sys.executable)
 
 
 def nbx_cmd() -> list:
-    """The `neurobrix` entry point, as a command LIST.
-
-    `python -m neurobrix` is the portable spelling of the console script, and it
-    is what the console script does; the rig's own binary is still preferred
-    where it exists.
-    """
+    """The `neurobrix` entry point, as a command LIST: `NBX_ZOO_NEUROBRIX` when set, else
+    `python -m neurobrix` under `zoo_python()` — the portable spelling of the console script."""
     env = os.environ.get("NBX_ZOO_NEUROBRIX")
     if env:
         return [env]
-    if os.path.exists(_LEGACY_NBX):
-        return [_LEGACY_NBX]
     return [zoo_python(), "-m", "neurobrix"]
 
 
@@ -204,14 +196,35 @@ def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
         return -9
 
 
+def oom_kills() -> Optional[int]:
+    """The kernel's OOM-kill counter since boot (`/proc/vmstat`), or None where it does not exist."""
+    try:
+        for line in Path("/proc/vmstat").read_text().splitlines():
+            if line.startswith("oom_kill "):
+                return int(line.split()[1])
+    except OSError:
+        return None
+    return None
+
+
 def run(cmd, env, log: Path, timeout: int) -> tuple:
+    """-9 is what `run_group` returns for a timeout — and what ANY SIGKILL returns. The log said
+    "TIMEOUT after 3600s" for a Qwen3-30B cell the kernel killed at 323 s (2026-09-26, host
+    memory: three 30B models loading at once). A -9 before the timeout is written as a KILL, with
+    the OOM-kill counter read around the run."""
     t0 = time.time()
+    oom0 = oom_kills()
     with open(log, "w") as fh:
         fh.write("$ " + shlex.join(cmd) + "\n")
         fh.flush()
         rc = run_group(cmd, env, fh, timeout)
-        if rc == -9:
+        wall = time.time() - t0
+        if rc == -9 and wall >= timeout:
             fh.write(f"\nTIMEOUT after {timeout}s\n")
+        elif rc == -9:
+            oom1 = oom_kills()
+            fh.write(f"\nKILLED by SIGKILL at {wall:.0f}s, before the {timeout}s timeout; kernel OOM kills "
+                     f"during the run: {'unknown' if None in (oom0, oom1) else oom1 - oom0}\n")
     return rc, time.time() - t0
 
 
