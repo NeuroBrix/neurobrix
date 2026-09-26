@@ -426,6 +426,24 @@ def _backend_capability(table, name: str, what: str) -> bool:
     return value
 
 
+#: What the ENGINE declared about a backend, above the tables: a capability that is a
+#: property of the launcher it selected, not of the silicon, is the engine's to state.
+#: nbx_tensor is a library with a boundary (R33, the ratchet cell
+#: test_the_boundary_does_not_widen) and asks the engine nothing; the engine tells it,
+#: through `declare_backend_capability`, before a kernel is launched.
+_DECLARED_CAPABILITIES: Dict[str, Dict[str, bool]] = {}
+
+
+def declare_backend_capability(backend: str, **capabilities: bool) -> None:
+    """The engine states a capability of the launcher it selected for `backend`
+    (`loads_pointers_from_memory=True` for Metal's triton_ext, proven through its pinned
+    scope). Read by the capability questions below, above the static tables."""
+    for name, value in capabilities.items():
+        if not isinstance(value, bool):
+            raise TypeError(f"a backend capability is a bool, not {value!r} ({backend}.{name})")
+    _DECLARED_CAPABILITIES.setdefault(backend, {}).update(capabilities)
+
+
 def backend_loads_pointers_from_memory() -> bool:
     """True where a kernel may dereference an address it LOADED from a tensor.
 
@@ -436,16 +454,17 @@ def backend_loads_pointers_from_memory() -> bool:
     test_the_moe_table_reads_through_a_pinned_scope, 2026-09-20; the archived
     fork had no such scope and the same load returned zeros with nothing
     raised — the measured defect this gate refuses). So the metal row is a
-    SELECTION read, not a constant: any other metal backend answers False
-    until it proves its own lifetime contract.
+    SELECTION read, not a constant — and the selection is the engine's, so the
+    engine DECLARES it here on every Metal run's entry
+    (`triton/metal_backend.ensure_triton_metal_or_raise`); undeclared, the table's
+    False stands until a launcher proves its own lifetime contract. Until
+    2026-09-26 this function imported the engine's metal_backend to ask, which
+    widened the library's boundary (the ratchet cell went red on main).
     """
     backend = _detect_gpu_backend()
-    if backend == "metal":
-        try:
-            from neurobrix.triton.metal_backend import selected_metal_backend
-            return selected_metal_backend() == "triton_ext"
-        except Exception:                              # noqa: BLE001
-            return False
+    declared = _DECLARED_CAPABILITIES.get(backend, {}).get("loads_pointers_from_memory")
+    if declared is not None:
+        return declared
     return _backend_capability(
         _BACKEND_LOADS_POINTERS_FROM_MEMORY, "_BACKEND_LOADS_POINTERS_FROM_MEMORY",
         "whether a kernel can read through a pointer loaded from memory")
