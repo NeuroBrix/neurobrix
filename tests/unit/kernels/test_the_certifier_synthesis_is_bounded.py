@@ -67,3 +67,19 @@ def test_the_host_peak_is_a_small_multiple_of_the_operand(dt, ceiling):
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert peak <= ceiling * a.nbytes, f"{dt}: peak {peak} for {a.nbytes} operand bytes"
+
+
+def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out):
+    # The Mac's compile-only caller (msl_census.py) needs the key's arguments, never values.
+    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    for kernel, key in ((qual, (1 << 16, 4096, 4096, True, False, "fp16", "fp16", "fp16")),
+                        ("neurobrix.kernels.ops.conv.conv2d_forward_kernel",
+                         (1, 128, 2048, 1024, 128, 2048, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, "fp16", "fp16"))):
+        tracemalloc.start()
+        made = AC.synthesize(kernel, _Tuner(), key, _NoDraw(), values=False)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        call, oracle, _ = made
+        assert oracle is None and callable(call)
+        assert peak < 1 << 20, f"{peak} host bytes for an argument-only synthesis"
+
