@@ -125,29 +125,71 @@ def container_bytes(model: str) -> int:
     return sum(f.stat().st_size for f in (CACHE / model).glob("components/*/weights/*"))
 
 
-def host_heavy(model: str) -> bool:
-    """A container whose weights exceed an eighth of the host's memory runs ALONE among the cards:
-    on 2026-09-26 three 30B-class models loading at once on a 251 GB host drew the OOM killer."""
-    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    return container_bytes(model) > total // 8
+#: A cell's host footprint per byte of weights: pinned staging + the arena's host side. Measured
+#: 2026-09-26: Qwen3-Coder-30B 87 GB RSS for 57 GB of weights, DeepSeek-Coder-V2-Lite 51 GB for 31,
+#: deepseek-moe 43 GB for 32 — 1.35x to 1.65x.
+HOST_PER_WEIGHT_BYTE = 1.7
+#: The share of the host the matrix may hold at once: the rest belongs to the census, the gate's
+#: harness and the kernel. Three concurrent cells at 180 GB of 251 drove memory pressure to 33 %
+#: "full" and the gate's cells to their timeouts (2026-09-26).
+HOST_SHARE = 0.55
+
+
+def _host_bytes() -> int:
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+def _ledger(out: Path, change):
+    """Read-modify-write the host reservations {pid: bytes} under an exclusive flock, dead pids pruned."""
+    path = out / "host_ledger.json"
+    with open(out / "host_ledger.lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            led = json.loads(path.read_text()) if path.exists() else {}
+            led = {p: n for p, n in led.items() if Path(f"/proc/{p}").exists()}
+            result = change(led)
+            path.write_text(json.dumps(led))
+            return result
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def reserve_host(out: Path, need: int) -> bool:
+    budget = int(_host_bytes() * HOST_SHARE)
+
+    def take(led):
+        if need > budget:
+            raise SystemExit(f"a cell needing {need >> 30} GiB of host exceeds the matrix's whole budget "
+                             f"({budget >> 30} GiB): refused by name")
+        if sum(led.values()) + need > budget:
+            return False
+        led[str(os.getpid())] = need
+        return True
+    return _ledger(out, take)
+
+
+def release_host(out: Path) -> None:
+    _ledger(out, lambda led: led.pop(str(os.getpid()), None))
 
 
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
-    """The cell's row; None when the cell is host-heavy, the host lock is taken and `wait` is False
-    (the card runs its light cells meanwhile and comes back)."""
-    if host_heavy(model):
-        with open(out / "host_heavy.lock", "a") as lk:
-            try:
-                fcntl.flock(lk, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-            except BlockingIOError:
-                return None
-            try:
-                print(f"[matrix] {model} {mode}: host-heavy ({container_bytes(model) / 2**30:.0f} GiB of "
-                      f"weights), the host lock held", flush=True)
-                return _run_cell(model, mode, gpu, out, timeout, src)
-            finally:
-                fcntl.flock(lk, fcntl.LOCK_UN)
-    return _run_cell(model, mode, gpu, out, timeout, src)
+    """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
+    runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
+    gate runs — nothing runs beside a gate) holds every new cell."""
+    need = int(container_bytes(model) * HOST_PER_WEIGHT_BYTE)
+    while True:
+        while (out / "PAUSE").exists():
+            time.sleep(30)
+        if reserve_host(out, need):
+            break
+        if not wait:
+            return None
+        time.sleep(30)
+    try:
+        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved", flush=True)
+        return _run_cell(model, mode, gpu, out, timeout, src)
+    finally:
+        release_host(out)
 
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
@@ -200,12 +242,10 @@ def cmd_run(a) -> int:
             if (m.strip(), mode) not in done]
     while todo:
         deferred = []
-        for model, mode in todo:
-            # A host-heavy cell whose lock is taken is deferred while light cells remain; once only
-            # deferred cells are left, the card waits for the lock.
-            row = run_cell(model, mode, a.gpu, out, a.timeout, Path(a.src),
-                           wait=not any(not host_heavy(m) for m, _ in todo if (m, _) not in deferred
-                                        and (m, _) != (model, mode)))
+        for i, (model, mode) in enumerate(todo):
+            # A cell the host budget cannot take now is deferred while this pass has cells left;
+            # the pass's last cell waits for the budget (and the deferred ones come next pass).
+            row = run_cell(model, mode, a.gpu, out, a.timeout, Path(a.src), wait=i == len(todo) - 1)
             if row is None:
                 deferred.append((model, mode))
                 continue
