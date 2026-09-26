@@ -64,6 +64,9 @@ class NBXRuntimeLoader:
                     f"  FIX: Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
                 )
             core_data[key] = self._load_json_from_cache(file_path)
+        # The naming door at the runtime's own entry (see `nbx.cache.refuse_misnamed`).
+        from neurobrix.nbx.cache import refuse_misnamed
+        refuse_misnamed(cache_path, core_data["manifest"])
 
         # 1b. Weight-storage encoding compatibility gate (artifact-verdict
         # condition 1): a build whose manifest declares a weight_encoding
