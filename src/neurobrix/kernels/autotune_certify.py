@@ -185,11 +185,23 @@ def _itemsize(dtype_name: str) -> int:
     return 2 if dtype_name == "bf16" else np.dtype(_NP[dtype_name]).itemsize
 
 
-def _refuse_oversize(card_bytes, specs, what: str) -> None:
-    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw."""
+def _unified_bytes_per_element(dt) -> int:
+    """What one element of a synthesized tensor costs on a device whose memory IS the host's:
+    the host draw (float32, float64 for an fp64 operand — `_arr`), the device copy at its own
+    width, and the float32 readback. For a half type 4 + 2 + 4 = 10, the Mac's measured
+    ceiling (2026-09-27: 6.4, 8.2 and >= 9.8 B/elem at 358M, 642M and 1 456M elements)."""
+    return (8 if str(dt) == "fp64" else 4) + _itemsize(dt) + 4
+
+
+def _refuse_oversize(card_bytes, specs, what: str, unified: bool = False) -> None:
+    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw.
+    On a unified-memory device the host copies live in the same pool as the device buffers,
+    so every copy is counted: a conv sized at 3 GB of device bytes took the Mac's certifier
+    past 14 GB and was killed by its guard (2026-09-27)."""
     if card_bytes is None:
         return
-    asked = sum(int(np.prod(shape, dtype=np.int64)) * _itemsize(dt) for shape, dt in specs)
+    per = _unified_bytes_per_element if unified else _itemsize
+    asked = sum(int(np.prod(shape, dtype=np.int64)) * per(dt) for shape, dt in specs)
     if asked > card_bytes:
         raise KeyTooLargeForClass(asked, int(card_bytes), what)
 
@@ -394,7 +406,7 @@ def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     return lambda: WindowedOracle([(w, _conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w)) for w in wins], oh, ow, n)
 
 
-def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None,
+def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None, unified: bool = False,
                values: bool = True) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], np.ndarray]], str]]:
     """(call, oracle_fn, output_arg_name): a callable that runs the wrapper on
     inputs of this key's shape and dtypes, a callable computing the fp64
@@ -434,7 +446,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
                                       ((K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
-                                      ((M, N), out_dt)], short)
+                                      ((M, N), out_dt)], short, unified=unified)
         a = arr(rng, (M, K), dts[0] if dts else "fp16")
         b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
@@ -449,7 +461,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((B, K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((B, M, N), out_dt)]
                          + ([((B, M, N), dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16"))]
-                            if has_bias else []), short)
+                            if has_bias else []), short, unified=unified)
         a = arr(rng, (B, M, K), dts[0] if dts else "fp16")
         b = arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
         if has_bias:
@@ -461,7 +473,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
                                       ((co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((n, co, _oh, _ow), out_dt)], short)
+                                      ((n, co, _oh, _ow), out_dt)], short, unified=unified)
         x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
@@ -470,7 +482,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
         _refuse_oversize(card_bytes, [((1, c, h, w), dts[0] if dts else "fp16"),
                                       ((c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((1, c, _oh, _ow), out_dt)], short)
+                                      ((1, c, _oh, _ow), out_dt)], short, unified=unified)
         x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
@@ -619,7 +631,8 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     # `ordinal` is the CUDA ordinal in the visible set (0 under a pin to any physical card),
     # not the physical card; the visible set is recorded beside it so the pair says which.
     return {"ordinal": idx, "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0)}
+            "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0),
+            "unified": bool(dev.has_unified_memory()) if hasattr(dev, "has_unified_memory") else False}
 
 
 def _clocks_mhz():
@@ -1053,14 +1066,14 @@ def launch_oracle(qual: str, tuner, meta, out_tensor):
 
 
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
-                card_bytes: Optional[int] = None) -> Dict[str, Any]:
+                card_bytes: Optional[int] = None, unified: bool = False) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
     proof, excluded) for the directory. Raises when nothing survives."""
     from neurobrix.kernels import launcher as L
     from neurobrix.triton import autotune_cache as atc
     from triton.runtime.autotuner import Autotuner
-    made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes)
+    made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes, unified=unified)
     if made is None:
         raise RuntimeError(f"no synthesizer for {qual}")
     call, oracle_fn, out_name = made
@@ -1608,7 +1621,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             try:
                 tol = _tolerance(vendor, profile, dtype)
                 entry = certify_key(qual, tuner, key, tol, rng,
-                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20)
+                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20,
+                                    unified=bool(certifying_device.get("unified")))
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
                 # again. Counted apart so the exit code can still mean something.
