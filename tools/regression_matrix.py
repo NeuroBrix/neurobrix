@@ -171,6 +171,13 @@ HOST_PER_WEIGHT_BYTE = 1.7
 HOST_SHARE = 0.8
 #: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness).
 HOST_HEADROOM = 16 << 30
+#: A model's MEASURED host peak is reserved with this margin; HOST_PER_WEIGHT_BYTE serves only a model
+#: this matrix never measured. The flat estimate held card 0 idle behind 188 GB of reservations while
+#: the four running cells used 10.3, 1.1, 0.7 and 0.5 GB of RSS (the supervisor's reading, 2026-09-27
+#: 14:20) — an estimate where a measurement was available.
+MEASURED_MARGIN = 1.2
+#: How often a running cell's host footprint is sampled for its peak.
+PEAK_SAMPLE_S = 1.0
 
 
 def _host_bytes() -> int:
@@ -197,6 +204,62 @@ def _rss_tree(pid: int) -> int:
         except OSError:
             continue
     return total
+
+
+def _children_rss() -> int:
+    """Resident bytes of every process this runner started (its cell's process tree), the runner excluded."""
+    me = os.getpid()
+    try:
+        kids = [int(c) for c in Path(f"/proc/{me}/task/{me}/children").read_text().split()]
+    except OSError:
+        return 0
+    return sum(_rss_tree(k) for k in kids)
+
+
+class PeakRSS:
+    """The peak of `_children_rss()` while it runs, sampled every PEAK_SAMPLE_S — a cell's host peak,
+    written in its row so the next reservation of the model is a measurement, not an estimate."""
+
+    def __init__(self, interval: float = PEAK_SAMPLE_S):
+        import threading
+        self.peak, self._interval = 0, interval
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self):
+        while True:
+            self.peak = max(self.peak, _children_rss())
+            if self._stop.wait(self._interval):
+                return
+
+    def __enter__(self):
+        self._t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._t.join()
+        self.peak = max(self.peak, _children_rss())
+
+
+def measured_peaks(out: Path) -> dict:
+    """{model: the highest `host_peak_rss` any row of this matrix recorded for it}."""
+    peaks = {}
+    for f in out.glob("rows_card*.jsonl"):
+        for line in f.read_text().splitlines():
+            r = json.loads(line)
+            if r.get("host_peak_rss"):
+                peaks[r["model"]] = max(peaks.get(r["model"], 0), int(r["host_peak_rss"]))
+    return peaks
+
+
+def host_need(model: str, out: Path) -> tuple:
+    """(bytes to reserve, where the figure comes from): the model's highest measured peak plus
+    MEASURED_MARGIN when this matrix measured it, the static estimate only when it never did."""
+    peak = measured_peaks(out).get(model)
+    if peak:
+        return int(peak * MEASURED_MARGIN), "measured"
+    return int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate"
 
 
 def _ledger(out: Path, change):
@@ -243,7 +306,7 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
     """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
     runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
     gate runs — nothing runs beside a gate) holds every new cell."""
-    need = int(container_bytes(model) * HOST_PER_WEIGHT_BYTE)
+    need, need_from = host_need(model, out)
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
@@ -253,8 +316,11 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             return None
         time.sleep(30)
     try:
-        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved", flush=True)
-        return _run_cell(model, mode, gpu, out, timeout, src)
+        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved ({need_from})", flush=True)
+        with PeakRSS() as peak:
+            row = _run_cell(model, mode, gpu, out, timeout, src)
+        row.update(host_peak_rss=peak.peak, host_reserved=need, host_reserved_from=need_from)
+        return row
     finally:
         release_host(out)
 
