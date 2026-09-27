@@ -3917,8 +3917,14 @@ class PrismSolver:
                 _rh, _rw = _oh // _ih, _ow // _iw
                 if _rh == _rw and _rh > 1:
                     scale_factor = _rh
+        declared = config.get("upscale")
+        if declared is not None and scale_factor is not None and int(declared) != int(scale_factor):
+            raise ValueError(
+                f"ZERO FALLBACK: {comp_name} declares upscale {declared} and its graph measures "
+                f"{scale_factor} (trace {trace_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
+                f"a tile plan cannot choose between a declaration and a measurement that disagree")
         if scale_factor is None:
-            scale_factor = config.get("upscale")
+            scale_factor = declared
         if scale_factor is None:
             # VAE configs spell the block list as decoder_block_out_channels
             # (Sana/DC-AE) OR the generic block_out_channels (most diffusers VAEs).

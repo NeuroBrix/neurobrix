@@ -46,3 +46,25 @@ def test_sana_video_tiles_at_the_scale_its_graph_measures(monkeypatch):
 def test_a_vae_whose_heuristic_agrees_keeps_its_factor(monkeypatch):
     spec = _spec(monkeypatch, "CogVideoX-2b", 352, 720, 49, 471, 121275, 6087, 12288)
     assert spec is None or spec["scale_factor"] == 8, spec
+
+
+def test_a_declared_upscale_that_disagrees_with_the_graph_is_refused(monkeypatch, tmp_path):
+    """A declaration outranks a guess, never a measurement it contradicts: real-esrgan-x4's graph
+    (measured 4) under a profile that declares upscale 2 refuses by name."""
+    import json
+    import shutil
+    src = CACHE / "real-esrgan-x4" / "components" / "model"
+    if not src.exists():
+        pytest.skip("real-esrgan-x4 is not in this machine's cache")
+    comp = tmp_path / "components" / "model"
+    comp.mkdir(parents=True)
+    shutil.copy(src / "graph.json", comp / "graph.json")
+    prof = json.loads((src / "profile.json").read_text())
+    prof["config"] = {**(prof.get("config") or {}), "upscale": 2}
+    (comp / "profile.json").write_text(json.dumps(prof))
+    monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: 0))
+    s = PrismSolver.__new__(PrismSolver)
+    from neurobrix.core.prism.profiler import InputConfig
+    s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
+    with pytest.raises(ValueError, match="declares upscale 2 and its graph measures 4"):
+        s._spatial_component_tiling(_Container(tmp_path), "model", ComponentMemory("model", 64 * MB, 90000 * MB, 100 * MB), 16384)
