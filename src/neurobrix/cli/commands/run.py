@@ -539,6 +539,9 @@ def cmd_run(args):
     if _cards:
         print(f"   Devices:  {', '.join(_cards)}"
               f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
+    if getattr(execution_plan, "host_footprint", None):
+        from neurobrix.core.prism.host_footprint import summary as _host_summary
+        print(f"   Host:     {_host_summary(execution_plan.host_footprint)}")
     for comp_name, alloc in execution_plan.components.items():
         print(f"   {comp_name} → {alloc.device}")
 

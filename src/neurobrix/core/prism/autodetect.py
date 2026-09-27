@@ -319,6 +319,46 @@ def load_default_profile():
 # MAIN DETECTION ORCHESTRATOR (OS-FIRST)
 # ============================================================================
 
+#: One probe per engine: the engine's own modules imported and its device context created, as a run
+#: does before its first weight; the process then reports its peak resident memory in MB. Each runs
+#: under the interpreter and the card door of the process that builds the profile. The Triton probe
+#: imports no torch (R33).
+_BASE_PROBES = {
+    "compiled": (
+        "import resource, sys\n"
+        "import torch\n"
+        "import neurobrix.core.runtime.graph_executor\n"
+        "if torch.cuda.is_available():\n"
+        "    torch.zeros(1, device='cuda')\n"),
+    "triton": (
+        "import resource, sys\n"
+        "import neurobrix.triton.flow.iterative_process\n"
+        "from neurobrix.kernels.nbx_tensor import DeviceAllocator\n"
+        "if DeviceAllocator.device_count() > 0:\n"
+        "    DeviceAllocator.set_device(0)\n"),
+}
+_PEAK_MB = ("r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+            "print(r // (1 << 20) if sys.platform == 'darwin' else r // 1024)\n")
+
+
+def _measure_runtime_base_mb() -> Dict[str, int]:
+    """{engine: MB} — the runtime's resident memory before any weight, measured on this machine.
+    An engine whose probe cannot run here is left out, and a plan on this profile says its base is
+    unmeasured: a number is never written that was not measured."""
+    import sys as _sys
+    out: Dict[str, int] = {}
+    for engine, code in _BASE_PROBES.items():
+        try:
+            r = subprocess.run([_sys.executable, "-c", code + _PEAK_MB], capture_output=True, text=True,
+                               timeout=300)
+            lines = r.stdout.strip().splitlines()
+            if r.returncode == 0 and lines and lines[-1].strip().isdigit():
+                out[engine] = int(lines[-1].strip())
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return out
+
+
 def detect_hardware() -> Dict[str, Any]:
     """
     Detect all hardware (CPU + GPUs + interconnects). Returns a hardware profile dict.
@@ -333,6 +373,8 @@ def detect_hardware() -> Dict[str, Any]:
 
     # --- CPU (always) ---
     cpu = _detect_cpu(os_type)
+    # The runtime's own base, measured here per engine: the base of Prism's host estimate.
+    cpu["runtime_base_mb"] = _measure_runtime_base_mb()
 
     # --- GPUs (OS-specific cascade) ---
     devices, brand = _detect_gpus(os_type)
