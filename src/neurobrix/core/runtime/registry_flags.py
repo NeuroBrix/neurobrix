@@ -1,21 +1,31 @@
-"""Runtime-direct read of per-component flags from the build toolchain's config/model_registry.yml.
+"""Per-component runtime flags: the container is the source, the build toolchain's registry a check.
 
-Phase 1 (DtypeEngine triton fix) introduced the per-component
-`activations_fp16_safe` flag. Doctrine: changing the YAML must take
-effect on next neurobrix run, WITHOUT a toolchain re-build (R18 immutable
-.nbx is preserved — no field added to graph/topology/profile contract).
+Phase 1 (DtypeEngine triton fix) read per-component flags straight from the
+build toolchain's config/model_registry.yml so a YAML edit took effect with no
+rebuild. That made a model run differently wherever the registry was not
+reachable — the Mac, an installed engine, a worktree without the gitignored
+`.nbx_registry` pointer — and it did: Wan2.1-T2V-1.3B rendered a lattice of
+16-px cells without `zero_pad_embeddings` (2026-09-20), and on 2026-09-27
+fifteen flags of eight video containers still existed only in the registry.
+The supervisor's R18 decision of 2026-09-27 02:57: a container carries every
+flag the engine reads; the registry serves the build only.
 
 Lookup precedence at runtime:
   1. env var override (developer iteration / debugging)
-  2. the build toolchain's config/model_registry.yml when accessible (monorepo / dev)
-  3. default value (legitimate for ABSENT registry / model / component /
-     flag — the annotations are opt-in)
+  2. the container's declaration (nbx/component_flags.py, registered when the
+     container is opened from topology.json's extracted_values)
+  3. default value (the annotations are opt-in)
+
+Where the registry IS reachable, a flag it declares that the container lacks
+or carries with another value is refused by name: a registry edit now takes
+effect through the container (Forge's in-place pass or a rebuild), so the
+developer's rack and every other machine run the same thing.
 
 ZERO FALLBACK boundary (engine audit #2 2026-07-05): an ABSENT registry
 is a legitimate deployment state (installed runtime without the build
-system co-located) and resolves to defaults. A registry that EXISTS but
-cannot be read or parsed RAISES — silently returning defaults would
-disable every per-component annotation engine-wide (e.g. the
+system co-located): the container's declarations answer alone. A registry
+that EXISTS but cannot be read or parsed RAISES — silently skipping it would
+disable the check on every per-component annotation engine-wide (e.g. the
 `activations_fp16_safe` / `requires_fp32_compute` fp32-overflow
 protection; graph_executor.py records that exact silent neutralisation
 happening once already).
@@ -116,20 +126,24 @@ def get_component_flag(
     default: Any = None,
     env_override: Optional[str] = None,
 ) -> Any:
-    """Return the value of `models.<model_name>.components.<component_name>.<flag_name>`.
+    """The flag a shipped container declares on a component.
 
-    Precedence:
+    Precedence (the supervisor's R18 decision of 2026-09-27 02:57 — a
+    container carries every flag the engine reads; the developer registry
+    serves the build toolchain only, never the runtime):
       1. env var (when env_override is provided and set in environment)
-      2. registry YAML lookup (the developer's override)
-      3. the container's own declaration (nbx/component_flags.py)
-      4. default
+      2. the container's own declaration (nbx/component_flags.py)
+      3. default
 
-    Returns default when the registry / model / component / flag is
-    ABSENT (annotations are opt-in — legitimate absence). A registry
-    file that exists but is unreadable/malformed raises from
-    `_load_registry` (ZERO FALLBACK — engine audit #2 2026-07-05; the
-    former "never raises" contract silently disabled every annotation
-    engine-wide on a bad registry).
+    The registry is no longer a SOURCE. Where it is reachable (a developer
+    checkout with the `.nbx_registry` pointer) it is a CHECK: a flag it
+    declares truthy that the container does not carry, or carries with
+    another value, is refused by name — the container is stale and runs
+    differently on every machine without the registry (the Mac, an installed
+    engine, a worktree without the pointer: Wan2.1-T2V rendered a lattice of
+    16-px cells that way on 2026-09-20). A registry file that exists but is
+    unreadable/malformed raises from `_load_registry` (engine audit #2
+    2026-07-05).
     """
     if env_override and env_override in os.environ:
         v = os.environ[env_override].strip().lower()
@@ -142,37 +156,46 @@ def get_component_flag(
     if not model_name or not component_name:
         return default
 
-    reg = _load_registry()
-    # Registry layout: top-level is keyed by family (llm, vlm, image, audio,
-    # tts, stt, audio_llm, multimodal, upscaler, video, ...). Each family
-    # maps model_name → entry → components → component_name → flags. We do
-    # not require the caller to know the family, so we scan top-level for
-    # the model_name. Keys starting with '_' are reserved (templates,
-    # defaults) and skipped, as are non-mapping top-level metadata entries.
-    for top_key, family_entry in reg.items():
-        if str(top_key).startswith("_"):
-            continue
-        if not isinstance(family_entry, dict):
+    from neurobrix.nbx import component_flags
+    carried = component_flags.get(model_name, component_name, flag_name, _ABSENT)
+    declared = _registry_declaration(model_name, component_name, flag_name)
+    # A flag declared false or null is the default and is not carried by the
+    # build (importer/runtime_flags.py); anything else must be carried as is.
+    if declared is not _ABSENT and carried != declared and not (
+            declared in (None, False) and carried is _ABSENT):
+        where = "does not carry it" if carried is _ABSENT else f"carries {carried!r}"
+        raise RuntimeError(
+            f"ZERO FALLBACK: the build toolchain's registry declares "
+            f"{model_name}/{component_name}.{flag_name} = {declared!r} and the "
+            f"container {where}. A shipped container carries every flag the "
+            f"engine reads; this one runs differently on every machine without "
+            f"the registry. Write the flag into the container (Forge "
+            f"tools/neurotax_rename.py --apply) or rebuild it.")
+    return default if carried is _ABSENT else carried
+
+
+_ABSENT = object()
+
+
+def _registry_declaration(model_name: str, component_name: str, flag_name: str) -> Any:
+    """What the reachable registry declares for this flag, else _ABSENT.
+
+    Registry layout: top-level is keyed by family (llm, vlm, image, audio,
+    tts, stt, audio_llm, multimodal, upscaler, video, ...). Each family
+    maps model_name -> entry -> components -> component_name -> flags. The
+    caller need not know the family, so the top level is scanned for the
+    model_name. Keys starting with '_' are reserved (templates, defaults)
+    and skipped, as are non-mapping top-level metadata entries.
+    """
+    for top_key, family_entry in _load_registry().items():
+        if str(top_key).startswith("_") or not isinstance(family_entry, dict):
             continue
         entry = family_entry.get(model_name)
         if not isinstance(entry, dict):
             continue
         comps = entry.get("components", {})
-        if not isinstance(comps, dict):
-            continue
-        comp = comps.get(component_name)
-        if not isinstance(comp, dict):
-            continue
-        if flag_name in comp:
+        comp = comps.get(component_name) if isinstance(comps, dict) else None
+        if isinstance(comp, dict) and flag_name in comp:
             return comp[flag_name]
-        break
-
-    # 3. The container's own declaration. The build writes every flag the
-    #    registry declares on a component into the container (topology
-    #    extracted_values), and the container records it when opened
-    #    (nbx/component_flags.py). This is what an installed engine, or a
-    #    checkout without the `.nbx_registry` pointer, runs on — measured
-    #    2026-09-20 on Wan2.1-T2V-1.3B, which rendered a lattice without it.
-    #    The registry above stays the developer's override.
-    from neurobrix.nbx import component_flags
-    return component_flags.get(model_name, component_name, flag_name, default)
+        return _ABSENT
+    return _ABSENT
