@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Every run's plan now states the host memory it expects to hold.** Beside the cards it plans, a run
   prints `Host:` (and `--explain-plan` a `host memory` line and a JSON field): the runtime's own base,
   measured on the machine when its hardware profile is generated, plus what the chosen plan keeps in
-  host memory and what loading holds. A profile generated before this release says the base is
-  unmeasured until it is regenerated.
+  host memory and what loading holds. The base is measured with the engine's compute libraries loaded,
+  as a run loads them. A profile generated before this release says the base is unmeasured until it is
+  regenerated.
 
 - **The number of weight files read in parallel is configurable in one place.** `io.num_workers` in
   `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
