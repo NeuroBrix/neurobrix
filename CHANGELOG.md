@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
-  whose GPU shares memory with the host, the certifier now counts its host-side copies of each
+  whose GPU shares memory with the host (unified memory), the certifier now counts its host-side copies of each
   test tensor when it decides whether a shape fits.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that

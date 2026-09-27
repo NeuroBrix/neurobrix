@@ -112,11 +112,16 @@ def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch):
 
 
 def test_the_certifying_device_says_whether_its_memory_is_unified(monkeypatch):
-    """The flag's source: the hardware profile's device (DeviceSpec.has_unified_memory)."""
+    """The flag's source: the hardware profile's REAL DeviceSpec. A first version stubbed the
+    device with a lambda and was green against its stub while every real profile raised
+    "'bool' object is not callable" (has_unified_memory is a property) — caught by the Mac's
+    certify run, 2026-09-27 07:03 (vacuous-gates register 113)."""
     import types
+    from neurobrix.core.prism.structure import DeviceSpec
     from neurobrix.kernels import nbx_tensor, wrappers
     monkeypatch.setattr(nbx_tensor.DeviceAllocator, "get_device", staticmethod(lambda: 0))
     for uni in (True, False):
-        dev = types.SimpleNamespace(index=0, name="d", memory_mb=24576, has_unified_memory=lambda u=uni: u)
+        dev = DeviceSpec(index=0, name="d", memory_mb=24576, compute_capability="0.0",
+                         supports_dtypes=["float16"], unified_memory=uni)
         monkeypatch.setattr(wrappers, "get_hardware_profile", lambda d=dev: types.SimpleNamespace(devices=[d]))
         assert AC._read_certifying_device()["unified"] is uni

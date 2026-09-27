@@ -632,7 +632,7 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     # not the physical card; the visible set is recorded beside it so the pair says which.
     return {"ordinal": idx, "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0),
-            "unified": bool(dev.has_unified_memory()) if hasattr(dev, "has_unified_memory") else False}
+            "unified": bool(dev.has_unified_memory)}      # a DeviceSpec property, read — not called
 
 
 def _clocks_mhz():
