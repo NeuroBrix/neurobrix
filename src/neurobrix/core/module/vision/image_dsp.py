@@ -419,3 +419,55 @@ def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
         "patch_attention_mask": np.ones((1, 1, gh * gw), dtype=bool),
         "tgt_sizes": np.array([[gh, gw]], dtype=np.int32),
     }
+
+
+def vace_control_pair_np(clip: Optional[np.ndarray], keep_frames: int, num_frames: int,
+                         height: int, width: int):
+    """The VACE control encoder's input and its pixel mask (vendor WanVACEPipeline).
+
+    The vendor encodes TWO clips from a control video V and a mask M (1 = generate, 0 = keep):
+    ``inactive = V * (1 - M)`` and ``reactive = V * M`` (prepare_video_latents), and folds M
+    into the mask channels (prepare_masks). With no control video V is zeros and M is ones
+    (preprocess_conditions: the all-generate path); a still image is the clip's first
+    ``keep_frames`` frames, the rest padding, and those frames are the kept ones.
+
+    Returns ``(pair [2, 3, T, H, W], mask [1, 1, T, H, W])`` float32: the two clips stacked on
+    the batch axis so ONE encoder pass makes both latents (batch 0 = inactive, 1 = reactive).
+    """
+    if clip is None:
+        v = np.zeros((1, 3, num_frames, height, width), dtype=np.float32)
+        keep_frames = 0
+    else:
+        v = np.asarray(clip, dtype=np.float32)
+        if v.ndim != 5 or v.shape[0] != 1:
+            raise ValueError(f"VACE control: the clip must be [1, 3, T, H, W], got {tuple(v.shape)}")
+    t = v.shape[2]
+    if not 0 <= keep_frames <= t:
+        raise ValueError(f"VACE control: {keep_frames} kept frames in a {t}-frame clip")
+    m = np.ones((1, 1) + tuple(v.shape[2:]), dtype=np.float32)
+    m[:, :, :keep_frames] = 0.0
+    pair = np.concatenate([v * (1.0 - m), v * m], axis=0)
+    return np.ascontiguousarray(pair), m
+
+
+def vace_fold_mask_np(mask: np.ndarray, latent_t: int, latent_h: int, latent_w: int,
+                      mask_channels: int) -> np.ndarray:
+    """Fold a pixel mask [1, 1, T, H, W] into the VACE mask channels [1, C, T', H', W'].
+
+    Vendor WanVACEPipeline.prepare_masks: the spatial VAE factor (s x s pixels per latent cell)
+    moves into the channel axis — view(T, H', s, W', s).permute(2, 4, 0, 1, 3) — and the time
+    axis is resampled T -> T' with ``nearest-exact`` (source index floor((i + 0.5) * T / T')).
+    The spatial factor is read from the shapes (H / H'), never assumed; its square must be the
+    container's declared mask width.
+    """
+    m = np.asarray(mask, dtype=np.float32)
+    _, _, t, h, w = m.shape
+    sh, sw = h // latent_h, w // latent_w
+    if sh * latent_h != h or sw * latent_w != w or sh != sw or sh * sw != mask_channels:
+        raise ValueError(
+            f"VACE mask fold: pixels {h}x{w} over latent {latent_h}x{latent_w} is not a square "
+            f"factor whose square is the declared {mask_channels} mask channels")
+    f = m[0, 0].reshape(t, latent_h, sh, latent_w, sw).transpose(2, 4, 0, 1, 3)
+    f = f.reshape(sh * sw, t, latent_h, latent_w)
+    src = np.minimum(np.floor((np.arange(latent_t) + 0.5) * (t / latent_t)).astype(np.int64), t - 1)
+    return np.ascontiguousarray(f[:, src][None])
