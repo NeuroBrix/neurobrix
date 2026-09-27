@@ -22,6 +22,7 @@ without a GPU.
 from __future__ import annotations
 
 import numpy as np
+from neurobrix.kernels import launcher as L
 
 from neurobrix.kernels import screen_oracle as S
 from neurobrix.kernels.autotune_certify import f32_to_bf16_bits
@@ -79,7 +80,7 @@ def test_bf16_conv_output_gets_a_matching_width_reference():
         base_fn = _conv_kernel_stub()
         nargs = named
 
-    buffers = [(0x3000, out_bits.nbytes, "bf16")]     # the output, bf16 width
+    buffers = [L.ScreenedBuffer(0x3000, out_bits.nbytes, "bf16")]     # the output, bf16 width
     ref = S.provider(_Tuner(), ("conv-bf16-key",), buffers, meta=named)
 
     # The oracle must be CONSULTED, not discarded to the vote: a reference is
@@ -121,5 +122,5 @@ def test_fp32_output_still_matches():
         base_fn = _conv_kernel_stub()
         nargs = named
 
-    ref = S.provider(_Tuner(), ("conv-fp32-key",), [(0x3000, out.nbytes, "fp32")], meta=named)
+    ref = S.provider(_Tuner(), ("conv-fp32-key",), [L.ScreenedBuffer(0x3000, out.nbytes, "fp32")], meta=named)
     assert ref is not None and len(ref[0]) == out.nbytes
