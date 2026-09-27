@@ -351,7 +351,8 @@ def _judgment_time(j) -> float:
     offset = {"CEST": 2, "CET": 1, "UTC": 0, "GMT": 0}.get(zone)
     if offset is None:
         raise SystemExit(f"judgment date {j['date']!r}: unknown zone {zone!r}")
-    return float(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M")) - offset * 3600)
+    fmt = "%Y-%m-%d %H:%M:%S" if stamp.count(":") == 2 else "%Y-%m-%d %H:%M"   # a judge may stamp seconds
+    return float(calendar.timegm(time.strptime(stamp, fmt)) - offset * 3600)
 
 
 def load_rows(out: Path) -> list:
