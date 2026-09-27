@@ -593,7 +593,7 @@ def cmd_run(args):
             prepare_image_inputs,
         )
         inputs.update(prepare_image_inputs(
-            pkg.topology, getattr(args, "model", None), args.input_image,
+            pkg.topology, pkg.manifest.get("model_name"), args.input_image,
             cache_path, height=args.height, width=args.width,
             # The frame count cmd_run already resolved, NOT a second read of
             # the raw argument: without `--frames` that re-derivation was 0, so
@@ -643,7 +643,7 @@ def cmd_run(args):
     # (the all-generate path); an image: V is its padded clip and its frame is the kept one.
     # Data-driven by the transformer's vace_control_conditioning flag.
     from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
-    if _gcf(getattr(args, "model", None), "transformer", "vace_control_conditioning", default=None):
+    if _gcf(pkg.manifest.get("model_name"), "transformer", "vace_control_conditioning", default=None):
         import numpy as _np
         from neurobrix.core.module.vision.image_dsp import vace_control_pair_np
         _clip = inputs.get("global.image")
