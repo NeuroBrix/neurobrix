@@ -34,8 +34,9 @@ from neurobrix.core.io.memory import PinnedMemoryManager, get_io_config, IOConfi
 
 T = TypeVar('T')
 
-# Default workers from config
-DEFAULT_NUM_WORKERS = 8
+# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
+from neurobrix.core.workspace import io_workers as _io_workers
+DEFAULT_NUM_WORKERS = _io_workers()
 
 
 # ============================================================================
