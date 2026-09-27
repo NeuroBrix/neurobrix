@@ -19,7 +19,7 @@ the regression attributable in one cycle (2026-08-28).
 Born from the upscaler trace-value collision + frozen window-count
 pair (DETTE: D-RETRACE-SWIN2SR-SYMBOLIC; the class covers the seven
 Swin-window artifacts — see
-validation_outputs/spatial_freeze_census_2026_08_27/VERDICT.md).
+models/_agents/archives/dell/validation_outputs_pre_2026_09_01/spatial_freeze_census_2026_08_27/VERDICT.md).
 
 Runnable: python3 -m pytest tests/regression/test_upscale_offtrace.py -q
 
