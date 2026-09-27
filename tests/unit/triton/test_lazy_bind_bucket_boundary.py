@@ -35,6 +35,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from tests.unit.child_env import the_callers_door
+
 try:
     import pytest
 except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
@@ -124,7 +126,7 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
         # Device selection and the pinned profile are CUDA facts, not the
         # test's subject. Elsewhere Prism autodetects the hardware, which is
         # what it is for.
-        env["CUDA_VISIBLE_DEVICES"] = env.get("NBX_TEST_GPU", "2")
+        env["CUDA_VISIBLE_DEVICES"] = env.get("NBX_TEST_GPU") or the_callers_door("2")
     env.update(arm_env)
     out = outdir / f"{tag}.txt"
     hardware = ["--hardware", "v100-32g"] if backend == "cuda" else []
