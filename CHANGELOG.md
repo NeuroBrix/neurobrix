@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The number of weight files read in parallel is configurable in one place.** `io.num_workers` in
+  `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
+  written their own value. An unconfigured count stops with a message naming both places.
+
 ### Added
 
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
