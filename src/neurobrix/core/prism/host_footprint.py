@@ -16,15 +16,23 @@ where the rule lives, so a change there is a change to price here:
         pinned; everything else and all compute stay on the card (triton/weight_loader.py
         `_load_to_pinned_cpu`, graph_executor.py re-routes compute to a card);
   transient — while a component loads:
-    compiled: up to `io_workers()` shards in flight, each as read, converted and pinned copies
-        (core/io/weight_loader.py: load to cpu, dtype conversion, pin_memory, non_blocking copy);
+    compiled: the component passes through the host whole — read at its stored width, and pinned at
+        the plan's width for the non-blocking upload (core/io/weight_loader.py `_load_with_pinned_dma`:
+        load_file to cpu, `_convert_weights_dtype`, `_transfer_with_pinned_memory`). The pinned copies
+        are not given back: PyTorch's caching host allocator keeps a freed pinned block on its free
+        list and never calls cudaFreeHost (pytorch#134332; PyTorch DevLog 2026-08-09, "Pinned memory:
+        what it is for, and why nobody gives it back"), so the worker count bounds the pace, not the
+        bytes;
     triton: one tensor at a time, as read and as converted (triton/weight_loader.py);
   base — the runtime's own process before any weight (interpreter, libraries, backend context): a
     MEASURED value of this machine, carried by the hardware profile per engine
     (`cpu.runtime_base_mb`); a profile without it prices no base and says so.
 
 Under lazy loading one component is resident at a time, so steady is the largest component's; eager
-loading holds them all. layer_streaming re-reads a segment from disk per run (no host cache) and KV
+loading holds them all. The compiled load follows the same rule, measured on the matrix's peaks (84 cells,
+2026-09-27): an eager plan loads every component before its first op, and the pinned blocks of one are
+not the sizes the next asks for, so their passes add up; a lazy plan loads one component at a time and
+the next reuses the host blocks the last one left. layer_streaming re-reads a segment from disk per run (no host cache) and KV
 caches live on the card, except under cpu_execution, whose components are priced as host compute.
 
 Pure arithmetic, no torch: Prism is torch-free (R33).
@@ -33,13 +41,6 @@ from __future__ import annotations
 
 from typing import Dict, Mapping, Optional
 
-#: Copies of one shard the compiled loader holds while that shard is in flight: as read and pinned for
-#: the non-blocking upload, plus a converted copy when the stored dtype is not the plan's
-#: (core/io/weight_loader.py `_load_weight_file`: load_file to cpu, `_convert_weights_dtype` returns
-#: early when the dtype already matches, `_transfer_with_pinned_memory`). The loader's own steps,
-#: judged by the matrix's measured peaks — not a tuning value.
-COMPILED_COPIES_PER_SHARD = 2
-COMPILED_CONVERSION_COPIES = 1
 #: Copies of one tensor the triton loader holds: as read and as converted (triton/weight_loader.py).
 TRITON_COPIES_PER_TENSOR = 2
 #: Bytes per element the compiled host path computes in.
@@ -59,14 +60,14 @@ def _on_host(device) -> bool:
 
 def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
-                   base_mb: Optional[int], io_workers: int, dtype_bytes: Mapping[str, int],
+                   base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
     shard_sizes  {component: {shard name: bytes}}         (the container's shards)
-    stored_dtypes {component: {stored floating dtypes}}  (the weights index): a component loaded at
-                 another dtype holds a converted copy per shard in flight
+    stored_dtypes {component: {stored floating dtypes}}  (the weights index): what a load reads at, beside
+                 the plan's dtype it pins at
     base_mb      the runtime's measured base on this machine for this engine, or None (not measured)
     """
     if engine not in ENGINES:
@@ -96,13 +97,15 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
     steady_bytes = (max(steady.values(), default=0) if plan.loading_mode == "lazy"
                     else sum(steady.values()))
     if engine == "compiled":
-        def _copies(name):
+        def _passes_through(name, stored_bytes):
             alloc = plan.components.get(name)
-            stored = (stored_dtypes or {}).get(name) or set()
-            converts = alloc is not None and bool(stored) and any(d != str(alloc.dtype) for d in stored)
-            return COMPILED_COPIES_PER_SHARD + (COMPILED_CONVERSION_COPIES if converts else 0)
-        transient = max((min(io_workers, len(sh)) * _copies(name) * max(sh.values())
-                         for name, sh in shard_sizes.items() if sh), default=0)
+            widths = [dtype_bytes[d] for d in ((stored_dtypes or {}).get(name) or ()) if d in dtype_bytes]
+            pinned = stored_bytes
+            if alloc is not None and widths and str(alloc.dtype) in dtype_bytes:
+                pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
+            return stored_bytes + pinned
+        passes = [_passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
+        transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
     else:
         transient = TRITON_COPIES_PER_TENSOR * max(
             (n for ks in key_sizes.values() for n in ks.values()), default=0)
