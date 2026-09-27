@@ -335,6 +335,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A model runs from what its container declares, on every machine.** Per-component settings
+  that some video models read from a developer-only file now come from the container itself;
+  a developer checkout whose file disagrees with a container refuses to run it and names the
+  setting, instead of running it differently from everyone else.
 - **The memory budget is one law for every device kind.** A shared pool — unified memory, a
   device driving a display, a card another process holds memory on, host RAM — is budgeted at
   its free reading rounded DOWN onto the commercial memory ladder (now configuration, 4 GB to
