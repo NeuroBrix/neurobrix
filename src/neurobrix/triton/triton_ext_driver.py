@@ -202,9 +202,11 @@ class TritonExtDriver(Driver):
         from triton_apple_backend.device_print import parse_print_layout
         pl = parse_print_layout(getattr(metadata, "print_layout", None))
         al = parse_assert_layout(getattr(metadata, "assert_layout", None))
-        if pl is None and al is None:
+        exposes = bool(getattr(metadata, "exposes_addresses", False))
+        reads = bool(getattr(metadata, "reads_addresses", False))
+        if pl is None and al is None and not exposes and not reads:
             return None
-        return _Trailing(pl, al)
+        return _Trailing(pl, al, exposes, reads)
 
     def launch(self, function, grid, block, shared: int, stream: int,
                params: Sequence[Tuple[str, Any]], names=None, types=None,
@@ -275,6 +277,12 @@ class TritonExtDriver(Driver):
         # start zeroed: each block's head word is a running count the kernel
         # bumps.
         print_buf = assert_buf = None
+        # The address verdicts ride with the launch, as their driver sends them.
+        address_kw = {}
+        if trailing is not None and trailing.exposes_addresses:
+            address_kw["exposes_addresses"] = True
+        if trailing is not None and trailing.reads_addresses:
+            address_kw["reads_addresses"] = True
         if trailing is not None:
             rt = D._runtime()      # D is the pinned torch-free runtime's module
             if trailing.print_layout is not None:
@@ -306,7 +314,7 @@ class TritonExtDriver(Driver):
             import time as _t
             _a = _t.perf_counter(); _nbx_queue_drain()
             _b = _t.perf_counter()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **address_kw)
             _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
             _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
             _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
@@ -318,7 +326,7 @@ class TritonExtDriver(Driver):
                 _row[0] += 1; _row[1] += _d - _c
         else:
             _nbx_queue_drain()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **address_kw)
             # And the other direction: the host (and NeuroBrix's own blits) must
             # see what this kernel wrote.
             _native().synchronize()
@@ -346,6 +354,17 @@ class _Trailing(NamedTuple):
     """
     print_layout: Any
     assert_layout: Any
+    #: The compiler's verdict on addresses (triton-ext `compiler.py`:
+    #: `applegpu.exposes_addresses` / `applegpu.reads_addresses`, into the
+    #: metadata). Their own driver passes both on every launch
+    #: (`driver.py`: `exposes_addresses=`, `reads_addresses=`), and
+    #: `metal_native` acts on them: an exposing launch records its buffers as
+    #: exposed, a reading launch makes every exposed buffer resident
+    #: (`useResources`). A launch that omits them reads a pointer table
+    #: through buffers Metal was never told about — measured 2026-09-27 on
+    #: 332e2931: the engine's MoE table read 0/4096 until they were passed.
+    exposes_addresses: bool = False
+    reads_addresses: bool = False
 
 
 #: Binding census, printed at exit under NBX_EXT_STATS=1. An interior binding
@@ -383,9 +402,16 @@ _PTR_NP = {
 _PINNED_WRAPS: dict = {}
 
 # Pinned wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
-# tensor, held by metal_native.retain_resident for the scope's lifetime. What
-# that buys is a PINNED LIFETIME: the wrap, and so its GPU virtual address,
-# outlives the launch that made it. A kernel that reads through a
+# tensor, KEPT (this table holds the reference) for the scope's lifetime, its
+# address read from the wrap itself with upstream's `gpu_address()` (triton-ext
+# 332e2931: a wrapped buffer has an address too, recorded as exposed like an
+# alloc()'d one, so launches make it resident while it lives; the exposed set
+# is weak, so dropping the wrap frees it). What that buys is a PINNED LIFETIME:
+# the wrap, and so its GPU virtual address, outlives the launch that made it.
+# Measured on an upstream-only 332e2931 build, 2026-09-27: a never-bound wrap's
+# host gpu_address() reads correctly from a kernel, at 1 KiB and in the last
+# window of 64 MiB (logs/residency_probes_332e2931_upstream.log). Until then this
+# needed our own `retain_resident` (6904de9, posted on #130, now dropped). A kernel that reads through a
 # pointer-table entry needs the covering wrap ALIVE, and this driver otherwise
 # makes a fresh wrap per launch. Once that wrap is dropped, its captured
 # address reads wrong bytes with nothing raised. Upstream documents exactly
@@ -403,7 +429,7 @@ _RESIDENT_WRAPS: dict = {}
 
 def _resident_acquire(addr: int) -> int:
     """Pin one wrap of the whole allocation containing `addr` for the scope's
-    lifetime (retain_resident holds it); returns base."""
+    lifetime (this table holds it); returns base."""
     import numpy as np
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
 
@@ -423,7 +449,7 @@ def _resident_acquire(addr: int) -> int:
     raw = (ctypes.c_byte * size).from_address(base)
     view = np.frombuffer(memoryview(raw), dtype=np.uint8)
     buf = _native().wrap(view)
-    gpu_va = int(_native().retain_resident(buf))
+    gpu_va = int(buf.gpu_address())
     _RESIDENT_WRAPS[base] = [buf, 1, gpu_va]
     return base
 
@@ -471,10 +497,8 @@ def _resident_release(base) -> None:
         return
     ent[1] -= 1
     if ent[1] <= 0:
-        try:
-            _native().release_resident(ent[0])
-        except Exception:                              # noqa: BLE001
-            pass
+        # Dropping the last reference to the wrap is the release: upstream's
+        # exposed set holds it weakly.
         _RESIDENT_WRAPS.pop(base, None)
 #: How many open scopes pin each address. A wrap is dropped only when the last
 #: scope holding its address exits.
