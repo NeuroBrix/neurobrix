@@ -3988,6 +3988,301 @@ exactly as it applies to a certification sweep.
 
 ---
 
+## 2026-09-23 — the shape defects: cross-backend verdict, and the first one closed by the rack's own fix
+
+### The verdict: shared code, LATENT on the rack, active here
+
+All six models run on the rack — `catalogue-state.md` shows the four PixArt variants and
+Sana-1600M-MultiLing passing on 16 GB **and** 32 GB cards, PixArt-XL-1024 with a judged
+`bench.png`. The code is shared, so the question was why only Apple sees it. The answer is in
+`_spatial_promotion_pass`'s own docstring:
+
+> Bit-perfect for trace == runtime models (Sana 1024, PixArt 1024, every LLM): the resolver
+> substitutes the symbol with its own trace_value, identical Python int output.
+
+**On the rack the pass is a NO-OP**, because trace == runtime for these containers. The Apple
+census imposes rungs (4 096 … 16 384 MB) that change the plan, so runtime != trace and the
+pass actually substitutes — and it disambiguates H from W **by position**, assuming
+channels-first. Sana's `height`@32 and `width`@32 are **weight-extent** bindings, i.e. a
+channel count, so the position rule put 32 where 128 belonged:
+`Cannot broadcast (1, 32, 128, 128) and (1, 128, 128, 32)`.
+
+**This means the rack cannot reproduce the red without making runtime != trace on its side.**
+It can prove a fix does not regress (trace == runtime stays bit-perfect); it cannot see the
+failure by running these models as it runs them today. Worth saying plainly before anyone
+reads a green there as coverage.
+
+### Sana-1600M-MultiLing — CLOSED, by the rack's fix, not by mine
+
+Reproduced on a quiet host after merging main: **rc=0, zero broadcast failures**, a
+1024x1024 artefact with std 57.4, structured, no all-zero rows (2 steps, so dark — the census
+uses 20; the point is the defect, not the image).
+
+The fix is theirs: `2a21e41e` *"forge: a weight's dim is never a request symbol — 11 of 59
+containers say otherwise"*, confirmed an ancestor of this HEAD. Sana's `height`@32 was exactly
+such a binding. **Merging main closed it**, which is the answer their commit message predicted
+for eleven containers and this is one of them.
+
+The remaining five are being reproduced the same way, one model at a time on a quiet host.
+
+### 2026-09-23 — the other four, and a correction to what the rack can reproduce
+
+**The claim above — "the rack cannot reproduce the red without making runtime != trace on
+its side" — is too strong, and this is the measurement that corrects it.** Runtime != trace
+does not need an imposed rung. It needs a request at a size other than the traced one, and
+`--height 2048 --width 2048` is such a request on any machine. Measured here on the census
+shadow, PixArt-XL-1024:
+
+| request | before the fixes | after |
+|---|---|---|
+| 1024² (the traced size) | clean | clean |
+| 1536² | clean | clean |
+| 2048² | `Cannot broadcast (2, 1, 1152) and (8, 4096, 1152)` | clean |
+| 4096² | `Cannot broadcast (2, 1, 1152) and (32, 4096, 1152)` | clean |
+
+So the rack **can** see these reds, by asking for 2048 px. What it cannot do is meet them
+while running these models the way it runs them today, at their traced size — which is why
+36/36 keys and a judged `bench.png` are not coverage above 1024 px. The green there is
+**unexercised, not evidence of absence**, and that is the sentence worth carrying.
+
+1536² is the instructive one: it is CORRECT, before and after, because its ratio to the trace
+is 2.25 and the invented reshape could not scale a batch by a fraction. The integer ratios
+are the ones that break. A gate that sampled only 1536 would have reported health.
+
+**Two defect classes, both fixed engine-side here** (`ae0d1908`, `86fa1ef4`):
+
+1. **The patchified token count was never promotable.** `_spatial_promotion_pass` knows H, W,
+   H*W and their *upscaled* multiples; a patch-embedded transformer divides, so its grid
+   (H/p)*(W/p) — 64, 4096, 8192 in PixArt — matched nothing and 224 target groups stayed
+   literal in PixArt-XL-1024 and PixArt-Sigma-XL-1024. The token expression is now harvested
+   from the graph's own correctly-symbolised patch-embed view; no patch size is inferred.
+
+2. **A request symbol standing in for a fixed extent** — the same class as your `2a21e41e`
+   ("a weight's dim is never a request symbol — 11 of 59 containers say otherwise"), met in
+   two further shapes that commit did not reach here:
+   - a **slice end**: the PixArt -MS timestep embedding is 256 wide and split in half, and at
+     the traced 1024 px the half (128) equals the latent height, so the tracer bound
+     `emb[:, :128]`'s end to `height`. Corrected by reachability — that tensor descends from
+     `input::timestep`, never from `input::hidden_states`.
+   - a **head dimension**: Sana_1600M_1024px_MultiLing has 70 heads of 32 and a latent of 32,
+     so the head dim was bound to `height`. Reachability cannot adjudicate it (the tensor *is*
+     spatial, the position is not); the discriminator is structural — a group of view-target
+     entries reconstructing a weight extent (70*32 = 2240) may not hold a request symbol.
+     **This one did NOT close the model.** Three of Sana's defects were fixed and a fourth
+     stands; it is named, not closed, and it closes by YOUR retrace — see the 2026-09-23
+     entry at the end of this file, which supersedes any reading of this line as a closure.
+
+Both are **load-time adaptations, not trace repairs**. The born-at-source fix is yours and it
+already exists: containers re-traced under `2a21e41e` will not carry these bindings. The
+adaptation is what lets the containers already built run before eleven re-traces land. If you
+re-trace these four, the corrections become no-ops rather than conflicts — they only fire on a
+symbol the container itself carries, and they run before any promotion this pass inserts.
+
+**Owed to the rack:** a CUDA proof at **2048 px** for the four PixArt containers and
+Sana_1600M_1024px_MultiLing, on the merged trunk. Not at 4096 px — that is an Apple rung
+question and this defect does not need it.
+
+**Owed by us, named not fixed:** `metadata_ops._reshape` does not refuse a target that no
+longer matches its input's element count. Its "BATCH-AWARE FALLBACK" and the relative-shape
+logic behind it INVENT a numel-preserving shape, which is how a baked literal became
+`(32, 4096, 1152)` instead of an error naming the op. Every defect above was found eleven ops
+downstream of where it happened. Making it refuse is a catalogue-wide change that cannot ship
+unmeasured — its docstring says it is load-bearing for CFG batch 2 -> 1 — so it is filed here
+with its evidence rather than changed quietly.
+
+### 2026-09-23 — Sana closes by YOUR retrace; PixArt is a sibling class your detector does not scan
+
+**Sana_1600M_1024px_MultiLing is yours, and you already have it.** `2a21e41e` names eleven
+containers and this one is first, with 174 parameter dims bound to symbols — the worst of the
+eleven — and the commit is explicit that they are "PINNED rather than asserted empty: data
+awaiting retraces". Ran your own detector here to be sure rather than infer it from the list:
+
+    PixArt-XL-1024                   offending PARAMETER dims: 0
+    PixArt-Sigma-XL-1024             offending PARAMETER dims: 0
+    PixArt-XL-2-1024-MS              offending PARAMETER dims: 0
+    PixArt-Sigma-XL-2-1024-MS        offending PARAMETER dims: 0
+    Sana_1600M_1024px_MultiLing      offending PARAMETER dims: 174
+
+Three of its defects were closed here, each chaining to the next the way the census shadow
+always does:
+
+    aten.bmm::0  (140, 33, 16384) @ (35, 16384, 128)    head dim bound to height
+    aten.mm::3   Incompatible dimensions: 4480 vs 2240  hidden size written as mul(70, height)
+    aten.add::6  (2, 4096, 2240) vs (2, 4224, 2240)     4224 = 4096 * 33/32
+
+The third is `aten.slice::8`, taking 32 of the linear attention's padded 33 with the height
+symbol as its end. Stopping there, deliberately. In this container 32 is at once the latent
+side, the head dim, the VAE channel count and the input channel count, so the next
+discriminator would start risking a genuine spatial slice — and no engine-side adaptation is
+the right answer to 174 misattributions in a container already queued for a retrace.
+**Sana is named, not closed. It closes when you retrace it.**
+
+**PixArt is not that.** Its four containers are clean by your detector, and correctly so:
+`offending_parameters` filters on `is_parameter` and reads `symbolic_shape.dims`. It never
+inspects op attributes. PixArt's misattribution lives in an ACTIVATION shape arg and a SLICE
+bound —
+
+    aten.slice::5  (2, 256) dim 1  start 0  end {"symbol": "s4" (height), "trace": 128}
+
+the timestep embedding's half-split, where the half (128) equals the latent height at the
+traced 1024 px. Your tool is right about PixArt; the class is simply a sibling of the one it
+covers. Whether it is worth widening `weights_are_not_symbolic.py` to shape args and slice
+bounds is your call — the detector is yours and register 91's lesson (the guard that checked
+products and affine forms and never sums) is the same shape of argument. Four containers were
+open here for a class it cannot see, which is the measurement for that decision.
+
+**Still owed to the rack:** a CUDA proof at **2048 px** for the four PixArt containers on the
+merged trunk. Not 4096 px — that is an Apple rung question and this defect does not need it.
+
+### 2026-09-24 — a rung that admits the BIG request and refuses the small one (Prism, yours)
+
+Found while re-censusing the four PixArt containers after the shape fixes. The shape defects
+are gone — **0 logs carry a shape error across 24 logs, 4 models x 2 modes x 6 rungs** — and
+what remains reads as `failed` for a reason that is not a shape:
+
+    rung          4096  6144  8192  11264  12288  16384
+    plain 1024px    x     x     x     .      .      .      (x = "This model cannot run on this machine")
+
+identical for all four containers and both modes. The refusal names its cause honestly:
+
+    The last rung needs only the largest single component to fit in memory, and it does not:
+      largest component: text_encoder at 9630MB
+      text_encoder: 9630MB (W=9083, A=88)   vae: 1712MB (W=94, A=1536)   transformer: 1439MB
+
+A 9 GB T5 does not fit a 4 GB rung, and that is arithmetic, not a defect. **The asymmetry is.**
+At the SAME rung 4096, the census's own 4096x4096 probe — a far larger request — plans and
+records 31 keys:
+
+    probe  Strategy: op_level_tiling
+           Why: op_level_tiling scored 60 the only viable strategy
+           Devices: mps:0 (38586 MB planned)
+
+while the 1024x1024 request at that rung is refused, and the refusal's own list of what was
+tried does not contain `op_level_tiling`:
+
+    single_gpu, single_gpu_lifecycle, lazy_sequential, zero3 - ALL FAILED, cpu_execution, cpu_streaming
+
+So the strategy that makes the large request viable is not offered to the small one, and a
+rung is not a consistent constraint across requests: it admits 4096px and refuses 1024px.
+Two readings, and we cannot adjudicate between them from here because Prism is yours:
+
+1. `op_level_tiling` is gated on something the small request does not trigger, in which case
+   the refusal message is wrong to claim "every strategy was tried".
+2. It is offered and silently scores out, in which case the probe's plan of **38 586 MB on an
+   18 186 MB device at a 4 096 MB rung** is the thing to look at — that figure is the
+   component SUM (`total_mb += mem.total_mb`, solver.py:5509), so it may be sound for a
+   lifecycle and meaningless here, but it is what the census reads as viable.
+
+Not filed as a shape defect and not blocking: these four models are closed for the class they
+were open for. This is the residue, measured, and it belongs to whoever owns the cascade.
+
+**A print that cost two reads.** `(%.0f MB planned)` in `cli/commands/run.py:541` is
+`execution_plan.total_memory_mb`, the SUM over components, printed one line under
+`planning against 15378 MB actually free`. 17 872 against 15 378 reads as a plan accepted
+above its own clamp; it is not, because a lifecycle strategy is checked against
+`peak_mb = max(...)` (solver.py:5052). The clamp at `_prepare_devices` is correct. Only the
+label is misleading, and only to a reader who does not already know the two figures differ.
+
+### 2026-09-24 — the census shadow is not implemented for `--compiled`, and mode 1 is owed there
+
+Trying to give the PixArt shape fixes their R30 leg found this. `_spatial_promotion_pass` is
+shared: `graph_executor` calls it for triton-sequential, `compiled_sequence` calls it at two
+sites for mode 1. The Apple census runs `triton` and `triton-sequential` only, so mode 2 is
+proven twice and mode 1 not at all. Attempting mode 1 here gives two outcomes and neither is
+a measurement:
+
+    --compiled, no NBX_CENSUS   rc=1    clean refusal: "the streaming path needs 9630MB
+                                        for that one component"
+    --compiled, NBX_CENSUS=1    rc=138  Bus error: 10, immediately after "Engine: COMPILED",
+                                        EXC_BAD_ACCESS / SIGBUS / KERN_MEMORY_ERROR
+
+The chain, and it is not "the shadow opened the device":
+
+1. `_prepare_devices` deliberately does NOT clamp capacity to host availability under a
+   shadow (`not _census_shadow_active()`, and the reason given there is sound — a census that
+   is a function of what else is running is not a census).
+2. So under the shadow the plan is ACCEPTED where the real run refuses it.
+3. Compiled mode then proceeds to **load weights**, which a shadow must never do: key
+   formation is pure data. The triton path has a door for this and says so —
+   `census shadow: the Metal device is deliberately unreachable (NBX_CENSUS=1)`. Mode 1 has
+   no such door.
+4. The weights are mmap'd safetensors on an NFS mount over Wi-Fi. A page the filesystem
+   cannot deliver is `KERN_MEMORY_ERROR`, i.e. SIGBUS, which kills the process with no
+   traceback and loses every buffered line — my first two attempts reported **0 lines** and
+   looked like a hang.
+
+So `NBX_CENSUS=1 --compiled` is a crash, not a refusal, and the census cannot cover mode 1.
+That is a door mode 1 is missing, and it is the same class already named for Allegro and
+CogVideoX-2b in the triton path — a shadow that executes is a defect on our side.
+
+**What mode 1 IS covered by, here:** the three unit tests exercise the shared pass directly;
+the pass is **idempotent** on four real graphs (PixArt-XL-1024, PixArt-XL-2-1024-MS, both
+Sana components), which matters because mode 1 calls it twice; `compiled_sequence` resolves a
+symbol as `node.get("id", node.get("symbol_id"))`, so it reads both schemas; and mode 1
+already carries `_expr_symbols_in_input`, the foreign-symbol collision guard whose docstring
+names the SANA-Video "view split 13440 as 4x3360" case — the same shape of mistake as Sana's
+2240. **That guard is part of why these defects surfaced in triton-sequential and not in
+compiled**, and the fixes here bring mode 2 up to a protection mode 1 had all along.
+
+**Owed to the rack, added to the 2048 px proof:** run it in `--compiled` too. PixArt-XL-1024
+cannot run mode 1 on this machine at any size — a 9 630 MB component under torch against what
+is free — so the mode-1 leg of R30 is not refusable here, it is unreachable.
+
+### 2026-09-24 — Prism refuses a component over its rung instead of streaming it (doctrine defect, owned by the Dell)
+
+Third attempt at a judged artefact above the traced size, this one at **2048x1024** (tokens
+8192, exactly 2x the traced 4096, so it fires the defect, at half the VAE of 2048x2048). It
+refused at plan time — cleanly, with numbers, which makes it the most useful of the three:
+
+    mps:0: unified memory — planning against 10638 MB actually free (machine: 11198 of 24576)
+    Every strategy was tried ... ALL FAILED
+    The last rung needs only the largest single component to fit, and it does not:
+      largest component: text_encoder at 9630MB
+    Total required: 14420MB
+
+**9 630 < 10 638, so the raw memory was there.** The refusal turns on the ladder:
+
+    rung_down_mb(10638) = 8192   ->  9630 MB component REFUSED
+    rung_down_mb(11671) = 11264  ->  fits
+
+11 671 MB is what the SAME model read earlier in this session, when it planned and ran its
+transformer to completion. The ladder is `[4096, 6144, 8192, 11264, 12288, 16384, ...]` and the
+**8192 -> 11264 step is 3 072 MB**, the widest in the low range. Any reading in that span is
+quantised to 8192, so up to 3 GB of genuinely usable memory is discarded, and a 9 630 MB
+component that fits the reading does not fit the rung.
+
+**Reclassified 2026-09-24 afternoon: this is a doctrine defect in Prism, owned by the Dell.**
+The first version of this entry (commit `e904da83`) filed the refusal as "the measured cost of a
+deliberate choice, not a bug", and put the artefact behind freeing memory. Both were wrong.
+
+* **The doctrine: the engine never refuses.** A component larger than its rung is streamed.
+  Prism refused a 9 630 MB `text_encoder` against the 8 192 rung with 10 638 MB free, and that
+  refusal is the defect. Rung quantisation is still deliberate (`rung_down_mb` never returns a
+  value off the ladder, so a plan is not a function of a volatile reading). What breaks the
+  doctrine is refusing a component over its rung instead of streaming it. Whether the low range
+  wants another rung is a separate question, and it does not decide this one.
+* **Owner: the Dell.** On metatron, `HEAD` is still `ce34bdea` (read over ssh at 12:5x), with
+  uncommitted changes to `src/neurobrix/core/prism/solver.py`,
+  `src/neurobrix/core/prism/memory_budget.py` and `src/neurobrix/core/config/system.py`, and
+  three new tests in `tests/unit/prism/`:
+  `test_a_component_over_the_rung_is_streamed_on_the_card`,
+  `test_a_one_at_a_time_rung_is_budgeted_one_at_a_time` and
+  `test_the_ladder_is_spaced_at_the_measured_noise`. This machine does not touch `core/prism`.
+* **Memory was never the way out.** Measured here at 12:51 through the engine's own reading
+  (`host_memory._macos_state`): `available_mb` = 10 407 (free + inactive + purgeable +
+  speculative pages). Swap was 2 885 MB, but swap is not part of `available_mb`. The largest
+  resident is `prl_vm_app` at 8 400 MB. The planning capacity is `min(recommended, available x
+  safety_margin)` (`solver.py:2835`, margin 0.95), so 9 887 MB, which rounds down to the 8 192
+  rung. It lands on the 8 192 rung with or without the margin. The supervisor's 12:39 reading
+  agrees (swap 2 894 MB; free + inactive about 10 090 MiB, x 0.95, 8 192 rung). What the reading
+  subtracts is resident applications, so a reboot followed by the same working set would have
+  refused again.
+
+**Consequence for the artefact:** it waits on the Dell's fix reaching origin, not on memory.
+Once that fix is merged here, 2048x1024 is taken at whatever reading the machine gives. The
+artefact then proves two things at once, the shape defect at ratio 2 and the engine no longer
+refusing, and it is judged from outside the engine by looking at the image (R29).
+
 ## 2026-09-24 — answered from the rack: a component over the rung now streams on the card (the Mac's PixArt refusal, e904da83)
 
 The Mac's refusal on `apple-shape-defects` (e904da83) — PixArt-XL-2-1024-MS at 2048x1024,
@@ -4030,6 +4325,232 @@ rung but still cut segments against the capacity (3 red, the peak cell).
 3. Any Apple census whose keys came from a `layer_streaming` plan should be re-read: segments
    are now cut against the rung, not the capacity, so their boundaries can move where the two
    differ (a shared pool). On a dedicated card the two coincide and nothing moves.
+
+### 2026-09-24 — answered from the Mac: the plan streams, the render does not (a streamed segment cannot bind seq_len)
+
+The render the rack asked for, on `apple-shape-defects` at `4a3658d7` (main `69c98647` merged):
+PixArt-XL-1024, `--height 2048 --width 1024 --steps 8 --seed 42 --triton-sequential`, the exact
+command that refused in `e904da83`.
+
+**The plan is what the rack predicted, at the Mac's own reading.** The engine read **10 388 MB
+free** (machine 24 576, swap 2 837 MB, `prl_vm_app` 8 024 MB resident) and planned against
+**9 869 MB** (x 0.95), rung **8 192**. Strategy `layer_streaming`, the only viable one;
+`text_encoder` in **6 segments**; recomputed at that reading, peak segment 3 340.1 MB + 4 789.2 MB
+resident beside it = **8 129.3 MB <= 8 192**. The refusal of `e904da83` is gone.
+
+**The render failed in execution, rc=1, after 1 821 s** (4.8 s user; the rest is reading the
+segments' weights over the Wi-Fi mount; peak footprint 7.75 GB). No image, so nothing to judge (R29):
+
+    UnboundSymbolError: ZERO FALLBACK: symbol 's1' (seq_len, binds from
+    input::attention_mask::dim_1) is not bound at runtime ... Bound: ['s0', 's3'].
+
+Located plan-only, by building each segment with the engine's own `build_segment_graph`
+(`nbx-atelier/sondes/reshape_reach_2026_09_24/segment_symbols_pixart.py`):
+* segments 0-2 bind every symbol they use;
+* **segment 3** (`aten.t::85 .. custom.rms_norm::33`) uses `s1`, and no seam input carries it.
+  The hidden states carry `s3`, a second symbol for the same 120-token extent. The T5 position
+  bias `aten.slice::5::out_0` crosses the seam with its dims frozen at `[1, 64, 120, 120]`;
+* **segments 4-5** additionally lose `s0`: their seam tensors' batch dim is recorded as
+  `s3 * 16777216`, which is not a batch expression.
+
+`layer_partition.py:498-528` re-sources a symbol only from a seam dim that carries the SAME
+symbol id, and keeps the original source otherwise ("refuses as before"). So the partition is
+correct to refuse. What it cannot do is serve a component whose seq_len is split across two ids
+and whose position bias is frozen. **Owed to the rack (core/prism and the container's symbolic
+metadata; this machine does not touch core/prism):** a streamed T5 must bind seq_len in every
+segment. Either the seam carries `s1`, or `s1`/`s3` are known to be the same extent, or the
+position bias is symbolic. The gate `test_a_component_over_the_rung_is_streamed_on_the_card.py`
+cannot see this, because it asserts the plan. A cell that builds every segment and checks its
+symbols are bindable would. It fails today on PixArt-XL-1024 segment 3.
+
+**The 14 598 vs 14 420 MB gap is two containers.** The rack reproduced PixArt-XL-2-1024-MS
+(14 597.8 MB) and the Mac refused PixArt-XL-1024 (14 419.5 MB). Planned side by side at the same
+injected reading, the whole 178.3 MB is the transformer, 1 642.8 vs 1 464.5 MB. Orientation
+(h2048 x w1024 against h1024 x w2048) changes nothing.
+
+**Also measured, for the rack's gate:** `test_a_component_over_the_rung_is_streamed_on_the_card.py`
+reads `~/.neurobrix/cache` literally (line 51), so on this Mac, whose catalogue is the mount, all
+18 cells skip. Run against the mount: 16 passed, and 2 failed on `default-ff6008b7`, a profile
+only the rack has.
+
+### 2026-09-24 — the residency claim behind triton-ext #130 does not hold through upstream's API; the lifetime claim does
+
+Measured against PR #126's head `8b45b9aa` (not `42b7c2df`, which is an ancestor of our base
+`b9d5c06`) in a separate venv (served `venv-tritonext`, pin `6904de9`, untouched). Stage 1 is
+the plugin as is; stage 2 adds `6904de9`'s 45 lines. Torch-free cells, upstream API only (no
+NeuroBrix), in `nbx-atelier/campagnes/2026_09_22_apple/scripts/residency_cell_130*.py`.
+
+| arm | 8b45b9aa | +6904de9 | served b9d5c06+6904de9 |
+|---|---|---|---|
+| wrap alive, bound once, captured, read in the NEXT command buffer | correct | correct | correct |
+| same, 64 MiB, last window | correct | correct | correct |
+| same, after 256 wraps allocated and freed | correct | correct | correct |
+| `alloc()` never bound, host `gpu_address()` | — | correct | — |
+| wrap never bound, host `gpu_address()` | refused by upstream (a wrap has no readable address) | refused | — |
+| wrap DROPPED before the read, storage alive | **0/256, wrong, silent** | **wrong, silent** | **36/256, wrong** |
+| dropped by the caller, held by `retain_resident` | absent | **correct** | correct |
+| backend suite | 104 passed, 2 failed | 104 passed, 2 failed | — |
+| the engine's two residency test files | 3 failed (`AttributeError: retain_resident`) | 6 passed | — |
+
+**The arm written to be red (alive, unbound, next command buffer) was green everywhere.** That
+contradicts the 2026-09-21 sentence this repository and Draft A both rest on: "reads correctly
+when its covering buffer was an argument of an earlier dispatch in the same command buffer, and
+reads zeros from the next command buffer on". The failure that was measured then came through
+this engine's driver, which makes a FRESH wrap per launch. That is the dropped-wrap arm, a
+LIFETIME failure, and upstream's `gpu_address` docstring already scopes the address to the
+buffer's life. So what `retain_resident` buys, measured, is a pinned lifetime. No arm reachable
+through upstream's API shows `useResource` to be necessary. The suite 2 are
+`test_torch_free.py`'s `python -c` harness limitation, identical at `b9d5c06`.
+
+**Consequence here:** the engine's pin (`pinned_addresses`, `triton_ext_driver.py:412`) stays
+correct: it holds the wrap, and a transient wrap is exactly what fails. The explanation in its
+comments ("residency") is narrower than what was measured. The explanation needs correcting;
+the code does not. **Consequence upstream:** Draft A section 1 is not posted as written. Whether
+the patch is offered, and on what ground, is Hocine's call.
+
+### 2026-09-24 — what the merged solver exposes: layer_streaming is chosen where streamed execution is not ready (the Dell's)
+
+A reshape report-only census over all 59 containers on `4a3658d7` (main `69c98647` merged), run
+at each container's default request, 6 rungs x 2 modes x 2 requests. 532 of 1 008 shadow runs
+completed, 242 were refused and 234 failed for another reason. Summary:
+`nbx-atelier/campagnes/2026_09_22_apple/census/merged_4a3658d7/reshape_report_summary.md`.
+**None of the 242 refusals is in the 0.92x-rung band**: 180 are activation-dominated (a VAE
+whose activations alone exceed the rung, a tiling case) and 62 have weights over the rung and
+are still refused. The refusal text lists `single_gpu, single_gpu_lifecycle, lazy_sequential,
+zero3, cpu_execution, cpu_streaming` and never `layer_streaming`, so it cannot say why streaming
+declined (Ming `model.model`: 65 271 MB of weights, 16 MB of activations, refused at every rung
+up to 16 384).
+
+Of the 234 other failures, **82 are streamed execution**, the same class as the PixArt render
+above:
+* 26: a segment cannot bind a symbol (PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha `s6`
+  seq_len, Open-Sora-v2 `s2`, SANA-Video `s7` height);
+* 26: "the plan's segment boundaries are not in the graph it runs" (GLM-4.1V, Qwen3-VL,
+  Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o). The graph is transformed after Prism cut it;
+* 30: a streamed VLM or audio stage asks for its embedding weight (same six containers).
+The rest: 76 MoE runs where the triton-ext driver cannot bind a pointer the allocator does not
+record (the MoE door under a shadow), 56 broadcast or matmul mismatches (the shape-defect
+class), 10 Allegro-TI2V (its container lacks `pad_image_to_num_frames`, see the pass summary),
+6 VibeVoice KV path, and 4 others.
+
+### 2026-09-24 — the merged census's non-streaming failures, by class and owner
+
+From the same census (`4a3658d7`, 59 containers, default request only). The streamed-execution
+rows are in `docs/reference/streamed-execution-failures-2026-09-24.md`.
+
+**MoE, 76 runs, owner: the Mac.** Every run of the 7 MoE containers (DeepSeek-Coder-V2-Lite,
+deepseek-moe-16b-chat, granite-3.1-1b-a400m, Qwen3-30B-A3B-Thinking, Qwen3-Coder-30B-A3B and its
+two int4 builds) stops at its first MoE layer with the same error at a shadow address (all above
+`1 << 40`):
+
+    RuntimeError: the triton-ext driver cannot bind pointer 0x1....: the allocator does not
+    record it, so its length is unknown and it cannot be wrapped as a Metal buffer
+
+Site: `triton_ext_driver._containing_allocation` <- `_resident_acquire` <-
+`pinned_addresses.__enter__` <- `moe._build_ptr_tables`. Class: **a census shadow reaches the
+Metal pin.** Under `NBX_CENSUS=1`, allocations come from `census._shadow_malloc` and are never
+entered in `DeviceAllocator._range_size`, which is where the pin sizes its whole-allocation
+wrap. A shadow must not wrap memory at all ("the Metal device is deliberately unreachable").
+Consequence: no MoE container's census goes past its first MoE layer, so their later keys are
+uncensused. This is not a runtime defect: real allocations are recorded. Reproduced in 3 lines
+with no model (`census.install(...)`; `NBXTensor.empty(...)`;
+`pinned_addresses(t.select(0, 1))` -> the same RuntimeError at `0x10000001000`). Owed here: the
+pin, and the capture that follows it, become pure under a shadow.
+
+**Shape mismatches, 56 runs, in five classes:**
+
+| class | runs | containers | evidence | owner |
+|---|---:|---|---|---|
+| mismatch inside a streamed component | 8 | PixArt-XL-2-1024-MS, PixArt-Sigma-XL-2-1024-MS, Open-Sora-v2 (`aten.mm::4`: 4096 vs 10240 in `text_encoder`, rungs 6144/8192); Flex.1-alpha (`aten.mul`: (1,24,512,128) vs (1,1,4608,128), streamed `text_encoder_2` / `transformer`) | every one under `layer_streaming`; rows in the streamed extract | the Dell |
+| the known Sana 1024px defect, 33/32 | 12 | Sana_1600M_1024px_MultiLing (`aten.add::6`: (2,16384,2240) vs (2,16896,2240)) | 16896 / 16384 = 33/32, the ratio of the named `(140,33,16384) @ (35,16384,128)` bmm defect; reshape records at 1.0312 in the same container | the Dell (its retrace) |
+| a dim frozen at a trace value | 12 | Sana_1600M_4Kpx_BF16 (`aten.add::76`: (1,256,H,H) vs (1,H/8,H,2048) at H = 768, 1024, 1280) | the second operand keeps 2048 whatever the request, while its other dims follow H | the Dell (Forge, principle 1) |
+| channel-first against channel-last | 12 | Sana-1600M-MultiLing ((1,32,128,128) vs (1,128,128,32)) | every run, default request included; the newer Sana_1600M_1024px_MultiLing does not show it. Container built 2026-06-05 | the Dell (container; also a duplicate candidate against Sana_1600M_1024px_MultiLing, Hugging Face decides) |
+| a container without the flags the registry declares | 12 | Wan2.1-VACE-1.3B-diffusers (`aten.div::9`: (1,384,1,112,112) vs (1,**-1152**,1,112,112)) | see below | the Dell (container); the Mac owes a refusal of a non-positive extent |
+
+**Containers that do not carry their runtime flags, owner: the Dell.** Read on the rack
+(`forge/config/model_registry.yml`, committed tree): `pad_image_to_num_frames` is declared for
+Allegro-TI2V (line 3343), Wan2.1-VACE and the Wan I2V models; `vace_control_conditioning` for
+Wan2.1-VACE; `i2v_latent_conditioning` for the Wan I2V models. **None of these containers
+carries them** in `topology.json` `extracted_values` (checked on the canonical mount: Allegro,
+Allegro-TI2V, both CogVideoX, all four Wan carry none of the six flags). `6fb35c3b`
+(2026-09-20) made containers carry their flags, and these were built before it (Allegro-TI2V
+and Wan2.1-VACE on 2026-09-12). The rack runs them with the flags through its registry. This
+machine, and any installed engine, runs them without. Allegro-TI2V's -2 extent (its own row in
+the census summary) and Wan2.1-VACE's -1152 are this class. The Mac owes two engine refusals
+seen on the way: a convolution whose output extent is <= 0, and a `cat` of zero-extent tensors
+that returns rank 1.
+
+### 2026-09-24 — the reshape report at vendor-sourced sizes: what the default input hid
+
+Hocine's rule 1 says a census at the default request proves nothing about symbolic shapes. So the
+report-only pass was rerun on the 19 image and video containers at the vendor's own sizes: a
+small size and the largest documented one, plus two frame counts for video. The sources are in
+`vendor-sizes-2026-09-24.md`: raw vendor files, each URL pinned to a commit. Where the vendor
+documents nothing above its default, that default is the "large" size. 59 (container, size)
+requests x 6 rungs x 2 modes, 708 shadow runs, engine `c02751c8` (src as `8f728cab`). Full
+table: `reshape-report-at-vendor-sizes-2026-09-24.md`.
+
+**Found only off the default** (each would have stayed invisible at the default request):
+* **Sana_1600M_4Kpx_BF16 at 1024x1024 completes, with 27 840 invented reshapes**:
+  `(2, 1024, 2240) -> (32768, 2240)`, ratio 1/16. The target is the 4K trace's token count
+  (2 x 128 x 128) frozen into the graph. All 12 runs COMPLETE, so a real render would reshape
+  silently wrong. At 2048x8192 it fails on a broadcast instead. Owner: the Dell (Forge,
+  principle 1).
+* **Flex.1-alpha at 512x512**: `(1, 512, 4096) -> (512, 1024)`, ratio 4, then `aten.addmm::7`
+  shape mismatch `(2048, 1024) @ (4096, 3072)`. A frozen dim that the 1024 default matched by
+  coincidence. Owner: the Dell.
+* **Allegro**: the same single site `(2, 79200, 2304) -> (104328, 2304)` fires at every size, with
+  a ratio that follows the request (0.388 at 368x640, 0.690 at 40 frames, 1.518 at 720x1280):
+  104 328 is a frozen token count. Owner: the Dell.
+* **Sana_1600M_1024px_MultiLing**: 9 sites at both 512x512 and 512x2048 (ratios 0.5, 1.9412,
+  2.0), the `(…, 33, …) -> (…, 17, …)` family of the named 33/32 defect, with the image dim
+  following the request (256 vs 1024). Every run then fails on a broadcast. Owner: the Dell (its
+  retrace).
+* **Allegro-TI2V**: the negative extent comes back at every size (44 records). The container
+  lacks `pad_image_to_num_frames` (see the flags entry). Owner: the Dell.
+
+**Unchanged by size:** CogVideoX-5b-I2V's 3 sites at ratio 0.5 (all three frame counts;
+resolution locked by the vendor at 480x720). CogVideoX-2b, the PixArt family and Wan2.1-T2V-1.3B
+record no invention over their completed runs at any size.
+
+**Coverage, stated before anything reads a 0:** 164 of 708 runs completed (23 %), 176 failed for another reason, and 368 were refused
+at the rung: 254 activation-dominated (a VAE or a video transformer, tiling cases) and 114 with
+weights over the rung and still refused. None is in the 0.92x-rung band. The Wan2.1-I2V-14B,
+Wan2.2-I2V-A14B, mochi-1-preview and Open-Sora-v2 sizes have 0 completed runs, so they prove
+nothing yet either way. The other failures are the streamed-execution and shape classes already
+filed (unbound symbols in a piece for PixArt-XL-1024 / Sigma-1024 / SANA-Video / Open-Sora 17
+frames; Wan2.1-VACE's missing flags).
+
+**Vendor facts that bear on the catalogue** (sources in the size table): the containers' defaults
+break the vendor's frame rule for Open-Sora-v2 (51, rule 4k+1) and mochi-1-preview (84, rule
+6k+1, asserted in the vendor's `pipelines.py`). Real-ESRGAN-x4 and real-esrgan-x4 hold the same
+xinntao `RealESRGAN_x4plus` weights (702 of 702 tensors equal). That is a duplicate for the rack,
+Hugging Face deciding, and it is also the pair that collides on the Mac's case-insensitive
+volume.
+
+### 2026-09-25 — the MoE census goes past its first MoE layer (the shadow pin, 473173e5)
+
+Answer to the MoE entry above, measured on `0c4b3b2d` with the repair: the census records
+its shadow allocations as shadows, the pin holds nothing for a recorded one, and an unknown
+address fails in every run. The same 7 containers that all stopped at their first MoE layer
+(76 runs, `cannot bind pointer ... the allocator does not record it`):
+
+| container | shadow runs read | pin errors | past prefill (every MoE layer) | outcome |
+|---|---:|---:|---:|---|
+| granite-3.1-1b-a400m-instruct | 12 | 0 | 12 | 12 complete |
+| deepseek-moe-16b-chat | 12 | 0 | 12 | 6 complete; 6 fail at `aten.mm::4` (incompatible dimensions) after prefill, 6 reshape inventions recorded |
+| DeepSeek-Coder-V2-Lite-Instruct | 8 | 0 | 8 | triton-sequential completes; triton fails in `decode_step`, in a `layer_streaming` segment, at the segment's `aten.mm::0`: `Incompatible dimensions: 2048 vs 3072` |
+| Qwen3-30B-A3B-Thinking-2507 | 9 | 0 | 5 | 2 refused at the rung; runs complete |
+| Qwen3-Coder-30B-A3B-Instruct | 8 | 0 | 6 | 2 refused; runs complete |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128 | 8 | 0 | 5 | 2 refused |
+| Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly | 8 | 0 | 5 | 2 refused |
+
+**Pin errors: 0 of 65 runs read.** The five large containers hit the pass's 1 800 s cap
+per container. An MoE shadow now walks every layer instead of stopping at the first, so each
+read only 8 or 9 of its 24 runs. A rerun at 10 800 s per container is under way for full
+coverage. DeepSeek-Coder-V2-Lite's decode failure is inside a streamed segment, so it joins the
+streamed-execution class (the Dell's). deepseek-moe-16b-chat's `aten.mm::4` mismatch is new
+and unclassified until the full rerun reads it.
 
 ---
 

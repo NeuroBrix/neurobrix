@@ -6,6 +6,7 @@ like ones([23, 23]) become ones([s1, s1]) → ones([actual_seq_len, actual_seq_l
 Called by TritonSequence.compile() and _run_triton_sequential().
 """
 
+import copy
 from typing import Dict, Optional
 
 
@@ -561,6 +562,63 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
 
     hw_product = (h_sym[1] * w_sym[1]) if (h_sym and w_sym) else None
 
+    # ---- the PATCHIFIED token grid (2026-09-23, PixArt on Apple) ----------
+    # Everything above reads a VAE decoder, where spatial dims scale UP: H, W,
+    # H*W and their multiples. A patch-embedded diffusion transformer divides
+    # instead — its token grid is (H/p)*(W/p) — so 64, 4096 and 8192 match none
+    # of those signals and 84 view pairs per PixArt block were left literal.
+    #
+    # The patch size is NOT inferred here. The patch-embed view is already
+    # symbolised correctly by the tracer, so the expression is HARVESTED from
+    # the graph itself: any tokenisation scheme is covered, and a container
+    # that carries no such sibling simply gets no token promotion rather than
+    # a guess. Sub-expressions come with it, which is where the grid SIDES
+    # (the two `(s-2)//2+1`, trace 64) come from for the unpatchify.
+    def _expr_refs(expr, sid):
+        if isinstance(expr, dict):
+            if expr.get("type") == "symbol":
+                return (expr.get("id") or expr.get("symbol_id")) == sid
+            for k in ("left", "right"):
+                if k in expr and _expr_refs(expr[k], sid):
+                    return True
+            for f in expr.get("factors", []) or []:
+                if _expr_refs(f, sid):
+                    return True
+        return False
+
+    def _expr_trace(expr):
+        if isinstance(expr, int):
+            return expr
+        if isinstance(expr, dict):
+            for k in ("trace", "trace_value"):
+                if isinstance(expr.get(k), int):
+                    return expr[k]
+        return None
+
+    tok_expr = tok_trace = None            # the token count, e.g. 4096
+    tok_h = tok_w = None                   # its two sides, e.g. 64 and 64
+    if h_sym and w_sym:
+        for _od in ops_meta.values():
+            for _a in (_od.get("attributes", {}).get("args") or []):
+                if not (isinstance(_a, dict) and _a.get("type") == "list"):
+                    continue
+                for _e in _a.get("value", []):
+                    if not (isinstance(_e, dict) and _e.get("type") == "mul"):
+                        continue
+                    _l, _r = _e.get("left"), _e.get("right")
+                    if not (_expr_refs(_l, h_sym[0]) and _expr_refs(_r, w_sym[0])):
+                        continue
+                    if _expr_refs(_l, w_sym[0]) or _expr_refs(_r, h_sym[0]):
+                        continue            # not a clean (H-side, W-side) product
+                    _t = _expr_trace(_e)
+                    if _t is None or _t == hw_product or _t <= 1:
+                        continue            # H*W itself is already covered above
+                    if tok_trace is None or _t > tok_trace:
+                        tok_expr, tok_trace = copy.deepcopy(_e), _t
+                        tok_h, tok_w = copy.deepcopy(_l), copy.deepcopy(_r)
+                if tok_expr is not None:
+                    break
+
     # DC-AE / cascade decoders double the spatial size at each up-stage,
     # so the VAE graph references both the input-scale H/W AND every
     # scaled-up version (2H, 4H, 8H, ..., 32H for Sana 4Kpx). Each
@@ -804,7 +862,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         # symbol / scalar / unknown — leave alone
         return expr, False
 
-    def _walk_shape_list(items):
+    def _walk_shape_list(items, in_shape=None, op_type=None):
         """Apply spatial promotion to a flat shape list.
 
         Three complementary signals:
@@ -856,7 +914,237 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
                     out[i] = new
                     changed = True
 
+        # Pass 4: the patchified token count, at any position but the LAST.
+        # Position is the disambiguator the pass already relies on: the final
+        # entry of an activation shape is canonically the feature width, and
+        # in PixArt the T5 stream is (B, 120, 4096) — 4096 is ALSO the text
+        # hidden size. Promoting it there would break cross-attention while
+        # still reading bit-perfect at the traced size, where trace == runtime
+        # hides every wrong promotion.
+        if tok_expr is not None:
+            for i in range(len(out) - 1):
+                if out[i] == tok_trace:
+                    out[i] = copy.deepcopy(tok_expr)
+                    changed = True
+
+        # Pass 5: the batch*token collapse that feeds a GEMM, `[B*T, C]`. The
+        # trace bakes the product as one int, so neither symbol is visible in
+        # it. It carries exactly one unknown, which is what -1 is for — the
+        # same form the tracer itself emits at the sibling `view([s3, -1, C])`.
+        # ONLY for the reshaping family. In `aten::expand` a -1 means "keep this
+        # dimension", not "infer it", so writing one there would silently change
+        # the op's meaning instead of its extent.
+        if (op_type in ("aten::view", "aten::_unsafe_view", "aten::reshape")
+                and tok_trace is not None and in_shape and len(in_shape) >= 2
+                and -1 not in out and len(out) >= 2
+                and isinstance(out[0], int) and tok_trace in tuple(in_shape)[:-1]):
+            _collapsed = 1
+            for _d in tuple(in_shape)[:-1]:
+                _collapsed *= _d
+            if out[0] == _collapsed and out[0] != tok_trace:
+                out[0] = -1
+                changed = True
+
+        # Pass 6: the unpatchify grid, an adjacent (H_tokens, W_tokens) pair.
+        # It already carries a -1 for the batch, so the sides cannot be left
+        # to inference — they need the harvested expressions by name.
+        if tok_h is not None and tok_w is not None:
+            _ht, _wt = _expr_trace(tok_h), _expr_trace(tok_w)
+            if _ht and _wt:
+                for i in range(len(out) - 1):
+                    if out[i] == _ht and out[i + 1] == _wt:
+                        out[i] = copy.deepcopy(tok_h)
+                        out[i + 1] = copy.deepcopy(tok_w)
+                        changed = True
+                        break
+
         return out, changed
+
+    # ---- a slice end bound to a spatial symbol BY COINCIDENCE --------------
+    # `_override_misattributed_arith` above corrects the tracer binding a spatial
+    # dim to a non-spatial symbol. This is the mirror mistake. PixArt -MS traced
+    # at 1024 has a latent of 128 and a timestep embedding of 256 split in half
+    # and swapped; both halves are 128, so the tracer bound `emb[:, :128]`'s end
+    # to the HEIGHT symbol. Invisible at the traced size, and at 4096 px the half
+    # becomes 512, clamps to the full 256, and the first addmm dies on (2, 384).
+    #
+    # The discriminator is not the value — it is whether the sliced tensor has a
+    # spatial extent at all. Reachability from the tensor the height/width symbols
+    # are SOURCED from answers that from the graph, with nothing hardcoded.
+    _spatial_ids = {s for s in ((h_sym[0] if h_sym else None),
+                                (w_sym[0] if w_sym else None)) if s}
+    if _spatial_ids:
+        _roots = set()
+        for _sid, _info in symbols.items():
+            if _sid in _spatial_ids:
+                _src = _info.get("source") or ""
+                if "::dim_" in _src:
+                    _roots.add(_src.rsplit("::dim_", 1)[0])
+        _consumers: Dict[str, list] = {}
+        for _uid, _od in ops_meta.items():
+            for _tid in (_od.get("input_tensor_ids") or []):
+                _consumers.setdefault(_tid, []).append(_od)
+        _spatial_tensors = set(_roots)
+        _queue = list(_roots)
+        while _queue:
+            for _od in _consumers.get(_queue.pop(), ()):
+                for _out in (_od.get("output_tensor_ids") or []):
+                    if _out not in _spatial_tensors:
+                        _spatial_tensors.add(_out)
+                        _queue.append(_out)
+
+        for _uid, _od in ops_meta.items():
+            if _od.get("op_type") != "aten::slice":
+                continue
+            _ins = _od.get("input_tensor_ids") or []
+            if _ins and _ins[0] in _spatial_tensors:
+                continue                     # a genuine spatial slice; leave it
+            _args = _od.get("attributes", {}).get("args") or []
+            for _i in range(1, len(_args)):
+                _a = _args[_i]
+                if not (isinstance(_a, dict) and _a.get("type") == "symbol"):
+                    continue
+                if (_a.get("id") or _a.get("symbol_id")) not in _spatial_ids:
+                    continue
+                _tv = _a.get("trace") if _a.get("trace") is not None \
+                    else _a.get("trace_value")
+                if isinstance(_tv, int):
+                    _args[_i] = {"type": "scalar", "value": _tv}
+
+        # ---- a spatial symbol standing in for a WEIGHT extent -------------
+        # Sana has 70 heads of 32 and, at its traced 1024 px, a latent of 32.
+        # The tracer bound the head dim to the height symbol, so at 4096 px the
+        # head dim became 128 and the first attention op died on an invented
+        # batch: "bmm shape mismatch: (140, 33, 16384) @ (35, 16384, 128)".
+        #
+        # Taint cannot see this one — the tensor IS spatial, it is the POSITION
+        # that is not. The discriminator is structural: align the view's target
+        # against its input, and a group of entries that reconstructs an extent
+        # fixed by the weights cannot hold a request-dependent symbol. The same
+        # view's token entry reconstructs a request-dependent input dim and
+        # stays symbolic.
+        _weight_dims = set()
+        for _tid, _td in (tensors or {}).items():
+            if _tid.startswith("param::") or _tid.startswith("buffer::"):
+                for _d in (_td.get("shape") or []):
+                    if isinstance(_d, int) and _d > 1:
+                        _weight_dims.add(_d)
+
+        def _align(in_shape, out_shape):
+            """For each out index, the input dims it accounts for.
+
+            ("one", i)        — 1:1 with input dim i
+            ("split", i, n)   — one of n entries that together rebuild input dim i
+            ("merge", i0, i1) — this entry alone merges input dims [i0, i1)
+            """
+            groups, i, j = {}, 0, 0
+            while i < len(in_shape) and j < len(out_shape):
+                if in_shape[i] == out_shape[j]:
+                    groups[j] = ("one", i)
+                    i, j = i + 1, j + 1
+                    continue
+                p, k = 1, j
+                while k < len(out_shape) and p < in_shape[i]:
+                    p *= out_shape[k]
+                    k += 1
+                if p == in_shape[i]:
+                    for m in range(j, k):
+                        groups[m] = ("split", i, k - j)
+                    i, j = i + 1, k
+                    continue
+                q, m = 1, i
+                while m < len(in_shape) and q < out_shape[j]:
+                    q *= in_shape[m]
+                    m += 1
+                if q == out_shape[j]:
+                    groups[j] = ("merge", i, m)
+                    i, j = m, j + 1
+                    continue
+                return None
+            return groups
+
+        def _spatial_refs(expr):
+            """Which spatial symbols an entry references, at any depth."""
+            got = set()
+            if isinstance(expr, dict):
+                if expr.get("type") == "symbol":
+                    _s = expr.get("id") or expr.get("symbol_id")
+                    if _s in _spatial_ids:
+                        got.add(_s)
+                for _k2 in ("left", "right", "operand"):
+                    if _k2 in expr:
+                        got |= _spatial_refs(expr[_k2])
+                for _f in (expr.get("factors") or []):
+                    got |= _spatial_refs(_f)
+            return got
+
+        for _uid, _od in ops_meta.items():
+            if _od.get("op_type") not in ("aten::view", "aten::_unsafe_view",
+                                          "aten::reshape"):
+                continue
+            _ins = _od.get("input_shapes") or []
+            _outs = _od.get("output_shapes") or []
+            if not _ins or not _outs or not _ins[0] or not _outs[0]:
+                continue
+            _args = _od.get("attributes", {}).get("args") or []
+            if len(_args) < 2 or not isinstance(_args[1], dict):
+                continue
+            _items = _args[1].get("value")
+            if not isinstance(_items, list) or len(_items) != len(_outs[0]):
+                continue
+            _groups = _align(list(_ins[0]), list(_outs[0]))
+            if not _groups:
+                continue
+            for _k, _elem in enumerate(_items):
+                _refs = _spatial_refs(_elem)
+                if not _refs:
+                    continue
+                # An entry naming BOTH axes is a genuine spatial quantity — a token
+                # count, an area — however its position aligns. Sana writes its
+                # hidden size as mul(70, height) and its token count as
+                # mul(height, width), side by side in the same target.
+                if h_sym and w_sym and h_sym[0] in _refs and w_sym[0] in _refs:
+                    continue
+                _g = _groups.get(_k)
+                if not _g:
+                    continue
+                if _g[0] == "merge":
+                    # The PRODUCT is what the entry has to reproduce, and it is the
+                    # product that the weights fix. Sana merges 70 heads with a head
+                    # dim of 32 into the hidden size 2240: 70 is not itself any
+                    # weight's extent, 2240 is every projection's. Safe because an
+                    # entry naming both axes was already let through above — which is
+                    # what a batch*tokens merge looks like.
+                    _prod = 1
+                    for _m in range(_g[1], _g[2]):
+                        _prod *= _ins[0][_m]
+                    if _prod not in _weight_dims:
+                        continue
+                else:
+                    if _ins[0][_g[1]] not in _weight_dims:
+                        continue             # the extent is not fixed by the weights
+                _bare = isinstance(_elem, dict) and _elem.get("type") == "symbol"
+                if _bare and _g[0] == "one":
+                    # The entry maps 1:1 to an input dim, so there is no split to
+                    # reason about, and at the traced size the head dim and the
+                    # latent side can be the same number (Sana: 70 heads of 32, a
+                    # 32x32 latent). The PARTNER decides: a genuine spatial use
+                    # names height AND width as bare entries together — Sana's VAE
+                    # keeps them as two adjacent dims — while a misattribution is a
+                    # lone height with no width beside it.
+                    #
+                    # Top level only. Sana's token entry is `mul(s6, s7)`, so a
+                    # nested search finds the partner inside every one of them and
+                    # would keep all 124.
+                    _partner = (w_sym[0] if (h_sym and
+                                             (_elem.get("id") or _elem.get("symbol_id"))
+                                             == h_sym[0] and w_sym)
+                                else (h_sym[0] if h_sym else None))
+                    if any(isinstance(_o, dict) and _o.get("type") == "symbol"
+                           and (_o.get("id") or _o.get("symbol_id")) == _partner
+                           for _n, _o in enumerate(_items) if _n != _k):
+                        continue             # a real (height, width) pair
+                _items[_k] = _outs[0][_k]
 
     _spatial_targets = (
         "aten::view", "aten::_unsafe_view", "aten::reshape", "aten::expand",
@@ -885,7 +1173,9 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         _items = _shape_arg.get("value", []) if _is_wrapped else _shape_arg
         if not isinstance(_items, (list, tuple)):
             continue
-        _new_items, _changed = _walk_shape_list(_items)
+        _in_shapes = _op_data.get("input_shapes") or []
+        _new_items, _changed = _walk_shape_list(
+            _items, _in_shapes[0] if _in_shapes else None, _ot)
         if _changed:
             if _is_wrapped:
                 _args[_shape_idx] = {"type": "list", "value": _new_items}

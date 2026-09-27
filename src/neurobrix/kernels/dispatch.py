@@ -60,6 +60,47 @@ def _tensor_to_int_or_none(val):
 # METADATA OPS — pure Python, NBXTensor methods, CPU stride math
 # ============================================================================
 
+def _report_invented_shape(x, shape):
+    """Report-only twin of the instrument in `metadata_ops._reshape`, at MODE 2's site.
+
+    Step one of the owner's two-step decision (2026-09-24): know which containers a refusing
+    reshape would reject before writing the refusal. The first instrument sat in the compiled
+    op set, which a `--modes triton,triton-sequential` census never enters, so it could not
+    fire (a Kokoro-82M census with it set never created the file). `NBX_RESHAPE_REPORT=<file>`
+    appends one record per call whose target has no -1 and whose element count does not match
+    the input: an INVENTED shape. A -1 target is an inference and is not recorded. A 1-D
+    target is not exempt, because `NBXTensor.view` does not validate numel. The call has no
+    op uid here, so a record carries shapes, not a uid. Default off, one env lookup per call,
+    no behaviour change."""
+    rep = os.environ.get("NBX_RESHAPE_REPORT")
+    if not rep or -1 in shape:
+        return
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    target = 1
+    for d in shape:
+        target *= d
+    if numel == target:
+        return
+    try:
+        import json
+        with open(rep, "a") as fh:
+            json.dump({
+                "model": os.environ.get("NBX_RESHAPE_REPORT_MODEL", ""),
+                "site": "dispatch._resolve_view_shape",
+                "op_uid": "",
+                "in_shape": [int(d) for d in x.shape],
+                "in_numel": int(numel),
+                "target": [int(d) for d in shape],
+                "target_numel": int(target),
+                "ratio": (numel / target) if target else None,
+            }, fh)
+            fh.write("\n")
+    except Exception:
+        pass          # an instrument must never change the run it measures
+
+
 def _resolve_view_shape(x, shape):
     """Reconcile a trace-baked view/reshape shape with the runtime numel.
 
@@ -74,6 +115,7 @@ def _resolve_view_shape(x, shape):
     (trace==runtime) → returns the shape unchanged. Returns a list.
     """
     shape = list(shape)
+    _report_invented_shape(x, shape)
     if -1 in shape or len(shape) < 2:
         return shape  # explicit infer dim, or scalar/1D — view handles it
     numel = 1

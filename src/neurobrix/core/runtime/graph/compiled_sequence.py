@@ -1065,6 +1065,14 @@ class CompiledSequence:
         # happen exactly once per DAG lifetime.
         for tid in pretranspose_tids:
             meta = tensors.setdefault(tid, {})
+            # A recompile over the same DAG (a streamed piece compiled again for the next pass)
+            # finds the same aten::t ops — they stay in ops_metadata, only their consumers are
+            # rewired — so the swap must key on the stamp, not on the discovery. Swapping again
+            # flipped the metadata back to the file's shape on every second compile (measured
+            # 2026-09-26: PixArt's T5 streamed in 29 pieces, the census shadow then shaped the
+            # weight from the flipped metadata and the bind's .t() handed mm (10240, 4096)).
+            if meta.get("pretransposed"):
+                continue
             meta["pretransposed"] = True
             shape = meta.get("shape", [])
             if len(shape) == 2:
@@ -1246,7 +1254,16 @@ class CompiledSequence:
                 args[3] = {"type": "scalar", "value": full_size}
 
         if not safe_symbols:
-            return  # All seq_len trace values collide with weight dims
+            # Every seq_len trace value collides with a weight dim, so no seq_len scalar is
+            # promoted — but the SPATIAL pass below is independent of seq_len and must still
+            # run. Returning here skipped it: PixArt-XL-2-1024-MS (text length 120, also a weight
+            # extent) and mochi-1-preview (256) lost their height/width rebinding and the
+            # coincidence slice correction in --compiled only, and PixArt at 768x1024 died at
+            # aten.addmm::0 on (2x160 @ 256x1152) while both Triton modes rendered (2026-09-26).
+            from neurobrix.triton.promotion import _spatial_promotion_pass
+            _spatial_promotion_pass(self.dag, tensors, ops_metadata,
+                                    symbols, set(), set())
+            return
 
         # Promote scalar args in shape-manipulating ops to symbolic references
         promoted = 0
