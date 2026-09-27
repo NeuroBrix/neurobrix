@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Diffusion models trained on a table of sizes render any requested size the way their vendor
+  does.** When a model's container records the vendor's resolution binning, the request is mapped
+  to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
+  for, in both engines. A request can turn it off with `use_resolution_binning`.
+
 - **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
   such a stage at every key class of that length, on the largest memory rung.
 
