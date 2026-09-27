@@ -9,10 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Diffusion models trained on a table of sizes render any requested size the way their vendor
+  does.** When a model's container records the vendor's resolution binning, the request is mapped
+  to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
+  for, in both engines. A request can turn it off with `use_resolution_binning`.
+
 - **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
   such a stage at every key class of that length, on the largest memory rung.
 
 ### Changed
+
+- **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
+  depths the Metal backend's author recommends; the Apple profile declares them
+  (`autotune.certify_num_stages`).
 
 - **A model's directory in the cache carries the name its manifest declares.** The engine now
   refuses a container whose directory was renamed by hand — at extraction, when a directory is
@@ -27,6 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
+- **On Apple GPUs, memory the engine frees is given back.** Every Metal buffer freed by the Triton
+  engines used to stay allocated for the life of the process (a PyObjC 12.2.2 defect,
+  [pyobjc#690](https://github.com/ronaldoussoren/pyobjc/issues/690)), so a long run or a large
+  upscale could exhaust memory. hat-s-x4 in `--triton`, which was killed for swap before, completes.
+- **The Triton engines round weights to bfloat16 to nearest instead of truncating them.** Images
+  from `--triton` are closer to `--compiled`: the upscalers moved 8 to 14 dB of PSNR closer, and
+  their grey backgrounds are gone.
+- **PixArt-XL-2-1024-MS and mochi-1-preview render in `--compiled` at sizes other than the one they
+  were traced at.** A size where every sequence length also matched a weight dimension skipped the
+  spatial resizing of the graph.
+- **A configuration file with a key written twice is refused** instead of silently keeping the last
+  one. The Apple M4 Pro profile's measured autotune tolerances, hidden by a second `autotune:`
+  block, are read again.
+- **A census no longer fails a model whose text encoder runs in pieces**, from its second pass on.
+  A weight's transposed shape was recorded again at each compile of a piece.
+- **The Triton engines keep a finite mask value finite in half precision.** A mask sentinel written
+  as the float32 minimum became minus infinity when narrowed to bfloat16 or float16, and a fully
+  masked row could then turn to NaN; it now saturates to the half type's own minimum, as the
+  `--compiled` engines already did.
 
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
