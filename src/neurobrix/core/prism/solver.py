@@ -929,6 +929,8 @@ class PrismSolver:
         # executor will still have. Default "compiled" keeps every existing caller's behaviour.
         self._mode = str(mode or "compiled")
         self._serve_mode = serve_mode
+        # {component: elements of its graph outputs at the request} — the host estimate's output term.
+        self._output_elements: Dict[str, int] = {}
         # The REQUEST's serve intent, never toggled. `_serve_mode` is set False for the cold
         # re-evaluation and restored before the KV check; a reserve taken during the cold pass from
         # the toggled flag was one turn while the check then demanded two.
@@ -1567,7 +1569,7 @@ class PrismSolver:
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
-            resident_bytes=resident_bytes_now())
+            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -2293,6 +2295,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                     )
+                    self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
                     if smallest_gpu_bytes > 0 and ap.overflow_ops:
@@ -5334,6 +5337,18 @@ class PrismSolver:
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
         return allocations, devices
+
+    def _output_bytes(self, container) -> int:
+        """What the run's output boundary holds on the host: the largest graph output among the plan's
+        components at the request, times what the family's save path holds per element
+        (output_dispatch.host_bytes_per_output_element). The largest, not a named component: which one is
+        final is the flow's business, and the largest bounds it."""
+        from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
+        family = (container.get_manifest() or {}).get("family")
+        elements = max(self.__dict__.get("_output_elements", {}).values(), default=0)
+        if not family or not elements:
+            return 0
+        return int(elements) * host_bytes_per_output_element(family)
 
     def _stored_dtypes_by_component(self, container) -> Dict[str, set]:
         """Per-component {stored floating dtypes} from the weights index (what a load converts FROM)."""
