@@ -52,6 +52,30 @@ def get_output_format(family: str) -> str:
     return fmt
 
 
+#: What each save path below holds on the host per element of the final tensor, read from its code:
+#: png / jpg / mp4 — `final_as_array` (float32), then `processor.process_array` / `np.clip` rebinding it,
+#: and the `* 255` float32 temporary beside it before `.astype` to 8 (or 16) bits: two float32 copies and
+#: the integer image (save_image, save_video); wav — the float32 waveform and its normalised copy, then
+#: soundfile's PCM_16 (AudioOutputProcessor.save_waveform); txt — tokens, nothing proportional to a tensor.
+_SAVE_FLOAT_COPIES = 2
+
+
+def host_bytes_per_output_element(family: str) -> int:
+    """Host bytes the output boundary holds per element of the run's final tensor, for `family`'s declared
+    output format — Prism prices the run's output from it (core/prism/host_footprint.py). A family whose
+    format depends on the mode is priced at the dearest of its formats, never a guess at the mode."""
+    fmt = get_output_format(family)
+    bit_depth = int(get_output_processing(family).get("bit_depth", 8))
+    image = _SAVE_FLOAT_COPIES * 4 + max(1, bit_depth // 8)
+    per_format = {"txt": 0, "wav": _SAVE_FLOAT_COPIES * 4 + 2, "png": image, "jpg": image, "jpeg": image,
+                  "mp4": _SAVE_FLOAT_COPIES * 4 + 1}
+    if fmt == "mode_dependent":
+        return max(per_format.values())
+    if fmt not in per_format:
+        raise RuntimeError(f"ZERO FALLBACK: no host pricing for output format {fmt!r} (family {family!r}).")
+    return per_format[fmt]
+
+
 def default_extension_for_mode(family: str, mode: Optional[str] = None) -> str:
     """
     Resolve canonical extension for (family, mode).
