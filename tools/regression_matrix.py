@@ -103,10 +103,35 @@ def first_error(log: Path) -> str:
 def last_stage(log: Path) -> dict:
     """Where a cell was when it ended without an artefact: its last progress line and its last
     line of output. A TIMEOUT row carries it, so a red cell names the stage it held its card in."""
-    lines = [l.strip() for l in (log.read_text(errors="replace") if log.exists() else "").splitlines()
+    text = log.read_text(errors="replace") if log.exists() else ""
+    text = text.split(Z.STACK_MARK)[0]
+    lines = [l.strip() for l in text.splitlines()
              if l.strip() and not l.startswith(("TIMEOUT after", "KILLED by SIGKILL"))]
     progress = [l for l in lines if l.startswith("[progress]")]
     return {"progress": progress[-1][:300] if progress else None, "last_line": lines[-1][:300] if lines else None}
+
+
+def stack_at_timeout(log: Path) -> list:
+    """The engine frames of the main process's first thread in the stack taken before a TIMEOUT
+    kill, innermost first — what the cell was DOING when its budget ran out (py-spy's frame
+    lines: "    func (path:line)"). Empty when no stack was taken."""
+    text = log.read_text(errors="replace") if log.exists() else ""
+    if Z.STACK_MARK not in text:
+        return []
+    section = text.split(Z.STACK_MARK, 1)[1]
+    frames, in_thread = [], False
+    for line in section.splitlines():
+        if line.startswith("Thread "):
+            if in_thread:
+                break
+            in_thread = True
+            continue
+        if in_thread and line.startswith("    ") and "(" in line:
+            frames.append(line.strip())
+        elif in_thread and frames and not line.strip():
+            break
+    engine = [f for f in frames if "neurobrix" in f or "kernels" in f or "triton" in f]
+    return (engine or frames)[:12]
 
 
 def sha256(path: Path) -> str:
@@ -251,7 +276,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *req, *MODES[mode],
            "--output", str(art)]
-    rc, wall = Z.run(cmd, env, log, timeout)
+    rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
            "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
@@ -267,6 +292,9 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     else:
         row["error"] = first_error(log) if rc != 0 else "rc 0 and no artefact"
         row["last_stage"] = last_stage(log)
+        stack = stack_at_timeout(log)
+        if stack:
+            row["stack_at_timeout"] = stack
     return row
 
 
