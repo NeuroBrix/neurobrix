@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the hub record's name, and prints the name to use with `run` and `remove`. A model
   extracted under a hand-chosen name before this release is refused the same way, whichever path
   opens it. One repository under two names is a duplicate, not two models.
+- **A model runs from what its container declares, on every machine.** Per-component settings
+  that some video models read from a developer-only file now come from the container itself,
+  whatever name or path the model is requested by;
+  a developer checkout whose file disagrees with a container refuses to run it and names the
+  setting, instead of running it differently from everyone else.
 
 ### Fixed
 

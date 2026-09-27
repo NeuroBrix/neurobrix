@@ -48,13 +48,17 @@ def test_a_flag_the_container_declares_is_read_with_no_registry():
     assert rf.get_component_flag("other", "text_encoder", "zero_pad_embeddings", default=False) is False
 
 
-def test_the_registry_stays_the_developer_s_override(monkeypatch, tmp_path):
+def test_the_registry_is_a_check_no_longer_the_developer_s_override(monkeypatch, tmp_path):
+    """2026-09-27 02:57 (R18, general): the registry serves the build only. A registry that
+    disagrees with the container no longer overrides it — the run is refused, by name."""
     p = tmp_path / "model_registry.yml"
     p.write_text("video:\n  wan:\n    components:\n      text_encoder:\n        zero_pad_embeddings: false\n")
+    monkeypatch.setattr(rf, "_REGISTRY_CACHE", None)
     monkeypatch.setattr(rf, "_find_registry_yaml", lambda: p)
     component_flags.register("wan", {"text_encoder": {"zero_pad_embeddings": True}})
-    assert rf.get_component_flag("wan", "text_encoder", "zero_pad_embeddings", default=None) is False
-    # A component the registry knows but a flag it does not declare falls through to the container.
+    with pytest.raises(RuntimeError, match="carries True"):
+        rf.get_component_flag("wan", "text_encoder", "zero_pad_embeddings", default=None)
+    # A component the registry knows but a flag it does not declare: the container answers.
     component_flags.register("wan", {"text_encoder": {"requires_fp32_compute": True}})
     assert rf.get_component_flag("wan", "text_encoder", "requires_fp32_compute", default=False) is True
 
