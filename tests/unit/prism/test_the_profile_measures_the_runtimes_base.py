@@ -28,3 +28,16 @@ def test_the_solver_prices_the_profiles_base():
     src = (A.__file__.replace("autodetect.py", "solver.py"))
     text = open(src).read()
     assert 'getattr(profile.cpu, "runtime_base_mb", None)' in text and "plan.host_footprint = host_footprint(" in text
+
+
+def test_a_probe_started_by_a_large_process_measures_itself_not_its_parent():
+    # Linux carries ru_maxrss across fork and exec: under a 2.4 GB test process every probe read its
+    # parent's size at both ends and the base came out 0 (2026-09-27). The kernel's per-image counters
+    # (VmRSS / VmHWM) start fresh at exec; this holds 1.5 GB and asks for a positive base below it.
+    from neurobrix.core.prism import host_footprint as H
+    held = bytearray(1536 << 20)
+    for i in range(0, len(held), 4096):
+        held[i] = 1
+    base = A._measure_runtime_base_mb()
+    assert all(0 < v < 1536 for v in base.values()), base
+    assert H.resident_bytes_now() >= 1536 << 20

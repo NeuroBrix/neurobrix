@@ -129,12 +129,20 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
 
 
 def resident_bytes_now() -> int:
-    """This process's resident memory so far (its peak RSS: at planning time, the container just parsed),
-    read from the OS — Linux reports KiB, macOS bytes."""
-    import resource
+    """This process's resident memory now (at planning time: the interpreter, the CLI, the parsed
+    container). Linux: VmRSS from /proc/self/status. NOT getrusage's ru_maxrss there — Linux carries it
+    across fork and exec, so a process started by a large one reports its parent's size (measured
+    2026-09-27: 1 509 MB in a child of a 1.5 GB parent whose own VmHWM was 8 MB). Elsewhere (macOS, no
+    /proc) ru_maxrss, which macOS reports in bytes."""
     import sys
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return int(r) if sys.platform == "darwin" else int(r) << 10
+    if sys.platform.startswith("linux"):
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) << 10
+        raise RuntimeError("ZERO FALLBACK: /proc/self/status carries no VmRSS")
+    import resource
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
 
 def summary(hf: Mapping) -> str:
