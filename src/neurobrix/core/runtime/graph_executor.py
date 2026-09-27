@@ -3075,6 +3075,7 @@ class GraphExecutor:
             needs_move as _needs_move_dt, transfer_tensor as _xfer_dt)
         from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_dt
 
+        _type_interceptors = getattr(self, "_pending_triton_interceptors", None) or {}
         for op_idx, op_uid in enumerate(exec_order):
             op_data = ops_meta.get(op_uid)
             if op_data is None:
@@ -3224,6 +3225,19 @@ class GraphExecutor:
                 if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
                     resolved_kwargs = dispatcher.resolve_kwargs(attrs)
                     _fn = self._op_uid_interceptors[op_uid]
+                    for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
+                        resolved_kwargs.setdefault(_k, _v)
+                    result = _fn(*resolved_args, **resolved_kwargs)
+                elif op_type in _type_interceptors:
+                    # The op_type interceptors the compiled Triton sequence
+                    # installs at compile (register_triton_interceptors): the
+                    # KV cache's attention and arange hooks. Without this
+                    # branch triton-sequential decoded with NO cache — every
+                    # token re-ran the whole context, where the PyTorch
+                    # sequential oracle decodes with it (R30; the MoE LMs'
+                    # tseq cells timed out on it, 2026-09-27).
+                    resolved_kwargs = dispatcher.resolve_kwargs(attrs)
+                    _fn = _type_interceptors[op_type]
                     for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
                         resolved_kwargs.setdefault(_k, _v)
                     result = _fn(*resolved_args, **resolved_kwargs)
