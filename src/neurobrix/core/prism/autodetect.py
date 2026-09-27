@@ -328,10 +328,19 @@ def load_default_profile():
 #: Each runs under the interpreter and the card door of the process that builds the profile. The Triton
 #: probe imports no torch (R33) and uses only kernels that are certified or need no autotune sweep, so
 #: building a profile writes no autotune cache (read: the replay cache's files and mtimes unchanged).
-_PLANNING_STATE = ("import resource, sys\n"
+#: The probe's own memory, in MB: VmRSS ("now") / VmHWM ("peak") from /proc/self/status on Linux — never
+#: ru_maxrss there, which Linux carries across fork and exec (a probe started by a large process would
+#: report its parent's size: the base measured 0 inside a 2.4 GB test process, 2026-09-27); ru_maxrss
+#: elsewhere (macOS: bytes, and no /proc).
+_MB_OF = ("import resource, sys\n"
+          "def _mb(kind):\n"
+          "    if sys.platform.startswith('linux'):\n"
+          "        key = 'VmRSS:' if kind == 'now' else 'VmHWM:'\n"
+          "        return next(int(l.split()[1]) for l in open('/proc/self/status') if l.startswith(key)) // 1024\n"
+          "    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1 << 20)\n")
+_PLANNING_STATE = (_MB_OF +
                    "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.core.prism.solver\n"
-                   "_r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
-                   "print(_r // (1 << 20) if sys.platform == 'darwin' else _r // 1024)\n")
+                   "print(_mb('now'))\n")
 _BASE_PROBES = {
     "compiled": (
         "import torch\n"
@@ -354,8 +363,7 @@ _BASE_PROBES = {
         "    wrappers.add(a, a)\n"
         "    wrappers.mm(a, a)\n"),
 }
-_PEAK_MB = ("r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
-            "print(r // (1 << 20) if sys.platform == 'darwin' else r // 1024)\n")
+_PEAK_MB = "print(_mb('peak'))\n"
 
 
 def _measure_runtime_base_mb() -> Dict[str, int]:
