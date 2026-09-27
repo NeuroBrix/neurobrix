@@ -86,6 +86,8 @@ class RuntimeExecutor:
 
         # Helper modules (initialized in execute)
         self._input_resolver: Optional[InputResolver] = None
+        # Set per request by _prepare_defaults (resolution binning); None = not binned.
+        self._binned_request = None
         self._input_synthesizer: Optional[InputSynthesizer] = None
         self._output_extractor: Optional[OutputExtractor] = None
         # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
@@ -359,6 +361,11 @@ class RuntimeExecutor:
         from neurobrix.core.runtime.resolution.variable_resolver import to_engine_container
         inputs = to_engine_container(inputs, self.mode)
         merged_defaults = self._prepare_defaults(inputs)
+        if self._binned_request is not None:
+            # The request's own height/width are bound into the resolver as given; a binned
+            # request binds the bin in their place, the requested size travels to the flow.
+            from neurobrix.core.runtime.resolution.resolution_binning import rebind_request_size
+            inputs = rebind_request_size(inputs, self._binned_request)
         self._init_variable_resolver(inputs, merged_defaults)
         self._set_runtime_resolution_on_executors(merged_defaults)
 
@@ -368,6 +375,10 @@ class RuntimeExecutor:
         # 4. Create FlowContext and dispatch to handler
         flow_type = self._detect_flow_type()
         logger.debug(f"Flow type: {flow_type}")
+        if self._binned_request is not None and flow_type != "iterative_process":
+            raise RuntimeError(
+                f"ZERO FALLBACK: flow.resolution_binning is active but the '{flow_type}' flow does not "
+                f"restore the requested size; only iterative_process does.")
 
         assert self.variable_resolver is not None, "variable_resolver must be initialized"
         assert self.strategy is not None, "strategy must be initialized"
@@ -385,6 +396,7 @@ class RuntimeExecutor:
             mode=self.mode,
             primary_device=self._get_primary_device(),
             persistent_mode=self._persistent_mode,
+            binned_request=self._binned_request,
         )
 
         # The Triton engine's random stream is armed here, once per request,
@@ -481,6 +493,15 @@ class RuntimeExecutor:
         for key, value in inputs.items():
             default_key = key.replace("global.", "") if key.startswith("global.") else key
             merged_defaults[default_key] = value
+
+        # Resolution binning (the vendor's `use_resolution_binning`, recorded by Forge under
+        # `flow.resolution_binning`): the request is classified to its trained bin HERE, after
+        # every source of height/width has spoken and before the latent extent is derived from
+        # them, so the whole pipeline runs at the bin. The flow restores the requested size
+        # after the decoder (`resolution.resolution_binning`, both branches).
+        from neurobrix.core.runtime.resolution.resolution_binning import bin_request, REQUEST_FLAG
+        self._binned_request = bin_request(
+            self.pkg.topology, merged_defaults, inputs.get(REQUEST_FLAG))
 
         # Compute dynamic latent dimensions
         comp_configs = {name: data for name, data in self.pkg.components.items()}

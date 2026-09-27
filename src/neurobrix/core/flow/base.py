@@ -67,6 +67,11 @@ class FlowContext:
     # Primary device string — ALWAYS derived from Prism allocation (executor.py:_get_primary_device)
     primary_device: str = ""
 
+    # Resolution binning (`resolution.resolution_binning.BinnedRequest`): set when the request
+    # runs at a trained bin instead of its own size; the flow restores the requested size after
+    # the decoder. None when the request is not binned.
+    binned_request: Any = None
+
     def compute_dtype(self, component: str = None) -> 'torch.dtype':
         """Prism-RESOLVED compute dtype for flow-level tensor synthesis.
 

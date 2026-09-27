@@ -26,7 +26,7 @@ import numpy as np
 
 from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
-    _set_device,
+    _set_device, float32_to_bf16_bits,
 )
 from .memory_pool import ComponentArena
 
@@ -408,12 +408,10 @@ def _load_to_pinned_cpu(
         arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
         arr = np.ascontiguousarray(arr)
         if target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float16:
-            # fp16 → bf16 (truncate mantissa)
-            fp32 = arr.astype(np.float32)
-            arr = np.ascontiguousarray(
-                (fp32.view(np.uint32) >> 16).astype(np.uint16))
+            # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact)
+            arr = float32_to_bf16_bits(arr.astype(np.float32))
         elif target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float32:
-            # fp32 → bf16 (top 16 bits of the fp32), the SAME bit-transform the
+            # fp32 → bf16 rounded to nearest even, the SAME transform the
             # GPU arena loader uses (_load_shard_into_arenas), so the zero3
             # host-staged copy of a weight is bit-identical to its arena copy.
             # An fp32 encoder (PixArt / CogVideoX T5) staged to a bf16 compute
@@ -423,8 +421,7 @@ def _load_to_pinned_cpu(
             # stored_dtype_in_compute, the one rule shared with the census
             # shadow, so completing this pair keeps the shadow's dtypes and the
             # real run's identical rather than diverging.
-            arr = np.ascontiguousarray(
-                (arr.view(np.uint32) >> 16).astype(np.uint16))
+            arr = float32_to_bf16_bits(arr)
 
     # Any remaining source->target pair: cast through numpy.
     #
@@ -589,15 +586,12 @@ def _load_shard_into_arenas(
                     final_dtype = NBXDtype.float16
                 elif (nbx_dtype == NBXDtype.float32
                       and target_dtype == NBXDtype.bfloat16):
-                    # fp32 → bf16 (top 16 bits of fp32 mantissa).
-                    arr = np.ascontiguousarray(
-                        (arr.view(np.uint32) >> 16).astype(np.uint16))
+                    # fp32 → bf16, rounded to nearest even.
+                    arr = float32_to_bf16_bits(arr)
                     final_dtype = NBXDtype.bfloat16
                 elif target_dtype != nbx_dtype:
-                    # fp16 → bf16 (truncation of mantissa, standard path).
-                    fp32 = arr.astype(np.float32)
-                    arr = np.ascontiguousarray(
-                        (fp32.view(np.uint32) >> 16).astype(np.uint16))
+                    # fp16 → bf16, rounded to nearest even (fp16 → fp32 is exact).
+                    arr = float32_to_bf16_bits(arr.astype(np.float32))
                     final_dtype = target_dtype
                 else:
                     final_dtype = target_dtype

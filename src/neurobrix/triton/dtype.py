@@ -97,6 +97,58 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
 
 _FLOATING = frozenset({NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64})
 
+# ---------------------------------------------------------------------------
+# Saturating narrowing of scalars and one-element constants — the R30 mirror of
+# core/dtype/engine.py's AMP_SCALAR_FILL_OPS / AMP_CREATION_FILL_OPS clamp
+# (duplicated, not imported: that module imports torch, R33), extended to the
+# one-element operand of `where`.
+#
+# A finite value beyond a half dtype's range (a finfo(fp32).min mask sentinel a
+# graph traced in fp32 carries as a literal) becomes +-inf when it is written
+# into that dtype. The vendor, running in the half dtype, uses finfo(half).min,
+# which is finite. Measured 2026-09-26 on PixArt-XL-2-1024-MS's T5: the mask's
+# `aten.where::0` filled 13 200 positions with -inf in bf16 where the ATen branch
+# kept -3.4028e38 in fp32; ten components of the catalogue carry such literals
+# (six text encoders at finfo(fp32).min, four at finfo(bf16).min, infinite in fp16).
+# A fully masked row then softmaxes to NaN. Saturation writes the half dtype's own
+# extreme instead, which is what the vendor's value is.
+# ---------------------------------------------------------------------------
+AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
+    "masked_fill", "masked_fill_", "fill", "fill_", "index_fill", "index_fill_",
+})
+AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({"full", "new_full", "full_like"})
+_HALF_MAX = {NBXDtype.float16: 65504.0, NBXDtype.bfloat16: 3.3895313892515355e38}
+
+
+def saturate_scalar(value, dtype):
+    """A Python number clamped to the finite range of a half `dtype`; anything else unchanged
+    (a bool, a non-half dtype, a NaN, an infinity the graph wrote on purpose)."""
+    top = _HALF_MAX.get(dtype)
+    if top is None or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        return value
+    return max(-top, min(top, v))
+
+
+def _saturated_one_element(t, out_dt):
+    """`t` itself, unless it is a one-element float tensor wider than `out_dt` holding a finite
+    value beyond `out_dt`'s range — then a one-element tensor of `t`'s dtype holding the
+    saturated value, same shape."""
+    if not _is_float_tensor(t) or t.numel() != 1:
+        return t
+    if _get_nbx_dtype(t) not in (NBXDtype.float32, NBXDtype.float64):
+        return t
+    import numpy as np
+    v = float(np.asarray(t.numpy()).reshape(-1)[0])
+    sv = saturate_scalar(v, out_dt)
+    if sv == v:
+        return t
+    arr = np.full(tuple(t.shape), sv, dtype=np.float64 if _get_nbx_dtype(t) == NBXDtype.float64 else np.float32)
+    return NBXTensor.from_numpy(arr)
+
+
 
 # Mirror of core/dtype/engine.py's predicate. Duplicated, not imported: that
 # module imports torch, and the Triton branch loads no torch at import or at
@@ -405,6 +457,15 @@ class TritonDtypeEngine:
         # (mm/bmm/addmm self-gate on _NBX_HAS_NATIVE_BF16 internally;
         # conv2d/upsample_nearest are dtype-tag-driven). See _SELF_MANAGED_OPS
         # docstring for the per-op doctrine.
+        # Scalars and one-element constants narrowed into a half dtype saturate
+        # (see saturate_scalar). Ahead of the self-managed return: none of these
+        # ops is self-managed, and the rule holds whatever the compute dtype.
+        if op_name in AMP_SCALAR_FILL_OPS:
+            return self._wrap_scalar_fill(func)
+        if op_name in AMP_CREATION_FILL_OPS:
+            return self._wrap_creation_fill(func)
+        if op_name == "where":
+            return self._wrap_where_saturate(func)
         if op_name in _SELF_MANAGED_OPS:
             return func
 
@@ -432,6 +493,50 @@ class TritonDtypeEngine:
             return self._wrap_promote(func)
 
         return func
+
+    @staticmethod
+    def _wrap_scalar_fill(func: Callable) -> Callable:
+        """masked_fill / fill / index_fill: the Python scalar is clamped to the finite range of the
+        tensor it fills, as the ATen branch does (AMP_SCALAR_FILL_OPS)."""
+        def fill_func(*args, **kwargs):
+            target = next((_get_nbx_dtype(a) for a in args if _is_float_tensor(a)), None)
+            if target not in _HALF_MAX:
+                return func(*args, **kwargs)
+            args = tuple(saturate_scalar(a, target) if not hasattr(a, "data_ptr") else a for a in args)
+            kwargs = {k: (saturate_scalar(v, target) if not hasattr(v, "data_ptr") else v) for k, v in kwargs.items()}
+            return func(*args, **kwargs)
+        return fill_func
+
+    @staticmethod
+    def _wrap_creation_fill(func: Callable) -> Callable:
+        """full / new_full / full_like: the fill value is clamped to the finite range of the dtype
+        created — the dtype kwarg, else an NBXDtype argument, else the template tensor's dtype
+        (the ATen branch's clamp_creation_fill_args)."""
+        def creation_func(*args, **kwargs):
+            target = kwargs.get("dtype")
+            if not isinstance(target, NBXDtype):
+                target = next((a for a in args if isinstance(a, NBXDtype)), None)
+            if target is None:
+                target = next((_get_nbx_dtype(a) for a in args if _is_float_tensor(a)), None)
+            if target not in _HALF_MAX:
+                return func(*args, **kwargs)
+            args = tuple(saturate_scalar(a, target) if isinstance(a, float) else a for a in args)
+            if isinstance(kwargs.get("fill_value"), float):
+                kwargs = {**kwargs, "fill_value": saturate_scalar(kwargs["fill_value"], target)}
+            return func(*args, **kwargs)
+        return creation_func
+
+    @staticmethod
+    def _wrap_where_saturate(func: Callable) -> Callable:
+        """where(cond, x, y) writes into x's dtype. A one-element operand of a wider float dtype
+        whose finite value lies beyond that half dtype's range is replaced by the saturated value
+        before the kernel writes it (a mask sentinel, read on the host: one element, once)."""
+        def where_func(cond, x, y, *rest, **kwargs):
+            out_dt = _get_nbx_dtype(x) if _is_float_tensor(x) else None
+            if out_dt in _HALF_MAX:
+                x, y = (_saturated_one_element(t, out_dt) for t in (x, y))
+            return func(cond, x, y, *rest, **kwargs)
+        return where_func
 
     def _wrap_complex_output(self, func: Callable) -> Callable:
         """Raise fp16/bf16 operands to fp32 and leave every other dtype alone.
