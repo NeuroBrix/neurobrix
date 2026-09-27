@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-117 entries, 111 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+118 entries, 112 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2201,8 +2201,7 @@ sound.
 It was not sound. The census's own merged report named the casualties an hour later: six
 models — `whisper-large-v3-turbo`, `orpheus-3b-0.1-ft-snac`, `real-esrgan-x2/x4/x8`,
 `TinyLlama-1.1B-Chat-v1.0` — every one of them `SyntaxError: invalid syntax` at
-`census.py:397`, `<<<<<<< HEAD`, all stamped 02:45. A seventh of the catalogue, silently
-missing from a census that was about to feed certification on four cards.
+`census.py:397`, `missing from a census that was about to feed certification on four cards.
 
 **What would it have done if the code were wrong?** Printed nothing, exactly as it did when
 the code WAS wrong — the check could not distinguish "no damage" from "no files read".
@@ -3542,6 +3541,7 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
 
+<<<<<<< HEAD
 ### 111 — the lattice test checked its own copy of the snap, and the copy encoded the defect
 
 `tests/unit/prism/test_a_tiled_extent_lands_on_the_profile_s_lattice.py` asserted the tile-lattice
@@ -3559,3 +3559,23 @@ cell now exists (`test_a_tile_below_the_lattice_keeps_its_size.py`: the live fig
 tile 12 kept; red on c657c7bf), and the helper mirrors the corrected rule with a pointer to it.
 
 **The lesson, in one line.** A test that re-implements the rule it guards guards the re-implementation.
+### 112 — the matrix's mechanical check read a video's bytes and never its size
+
+`tools/regression_matrix.py` writes, for every cell with an artefact, the mechanical half of R29:
+degeneracy and geometry for an image, emptiness for text — and for a video, the path and the byte
+count. SANA-Video_2B_720p_diffusers on a 32 GB V100 (lazy_sequential) wrote an 81-frame video of
+**160x64** for a 1280x512 request, in the compiled engine and in triton-sequential alike; both rows
+read `rc 0` with a size in bytes (queue-6 smoke on card 3, 2026-09-27 03:10; the zero3 branch's
+proof on cards 2 and 3, 04:14 and 04:33). The fault was seen only when a judge opened the file.
+
+**What the gate said about a wrong video**: nothing. A check that never reads a dimension cannot
+see a fault whose whole signature is a dimension.
+
+**Repair.** `judge_artefact.video_degeneracy` reads the size and frame count (imageio, the engine
+python's own I/O) and three sampled frames; the row names a geometry that is not the request's and
+a video whose sampled frames are one flat colour. Gate
+`tests/unit/tools/test_a_video_row_checks_its_size_against_the_request.py`: 3 red on the old
+check, green after; on the real artefact it reads `geometry (64, 160) is not the requested (512, 1280)`.
+
+**The lesson, in one line.** A mechanical check covers every output kind the matrix writes, or it
+is a green light for the kind it skips.
