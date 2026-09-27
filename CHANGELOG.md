@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SANA-Video renders at the requested size on large-memory GPUs.** When its decoder was split into
+  tiles, the tiles were stitched on a canvas eight times too small, so a 1280x512 request came out
+  as a 160x64 video. The tile scale now comes from the model's own measured shapes.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
