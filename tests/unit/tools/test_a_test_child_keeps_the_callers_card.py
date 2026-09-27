@@ -46,3 +46,11 @@ def test_no_test_hands_a_child_a_card_of_its_own():
             if "monkeypatch" not in line and _LITERAL_CARD.search(line):
                 sites.append(f"{f.relative_to(TESTS)}:{n}: {line.strip()}")
     assert not sites, "a child is given its own card:\n" + "\n".join(sites)
+
+
+def test_a_pinned_profile_travels_with_the_tests_own_card(monkeypatch):
+    """A 32 GB profile pinned with card 2 must not follow the caller's door onto a 16 GB card."""
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert C.the_pinned_profile("v100-32g") == "v100-32g"
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    assert C.the_pinned_profile("v100-32g") is None
