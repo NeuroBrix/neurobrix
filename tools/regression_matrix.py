@@ -276,8 +276,14 @@ def cmd_run(a) -> int:
     rows_path = out / f"rows_card{a.gpu}.jsonl"
     # The matrix is one: a cell with a row on ANY card is done, so a model's remaining cells can be
     # handed to another card without running its finished ones twice.
-    done = {(r["model"], r["mode"]) for f in out.glob("rows_card*.jsonl")
-            for r in map(json.loads, f.read_text().splitlines())}
+    latest = {}
+    for f in out.glob("rows_card*.jsonl"):
+        for r in map(json.loads, f.read_text().splitlines()):
+            latest[(r["model"], r["mode"])] = r if _row_time(r) >= _row_time(latest.get((r["model"], r["mode"]))) \
+                else latest[(r["model"], r["mode"])]
+    # --rerun: the listed cells run again although they have a row; the new row names the one it
+    # supersedes (kept, never deleted — the supervisor's rule of 2026-09-27 02:57).
+    done = set() if a.rerun else set(latest)
     todo = [(m.strip(), mode) for m in a.models.split(",") if m.strip() for mode in a.modes.split(",")
             if (m.strip(), mode) not in done]
     while todo:
@@ -289,6 +295,9 @@ def cmd_run(a) -> int:
             if row is None:
                 deferred.append((model, mode))
                 continue
+            prev = latest.get((model, mode))
+            if a.rerun and prev is not None:
+                row["supersedes"] = {k: prev.get(k) for k in ("date", "gpu", "rc", "wall_s", "error", "engine", "sha256")}
             with open(rows_path, "a") as f:
                 f.write(json.dumps(row) + "\n")
             print(f"[matrix] {model} {mode} rc={row['rc']} {row.get('wall_s')}s "
@@ -297,20 +306,52 @@ def cmd_run(a) -> int:
     return 0
 
 
+def _row_time(r) -> float:
+    """A row's own time (its UTC `date`), 0 for none."""
+    if not r or not r.get("date"):
+        return 0.0
+    import calendar
+    return float(calendar.timegm(time.strptime(r["date"], "%Y-%m-%dT%H:%M:%SZ")))
+
+
+def _judgment_time(j) -> float:
+    """A judgment's time: `judge` writes local time with its zone name (CEST/CET on this fleet)."""
+    import calendar
+    stamp, _, zone = j["date"].rpartition(" ")
+    offset = {"CEST": 2, "CET": 1, "UTC": 0, "GMT": 0}.get(zone)
+    if offset is None:
+        raise SystemExit(f"judgment date {j['date']!r}: unknown zone {zone!r}")
+    return float(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M")) - offset * 3600)
+
+
 def load_rows(out: Path) -> list:
-    """Every cell's row, with the latest outside judgment of that (model, mode) merged in
-    (`judgments.jsonl`, appended by `judge` — the rows files belong to the running cards)."""
-    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    """The LATEST row of every cell (a re-run supersedes, the older rows ride along under
+    `superseded`), with the latest outside judgment of that (model, mode) merged in — only a judgment
+    taken after the row it would judge: a re-run cell is pending until judged again."""
+    latest, older = {}, {}
+    for f in sorted(out.glob("rows_card*.jsonl")):
+        for r in map(json.loads, f.read_text().splitlines()):
+            k = (r["model"], r["mode"])
+            if k in latest and _row_time(r) < _row_time(latest[k]):
+                older.setdefault(k, []).append(r)
+                continue
+            if k in latest:
+                older.setdefault(k, []).append(latest[k])
+            latest[k] = r
     judged = {}
     jf = out / "judgments.jsonl"
     if jf.exists():
         for l in jf.read_text().splitlines():
             j = json.loads(l)
             judged[(j["model"], j["mode"])] = j
-    for r in rows:
-        j = judged.get((r["model"], r["mode"]))
-        if j:
+    rows = []
+    for k, r in latest.items():
+        if k in older:
+            r["superseded"] = sorted(older[k], key=_row_time)
+        j = judged.get(k)
+        if j and _judgment_time(j) >= _row_time(r) - 60:        # judge stamps to the minute
             r.update(judged=j["judged"], verdict=j["verdict"], judged_on=j["date"])
+        rows.append(r)
     return rows
 
 
@@ -422,6 +463,8 @@ def main() -> int:
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--modes", default=",".join(MODES))
+    r.add_argument("--rerun", action="store_true",
+                   help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
     t = sub.add_parser("table")
