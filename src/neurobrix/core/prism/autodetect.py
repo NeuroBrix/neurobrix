@@ -319,23 +319,36 @@ def load_default_profile():
 # MAIN DETECTION ORCHESTRATOR (OS-FIRST)
 # ============================================================================
 
-#: One probe per engine: the engine's own modules imported and its device context created, as a run
-#: does before its first weight; the process then reports its peak resident memory in MB. Each runs
-#: under the interpreter and the card door of the process that builds the profile. The Triton probe
-#: imports no torch (R33).
+#: One probe per engine: the engine's own modules imported, its device context created and its compute
+#: libraries loaded the way a run's first ops load them — a GEMM, a convolution and an attention on the
+#: compiled engine (cuBLAS, cuDNN and the SDPA kernels are loaded on first use, not at import), a Triton
+#: kernel compiled and launched on the Triton engine (the JIT's compiler is loaded on first launch); the
+#: process then reports its peak resident memory in MB. Each runs under the interpreter and the card door
+#: of the process that builds the profile. The Triton probe imports no torch (R33) and uses only kernels
+#: that are certified or need no autotune sweep, so building a profile writes no autotune cache.
 _BASE_PROBES = {
     "compiled": (
         "import resource, sys\n"
         "import torch\n"
+        "import torch.nn.functional as F\n"
         "import neurobrix.core.runtime.graph_executor\n"
         "if torch.cuda.is_available():\n"
-        "    torch.zeros(1, device='cuda')\n"),
+        "    a = torch.ones(64, 64, device='cuda', dtype=torch.float16)\n"
+        "    (a @ a).sum().item()\n"
+        "    x = torch.ones(1, 4, 8, 8, device='cuda', dtype=torch.float16)\n"
+        "    F.conv2d(x, torch.ones(4, 4, 3, 3, device='cuda', dtype=torch.float16), padding=1).sum().item()\n"
+        "    q = torch.ones(1, 2, 16, 32, device='cuda', dtype=torch.float16)\n"
+        "    F.scaled_dot_product_attention(q, q, q).sum().item()\n"),
     "triton": (
         "import resource, sys\n"
         "import neurobrix.triton.flow.iterative_process\n"
-        "from neurobrix.kernels.nbx_tensor import DeviceAllocator\n"
+        "from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype\n"
+        "from neurobrix.kernels import wrappers\n"
         "if DeviceAllocator.device_count() > 0:\n"
-        "    DeviceAllocator.set_device(0)\n"),
+        "    DeviceAllocator.set_device(0)\n"
+        "    a = NBXTensor.zeros((64, 64), NBXDtype.float16)\n"
+        "    wrappers.add(a, a)\n"
+        "    wrappers.mm(a, a)\n"),
 }
 _PEAK_MB = ("r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
             "print(r // (1 << 20) if sys.platform == 'darwin' else r // 1024)\n")

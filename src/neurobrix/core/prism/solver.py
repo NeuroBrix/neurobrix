@@ -1560,13 +1560,12 @@ class PrismSolver:
         # runtime's own rules (host_footprint.py); the base is this machine's measured value, carried by
         # the hardware profile, or absent and said to be.
         from neurobrix.core.prism.host_footprint import host_footprint, engine_of
-        from neurobrix.core.workspace import io_workers
         from neurobrix.triton.weight_loader import is_block_key   # torch-free
         _engine = engine_of(self._mode)
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
-            _base, io_workers(), get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container))
+            _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
