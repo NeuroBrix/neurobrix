@@ -58,7 +58,7 @@ sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output kind
-from judge_artefact import image_degeneracy, text_degeneracy  # noqa: E402
+from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
@@ -151,6 +151,8 @@ def mechanical(path: Path, family: str, expect_hw=None) -> dict:
         return image_degeneracy(path, expect_shape=expect_hw)
     if suffix == ".txt":
         return text_degeneracy(path)
+    if suffix == ".mp4":
+        return video_degeneracy(path, expect_shape=expect_hw)
     return {"path": str(path), "bytes": path.stat().st_size}
 
 
