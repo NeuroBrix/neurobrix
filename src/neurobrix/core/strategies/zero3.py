@@ -541,8 +541,15 @@ class Zero3Strategy(ExecutionStrategy):
     def _build_ratchet_state(
         self, component_name: str, executor: Any
     ) -> Optional[Dict[str, Any]]:
-        """Construct per-component ratchet state. Returns None if the
-        executor doesn't have block structure (e.g. image/audio VAE).
+        """Construct per-component ratchet state. Returns None only while
+        the executor has no compiled sequence yet (retried at the next op).
+        A component with nothing to pipeline — no block structure (Janus
+        gen_head: four weights, all block -1) or no block weight on the
+        host — gets a PRIME-ONLY state: no blocks, but the priming sweep
+        still runs, because its host weights reach the GPU ops through
+        that sweep and nothing else. Returning None there left them on the
+        host and the first op died on "mat1 is on cuda:0 ... cpu"
+        (Janus-Pro-7B native under zero3 on a 16 GB card, 2026-09-27).
 
         Called once at the first pre_op_cb tick when the compiled
         sequence is guaranteed to be built and device-annotated.
@@ -562,16 +569,16 @@ class Zero3Strategy(ExecutionStrategy):
                 f"[Zero3] {component_name}: get_op_blocks failed ({e}); "
                 f"falling back to unpipelined slow path"
             )
-            return None
+            return self._prime_only_state(component_name, seq, is_triton, executor)
         # Filter out block -1 (embeddings / final norm / lm_head) — those
         # weights are small and stay resident across the whole pass.
         real_blocks = {bidx: entry for bidx, entry in blocks.items() if bidx >= 0}
         if not real_blocks:
-            # No transformer blocks — nothing to pipeline.
+            # No transformer blocks — nothing to pipeline, everything to prime.
             if _z3d:
                 print(f"[Z3DIAG] build_state({component_name}): NO REAL "
-                      f"BLOCKS ({len(blocks)} raw)", flush=True)
-            return None
+                      f"BLOCKS ({len(blocks)} raw) — prime only", flush=True)
+            return self._prime_only_state(component_name, seq, is_triton, executor)
 
         op_to_block = self._build_op_to_block(real_blocks)
         cpu_originals = self._snapshot_cpu_originals(executor, real_blocks)
@@ -586,9 +593,9 @@ class Zero3Strategy(ExecutionStrategy):
         if not has_cpu_block_weights:
             if _z3d:
                 print(f"[Z3DIAG] build_state({component_name}): NO CPU "
-                      f"BLOCK WEIGHTS ({len(cpu_originals)} originals)",
+                      f"BLOCK WEIGHTS ({len(cpu_originals)} originals) — prime only",
                       flush=True)
-            return None
+            return self._prime_only_state(component_name, seq, is_triton, executor)
 
         # Stream setup. Transfer stream carries the async H2D; the
         # compute stream is the runtime default (stream=0).
@@ -652,6 +659,30 @@ class Zero3Strategy(ExecutionStrategy):
             f"path={'triton' if is_triton else 'native'}, "
             f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}"
         )
+        return state
+
+    def _prime_only_state(
+        self, component_name: str, seq: Any, is_triton: bool, executor: Any
+    ) -> Dict[str, Any]:
+        """A ratchet with no blocks: the priming sweep runs once, the
+        per-op step finds no block to move, the pass-end reset has nothing
+        to evict."""
+        state: Dict[str, Any] = {
+            'seq': seq,
+            'is_triton': is_triton,
+            'exec_dev_idx': self._exec_dev_idx(),
+            'blocks': {},
+            'op_to_block': {},
+            'cpu_originals': {},
+            'gpu_cache': {},
+            'block_events': {},
+            'current_block': -1,
+            'transfer_stream': 0,
+            'transfer_stream_torch': None,
+            'primed': False,
+            'executor': executor,
+        }
+        self._ratchet[component_name] = state
         return state
 
     def _ratchet_prime(self, state: Dict[str, Any], component_name: str) -> None:
