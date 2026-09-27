@@ -100,6 +100,15 @@ def first_error(log: Path) -> str:
     return text.strip().splitlines()[-1][:300] if text.strip() else ""
 
 
+def last_stage(log: Path) -> dict:
+    """Where a cell was when it ended without an artefact: its last progress line and its last
+    line of output. A TIMEOUT row carries it, so a red cell names the stage it held its card in."""
+    lines = [l.strip() for l in (log.read_text(errors="replace") if log.exists() else "").splitlines()
+             if l.strip() and not l.startswith(("TIMEOUT after", "KILLED by SIGKILL"))]
+    progress = [l for l in lines if l.startswith("[progress]")]
+    return {"progress": progress[-1][:300] if progress else None, "last_line": lines[-1][:300] if lines else None}
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -132,11 +141,35 @@ HOST_PER_WEIGHT_BYTE = 1.7
 #: The share of the host the matrix may hold at once: the rest belongs to the census, the gate's
 #: harness and the kernel. Three concurrent cells at 180 GB of 251 drove memory pressure to 33 %
 #: "full" and the gate's cells to their timeouts (2026-09-26).
-HOST_SHARE = 0.55
+HOST_SHARE = 0.8
+#: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness).
+HOST_HEADROOM = 16 << 30
 
 
 def _host_bytes() -> int:
     return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
+def _mem_available() -> int:
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) << 10
+    raise SystemExit("/proc/meminfo has no MemAvailable: the host budget cannot be measured")
+
+
+def _rss_tree(pid: int) -> int:
+    """Resident bytes of a runner and every process under it (its cell)."""
+    total, todo = 0, [pid]
+    while todo:
+        p = todo.pop()
+        try:
+            for line in Path(f"/proc/{p}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1]) << 10
+            todo += [int(c) for c in Path(f"/proc/{p}/task/{p}/children").read_text().split()]
+        except OSError:
+            continue
+    return total
 
 
 def _ledger(out: Path, change):
@@ -162,6 +195,13 @@ def reserve_host(out: Path, need: int) -> bool:
             raise SystemExit(f"a cell needing {need >> 30} GiB of host exceeds the matrix's whole budget "
                              f"({budget >> 30} GiB): refused by name")
         if sum(led.values()) + need > budget:
+            return False
+        # MEASURED as well as reserved: a running cell owes at most its reservation minus what it
+        # already holds; the new cell starts only if the host's available memory covers it, that
+        # owed growth, and a headroom. Reservations alone held three cards idle at 22:57 with
+        # 201 GB available (2026-09-26); measurement alone let three 30B loads OOM the host at 18:40.
+        owed = sum(max(0, n - _rss_tree(int(p))) for p, n in led.items())
+        if _mem_available() < need + owed + HOST_HEADROOM:
             return False
         led[str(os.getpid())] = need
         return True
@@ -226,6 +266,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
                    mechanical=mechanical(art, family, size))
     else:
         row["error"] = first_error(log) if rc != 0 else "rc 0 and no artefact"
+        row["last_stage"] = last_stage(log)
     return row
 
 
@@ -233,11 +274,16 @@ def cmd_run(a) -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
-    done = set()
-    if rows_path.exists():
-        for line in rows_path.read_text().splitlines():
-            r = json.loads(line)
-            done.add((r["model"], r["mode"]))
+    # The matrix is one: a cell with a row on ANY card is done, so a model's remaining cells can be
+    # handed to another card without running its finished ones twice.
+    latest = {}
+    for f in out.glob("rows_card*.jsonl"):
+        for r in map(json.loads, f.read_text().splitlines()):
+            latest[(r["model"], r["mode"])] = r if _row_time(r) >= _row_time(latest.get((r["model"], r["mode"]))) \
+                else latest[(r["model"], r["mode"])]
+    # --rerun: the listed cells run again although they have a row; the new row names the one it
+    # supersedes (kept, never deleted — the supervisor's rule of 2026-09-27 02:57).
+    done = set() if a.rerun else set(latest)
     todo = [(m.strip(), mode) for m in a.models.split(",") if m.strip() for mode in a.modes.split(",")
             if (m.strip(), mode) not in done]
     while todo:
@@ -249,6 +295,9 @@ def cmd_run(a) -> int:
             if row is None:
                 deferred.append((model, mode))
                 continue
+            prev = latest.get((model, mode))
+            if a.rerun and prev is not None:
+                row["supersedes"] = {k: prev.get(k) for k in ("date", "gpu", "rc", "wall_s", "error", "engine", "sha256")}
             with open(rows_path, "a") as f:
                 f.write(json.dumps(row) + "\n")
             print(f"[matrix] {model} {mode} rc={row['rc']} {row.get('wall_s')}s "
@@ -257,20 +306,52 @@ def cmd_run(a) -> int:
     return 0
 
 
+def _row_time(r) -> float:
+    """A row's own time (its UTC `date`), 0 for none."""
+    if not r or not r.get("date"):
+        return 0.0
+    import calendar
+    return float(calendar.timegm(time.strptime(r["date"], "%Y-%m-%dT%H:%M:%SZ")))
+
+
+def _judgment_time(j) -> float:
+    """A judgment's time: `judge` writes local time with its zone name (CEST/CET on this fleet)."""
+    import calendar
+    stamp, _, zone = j["date"].rpartition(" ")
+    offset = {"CEST": 2, "CET": 1, "UTC": 0, "GMT": 0}.get(zone)
+    if offset is None:
+        raise SystemExit(f"judgment date {j['date']!r}: unknown zone {zone!r}")
+    return float(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M")) - offset * 3600)
+
+
 def load_rows(out: Path) -> list:
-    """Every cell's row, with the latest outside judgment of that (model, mode) merged in
-    (`judgments.jsonl`, appended by `judge` — the rows files belong to the running cards)."""
-    rows = [json.loads(l) for f in sorted(out.glob("rows_card*.jsonl")) for l in f.read_text().splitlines()]
+    """The LATEST row of every cell (a re-run supersedes, the older rows ride along under
+    `superseded`), with the latest outside judgment of that (model, mode) merged in — only a judgment
+    taken after the row it would judge: a re-run cell is pending until judged again."""
+    latest, older = {}, {}
+    for f in sorted(out.glob("rows_card*.jsonl")):
+        for r in map(json.loads, f.read_text().splitlines()):
+            k = (r["model"], r["mode"])
+            if k in latest and _row_time(r) < _row_time(latest[k]):
+                older.setdefault(k, []).append(r)
+                continue
+            if k in latest:
+                older.setdefault(k, []).append(latest[k])
+            latest[k] = r
     judged = {}
     jf = out / "judgments.jsonl"
     if jf.exists():
         for l in jf.read_text().splitlines():
             j = json.loads(l)
             judged[(j["model"], j["mode"])] = j
-    for r in rows:
-        j = judged.get((r["model"], r["mode"]))
-        if j:
+    rows = []
+    for k, r in latest.items():
+        if k in older:
+            r["superseded"] = sorted(older[k], key=_row_time)
+        j = judged.get(k)
+        if j and _judgment_time(j) >= _row_time(r) - 60:        # judge stamps to the minute
             r.update(judged=j["judged"], verdict=j["verdict"], judged_on=j["date"])
+        rows.append(r)
     return rows
 
 
@@ -382,7 +463,9 @@ def main() -> int:
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--modes", default=",".join(MODES))
-    r.add_argument("--timeout", type=int, default=3600)
+    r.add_argument("--rerun", action="store_true",
+                   help="run the listed cells although they have a row; the new row supersedes the old one")
+    r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
     t = sub.add_parser("table")
     t.add_argument("--out", required=True)
