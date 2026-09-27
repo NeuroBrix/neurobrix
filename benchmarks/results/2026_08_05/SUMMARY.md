@@ -19,7 +19,7 @@ TinyLlama-1.1B-Chat-v1.0, fp16 everywhere, greedy, 128 new tokens
 events), warm serving, N=5 (median), GPU 3 (V100-SXM2-32GB), driver
 535.309.01. Engine tree = `de31b89` + the harness-hardening change
 committed with this artifact (streaming sink proven byte-inert:
-`validation_outputs/bench_harness_hardening_2026_08_05/`).
+`models/_agents/archives/dell/validation_outputs_pre_2026_09_01/bench_harness_hardening_2026_08_05/`).
 
 | column | tok/s decode (med) | TTFT (med) | wall/req (med) | peak VRAM | cold start |
 |---|---|---|---|---|---|
