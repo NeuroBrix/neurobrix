@@ -670,10 +670,16 @@ class TritonAutoregressiveHandler:
         graph_ops = dag.get("ops", {})
         has_sdpa = any(op.get("op_type") in sdpa_types for op in graph_ops.values())
 
-        # Create KV cache from Prism plan (data-driven, zero hardcode)
-        # KV cache only for compiled mode — sequential uses O(n) fallback
+        # Create KV cache from Prism plan (data-driven, zero hardcode), in
+        # BOTH Triton modes, as the PyTorch flow does in both of its modes
+        # (core/flow/autoregressive.py). triton-sequential used to decode by
+        # re-running the whole context every token while its PyTorch oracle
+        # used the cache (R30). NBX_KV_RECOMPUTE=1 keeps the O(n) path as the
+        # same-shape reference, the compiled flow's diagnostic, mirrored.
+        import os as _os_kv
         kv_interceptor = None
-        if has_sdpa and self.ctx.mode == "triton":
+        if has_sdpa and self.ctx.mode in ("triton", "triton_sequential") \
+                and _os_kv.environ.get("NBX_KV_RECOMPUTE") != "1":
             from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
 
             # Prompt-aware sizing inputs (S1 finding TINYLLAMA-KVCAP):
