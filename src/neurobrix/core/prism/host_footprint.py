@@ -29,10 +29,12 @@ where the rule lives, so a change there is a change to price here:
     (`cpu.runtime_base_mb`); a profile without it prices no base and says so.
 
 Under lazy loading one component is resident at a time, so steady is the largest component's; eager
-loading holds them all. The compiled load follows the same rule, measured on the matrix's peaks (84 cells,
-2026-09-27): an eager plan loads every component before its first op, and the pinned blocks of one are
-not the sizes the next asks for, so their passes add up; a lazy plan loads one component at a time and
-the next reuses the host blocks the last one left. layer_streaming re-reads a segment from disk per run (no host cache) and KV
+loading holds them all. The compiled load is priced the same way, as a bound: the loader synchronises once
+per component (core/io/weight_loader.py `load_component`), so a component's pinned blocks can all be
+outstanding until then, and afterwards they return to the allocator's free list, where the next component
+reuses them only where sizes fit. An eager plan's sum is the most its passes can hold (none reused), a
+lazy plan's largest pass what one component alone holds; the matrix's peaks lie between the two for
+eager plans and at or under the largest pass for lazy ones (66 cells, 2026-09-27). layer_streaming re-reads a segment from disk per run (no host cache) and KV
 caches live on the card, except under cpu_execution, whose components are priced as host compute.
 
 Pure arithmetic, no torch: Prism is torch-free (R33).
