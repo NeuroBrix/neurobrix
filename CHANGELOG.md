@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
   rest of the model's. The same applies to a host-memory weight that is only reshaped before use (SANA-Video's
   output modulation in `--compiled` on a 32 GB card).
+- **`--triton-sequential` generates text at the speed of a cached decode.** It re-ran the whole
+  context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
+  experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
+  old recompute path as a reference in both engines.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
