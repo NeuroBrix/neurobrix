@@ -90,3 +90,53 @@ def test_no_sequence_yet_is_retried_not_primed():
     ex._compiled_seq = None
     _first_op(s, "gen_head", ex)
     assert "gen_head" not in s._ratchet
+
+
+# ── the flipped op computes on the execution device, in both engines ──
+#
+# SANA-Video's transformer under lazy_sequential+zero3 (32 GB V100, 2026-09-27):
+# `param::scale_shift` -> unsqueeze -> unsqueeze -> add(time embedding). The first
+# unsqueeze is the flipped op and its ONLY tensor is the host weight; the compiled
+# priming set its device to the weight's (CPU), the slow path found no CUDA argument
+# to prefer, the view was made on the host, and `aten.add::352` met it on the card.
+
+class _Op:
+    def __init__(self, weight_slots):
+        self.weight_input_slots = weight_slots
+        self.device = None
+        self.needs_transfer = False
+        self.device_idx = None
+
+
+class _HostTensor:
+    def __init__(self, device):
+        self.device = device
+        self._device = device.type if hasattr(device, "type") else device
+
+
+def test_the_compiled_flip_targets_the_execution_device():
+    import torch
+    from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
+
+    seq = object.__new__(CompiledSequence)
+    weight_only = _Op([0])
+    seq._arena = [_HostTensor(torch.device("cpu"))]
+    seq._ops = [weight_only, _Op([])]
+    exec_dev = torch.device("cuda:0")
+    assert CompiledSequence.mark_cpu_weighted_ops_for_transfer(seq, exec_dev) == 1
+    assert weight_only.needs_transfer is True
+    assert weight_only.device == exec_dev, (
+        f"a flipped op computes on the execution device, not on its weight's "
+        f"{weight_only.device} — an op whose only tensor is the weight has no "
+        f"other argument to take the device from")
+
+
+def test_the_triton_mirror_already_targets_the_execution_device():
+    from neurobrix.triton.sequence import TritonSequence
+
+    seq = object.__new__(TritonSequence)
+    weight_only = _Op([0])
+    seq._arena = [_HostTensor("cpu")]
+    seq._ops = [weight_only]
+    assert TritonSequence.mark_cpu_weighted_ops_for_transfer(seq, 0) == 1
+    assert weight_only.device_idx == 0 and weight_only.needs_transfer is True
