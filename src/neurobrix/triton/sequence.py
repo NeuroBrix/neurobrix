@@ -29,7 +29,7 @@ from neurobrix.kernels.wrappers import (
     deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT)
 
 from .arena import Arena
-from .symbols import SymbolResolver, impossible_extent_context
+from .symbols import SymbolResolver
 from .dtype import TritonDtypeEngine
 from . import replay as _replay
 
@@ -961,14 +961,6 @@ class TritonSequence:
         # DAG lifetime.
         for tid in pretranspose_tids:
             meta = tensors.setdefault(tid, {})
-            # A recompile over the same DAG (a streamed piece compiled again for the next pass)
-            # finds the same aten::t ops — they stay in ops_metadata, only their consumers are
-            # rewired — so the swap must key on the stamp, not on the discovery. Swapping again
-            # flipped the metadata back to the file's shape on every second compile (measured
-            # 2026-09-26: PixArt's T5 streamed in 29 pieces, the census shadow then shaped the
-            # weight from the flipped metadata and the bind's .t() handed mm (10240, 4096)).
-            if meta.get("pretransposed"):
-                continue
             meta["pretransposed"] = True
             shape = meta.get("shape", [])
             if len(shape) == 2:
@@ -3990,7 +3982,7 @@ class TritonSequence:
                         for i, a in enumerate(args)
                         if isinstance(a, NBXTensor))
                     _msg = _oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
                         f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
                         e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
@@ -4354,7 +4346,7 @@ class TritonSequence:
                 except Exception as e:
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
                         f"positions {_none_pos} of {len(args)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
@@ -4373,7 +4365,7 @@ class TritonSequence:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}", e,
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
 
