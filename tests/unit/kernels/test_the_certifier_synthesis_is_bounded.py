@@ -83,3 +83,40 @@ def test_arguments_only_draws_nothing_and_builds_no_oracle(fp16_out):
         assert oracle is None and callable(call)
         assert peak < 1 << 20, f"{peak} host bytes for an argument-only synthesis"
 
+
+
+def test_on_unified_memory_the_host_copies_count(fp16_out):
+    """The Mac's certifier (unified memory, 2026-09-27): a conv whose DEVICE bytes the bound
+    admitted (~3 GB) grew past 14 GB and was killed — the float32 host draw, the device copy and
+    the readback share one pool there. Measured ceiling 10 B/elem for a half type; the bound now
+    counts 4 + 2 + 4 per element on a unified device, and nothing changes on a discrete card."""
+    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")      # 1.07G + 16.8M + 1.07G elements
+    elems = (1 << 18) * 4096 * 2 + 4096 * 4096 + 4096                   # A, B, the output, the bias
+    card = elems * 6                                                      # fits at 2 B/elem, not at 10
+    with pytest.raises(AC.KeyTooLargeForClass) as e:
+        AC.synthesize(qual, _Tuner(), key, _NoDraw(), card_bytes=card, unified=True)
+    assert e.value.asked == elems * 10
+    assert AC._unified_bytes_per_element("fp16") == 10 and AC._unified_bytes_per_element("fp64") == 20
+
+
+def test_a_discrete_card_keeps_its_device_bound(fp16_out, monkeypatch):
+    """Same key and budget on a discrete card: the device bytes fit, no refusal from the bound."""
+    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    key = (1 << 18, 4096, 4096, True, False, "fp16", "fp16", "fp16")
+    elems = (1 << 18) * 4096 * 2 + 4096 * 4096
+    seen = {}
+    monkeypatch.setattr(AC, "_arr", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("drawn")))
+    with pytest.raises(RuntimeError, match="drawn"):
+        AC.synthesize(qual, _Tuner(), key, np.random.default_rng(0), card_bytes=elems * 6)
+
+
+def test_the_certifying_device_says_whether_its_memory_is_unified(monkeypatch):
+    """The flag's source: the hardware profile's device (DeviceSpec.has_unified_memory)."""
+    import types
+    from neurobrix.kernels import nbx_tensor, wrappers
+    monkeypatch.setattr(nbx_tensor.DeviceAllocator, "get_device", staticmethod(lambda: 0))
+    for uni in (True, False):
+        dev = types.SimpleNamespace(index=0, name="d", memory_mb=24576, has_unified_memory=lambda u=uni: u)
+        monkeypatch.setattr(wrappers, "get_hardware_profile", lambda d=dev: types.SimpleNamespace(devices=[d]))
+        assert AC._read_certifying_device()["unified"] is uni
