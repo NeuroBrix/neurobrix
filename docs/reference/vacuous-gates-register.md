@@ -3541,7 +3541,6 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
 
-<<<<<<< HEAD
 ### 111 — the lattice test checked its own copy of the snap, and the copy encoded the defect
 
 `tests/unit/prism/test_a_tiled_extent_lands_on_the_profile_s_lattice.py` asserted the tile-lattice
