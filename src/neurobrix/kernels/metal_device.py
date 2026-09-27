@@ -109,6 +109,40 @@ def _as_int(value) -> int:
     return int(getattr(value, "value", value) or 0)
 
 
+#: The `new*` selectors this runtime calls through pyobjc. Every one returns an object the caller
+#: OWNS (+1, the Cocoa "new" family — for instance methods too, per clang's ownership rules).
+_NEW_FAMILY_SELECTORS = (b"newBufferWithLength:options:", b"newCommandQueue", b"newSharedEvent")
+_NEW_FAMILY_DECLARED = False
+
+
+def declare_new_family_ownership() -> None:
+    """Tell pyobjc that the `new*` Metal selectors return an already-retained object.
+
+    pyobjc up to 12.2.2 applies the "new" ownership rule to class methods only, treats the +1
+    result of an instance method such as `-[MTLDevice newBufferWithLength:options:]` as
+    autoreleased, retains it again, and never releases that retain: EVERY MTLBuffer this runtime
+    ever made outlived its free (upstream: ronaldoussoren/pyobjc#690, fixed in pyobjc 12.2.3,
+    not yet published when this was written; dipy/dipy#4190 met the same leak). Measured
+    2026-09-26 on an M4 Pro with pyobjc 12.2.2: a new buffer had retainCount 2, and after `del`
+    `MTLDevice.currentAllocatedSize()` did not move; declared as below, retainCount 1 and the
+    allocation returns to 0 at `del`. The process footprint grew by every freed buffer the GPU
+    had written — about 60 MB per key in a certifier sweep, into swap in a long render.
+
+    The declaration must be made after `import Metal` (loading the framework wrapper installs its
+    own metadata) and before the first call of each selector (pyobjc resolves a selector's
+    signature once). It is idempotent, and it stays correct under a pyobjc that fixes the rule
+    itself: both then say the same thing. `test_metal_new_family_is_not_leaked.py` measures it."""
+    global _NEW_FAMILY_DECLARED
+    if _NEW_FAMILY_DECLARED:
+        return
+    import objc
+    import Metal  # noqa: F401  the wrapper's own metadata first, ours over it
+    for selector in _NEW_FAMILY_SELECTORS:
+        objc.registerMetaDataForSelector(
+            b"NSObject", selector, {"retval": {"already_retained": True}, "arguments": {}})
+    _NEW_FAMILY_DECLARED = True
+
+
 class MetalRuntime:
     """One Metal device, presented as the runtime object the seam expects.
 
@@ -131,6 +165,7 @@ class MetalRuntime:
             ) from exc
 
         self._Metal = Metal
+        declare_new_family_ownership()
         device = Metal.MTLCreateSystemDefaultDevice()
         if device is None:
             raise MetalUnavailableError(

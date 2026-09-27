@@ -1053,7 +1053,8 @@ def launch_oracle(qual: str, tuner, meta, out_tensor):
 
 
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
-                card_bytes: Optional[int] = None) -> Dict[str, Any]:
+                card_bytes: Optional[int] = None,
+                num_stages: Optional[Tuple[int, ...]] = None) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
     proof, excluded) for the directory. Raises when nothing survives."""
@@ -1116,7 +1117,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 oracle = oracle_box["v"] = oracle_fn()
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
-        configs = list(upstream_prune(tuner, kwargs))
+        configs = restrict_num_stages(list(upstream_prune(tuner, kwargs)), num_stages)
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
         if out_idx is None or out_idx >= len(args):
@@ -1343,6 +1344,45 @@ def _engine_version() -> str:
 # ---------------------------------------------------------------------------
 # the run: a profile, its shapes, its files
 # ---------------------------------------------------------------------------
+def _num_stages_space(vendor: str, profile: str) -> Optional[Tuple[int, ...]]:
+    """The software-pipelining depths the profile allows certification to try
+    (`autotune.certify_num_stages`), or None when it declares none (every depth the kernel's
+    configurations carry, as before). Read from the profile file itself, like the tolerance."""
+    try:
+        import yaml
+        path = Path(__file__).resolve().parents[1] / "config" / "vendors" / vendor / f"{profile}.yml"
+        cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    space = (cfg.get("autotune") or {}).get("certify_num_stages")
+    if space is None:
+        return None
+    depths = tuple(sorted({int(d) for d in space}))
+    if not depths or min(depths) < 1:
+        raise RuntimeError(f"{vendor}/{profile}: autotune.certify_num_stages {space!r} names no valid depth")
+    return depths
+
+
+def restrict_num_stages(configs: list, depths: Optional[Tuple[int, ...]]) -> list:
+    """Every tile shape of `configs`, at each allowed pipelining depth — not the configurations
+    that happen to carry an allowed depth. Filtering would drop a tile the kernel only listed at
+    depth 3 or 4; the depth is a separate axis of the space, so each tile is re-offered at each
+    allowed depth, duplicates removed, order kept. None leaves the list untouched."""
+    if not depths:
+        return configs
+    import triton
+    out, seen = [], set()
+    for cfg in configs:
+        for d in depths:
+            ident = (tuple(sorted(cfg.kwargs.items())), cfg.num_warps, d, cfg.num_ctas, cfg.maxnreg)
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append(triton.Config(dict(cfg.kwargs), num_warps=cfg.num_warps, num_stages=d,
+                                     num_ctas=cfg.num_ctas, maxnreg=cfg.maxnreg))
+    return out
+
+
 def _tolerance(vendor: str, profile: str, dtype: str) -> float:
     tol = C._tolerance_for(vendor, profile, dtype)
     if tol is None:
@@ -1608,7 +1648,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             try:
                 tol = _tolerance(vendor, profile, dtype)
                 entry = certify_key(qual, tuner, key, tol, rng,
-                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20)
+                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20,
+                                    num_stages=_num_stages_space(vendor, profile))
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
                 # again. Counted apart so the exit code can still mean something.

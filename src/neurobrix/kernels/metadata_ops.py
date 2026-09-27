@@ -7,6 +7,9 @@ ZERO unsafe type hardening — original dtypes are preserved.
 All ops use the aten::* format (native ATen trace).
 """
 
+import json as _json
+import os as _os
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -329,6 +332,35 @@ def _reshape(inputs: List[torch.Tensor], attrs: Dict[str, Any]) -> torch.Tensor:
     # Case 1: Elements match exactly → use static shape directly
     if input_elements == static_elements:
         return data.reshape(shape_list)
+
+    # ---- report-only census of what a REFUSING _reshape would reject --------
+    # Step one of the owner's two-step decision (2026-09-24): before this
+    # function is made to refuse a target that no longer matches its input, we
+    # need to know how many containers fall and which. `NBX_RESHAPE_REPORT=<file>`
+    # records every site that reaches here WITHOUT a -1 to absorb the difference,
+    # i.e. every site where a shape is INVENTED rather than inferred. Default off,
+    # no behaviour change, one env lookup per call.
+    #
+    # A target carrying a -1 is NOT recorded: it legitimately fails the exact
+    # match above (static_elements skips the -1) and a refusing implementation
+    # would still have to infer it. Counting those would report the whole
+    # catalogue as falling and measure nothing.
+    _rep = _os.environ.get("NBX_RESHAPE_REPORT")
+    if _rep and -1 not in shape_list:
+        try:
+            with open(_rep, "a") as _fh:
+                _json.dump({
+                    "model": _os.environ.get("NBX_RESHAPE_REPORT_MODEL", ""),
+                    "op_uid": attrs.get("op_uid") or attrs.get("uid") or "",
+                    "in_shape": list(getattr(data, "shape", ())),
+                    "in_numel": int(input_elements),
+                    "target": [int(d) for d in shape_list],
+                    "target_numel": int(static_elements),
+                    "ratio": (input_elements / static_elements) if static_elements else None,
+                }, _fh)
+                _fh.write("\n")
+        except Exception:
+            pass          # an instrument must never change the run it measures
 
     # Case 2: Batch Merge Pattern (V2 graphs with CFG)
     # Pattern: [batch*k, features] -> [batch, features*k] during trace

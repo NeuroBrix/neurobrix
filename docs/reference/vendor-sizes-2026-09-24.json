@@ -1,0 +1,2296 @@
+{
+  "Allegro": {
+    "hf_repo": "rhymes-ai/Allegro",
+    "hf_repo_note": null,
+    "default": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 88
+    },
+    "largest_documented": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 88
+    },
+    "constraints": "H,W % 8 (check_inputs); effective H,W % 16 (VAE 8x * patch_size 2). Frames: even n -> latent ceil(n/4); vendor frame counts 88 and 40 are multiples of 4 (use 4k).",
+    "proposed": {
+      "small": {
+        "height": 368,
+        "width": 640
+      },
+      "large": null,
+      "frames_small": 40,
+      "frames_large": null,
+      "basis": {
+        "small": "sibling checkpoint Allegro-T2V-40x360P native size (not documented for this 88x720P checkpoint)",
+        "large": "no larger size documented",
+        "frames_small": "sibling checkpoints 40x360P / 40x720P native frame count (not documented for this checkpoint)",
+        "frames_large": "no larger frame count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "Resolution 720 x 1280",
+        "url": "https://huggingface.co/rhymes-ai/Allegro/raw/c1b9207bb5cb79e2aa08f3d139c17d26c0de55b6/README.md",
+        "where": "L24, L61-62"
+      },
+      {
+        "claim": "Frames 88 (6 s @ 15 FPS)",
+        "url": "https://huggingface.co/rhymes-ai/Allegro/raw/c1b9207bb5cb79e2aa08f3d139c17d26c0de55b6/README.md",
+        "where": "L25, L65-70"
+      },
+      {
+        "claim": "transformer sample_frames 22, sample_height 90, sample_width 160, patch_size 2",
+        "url": "https://huggingface.co/rhymes-ai/Allegro/raw/c1b9207bb5cb79e2aa08f3d139c17d26c0de55b6/transformer/config.json",
+        "where": "L20-29"
+      },
+      {
+        "claim": "height/width must be divisible by 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/allegro/pipeline_allegro.py",
+        "where": "L383-384"
+      },
+      {
+        "claim": "latent frames: even num_frames -> ceil(n/4); odd -> ceil((n-1)/4)+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/allegro/pipeline_allegro.py",
+        "where": "L586-589"
+      },
+      {
+        "claim": "defaults: num_frames = sample_frames*4, height = sample_height*8, width = sample_width*8",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/allegro/pipeline_allegro.py",
+        "where": "L777-779"
+      },
+      {
+        "claim": "vendor inference script uses num_frames=88, height=720, width=1280",
+        "url": "https://raw.githubusercontent.com/rhymes-ai/Allegro/f395a54b015f7e3296c52f59a45b78acf9dd07f6/single_inference.py",
+        "where": "L68-70"
+      },
+      {
+        "claim": "vendor also released sibling checkpoints Allegro-T2V-40x360P and Allegro-T2V-40x720P (separate weights)",
+        "url": "https://raw.githubusercontent.com/rhymes-ai/Allegro/f395a54b015f7e3296c52f59a45b78acf9dd07f6/README.md",
+        "where": "L16, L45"
+      },
+      {
+        "claim": "sibling 40x360P checkpoint: 368 x 640, 40 frames",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-T2V-40x360P/raw/e4838253f58e0b445e4c8f5cb2b052780c35089d/README.md",
+        "where": "L24, L62, L66"
+      },
+      {
+        "claim": "sibling 40x360P transformer: sample_frames 10, sample_height 46, sample_width 80",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-T2V-40x360P/raw/e4838253f58e0b445e4c8f5cb2b052780c35089d/transformer/config.json",
+        "where": "L22-24"
+      }
+    ],
+    "notes": "Vendor documents a single size (88x720x1280) for this checkpoint; 368x640/40f come from separately released sibling checkpoints of the same architecture, so they are shape tests, not vendor-supported quality points. Container trace (observed): transformer latent 14x92x162, VAE decode 9x14x22 latent -> 36x112x176 px. One GitHub issue (rhymes-ai/Allegro#37) asks for 640x360/854x480/960x540 but gives no size that was run; no third-party larger size found.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==0"
+    }
+  },
+  "Allegro-TI2V": {
+    "hf_repo": "rhymes-ai/Allegro-TI2V",
+    "hf_repo_note": null,
+    "default": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 88
+    },
+    "largest_documented": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 88
+    },
+    "constraints": "Same as Allegro: H,W % 8 (vendor TI2V pipeline check_inputs), effective % 16 (patch 2); frames 4k (88). Vendor: output resolution FIXED at 720x1280, only 88x720x1280 supported.",
+    "proposed": {
+      "small": {
+        "height": 368,
+        "width": 640
+      },
+      "large": null,
+      "frames_small": 40,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT vendor-supported: vendor says fixed 720x1280; 368x640 borrowed from T2V sibling checkpoint as a shape test only",
+        "large": "no larger size documented",
+        "frames_small": "NOT vendor-supported: vendor says only 88 frames; 40 borrowed from T2V sibling checkpoints",
+        "frames_large": "no larger frame count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "Resolution 720 x 1280; Frames 88",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-TI2V/raw/eaac4927c4f42eb20cd21d0c2c4e58a8af34cd62/README.md",
+        "where": "L67-72"
+      },
+      {
+        "claim": "'The output video resolution is fixed at 720 x 1280'",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-TI2V/raw/eaac4927c4f42eb20cd21d0c2c4e58a8af34cd62/README.md",
+        "where": "L112"
+      },
+      {
+        "claim": "'For Allegro TI2V, currently we only support the video size on 88x720x1280'",
+        "url": "https://raw.githubusercontent.com/rhymes-ai/Allegro/f395a54b015f7e3296c52f59a45b78acf9dd07f6/README.md",
+        "where": "L243"
+      },
+      {
+        "claim": "vendor TI2V script: num_frames=88, height=720, width=1280",
+        "url": "https://raw.githubusercontent.com/rhymes-ai/Allegro/f395a54b015f7e3296c52f59a45b78acf9dd07f6/single_inference_ti2v.py",
+        "where": "L132-134"
+      },
+      {
+        "claim": "H,W % 8 in vendor TI2V pipeline",
+        "url": "https://raw.githubusercontent.com/rhymes-ai/Allegro/f395a54b015f7e3296c52f59a45b78acf9dd07f6/allegro/pipelines/pipeline_allegro_ti2v.py",
+        "where": "L348-349"
+      },
+      {
+        "claim": "transformer sample_size [90,160], sample_size_t 22, patch_size 2",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-TI2V/raw/eaac4927c4f42eb20cd21d0c2c4e58a8af34cd62/transformer/config.json",
+        "where": "L21-27"
+      },
+      {
+        "claim": "latent frames: even num_frames -> ceil(n/4); odd -> ceil((n-1)/4)+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/allegro/pipeline_allegro.py",
+        "where": "L586-589"
+      },
+      {
+        "claim": "sibling 40x360P checkpoint: 368 x 640, 40 frames",
+        "url": "https://huggingface.co/rhymes-ai/Allegro-T2V-40x360P/raw/e4838253f58e0b445e4c8f5cb2b052780c35089d/README.md",
+        "where": "L24, L62, L66"
+      }
+    ],
+    "notes": "No diffusers pipeline for TI2V (diffusers/pipelines/allegro has only pipeline_allegro.py); vendor code is the rhymes-ai/Allegro GitHub repo. Container trace (observed): transformer latent 7x18x26. Any non-default size is outside vendor support.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==0"
+    }
+  },
+  "CogVideoX-2b": {
+    "hf_repo": "zai-org/CogVideoX-2b",
+    "hf_repo_note": "formerly THUDM/CogVideoX-2b; redirects",
+    "default": {
+      "height": 480,
+      "width": 720,
+      "num_frames": 49
+    },
+    "largest_documented": {
+      "height": 480,
+      "width": 720,
+      "num_frames": 49
+    },
+    "constraints": "H,W % 8 (check_inputs); effective % 16 (VAE 8x * patch_size 2). Frames 4k+1 (latent (n-1)//4+1). Vendor: '720 x 480, no support for other resolutions (including fine-tuning)'. Sincos PE (use_rotary false) is regenerated for other sizes, so other shapes run mechanically.",
+    "proposed": {
+      "small": {
+        "height": 320,
+        "width": 480
+      },
+      "large": null,
+      "frames_small": 25,
+      "frames_large": null,
+      "basis": {
+        "small": "code-valid only (mod 16, same 2:3 aspect); vendor documents NO other resolution",
+        "large": "no larger size documented",
+        "frames_small": "rule-valid only (4k+1); vendor documents only 49",
+        "frames_large": "no larger frame count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "Video Resolution: '720 x 480, no support for other resolutions (including fine-tuning)'",
+        "url": "https://huggingface.co/zai-org/CogVideoX-2b/raw/1137dacfc2c9c012bed6a0793f4ecf2ca8e7ba01/README.md",
+        "where": "L152-153"
+      },
+      {
+        "claim": "Video length 6 s, 8 fps; example num_frames=49",
+        "url": "https://huggingface.co/zai-org/CogVideoX-2b/raw/1137dacfc2c9c012bed6a0793f4ecf2ca8e7ba01/README.md",
+        "where": "L145, L149, L237"
+      },
+      {
+        "claim": "sample_frames 49, sample_height 60, sample_width 90, patch_size 2, use_rotary_positional_embeddings false",
+        "url": "https://huggingface.co/zai-org/CogVideoX-2b/raw/1137dacfc2c9c012bed6a0793f4ecf2ca8e7ba01/transformer/config.json",
+        "where": "L17-20, L27"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/cogvideo/pipeline_cogvideox.py",
+        "where": "L387-388"
+      },
+      {
+        "claim": "latent_frames = (num_frames - 1) // 4 + 1  -> frames 4k+1 exact",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/cogvideo/pipeline_cogvideox.py",
+        "where": "L680"
+      },
+      {
+        "claim": "defaults: height = sample_height*8, width = sample_width*8, num_frames = sample_frames",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/cogvideo/pipeline_cogvideox.py",
+        "where": "L619-621"
+      },
+      {
+        "claim": "vendor RESOLUTION_MAP cogvideox-2b / -5b / -5b-i2v = (480, 720); CogVideoX1.0 generates 49 frames (6 s @ 8 fps); non-i2v custom resolution is reset to default",
+        "url": "https://raw.githubusercontent.com/zai-org/CogVideo/7a1af7154511e0ce4e4be8d62faa8c5e5a3532d2/inference/cli_demo.py",
+        "where": "L41-48, L80, L112-116"
+      }
+    ],
+    "notes": "Vendor explicitly supports only 480x720x49. Proposed small/frames are engine shape tests, not vendor quality points. Container trace (observed): transformer latent [6 frames,16ch,62x92]. No vendor-repo issue reporting a larger working size was found.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "CogVideoX-5b-I2V": {
+    "hf_repo": "zai-org/CogVideoX-5b-I2V",
+    "hf_repo_note": "formerly THUDM/CogVideoX-5b-I2V; redirects",
+    "default": {
+      "height": 480,
+      "width": 720,
+      "num_frames": 49
+    },
+    "largest_documented": {
+      "height": 480,
+      "width": 720,
+      "num_frames": 49
+    },
+    "constraints": "Resolution is HARD-LOCKED in diffusers: learned positional embeddings raise ValueError if H,W != sample size (480x720). Frames 4k+1; a frame count != 49 regenerates the sincos part of the PE (runs, quality not documented).",
+    "proposed": {
+      "small": null,
+      "large": null,
+      "frames_small": 25,
+      "frames_large": null,
+      "basis": {
+        "small": "none possible: diffusers raises on any H,W other than 480x720",
+        "large": "none possible / no larger size documented",
+        "frames_small": "rule-valid only (4k+1); engine shape test, vendor documents only 49",
+        "frames_large": "no larger frame count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "Video Resolution: '720 x 480, no support for other resolutions (including fine-tuning)'",
+        "url": "https://huggingface.co/zai-org/CogVideoX-5b-I2V/raw/a6f0f4858a8395e7429d82493864ce92bf73af11/README.md",
+        "where": "L97-98"
+      },
+      {
+        "claim": "Video length 6 s, 8 fps; example num_frames=49",
+        "url": "https://huggingface.co/zai-org/CogVideoX-5b-I2V/raw/a6f0f4858a8395e7429d82493864ce92bf73af11/README.md",
+        "where": "L90, L94, L186"
+      },
+      {
+        "claim": "use_learned_positional_embeddings true; sample 49 x 60 x 90; patch_size 2",
+        "url": "https://huggingface.co/zai-org/CogVideoX-5b-I2V/raw/a6f0f4858a8395e7429d82493864ce92bf73af11/transformer/config.json",
+        "where": "L17-20, L27-28"
+      },
+      {
+        "claim": "ValueError 'not possible to generate videos at a different resolution than the defaults ... THUDM/CogVideoX-5b-I2V' when learned PE and H,W differ",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/models/embeddings.py",
+        "where": "L749-754"
+      },
+      {
+        "claim": "frame count != sample_frames -> PE regenerated",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/models/embeddings.py",
+        "where": "L756-764"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs); defaults from transformer config",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/cogvideo/pipeline_cogvideox_image2video.py",
+        "where": "L477-478, L715-717"
+      },
+      {
+        "claim": "latent_frames = (num_frames - 1) // 4 + 1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/cogvideo/pipeline_cogvideox_image2video.py",
+        "where": "L778"
+      },
+      {
+        "claim": "vendor RESOLUTION_MAP cogvideox-2b / -5b / -5b-i2v = (480, 720); CogVideoX1.0 generates 49 frames (6 s @ 8 fps); non-i2v custom resolution is reset to default",
+        "url": "https://raw.githubusercontent.com/zai-org/CogVideo/7a1af7154511e0ce4e4be8d62faa8c5e5a3532d2/inference/cli_demo.py",
+        "where": "L41-48, L80, L112-116"
+      }
+    ],
+    "notes": "Only the frame axis can be varied. Container trace (observed): transformer latent [13,32,60,90] = 49 frames at 480x720, i.e. the default.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "Flex.1-alpha": {
+    "hf_repo": "ostris/Flex.1-alpha",
+    "hf_repo_note": null,
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "constraints": "FluxPipeline: H,W % 16 (vae_scale_factor 8 * 2 for 2x2 latent packing); non-multiples are warned and resized. Default = default_sample_size 128 * 8 = 1024.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": null,
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor ai-toolkit Flex LoRA config trains on resolutions [512, 768, 1024]",
+        "large": "no size above 1024 documented by the vendor"
+      }
+    },
+    "sources": [
+      {
+        "claim": "model_index: FluxPipeline",
+        "url": "https://huggingface.co/ostris/Flex.1-alpha/raw/5dd0b1bc2a9421b891abcf7c9218993f696dd550/model_index.json",
+        "where": "_class_name"
+      },
+      {
+        "claim": "'can be used almost identically to FLUX.1-dev'; no resolution stated on the card",
+        "url": "https://huggingface.co/ostris/Flex.1-alpha/raw/5dd0b1bc2a9421b891abcf7c9218993f696dd550/README.md",
+        "where": "L32"
+      },
+      {
+        "claim": "training resolution: [ 512, 768, 1024 ] ('flex enjoys multiple resolutions')",
+        "url": "https://raw.githubusercontent.com/ostris/ai-toolkit/cbc6bbdd701825adf6a1d29d6958962aa24f961d/config/examples/train_lora_flex_24gb.yaml",
+        "where": "L39"
+      },
+      {
+        "claim": "sampling width: 1024, height: 1024",
+        "url": "https://raw.githubusercontent.com/ostris/ai-toolkit/cbc6bbdd701825adf6a1d29d6958962aa24f961d/config/examples/train_lora_flex_24gb.yaml",
+        "where": "L79-80"
+      },
+      {
+        "claim": "default_sample_size = 128; height = height or 128*vae_scale_factor",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/flux/pipeline_flux.py",
+        "where": "L215, L731-732"
+      },
+      {
+        "claim": "H,W must be divisible by vae_scale_factor*2 (=16)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/flux/pipeline_flux.py",
+        "where": "L453-456"
+      },
+      {
+        "claim": "(parent architecture, NOT Flex vendor) FLUX.1 reference CLI default width 1360, height 768; 'should be a multiple of 16'",
+        "url": "https://raw.githubusercontent.com/black-forest-labs/flux/802fb4713906133fcbd0d8dc5351620ca4773036/src/flux/cli.py",
+        "where": "L105-106, L129-130"
+      }
+    ],
+    "notes": "Container defaults.json records no size; container VAE trace decodes 128x128 latent -> 1024x1024 and transformer trace has 4096 packed tokens (=1024x1024). The Flex card gives no resolution; the only vendor numbers are the ai-toolkit config (512/768/1024 train, 1024 sample). FLUX.1 parent CLI default 1360x768 (~1.04 MP, not larger than 1024^2) is cited for reference only.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "Open-Sora-v2": {
+    "hf_repo": "hpcai-tech/Open-Sora-v2",
+    "hf_repo_note": "weights only; code in GitHub hpcaitech/Open-Sora",
+    "default": {
+      "height": 192,
+      "width": 336,
+      "num_frames": 129,
+      "container_default_num_frames": 51
+    },
+    "largest_documented": {
+      "height": 576,
+      "width": 1024,
+      "num_frames": 129
+    },
+    "constraints": "H,W rounded up to multiple of 16 (sampling.py). Resolutions are named buckets: 256px or 768px x aspect ratio {16:9, 9:16, 1:1, 2.39:1}. Frames: 4k+1; README says 'less than 129' but the vendor default config uses 129.",
+    "proposed": {
+      "small": {
+        "height": 256,
+        "width": 256
+      },
+      "large": {
+        "height": 576,
+        "width": 1024
+      },
+      "frames_small": 17,
+      "frames_large": 125,
+      "basis": {
+        "small": "vendor 256px 1:1 bucket",
+        "large": "vendor 768px 16:9 bucket (largest documented)",
+        "frames_small": "vendor rule 4k+1 (README L100); 33 avoided because the container VAE was traced at 33",
+        "frames_large": "largest value satisfying the README rule '4k+1 and less than 129'; the vendor default config itself uses 129 (=4k+1), which contradicts the README wording"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'Our 11B model supports 256px and 768px resolution'",
+        "url": "https://huggingface.co/hpcai-tech/Open-Sora-v2/raw/5dd4b85059c49be387828d833060d80036cb160d/README.md",
+        "where": "L62"
+      },
+      {
+        "claim": "aspect_ratio candidates 16:9, 9:16, 1:1, 2.39:1; num_frames should be 4k+1 and less than 129",
+        "url": "https://huggingface.co/hpcai-tech/Open-Sora-v2/raw/5dd4b85059c49be387828d833060d80036cb160d/README.md",
+        "where": "L100"
+      },
+      {
+        "claim": "default sampling: resolution 256px, aspect_ratio 16:9, num_frames 129",
+        "url": "https://raw.githubusercontent.com/hpcaitech/Open-Sora/7ad6a96a135feb81f755c84fb391818718f6beb2/configs/diffusion/inference/256px.py",
+        "where": "L17-19"
+      },
+      {
+        "claim": "768px config overrides resolution='768px'",
+        "url": "https://raw.githubusercontent.com/hpcaitech/Open-Sora/7ad6a96a135feb81f755c84fb391818718f6beb2/configs/diffusion/inference/768px.py",
+        "where": "L6-8"
+      },
+      {
+        "claim": "get_image_size(resolution, ar, training=False) used at sampling; H,W rounded up to multiple of 16",
+        "url": "https://raw.githubusercontent.com/hpcaitech/Open-Sora/7ad6a96a135feb81f755c84fb391818718f6beb2/opensora/utils/sampling.py",
+        "where": "L102, L109-110"
+      },
+      {
+        "claim": "bucket computation (evaluated: 256px 16:9=192x336, 1:1=256x256, 2.39:1=160x384; 768px 16:9=576x1024, 1:1=768x768, 2.39:1=496x1184)",
+        "url": "https://raw.githubusercontent.com/hpcaitech/Open-Sora/7ad6a96a135feb81f755c84fb391818718f6beb2/opensora/datasets/aspect.py",
+        "where": "L4-14, L22-56, L133-139"
+      }
+    ],
+    "notes": "Not a diffusers repo (model_index.json 404). CONTAINER DEFAULT 51 FRAMES VIOLATES THE VENDOR 4k+1 RULE ((51-1)%4=2); the container VAE trace decodes 9 latent frames -> 33 frames at 112x176. 768px 1:1 (768x768) has the same pixel count as 576x1024. Vendor recommends multi-GPU sequence parallel for 768px.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "PixArt-Sigma-XL-1024": {
+    "hf_repo": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
+    "hf_repo_note": null,
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 8 (check_inputs); effective % 16 (VAE 8x * patch 2). With use_resolution_binning=True (default) every request is snapped to ASPECT_RATIO_1024_BIN (all buckets ~1 MP, 512..2048 per side) and resized back; sizes below the bin need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: 512x512 is the native size of the separate 512 checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024-MS bucket '0.25' [512, 2048]: longest documented side (2048), same token count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "ASPECT_RATIO_1024_BIN: '0.25': [512, 2048] ... '1.0': [1024, 1024] ... '4.0': [2048, 512] ([height, width])",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107 (L73, L91, L105)"
+      },
+      {
+        "claim": "ASPECT_RATIO_512_BIN '1.0': [512, 512] (used only when transformer sample_size == 64)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L108-143 (L127)"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L413-414"
+      },
+      {
+        "claim": "defaults height/width = sample_size*8; binning table chosen by sample_size (128 -> 1024 bin)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L742-755"
+      },
+      {
+        "claim": "transformer sample_size 128, patch_size 2",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/raw/e102b3591cc82e97071b8b4cb90d834d0c487207/transformer/config.json",
+        "where": "L24-25"
+      },
+      {
+        "claim": "card: 'It can directly generate 1024px, 2K and 4K images' (family statement; 2K is a separate checkpoint)",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/raw/e102b3591cc82e97071b8b4cb90d834d0c487207/README.md",
+        "where": "L26"
+      },
+      {
+        "claim": "model zoo: PixArt-Sigma 256 / 512 / 1024 / 2K are separate checkpoints",
+        "url": "https://raw.githubusercontent.com/PixArt-alpha/PixArt-sigma/1ce521afddcc2fab329b35b7374aa86d654e12f7/README.md",
+        "where": "L259-263"
+      },
+      {
+        "claim": "ASPECT_RATIO_2048_BIN only used when sample_size == 256 (2K checkpoint)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L62, L745-748"
+      }
+    ],
+    "notes": "Container is a copy of PixArt-alpha/PixArt-Sigma-XL-2-1024-MS (manifest model_name = PixArt-Sigma-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "PixArt-Sigma-XL-2-1024-MS": {
+    "hf_repo": "PixArt-alpha/PixArt-Sigma-XL-2-1024-MS",
+    "hf_repo_note": null,
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 8 (check_inputs); effective % 16 (VAE 8x * patch 2). With use_resolution_binning=True (default) every request is snapped to ASPECT_RATIO_1024_BIN (all buckets ~1 MP, 512..2048 per side) and resized back; sizes below the bin need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: 512x512 is the native size of the separate 512 checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024-MS bucket '0.25' [512, 2048]: longest documented side (2048), same token count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "ASPECT_RATIO_1024_BIN: '0.25': [512, 2048] ... '1.0': [1024, 1024] ... '4.0': [2048, 512] ([height, width])",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107 (L73, L91, L105)"
+      },
+      {
+        "claim": "ASPECT_RATIO_512_BIN '1.0': [512, 512] (used only when transformer sample_size == 64)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L108-143 (L127)"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L413-414"
+      },
+      {
+        "claim": "defaults height/width = sample_size*8; binning table chosen by sample_size (128 -> 1024 bin)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L742-755"
+      },
+      {
+        "claim": "transformer sample_size 128, patch_size 2",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/raw/e102b3591cc82e97071b8b4cb90d834d0c487207/transformer/config.json",
+        "where": "L24-25"
+      },
+      {
+        "claim": "card: 'It can directly generate 1024px, 2K and 4K images' (family statement; 2K is a separate checkpoint)",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/raw/e102b3591cc82e97071b8b4cb90d834d0c487207/README.md",
+        "where": "L26"
+      },
+      {
+        "claim": "model zoo: PixArt-Sigma 256 / 512 / 1024 / 2K are separate checkpoints",
+        "url": "https://raw.githubusercontent.com/PixArt-alpha/PixArt-sigma/1ce521afddcc2fab329b35b7374aa86d654e12f7/README.md",
+        "where": "L259-263"
+      },
+      {
+        "claim": "ASPECT_RATIO_2048_BIN only used when sample_size == 256 (2K checkpoint)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_sigma.py",
+        "where": "L62, L745-748"
+      }
+    ],
+    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "PixArt-XL-1024": {
+    "hf_repo": "PixArt-alpha/PixArt-XL-2-1024-MS",
+    "hf_repo_note": null,
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 8 (check_inputs); effective % 16 (VAE 8x * patch 2). With use_resolution_binning=True (default) every request is snapped to ASPECT_RATIO_1024_BIN (all buckets ~1 MP, 512..2048 per side) and resized back; sizes below the bin need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: 512x512 is the native size of the separate 512 checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024-MS bucket '0.25' [512, 2048]: longest documented side (2048), same token count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "ASPECT_RATIO_1024_BIN: '0.25': [512, 2048] ... '1.0': [1024, 1024] ... '4.0': [2048, 512] ([height, width])",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107 (L73, L91, L105)"
+      },
+      {
+        "claim": "ASPECT_RATIO_512_BIN '1.0': [512, 512] (used only when transformer sample_size == 64)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L108-143 (L127)"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L468-469"
+      },
+      {
+        "claim": "defaults height/width = sample_size*8; binning table chosen by sample_size (128 -> 1024 bin)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L800-811"
+      },
+      {
+        "claim": "transformer sample_size 128, patch_size 2",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/raw/b89adadeccd9ead2adcb9fa2825d3fabec48d404/transformer/config.json",
+        "where": "L23-24"
+      },
+      {
+        "claim": "card: 'It can directly generate 1024px images'",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/raw/b89adadeccd9ead2adcb9fa2825d3fabec48d404/README.md",
+        "where": "L27"
+      },
+      {
+        "claim": "model zoo: PixArt-alpha 256 / 512 / 1024 are separate checkpoints",
+        "url": "https://raw.githubusercontent.com/PixArt-alpha/PixArt-alpha/cac2fd3b4544cf7620d8fbbf8b19d97ffcb85892/README.md",
+        "where": "L210-214"
+      }
+    ],
+    "notes": "Container is a copy of PixArt-alpha/PixArt-XL-2-1024-MS (manifest model_name = PixArt-XL-2-1024-MS). No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "PixArt-XL-2-1024-MS": {
+    "hf_repo": "PixArt-alpha/PixArt-XL-2-1024-MS",
+    "hf_repo_note": null,
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 8 (check_inputs); effective % 16 (VAE 8x * patch 2). With use_resolution_binning=True (default) every request is snapped to ASPECT_RATIO_1024_BIN (all buckets ~1 MP, 512..2048 per side) and resized back; sizes below the bin need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: 512x512 is the native size of the separate 512 checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024-MS bucket '0.25' [512, 2048]: longest documented side (2048), same token count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "ASPECT_RATIO_1024_BIN: '0.25': [512, 2048] ... '1.0': [1024, 1024] ... '4.0': [2048, 512] ([height, width])",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107 (L73, L91, L105)"
+      },
+      {
+        "claim": "ASPECT_RATIO_512_BIN '1.0': [512, 512] (used only when transformer sample_size == 64)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L108-143 (L127)"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L468-469"
+      },
+      {
+        "claim": "defaults height/width = sample_size*8; binning table chosen by sample_size (128 -> 1024 bin)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L800-811"
+      },
+      {
+        "claim": "transformer sample_size 128, patch_size 2",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/raw/b89adadeccd9ead2adcb9fa2825d3fabec48d404/transformer/config.json",
+        "where": "L23-24"
+      },
+      {
+        "claim": "card: 'It can directly generate 1024px images'",
+        "url": "https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/raw/b89adadeccd9ead2adcb9fa2825d3fabec48d404/README.md",
+        "where": "L27"
+      },
+      {
+        "claim": "model zoo: PixArt-alpha 256 / 512 / 1024 are separate checkpoints",
+        "url": "https://raw.githubusercontent.com/PixArt-alpha/PixArt-alpha/cac2fd3b4544cf7620d8fbbf8b19d97ffcb85892/README.md",
+        "where": "L210-214"
+      }
+    ],
+    "notes": "No bucket smaller than ~1 MP exists for the 1024-MS checkpoint. Container trace (observed): VAE 128x128 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "SANA-Video_2B_720p_diffusers": {
+    "hf_repo": "Efficient-Large-Model/SANA-Video_2B_720p_diffusers",
+    "hf_repo_note": null,
+    "default": {
+      "height": 704,
+      "width": 1280,
+      "num_frames": 81
+    },
+    "largest_documented": {
+      "height": 704,
+      "width": 1280,
+      "num_frames": 81,
+      "longest_side_bucket": {
+        "height": 672,
+        "width": 1344
+      }
+    },
+    "constraints": "H,W % 32 (check_inputs; LTX2 VAE 32x spatial, patch 1). Frames 8k+1 (LTX2 VAE temporal 8; latent (n-1)//8+1). sample_size 22 -> ASPECT_RATIO_720_BIN (binning on by default: the pipeline's own signature default 480x832 is snapped to 704x1280). 'Up to 720x1280' in the card is not %32; vendor usage is 704x1280.",
+    "proposed": {
+      "small": {
+        "height": 480,
+        "width": 832
+      },
+      "large": {
+        "height": 672,
+        "width": 1344
+      },
+      "frames_small": 41,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: 480p sibling (SANA-Video_2B_480p) size; requires use_resolution_binning=False",
+        "large": "vendor 720 bin '0.5' [672, 1344]: 903,168 px vs default 901,120 px (largest documented pixel count and longest side)",
+        "frames_small": "rule-valid only (8k+1); vendor documents only 81",
+        "frames_large": "no larger frame count documented for this checkpoint (minute-long video is the separate LongSANA model)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'resolutions up to 720x1280'",
+        "url": "https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p_diffusers/raw/82de0b2398cd16435d3f6621778f9e89ffa096cb/README.md",
+        "where": "L41"
+      },
+      {
+        "claim": "usage: height, width, frames = 704, 1280, 81",
+        "url": "https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p_diffusers/raw/82de0b2398cd16435d3f6621778f9e89ffa096cb/README.md",
+        "where": "L76"
+      },
+      {
+        "claim": "'developed to generate 720p resolution 81(5s) frames videos with multi-scale heigh and width'",
+        "url": "https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p_diffusers/raw/82de0b2398cd16435d3f6621778f9e89ffa096cb/README.md",
+        "where": "L166"
+      },
+      {
+        "claim": "transformer sample_size 22, patch_size [1,1,1]",
+        "url": "https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p_diffusers/raw/82de0b2398cd16435d3f6621778f9e89ffa096cb/transformer/config.json",
+        "where": "L21-28"
+      },
+      {
+        "claim": "VAE AutoencoderKLLTX2Video spatial_compression_ratio 32, temporal_compression_ratio 8",
+        "url": "https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p_diffusers/raw/82de0b2398cd16435d3f6621778f9e89ffa096cb/vae/config.json",
+        "where": "L2, L64, L71"
+      },
+      {
+        "claim": "720p model: height=704, width=1280, frames=81",
+        "url": "https://raw.githubusercontent.com/NVlabs/Sana/f9178744c096dcf2a2ea773da183e341bcbeb044/docs/sana_video.md",
+        "where": "L97, L170"
+      },
+      {
+        "claim": "ASPECT_RATIO_720_BIN '0.5': [672, 1344], '0.57': [704, 1280]; ASPECT_RATIO_480_BIN '0.57': [480, 832]",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana_video/pipeline_sana_video.py",
+        "where": "L46-74 (L48, L62-63)"
+      },
+      {
+        "claim": "H,W % 32 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana_video/pipeline_sana_video.py",
+        "where": "L463-464"
+      },
+      {
+        "claim": "temporal factor read from vae.config.temporal_compression_ratio; latent frames (n-1)//t+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana_video/pipeline_sana_video.py",
+        "where": "L226-229, L672"
+      },
+      {
+        "claim": "__call__ signature default height=480, width=832; sample_size 22 -> 720 bin",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana_video/pipeline_sana_video.py",
+        "where": "L723-724, L850-857"
+      }
+    ],
+    "notes": "Container trace (observed): transformer latent [128ch, 3 frames, 24x41]; VAE decode 9x14x22 latent -> 65 frames x 448x704. Container defaults.json 704x1280x81 matches the vendor usage.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 32,
+      "frame_rule": "n%8==1"
+    }
+  },
+  "Sana-1600M-MultiLing": {
+    "hf_repo": "Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers",
+    "hf_repo_note": "diffusers format; original .pth repo: Efficient-Large-Model/Sana_1600M_1024px_MultiLing",
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 32 (check_inputs; DC-AE 32x, patch 1). Binning on by default -> snapped to ASPECT_RATIO_1024_BIN (~1 MP buckets); below-bin sizes need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: native size of the separate Sana_1600M_512px_MultiLing checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024 bin '0.25' [512, 2048]: longest documented side, same pixel count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'developed to generate 1024px based images with multi-scale heigh and width'",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/README.md",
+        "where": "L46"
+      },
+      {
+        "claim": "usage example height=1024, width=1024",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/README.md",
+        "where": "L88-89"
+      },
+      {
+        "claim": "same statement on the non-diffusers repo",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing/raw/29bd2947d7fd8e1e1d6c02d6fe22dd8e5d988d10/README.md",
+        "where": "L58"
+      },
+      {
+        "claim": "transformer sample_size 32, patch_size 1",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/transformer/config.json",
+        "where": "L19-20"
+      },
+      {
+        "claim": "H,W % 32 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L440-441"
+      },
+      {
+        "claim": "sample_size 32 -> ASPECT_RATIO_1024_BIN (binning on by default)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L809-821"
+      },
+      {
+        "claim": "ASPECT_RATIO_1024_BIN '0.25': [512, 2048] ... '4.0': [2048, 512]",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107"
+      },
+      {
+        "claim": "model zoo: Sana-1.6B 512px MultiLing is a separate checkpoint; 1024px MultiLing entry",
+        "url": "https://raw.githubusercontent.com/NVlabs/Sana/f9178744c096dcf2a2ea773da183e341bcbeb044/docs/model_zoo.md",
+        "where": "L10, L12"
+      }
+    ],
+    "notes": "Container manifest model_name = Sana_1600M_1024px_MultiLing (alias container). The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container trace: VAE 32x32 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 32,
+      "frame_rule": null
+    }
+  },
+  "Sana_1600M_1024px_MultiLing": {
+    "hf_repo": "Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers",
+    "hf_repo_note": "diffusers format; original .pth repo: Efficient-Large-Model/Sana_1600M_1024px_MultiLing",
+    "default": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 1024,
+      "width": 1024,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 512,
+        "width": 2048
+      }
+    },
+    "constraints": "H,W % 32 (check_inputs; DC-AE 32x, patch 1). Binning on by default -> snapped to ASPECT_RATIO_1024_BIN (~1 MP buckets); below-bin sizes need use_resolution_binning=False.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 512,
+        "width": 2048
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: native size of the separate Sana_1600M_512px_MultiLing checkpoint; requires use_resolution_binning=False",
+        "large": "vendor 1024 bin '0.25' [512, 2048]: longest documented side, same pixel count as 1024x1024; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'developed to generate 1024px based images with multi-scale heigh and width'",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/README.md",
+        "where": "L46"
+      },
+      {
+        "claim": "usage example height=1024, width=1024",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/README.md",
+        "where": "L88-89"
+      },
+      {
+        "claim": "same statement on the non-diffusers repo",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing/raw/29bd2947d7fd8e1e1d6c02d6fe22dd8e5d988d10/README.md",
+        "where": "L58"
+      },
+      {
+        "claim": "transformer sample_size 32, patch_size 1",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers/raw/95c8776793a436b70da4f2d5da3692bb3d84f51d/transformer/config.json",
+        "where": "L19-20"
+      },
+      {
+        "claim": "H,W % 32 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L440-441"
+      },
+      {
+        "claim": "sample_size 32 -> ASPECT_RATIO_1024_BIN (binning on by default)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L809-821"
+      },
+      {
+        "claim": "ASPECT_RATIO_1024_BIN '0.25': [512, 2048] ... '4.0': [2048, 512]",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py",
+        "where": "L72-107"
+      },
+      {
+        "claim": "model zoo: Sana-1.6B 512px MultiLing is a separate checkpoint; 1024px MultiLing entry",
+        "url": "https://raw.githubusercontent.com/NVlabs/Sana/f9178744c096dcf2a2ea773da183e341bcbeb044/docs/model_zoo.md",
+        "where": "L10, L12"
+      }
+    ],
+    "notes": "The local snapshot on the NAS is the _diffusers layout (model_index.json present), so the container was built from the _diffusers repo. The family statement 'up to 4096 x 4096' refers to the separate 4K checkpoint. Container trace: VAE 32x32 latent -> 1024x1024.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 32,
+      "frame_rule": null
+    }
+  },
+  "Sana_1600M_4Kpx_BF16": {
+    "hf_repo": "Efficient-Large-Model/Sana_1600M_4Kpx_BF16",
+    "hf_repo_note": "NAS snapshot = this .pth repo); diffusers twin: Efficient-Large-Model/Sana_1600M_4Kpx_BF16_diffusers",
+    "default": {
+      "height": 4096,
+      "width": 4096,
+      "num_frames": null
+    },
+    "largest_documented": {
+      "height": 4096,
+      "width": 4096,
+      "num_frames": null,
+      "longest_side_bucket": {
+        "height": 2048,
+        "width": 8192
+      }
+    },
+    "constraints": "H,W % 32. sample_size 128 -> ASPECT_RATIO_4096_BIN (~16.8 MP buckets, 2048..8192 per side). Vendor: 4K needs VAE tiling / patch_conv to avoid OOM.",
+    "proposed": {
+      "small": {
+        "height": 1024,
+        "width": 1024
+      },
+      "large": {
+        "height": 2048,
+        "width": 8192
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "NOT a bucket of this checkpoint: native size of the base model it was fine-tuned from (Sana_1600M_1024px_BF16); requires use_resolution_binning=False",
+        "large": "vendor 4096 bin '0.25' [2048, 8192]: longest documented side, same pixel count as 4096x4096; no larger pixel count documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'developed to generate 4Kpx based images with multi-scale heigh and width'",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16/raw/5c110e0eb00467bbe7051b4a2cdfa0750ee22e90/README.md",
+        "where": "L55"
+      },
+      {
+        "claim": "usage height=4096, width=4096",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16/raw/5c110e0eb00467bbe7051b4a2cdfa0750ee22e90/README.md",
+        "where": "L87-88"
+      },
+      {
+        "claim": "fine-tuned from Sana_1600M_1024px_BF16",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16_diffusers/raw/0f1d3414c1c45b68daf459d9063756cfcc1daee2/README.md",
+        "where": "L59"
+      },
+      {
+        "claim": "diffusers usage height=4096, width=4096; patch_conv VAE split 'for 4096x4096 image generation OOM issue'",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16_diffusers/raw/0f1d3414c1c45b68daf459d9063756cfcc1daee2/README.md",
+        "where": "L93-96, L101-102"
+      },
+      {
+        "claim": "transformer sample_size 128, patch_size 1, interpolation_scale 2.0",
+        "url": "https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16_diffusers/raw/0f1d3414c1c45b68daf459d9063756cfcc1daee2/transformer/config.json",
+        "where": "L11, L19-20"
+      },
+      {
+        "claim": "'4K models need VAE tiling to avoid OOM issue'",
+        "url": "https://raw.githubusercontent.com/NVlabs/Sana/f9178744c096dcf2a2ea773da183e341bcbeb044/docs/model_zoo.md",
+        "where": "L124"
+      },
+      {
+        "claim": "ASPECT_RATIO_4096_BIN '0.25': [2048, 8192], '1.0': [4096, 4096], '4.0': [8192, 2048]; chosen when sample_size == 128",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L67-107, L810-811"
+      },
+      {
+        "claim": "H,W % 32 (check_inputs)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/sana/pipeline_sana.py",
+        "where": "L440-441"
+      }
+    ],
+    "notes": "Container trace: VAE 128x128 latent -> 4096x4096 (the default). Which of the two repos fed the importer is not recorded; the NAS snapshot directory holds the .pth repo.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 32,
+      "frame_rule": null
+    }
+  },
+  "Wan2.1-I2V-14B-480P-Diffusers": {
+    "hf_repo": "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
+    "hf_repo_note": null,
+    "default": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "largest_documented": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "constraints": "H,W % 16. Vendor diffusers example derives H,W from the input image aspect with max_area 480*832, each rounded down to mod_value = 8*2 = 16. Frames 4n+1.",
+    "proposed": {
+      "small": {
+        "height": 624,
+        "width": 624
+      },
+      "large": {
+        "height": 832,
+        "width": 480
+      },
+      "frames_small": 33,
+      "frames_large": 161,
+      "basis": {
+        "small": "vendor max_area formula for a square input image: round(sqrt(480*832))//16*16 = 624 (389,376 px; nothing smaller documented)",
+        "large": "vendor portrait size 832*480 (SUPPORTED_SIZES); same area as default; no larger size documented for the 480P checkpoint (720P is a separate checkpoint)",
+        "frames_small": "rule-valid only (4n+1)",
+        "frames_large": "THIRD-PARTY: issue #73 reports frame_num=161 on the 480P I2V checkpoint (vendor code then hard-coded 81) and 161 on 720P via ComfyUI"
+      }
+    },
+    "sources": [
+      {
+        "claim": "this repo: I2V-14B 'capable of generating 480P videos'; I2V-14B-480P 'Supports 480P'; 720P is a separate checkpoint",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/raw/b184e23a8a16b20f108f727c902e769e873ffc73/README.md",
+        "where": "L34, L87-88"
+      },
+      {
+        "claim": "diffusers example: max_area = 480 * 832; mod_value; height/width from image aspect; num_frames=81",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-I2V-14B-480P-Diffusers/raw/b184e23a8a16b20f108f727c902e769e873ffc73/README.md",
+        "where": "L173-178, L186"
+      },
+      {
+        "claim": "pipeline defaults 480x832x81; H,W % 16; frames rounding",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan_i2v.py",
+        "where": "L359-360, L517-519, L637-641"
+      },
+      {
+        "claim": "num_frames - 1 must be divisible by 4 (rounded otherwise)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L494-498"
+      },
+      {
+        "claim": "H,W must be multiples of vae_scale_factor_spatial * patch_size (=16)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L506-513"
+      },
+      {
+        "claim": "vendor CLI: '--frame_num ... The number should be 4n+1'; default 81",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/generate.py",
+        "where": "L84-85, L117-120"
+      },
+      {
+        "claim": "SUPPORTED_SIZES: t2v-1.3B ('480*832','832*480'); i2v-14B / t2v-14B (+720*1280,1280*720); vace-1.3B ('480*832','832*480')",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/wan/configs/__init__.py",
+        "where": "L45-52"
+      },
+      {
+        "claim": "third-party run report: I2V 720P runs to 161 frames in ComfyUI; vendor I2V code hard-coded 81 frames at the time (user report, not vendor)",
+        "url": "https://github.com/Wan-Video/Wan2.1/issues/73",
+        "where": "issue body (pftq, 2025-02-26)"
+      }
+    ],
+    "notes": "Container trace (observed): transformer latent 12 frames x 60x104 (=45 frames at 480x832). Frame counts other than 81 are only third-party reported for the vendor CLI; the diffusers pipeline accepts any 4n+1.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "Wan2.1-T2V-1.3B-Diffusers": {
+    "hf_repo": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+    "hf_repo_note": null,
+    "default": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "largest_documented": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 81
+    },
+    "constraints": "H,W % 16 (VAE 8x * patch 2; pipeline check_inputs % 16). Frames 4n+1.",
+    "proposed": {
+      "small": {
+        "height": 240,
+        "width": 416
+      },
+      "large": {
+        "height": 720,
+        "width": 1280
+      },
+      "frames_small": 33,
+      "frames_large": 161,
+      "basis": {
+        "small": "code-valid only (mod 16, half of 480x832); vendor documents nothing below 480P",
+        "large": "vendor note: 1.3B can generate 720P but 'less stable'; not in the CLI SUPPORTED_SIZES for t2v-1.3B",
+        "frames_small": "rule-valid only (4n+1)",
+        "frames_large": "THIRD-PARTY: 161 frames reported for Wan2.1 I2V in issue #73 (not vendor, not this checkpoint)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "T2V-1.3B 'Supports 480P'",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/raw/0fad780a534b6463e45facd96134c9f345acfa5b/README.md",
+        "where": "L90"
+      },
+      {
+        "claim": "'The 1.3B model is capable of generating videos at 720P resolution ... less stable ... we recommend using 480P'",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/raw/0fad780a534b6463e45facd96134c9f345acfa5b/README.md",
+        "where": "L93"
+      },
+      {
+        "claim": "diffusers example height=480, width=832, num_frames=81",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B-Diffusers/raw/0fad780a534b6463e45facd96134c9f345acfa5b/README.md",
+        "where": "L185-187"
+      },
+      {
+        "claim": "pipeline defaults height 480, width 832, num_frames 81; H,W % 16",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L292, L388-390"
+      },
+      {
+        "claim": "num_frames - 1 must be divisible by 4 (rounded otherwise)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L494-498"
+      },
+      {
+        "claim": "H,W must be multiples of vae_scale_factor_spatial * patch_size (=16)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L506-513"
+      },
+      {
+        "claim": "vendor CLI: '--frame_num ... The number should be 4n+1'; default 81",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/generate.py",
+        "where": "L84-85, L117-120"
+      },
+      {
+        "claim": "SUPPORTED_SIZES: t2v-1.3B ('480*832','832*480'); i2v-14B / t2v-14B (+720*1280,1280*720); vace-1.3B ('480*832','832*480')",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/wan/configs/__init__.py",
+        "where": "L45-52"
+      },
+      {
+        "claim": "third-party run report: I2V 720P runs to 161 frames in ComfyUI; vendor I2V code hard-coded 81 frames at the time (user report, not vendor)",
+        "url": "https://github.com/Wan-Video/Wan2.1/issues/73",
+        "where": "issue body (pftq, 2025-02-26)"
+      }
+    ],
+    "notes": "Container trace (observed): transformer latent 10 frames x 60x104 (=37 frames at 480x832); VAE trace 9x14x22 latent. 720x1280 is vendor-mentioned with a quality caveat.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "Wan2.1-VACE-1.3B-diffusers": {
+    "hf_repo": "Wan-AI/Wan2.1-VACE-1.3B-diffusers",
+    "hf_repo_note": null,
+    "default": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "largest_documented": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "constraints": "H,W % (8 * patch 2 = 16) (check_inputs raises). Frames 4n+1. Vendor table: VACE-1.3B 480P yes, 720P no.",
+    "proposed": {
+      "small": {
+        "height": 512,
+        "width": 512
+      },
+      "large": {
+        "height": 832,
+        "width": 480
+      },
+      "frames_small": 33,
+      "frames_large": 161,
+      "basis": {
+        "small": "vendor diffusers example height=512, width=512, num_frames=81",
+        "large": "vendor portrait size 832*480 (SUPPORTED_SIZES vace-1.3B); same area as default; 720P explicitly not supported",
+        "frames_small": "rule-valid only (4n+1)",
+        "frames_large": "THIRD-PARTY (Wan2.1 I2V report, issue #73), not specific to VACE"
+      }
+    },
+    "sources": [
+      {
+        "claim": "VACE resolution table: 480P(~81x480x832) yes / 720P no for Wan2.1-VACE-1.3B",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B-diffusers/raw/ec4d2cb062b548996b179d493fdd05340de702a1/README.md",
+        "where": "L485-506 (L489, L503-504)"
+      },
+      {
+        "claim": "VACE-1.3B 'Supports 480P'",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B-diffusers/raw/ec4d2cb062b548996b179d493fdd05340de702a1/README.md",
+        "where": "L116"
+      },
+      {
+        "claim": "diffusers example: height = 512, width = 512, num_frames = 81",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B-diffusers/raw/ec4d2cb062b548996b179d493fdd05340de702a1/README.md",
+        "where": "L571-573"
+      },
+      {
+        "claim": "vendor CLI example --task vace-1.3B --size 832*480",
+        "url": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B-diffusers/raw/ec4d2cb062b548996b179d493fdd05340de702a1/README.md",
+        "where": "L522"
+      },
+      {
+        "claim": "check_inputs: H,W divisible by vae_scale_factor_spatial*patch_size",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan_vace.py",
+        "where": "L342-352"
+      },
+      {
+        "claim": "pipeline defaults 480x832x81; frames rounding to 4n+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan_vace.py",
+        "where": "L700-702, L840-844"
+      },
+      {
+        "claim": "num_frames - 1 must be divisible by 4 (rounded otherwise)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L494-498"
+      },
+      {
+        "claim": "H,W must be multiples of vae_scale_factor_spatial * patch_size (=16)",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan.py",
+        "where": "L506-513"
+      },
+      {
+        "claim": "vendor CLI: '--frame_num ... The number should be 4n+1'; default 81",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/generate.py",
+        "where": "L84-85, L117-120"
+      },
+      {
+        "claim": "SUPPORTED_SIZES: t2v-1.3B ('480*832','832*480'); i2v-14B / t2v-14B (+720*1280,1280*720); vace-1.3B ('480*832','832*480')",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.1/9737cba9c1c3c4d04b33fcad41c111989865d315/wan/configs/__init__.py",
+        "where": "L45-52"
+      },
+      {
+        "claim": "third-party run report: I2V 720P runs to 161 frames in ComfyUI; vendor I2V code hard-coded 81 frames at the time (user report, not vendor)",
+        "url": "https://github.com/Wan-Video/Wan2.1/issues/73",
+        "where": "issue body (pftq, 2025-02-26)"
+      }
+    ],
+    "notes": "Container trace (observed): transformer latent 10 x 60x104 (+96-ch control). 512x512 is the only vendor-documented non-480P size.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "Wan2.2-I2V-A14B-Diffusers": {
+    "hf_repo": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+    "hf_repo_note": null,
+    "default": {
+      "height": 480,
+      "width": 832,
+      "num_frames": 81
+    },
+    "largest_documented": {
+      "height": 720,
+      "width": 1280,
+      "num_frames": 81
+    },
+    "constraints": "H,W % 16 (VAE 8x, patch (1,2,2)). Frames 4n+1. Vendor supports 480P and 720P.",
+    "proposed": {
+      "small": {
+        "height": 624,
+        "width": 624
+      },
+      "large": {
+        "height": 720,
+        "width": 1280
+      },
+      "frames_small": 33,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor max_area formula (480*832) for a square image -> 624x624",
+        "large": "vendor 720P ('supporting both 480P and 720P'; CLI example --size 1280*720)",
+        "frames_small": "rule-valid only (4n+1)",
+        "frames_large": "no larger frame count documented; no Wan2.2 run report found"
+      }
+    },
+    "sources": [
+      {
+        "claim": "I2V-A14B 'supporting both 480P and 720P'",
+        "url": "https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers/raw/596658fd9ca6b7b71d5057529bbf319ecbc61d74/README.md",
+        "where": "L34, L100, L122"
+      },
+      {
+        "claim": "CLI example --size 1280*720",
+        "url": "https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers/raw/596658fd9ca6b7b71d5057529bbf319ecbc61d74/README.md",
+        "where": "L127"
+      },
+      {
+        "claim": "diffusers example max_area = 480 * 832, mod_value, num_frames=81",
+        "url": "https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers/raw/596658fd9ca6b7b71d5057529bbf319ecbc61d74/README.md",
+        "where": "L170-175, L186"
+      },
+      {
+        "claim": "SUPPORTED_SIZES i2v-A14B: 720*1280, 1280*720, 480*832, 832*480",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/wan/configs/__init__.py",
+        "where": "L45"
+      },
+      {
+        "claim": "shared frame_num = 81",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/wan/configs/shared_config.py",
+        "where": "L20"
+      },
+      {
+        "claim": "'--frame_num ... The number should be 4n+1'",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/generate.py",
+        "where": "L123-126"
+      },
+      {
+        "claim": "vae_stride (4, 8, 8), patch_size (1, 2, 2)",
+        "url": "https://raw.githubusercontent.com/Wan-Video/Wan2.2/1ea34ff48f87168174e12956e200b1d908b1c5ff/wan/configs/wan_i2v_A14B.py",
+        "where": "L17, L20"
+      },
+      {
+        "claim": "pipeline defaults 480x832x81; H,W % 16; frames 4n+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/wan/pipeline_wan_i2v.py",
+        "where": "L359-360, L517-519, L637-641"
+      }
+    ],
+    "notes": "Container trace (observed): transformer latent 5 frames x 10x12 (tiny trace = 17 frames at 80x96). Vendor CLI uses 720P in its examples; the diffusers card example uses 480P area.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%4==1"
+    }
+  },
+  "mochi-1-preview": {
+    "hf_repo": "genmo/mochi-1-preview",
+    "hf_repo_note": null,
+    "default": {
+      "height": 480,
+      "width": 848,
+      "num_frames": 84
+    },
+    "largest_documented": {
+      "height": 480,
+      "width": 848,
+      "num_frames": 163
+    },
+    "constraints": "Vendor asserts (num_frames - 1) % 6 == 0 (frames 6k+1). diffusers check_inputs only % 8, but latents are /8 then patch_size 2 -> effective H,W % 16. diffusers latent frames (n-1)//6+1.",
+    "proposed": {
+      "small": {
+        "height": 320,
+        "width": 576
+      },
+      "large": null,
+      "frames_small": 31,
+      "frames_large": 163,
+      "basis": {
+        "small": "code-valid only (mod 16, ~same aspect); vendor documents only 480x848 ('generates videos at 480p today')",
+        "large": "no larger size documented",
+        "frames_small": "vendor README example num_frames=31",
+        "frames_large": "vendor CLI default --num_frames 163"
+      }
+    },
+    "sources": [
+      {
+        "claim": "'The initial release generates videos at 480p today'",
+        "url": "https://huggingface.co/genmo/mochi-1-preview/raw/14be5fcea23095ed330cb214647916a451e38b6e/README.md",
+        "where": "L190"
+      },
+      {
+        "claim": "vendor example height=480, width=848, num_frames=31",
+        "url": "https://huggingface.co/genmo/mochi-1-preview/raw/14be5fcea23095ed330cb214647916a451e38b6e/README.md",
+        "where": "L95-97"
+      },
+      {
+        "claim": "diffusers example num_frames=84 (not 6k+1)",
+        "url": "https://huggingface.co/genmo/mochi-1-preview/raw/14be5fcea23095ed330cb214647916a451e38b6e/README.md",
+        "where": "L135, L156"
+      },
+      {
+        "claim": "CLI defaults width 848, height 480, num_frames 163",
+        "url": "https://raw.githubusercontent.com/genmoai/mochi/0c86aebf386e6622deadfb47ff1996878cefc0ac/demos/cli.py",
+        "where": "L139-141"
+      },
+      {
+        "claim": "assert (t - 1) % 6 == 0, 't - 1 must be divisible by 6'",
+        "url": "https://raw.githubusercontent.com/genmoai/mochi/0c86aebf386e6622deadfb47ff1996878cefc0ac/src/genmo/mochi_preview/pipelines.py",
+        "where": "L422"
+      },
+      {
+        "claim": "fine-tuner uses --num_frames 37",
+        "url": "https://raw.githubusercontent.com/genmoai/mochi/0c86aebf386e6622deadfb47ff1996878cefc0ac/demos/fine_tuner/README.md",
+        "where": "L28"
+      },
+      {
+        "claim": "vae spatial 8, temporal 6, patch_size 2; default 480x848; __call__ num_frames default 19",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/mochi/pipeline_mochi.py",
+        "where": "L185-194, L452"
+      },
+      {
+        "claim": "H,W % 8 (check_inputs); latent frames (n-1)//6+1",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/pipelines/mochi/pipeline_mochi.py",
+        "where": "L348-349, L402-404"
+      },
+      {
+        "claim": "transformer patch_size 2",
+        "url": "https://huggingface.co/genmo/mochi-1-preview/raw/14be5fcea23095ed330cb214647916a451e38b6e/transformer/config.json",
+        "where": "L11"
+      },
+      {
+        "claim": "transformer patchifies latents: post_patch_height = height // p, post_patch_width = width // p (p = 2) -> latent H,W even -> pixel H,W % 16",
+        "url": "https://raw.githubusercontent.com/huggingface/diffusers/4295ee3ec58efa6577bc459e9b84ca3f63aa9a96/src/diffusers/models/transformers/transformer_mochi.py",
+        "where": "L442-445"
+      }
+    ],
+    "notes": "CONTAINER DEFAULT 84 FRAMES VIOLATES THE VENDOR 6k+1 RULE; diffusers floors it to 14 latent frames (79 decoded frames). Container trace (observed): transformer latent 10 x 30x54 (= 240x432 px, 55 frames) - avoid 240x432 as a 'new' size. No vendor-repo issue reporting another resolution was found.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": "n%6==1"
+    }
+  },
+  "Real-ESRGAN-x4": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - xinntao/Real-ESRGAN GitHub release v0.1.0 RealESRGAN_x4plus.pth (verified: all 702 container tensors equal this file)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference, any size"
+    },
+    "largest_documented": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "no maximum documented; tile mode for OOM"
+    },
+    "constraints": "Scale x4 (RRDBNet, no pixel_unshuffle): no divisibility rule on input H,W. Optional tiling (tile_pad 10).",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": null,
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor training LR patch (gt_size 256 / scale 4)",
+        "large": "no maximum or tile size documented for the PyTorch path (default is whole image)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "RealESRGAN_x4plus.pth distributed as GitHub release v0.1.0",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/README.md",
+        "where": "L199"
+      },
+      {
+        "claim": "inference: --outscale default 4; --tile default 0 (no tile, whole image); --tile_pad 10; --pre_pad 0",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/inference_realesrgan.py",
+        "where": "L32, L36-38"
+      },
+      {
+        "claim": "mod_scale padding: scale 2 -> pad H,W to multiple of 2; scale 1 -> 4; scale 4 -> none",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/realesrgan/utils.py",
+        "where": "L100-110"
+      },
+      {
+        "claim": "tile option exists because large images OOM ('try to set --tile with a smaller number')",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/inference_realesrgan.py",
+        "where": "L150"
+      },
+      {
+        "claim": "ncnn executable: tile size >=32 / 0=auto",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/README.md",
+        "where": "L162"
+      },
+      {
+        "claim": "x4plus training: scale 4, gt_size 256 (-> 64x64 LR patch)",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/options/train_realesrgan_x4plus.yml",
+        "where": "L4, L33"
+      }
+    ],
+    "notes": "Despite the capitalised name, this container holds xinntao RealESRGAN_x4plus weights, NOT ai-forever RealESRGAN_x4.pth (the two files have equal byte size but different content; conv_first and all 702 tensors match x4plus). Container trace: input 1x3x112x80 -> 448x320.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 1,
+      "frame_rule": null
+    }
+  },
+  "real-esrgan-x2": {
+    "hf_repo": "ai-forever/Real-ESRGAN",
+    "hf_repo_note": "file RealESRGAN_x2.pth; verified 702/702 tensors",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "any image size; vendor predict() feeds the model exactly one shape, 240x240 tiles (192 patch + 2x24 overlap)"
+    },
+    "largest_documented": {
+      "height": 240,
+      "width": 240,
+      "num_frames": null,
+      "note": "vendor pipeline never feeds more than 240x240 per forward (batch<=4)"
+    },
+    "constraints": "Scale x2: pixel_unshuffle(2) -> input H,W must be even. Vendor tiling: 192 px patches + 24 px overlap each side = 240x240 model input.",
+    "proposed": {
+      "small": {
+        "height": 240,
+        "width": 240
+      },
+      "large": null,
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor tile size (the only shape the vendor pipeline feeds)",
+        "large": "no larger per-forward input documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "HF_MODELS[2] = sberbank-ai/Real-ESRGAN RealESRGAN_x2.pth",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/model.py",
+        "where": "L12-24"
+      },
+      {
+        "claim": "predict(batch_size=4, patches_size=192, padding=24, pad_size=15): image reflect-padded by 15, split into 192 px patches with 24 px overlap -> every model input is 240x240",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/model.py",
+        "where": "L60-75"
+      },
+      {
+        "claim": "split_image_into_overlapping_patches: patch = [x-24 : x+192+24]",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/utils.py",
+        "where": "L62-100"
+      },
+      {
+        "claim": "RRDBNet: scale 2 -> pixel_unshuffle(x, 2) (needs even H,W); scale 8 -> extra conv_up3",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/rrdbnet_arch.py",
+        "where": "L88-91, L98-99, L106-119"
+      },
+      {
+        "claim": "model card (weights x2/x4/x8)",
+        "url": "https://huggingface.co/ai-forever/Real-ESRGAN/raw/8110204ebf8d25c031b66c26c2d1098aa831157e/README.md",
+        "where": "whole file"
+      }
+    ],
+    "notes": "Container trace: input 1x3x112x144 -> 224x288. The model itself is fully convolutional; sizes above 240 are outside the vendor pipeline, not forbidden.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 2,
+      "frame_rule": null
+    }
+  },
+  "real-esrgan-x4": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - xinntao/Real-ESRGAN GitHub release v0.1.0 RealESRGAN_x4plus.pth (verified: all 702 container tensors equal this file)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference, any size"
+    },
+    "largest_documented": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "no maximum documented; tile mode for OOM"
+    },
+    "constraints": "Scale x4 (RRDBNet, no pixel_unshuffle): no divisibility rule on input H,W. Optional tiling (tile_pad 10).",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": null,
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor training LR patch (gt_size 256 / scale 4)",
+        "large": "no maximum or tile size documented for the PyTorch path (default is whole image)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "RealESRGAN_x4plus.pth distributed as GitHub release v0.1.0",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/README.md",
+        "where": "L199"
+      },
+      {
+        "claim": "inference: --outscale default 4; --tile default 0 (no tile, whole image); --tile_pad 10; --pre_pad 0",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/inference_realesrgan.py",
+        "where": "L32, L36-38"
+      },
+      {
+        "claim": "mod_scale padding: scale 2 -> pad H,W to multiple of 2; scale 1 -> 4; scale 4 -> none",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/realesrgan/utils.py",
+        "where": "L100-110"
+      },
+      {
+        "claim": "tile option exists because large images OOM ('try to set --tile with a smaller number')",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/inference_realesrgan.py",
+        "where": "L150"
+      },
+      {
+        "claim": "ncnn executable: tile size >=32 / 0=auto",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/README.md",
+        "where": "L162"
+      },
+      {
+        "claim": "x4plus training: scale 4, gt_size 256 (-> 64x64 LR patch)",
+        "url": "https://raw.githubusercontent.com/xinntao/Real-ESRGAN/a4abfb2979a7bbff3f69f58f58ae324608821e27/options/train_realesrgan_x4plus.yml",
+        "where": "L4, L33"
+      }
+    ],
+    "notes": "Weights verified equal to xinntao RealESRGAN_x4plus.pth (702/702 tensors). Container trace: input 1x3x112x80 -> 448x320.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 1,
+      "frame_rule": null
+    }
+  },
+  "real-esrgan-x8": {
+    "hf_repo": "ai-forever/Real-ESRGAN",
+    "hf_repo_note": "file RealESRGAN_x8.pth; verified 704/704 tensors",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "any image size; vendor predict() feeds the model exactly one shape, 240x240 tiles (192 patch + 2x24 overlap)"
+    },
+    "largest_documented": {
+      "height": 240,
+      "width": 240,
+      "num_frames": null,
+      "note": "vendor pipeline never feeds more than 240x240 per forward (batch<=4)"
+    },
+    "constraints": "Scale x8 (three 2x nearest+conv stages): no input divisibility rule. Vendor tiling 240x240 model input.",
+    "proposed": {
+      "small": {
+        "height": 240,
+        "width": 240
+      },
+      "large": null,
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor tile size (the only shape the vendor pipeline feeds)",
+        "large": "no larger per-forward input documented"
+      }
+    },
+    "sources": [
+      {
+        "claim": "HF_MODELS[8] = sberbank-ai/Real-ESRGAN RealESRGAN_x8.pth",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/model.py",
+        "where": "L12-24"
+      },
+      {
+        "claim": "predict(batch_size=4, patches_size=192, padding=24, pad_size=15): image reflect-padded by 15, split into 192 px patches with 24 px overlap -> every model input is 240x240",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/model.py",
+        "where": "L60-75"
+      },
+      {
+        "claim": "split_image_into_overlapping_patches: patch = [x-24 : x+192+24]",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/utils.py",
+        "where": "L62-100"
+      },
+      {
+        "claim": "RRDBNet: scale 2 -> pixel_unshuffle(x, 2) (needs even H,W); scale 8 -> extra conv_up3",
+        "url": "https://raw.githubusercontent.com/ai-forever/Real-ESRGAN/362a0316878f41dbdfbb23657b450c3353de5acf/RealESRGAN/rrdbnet_arch.py",
+        "where": "L88-91, L98-99, L106-119"
+      },
+      {
+        "claim": "model card (weights x2/x4/x8)",
+        "url": "https://huggingface.co/ai-forever/Real-ESRGAN/raw/8110204ebf8d25c031b66c26c2d1098aa831157e/README.md",
+        "where": "whole file"
+      }
+    ],
+    "notes": "Container trace: input 1x3x112x80 -> 896x640. A 240x240 input yields a 1920x1920 output.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 1,
+      "frame_rule": null
+    }
+  },
+  "hat-l-x4": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - XPixelGroup/HAT (weights HAT-L_SRx4_ImageNet-pretrain.pth, distributed via links in the GitHub README)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference, padded to multiple of 16"
+    },
+    "largest_documented": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "no maximum documented; tile mode example 256 (+32 pad)"
+    },
+    "constraints": "Window 16: input padded to H,W % 16 by the vendor. Scale x4. Tile size and pad must be multiples of 16.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 256,
+        "width": 256
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor img_size 64 (training LR patch)",
+        "large": "vendor tile_size 256 (interior padded tiles reach 320x320)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "pre_process pads input to a multiple of window_size (reflect)",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/hat/models/hat_model.py",
+        "where": "L17-26"
+      },
+      {
+        "claim": "HAT-L test config: upscale 4, img_size 64, window_size 16",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/options/test/HAT-L_SRx4_ImageNet-pretrain.yml",
+        "where": "L51-54"
+      },
+      {
+        "claim": "tile mode example: tile_size 256, tile_pad 32, both 'must be an integer multiple of the window size'",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/options/test/HAT_tile_example.yml",
+        "where": "L7-9"
+      },
+      {
+        "claim": "tile_process: input tile = tile_size +/- tile_pad (interior tiles 320x320)",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/hat/models/hat_model.py",
+        "where": "L40-75"
+      },
+      {
+        "claim": "tile mode 'for limited GPU memory when testing'",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/README.md",
+        "where": "L100"
+      },
+      {
+        "claim": "HAT-L training gt_size 256 (-> 64 LR)",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/options/train/train_HAT-L_SRx4_ImageNet_from_scratch.yml",
+        "where": "L18"
+      }
+    ],
+    "notes": "NAS file hat_l_x4.pth is a symlink to HAT-L_SRx4_ImageNet-pretrain.pth. Container trace: 1x3x112x80 (112 = 7*16, 80 = 5*16) -> 448x320.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "hat-s-x4": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - XPixelGroup/HAT (weights HAT-S_SRx4.pth, distributed via links in the GitHub README)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference, padded to multiple of 16"
+    },
+    "largest_documented": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "no maximum documented; tile mode example 256 (+32 pad)"
+    },
+    "constraints": "Window 16: input padded to H,W % 16. Scale x4. depths [6]*6.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 256,
+        "width": 256
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "vendor img_size 64",
+        "large": "vendor tile_size 256 (interior padded tiles reach 320x320)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "pre_process pads input to a multiple of window_size (reflect)",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/hat/models/hat_model.py",
+        "where": "L17-26"
+      },
+      {
+        "claim": "HAT-S test config: upscale 4, img_size 64, window_size 16",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/options/test/HAT-S_SRx4.yml",
+        "where": "L51-54"
+      },
+      {
+        "claim": "tile mode example: tile_size 256, tile_pad 32, both 'must be an integer multiple of the window size'",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/options/test/HAT_tile_example.yml",
+        "where": "L7-9"
+      },
+      {
+        "claim": "tile_process: input tile = tile_size +/- tile_pad (interior tiles 320x320)",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/hat/models/hat_model.py",
+        "where": "L40-75"
+      },
+      {
+        "claim": "tile mode 'for limited GPU memory when testing'",
+        "url": "https://raw.githubusercontent.com/XPixelGroup/HAT/1638a9a822581657811867bf670717f8371fc3e5/README.md",
+        "where": "L100"
+      }
+    ],
+    "notes": "NAS file hat_s_x4.pth (params/params_ema, 864 tensors) - matching to HAT-S_SRx4.pth assumed from name, not hash-verified. Container trace: 1x3x112x80 -> 448x320.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 16,
+      "frame_rule": null
+    }
+  },
+  "swin2SR-classical-sr-x2-64": {
+    "hf_repo": "caidas/swin2SR-classical-sr-x2-64",
+    "hf_repo_note": null,
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference"
+    },
+    "largest_documented": {
+      "height": 264,
+      "width": 264,
+      "num_frames": null,
+      "note": "only concrete size in vendor docs (256x256 example + processor padding); no maximum documented"
+    },
+    "constraints": "Window 8: H,W % 8 (processor always pads to next multiple of 8; model reflect-pads mod 8). Scale x2.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 264,
+        "width": 264
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "config image_size 64 / training patch 64",
+        "large": "transformers docs example (256x256) as actually fed after processor padding"
+      }
+    },
+    "sources": [
+      {
+        "claim": "config: image_size 64, window_size 8, upscale, upsampler",
+        "url": "https://huggingface.co/caidas/swin2SR-classical-sr-x2-64/raw/cee1c923c6a37361c6e5650b65dcf4be821e5d52/config.json",
+        "where": "L18, L40-43"
+      },
+      {
+        "claim": "preprocessor: do_pad true, pad_size 8",
+        "url": "https://huggingface.co/caidas/swin2SR-classical-sr-x2-64/raw/cee1c923c6a37361c6e5650b65dcf4be821e5d52/preprocessor_config.json",
+        "where": "pad_size"
+      },
+      {
+        "claim": "image processor pad: (h//8+1)*8 - h (always adds 1..8 px, symmetric)",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/image_processing_swin2sr.py",
+        "where": "L66-77"
+      },
+      {
+        "claim": "model pad_and_normalize: reflect-pad to multiple of window_size",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L737-744"
+      },
+      {
+        "claim": "docs example input: butterfly.jpg (256x256 px, measured) -> 264x264 after processor padding",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L991-994"
+      },
+      {
+        "claim": "vendor test command (classical_sr --scale 2 --training_patch_size 64)",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/README.md",
+        "where": "L183"
+      },
+      {
+        "claim": "vendor test pads to (h//8+1)*8; optional --tile must be a multiple of window_size",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/main_test_swin2sr.py",
+        "where": "L69-74, L279"
+      }
+    ],
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 8,
+      "frame_rule": null
+    }
+  },
+  "swin2SR-classical-sr-x4-64": {
+    "hf_repo": "caidas/swin2SR-classical-sr-x4-64",
+    "hf_repo_note": null,
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference"
+    },
+    "largest_documented": {
+      "height": 264,
+      "width": 264,
+      "num_frames": null,
+      "note": "only concrete size in vendor docs (256x256 example + processor padding); no maximum documented"
+    },
+    "constraints": "Window 8: H,W % 8 (processor always pads to next multiple of 8; model reflect-pads mod 8). Scale x4.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 264,
+        "width": 264
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "config image_size 64 / training patch 64",
+        "large": "transformers docs example (256x256) as actually fed after processor padding"
+      }
+    },
+    "sources": [
+      {
+        "claim": "config: image_size 64, window_size 8, upscale, upsampler",
+        "url": "https://huggingface.co/caidas/swin2SR-classical-sr-x4-64/raw/c69ef3e2d2ac5777ff4a9f2f5afcd86d20604b7e/config.json",
+        "where": "L18, L40-43"
+      },
+      {
+        "claim": "preprocessor: do_pad true, pad_size 8",
+        "url": "https://huggingface.co/caidas/swin2SR-classical-sr-x4-64/raw/c69ef3e2d2ac5777ff4a9f2f5afcd86d20604b7e/preprocessor_config.json",
+        "where": "pad_size"
+      },
+      {
+        "claim": "image processor pad: (h//8+1)*8 - h (always adds 1..8 px, symmetric)",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/image_processing_swin2sr.py",
+        "where": "L66-77"
+      },
+      {
+        "claim": "model pad_and_normalize: reflect-pad to multiple of window_size",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L737-744"
+      },
+      {
+        "claim": "docs example input: butterfly.jpg (256x256 px, measured) -> 264x264 after processor padding",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L991-994"
+      },
+      {
+        "claim": "vendor test command (classical_sr --scale 4 --training_patch_size 64)",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/README.md",
+        "where": "L185"
+      },
+      {
+        "claim": "vendor test pads to (h//8+1)*8; optional --tile must be a multiple of window_size",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/main_test_swin2sr.py",
+        "where": "L69-74, L279"
+      }
+    ],
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 8,
+      "frame_rule": null
+    }
+  },
+  "swin2SR-realworld-sr-x4-64-bsrgan-psnr": {
+    "hf_repo": "caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+    "hf_repo_note": null,
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference"
+    },
+    "largest_documented": {
+      "height": 264,
+      "width": 264,
+      "num_frames": null,
+      "note": "only concrete size in vendor docs (256x256 example + processor padding); no maximum documented"
+    },
+    "constraints": "Window 8: H,W % 8 (processor always pads to next multiple of 8; model reflect-pads mod 8). Scale x4.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 264,
+        "width": 264
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "config image_size 64 / training patch 64",
+        "large": "transformers docs example (256x256) as actually fed after processor padding"
+      }
+    },
+    "sources": [
+      {
+        "claim": "config: image_size 64, window_size 8, upscale, upsampler",
+        "url": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr/raw/bb13f02e45e88d00b6c202b3fbe6a181af144606/config.json",
+        "where": "L18, L40-43"
+      },
+      {
+        "claim": "preprocessor: do_pad true, pad_size 8",
+        "url": "https://huggingface.co/caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr/raw/bb13f02e45e88d00b6c202b3fbe6a181af144606/preprocessor_config.json",
+        "where": "pad_size"
+      },
+      {
+        "claim": "image processor pad: (h//8+1)*8 - h (always adds 1..8 px, symmetric)",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/image_processing_swin2sr.py",
+        "where": "L66-77"
+      },
+      {
+        "claim": "model pad_and_normalize: reflect-pad to multiple of window_size",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L737-744"
+      },
+      {
+        "claim": "docs example input: butterfly.jpg (256x256 px, measured) -> 264x264 after processor padding",
+        "url": "https://raw.githubusercontent.com/huggingface/transformers/89b6b17574892ec0770551537a3fe69d6886703e/src/transformers/models/swin2sr/modeling_swin2sr.py",
+        "where": "L991-994"
+      },
+      {
+        "claim": "vendor test command (real_sr --scale 4)",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/README.md",
+        "where": "L195"
+      },
+      {
+        "claim": "vendor test pads to (h//8+1)*8; optional --tile must be a multiple of window_size",
+        "url": "https://raw.githubusercontent.com/mv-lab/swin2sr/6f25d7689813f7dd12c5a212b638066fa71bc9e6/main_test_swin2sr.py",
+        "where": "L69-74, L279"
+      }
+    ],
+    "notes": "No tile size or maximum input is documented for Swin2SR. Container trace: 1x3x112x80.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 8,
+      "frame_rule": null
+    }
+  },
+  "swinir-classical-x2": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - JingyunLiang/SwinIR GitHub release 001_classicalSR_DF2K_s64w8_SwinIR-M_x2.pth (identified from attn_mask shape 64x64x64 = 64 px training patch, window 8)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference"
+    },
+    "largest_documented": {
+      "height": 400,
+      "width": 400,
+      "num_frames": null,
+      "note": "only documented tile size; no maximum documented"
+    },
+    "constraints": "Window 8: model needs H,W % 8 (vendor pads with flips to (h//8+1)*8). Scale x2. Tile must be a multiple of 8.",
+    "proposed": {
+      "small": {
+        "height": 64,
+        "width": 64
+      },
+      "large": {
+        "height": 400,
+        "width": 400
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "training_patch_size 64 (DF2K s64w8) - vendor script would feed 72x72 after its padding",
+        "large": "vendor-documented tile 400 (README, real-SR example of the same script)"
+      }
+    },
+    "sources": [
+      {
+        "claim": "classical SR: model built with img_size=training_patch_size, window_size=8; 001_classicalSR_DF2K_s64w8_SwinIR-M_x2.pth",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L130-131"
+      },
+      {
+        "claim": "vendor test command for 001_classicalSR_DF2K_s64w8_SwinIR-M_x2.pth (training_patch_size 64)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L114"
+      },
+      {
+        "claim": "'--training_patch_size is just used to differentiate two settings ... Images are NOT tested patch by patch'",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L106"
+      },
+      {
+        "claim": "input padded with flips to (h//8+1)*8 (always adds 1..8 px)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L68-73"
+      },
+      {
+        "claim": "optional --tile (must be a multiple of window_size), --tile_overlap 32",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L29-30, L286"
+      },
+      {
+        "claim": "'use --tile 400 if you run out-of-memory' (real-SR section of the same script)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L126"
+      }
+    ],
+    "notes": "The NAS file swinir_x2.pth differs from 001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth (attn_mask 64 windows vs 36), i.e. it is the DF2K s64w8 checkpoint. Container trace: 1x3x112x80 -> 224x160.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 8,
+      "frame_rule": null
+    }
+  },
+  "swinir-classical-x4": {
+    "hf_repo": null,
+    "hf_repo_note": "none official - JingyunLiang/SwinIR GitHub release 001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth (NAS symlink target; attn_mask 36x64x64 = 48 px patch)",
+    "default": {
+      "height": null,
+      "width": null,
+      "num_frames": null,
+      "note": "whole-image inference"
+    },
+    "largest_documented": {
+      "height": 400,
+      "width": 400,
+      "num_frames": null,
+      "note": "only documented tile size; no maximum documented"
+    },
+    "constraints": "Window 8: H,W % 8 (vendor pads to (h//8+1)*8). Scale x4. Tile multiple of 8.",
+    "proposed": {
+      "small": {
+        "height": 48,
+        "width": 48
+      },
+      "large": {
+        "height": 400,
+        "width": 400
+      },
+      "frames_small": null,
+      "frames_large": null,
+      "basis": {
+        "small": "training_patch_size 48 (DIV2K s48w8) - vendor script would feed 56x56",
+        "large": "vendor-documented tile 400"
+      }
+    },
+    "sources": [
+      {
+        "claim": "classical SR: model built with img_size=training_patch_size, window_size=8; 001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L130-131"
+      },
+      {
+        "claim": "vendor test command for 001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth (training_patch_size 48)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L110"
+      },
+      {
+        "claim": "'--training_patch_size is just used to differentiate two settings ... Images are NOT tested patch by patch'",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L106"
+      },
+      {
+        "claim": "input padded with flips to (h//8+1)*8 (always adds 1..8 px)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L68-73"
+      },
+      {
+        "claim": "optional --tile (must be a multiple of window_size), --tile_overlap 32",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/main_test_swinir.py",
+        "where": "L29-30, L286"
+      },
+      {
+        "claim": "'use --tile 400 if you run out-of-memory' (real-SR section of the same script)",
+        "url": "https://raw.githubusercontent.com/JingyunLiang/SwinIR/6545850fbf8df298df73d81f3e8cba638787c8bd/README.md",
+        "where": "L126"
+      }
+    ],
+    "notes": "Container trace: 1x3x112x80 -> 448x320.",
+    "divisibility_used_for_check": {
+      "hw_multiple_of": 8,
+      "frame_rule": null
+    }
+  }
+}
