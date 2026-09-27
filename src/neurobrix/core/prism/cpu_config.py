@@ -10,7 +10,7 @@ ZERO FALLBACK: Missing required cpu: fields = crash with explicit error.
 
 import os
 import logging
-from typing import TYPE_CHECKING
+from typing import Dict, TYPE_CHECKING
 
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
@@ -29,6 +29,10 @@ class CPUConfig:
     ram_mb: int
     architecture: str  # x86_64, aarch64, arm64
     features: List[str] = field(default_factory=list)
+    # The runtime's own resident memory before any weight, MEASURED on this machine per engine
+    # ({"compiled": MB, "triton": MB}, autodetect) — the base of Prism's host estimate. Absent on a
+    # profile nobody measured: the estimate then prices no base and says so.
+    runtime_base_mb: Dict[str, int] = field(default_factory=dict)
 
     @property
     def ram_gb(self) -> float:
@@ -52,6 +56,7 @@ class CPUConfig:
             ram_mb=cpu_dict["ram_mb"],
             architecture=cpu_dict["architecture"],
             features=cpu_dict.get("features", []),
+            runtime_base_mb=dict(cpu_dict.get("runtime_base_mb") or {}),
         )
 
 
