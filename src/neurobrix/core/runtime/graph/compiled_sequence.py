@@ -3271,7 +3271,11 @@ class CompiledSequence:
 
         Contract — matches the semantics of Phase 1 + the zero3 slow
         path rule (CUDA always wins over CPU, so needs_transfer is True
-        iff op.device differs from self.device):
+        iff op.device differs from self.device). The priming flip
+        (mark_cpu_weighted_ops_for_transfer) is the other writer and sets
+        op.device = the EXECUTION device with needs_transfer True for a
+        host-weighted op; this function re-derives only the ops of the
+        slots a block swap touched:
 
             op.device        = device of first weight tensor currently in arena
             op.needs_transfer = (op.device != self.device)
@@ -3337,7 +3341,7 @@ class CompiledSequence:
                 continue
             for ws in op.weight_input_slots:
                 t = self._arena[ws]
-                if t is not None and hasattr(t, 'device') and t.device != exec_device:
+                if t is not None and hasattr(t, 'device') and t.device.type == "cpu":
                     op.device = exec_device
                     op.needs_transfer = True
                     flipped += 1
