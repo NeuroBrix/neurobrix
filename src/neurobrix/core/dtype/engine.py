@@ -623,13 +623,45 @@ class DtypeEngine:
         4. AMP Promote ops: promote to widest input dtype
         5. Everything else: pass through unchanged
         """
+        policy = self.store_policy(op_type, attrs, op_uid)
+        if policy == "to_copy":
+            return self._make_to_copy(attrs)
+        assert func is not None, (
+            f"ZERO FALLBACK: func cannot be None for op {strip_aten_prefix(op_type)}")
+        return self._wrapper_for(policy, func)
+
+    def _wrapper_for(self, policy: str, func: Callable) -> Callable:
+        """The wrapper a store policy names (store_policy is the decision)."""
+        store_compute = policy.endswith("+store_compute")
+        base = policy[:-len("+store_compute")] if store_compute else policy
+        inner = {
+            "complex": self._make_complex_output_wrapper,
+            "creation_fill": self._make_creation_fill_guard,
+            "fp32": self._make_fp32_wrapper,
+            "safe_softmax": self._make_safe_softmax,
+            "cpu_fp32": self._make_cpu_fp32_wrapper,
+            "lower": self._make_lower_precision_wrapper,
+            "promote": self._make_promote_wrapper,
+            "mul_safe": self._make_mul_safe,
+            "passthrough": lambda f: f,
+        }[base](func)
+        return self._make_store_in_compute_dtype(inner) if store_compute else inner
+
+    def store_policy(self, op_type: str, attrs: Dict[str, Any],
+                     op_uid: Optional[str] = None) -> str:
+        """What this engine does with an op's precision — the DECISION behind compile_op,
+        as a name: `fp32` / `safe_softmax` / `cpu_fp32` / `mul_safe` compute and STORE in fp32;
+        `lower` and any `...+store_compute` store the compute dtype; `promote` and `passthrough`
+        follow their inputs; `creation_fill`, `complex`, `to_copy` keep their own dtype rule.
+        One function for the engine that applies it and for the planner that budgets it
+        (Prism priced a conservative component's matmul outputs at fp16 while this engine
+        stored them fp32: CogVideoX-5b-I2V's transformer OOM on a 16 GB V100, 2026-09-27).
+        """
         op_name = strip_aten_prefix(op_type)
 
         # _to_copy always handled (required for dtype conversion)
         if op_type == "aten::_to_copy":
-            return self._make_to_copy(attrs)
-
-        assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
+            return "to_copy"
 
         # A complex-producing op never receives a half input — decided from
         # the container's own output_dtypes (traced_output_is_complex). FIRST,
@@ -641,34 +673,34 @@ class DtypeEngine:
         # precision choice among REAL dtypes and cannot validly retype a
         # traced complex128 contract to complex64.
         if traced_output_is_complex(attrs):
-            return self._make_complex_output_wrapper(func)
+            return "complex"
 
         # Creation-fill guard: independent of the amp_enabled gate — the
         # Prism dtype remap (bf16→fp16 kwarg) happens regardless of AMP,
         # so the scalar clamp must too. See AMP_CREATION_FILL_OPS.
         if op_name in AMP_CREATION_FILL_OPS:
-            return self._make_creation_fill_guard(func)
+            return "creation_fill"
 
         # Vendor keep-in-fp32 pin on this exact op (fp32_op_uids): applied
         # whatever the AMP gate says and whatever the op's AMP class — with
         # AMP off the component mirrors a plain torch_dtype=float16 forward,
         # and the vendor's own forward keeps these MODULES fp32 (transformers
         # _keep_in_fp32_modules, diffusers' float32 islands).
-        if op_uid is not None and op_uid in self.fp32_op_uids and func is not None:
+        if op_uid is not None and op_uid in self.fp32_op_uids:
             if op_name in ("_softmax", "_log_softmax"):
-                return self._make_safe_softmax(func)
-            return self._make_fp32_wrapper(func)
+                return "safe_softmax"
+            return "fp32"
 
         # AMP disabled: skip all autocast wrapping (no fp32 upcasting).
         if not self.amp_enabled:
-            return func
+            return "passthrough"
 
         # Host-placed compute: the CPU backend refuses fp16 for some ops that
         # CUDA accepts, so the wrapper is chosen on the DEVICE the tensors
         # arrive on, not only on the compute dtype. Checked before the AMP
         # rules because it applies whatever those rules say about the op.
         if cpu_lacks_half_kernel(op_name):
-            return self._make_cpu_fp32_wrapper(func)
+            return "cpu_fp32"
 
         # AMP rules only apply when compute_dtype is half-precision
         if self.compute_dtype in (torch.float16, torch.bfloat16):
@@ -677,26 +709,26 @@ class DtypeEngine:
             if op_name in AMP_FP32_OPS:
                 if contract and op_name in _FP32_OPS_HALF_IO:
                     # The vendor's kernel: fp16 in/out, fp32 inside.
-                    return self._make_lower_precision_wrapper(func)
+                    return "lower"
                 # _softmax/_log_softmax have half_to_float that crashes if input
                 # is already fp32 ("conversion is supported for Half type only").
                 # Wrap with a guard that disables half_to_float when input is fp32.
                 if op_name in ("_softmax", "_log_softmax"):
-                    inner = self._make_safe_softmax(func)
+                    inner = "safe_softmax"
                 else:
-                    inner = self._make_fp32_wrapper(func)
+                    inner = "fp32"
                 # Contract: fp32 compute, fp16 store — only where the graph
                 # shows no precision-class consumer (the vendor's island
                 # otherwise; narrowed at the next matmul's own input cast).
                 if contract and op_uid is not None and op_uid in self.narrow_op_uids:
-                    return self._make_store_in_compute_dtype(inner)
+                    return inner + "+store_compute"
                 return inner
 
             if op_name in AMP_FP16_OPS:
                 # Vendor keep-in-fp32 pin on this exact op (fp32_op_uids):
                 # wins over every contract, on any hardware.
                 if op_uid is not None and op_uid in self.fp32_op_uids:
-                    return self._make_fp32_wrapper(func)
+                    return "fp32"
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
                 if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
@@ -705,7 +737,7 @@ class DtypeEngine:
                     # keeps its fp32 compute and stores fp16.
                     if contract:
                         if op_name in _FP16_GEMM_OPS:
-                            return self._make_lower_precision_wrapper(func)
+                            return "lower"
                         # `div` by a compile-time SCALAR that is no epsilon
                         # (|s| >= fp16 min normal), outside any island: the
                         # vendor's fp16 forward divides in fp16 (the attention
@@ -714,11 +746,10 @@ class DtypeEngine:
                         # A tensor divisor keeps the fp32 compute (epsilon).
                         if (op_name == "div" and _scalar_divisor_is_plain(attrs)
                                 and op_uid is not None and op_uid in self.narrow_op_uids):
-                            return self._make_lower_precision_wrapper(func)
-                        inner = self._make_fp32_wrapper(func)
+                            return "lower"
                         if op_uid is not None and op_uid in self.narrow_op_uids:
-                            return self._make_store_in_compute_dtype(inner)
-                        return inner
+                            return "fp32+store_compute"
+                        return "fp32"
                     # Diagnostic, read-only (default off): NBX_DISABLE_MATMUL_FP32=1
                     # runs mm/bmm/addmm/div in fp16 (vendor-equivalent — a plain
                     # torch_dtype=float16 forward keeps matmul in fp16, only
@@ -726,12 +757,12 @@ class DtypeEngine:
                     # the matmul fp32 upcast (not the norm fp32) drives a divergence.
                     import os as _os_mm
                     if _os_mm.environ.get("NBX_DISABLE_MATMUL_FP32") == "1":
-                        return self._make_lower_precision_wrapper(func)
-                    return self._make_fp32_wrapper(func)
-                return self._make_lower_precision_wrapper(func)
+                        return "lower"
+                    return "fp32"
+                return "lower"
 
             if op_name in AMP_PROMOTE_OPS:
-                return self._make_promote_wrapper(func)
+                return "promote"
 
             # fp16-only: guard the squaring pattern x*x (RMSNorm/LayerNorm
             # variance: mean(x*x)) against fp16 overflow. On bf16 the exponent
@@ -747,9 +778,9 @@ class DtypeEngine:
                 # complex-scalar guard below, which bf16 does need. On fp16
                 # hardware the complex branch never fires — fp16 x complex
                 # promotes to complex32, which torch implements.
-                return self._make_mul_safe(func)
+                return "mul_safe"
 
-        return func
+        return "passthrough"
 
     # ========================================================================
     # AMP WRAPPERS

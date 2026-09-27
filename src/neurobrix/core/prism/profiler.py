@@ -647,6 +647,7 @@ class ActivationProfiler:
         zero_alloc_uids: Optional[set] = None,
         inplace_adds: Optional[List] = None,
         force_compute_dtype_for_fp: bool = False,
+        tensor_bytes: Optional[Dict[str, int]] = None,
         placement_floor: bool = False,
     ) -> ActivationProfile:
         """
@@ -797,6 +798,13 @@ class ActivationProfiler:
                 shape = self._resolve_shape(tensor_meta, symbol_map)
                 size = self._compute_size(shape, tensor_meta, dtype_bytes,
                                           force_compute_dtype_for_fp=force_compute_dtype_for_fp)
+                if tensor_bytes and out_tid in tensor_bytes and dtype_bytes:
+                    # The width the DtypeEngine STORES this output in (core/dtype/store_plan):
+                    # an fp32 matmul store on a half-precision plan costs twice the compute
+                    # dtype's bytes, and the plan must say so.
+                    size = size // dtype_bytes * tensor_bytes[out_tid] if force_compute_dtype_for_fp \
+                        else size
+
 
                 # Zero-alloc op: output is a sentinel proxy / stride-0 view
                 # at runtime, not a real allocation. Liveness still tracks
