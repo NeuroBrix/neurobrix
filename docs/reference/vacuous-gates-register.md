@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-115 entries, 110 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+116 entries, 111 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3498,3 +3498,21 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
+
+### 113 — the certifier's unified-memory flag was tested on a stub whose method the real class does not have
+
+`a-unified-certifier-counts-the-host-copies` (73b04e10) read the certifying device's memory kind
+with `dev.has_unified_memory()`. `DeviceSpec.has_unified_memory` is a `@property`: on every real
+hardware profile the call raised "'bool' object is not callable" before the first key. The gate
+built the device as a `SimpleNamespace` whose `has_unified_memory` was a lambda — callable, as the
+code assumed — and was green against that stub only. Found by the Mac's certify run on the branch
+(Apple M4 Pro, 2026-09-27 07:03:50), which died at start.
+
+**What the gate said about code that cannot run**: pass. A stub shaped by the code under test
+agrees with the code under test.
+
+**Repair.** The code reads the property; the gate builds a real `DeviceSpec(unified_memory=...)`
+and is red on 73b04e10 ("'bool' object is not callable"), green after.
+
+**The lesson, in one line.** A test double of a project class is built from the class, never from
+the call the code happens to make on it.
