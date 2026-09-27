@@ -53,10 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A large image no longer runs out of memory in its decoder where the plan had priced it to fit.**
-  A plan that counted a decoder's large residual additions as done in place now performs them in place,
-  so the memory it runs under is the memory it was accepted on (Sana 4Kpx at 3072x4096 on an 18 GB
-  Apple GPU ran out of memory in the decode).
+- **A plan performs the in-place additions it was priced with.** When a decoder's large residual
+  additions were counted as done in place but no single operation overflowed the card, the plan left
+  them out of place, holding a buffer its memory figure never counted; they now run in place.
 
 - **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
   read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
@@ -67,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
   rest of the model's. The same applies to a host-memory weight that is only reshaped before use (SANA-Video's
   output modulation in `--compiled` on a 32 GB card).
+- **Mixture-of-experts models whose experts live in host memory decode faster.** Every expert layer
+  ran a full Python garbage collection for every generated token.
 - **`--triton-sequential` generates text at the speed of a cached decode.** It re-ran the whole
   context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
   experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
