@@ -84,6 +84,16 @@ def test_the_base_is_the_profiles_measurement_or_is_said_to_be_missing():
     assert f["base_bytes"] == 0 and not f["base_measured"]
 
 
+def test_the_planning_process_resident_memory_is_part_of_the_figure():
+    # The parsed container is held by the process that plans (1.5-4.8x its JSON bytes, not a constant):
+    # it is read from the process, then the engine's measured addition and the plan's holdings go on top.
+    plan = _plan(lm=("cuda:0", "float16", {}, 0, 0, 0))
+    f = H.host_footprint(plan, {"lm": {}}, {"lm": {}}, "triton", 100, DT, _block, resident_bytes=300 * MB)
+    assert f["resident_bytes"] == 300 * MB and f["total_bytes"] == 400 * MB
+    assert "resident 300 MB" in H.summary(f)
+    assert H.resident_bytes_now() > 0
+
+
 def test_an_unknown_engine_is_refused():
     with pytest.raises(ValueError, match="no host rules"):
         H.host_footprint(_plan(), {}, {}, "metal-magic", None, DT, _block)

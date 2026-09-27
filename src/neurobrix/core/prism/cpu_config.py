@@ -29,9 +29,10 @@ class CPUConfig:
     ram_mb: int
     architecture: str  # x86_64, aarch64, arm64
     features: List[str] = field(default_factory=list)
-    # The runtime's own resident memory before any weight, MEASURED on this machine per engine
-    # ({"compiled": MB, "triton": MB}, autodetect) — the base of Prism's host estimate. Absent on a
-    # profile nobody measured: the estimate then prices no base and says so.
+    # What the engine's device work adds to a process that has planned, before any weight — its modules,
+    # the device context and the compute libraries a run's first ops load — MEASURED on this machine per
+    # engine ({"compiled": MB, "triton": MB}, autodetect). Prism's host estimate adds it to the planning
+    # process's own resident memory. Absent on a profile nobody measured: the estimate says so.
     runtime_base_mb: Dict[str, int] = field(default_factory=dict)
 
     @property

@@ -319,16 +319,21 @@ def load_default_profile():
 # MAIN DETECTION ORCHESTRATOR (OS-FIRST)
 # ============================================================================
 
-#: One probe per engine: the engine's own modules imported, its device context created and its compute
-#: libraries loaded the way a run's first ops load them — a GEMM, a convolution and an attention on the
-#: compiled engine (cuBLAS, cuDNN and the SDPA kernels are loaded on first use, not at import), a Triton
-#: kernel compiled and launched on the Triton engine (the JIT's compiler is loaded on first launch); the
-#: process then reports its peak resident memory in MB. Each runs under the interpreter and the card door
-#: of the process that builds the profile. The Triton probe imports no torch (R33) and uses only kernels
-#: that are certified or need no autotune sweep, so building a profile writes no autotune cache.
+#: One probe per engine, measured from the state a run plans in (the CLI imported, no engine yet): the
+#: engine's own modules imported, its device context created and its compute libraries loaded the way a
+#: run's first ops load them — a GEMM, a convolution and an attention on the compiled engine (cuBLAS,
+#: cuDNN and the SDPA kernels are loaded on first use, not at import), a Triton kernel compiled and
+#: launched on the Triton engine (the JIT's compiler is loaded on first launch). The probe prints its
+#: resident memory at the planning state, then its peak, in MB; the difference is what the engine adds.
+#: Each runs under the interpreter and the card door of the process that builds the profile. The Triton
+#: probe imports no torch (R33) and uses only kernels that are certified or need no autotune sweep, so
+#: building a profile writes no autotune cache (read: the replay cache's files and mtimes unchanged).
+_PLANNING_STATE = ("import resource, sys\n"
+                   "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.core.prism.solver\n"
+                   "_r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
+                   "print(_r // (1 << 20) if sys.platform == 'darwin' else _r // 1024)\n")
 _BASE_PROBES = {
     "compiled": (
-        "import resource, sys\n"
         "import torch\n"
         "import torch.nn.functional as F\n"
         "import neurobrix.core.runtime.graph_executor\n"
@@ -340,7 +345,6 @@ _BASE_PROBES = {
         "    q = torch.ones(1, 2, 16, 32, device='cuda', dtype=torch.float16)\n"
         "    F.scaled_dot_product_attention(q, q, q).sum().item()\n"),
     "triton": (
-        "import resource, sys\n"
         "import neurobrix.triton.flow.iterative_process\n"
         "from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype\n"
         "from neurobrix.kernels import wrappers\n"
@@ -355,18 +359,18 @@ _PEAK_MB = ("r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss\n"
 
 
 def _measure_runtime_base_mb() -> Dict[str, int]:
-    """{engine: MB} — the runtime's resident memory before any weight, measured on this machine.
-    An engine whose probe cannot run here is left out, and a plan on this profile says its base is
-    unmeasured: a number is never written that was not measured."""
+    """{engine: MB} — what the engine's device work adds to a process at the planning state, measured on
+    this machine. An engine whose probe cannot run here is left out, and a plan on this profile says its
+    base is unmeasured: a number is never written that was not measured."""
     import sys as _sys
     out: Dict[str, int] = {}
     for engine, code in _BASE_PROBES.items():
         try:
-            r = subprocess.run([_sys.executable, "-c", code + _PEAK_MB], capture_output=True, text=True,
-                               timeout=300)
-            lines = r.stdout.strip().splitlines()
-            if r.returncode == 0 and lines and lines[-1].strip().isdigit():
-                out[engine] = int(lines[-1].strip())
+            r = subprocess.run([_sys.executable, "-c", _PLANNING_STATE + code + _PEAK_MB],
+                               capture_output=True, text=True, timeout=300)
+            lines = [l.strip() for l in r.stdout.strip().splitlines()]
+            if r.returncode == 0 and len(lines) >= 2 and lines[0].isdigit() and lines[-1].isdigit():
+                out[engine] = int(lines[-1]) - int(lines[0])
         except (OSError, subprocess.SubprocessError):
             continue
     return out
