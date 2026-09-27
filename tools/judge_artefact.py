@@ -57,6 +57,32 @@ def image_degeneracy(path: Path, expect_shape=None) -> dict:
             "degenerate": bool(reasons), "reasons": reasons}
 
 
+def video_degeneracy(path: Path, expect_shape=None) -> dict:
+    """The tests a video must pass to be worth judging: the geometry the request implies, and
+    frames that are not one flat colour. SANA-Video on a 32 GB card wrote 160x64 for a 1280x512
+    request and its row read rc=0 with a byte count (2026-09-27): a mechanical check that never
+    reads the size cannot see the one fault a size makes obvious."""
+    import imageio.v2 as iio
+    import numpy as np
+
+    r = iio.get_reader(str(path))
+    try:
+        w, h = r.get_meta_data()["size"]
+        n = r.count_frames()
+        picks = sorted({0, n // 2, max(n - 1, 0)})
+        frames = [np.asarray(r.get_data(i)) for i in picks]
+    finally:
+        r.close()
+    reasons = []
+    if expect_shape is not None and (h, w) != tuple(expect_shape):
+        reasons.append(f"geometry {(h, w)} is not the requested {tuple(expect_shape)}")
+    stds = [float(f.std()) for f in frames]
+    if all(s == 0.0 for s in stds):
+        reasons.append("every sampled frame is one flat colour")
+    return {"path": str(path), "bytes": path.stat().st_size, "shape": [h, w], "frames": n,
+            "sampled_std": stds, "degenerate": bool(reasons), "reasons": reasons}
+
+
 def text_degeneracy(path: Path) -> dict:
     t = path.read_text(errors="replace")
     stripped = t.strip()
