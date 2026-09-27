@@ -140,3 +140,17 @@ def test_the_triton_mirror_already_targets_the_execution_device():
     seq._ops = [weight_only]
     assert TritonSequence.mark_cpu_weighted_ops_for_transfer(seq, 0) == 1
     assert weight_only.device_idx == 0 and weight_only.needs_transfer is True
+
+
+def test_a_weight_on_another_card_is_not_flipped():
+    """Only a HOST weight goes to the transfer path; a weight on another card
+    computes where it lives (FGP placement), as in the Triton mirror."""
+    import torch
+    from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
+
+    seq = object.__new__(CompiledSequence)
+    other_card = _Op([0])
+    seq._arena = [_HostTensor(torch.device("cuda:1"))]
+    seq._ops = [other_card]
+    assert CompiledSequence.mark_cpu_weighted_ops_for_transfer(seq, torch.device("cuda:0")) == 0
+    assert other_card.device is None and other_card.needs_transfer is False

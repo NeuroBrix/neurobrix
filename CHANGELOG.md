@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Models whose weights are offloaded to host memory no longer fail on a small head.** A component
   with no transformer blocks (Janus-Pro-7B's image-generation head) kept its weights on the host and
   the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
-  rest of the model's. The same applies to a weight that is only reshaped before use (SANA-Video's
+  rest of the model's. The same applies to a host-memory weight that is only reshaped before use (SANA-Video's
   output modulation in `--compiled` on a 32 GB card).
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
