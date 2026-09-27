@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A model runs from what its container declares, on every machine.** Per-component settings
-  that some video models read from a developer-only file now come from the container itself;
+  that some video models read from a developer-only file now come from the container itself,
+  whatever name or path the model is requested by;
   a developer checkout whose file disagrees with a container refuses to run it and names the
   setting, instead of running it differently from everyone else.
 
