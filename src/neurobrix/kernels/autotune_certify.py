@@ -632,7 +632,10 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     # not the physical card; the visible set is recorded beside it so the pair says which.
     return {"ordinal": idx, "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0),
-            "unified": bool(dev.has_unified_memory()) if hasattr(dev, "has_unified_memory") else False}
+            # `DeviceSpec.has_unified_memory` is a PROPERTY. It was called as a method, which
+            # raised "'bool' object is not callable" on every profile that lists its devices
+            # (the Mac's first certify on 2026-09-27); the test's stub had made it a method.
+            "unified": bool(dev.has_unified_memory) if hasattr(dev, "has_unified_memory") else False}
 
 
 def _clocks_mhz():
