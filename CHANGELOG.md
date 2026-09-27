@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Mixture-of-experts models whose experts live in host memory decode faster.** Every expert layer
+  ran a full Python garbage collection for every generated token.
 - **`--triton-sequential` generates text at the speed of a cached decode.** It re-ran the whole
   context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
   experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
