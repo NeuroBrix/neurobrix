@@ -182,8 +182,18 @@ class TritonNextTokenDiffusionEngine:
             self._ensure_weights_loaded(comp)
 
         import os as _os_ntd
-        gen = (self._generate_reprefill if _os_ntd.environ.get("NBX_NTD_REPREFILL") == "1"
-               else self._generate_kv)
+        # triton-sequential is the op-by-op kernel oracle and carries no KV cache
+        # BY DESIGN: the autoregressive flow builds its KV interceptor for
+        # `triton` only and runs the O(n) recompute here, so a session in this
+        # mode has no decode branches to give (`TritonLMSession.branch_state`
+        # refuses). This mode therefore runs the re-prefill path, which is the
+        # reference the KV path was proven against when it was introduced
+        # (90a324a8: tokens identical, Triton KV vs re-prefill latents 0-0.1 %).
+        # Found by the Apple census, 2026-09-27: VibeVoice-1.5B failed every
+        # triton-sequential cell with "decode branches need the KV cache path".
+        use_reprefill = (self.ctx.mode == "triton_sequential"
+                         or _os_ntd.environ.get("NBX_NTD_REPREFILL") == "1")
+        gen = self._generate_reprefill if use_reprefill else self._generate_kv
         emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start = gen(
             prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id,
             valid_arr, max_steps, ddpm_steps, cfg_scale, vae_dim, defaults, scaling, bias)
