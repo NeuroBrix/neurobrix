@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Such an encoder (the Wan family's) was always planned whole, so a long clip at a large size ran
   out of memory before its first layer. It is now tiled in height and width with the whole clip in
   every tile, the way the model's own tiled encoding works; it is never split in time.
+- **Video VAEs that need tiling no longer fall back to the CPU on 16 GB cards.** When the memory budget
+  sized a decode tile smaller than the GPU's preferred alignment, the planner rounded it up past the
+  budget and sent the whole decoder to the host (CogVideoX at 352x720 decoded for most of an hour).
+  The tile now keeps the size that fits.
 
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
