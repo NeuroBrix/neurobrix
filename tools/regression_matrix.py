@@ -343,7 +343,42 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     return row
 
 
+def full_matrix(cache: Path = None) -> set:
+    """Every cell the matrix holds: each container of the shared cache (a directory with a manifest)
+    in every mode — derived from the cache, never a hand-kept list."""
+    cache = cache or CACHE
+    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in MODES}
+
+
+def cells_of_lists(paths) -> set:
+    """The cells a gate's card lists name ("<model> <mode>,<mode>" per line)."""
+    cells = set()
+    for p in paths:
+        for line in Path(p).read_text().splitlines():
+            if line.strip():
+                model, modes = line.split()
+                cells |= {(model, m) for m in modes.split(",")}
+    return cells
+
+
+def refuse_a_partial_gate(lists, cache: Path = None) -> None:
+    """A queue's gate covers EVERY cell of the matrix (the supervisor, 2026-09-27 16:25): queue-9's
+    gate ran lists inherited from queue-8 and never ran Sana_1600M_4Kpx_BF16 native — a regression
+    it would have seen landed on main. Refused by name when the union of the gate's lists is not
+    the full matrix."""
+    full, named = full_matrix(cache), cells_of_lists(lists)
+    missing, unknown = sorted(full - named), sorted(named - full)
+    if missing or unknown:
+        raise SystemExit(
+            f"REFUSED: this gate's cell lists are not the matrix's full list — {len(missing)} of "
+            f"{len(full)} cells missing{': ' + ', '.join(f'{m}/{mo}' for m, mo in missing[:8]) if missing else ''}"
+            f"{'; unknown: ' + ', '.join(f'{m}/{mo}' for m, mo in unknown[:8]) if unknown else ''}. "
+            f"A gate spares no cell.")
+
+
 def cmd_run(a) -> int:
+    if getattr(a, "gate_lists", None):
+        refuse_a_partial_gate(a.gate_lists)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
@@ -537,6 +572,8 @@ def main() -> int:
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--modes", default=",".join(MODES))
+    r.add_argument("--gate-lists", nargs="+", default=None,
+                   help="this run is a queue gate: the card lists of the whole gate; refused unless together they name every cell of the matrix")
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
