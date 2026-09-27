@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video VAEs that need tiling no longer fall back to the CPU on 16 GB cards.** When the memory budget
+  sized a decode tile smaller than the GPU's preferred alignment, the planner rounded it up past the
+  budget and sent the whole decoder to the host (CogVideoX at 352x720 decoded for most of an hour).
+  The tile now keeps the size that fits.
+
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
   generated in their own precision, so a certification run's host memory stays close to the size

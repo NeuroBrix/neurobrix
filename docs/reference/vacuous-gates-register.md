@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-115 entries, 110 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+116 entries, 111 in the rack's block (1-499) and 5 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3498,3 +3498,21 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
+
+### 111 — the lattice test checked its own copy of the snap, and the copy encoded the defect
+
+`tests/unit/prism/test_a_tiled_extent_lands_on_the_profile_s_lattice.py` asserted the tile-lattice
+rule on a helper `_snap` defined in the test file — `max(unit, (v // unit) * unit)` — never on
+`PrismSolver._spatial_component_tiling`. Its fourth cell pinned `_snap(15, 16) == 16`: "the floor is
+one unit". The solver carried the same expression, and that floor was the defect: CogVideoX-2b and
+CogVideoX-5b-I2V at 352x720x49 on a 16 GB V100 sized a 12-latent VAE tile under the 12 288 MB rung,
+the snap raised it to 16 — over the 4.80 GB tile budget — the function returned None and the plan
+sent the VAE to the host, 45 minutes of CPU decode per cell (regression matrix, 2026-09-26/27; found
+live with `NBX_PRISM_TILE_DIAG=1` on card 1, 2026-09-27 02:41). Offline plans read no vendor lattice
+and tiled on the card, so every reproduction without a card disagreed with the rack.
+
+What the test would have done with the code wrong: pass — it never called the code. The solver's own
+cell now exists (`test_a_tile_below_the_lattice_keeps_its_size.py`: the live figures, lattice 16,
+tile 12 kept; red on c657c7bf), and the helper mirrors the corrected rule with a pointer to it.
+
+**The lesson, in one line.** A test that re-implements the rule it guards guards the re-implementation.
