@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
+  planner read which processes share a card by the process's own device number; under a remap that
+  number names a different physical card, whose occupants then shrank or inflated the plan.
+
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
   generated in their own precision, so a certification run's host memory stays close to the size
