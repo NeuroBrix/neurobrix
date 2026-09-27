@@ -272,7 +272,27 @@ def reserve_host(out: Path, need: int) -> bool:
             return False
         led[str(os.getpid())] = need
         return True
-    return _ledger(out, take)
+
+    def in_turn(led):
+        # IN ARRIVAL ORDER: a cell that could not be admitted waits in `host_waiting.json` {pid: since},
+        # and no later cell is admitted past a living earlier waiter. Without it a cell needing most of
+        # the budget never saw the ledger empty — smaller cells kept slipping in: Wan2.2-I2V-A14B
+        # (200 of 201 GiB) waited 1 h 46 min on card 0 with both gates running (2026-09-27). The
+        # queue is its own file so a runner still on the older code keeps reading a plain ledger.
+        wpath = out / "host_waiting.json"
+        waiting = json.loads(wpath.read_text()) if wpath.exists() else {}
+        waiting = {p: t for p, t in waiting.items() if Path(f"/proc/{p}").exists()}
+        me = str(os.getpid())
+        mine = waiting.get(me, time.time())
+        ahead = [p for p, t in waiting.items() if p != me and t < mine]
+        admitted = not ahead and take(led)
+        if admitted:
+            waiting.pop(me, None)
+        else:
+            waiting[me] = mine
+        wpath.write_text(json.dumps(waiting))
+        return admitted
+    return _ledger(out, in_turn)
 
 
 def release_host(out: Path) -> None:
