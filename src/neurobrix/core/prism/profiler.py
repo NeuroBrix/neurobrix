@@ -360,6 +360,9 @@ class ActivationProfile:
     #: `aten.t` and `aten.view` as allocations and reports hundreds of GB on a
     #: graph that allocates none of it.
     live_before_op: Optional[Dict[str, int]] = None
+    #: Elements of the graph's output tensors at this binding — what the component hands on; the host
+    #: estimate prices the run's output boundary from the largest of them.
+    output_elements: int = 0
 
     @property
     def peak_mb(self) -> float:
@@ -942,7 +945,16 @@ class ActivationProfiler:
                         (op_uid, op_type, out_bytes_total, ws_bytes, list(in_tids))
                     )
 
+        output_elements = 0
+        for tid in graph_outputs:
+            meta = self.tensors.get(tid)
+            if meta:
+                n = 1
+                for d in self._resolve_shape(meta, symbol_map):
+                    n *= int(d)
+                output_elements += n
         return ActivationProfile(
+            output_elements=output_elements,
             peak_bytes=peak_bytes,
             peak_op_uid=peak_op_uid,
             peak_step=peak_step,
