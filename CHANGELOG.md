@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
+  read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
+  3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.
+
 - **Models whose weights are offloaded to host memory no longer fail on a small head.** A component
   with no transformer blocks (Janus-Pro-7B's image-generation head) kept its weights on the host and
   the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
