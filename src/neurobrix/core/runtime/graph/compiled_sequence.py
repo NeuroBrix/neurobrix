@@ -3312,10 +3312,19 @@ class CompiledSequence:
         FIRST weighted op in Phase 4's device-transition scan. For
         zero3 that's wrong: every CPU-weighted op needs the slow path
         because its weight is on CPU while activations are on GPU. The
-        slow path in _run_inner_multi_device moves args to the GPU
-        target per-op, so setting op.device=CPU + needs_transfer=True
-        makes the allocator's per-op scratch tensor pattern kick in —
-        VRAM stays bounded to one op's working set at a time.
+        slow path in _run_inner_multi_device moves args to op.device
+        per-op, so op.device is the EXECUTION device and the host weight
+        travels as a per-op scratch copy — VRAM stays bounded to one op's
+        working set at a time. Same as the Triton mirror
+        (`op.device_idx = exec_device_idx`).
+
+        op.device used to be the weight's own device (CPU), leaving the
+        slow path to find the compute device among the op's OTHER tensor
+        arguments. An op whose only tensor is the weight has none: SANA-
+        Video's `unsqueeze(param::scale_shift)` ran on the host and its
+        view met the time embedding on the card at `aten.add::352`
+        ("cuda:0 and cpu", lazy_sequential+zero3 on a 32 GB V100,
+        2026-09-27).
 
         Idempotent. Returns the number of ops whose flag was flipped,
         for diagnostic logging at install time.
@@ -3329,7 +3338,7 @@ class CompiledSequence:
             for ws in op.weight_input_slots:
                 t = self._arena[ws]
                 if t is not None and hasattr(t, 'device') and t.device != exec_device:
-                    op.device = t.device
+                    op.device = exec_device
                     op.needs_transfer = True
                     flipped += 1
                     break
