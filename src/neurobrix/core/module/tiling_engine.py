@@ -571,10 +571,14 @@ class TilingEngine:
                 osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
                 rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
             # Feathered, not boxed: each tile weighs 1 in its interior and ramps down across
-            # the overlap it shares with a neighbour (the vendors' tiled decode crossfades
-            # there: diffusers blend_h / blend_v). A box weight switches the average abruptly
-            # wherever the tile count changes — a line at every tile stride: CogVideoX-2b's
-            # 64-px and Wan2.1-T2V's 96-px grids, both engines (2026-09-27).
+            # the overlap it shares with a neighbour — a symmetric crossfade. It is NOT the
+            # vendors' formula (diffusers' blend_h / blend_v ramp the previous tile's tail by
+            # i / blend_extent into the next tile's head and crop each tile to the stride), so a
+            # tile-level comparison with a vendor tiled decode keeps a residual by construction.
+            # A box weight switched the average abruptly wherever the tile count changed — a
+            # line at every tile stride: CogVideoX-2b's 64-px and Wan2.1-T2V's 96-px grids, both
+            # engines (2026-09-27). The temporal axis is tiled only for a LINEAR temporal map
+            # (Prism's gate): a causal decoder, whose first frame is special, is never cut in time.
             w = _feather(osl, ty, tx, tt)
             output[osl] = output[osl] + res[rsl] * w
             weight[osl] = weight[osl] + w
