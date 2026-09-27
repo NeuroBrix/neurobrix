@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A model too large for the card is streamed on the card before any of it is computed on the host.** The
+  planner now sizes streamed segments for the request actually made (not the size the model was traced
+  at), keeps a decoder that fits in tiles resident beside the streamed part, counts only what the flow
+  holds loaded together, and ranks every plan that computes on the host below every plan that does not.
+
 - **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
   depths the Metal backend's author recommends; the Apple profile declares them
   (`autotune.certify_num_stages`).

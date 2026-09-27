@@ -1481,6 +1481,9 @@ class PrismSolver:
                 for name, part in _parts.items()}
             plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
             plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
+            # The components this rung kept resident by tiling them: their tiling is the plan's.
+            for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
+                self._component_tiling[_cn] = _spec
             if not plan.layer_stream_plan:
                 raise RuntimeError(
                     "layer_streaming was chosen and carries no segments: the "
@@ -2277,6 +2280,10 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                     )
+                    # The request's symbols and compute width, for every other place that sizes this
+                    # component's activations (the layer partitioner): one resolver, one request.
+                    self.__dict__.setdefault("_request_sizing", {})[comp.name] = (
+                        dict(ap.symbol_map or {}), int(dtype_bytes))
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
                     if smallest_gpu_bytes > 0 and ap.overflow_ops:
@@ -4761,6 +4768,16 @@ class PrismSolver:
             n_components = len(allocations)
             score -= 20.0 * n_components
 
+        # HOST COMPUTE IS THE LAST RESORT (the owner, 2026-09-27 14:27): a plan that computes any
+        # component on the host ranks below every plan that computes all of them on an accelerator,
+        # and above the all-host rungs. lazy_sequential's host placement (Strategy 4) scored 240
+        # against layer_streaming's 50 and won SANA-Video at 1280x512 on 16 GB with the transformer
+        # on the host (365 s native, triton past its cap) while streaming it on the card was viable.
+        # A `zero3:` placement computes on the card and is not host compute.
+        if strategy_name not in ("cpu_execution", "cpu_streaming") and any(
+                str(a[0] if isinstance(a, tuple) else a).startswith("cpu") for a in allocations.values()):
+            return min(max(score, 1.0), BASE_SCORES["cpu_execution"] + 0.5)
+
         # INVARIANT: a GPU-compute strategy never ranks below the R35
         # last-resort cpu_execution, no matter how harsh its penalties.
         # (Absent profile CPU/PCIe stats crushed zero3 from base 100 to the
@@ -5143,10 +5160,45 @@ class PrismSolver:
         # TinyLlama at 1000 MB: a 992.5 MB segment plus a 264.1 MB lm_head
         # against 950 MB of capacity. Same defect as sizing segments without
         # reserving the activations, one level up.
+        # A component over the rung that SPATIAL TILING brings under it stays resident, tiled, instead
+        # of being classed as streamed: a VAE that fits in tiles must not veto streaming the transformer
+        # that needs it (SANA-Video at 1280x512 on 16 GB: VAE 208 GB untiled, 6.1 GB tiled at tile 17).
+        # The same tiling the spatial rung computes (`_spatial_component_tiling`, the same rung), costed
+        # the same way (weights at the device's cost + the tiled activations); it joins the plan's
+        # component tiling only if this rung wins.
+        tiled: Dict[str, Dict[str, Any]] = {}
+        cost: Dict[str, int] = {}
+        for name, mem in sorted_comps:
+            whole = self._whole_component_mb(container, name, mem, target) * 1024 * 1024
+            cost[name] = int(mem.total_bytes)
+            if whole <= budget_bytes:
+                continue
+            _t = self._spatial_component_tiling(
+                container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb))
+            if _t is not None:
+                _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
+                _tiled_bytes = int(_w * 1024 * 1024) + int(_t["tiled_activation_bytes"])
+                if _tiled_bytes <= budget_bytes:
+                    tiled[name] = _t
+                    cost[name] = _tiled_bytes
+        self._layer_stream_tilings = tiled
         streamed = {name for name, mem in sorted_comps
-                    if self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
-        resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
-                              if name not in streamed)
+                    if name not in tiled
+                    and self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
+        # What sits beside a streamed component is what its FLOW holds loaded with it: the phases its type
+        # declares (core/flow/base.py `resident_together` — the iterative flow unloads each pre_loop
+        # component after it runs and the loop's before post_loop, in both engines). A flow that declares
+        # none keeps every other component beside it, as before.
+        from neurobrix.core.flow.base import resident_together
+        _phases = resident_together(self._flow_topology(container))
+        _others = [name for name, _ in sorted_comps if name not in streamed]
+        if _phases is None or not streamed:
+            resident_beside = sum(cost[n] for n in _others)
+        else:
+            def _beside(s):
+                _phase = next((ph for ph in _phases if s in ph), None)
+                return sum(cost[n] for n in _others if _phase is None or n in _phase)
+            resident_beside = max(_beside(s) for s in streamed)
         # And the graph's CONSTANTS, which are resident beside every segment and
         # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
         # baked into graph.json is not a component, so it was invisible here while
@@ -5285,7 +5337,14 @@ class PrismSolver:
             _piece_sizes = ({k: (v if is_block_key(k) else 0)
                              for k, v in sizes_by_comp[comp_name].items()}
                             if comp_name in _read else sizes_by_comp.get(comp_name))
-            part = LayerPartitioner(graph, _piece_sizes).partition(segment_budget)
+            _sizing = self.__dict__.get("_request_sizing", {}).get(comp_name)
+            if _sizing is None:
+                return _decline(
+                    f"'{comp_name}' has no activation profile at this request (_compute_memory could "
+                    f"not profile it) — a partition cut at the trace's shapes would plan a run that "
+                    f"is not this one")
+            part = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
+                                    compute_dtype_bytes=_sizing[1]).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
                 # Either genuinely impossible, or one segment — in which case
                 # a rung above this one already serves it and this must not
@@ -5318,6 +5377,17 @@ class PrismSolver:
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
         return allocations, devices
+
+    def _flow_topology(self, container) -> Dict[str, Any]:
+        """The container's topology.json (its flow), read from its cache — the NBXContainer object carries
+        only the flags from it. Empty when the container has no cache path or no topology."""
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        import json as _json
+        from pathlib import Path as _P
+        path = _P(base) / "topology.json"
+        return _json.loads(path.read_text()) if path.exists() else {}
 
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
         """Per-component {weight_name: stored bytes} from the weights index.

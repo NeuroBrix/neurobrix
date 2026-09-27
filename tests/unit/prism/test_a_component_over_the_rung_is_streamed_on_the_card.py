@@ -141,7 +141,15 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
     p, s, seen = _plan(model, h, w, mode=mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
-    beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
+    # What stays resident beside a streamed component is what its FLOW holds with it (the phases its
+    # type declares, core/flow/base.py `resident_together`), the rule the solver cuts by; a flow that
+    # declares none holds every other component beside it.
+    from neurobrix.core.flow.base import resident_together
+    phases = resident_together(s._flow_topology(NBXContainer.load(str(container_root(model)))))
+    def _with(name):
+        ph = next((x for x in (phases or []) if name in x), None)
+        return [n for n in seen if n not in parts and (ph is None or n in ph)]
+    beside = max(sum(seen[n].total_bytes for n in _with(name)) for name in parts)
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
         assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
@@ -170,7 +178,11 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 [embedding::0, view::247] [moe_fused::block.12, view::467] [moe_fused::block.23, rms_norm::81]
       next      rung -> its usable part (0.92 x 15 564.8 = 14 319.6 MB), the whole-component
                 standard (test_no_component_falls_between_placing_whole_and_streaming.py):
-                still 3 segments, the boundaries below, identical in both modes.
+                still 3 segments, identical in both modes:
+                [embedding::0, split_with_sizes::35] [slice::502, view::427] [moe_fused::block.21, rms_norm::81]
+      a-partition-is-cut-at-the-request: activations sized at the REQUEST at the plan's compute
+                width (the profiler's resolver) instead of the trace's float32 widths, which doubled
+                them: 2 segments, the boundaries below, identical in both modes.
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -185,6 +197,5 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
         f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
-    assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
-                             ["aten.slice::502", "aten.view::427"],
-                             ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut
+    assert cut == {"model": [["aten.embedding::0", "aten.view::307"],
+                             ["moe_fused::block.15", "custom.rms_norm::81"]]}, cut
