@@ -29,8 +29,9 @@ if TYPE_CHECKING:  # R33: the ATen branch loads through torch; the Triton branch
 
 from .cache import ensure_extracted
 
-# Parallel loading workers (matches system.yml io.num_workers)
-NBX_LOADER_WORKERS = 8
+# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
+from neurobrix.core.workspace import io_workers as _io_workers
+NBX_LOADER_WORKERS = _io_workers()
 
 
 @dataclass
