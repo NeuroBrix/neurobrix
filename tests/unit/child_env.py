@@ -51,6 +51,26 @@ def child_env(base: dict | None = None, **extra) -> dict:
     return env
 
 
+def the_callers_door(default: str) -> str:
+    """The cards a child process may see: the caller's `CUDA_VISIBLE_DEVICES` when it set one,
+    `default` only when it set none.
+
+    A child told its own ordinal escapes the door the workshop runs the suite under. Measured
+    2026-09-27: a gate told `CUDA_VISIBLE_DEVICES=3` put a TinyLlama child on physical card 2
+    (the lazy-bind boundary test's "2") and a launch-path child on card 0 (the launcher's "0"),
+    twice meeting a retrace that owned card 2. An empty door holds no card, and the test says so
+    instead of finding one.
+    """
+    import pytest
+
+    door = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if door is None:
+        return default
+    if not door.strip():
+        pytest.skip("the caller's door holds no card (CUDA_VISIBLE_DEVICES is empty)")
+    return door
+
+
 def missing_prerequisites() -> list:
     """Which of them this process does not have — for a test that wants to say
     'this machine cannot compile in a child' rather than fail obscurely."""
