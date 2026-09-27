@@ -51,8 +51,8 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
 
 # (model, height, width, host MB free, rung MB): the Mac's own reading and rung for each case.
 CASES = [
-    ("PixArt-XL-1024", 2048, 1024, 11198, 8192),        # the Mac's render (8e786e70)
-    ("PixArt-Sigma-XL-1024", 2048, 1024, 11198, 8192),
+    ("PixArt-XL-2-1024-MS", 2048, 1024, 11198, 8192),        # the Mac's render (8e786e70)
+    ("PixArt-Sigma-XL-2-1024-MS", 2048, 1024, 11198, 8192),
     ("Flex.1-alpha", 1024, 1024, 18186, 16384),
 ]
 
