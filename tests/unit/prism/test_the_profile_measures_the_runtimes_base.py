@@ -1,10 +1,12 @@
-"""The hardware profile carries the runtime's own base memory, MEASURED on the machine per engine, and
-a plan's host estimate starts from it — or says it is unmeasured, never a number nobody measured.
+"""The hardware profile carries what each engine's device work adds, MEASURED on the machine per engine,
+and a plan's host estimate adds it to the planning process's own resident memory — or says it is
+unmeasured, never a number nobody measured.
 
 The base is not a constant of the code (the owner's rule, 2026-09-27 14:27: everything data-driven,
-carried by the container and the hardware profiles): on this rack the compiled runtime measured 690 MB
-with a CUDA context and 557 MB without, the Triton runtime 226 MB and 114 MB. Before this branch the
-profile has no `runtime_base_mb` and autodetect measures nothing: these fail.
+carried by the container and the hardware profiles). On this rack, from the planning state (the CLI
+imported, 33 MB), the compiled engine adds about 800 MB (torch, a CUDA context, cuBLAS, cuDNN, SDPA) and
+the Triton engine about 360 MB (a kernel compiled and launched). Before this branch the profile has no
+`runtime_base_mb` and autodetect measures nothing: these fail.
 """
 from neurobrix.core.prism import autodetect as A
 from neurobrix.core.prism.cpu_config import CPUConfig

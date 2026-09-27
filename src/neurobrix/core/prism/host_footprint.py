@@ -24,9 +24,12 @@ where the rule lives, so a change there is a change to price here:
         what it is for, and why nobody gives it back"), so the worker count bounds the pace, not the
         bytes;
     triton: one tensor at a time, as read and as converted (triton/weight_loader.py);
-  base — the runtime's own process before any weight (interpreter, libraries, backend context): a
-    MEASURED value of this machine, carried by the hardware profile per engine
-    (`cpu.runtime_base_mb`); a profile without it prices no base and says so.
+  resident — what the planning process already holds when Prism prices: the interpreter, the CLI and
+    the parsed container (NBXContainer.load keeps every component's graph and profile, 1.5-4.8x their
+    JSON bytes, measured 2026-09-27 — not a constant, so it is read, not priced), passed in measured;
+  base — what the engine's device work adds on top (its modules, device context, the compute libraries
+    a run's first ops load): a MEASURED value of this machine, carried by the hardware profile per
+    engine (`cpu.runtime_base_mb`); a profile without it prices no base and says so.
 
 Under lazy loading one component is resident at a time, so steady is the largest component's; eager
 loading holds them all. The compiled load is priced the same way, as a bound: the loader synchronises once
@@ -63,14 +66,16 @@ def _on_host(device) -> bool:
 def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
-                   is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None) -> Dict:
-    """The host bytes `plan` holds on `engine`: {total, base, steady (+ per component), transient}.
+                   is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
+                   resident_bytes: int = 0) -> Dict:
+    """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
     shard_sizes  {component: {shard name: bytes}}         (the container's shards)
     stored_dtypes {component: {stored floating dtypes}}  (the weights index): what a load reads at, beside
                  the plan's dtype it pins at
-    base_mb      the runtime's measured base on this machine for this engine, or None (not measured)
+    base_mb      what this engine's device work adds on this machine, or None (not measured)
+    resident_bytes what the planning process holds when it prices (the caller measures it)
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -112,10 +117,19 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
         transient = TRITON_COPIES_PER_TENSOR * max(
             (n for ks in key_sizes.values() for n in ks.values()), default=0)
     base = int(base_mb) << 20 if base_mb is not None else 0
-    return {"engine": engine, "total_bytes": base + steady_bytes + transient,
-            "base_bytes": base, "base_measured": base_mb is not None,
+    return {"engine": engine, "total_bytes": int(resident_bytes) + base + steady_bytes + transient,
+            "resident_bytes": int(resident_bytes), "base_bytes": base, "base_measured": base_mb is not None,
             "steady_bytes": steady_bytes, "steady": steady, "transient_bytes": transient,
             "loading": plan.loading_mode}
+
+
+def resident_bytes_now() -> int:
+    """This process's resident memory so far (its peak RSS: at planning time, the container just parsed),
+    read from the OS — Linux reports KiB, macOS bytes."""
+    import resource
+    import sys
+    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(r) if sys.platform == "darwin" else int(r) << 10
 
 
 def summary(hf: Mapping) -> str:
@@ -123,6 +137,7 @@ def summary(hf: Mapping) -> str:
     matrix reads into a cell's row as the estimate its measured peak judges."""
     base = f"{hf['base_bytes'] / 2**20:.0f} MB" if hf["base_measured"] else "UNMEASURED on this profile"
     held = ", ".join(f"{k} {v / 2**20:.0f} MB" for k, v in hf["steady"].items())
-    return (f"{hf['total_bytes'] / 2**20:.0f} MB on the {hf['engine']} engine = base {base}"
+    return (f"{hf['total_bytes'] / 2**20:.0f} MB on the {hf['engine']} engine = resident "
+            f"{hf.get('resident_bytes', 0) / 2**20:.0f} MB + engine {base}"
             f" + held {hf['steady_bytes'] / 2**20:.0f} MB ({hf['loading']})"
             f" + loading {hf['transient_bytes'] / 2**20:.0f} MB" + (f"  [held: {held}]" if held else ""))
