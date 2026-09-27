@@ -52,6 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the float32 minimum became minus infinity when narrowed to bfloat16 or float16, and a fully
   masked row could then turn to NaN; it now saturates to the half type's own minimum, as the
   `--compiled` engines already did.
+- **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
+  whose GPU shares memory with the host, the certifier now counts its host-side copies of each
+  test tensor when it decides whether a shape fits.
+- **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
+  planner read which processes share a card by the process's own device number; under a remap that
+  number names a different physical card, whose occupants then shrank or inflated the plan.
 
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
