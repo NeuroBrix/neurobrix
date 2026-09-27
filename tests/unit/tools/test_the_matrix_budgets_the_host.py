@@ -31,3 +31,13 @@ def test_two_cells_over_half_the_budget_never_overlap(tmp_path):
         p.join()
     assert sorted([q.get(), q.get()]) == [False, True]
     assert json.loads((tmp_path / "host_ledger.json").read_text()) == {}
+
+
+def test_a_cell_the_measured_memory_cannot_cover_waits(tmp_path, monkeypatch):
+    """Reservations fit, but the host's available memory does not cover the cell plus the growth the
+    running cells still owe: the cell waits. On a ledger that only summed reservations it starts."""
+    monkeypatch.setattr(R, "_mem_available", lambda: 8 << 30)
+    assert R.reserve_host(tmp_path, 1 << 30) is False
+    monkeypatch.setattr(R, "_mem_available", lambda: 64 << 30)
+    assert R.reserve_host(tmp_path, 1 << 30) is True
+    R.release_host(tmp_path)

@@ -197,11 +197,12 @@ def request_args(model: str, family: str, extra: list) -> list:
     return args + list(extra)
 
 
-def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
+def run_group(cmd, env, fh, timeout: int, cwd=None, before_kill=None) -> int:
     """The command in its own process group; a timeout kills the WHOLE group — the
     command's children too. A `drift` that timed out at 7200 s on 2026-09-07 left its
     child `run` alive on GPU3 beside the zoo's next model for ten minutes: only the
-    direct child was killed. -9 names a timeout."""
+    direct child was killed. -9 names a timeout. `before_kill(pgid)` runs while the
+    group is still alive — the moment its stack can still be read."""
     import os
     import signal
     p = subprocess.Popen([str(c) for c in cmd], env=env, stdout=fh, stderr=subprocess.STDOUT, cwd=cwd,
@@ -209,6 +210,8 @@ def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
     try:
         return p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        if before_kill is not None:
+            before_kill(p.pid)
         try:
             os.killpg(p.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -228,7 +231,53 @@ def oom_kills() -> Optional[int]:
     return None
 
 
-def run(cmd, env, log: Path, timeout: int) -> tuple:
+STACK_MARK = "=== STACK AT TIMEOUT (py-spy dump, taken before the kill) ==="
+
+
+def group_pids(pgid: int) -> list:
+    """Every live process of a process group, read from /proc."""
+    import os
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            if os.getpgid(int(d)) == pgid:
+                out.append(int(d))
+        except (ProcessLookupError, PermissionError):
+            continue
+    return sorted(out)
+
+
+def dump_group_stacks(pgid: int, fh) -> None:
+    """py-spy dump of every python process in the group, into the cell's log under STACK_MARK.
+    A dump that cannot be taken says why in the same place — never an empty section."""
+    import shutil
+    fh.write(f"\n{STACK_MARK}\n")
+    fh.flush()
+    import os
+    import sysconfig
+    # Absolute, because sudo's PATH does not carry the user's; a `pip install --user` puts it in
+    # the user scheme's scripts directory, which a non-login PATH often lacks.
+    search = os.pathsep.join([os.environ.get("PATH", ""), sysconfig.get_path("scripts", f"{os.name}_user")])
+    py_spy = shutil.which("py-spy", path=search)
+    if py_spy is None:
+        fh.write(f"no stack: py-spy is not on {search}\n")
+        return
+    for pid in group_pids(pgid):
+        try:
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+        except OSError:
+            continue
+        if not comm.startswith("python"):
+            continue
+        r = subprocess.run(["sudo", "-n", py_spy, "dump", "--pid", str(pid)],
+                           capture_output=True, text=True, timeout=60)
+        fh.write(f"--- pid {pid} ({comm}) rc={r.returncode}\n{r.stdout}{r.stderr}")
+        fh.flush()
+
+
+def run(cmd, env, log: Path, timeout: int, stack_at_timeout: bool = False) -> tuple:
     """-9 is what `run_group` returns for a timeout — and what ANY SIGKILL returns. The log said
     "TIMEOUT after 3600s" for a Qwen3-30B cell the kernel killed at 323 s (2026-09-26, host
     memory: three 30B models loading at once). A -9 before the timeout is written as a KILL, with
@@ -238,7 +287,8 @@ def run(cmd, env, log: Path, timeout: int) -> tuple:
     with open(log, "w") as fh:
         fh.write("$ " + shlex.join(cmd) + "\n")
         fh.flush()
-        rc = run_group(cmd, env, fh, timeout)
+        rc = run_group(cmd, env, fh, timeout,
+                       before_kill=(lambda pgid: dump_group_stacks(pgid, fh)) if stack_at_timeout else None)
         wall = time.time() - t0
         if rc == -9 and wall >= timeout:
             fh.write(f"\nTIMEOUT after {timeout}s\n")

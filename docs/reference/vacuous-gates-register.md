@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-116 entries, 110 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+117 entries, 111 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3541,3 +3541,24 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
+
+### 111 — the matrix's mechanical check read a video's bytes and never its size
+
+`tools/regression_matrix.py` writes, for every cell with an artefact, the mechanical half of R29:
+degeneracy and geometry for an image, emptiness for text — and for a video, the path and the byte
+count. SANA-Video_2B_720p_diffusers on a 32 GB V100 (lazy_sequential) wrote an 81-frame video of
+**160x64** for a 1280x512 request, in the compiled engine and in triton-sequential alike; both rows
+read `rc 0` with a size in bytes (queue-6 smoke on card 3, 2026-09-27 03:10; the zero3 branch's
+proof on cards 2 and 3, 04:14 and 04:33). The fault was seen only when a judge opened the file.
+
+**What the gate said about a wrong video**: nothing. A check that never reads a dimension cannot
+see a fault whose whole signature is a dimension.
+
+**Repair.** `judge_artefact.video_degeneracy` reads the size and frame count (imageio, the engine
+python's own I/O) and three sampled frames; the row names a geometry that is not the request's and
+a video whose sampled frames are one flat colour. Gate
+`tests/unit/tools/test_a_video_row_checks_its_size_against_the_request.py`: 3 red on the old
+check, green after; on the real artefact it reads `geometry (64, 160) is not the requested (512, 1280)`.
+
+**The lesson, in one line.** A mechanical check covers every output kind the matrix writes, or it
+is a green light for the kind it skips.
