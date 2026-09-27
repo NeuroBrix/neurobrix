@@ -71,6 +71,17 @@ def the_callers_door(default: str) -> str:
     return door
 
 
+def the_pinned_profile(profile: str):
+    """`profile` when the test runs on its OWN card, None under the caller's door.
+
+    A pinned profile names a card class (`v100-32g`) and was chosen WITH the test's own ordinal;
+    under the caller's door the card may be of another class, and a 32 GB profile on a 16 GB card
+    plans memory the card does not have. Autodetect reads a masked card since 2026-09-20 (the note
+    in tests/regression/test_serve_warm.py), so the caller's card is described by itself.
+    """
+    return profile if os.environ.get("CUDA_VISIBLE_DEVICES") is None else None
+
+
 def missing_prerequisites() -> list:
     """Which of them this process does not have — for a test that wants to say
     'this machine cannot compile in a child' rather than fail obscurely."""
