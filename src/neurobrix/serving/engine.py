@@ -214,7 +214,7 @@ class InferenceEngine:
                 prepare_image_inputs,
             )
             inputs.update(prepare_image_inputs(
-                self._pkg.topology, self.model_name,
+                self._pkg.topology, self._pkg.manifest.get("model_name"),
                 kwargs.pop("image_path"), self._container._cache_path,
                 height=kwargs.get("height"), width=kwargs.get("width"),
                 num_frames=kwargs.get("num_frames")))

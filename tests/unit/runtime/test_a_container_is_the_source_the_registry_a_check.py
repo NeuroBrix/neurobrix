@@ -70,3 +70,22 @@ def test_a_flag_declared_false_is_the_default_and_needs_no_carriage(registry):
     assert rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "vae_encoder",
                                  "requires_fp32_compute", default=False) is False
 
+
+
+def test_every_reader_asks_by_the_container_s_own_name():
+    """The container's flags are registered under its MANIFEST's model_name. A reader that asks
+    under the REQUESTED name (`--model` may be a path or an alias; the daemon's model_name is what
+    the client typed) finds nothing, and with the registry reachable the check refuses a container
+    that carries the flag. Two readers did (run.py's image inputs and VACE all-generate; the
+    daemon's image inputs); every reader now names the container by its manifest."""
+    import re
+    from pathlib import Path
+    src = Path(rf.__file__).resolve().parents[2]
+    bad = []
+    for p in src.rglob("*.py"):
+        text = p.read_text()
+        for m in re.finditer(r"(?:get_component_flag|_gcf|prepare_image_inputs)\(\s*([^,]*),\s*([^,]*),", text):
+            args = m.group(1) + "," + m.group(2)
+            if "getattr(args" in args or "self.model_name" in args:
+                bad.append(f"{p.relative_to(src)}:{text[:m.start()].count(chr(10)) + 1}")
+    assert not bad, f"flag readers asking by the requested name, not the container's: {bad}"

@@ -593,7 +593,7 @@ def cmd_run(args):
             prepare_image_inputs,
         )
         inputs.update(prepare_image_inputs(
-            pkg.topology, getattr(args, "model", None), args.input_image,
+            pkg.topology, pkg.manifest.get("model_name"), args.input_image,
             cache_path, height=args.height, width=args.width,
             # The frame count cmd_run already resolved, NOT a second read of
             # the raw argument: without `--frames` that re-derivation was 0, so
@@ -644,7 +644,7 @@ def cmd_run(args):
     # vace_control_conditioning flag; only synthesized when global.image is absent.
     if "global.image" not in inputs:
         from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
-        if _gcf(getattr(args, "model", None), "transformer",
+        if _gcf(pkg.manifest.get("model_name"), "transformer",
                 "vace_control_conditioning", default=None):
             _nf = int(getattr(args, "num_frames", 0) or 1)
             _h = int(args.height) if args.height else 480
