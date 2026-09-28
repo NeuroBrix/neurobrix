@@ -184,3 +184,28 @@ def test_the_engines_real_gate_is_wired_and_refuses_a_deviation_above_tolerance(
     assert "depthwise_conv2d_kernel.fp32.json" in names
     assert "depthwise_conv2d_kernel.fp16.json" in [Path(f).name for f in res["refused"]]
     assert "depthwise_conv2d_kernel.fp16.json" not in names   # the fixture's stand-in k.fp32.json is refused too, rightly
+
+
+def test_pushes_are_batched_to_one_per_window_and_the_final_one_waits_for_it(repo):
+    """Commits every interval, pushes at most once per `push_interval`; the final checkpoint waits for the window
+    to open rather than leave a commit only where it was written. Why: the owner's account was suspended twice for
+    automated pushes; on 2026-09-28 this tool pushed a working branch four times in an hour (supervisor 05:41).
+    Seen red on the tool that pushed at every checkpoint (the run ended in under 3 s, every commit pushed at once)."""
+    import threading, time
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2.6)"])
+    def writer():
+        for k in range(2, 5):                               # a new certified entry every second
+            time.sleep(1.0)
+            _write(repo["dir"], "k.fp32.json", k)
+    threading.Thread(target=writer, daemon=True).start()
+    t0 = time.monotonic()
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [p.pid], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, poll=0.2, say=lambda *_: None, push_interval=4.0)
+    elapsed = time.monotonic() - t0
+    assert rc == 0
+    commits = [l for l in _sh("git", "-C", repo["path"], "log", "--format=%h %s").splitlines() if "checkpoint" in l]
+    assert len(commits) >= 2, commits
+    head = _head(repo["path"])
+    assert _remote_head(repo["tmp"], "origin") == head and _remote_head(repo["tmp"], "gitlab") == head, \
+        "the final commit did not reach every remote"
+    assert elapsed >= 4.0, f"the run ended in {elapsed:.1f} s: pushes were not held to one per 4 s window"

@@ -195,20 +195,43 @@ def _record(record: Optional[str], line: str, say=print) -> None:
 
 def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes: List[str], gate_cmd: List[str],
         trailers: List[str], record: Optional[str], once: bool = False, poll: float = 10.0, say=print,
-        label: str = "") -> int:
+        label: str = "", push_interval: float = 1800.0) -> int:
+    """Checkpoints every `interval` seconds; PUSHES at most once every `push_interval` seconds.
+
+    The owner's account was suspended twice for automated pushes, and on 2026-09-28 this
+    checkpointer pushed a working branch four times in an hour (supervisor 05:41): an
+    unattended process pushes at most once every 30 minutes per repository, to a working
+    branch only. Commits are local and as frequent as the interval; a commit made inside the
+    push window stays local and is said so; the final checkpoint waits for the window to open
+    rather than leave a proof only where it was written."""
     for pid in producers:
         if not producer_alive(pid):
             say(f"[checkpoint] producer {pid} ({producer_name(pid)}) is already gone at start — one last checkpoint, then exit")
     stop = {"now": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("now", True))
     last = time.monotonic()
+    last_push = None                       # None: no push yet in this run
     while True:
         alive = [p for p in producers if producer_alive(p)]
         final = once or stop["now"] or (bool(producers) and not alive)
         due = time.monotonic() - last >= interval
         if due or final:
-            res = checkpoint(repo, rel_dir, remotes, gate_cmd, trailers, record, say=say, label=label)
+            def push_window_open():
+                return last_push is None or time.monotonic() - last_push >= push_interval
+            if final and remotes and not push_window_open():
+                wait = push_interval - (time.monotonic() - last_push)
+                say(f"[checkpoint] final checkpoint: the push window opens in {wait:.0f} s (at most one push per "
+                    f"{push_interval:.0f} s); waiting, the commit is local meanwhile")
+                time.sleep(max(0.0, wait))
+            push_now = bool(remotes) and push_window_open()
+            res = checkpoint(repo, rel_dir, remotes if push_now else [], gate_cmd, trailers, record, say=say, label=label)
             last = time.monotonic()
+            if res.get("sha"):
+                if push_now:
+                    last_push = time.monotonic()
+                else:
+                    _record(record, f"== {res['sha']}: committed, NOT pushed (the push window opens in "
+                                    f"{push_interval - (time.monotonic() - last_push):.0f} s)", say)
             if final:
                 failed = [r for r, why in (res.get("remotes") or {}).items() if why]
                 if failed:
@@ -258,7 +281,10 @@ def main(argv=None) -> int:
     p.add_argument("--dir", default="src/neurobrix/config/autotune", help="relative to --repo")
     p.add_argument("--producer-pid", type=int, action="append", default=[],
                    help="a certifier (or its chain) to hold; the last one gone triggers the final checkpoint")
-    p.add_argument("--interval", type=float, default=600.0, help="seconds between checkpoints")
+    p.add_argument("--interval", type=float, default=600.0, help="seconds between checkpoints (commits)")
+    p.add_argument("--push-interval", type=float, default=1800.0,
+                   help="seconds between PUSHES, at least; the owner's rule is one automated push per 30 minutes per "
+                        "repository, working branches only (2026-09-28)")
     p.add_argument("--poll", type=float, default=10.0)
     p.add_argument("--remotes", default="origin,gitlab")
     p.add_argument("--record", default=None, help="a campaign RUN.md every checkpoint appends one line to")
@@ -278,7 +304,7 @@ def main(argv=None) -> int:
         return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
     return run(a.repo, a.dir, a.producer_pid, a.interval, [r for r in a.remotes.split(",") if r], gate,
-               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label)
+               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label, push_interval=a.push_interval)
 
 
 if __name__ == "__main__":
