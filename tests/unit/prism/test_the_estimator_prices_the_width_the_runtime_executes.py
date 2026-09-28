@@ -41,6 +41,8 @@ reverted):
   * the in-place filter removed: red — test_an_in_place_add_into_a_narrower_buffer_is_a_new_buffer.
   * one ATen set edited in core/dtype/engine.py: red — test_the_mirrored_aten_tables_are_the_engine_s.
   * `import torch` added at the module top: red — test_the_pass_imports_no_torch.
+  * the plan-time contract skipping the record's signature check, or never safe:
+    red — test_the_plan_time_contract_is_the_runtime_s_triple.
 
 Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src python -m pytest -q \
      tests/unit/prism/test_the_estimator_prices_the_width_the_runtime_executes.py
