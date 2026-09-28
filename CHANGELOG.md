@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
   does.** When a model's container records the vendor's resolution binning, the request is mapped
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
