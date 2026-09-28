@@ -699,7 +699,7 @@ class ActivationProfiler:
         safety: float = 0.85,
         zero_alloc_uids: Optional[set] = None,
         inplace_adds: Optional[List] = None,
-        force_compute_dtype_for_fp: bool = False,
+        widths: Optional[Dict[str, int]] = None,
         placement_floor: bool = False,
     ) -> ActivationProfile:
         """
@@ -708,6 +708,18 @@ class ActivationProfiler:
         Args:
             input_config: Runtime input configuration (batch, height, width)
             dtype_bytes: Bytes per element override (default: from input_config.dtype)
+            widths: {tensor_id: bytes per element} the runtime EXECUTES each tensor at
+                (`core.prism.runtime_widths.runtime_widths`). When given, every op output
+                the simulation allocates is sized at its runtime width — a tensor the
+                engine keeps in fp32 under a half compute dtype is priced at 4 bytes, not
+                at the compute dtype's 2 — and an in-place add whose reused input is
+                NARROWER than its output is a fresh allocation (the in-place path falls
+                back to a plain add: wrappers.py add_inplace_nbx, tiling_engine.py
+                `_inplace_add`), so it is not aliased. None: the traced dtype of each
+                tensor (the per-request and detector callers). The overflow scan below
+                keeps sizing at the traced dtype either way — the op-level tiling
+                detector (`PrismSolver._detect_op_level_tiling_pairs`) derives the same
+                set from the same scan, and the two must agree on which ops overflow.
             zero_alloc_uids: Set of op_uids whose outputs are NOT allocated at
                 runtime because an `OpLevelTilingEngine` interceptor returns a
                 sentinel proxy (`FusionUpsampleProxy`, `BroadcastClonePyroxy`)
@@ -771,6 +783,23 @@ class ActivationProfiler:
         # P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
         alias = {}
         last_uses_eff = self.last_uses
+        if inplace_adds and widths is not None:
+            # An in-place add writes into its reused input's buffer only when that
+            # buffer is at least as wide as the result; a narrower target makes the
+            # runtime fall back to a plain add into a NEW buffer (wrappers.py
+            # add_inplace_nbx, tiling_engine.py `_inplace_add` torch path). Aliasing it
+            # anyway prices a buffer the runtime allocates at zero.
+            kept = []
+            for entry in inplace_adds:
+                op_uid_inp, reuse_idx = entry
+                op_inp = self.ops.get(op_uid_inp, {})
+                in_tids = op_inp.get("input_tensor_ids", [])
+                out_tids = op_inp.get("output_tensor_ids", [])
+                if (out_tids and reuse_idx < len(in_tids)
+                        and widths[in_tids[reuse_idx]] < widths[out_tids[0]]):
+                    continue
+                kept.append(entry)
+            inplace_adds = kept
         if inplace_adds:
             # Build alias map: output_tid -> reused_input_tid (resolve
             # transitive chains so all aliases point to the root buffer).
@@ -848,8 +877,13 @@ class ActivationProfiler:
             for out_tid in output_tids:
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
-                size = self._compute_size(shape, tensor_meta, dtype_bytes,
-                                          force_compute_dtype_for_fp=force_compute_dtype_for_fp)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[out_tid]
+                else:
+                    size = self._compute_size(shape, tensor_meta, dtype_bytes)
 
                 # Zero-alloc op: output is a sentinel proxy / stride-0 view
                 # at runtime, not a real allocation. Liveness still tracks
@@ -1135,34 +1169,24 @@ class ActivationProfiler:
         shape: List[int],
         tensor_meta: Dict[str, Any],
         default_dtype_bytes: int,
-        force_compute_dtype_for_fp: bool = False,
     ) -> int:
         """
-        Compute tensor size in bytes.
+        Compute tensor size in bytes at the tensor's TRACED dtype (the default
+        when the meta carries none).
 
-        Uses tensor's own dtype if available, otherwise default.
-
-        Args:
-            force_compute_dtype_for_fp: When True, override the meta's
-                floating-point dtype with the caller's `default_dtype_bytes`
-                (the runtime compute dtype). Mirrors the runtime: graph
-                tensors traced as fp32 (PyTorch autocast off / fp32 capture
-                path) are computed at compute_dtype (e.g. fp16) at runtime.
-                Non-floating dtypes (int64 indices, bool masks) preserve
-                their meta dtype. Used by `estimate_peak_memory` for
-                activation budgeting; weight estimation continues to use
-                the meta dtype unchanged.
+        The width a tensor is EXECUTED at is another question, answered by
+        `core.prism.runtime_widths` and passed to `estimate_peak_memory` as
+        `widths`. A flag that levelled every float to the compute dtype stood
+        here (`force_compute_dtype_for_fp`); it priced the fp32 tensors the
+        engines keep under a half compute dtype at half their size — Sana
+        4Kpx's VAE planned 6 144 MB at 3072x4096 and ran out of memory holding
+        15 360 MB (2026-09-28).
         """
         # Get dtype from tensor meta if available
         dtype = tensor_meta.get("dtype", None)
 
         if dtype:
             dtype_bytes = get_dtype_bytes_per_element(dtype)
-            # Override for floating-point types if requested
-            if force_compute_dtype_for_fp:
-                d = str(dtype).lower()
-                if "float" in d or "bf16" in d or "half" in d:
-                    dtype_bytes = default_dtype_bytes
         else:
             dtype_bytes = default_dtype_bytes
 

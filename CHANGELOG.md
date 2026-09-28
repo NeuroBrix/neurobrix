@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The memory plan counts the activations the engine keeps in full precision.** Under a half
+  precision compute type the engines still keep some intermediate results in float32 (normalization
+  outputs without a calibration record, float16 matrix products on GPUs without native bfloat16, and
+  whatever such a result is added to). The plan priced them at half their size, so it could accept a
+  placement that then ran out of memory (Sana 1600M 4Kpx's image decoder at 3072x4096).
+
 - **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
   read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
   3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.
