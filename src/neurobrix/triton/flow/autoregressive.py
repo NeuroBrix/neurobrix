@@ -313,13 +313,13 @@ class TritonAutoregressiveHandler:
 
         # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a
         # stage with NBXTensor codes (R30 mirror of the compiled path; no `snac`).
-        self._run_snac_codec_decoder(generated_tokens)
+        self._run_snac_codec_decoder(generated_tokens, generator.max_tokens)
 
         if not is_image:
             session.cleanup()
         return self.ctx.variable_resolver.resolve_all()
 
-    def _run_snac_codec_decoder(self, generated_tokens) -> None:
+    def _run_snac_codec_decoder(self, generated_tokens, max_tokens: int) -> None:
         """ZO-0 (triton): decode orpheus SNAC tokens through the TRACED
         codec.decoder, NBXTensor end-to-end. Redistributes the 7-tokens/frame
         stream into the 3 SNAC codebooks (pure python) and runs the codec as a
@@ -330,20 +330,33 @@ class TritonAutoregressiveHandler:
         if "codec.decoder" not in self.ctx.executors:
             return
         from neurobrix.core.flow.audio_utils import redistribute_snac_codes
-        gen_ids = list(generated_tokens)
-        codes = redistribute_snac_codes(
-            gen_ids, defaults["audio_token_start"], defaults["vocab_size"])
-        if codes is None:
-            return
+        from neurobrix.kernels import census as _census
+        start, vocab = defaults["audio_token_start"], defaults["vocab_size"]
         rv = self.ctx.variable_resolver.resolved
-        for key, vals in (("c0", codes[0]), ("c1", codes[1]), ("c2", codes[2])):
-            t = NBXTensor.from_numpy(np.array([vals], dtype=np.int64))
-            rv[f"codec.decoder.{key}"] = t
-            rv[key] = t
-        # triton loads component weights on demand — load codec.decoder before
-        # running it (else the in-graph codebook embedding weight is None).
-        self._ensure_weights_loaded("codec.decoder")
-        self._execute_component("codec.decoder", "forward", None)
+
+        def _decode(gen_ids) -> bool:
+            codes = redistribute_snac_codes(list(gen_ids), start, vocab)
+            if codes is None:
+                return False
+            for key, vals in (("c0", codes[0]), ("c1", codes[1]), ("c2", codes[2])):
+                t = NBXTensor.from_numpy(np.array([vals], dtype=np.int64))
+                rv[f"codec.decoder.{key}"] = t
+                rv[key] = t
+            # triton loads component weights on demand — load codec.decoder before
+            # running it (else the in-graph codebook embedding weight is None).
+            self._ensure_weights_loaded("codec.decoder")
+            self._execute_component("codec.decoder", "forward", None)
+            return True
+
+        if _census.walks_extents():
+            # The codec's extent is the number of generated tokens inside the audio range — a
+            # value filter a shadow cannot pass (its draws fall below audio_token_start, no
+            # frame survives, and the codec never ran: orpheus's 22 misses, 2026-09-28). The
+            # census meets every key class of that extent up to the request's token bound.
+            _census.walk_extent(1, max_tokens, lambda n: _decode([start] * n),
+                                name="codec.decoder audio tokens")
+        elif not _decode(generated_tokens):
+            return
         wav = rv.get("codec.decoder.output_0")
         if wav is not None:
             rv["global.output_audio"] = wav
