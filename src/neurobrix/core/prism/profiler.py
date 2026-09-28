@@ -700,6 +700,7 @@ class ActivationProfiler:
         zero_alloc_uids: Optional[set] = None,
         inplace_adds: Optional[List] = None,
         widths: Optional[Dict[str, int]] = None,
+        source_holding_uids: Optional[set] = None,
         placement_floor: bool = False,
     ) -> ActivationProfile:
         """
@@ -720,6 +721,11 @@ class ActivationProfiler:
                 keeps sizing at the traced dtype either way — the op-level tiling
                 detector (`PrismSolver._detect_op_level_tiling_pairs`) derives the same
                 set from the same scan, and the two must agree on which ops overflow.
+            source_holding_uids: zero-alloc op_uids whose output is a proxy or view
+                CARRYING its first input (the fused-upsample proxy, the
+                pixel-shuffle broadcast chain's expand / clone / view): their
+                output is aliased to that input's buffer, so the buffer lives
+                until the proxy's consumer runs. Members are zero-allocated.
             zero_alloc_uids: Set of op_uids whose outputs are NOT allocated at
                 runtime because an `OpLevelTilingEngine` interceptor returns a
                 sentinel proxy (`FusionUpsampleProxy`, `BroadcastClonePyroxy`)
@@ -800,34 +806,66 @@ class ActivationProfiler:
                     continue
                 kept.append(entry)
             inplace_adds = kept
-        if inplace_adds:
-            # Build alias map: output_tid -> reused_input_tid (resolve
-            # transitive chains so all aliases point to the root buffer).
-            for entry in inplace_adds:
-                op_uid_inp, reuse_idx = entry
-                op_inp = self.ops.get(op_uid_inp, {})
-                in_tids = op_inp.get("input_tensor_ids", [])
-                out_tids = op_inp.get("output_tensor_ids", [])
-                if not out_tids or reuse_idx >= len(in_tids):
+        # ALIASES — outputs that are not buffers of their own, each bound to the
+        # buffer it lives in (resolved transitively to the root), built in
+        # execution order:
+        #   * an in-place add's output IS its reused input's buffer;
+        #   * a SOURCE-HOLDING proxy's output is a sentinel or a view that
+        #     carries its first input, and its consumer reads that input's
+        #     storage when IT runs: a FusionUpsampleProxy holds the pre-upsample
+        #     tensor until the fused conv (kernels/ops/fused_upsample_conv.py:34-45),
+        #     the broadcast chain's expand is a stride-0 view, its clone a
+        #     BroadcastClonePyroxy carrying that view (:131-155), its view a
+        #     pass-through, and the pixel_shuffle reads through them
+        #     (wrappers.py `_pixel_shuffle_broadcast_aware`). Priced at zero
+        #     without the alias, the source was freed at its last DIRECT consumer
+        #     while the runtime still held it: Sana 4Kpx's decoder held its
+        #     pre-shuffle residual (3 072 MB fp32 at 3072x4096) beside the fused
+        #     conv and the shuffle's output, a buffer the estimate had released.
+        inplace_reuse = {}
+        for entry in inplace_adds or ():
+            op_uid_inp, reuse_idx = entry
+            inplace_reuse[op_uid_inp] = reuse_idx
+        holders = set(source_holding_uids or ())
+        if inplace_reuse or holders:
+            for op_uid_a in self.execution_order:
+                if op_uid_a in inplace_reuse:
+                    idx = inplace_reuse[op_uid_a]
+                elif op_uid_a in holders:
+                    idx = 0
+                else:
                     continue
-                target = in_tids[reuse_idx]
+                op_a = self.ops.get(op_uid_a, {})
+                in_tids = op_a.get("input_tensor_ids", [])
+                out_tids = op_a.get("output_tensor_ids", [])
+                if not out_tids or idx >= len(in_tids):
+                    continue
+                target = in_tids[idx]
                 seen_walk = set()
                 while target in alias and target not in seen_walk:
                     seen_walk.add(target)
                     target = alias[target]
                 for out_tid in out_tids:
                     alias[out_tid] = target
-                # Output is zero-allocated (rebinds to reused buffer)
-                zero_set.add(op_uid_inp)
-            # Recompute last_uses with the alias substitution: any consumer
-            # of an aliased output_tid extends the lifetime of the merged
-            # buffer (the alias root). Build by walking ops in order so the
-            # LAST consumer wins.
+                # Output is zero-allocated (it lives in the root's buffer)
+                zero_set.add(op_uid_a)
+            # Recompute last uses on the ROOTS: any consumer of an aliased tid,
+            # and any direct consumer of a root, extends the root's lifetime.
+            # Walking ops in order makes the LAST consumer win. A tid that takes
+            # part in no alias keeps exactly its `self.last_uses` entry.
+            roots = set()
+            for t in alias:
+                r = t
+                seen_resolve = set()
+                while r in alias and r not in seen_resolve:
+                    seen_resolve.add(r)
+                    r = alias[r]
+                roots.add(r)
             last_uses_eff = dict(self.last_uses)
             for op_uid_w in self.execution_order:
                 op_w = self.ops.get(op_uid_w, {})
                 for in_tid in op_w.get("input_tensor_ids", []):
-                    if in_tid in alias:
+                    if in_tid in alias or in_tid in roots:
                         target = in_tid
                         seen_resolve = set()
                         while target in alias and target not in seen_resolve:

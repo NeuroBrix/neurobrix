@@ -2322,6 +2322,11 @@ class PrismSolver:
                                 zero_alloc_uids=zero_uids,
                                 inplace_adds=inplace_adds,
                                 widths=widths,
+                                # The fused-upsample proxies and the broadcast
+                                # chain's expand/clone/view CARRY their input to
+                                # their consumer: its buffer lives until then.
+                                # The residual-chain sentinels carry nothing.
+                                source_holding_uids=fusion_uids | f2a_uids,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
