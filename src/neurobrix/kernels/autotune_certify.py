@@ -1639,6 +1639,19 @@ def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, fr
         cache.update(entries)
 
 
+def _file_entries(cache: Dict[str, Dict[str, Dict]], dtype: str, path: Path) -> Dict[str, Dict]:
+    """The certify loop's view of one kernel file, READ ONCE per dtype and pass. It was
+    `cache.setdefault(dtype, _read_file(path))`, whose default is evaluated on every call: every
+    key of the census re-read and re-parsed its whole kernel file (up to 21 MB, 0.25 s) and threw
+    it away — the 16 and 32 GB GEMM certifiers sat 8-10 minutes in it before their first key, the
+    card idle (py-spy, 2026-09-29), which the supervisor saw as the cards waiting between passes. The view is refreshed by `_write_file` after
+    each certification, so reading it once loses nothing."""
+    entries = cache.get(dtype)
+    if entries is None:
+        entries = cache[dtype] = _read_file(path)
+    return entries
+
+
 def _read_file(path: Path) -> Dict[str, Dict]:
     if not path.exists():
         return {}
@@ -1872,7 +1885,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 break
             dtype = C.output_dtype(tuner, key)
             path = C.file_for(vendor, profile, qual, dtype, root=root)
-            entries = per_dtype.setdefault(dtype, _read_file(path))
+            entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
             if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
