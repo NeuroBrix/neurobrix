@@ -61,7 +61,7 @@ def test_the_census_tool_walks_the_extents_without_being_asked(monkeypatch, tmp_
 
     def fake_shadow(model, req, mode, hw, n_dev, timeout, log_dir, rung_mb=0, tag="", walk_extents=False):
         calls.append((mode, tag, rung_mb, walk_extents))
-        return {"mode": mode, "rung_mb": rung_mb, "rc": 0, "wall_s": 0.0, "keys": [], "error": ""}
+        return {"mode": mode, "rung_mb": rung_mb, "rc": 0, "wall_s": 0.0, "keys": [], "op_keys": [], "error": ""}
 
     monkeypatch.setattr(m, "shadow", fake_shadow)
     monkeypatch.setattr(m, "_family", lambda model: "tts")

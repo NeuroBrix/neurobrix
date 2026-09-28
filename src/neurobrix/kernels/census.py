@@ -30,6 +30,24 @@ from typing import List, Any, Dict, Optional, Set
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
+_RECORDED_OPS: Set[tuple] = set()      # (op uid, key line) already written to <record>.ops
+_OP: List[Optional[str]] = [None]      # the graph op whose dispatch is forming keys now (set_op)
+_RECORDING: List[Optional[bool]] = [None]
+
+
+def recording() -> bool:
+    """Whether this process records the keys it forms (NBX_KEY_RECORD) — read once: the dispatch
+    loops ask it per op, so it must cost a list read, not an environment lookup."""
+    if _RECORDING[0] is None:
+        _RECORDING[0] = bool(os.environ.get("NBX_KEY_RECORD"))
+    return _RECORDING[0]
+
+
+def set_op(op_uid: Optional[str]) -> None:
+    """The dispatch loops name the graph op they are about to run, so every key it forms is recorded
+    with the op that formed it (`<record>.ops`, one `op<TAB>key line` pair per line) — the census
+    table's `op` column. Called only while recording."""
+    _OP[0] = op_uid
 _OBSERVERS: List[Set[str]] = []         # key lines formed during a `walk_extent` run, dedup or not
 _ACTIVE = {"census": False}
 _SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distinct and aligned
@@ -79,6 +97,12 @@ def record(tuned, key: tuple) -> None:
     with _RECORD_LOCK:
         for obs in _OBSERVERS:
             obs.add(line)
+        op = _OP[0]
+        if op is not None and (op, line) not in _RECORDED_OPS:
+            _RECORDED_OPS.add((op, line))
+            with open(path + ".ops", "a") as fh:
+                fh.write(f"{op}\t{line}\n")
+                fh.flush()
         if line in _RECORDED:
             return
         _RECORDED.add(line)

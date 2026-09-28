@@ -3058,10 +3058,17 @@ class TritonSequence:
                     print("[LazyBind] late-bind fired (replay declined "
                           "after would_replay said yes)", flush=True)
                 self.bind_weights(_parked)
-            if self._is_multi_device:
-                self._run_multi_device(skip_kills, pre_op_callback)
-            else:
-                self._run_single_device(skip_kills, pre_op_callback)
+            try:
+                if self._is_multi_device:
+                    self._run_multi_device(skip_kills, pre_op_callback)
+                else:
+                    self._run_single_device(skip_kills, pre_op_callback)
+            finally:
+                # the loops name each op for the keys it forms (census `set_op`); once the sequence
+                # returns, a key a flow forms between components is charged to no op
+                from neurobrix.kernels import census as _key_census
+                if _key_census.recording():
+                    _key_census.set_op(None)
             # Precision calibration: one pass of this component is complete
             # (the Triton engine's census — the ATen loop counts its own).
             from neurobrix.core.dtype import calibration as _cal_pass
@@ -3515,7 +3522,11 @@ class TritonSequence:
 
         import os as _os_vd
         _vdump = int(_os_vd.environ.get("NBX_VALUE_DUMP_EVERY", "0") or "0")
+        from neurobrix.kernels import census as _key_census
+        _key_ops = _key_census.recording()
         for op_idx, op in enumerate(self._ops):
+            if _key_ops:
+                _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
             _in_fp = ""          # set when NBX_VALUE_DUMP_EVERY >= 2
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
@@ -4302,7 +4313,11 @@ class TritonSequence:
             self._dump_pass = getattr(self, "_dump_pass", -1) + 1   # NBX_DUMP_TIDS_PASS counter
         _fp_path_md = os.environ.get("NBX_OP_FINGERPRINT", "")
 
+        from neurobrix.kernels import census as _key_census
+        _key_ops = _key_census.recording()
         for op_idx, op in enumerate(self._ops):
+            if _key_ops:
+                _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
             if _watch_slot >= 0 and arena[_watch_slot] is not _watch_ref:
                 _new = arena[_watch_slot]
                 print(f"[ARENA_WATCH] slot {_watch_slot} changed BEFORE "
