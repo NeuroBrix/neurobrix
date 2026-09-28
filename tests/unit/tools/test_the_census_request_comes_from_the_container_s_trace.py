@@ -36,7 +36,10 @@ sys.path.insert(0, str(REPO / "src"))
 import certified_census as CC  # noqa: E402
 
 MODEL = "FakeImage-960x1088"
-DERIVED = ["--height", "704", "--width", "1088"]      # computed by hand from the fake's trace
+# computed by hand from the fake's trace: the image family's confirmation.size_fraction 0.5 -> 480x544,
+# the height at three quarters -> 360, both on the 64 lattice -> 320x512 (704x1088 before the
+# confirmation request, 2026-09-28; the refusal's logic is unchanged, only the size it names)
+DERIVED = ["--height", "320", "--width", "512"]
 STALE = ["--height", "768", "--width", "1024"]        # the old container's derivation
 
 
@@ -117,14 +120,14 @@ def test_a_stale_table_is_refused_by_name(census):
     assert calls == [], f"a shadow ran on a request the container's trace does not give: {calls}"
     assert row["status"] == "refused", row
     msg = row.get("refusal", "")
-    assert MODEL in msg and "768x1024" in msg and "704x1088" in msg, msg
+    assert MODEL in msg and "768x1024" in msg and "320x512" in msg, msg
     assert "trace_request.py" in msg, f"the refusal does not say how to regenerate the table: {msg}"
 
 
 def test_a_table_without_a_size_is_refused_for_a_spatial_model(census):
     row, calls = census([["--prompt", "a red apple on a wooden table", "--seed", "42"]])
     assert calls == [] and row["status"] == "refused", row
-    assert "704x1088" in row.get("refusal", ""), row
+    assert "320x512" in row.get("refusal", ""), row
 
 
 def test_an_extra_size_flag_is_refused(census):
