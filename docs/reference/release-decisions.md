@@ -125,3 +125,23 @@ current state under 150 lines; history in dated archives; one watcher for inbox 
 release candidate's gate runs once, on both machines, after every model × dtype × mode is certified from (1) and verified
 at zero miss under (3). The manifesto (`CLAUDE.md`, untracked by this repository's own rule) carries the same text at its
 top on each machine.
+
+## 2026-09-29 01:37 — old certificates are re-proven, not re-swept; the census comes from one shared derivation (the owner, via the supervisor)
+
+**The measurement that raised it.** On the Mac, 2026-09-28/29: 1 068 keys re-swept under the served generator from
+census files in four hours (one to twelve keys a minute; one key in five refused for witness drift, four in five of
+those passing a retry), and the table's 1 335 keys begun the same way — because the runtime does not serve a proof made
+under another compiler (the generator door) and the certifier's `--reprove-generator` re-ranked every such key by a full
+sweep.
+
+**The decision.** 'Certified' means correct and pinned, not the fastest. For every key of the table with an entry under
+the retired generator, the certifier RE-PROVES that stored configuration under the served generator — the fp64 oracle and
+one timing under the witness, one configuration, seconds — and serves it, recorded as re-proven; a full sweep only where
+the stored configuration fails the oracle under the new generator, or where there is no entry at all. Re-ranking for
+speed belongs to the kernel-optimisation chantier at the end of the roadmap, not to the release. One implementation for
+both machines. The census: the same `.nbx` serves both machines, so one derivation from the graphs (no shadow execution)
+produces the profile-independent part once, committed, projected through each profile; the walks of 2026-09-28 were the
+last, and their tables are that derivation's test data.
+
+**Release consequence.** A pass reports how many keys were re-proven, swept, and why; no key is certified on a drifting
+witness and none is left uncertified without its retry.
