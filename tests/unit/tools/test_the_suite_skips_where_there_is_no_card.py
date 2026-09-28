@@ -50,7 +50,24 @@ def _run(tmp_path: Path, visible: str | None):
                           capture_output=True, text=True, env=env, timeout=300, cwd=str(tmp_path))
 
 
+def _devices_visible_under(visible: str) -> int:
+    env = dict(os.environ); env["CUDA_VISIBLE_DEVICES"] = visible; env["PYTHONPATH"] = str(ROOT / "src")
+    have = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r);"
+         "from neurobrix.kernels.nbx_tensor import DeviceAllocator; print(DeviceAllocator.device_count())"
+         % str(ROOT / "src")],
+        capture_output=True, text=True, timeout=180, env=env)
+    return int(have.stdout.strip() or 0) if have.returncode == 0 else 0
+
+
 def test_with_no_card_visible_only_the_no_card_failure_becomes_a_skip(tmp_path):
+    if _devices_visible_under("") > 0:
+        # The door is CUDA's: an empty CUDA_VISIBLE_DEVICES hides nothing from a Metal host, the
+        # hook stays disarmed (correctly — the other test below shows it) and both inner tests
+        # fail. The closed door cannot be shown from here (the Mac, 2026-09-28: "2 failed").
+        pytest.skip("a device stays visible under CUDA_VISIBLE_DEVICES='' on this host (not a CUDA "
+                    "backend): the no-card door cannot be closed from here")
     out = _run(tmp_path, "")
     tail = out.stdout.strip().splitlines()[-1]
     assert "1 failed" in tail and "1 skipped" in tail, (
