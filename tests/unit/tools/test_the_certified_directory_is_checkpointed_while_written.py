@@ -228,3 +228,18 @@ def test_the_push_window_is_the_repositorys_not_the_process_s(repo):
     assert elapsed >= 2.5, f"the final checkpoint pushed after {elapsed:.1f} s: it did not wait for the repository's window"
     assert _remote_head(repo["tmp"], "origin") == _head(repo["path"]) != before
     assert CP.last_push_time(repo["path"]) >= t0 - 1
+
+
+def test_a_final_checkpoint_with_nothing_to_push_does_not_wait_for_the_window(repo):
+    """With nothing to commit and nothing unpushed, the final checkpoint returns at once even inside
+    the push window. Seen red: it slept the whole window (13 minutes behind a certifier that certified
+    nothing on 2026-09-28, the GPU idle)."""
+    import time
+    CP.touch_push(repo["path"])                                  # the window is closed for 30 s
+    t0 = time.monotonic()
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    elapsed = time.monotonic() - t0
+    assert rc == 0
+    assert elapsed < 5.0, f"the final checkpoint waited {elapsed:.1f} s with nothing to push"
