@@ -395,8 +395,10 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            "NEUROBRIX_REPLAY_CACHE": str(out / f"replay_card{gpu}"), "PYTHONNOUSERSITE": "1"}
     # The cell runs under the interpreter the matrix was launched with (the pinned engine
     # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
+    # Every cell is a CONFIRMATION run (the owner's method, 2026-09-28 20:06): served entirely from
+    # the certified directory, a missing key an error naming its census row — never a runtime sweep.
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *req, *MODES[mode],
-           "--output", str(art)]
+           "--certified-only", "--output", str(art)]
     rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
