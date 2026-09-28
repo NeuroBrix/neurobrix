@@ -35,6 +35,7 @@ def test_a_row_records_the_cells_host_peak(tmp_path, monkeypatch):
         return {"model": model, "mode": mode, "rc": 0}
     monkeypatch.setattr(R, "_run_cell", fake_run_cell)
     monkeypatch.setattr(R, "PEAK_SAMPLE_S", 0.1)
+    monkeypatch.setattr(R, "plan_host_need", lambda *a: None)   # the static estimate: this cell tests the peak
     row = R.run_cell("m", "native", "0", tmp_path, 60, tmp_path)
     assert row["host_peak_rss"] >= 180 * MB and row["host_reserved_from"] == "estimate"
     assert row["host_reserved"] == int((1 << 30) * R.HOST_PER_WEIGHT_BYTE)

@@ -299,11 +299,48 @@ def release_host(out: Path) -> None:
     _ledger(out, lambda led: led.pop(str(os.getpid()), None))
 
 
+def cell_request(model: str) -> list:
+    """The request a cell runs, and the one its plan is asked for: the family's own request at the
+    container's off-trace size."""
+    family = Z.family_of(model)
+    req = Z.request_args(model, family, [])
+    size = off_trace_size(model, family)
+    if size is not None:
+        req = req + ["--height", str(size[0]), "--width", str(size[1])]
+    return req
+
+
+def plan_host_need(model: str, mode: str, gpu: str, src: Path):
+    """(bytes, "plan") — the host footprint the ENGINE's plan states for this request on this card
+    (`plan.host_footprint.total_bytes`, Prism's host estimate, the owner's 14:27 rule: a reservation is
+    what the plan the engine chose says the run will hold), or None when the tree under test prints
+    no such figure (a tree before prism-prices-the-host). Asked with `--explain-plan --json` in the
+    cell's own environment; nothing runs."""
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
+           "--explain-plan", "--json"]
+    try:
+        p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+        t = p.stdout
+        doc = json.loads(t[t.index("{"):])
+    except (subprocess.TimeoutExpired, ValueError):
+        return None
+    hf = (doc.get("plan", doc) or {}).get("host_footprint") or {}
+    total = hf.get("total_bytes")
+    return (int(total), "plan") if isinstance(total, int) and total > 0 else None
+
+
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
     """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
     runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
-    gate runs — nothing runs beside a gate) holds every new cell."""
-    need, need_from = int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate"
+    gate runs — nothing runs beside a gate) holds every new cell.
+
+    The reservation is the plan's own host figure when the tree states one, the static estimate
+    (container bytes x HOST_PER_WEIGHT_BYTE) otherwise — written in the row either way
+    (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
+    estimate while the host used 17 GB (2026-09-28 07:49)."""
+    planned = plan_host_need(model, mode, gpu, src)
+    need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
@@ -324,10 +361,8 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
-    req = Z.request_args(model, family, [])
+    req = cell_request(model)
     size = off_trace_size(model, family)
-    if size is not None:
-        req = req + ["--height", str(size[0]), "--width", str(size[1])]
     ext = Z.output_ext(family, req)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
