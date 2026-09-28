@@ -118,3 +118,38 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     assert len(benches) > 1, "the sweep timed the configuration space, not one configuration"
     assert entry["config"]["kwargs"].get("BLOCK_K") != 1, "the failing configuration was not served"
     assert "reproven_from" not in entry["proof"], "a swept key is not recorded as re-proven"
+
+
+def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_a_sweep(root, monkeypatch):
+    """Inbox 60 and 65 together: a key is never certified on a drifting witness and never left without its
+    retry — and a drift is not an oracle failure, so it must not open a sweep. Injection: the witness
+    reads two values 30 % apart around the single timing."""
+    from neurobrix.kernels.ops.matmul import matmul_kernel
+    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    tuner, key = _matmul_key()
+    vendor, profile = C.active_profile()
+    dtype = C.output_dtype(tuner, key)
+    tol = Z._tolerance(vendor, profile, dtype)
+    first = Z.certify_key(qual, tuner, key, tol, np.random.default_rng(7), bench=lambda fn: (fn(), 0.5)[1])
+    old = {k: first[k] for k in ("config", "proof", "excluded")}
+    old_backend = dict(Z._backend()); old_backend["backend_hash"] = "msl-v0.1-retired000"; old_backend["triton"] = "3.7.9+retired"
+    old["proof"] = dict(old["proof"], backend=old_backend)
+    path = C.file_for(vendor, profile, qual, dtype, root=root)
+    Z._write_file(path, vendor, profile, qual, dtype, {C.key_repr(key): old})
+    before = path.read_text()
+    tuner.cache.pop(key, None); C.reset()
+    cls = C.proof_memory_class(first["proof"])
+    monkeypatch.setattr(T, "ROOT", root / "table")
+    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
+                                                  "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
+    kind, _ = Z._regime()
+    if kind != "witness":
+        pytest.skip("this card's stability regime is a clock lock, not a witness")
+    reads = iter([3.0, 3.9] * 8)                                      # open 3.0, close 3.9: a 30 % drift on every bracket
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: next(reads))   # the module-level reader the local witness calls
+    benches = []
+    summary = Z.certify(profile, vendor=vendor, reprove_generator=True, log=lambda *a, **k: None,
+                        bench=lambda fn: (benches.append(1), fn(), 0.5)[2])
+    assert summary.get("swept", 0) == 0, f"a drift opened a sweep: {summary}"
+    assert summary.get("reproven", 0) == 0 and summary.get("failed", 0) == 1, summary
+    assert path.read_text() == before, "a refused key leaves the stored entry as it was, for the retry"
