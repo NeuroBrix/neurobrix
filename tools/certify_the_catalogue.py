@@ -59,6 +59,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
+from container_renames import current_name  # noqa: E402
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE", Path.home() / ".neurobrix" / "cache"))
 PY = os.environ.get("NBX_PYTHON", "/home/mlops/ml/venv/bin/python")
 
@@ -68,11 +69,7 @@ PY = os.environ.get("NBX_PYTHON", "/home/mlops/ml/venv/bin/python")
 ALIASES = {
     "qwen3-30b-a3b-thinking": "Qwen3-30B-A3B-Thinking-2507",
     "sana-1600m-4kpx-bf16": "Sana_1600M_4Kpx_BF16",
-    "wan2.1-t2v-1.3b": "Wan2.1-T2V-1.3B-Diffusers",
-    "wan2.1-vace-1.3b": "Wan2.1-VACE-1.3B-diffusers",
-    "wan2.1-i2v-14b-480p": "Wan2.1-I2V-14B-480P-Diffusers",
-    "wan2.2-i2v-a14b": "Wan2.2-I2V-A14B-Diffusers",
-    "sana-video-2b-720p": "SANA-Video_2B_720p_diffusers",
+    "sana-video-2b-720p": "SANA-Video_2B_720p",
     "swin2sr-classical-x4": "swin2SR-classical-sr-x4-64",
     "swin2sr-classical-x2": "swin2SR-classical-sr-x2-64",
     "swin2sr-realworld-x4": "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
@@ -163,7 +160,8 @@ def _known_costs(campaigns: Path) -> dict:
         est = cell_cost_estimate(result.parent, timeout=28800, arms=1)
         low = cell_cost_estimate(result.parent, timeout=28800, arms=1, narrowest=True)
         if est:
-            model = result.parent.name
+            # A record keeps the name the container had when it ran; it prices today's.
+            model = current_name(result.parent.name)
             row = {"known_s": est[0], "basis": est[1],
                    "floor_s": low[0] if low else est[0],
                    "floor_basis": low[1] if low else est[1]}

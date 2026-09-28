@@ -15,7 +15,7 @@ import neurobrix.core.runtime.registry_flags as rf
 from neurobrix.nbx import component_flags
 
 REG = ("video:\n"
-       "  Wan2.1-VACE-1.3B-diffusers:\n"
+       "  Wan2.1-VACE-1.3B:\n"
        "    components:\n"
        "      text_encoder:\n"
        "        zero_pad_embeddings: true\n"
@@ -42,32 +42,32 @@ def no_registry(monkeypatch):
 
 
 def test_without_a_registry_the_container_answers(no_registry):
-    component_flags.register("Wan2.1-VACE-1.3B-diffusers", {"text_encoder": {"zero_pad_embeddings": True}})
-    assert rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "text_encoder",
+    component_flags.register("Wan2.1-VACE-1.3B", {"text_encoder": {"zero_pad_embeddings": True}})
+    assert rf.get_component_flag("Wan2.1-VACE-1.3B", "text_encoder",
                                  "zero_pad_embeddings", default=False) is True
 
 
 def test_with_the_registry_the_same_container_gives_the_same_answer(registry):
-    component_flags.register("Wan2.1-VACE-1.3B-diffusers", {"text_encoder": {"zero_pad_embeddings": True}})
-    assert rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "text_encoder",
+    component_flags.register("Wan2.1-VACE-1.3B", {"text_encoder": {"zero_pad_embeddings": True}})
+    assert rf.get_component_flag("Wan2.1-VACE-1.3B", "text_encoder",
                                  "zero_pad_embeddings", default=False) is True
 
 
 def test_a_container_that_lacks_a_declared_flag_is_refused_by_name(registry):
-    component_flags.register("Wan2.1-VACE-1.3B-diffusers", {"text_encoder": {}})
+    component_flags.register("Wan2.1-VACE-1.3B", {"text_encoder": {}})
     with pytest.raises(RuntimeError, match=r"text_encoder\.zero_pad_embeddings.*does not carry it"):
-        rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "text_encoder", "zero_pad_embeddings", default=False)
+        rf.get_component_flag("Wan2.1-VACE-1.3B", "text_encoder", "zero_pad_embeddings", default=False)
 
 
 def test_a_container_that_carries_another_value_is_refused(registry):
-    component_flags.register("Wan2.1-VACE-1.3B-diffusers", {"text_encoder": {"zero_pad_embeddings": "yes"}})
+    component_flags.register("Wan2.1-VACE-1.3B", {"text_encoder": {"zero_pad_embeddings": "yes"}})
     with pytest.raises(RuntimeError, match="carries 'yes'"):
-        rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "text_encoder", "zero_pad_embeddings", default=False)
+        rf.get_component_flag("Wan2.1-VACE-1.3B", "text_encoder", "zero_pad_embeddings", default=False)
 
 
 def test_a_flag_declared_false_is_the_default_and_needs_no_carriage(registry):
-    component_flags.register("Wan2.1-VACE-1.3B-diffusers", {})
-    assert rf.get_component_flag("Wan2.1-VACE-1.3B-diffusers", "vae_encoder",
+    component_flags.register("Wan2.1-VACE-1.3B", {})
+    assert rf.get_component_flag("Wan2.1-VACE-1.3B", "vae_encoder",
                                  "requires_fp32_compute", default=False) is False
 
 

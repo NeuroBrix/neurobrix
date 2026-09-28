@@ -62,7 +62,7 @@ KNOWN_OFFENDERS = {
     "Real-ESRGAN-x4":                {"model"},
     "Real-ESRGAN-x4":                {"model"},
     "real-esrgan-x8":                {"model"},
-    "SANA-Video_2B_720p_diffusers":  {"transformer"},
+    "SANA-Video_2B_720p":            {"transformer"},
     "MiniCPM-o-4_5":                 {"flow_dit"},
     "Flex.1-alpha":                  {"text_encoder"},
     "Open-Sora-v2":                  {"text_encoder_2"},
