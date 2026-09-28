@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The certifier prices a key by its phases before any draw (`autotune_certify.price_key`: the host draws, the device copies, the fp64 oracle whole or windowed per `_row_windows`/`_conv_windows`, the readback) and refuses it by name over a working-set budget (`neurobrix autotune certify --working-set-mb`, the figure the run's guard kills at); the 10 B/elem constant stood 12 % under a small depthwise key and 40 % over a large one on the Mac (2026-09-28, 20 keys measured one per process, `results/certifier_price`). `NBX_CERTIFY_PHASES=1` prints the process's memory at each phase of a key. Test: `tests/unit/kernels/test_the_certifier_prices_a_key_by_its_phases.py` (16 measured peaks, injection: conv windows shrunk to 1x1 -> 0.48x/0.66x/0.82x, red).
+- The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
   does.** When a model's container records the vendor's resolution binning, the request is mapped
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
@@ -94,6 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the float32 minimum became minus infinity when narrowed to bfloat16 or float16, and a fully
   masked row could then turn to NaN; it now saturates to the half type's own minimum, as the
   `--compiled` engines already did.
+- **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
+  whose GPU shares memory with the host, the certifier now counts its host-side copies of each
+  test tensor when it decides whether a shape fits.
+- **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
+  planner read which processes share a card by the process's own device number; under a remap that
+  number names a different physical card, whose occupants then shrank or inflated the plan.
 - **Wan2.1-VACE conditions on an input image the way the reference pipeline does.** The control
   signal now encodes the kept frames and the frames to generate separately and folds the frame
   mask as the vendor does, instead of reusing the image's encoding for both halves.

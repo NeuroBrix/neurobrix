@@ -399,6 +399,19 @@ _BACKEND_LOADS_POINTERS_FROM_MEMORY = {"cuda": True, "hip": True, "metal": False
 # not, and must add its row (and a copy path) before the channel is armed
 # on it.
 _BACKEND_MEMORY_IS_HOST_READABLE = {"cuda": False, "hip": False, "metal": True}
+# Whether the backend's kernels can read and write a float64 (or complex128) element. Metal
+# has no double: its lowering NARROWS f64 to float in silence (`triton/metal_backend.py`,
+# `TRITON_METAL_FP64_UNAVAILABLE`), so a kernel over a float64 buffer reads eight-byte
+# elements as four-byte ones. Measured 2026-09-28: `from_numpy(float64).to(bf16)` on the
+# M4 Pro gave 1 139 of 143 360 bits right and 3 255 non-finite values (the Sana 4K sincos
+# positional embedding, every off-trace size). A census says "not this time"; the door in
+# `NBXTensor.to` says "never": a cast from or to such a dtype is refused BY NAME there.
+_BACKEND_HAS_FP64 = {"cuda": True, "hip": True, "metal": False}
+
+
+def backend_has_fp64() -> bool:
+    """Whether the detected backend's kernels handle float64 elements (see `_BACKEND_HAS_FP64`)."""
+    return _BACKEND_HAS_FP64.get(_detect_gpu_backend(), True)
 
 
 # The smallest `tl.dot` tile dimension a backend's attention lowering handles
@@ -4147,6 +4160,18 @@ class NBXTensor:
         # casts (complex128<->complex64) still proceed below.
         if self.is_complex() and target not in _COMPLEX_DTYPES:
             return self
+        # A float64 element on a backend whose kernels have none is not cast, it is misread:
+        # refused by name (`_BACKEND_HAS_FP64`). The caller places the array at a dtype the
+        # backend has (a float64 formula result is cast on the host first).
+        if not backend_has_fp64() and (self._dtype in (NBXDtype.float64, NBXDtype.complex128)
+                                       or target in (NBXDtype.float64, NBXDtype.complex128)):
+            raise RuntimeError(
+                f"ZERO FALLBACK: a cast from {self._dtype.name} to {target.name} on the "
+                f"'{_detect_gpu_backend()}' backend, whose kernels have no float64: its lowering "
+                f"narrows double in silence and the result would be garbage, not a cast "
+                f"(2026-09-28: 1 139 of 143 360 bits right on the Sana 4K positional embedding). "
+                f"Place the array at a dtype this backend has; a float64 formula result is cast "
+                f"on the host first.")
         # Cast via Triton copy kernel (tl.store auto-converts dtype).
         # Downcasts from wider floats to float16 use the PROTECTED
         # conversion (clamp finite values to ±65504) — the triton mirror
