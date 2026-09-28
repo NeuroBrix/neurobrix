@@ -170,6 +170,12 @@ def cmd_run(args):
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.config import get_output_processing
 
+    # A confirmation run serves the certified directory only (the owner's method, 2026-09-28):
+    # said to the engine before any kernel is defined, and never answered by a daemon, whose
+    # process keeps its own autotune state.
+    if getattr(args, "certified_only", False):
+        _os_dbg.environ["NBX_AUTOTUNE_CERTIFIED_ONLY"] = "1"
+
     # Auto-detect model from running daemon if --model omitted
     if args.model is None:
         from neurobrix.serving.client import DaemonClient
@@ -193,8 +199,8 @@ def cmd_run(args):
         from neurobrix.cli.commands.agent import run_agent_mode
         sys.exit(run_agent_mode(args))
 
-    # Warm path: if daemon is running with same model, use it
-    if _try_warm_path(args):
+    # Warm path: if daemon is running with same model, use it — never for a confirmation run
+    if not getattr(args, "certified_only", False) and _try_warm_path(args):
         sys.exit(0)
 
     # GUARD: If daemon is running but warm path failed, refuse cold path.
@@ -204,6 +210,10 @@ def cmd_run(args):
         daemon_pid = DaemonClient.get_pid()
         print(f"ERROR: A serving daemon is already running (PID {daemon_pid}).")
         print(f"NeuroBrix runs one task at a time — the daemon is using the GPUs.")
+        if getattr(args, "certified_only", False):
+            print("A confirmation run (--certified-only) is never answered by a daemon, whose process "
+                  "keeps its own autotune state. Stop it first:   neurobrix stop")
+            sys.exit(1)
         print(f"Either:")
         print(f"  1. Use the daemon:  neurobrix run --model {args.model} --prompt '...'")
         print(f"  2. Stop it first:   neurobrix stop")

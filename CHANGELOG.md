@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`neurobrix run --certified-only`: a confirmation run served entirely from the certified kernel
+  settings.** A kernel shape the certified directory does not cover fails the run with its name, its
+  shape and what the census says about it, instead of tuning at runtime; the machine's local tuning
+  cache is neither read nor written. Also set by `NBX_AUTOTUNE_CERTIFIED_ONLY=1`.
+
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
   does.** When a model's container records the vendor's resolution binning, the request is mapped
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked

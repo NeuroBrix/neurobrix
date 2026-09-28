@@ -83,6 +83,11 @@ def _add_run_arguments(p):
                                  'fusion, TritonSequentialDispatcher). Equivalent of '
                                  '--sequential but for the Triton backend. Useful for '
                                  'debugging individual Triton kernels.')
+    p.add_argument('--certified-only', action='store_true', dest='certified_only',
+                            help='Confirmation run: every autotuned kernel is served from the '
+                                 'certified directory, or the run fails naming the missing key '
+                                 'and its census row — never a runtime sweep, never the local '
+                                 'replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1).')
     p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
 
