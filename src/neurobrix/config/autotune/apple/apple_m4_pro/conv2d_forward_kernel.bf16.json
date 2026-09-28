@@ -17722,17 +17722,17 @@
      "BLOCK_SIZE_INF": 16
     },
     "num_warps": 4,
-    "num_stages": 2,
+    "num_stages": 1,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T21:54:17+00:00",
+    "date": "2026-09-28T22:09:59+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "msl-v0.1-b1c6226e82836d20"
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
     },
     "shape": [
      1,
@@ -17756,12 +17756,16 @@
      "bf16",
      "bf16"
     ],
-    "deviation": 0.002868178409126905,
+    "launches": 1,
+    "launch_deviations": [
+     0.0028961449822738155
+    ],
+    "deviation": 0.0028961449822738155,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 2097100-2097150; batch 0 rows 0-1 cols 4194200-4194250) of 1x1x4194250",
     "machine": {
      "hostname": "MacBook-Pro.local",
-     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "platform": "macOS-27.0-arm64-arm-64bit",
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
@@ -17770,25 +17774,26 @@
       "ordinal": 0,
       "visible_devices": null,
       "name": "Apple M4 Pro",
-      "memory_mb": 18186
+      "memory_mb": 18186,
+      "unified": true
      },
      "clocks_mhz": null
     },
-    "best_ms": 779.4285278320312,
-    "second_ms": 1142.8314208984375,
-    "candidates": 18,
-    "accepted": 18,
-    "benched": 12,
+    "best_ms": 647.1915893554688,
+    "second_ms": 704.1126708984375,
+    "candidates": 32,
+    "accepted": 32,
+    "benched": 16,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.002,
-     "runs": 40.917,
-     "bench": 123.927
+     "runs": 51.461,
+     "bench": 143.137
     },
     "stability_witness": {
-     "open_ms": 4.4608,
-     "close_ms": 4.4067,
-     "drift": 0.0121,
+     "open_ms": 3.5005,
+     "close_ms": 3.447,
+     "drift": 0.0153,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
