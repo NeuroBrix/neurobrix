@@ -307,6 +307,24 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
         time.sleep(poll)
 
 
+def refuse_a_repo_this_tool_is_not_from(repo: str, tool: Optional[str] = None) -> str:
+    """The message refusing a `--repo` that carries its OWN, different checkpointer, or "".
+
+    The ration, the hangup immunity and every later rule live in this file; a checkpointer run from
+    another tree's copy applies that tree's rules to this one. Measured 2026-09-28 18:55: two chains
+    launched from tmux windows (cwd: the main checkout) ran `tools/certified_checkpoint.py` by a
+    relative path after a backgrounded `cd` — main's copy, older than the certify tree's, without the
+    30-minute ration — and two unattended pushes of one branch went out 97 s apart. A repo without a
+    copy of its own (a test's scratch repo) has no rules of its own to lose, and passes."""
+    me = Path(tool or __file__).resolve()
+    top = _git(repo, "rev-parse", "--show-toplevel", check=False).stdout.strip()
+    own = Path(top) / "tools" / me.name if top else None
+    if own is None or not own.exists() or own.resolve() == me or own.read_bytes() == me.read_bytes():
+        return ""
+    return (f"REFUSED: --repo {top} carries its own checkpointer ({own}), different from this one ({me});\n"
+            f"  the tree's rules live in its own copy — run {own}.")
+
+
 def refuse_a_producer_that_will_wait_for_us(producer_pids, parent_pid) -> str:
     """The message refusing a producer that is our own parent shell, or "".
 
@@ -364,6 +382,10 @@ def main(argv=None) -> int:
                    help="permit --producer-pid to name the shell that launched this "
                         "checkpointer; only correct if that shell will NOT wait on it")
     a = p.parse_args(argv)
+    foreign = refuse_a_repo_this_tool_is_not_from(a.repo)
+    if foreign:
+        print(foreign, file=sys.stderr)
+        return 2
     deadlock = refuse_a_producer_that_will_wait_for_us(a.producer_pid, os.getppid())
     if deadlock and not a.allow_parent_as_producer:
         print(deadlock, file=sys.stderr)
