@@ -249,3 +249,27 @@ def test_a_final_checkpoint_with_nothing_to_push_does_not_wait_for_the_window(re
     elapsed = time.monotonic() - t0
     assert rc == 0
     assert elapsed < 5.0, f"the final checkpoint waited {elapsed:.1f} s with nothing to push"
+
+
+def test_the_checkpoint_stamp_is_the_machines_local_clock_and_names_its_zone(repo):
+    """The checkpointer's log said `15:41:13` for a push made at 17:41:13 CEST (2026-09-28): the stamp
+    came from `time.gmtime()` and carried no zone. The fleet reads Madrid local time; UTC only where a
+    format demands it, and then labelled. Red under the old stamp: with TZ=Asia/Tokyo the stamp's hour
+    is UTC's (nine hours off the local clock) and no zone name is printed."""
+    import time
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Tokyo"; time.tzset()
+    try:
+        said = []
+        CP.checkpoint(repo["path"], "src/neurobrix/config/autotune", ["origin"], repo["gate"], [],
+                      say=lambda *a: said.append(" ".join(str(x) for x in a)))
+        line = next(s for s in said if s.startswith("== checkpoint"))
+        local_hour = time.strftime("%H", time.localtime())
+        assert f"checkpoint {local_hour}:" in line, line
+        assert "JST" in line, line
+    finally:
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
