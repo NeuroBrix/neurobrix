@@ -3976,18 +3976,17 @@ class PrismSolver:
                 graph, profile_j, mem, budget_bytes, rung_mb,
                 trace_size, out_spatial)
 
-        # Scale factor: upscale (upscalers) or VAE compression ratio.
+        # Scale factor: what the graph MEASURES first — its traced input and output extents —
+        # then a declared upscale, then the block-count heuristic. The heuristic
+        # 2^(len(block_out_channels)-1) counts one 2x upsample per block, which is not every
+        # VAE's shape: SANA-Video's declares decoder_block_out_channels [256, 512, 1024]
+        # (heuristic 4) while its graph maps 14x22 latents to 448x704 pixels (32). Sized at 4,
+        # the tiled decode stitched a 160x64 canvas for a 1280x512 request, in both engines, on
+        # every card where the VAE tiled (32 GB lazy_sequential, 2026-09-27). Over the whole
+        # cache the two disagree on that one container only.
         config = profile_j.get("config", {})
-        scale_factor = config.get("upscale")
-        if scale_factor is None:
-            # Spatial compression ratio = 2^(num_blocks-1). VAE configs spell
-            # the block list as decoder_block_out_channels (Sana/DC-AE) OR the
-            # generic block_out_channels (CogVideoX / most diffusers VAEs).
-            db = (config.get("decoder_block_out_channels")
-                  or config.get("block_out_channels"))
-            if db:
-                scale_factor = 2 ** (len(db) - 1)
-        if scale_factor is None and out_spatial and trace_size:
+        scale_factor = None
+        if out_spatial and trace_size:
             # THE GRAPH SAYS IT, so ask the graph. Every upscaler in this
             # machine's cache carries an EMPTY `config` in profile.json --
             # real-esrgan x2/x4/x8, swin2SR-x4, hat-l-x4, all of them -- and
@@ -3996,13 +3995,6 @@ class PrismSolver:
             #   real-esrgan-x8   in [1,3,112,80] -> out [1,3,896,640]   8 and 8
             #   real-esrgan-x4   in [1,3,112,80] -> out [1,3,448,320]   4 and 4
             #   swin2SR-x4       in [1,3,112,80] -> out [1,3,448,320]   4 and 4
-            #
-            # Without this the rung refused the ENTIRE upscaler family at its
-            # first line, for want of a number the container already held, and
-            # `real-esrgan-x8` at 1024 px went to the host instead of being cut
-            # into pieces it fits in. A constant that answers a live question
-            # belongs to the authority that knows it, and here that is the
-            # graph, not a config field the builder never wrote.
             #
             # Both axes must agree and the ratio must be exact: a component
             # that scales H and W differently, or by a fraction, is not a
@@ -4013,6 +4005,21 @@ class PrismSolver:
                 _rh, _rw = _oh // _ih, _ow // _iw
                 if _rh == _rw and _rh > 1:
                     scale_factor = _rh
+        declared = config.get("upscale")
+        if declared is not None and scale_factor is not None and int(declared) != int(scale_factor):
+            raise ValueError(
+                f"ZERO FALLBACK: {comp_name} declares upscale {declared} and its graph measures "
+                f"{scale_factor} (trace {trace_size}x{in_spatial_w} -> {out_spatial}x{out_spatial_w}); "
+                f"a tile plan cannot choose between a declaration and a measurement that disagree")
+        if scale_factor is None:
+            scale_factor = declared
+        if scale_factor is None:
+            # VAE configs spell the block list as decoder_block_out_channels
+            # (Sana/DC-AE) OR the generic block_out_channels (most diffusers VAEs).
+            db = (config.get("decoder_block_out_channels")
+                  or config.get("block_out_channels"))
+            if db:
+                scale_factor = 2 ** (len(db) - 1)
         if not scale_factor:
             return None
 
