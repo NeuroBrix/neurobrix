@@ -187,6 +187,11 @@ def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
             << np.uint32(16)).view(np.float32)
 
 
+class WitnessDrift(RuntimeError):
+    """The regime witness moved beyond its tolerance across a sweep or a re-prove: not a measurement.
+    A key refused for this is neither certified nor swept — its retry pass re-proves it (inbox 60, 65)."""
+
+
 class KeyTooLargeForClass(RuntimeError):
     """The key's operands alone exceed the certifying card: refused BEFORE a value is drawn.
 
@@ -1448,7 +1453,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             _tol = float(_proto["witness"]["drift_tolerance"])
             _drift = abs(_w_close - _w_open) / max(_w_open, 1e-9)
             if _drift > _tol:
-                raise RuntimeError(
+                raise WitnessDrift(
                     f"{qual} at {key!r}: the witness drifted {_drift*100:.1f}% "
                     f"across the sweep ({_w_open:.4f} -> {_w_close:.4f} ms, "
                     f"tolerance {_tol*100:.0f}%): the GPU regime moved while "
@@ -1925,8 +1930,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                         entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
                                             reproven_from=stored_label, **common)
                         summary["reproven"] = summary.get("reproven", 0) + 1
-                    except (UnreachableCensusKey, KeyTooLargeForClass):
-                        raise
+                    except (UnreachableCensusKey, KeyTooLargeForClass, WitnessDrift):
+                        raise                         # a drift is a refusal for the retry pass, never a sweep
                     except Exception as exc:          # the stored configuration fails the oracle under
                         log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
                             f"configuration does not re-prove under the running generator ({exc}); swept")
