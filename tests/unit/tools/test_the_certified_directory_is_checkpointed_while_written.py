@@ -61,22 +61,22 @@ def _sh(*cmd, cwd=None, env=None):
 def repo(tmp_path):
     """A repo with one committed certified file and two bare remotes named as on the rack."""
     r = tmp_path / "repo"; r.mkdir()
-    _sh("git", "init", "-q", "-b", "main", cwd=r)
+    _sh("git", "init", "-q", "-b", "certify-branch", cwd=r)   # a working branch: `main` is never pushed by the brick
     _sh("git", "config", "user.email", "t@t", cwd=r); _sh("git", "config", "user.name", "t", cwd=r)
     d = r / "src/neurobrix/config/autotune/v/p"; d.mkdir(parents=True)
     (d / "k.fp32.json").write_text(json.dumps({"entries": {"(1,)": {"config": 1}}}))
     (r / "other.txt").write_text("not ours")
     _sh("git", "add", ".", cwd=r); _sh("git", "commit", "-q", "-m", "base", cwd=r)
     for name in ("origin", "gitlab"):
-        bare = tmp_path / f"{name}.git"; _sh("git", "init", "-q", "--bare", "-b", "main", str(bare))
+        bare = tmp_path / f"{name}.git"; _sh("git", "init", "-q", "--bare", "-b", "certify-branch", str(bare))
         _sh("git", "remote", "add", name, str(bare), cwd=r)
-        _sh("git", "push", "-q", name, "main", cwd=r)
+        _sh("git", "push", "-q", name, "certify-branch", cwd=r)
     gate = tmp_path / "gate.py"; gate.write_text(GATE_STUB)
     return {"path": str(r), "dir": d, "gate": [sys.executable, str(gate)], "tmp": tmp_path}
 
 
 def _remote_head(tmp, name):
-    return _sh("git", "--git-dir", str(tmp / f"{name}.git"), "rev-parse", "main").strip()
+    return _sh("git", "--git-dir", str(tmp / f"{name}.git"), "rev-parse", "certify-branch").strip()
 
 
 def _head(repo):
