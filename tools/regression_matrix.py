@@ -350,6 +350,17 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
     (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
     estimate while the host used 17 GB (2026-09-28 07:49)."""
     planned = plan_host_need(model, mode, gpu, src)
+    if planned is None:
+        # A tree that states no host figure (one before prism-prices-the-host) may be PRICED by another
+        # tree named in `<out>/price_src` — only one whose plans are proven identical to it (a plan
+        # census, both engines), so the figure is the host footprint of the very plan this cell runs.
+        # Said in the row as `plan@<tree>`.
+        pf = out / "price_src"
+        if pf.exists():
+            ptree = Path(pf.read_text().strip())
+            got = plan_host_need(model, mode, gpu, ptree / "src")
+            if got:
+                planned = (got[0], f"plan@{ptree.name}")
     need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
     while True:
         while (out / "PAUSE").exists():
