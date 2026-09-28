@@ -4762,3 +4762,29 @@ proof directory.
 (the 36 next-defect rows and 31 MoE decode rows the supervisor queued for the rack) copied under
 `models/_agents/mac.proofs.2026-09-26/` with their sha256 beside them, and one line naming which
 caller of `synthesize` compiles without running.
+
+## 2026-09-28 18:15 — the census walks every value-derived audio extent by default (the 2026-09-22 04:05 condition, met)
+
+The 2026-09-22 04:05 entry left the catalogue census WITHOUT `--walk-extents` until the ladder's
+open tail was measured. It was (04:55, 04:57: the quarter-octave tail now in every vendor profile),
+and the flag stayed off anyway: a mechanism behind an opt-in no caller opened. The 2026-09-28
+zero-miss verification paid for it on three audio models, one class — a codec whose length is what
+the model generated:
+
+| model | class | misses | cause |
+|---|---|---|---|
+| chatterbox | 16 GB | 32 | its vocoder walk was wired; the census never asked for it |
+| openaudio-s1-mini | 16 GB | 26 | the DualAR codec decoded at the one frame count the shadow reached |
+| orpheus-3b-0.1-ft | 32 GB | 22 | the SNAC codec NEVER ran: the shadow's draws fall below `audio_token_start`, no frame survives, its census recorded 8 prefill keys |
+
+Branch `the-census-walks-every-audio-codec-extent`: the tool walks on the model's own request at
+the top rung, always (the flag is gone); `triton/flow/autoregressive.py` walks the SNAC codec over
+the audio-token count through `redistribute_snac_codes` itself; `triton/flow/dual_ar.py` walks
+the RVQ decode and codec over frames (`_decode_codes`); and `census.walk_extent` now refuses a
+walk in which no extent recorded a key — a stage its flow's filter kept from running would
+otherwise print a walk and certify nothing. Kokoro, the fourth, is not walked on purpose: its
+Triton decoder pads every block to the traced frame length, so its keys do not depend on the
+predicted frame count (0 misses the same day). Live runs are unchanged, pinned by two tests.
+
+**For the Mac:** the same three models miss the same way on Metal (your 09:59 and 11:52 findings);
+a census taken from this branch on Apple walks them without being asked.
