@@ -361,3 +361,15 @@ def test_the_plan_time_contract_is_the_runtime_s_triple():
     assert k.safe is True and k.narrow_op_uids == _pc.narrowable_op_uids(dag)
     other = dict(dag, execution_order=list(reversed(dag["execution_order"])))
     assert plan_time_contract(cache, "vae", other, "float16").safe is False   # not this graph
+
+
+def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
+    """IntEnum.__str__ is int.__str__ on Python 3.11+ (the Mac's): str(NBXDtype.bfloat16) == "1" there,
+    and the pass refused Sana-4K's text encoder at plan time ("unknown dtype name '1'", 2026-09-28 12:16).
+    The name is read from the member. RED on 43b307ad: this test forces the 3.11 str() on 3.10."""
+    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    monkeypatch.setattr(NBXDtype, "__str__", lambda self: str(int(self)))
+    assert str(NBXDtype.bfloat16) == "1"
+    assert RW._nbx_name(NBXDtype.bfloat16) == "bfloat16"
+    assert RW._nbx_name(NBXDtype.float32) == "float32"

@@ -257,7 +257,11 @@ def _nbx(name: str):
 
 
 def _nbx_name(nbx) -> str:
-    return _name(str(nbx))
+    """An NBXDtype's NAME. NBXDtype is an IntEnum: `str()` of a member is "NBXDtype.bfloat16" on
+    Python 3.10 but the bare number ("1") on 3.11+, where IntEnum.__str__ became int.__str__ — the
+    Mac's interpreter; the name is read from the member, never from its string."""
+    name = getattr(nbx, "name", None)
+    return _name(name if isinstance(name, str) else str(nbx))
 
 
 def _wider(a: str, b: str) -> str:
