@@ -284,6 +284,11 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
             say(f"[checkpoint] producer {pid} ({producer_name(pid)}) is already gone at start — one last checkpoint, then exit")
     stop = {"now": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("now", True))
+    # A checkpointer outlives the terminal that launched it: a tmux window closing when its chain
+    # ends SIGHUPs the whole group, and it killed a final checkpoint mid-gate on 2026-09-28 (four
+    # certified entries uncommitted for 6.5 h, a checkpoint never pushed). Ignored, and inherited
+    # as ignored by the gate it runs, the hangup cannot cost a result; SIGTERM still ends it cleanly.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
     last = time.monotonic()
     while True:
         alive = [p for p in producers if producer_alive(p)]
