@@ -2910,7 +2910,8 @@ class GraphExecutor:
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
             activations_fp16_safe=bool(_seq_safe),
-            precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow))
+            precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow),
+            graph_dtype=self._dag.get("torch_dtype"))
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
