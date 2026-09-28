@@ -51,6 +51,37 @@ def child_env(base: dict | None = None, **extra) -> dict:
     return env
 
 
+def the_callers_door(default: str) -> str:
+    """The cards a child process may see: the caller's `CUDA_VISIBLE_DEVICES` when it set one,
+    `default` only when it set none.
+
+    A child told its own ordinal escapes the door the workshop runs the suite under. Measured
+    2026-09-27: a gate told `CUDA_VISIBLE_DEVICES=3` put a TinyLlama child on physical card 2
+    (the lazy-bind boundary test's "2") and a launch-path child on card 0 (the launcher's "0"),
+    twice meeting a retrace that owned card 2. An empty door holds no card, and the test says so
+    instead of finding one.
+    """
+    import pytest
+
+    door = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if door is None:
+        return default
+    if not door.strip():
+        pytest.skip("the caller's door holds no card (CUDA_VISIBLE_DEVICES is empty)")
+    return door
+
+
+def the_pinned_profile(profile: str):
+    """`profile` when the test runs on its OWN card, None under the caller's door.
+
+    A pinned profile names a card class (`v100-32g`) and was chosen WITH the test's own ordinal;
+    under the caller's door the card may be of another class, and a 32 GB profile on a 16 GB card
+    plans memory the card does not have. Autodetect reads a masked card since 2026-09-20 (the note
+    in tests/regression/test_serve_warm.py), so the caller's card is described by itself.
+    """
+    return profile if os.environ.get("CUDA_VISIBLE_DEVICES") is None else None
+
+
 def missing_prerequisites() -> list:
     """Which of them this process does not have — for a test that wants to say
     'this machine cannot compile in a child' rather than fail obscurely."""
