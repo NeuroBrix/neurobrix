@@ -60664,17 +60664,17 @@
      "GROUP_M": 8
     },
     "num_warps": 4,
-    "num_stages": 3,
+    "num_stages": 2,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T19:51:44+00:00",
+    "date": "2026-09-28T22:05:08+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "msl-v0.1-b1c6226e82836d20"
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
     },
     "shape": [
      448,
@@ -60686,12 +60686,16 @@
      "bf16",
      "fp32"
     ],
-    "deviation": 4.297618344071233e-06,
+    "launches": 1,
+    "launch_deviations": [
+     4.1654848758303486e-06
+    ],
+    "deviation": 4.1654848758303486e-06,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-26; rows 211-237; rows 422-448) of 448 rows",
     "machine": {
      "hostname": "MacBook-Pro.local",
-     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "platform": "macOS-27.0-arm64-arm-64bit",
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
@@ -60700,25 +60704,26 @@
       "ordinal": 0,
       "visible_devices": null,
       "name": "Apple M4 Pro",
-      "memory_mb": 18186
+      "memory_mb": 18186,
+      "unified": true
      },
      "clocks_mhz": null
     },
-    "best_ms": 6.6213250160217285,
-    "second_ms": 6.626604080200195,
-    "candidates": 10,
-    "accepted": 10,
-    "benched": 4,
+    "best_ms": 5.302868979317801,
+    "second_ms": 5.331863130841937,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.053,
-     "runs": 0.163,
-     "bench": 0.637
+     "oracle": 0.11,
+     "runs": 0.123,
+     "bench": 1.394
     },
     "stability_witness": {
-     "open_ms": 4.4328,
-     "close_ms": 4.4385,
-     "drift": 0.0013,
+     "open_ms": 3.4428,
+     "close_ms": 3.5049,
+     "drift": 0.018,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
