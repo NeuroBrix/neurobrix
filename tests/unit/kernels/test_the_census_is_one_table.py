@@ -75,3 +75,21 @@ def test_consolidation_reads_a_logs_dir_and_skips_foreign_json(tmp_path, monkeyp
     (src / "M.triton.walk.keys").write_text(f"neurobrix.kernels.ops.matmul.matmul_kernel::{K1}\n")
     by_model, unhashed = CT.rows_of_source(src, "t")
     assert list(by_model) == ["M"] and by_model["M"][0]["mode"] == "triton" and not unhashed
+
+
+def _replace_many(args):
+    path, model = args
+    from pathlib import Path
+    from neurobrix.kernels import census_table as TT
+    TT.replace_model(Path(path), model, [_row(model, K1), _row(model, K2)])
+
+
+def test_many_writers_lose_no_model(tmp_path):
+    """One census process per model writing one class table (2026-09-28 21:56): every model's rows
+    survive. Without the lock, a read-modify-write that raced another dropped its rows."""
+    import multiprocessing as mp
+    p = tmp_path / "t.jsonl"
+    models = [f"M{i:02d}" for i in range(24)]
+    with mp.Pool(8) as pool:
+        pool.map(_replace_many, [(str(p), m) for m in models])
+    assert sorted({r["model"] for r in T.read(p)}) == models
