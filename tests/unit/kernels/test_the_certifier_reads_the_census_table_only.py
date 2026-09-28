@@ -22,7 +22,7 @@ QUAL = "neurobrix.kernels.ops.matmul.matmul_kernel"
 
 
 def _row(model, key, mode="triton"):
-    return {"model": model, "container": "s", "mode": mode, "rungs_mb": None, "op": None,
+    return {"model": model, "container": "s", "mode": mode, "rungs_mb": None, "ops": [None],
             "kernel": QUAL, "key": key, "dtype": T.dtypes_of(key), "tool": "t"}
 
 
