@@ -119,6 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
   experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
   old recompute path as a reference in both engines.
+
+- **SANA-Video renders at the requested size on large-memory GPUs.** When its decoder was split into
+  tiles, the tiles were stitched on a canvas eight times too small, so a 1280x512 request came out
+  as a 160x64 video. The tile scale now comes from the model's own measured shapes, and a model whose
+  declared scale contradicts them is refused with both numbers.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
