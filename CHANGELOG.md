@@ -129,6 +129,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to fit the GPU, the tiles were averaged with equal weight where they overlap, leaving a line at
   every tile boundary (a 64-pixel grid on CogVideoX-2b, 96 pixels on Wan2.1). The overlaps are now
   crossfaded across their overlap.
+
+- **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
+  whose GPU shares memory with the host (unified memory), the certifier now counts its host-side copies of each
+  test tensor when it decides whether a shape fits.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
