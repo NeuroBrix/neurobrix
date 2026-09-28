@@ -3,7 +3,7 @@
 Implements forward FFT, rfft, and irfft as pure Triton kernels.
 Based on FlagGems PR #1243 (Cooley-Tukey butterfly decomposition).
 
-Algorithm:
+Algorithm (every row of a [rows, N] batch at once — one launch per step, not per row):
   1. Bit-reversal permutation (reorder input)
   2. log2(N) butterfly stages with twiddle factors
   3. For rfft: take first N//2+1 complex outputs
@@ -20,145 +20,92 @@ import triton.language as tl
 
 
 @triton.jit
-def bit_reverse_kernel(
+def bit_reverse_rows_kernel(
     real_in, imag_in, real_out, imag_out,
-    n,
+    n, total, log2n,
+    BLOCK_SIZE: tl.constexpr,
 ):
-    """Bit-reversal permutation: input[i] → output[bit_reverse(i)].
+    """Bit-reversal permutation of EVERY row of a [rows, n] pair in one launch:
+    row r's element i lands at row r, position bit_reverse(i).
 
-    Each thread handles one element. Grid size = N.
+    One element per lane, `total` = rows * n lanes. The rows used to be launched one
+    at a time from the host: an STFT of a spoken sentence is thousands of rows, and
+    its FFT cost thousands of launches per stage (py-spy on chatterbox's census walk,
+    2026-09-28: every sample inside that per-row loop).
     """
-    tid = tl.program_id(0).to(tl.int64)
-    # A program beyond n contributes nothing: every access below is masked
-    # (no early exit — unstructured control flow has no lowering on every
-    # backend; the Metal census, 2026-09-05).
-    m = tid < n
+    pid = tl.program_id(0).to(tl.int64)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit: rows * n passes 2^31 on a long speech
+    m = offs < total
+    row = offs // n
+    idx = offs % n
 
-    # Compute bit-reversed index.
-    #
-    # `rev_idx` is seeded as an explicit int64 and NOT as the literal 0. A bare
-    # `0` is int32, and the loop body below computes
-    # `(rev_idx << 1) | (temp_idx & 1)` where `temp_idx` descends from
-    # `tid.to(tl.int64)` — so the first iteration re-assigns an int64 into an
-    # int32 loop-carried variable and Triton refuses the kernel outright:
-    #
-    #   Loop-carried variable rev_idx has initial type int32 but is re-assigned
-    #   to int64 in loop! Please make sure that the type stays consistent.
-    #
-    # Found 2026-09-18 by `chatterbox`, whose vocoder calls `aten::stft`; the
-    # whole pipeline died there. No other loop-carried variable here has the
-    # problem: `temp_n` stays int32 under `//= 2`, and `temp_idx` is int64
-    # throughout.
-    temp_n = n
-    idx = tid
-    rev_idx = tl.cast(0, tl.int64)
-    temp_idx = idx
-    while temp_n > 1:
-        temp_n //= 2
-        rev_idx = (rev_idx << 1) | (temp_idx & 1)
-        temp_idx = temp_idx >> 1
+    # `rev` is an explicit int64 from the start: a bare 0 is int32, and the loop
+    # re-assigns an int64 into it — Triton refuses a loop-carried type change
+    # (found 2026-09-18 by chatterbox's `aten::stft`).
+    rev = tl.zeros([BLOCK_SIZE], dtype=tl.int64)
+    t = idx
+    for _ in range(0, log2n):
+        rev = (rev << 1) | (t & 1)
+        t = t >> 1
 
-    val_real = tl.load(real_in + idx)
-    val_imag = tl.load(imag_in + idx)
-    tl.store(real_out + rev_idx, val_real)
-    tl.store(imag_out + rev_idx, val_imag)
+    val_real = tl.load(real_in + offs, mask=m, other=0.0)
+    val_imag = tl.load(imag_in + offs, mask=m, other=0.0)
+    tl.store(real_out + row * n + rev, val_real, mask=m)
+    tl.store(imag_out + row * n + rev, val_imag, mask=m)
 
 
 @triton.jit
-def fft_stage_kernel(
+def fft_stage_rows_kernel(
     real_ptr, imag_ptr,
-    n, stage,
+    n, pairs, stage,
+    INVERSE: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
 ):
-    """One butterfly stage of the Cooley-Tukey FFT.
+    """One butterfly stage of the Cooley-Tukey FFT on EVERY row of a [rows, n] pair,
+    in place, one butterfly pair per lane (`pairs` = rows * n // 2 lanes).
 
-    Each thread processes one butterfly pair. Grid size = N//2.
-    Iterates log2(N) times for full FFT.
+    The forward twiddle is e^(-i*pi*k/half_block); INVERSE takes its conjugate. The
+    arithmetic of each pair is the one-row kernel's, written the same way, so a row
+    computed in a batch is bit-identical to the row computed alone.
     """
     PI = math.pi
-    tid = tl.program_id(0).to(tl.int64)
+    pid = tl.program_id(0).to(tl.int64)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    half_n = n // 2
+    row = offs // half_n
+    tid = offs % half_n
     half_block = 1 << (stage - 1)
 
-    # Which butterfly group and position within group
     butterfly_group = tid // half_block
     pos_in_group = tid % half_block
-
-    # Indices of the two elements in this butterfly pair
-    first_idx = butterfly_group * half_block * 2 + pos_in_group
-    second_idx = first_idx + half_block
-    # One mask for the butterfly: a program beyond n // 2, or a pair whose
-    # second element lies beyond n, reads and writes nothing (no early
-    # exit — the portable form is the mask).
-    m = (tid < n // 2) & (second_idx < n)
-
-    # Load values
-    a_real = tl.load(real_ptr + first_idx, mask=m, other=0.0)
-    a_imag = tl.load(imag_ptr + first_idx, mask=m, other=0.0)
-    b_real = tl.load(real_ptr + second_idx, mask=m, other=0.0)
-    b_imag = tl.load(imag_ptr + second_idx, mask=m, other=0.0)
-
-    # Twiddle factor: W = e^(-i * pi * k / half_block)
-    angle = PI * pos_in_group / half_block
-    w_real = tl.cos(-angle)
-    w_imag = tl.sin(-angle)
-
-    # Complex multiply: tw = b * W
-    tw_real = b_real * w_real - b_imag * w_imag
-    tw_imag = b_real * w_imag + b_imag * w_real
-
-    # Butterfly: a' = a + tw, b' = a - tw
-    result_a_real = a_real + tw_real
-    result_a_imag = a_imag + tw_imag
-    result_b_real = a_real - tw_real
-    result_b_imag = a_imag - tw_imag
-
-    # Store
-    tl.store(real_ptr + first_idx, result_a_real, mask=m)
-    tl.store(imag_ptr + first_idx, result_a_imag, mask=m)
-    tl.store(real_ptr + second_idx, result_b_real, mask=m)
-    tl.store(imag_ptr + second_idx, result_b_imag, mask=m)
-
-
-@triton.jit
-def ifft_stage_kernel(
-    real_ptr, imag_ptr,
-    n, stage,
-):
-    """One butterfly stage of the INVERSE FFT.
-
-    Same as forward but with conjugate twiddle factor (positive angle).
-    """
-    PI = math.pi
-    tid = tl.program_id(0).to(tl.int64)
-    half_block = 1 << (stage - 1)
-    butterfly_group = tid // half_block
-    pos_in_group = tid % half_block
-
-    first_idx = butterfly_group * half_block * 2 + pos_in_group
-    second_idx = first_idx + half_block
-    m = (tid < n // 2) & (second_idx < n)
+    first_local = butterfly_group * half_block * 2 + pos_in_group
+    second_local = first_local + half_block
+    # A lane beyond the last pair, or a pair whose second element lies beyond its row,
+    # reads and writes nothing (no early exit — the portable form is the mask).
+    m = (offs < pairs) & (second_local < n)
+    first_idx = row * n + first_local
+    second_idx = row * n + second_local
 
     a_real = tl.load(real_ptr + first_idx, mask=m, other=0.0)
     a_imag = tl.load(imag_ptr + first_idx, mask=m, other=0.0)
     b_real = tl.load(real_ptr + second_idx, mask=m, other=0.0)
     b_imag = tl.load(imag_ptr + second_idx, mask=m, other=0.0)
 
-    # INVERSE: positive angle (conjugate twiddle)
     angle = PI * pos_in_group / half_block
-    w_real = tl.cos(angle)
-    w_imag = tl.sin(angle)
+    if INVERSE:
+        w_real = tl.cos(angle)
+        w_imag = tl.sin(angle)
+    else:
+        w_real = tl.cos(-angle)
+        w_imag = tl.sin(-angle)
 
     tw_real = b_real * w_real - b_imag * w_imag
     tw_imag = b_real * w_imag + b_imag * w_real
 
-    result_a_real = a_real + tw_real
-    result_a_imag = a_imag + tw_imag
-    result_b_real = a_real - tw_real
-    result_b_imag = a_imag - tw_imag
-
-    tl.store(real_ptr + first_idx, result_a_real, mask=m)
-    tl.store(imag_ptr + first_idx, result_a_imag, mask=m)
-    tl.store(real_ptr + second_idx, result_b_real, mask=m)
-    tl.store(imag_ptr + second_idx, result_b_imag, mask=m)
+    tl.store(real_ptr + first_idx, a_real + tw_real, mask=m)
+    tl.store(imag_ptr + first_idx, a_imag + tw_imag, mask=m)
+    tl.store(real_ptr + second_idx, a_real - tw_real, mask=m)
+    tl.store(imag_ptr + second_idx, a_imag - tw_imag, mask=m)
 
 
 @triton.jit
