@@ -319,15 +319,25 @@ def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
            "--explain-plan", "--json"]
+    def _none(why):
+        # Said, never silent: the cell then reserves the static estimate and the reason is in its log.
+        print(f"[matrix] {model} {mode}: no plan host figure ({why}) — the static estimate is reserved", flush=True)
+        return None
     try:
         p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
-        t = p.stdout
+    except subprocess.TimeoutExpired:
+        return _none("the plan query timed out at 900 s")
+    t = p.stdout
+    try:
         doc = json.loads(t[t.index("{"):])
-    except (subprocess.TimeoutExpired, ValueError):
-        return None
+    except ValueError:
+        tail = (p.stderr or p.stdout).strip().splitlines()[-1:] or ["no output"]
+        return _none(f"rc {p.returncode}, no plan JSON: {tail[0][:160]}")
     hf = (doc.get("plan", doc) or {}).get("host_footprint") or {}
     total = hf.get("total_bytes")
-    return (int(total), "plan") if isinstance(total, int) and total > 0 else None
+    if not (isinstance(total, int) and total > 0):
+        return _none("the tree states no host_footprint")
+    return int(total), "plan"
 
 
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
