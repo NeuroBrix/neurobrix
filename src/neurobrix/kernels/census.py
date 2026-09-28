@@ -30,6 +30,24 @@ from typing import List, Any, Dict, Optional, Set
 
 _RECORD_LOCK = threading.Lock()
 _RECORDED: Set[str] = set()
+_RECORDED_OPS: Set[tuple] = set()      # (op uid, key line) already written to <record>.ops
+_OP: List[Optional[str]] = [None]      # the graph op whose dispatch is forming keys now (set_op)
+_RECORDING: List[Optional[bool]] = [None]
+
+
+def recording() -> bool:
+    """Whether this process records the keys it forms (NBX_KEY_RECORD) — read once: the dispatch
+    loops ask it per op, so it must cost a list read, not an environment lookup."""
+    if _RECORDING[0] is None:
+        _RECORDING[0] = bool(os.environ.get("NBX_KEY_RECORD"))
+    return _RECORDING[0]
+
+
+def set_op(op_uid: Optional[str]) -> None:
+    """The dispatch loops name the graph op they are about to run, so every key it forms is recorded
+    with the op that formed it (`<record>.ops`, one `op<TAB>key line` pair per line) — the census
+    table's `op` column. Called only while recording."""
+    _OP[0] = op_uid
 _OBSERVERS: List[Set[str]] = []         # key lines formed during a `walk_extent` run, dedup or not
 _ACTIVE = {"census": False}
 _SHADOW_PTR = [1 << 40]                 # addresses that address nothing, distinct and aligned
@@ -79,6 +97,12 @@ def record(tuned, key: tuple) -> None:
     with _RECORD_LOCK:
         for obs in _OBSERVERS:
             obs.add(line)
+        op = _OP[0]
+        if op is not None and (op, line) not in _RECORDED_OPS:
+            _RECORDED_OPS.add((op, line))
+            with open(path + ".ops", "a") as fh:
+                fh.write(f"{op}\t{line}\n")
+                fh.flush()
         if line in _RECORDED:
             return
         _RECORDED.add(line)
@@ -170,7 +194,13 @@ def walk_extent(lo: int, hi: int, run, name: str = ""):
         # (instrumentation that lies by construction). The run fails with the graph's own words.
         raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: every extent refused; "
                            f"first: {sorted(seen[refused[0]])[0]}")
-    classes = len({v for v in seen.values()}) - (1 if refused else 0)
+    keyed = {v for n, v in seen.items() if v and n not in refused}
+    if not keyed:
+        # Every extent the graph took launched nothing: a stage that never ran at any length (the
+        # flow's own filter kept it from running) would otherwise print a walk and certify no key.
+        raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: no extent recorded a key "
+                           f"in {len(seen)} run(s) — the stage never ran")
+    classes = len(keyed)
     print(f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
           f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""),
           flush=True)

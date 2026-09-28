@@ -27,13 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
 - The certifier prices a key by its phases before any draw (`autotune_certify.price_key`: the host draws, the device copies, the fp64 oracle whole or windowed per `_row_windows`/`_conv_windows`, the readback) and refuses it by name over a working-set budget (`neurobrix autotune certify --working-set-mb`, the figure the run's guard kills at); the 10 B/elem constant stood 12 % under a small depthwise key and 40 % over a large one on the Mac (2026-09-28, 20 keys measured one per process, `results/certifier_price`). `NBX_CERTIFY_PHASES=1` prints the process's memory at each phase of a key. Test: `tests/unit/kernels/test_the_certifier_prices_a_key_by_its_phases.py` (16 measured peaks, injection: conv windows shrunk to 1x1 -> 0.48x/0.66x/0.82x, red).
 - The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
+
+- **`neurobrix run --certified-only`: a confirmation run served entirely from the certified kernel
+  settings.** A kernel shape the certified directory does not cover fails the run with its name, its
+  shape and what the census says about it, instead of tuning at runtime; the machine's local tuning
+  cache is neither read nor written. Also set by `NBX_AUTOTUNE_CERTIFIED_ONLY=1`.
+
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
   does.** When a model's container records the vendor's resolution binning, the request is mapped
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
   for, in both engines. A request can turn it off with `use_resolution_binning`.
 
-- **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
-  such a stage at every key class of that length, on the largest memory rung.
+- **A census enumerates every stage whose length comes from values.** Such a stage — an audio
+  model's vocoder or codec, whose length is the speech it generated — runs at every key class of
+  that length on the largest memory rung, so a certified directory serves a speech of any length.
 
 ### Changed
 
@@ -48,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   planner now sizes streamed segments for the request actually made (not the size the model was traced
   at), keeps a decoder that fits in tiles resident beside the streamed part, counts only what the flow
   holds loaded together, and ranks every plan that computes on the host below every plan that does not.
+
+- **`neurobrix autotune certify` certifies the census table shipped with the engine, and nothing else.**
+  The kernel shapes to certify come from the committed census table of the hardware profile and the
+  card's memory class; `--census` is refused, and the machine's local tuning cache is no longer a
+  source of shapes.
+
+- **`--triton` speech models compute their spectrograms in a handful of GPU launches instead of one per
+  frame.** The Triton FFT behind `stft`/`istft` (chatterbox, MiniCPM-o) processed every frame of a
+  spectrogram separately; it now processes all frames at once, with bit-identical results.
 
 - **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
   depths the Metal backend's author recommends; the Apple profile declares them

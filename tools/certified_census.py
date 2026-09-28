@@ -35,13 +35,24 @@ comparison here.
     python tools/certified_census.py --hardware default-c5d28c27 --out nbx/campaigns/.../census.json
     python tools/certified_census.py --hardware default-c5d28c27 --models TinyLlama-1.1B-Chat-v1.0 --prove ~/.neurobrix/replay_cache/...
 
-The request each model is shadowed at is the family's judged request — the calibration section
-of `config/families/<family>.yml` plus the campaign's media and bounds (`tools/
-precision_zoo_campaign.request_args`, the one brick the retrace gate and the batteries use). A
-request-dependent dimension (a prompt's token count, a step count) enters the key exactly as
-the launcher forms it: the key is EXACT today, nothing buckets it, so the census covers the
-judged requests it is given (`--extra` adds flags to every request; `--requests-json` adds
-whole requests per model) and says so in `models[*].requests`.
+The request each model is shadowed at is DERIVED from the current container's trace, by the
+one derivation the regression matrix (the verification) uses too (`tools/trace_request.
+derived_request`): the family's judged request — the calibration section of `config/families/
+<family>.yml` plus the campaign's media and bounds (`precision_zoo_campaign.request_args`) — at
+the container's off-trace size for a family whose request names one. A request-dependent
+dimension (a prompt's token count, a step count, a height) enters the key exactly as the
+launcher forms it: the key is EXACT today, nothing buckets it, so the census covers the requests
+it is given and says so in `models[*].requests`.
+
+A request table (`--requests-json`, whole requests per model) is accepted only where its SIZE
+equals the derived one; its other flags (a prompt, a seed, a step count) are the table's. A
+table that disagrees is REFUSED for that model, by name, before any shadow runs — never its
+size taken silently, never the derived one either. Measured 2026-09-28: Sana_1600M_1024px_
+MultiLing was retraced (trace 960x1088); the census took 768x1024 from a table written from
+the OLD container while the matrix derived 704x1088 from the new one — 72 keys certified for a
+request the verification never makes, 42 keys the zero-miss verification met uncertified.
+`--extra` may not carry a size flag for the same reason. The census's own extra request (the
+family's tiling probe) is the census's, not the table's, and is kept.
 """
 from __future__ import annotations
 
@@ -58,10 +69,12 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+TOOL_REV = "unset"                                           # the table's `tool` column, set by main()
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "src"))
 
-import precision_zoo_campaign as _zoo                       # noqa: E402  (request_args, CACHE)
+import precision_zoo_campaign as _zoo                       # noqa: E402  (run_group, CACHE)
+import trace_request as _trace                              # noqa: E402  (the request the container's trace gives)
 import where_the_symbol_chain_breaks as _chain              # noqa: E402  (analyse)
 
 # Honor NEUROBRIX_CACHE (cache_dir's env door), so a census can run over a
@@ -169,8 +182,10 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
     suffix = (f".{tag}" if tag else "") + (f".r{rung_mb}" if rung_mb else "") + (".walk" if walk_extents else "")
     rec = log_dir / f"{model}.{mode}{suffix}.keys"
     log = log_dir / f"{model}.{mode}{suffix}.log"
-    if rec.exists():
-        rec.unlink()
+    ops_rec = Path(str(rec) + ".ops")
+    for old in (rec, ops_rec):
+        if old.exists():
+            old.unlink()
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": str(n_dev),
                 "NBX_KEY_RECORD": str(rec), "PYTHONPATH": str(REPO / "src"),
@@ -187,11 +202,14 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
     with open(log, "w") as fh:
         rc = _zoo.run_group(cmd, env, fh, timeout, cwd=str(REPO))
     keys = rec.read_text().splitlines() if rec.exists() else []
+    # (op uid, key line): the op each key was formed by, from the shadow's own record (census.set_op)
+    op_keys = [tuple(l.split("\t", 1)) for l in ops_rec.read_text().splitlines() if "\t" in l] if ops_rec.exists() else []
     tail = ""
     if rc != 0:
         lines = [l for l in log.read_text(errors="replace").splitlines() if "Error" in l or "ERROR" in l]
         tail = (lines[-1] if lines else "")[:300]
-    return {"mode": mode, "rung_mb": rung_mb, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys, "error": tail,
+    return {"mode": mode, "rung_mb": rung_mb, "rc": rc, "wall_s": round(time.time() - t0, 1), "keys": keys,
+            "op_keys": op_keys, "error": tail,
             # shlex.join, not " ".join: this string is REPLAYED (verification runs the
             # census's own command), and a space-joined argv cannot be. Recorded that way,
             # `--prompt The quick brown fox ...` split at every space and only `The` reached
@@ -243,12 +261,56 @@ def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
     return None
 
 
+class RequestRefused(Exception):
+    """A request the current container's trace does not give — the census will not shadow it."""
+
+
+def census_requests(model: str, fam: str, extra: list, table) -> list:
+    """The model's ordinary request(s): DERIVED from the container's trace (`trace_request.
+    derived_request`, the regression matrix's own derivation) plus `--extra`, or the table's,
+    each of which must ask for the derived size. Raises RequestRefused naming the model, both
+    sizes and how to regenerate the table; nothing is taken silently from either side."""
+    try:
+        derived = _trace.derived_request(model, fam)
+    except Exception as e:                    # said by name, never replaced by another request
+        raise RequestRefused(f"{model}: the request cannot be derived from the container's trace — "
+                             f"{type(e).__name__}: {e}") from e
+    want = _trace.requested_size(derived)
+    regen = (f"regenerate the table from the containers as they are now (`python tools/trace_request.py "
+             f"--models {model} --out <requests.json>`), or drop the model's entry and let the census derive it")
+    stray = [f for f in _trace.SIZE_FLAGS if f in extra]
+    if stray:
+        raise RequestRefused(
+            f"{model}: --extra carries {', '.join(stray)} — a size is the container's trace's "
+            f"({_trace.size_text(want)}), never a flag appended to every request; drop it from --extra")
+    if not table:
+        return [derived + list(extra)]
+    reqs = []
+    for i, req in enumerate(table):
+        req = list(req) + list(extra)
+        got = _trace.requested_size(req)
+        if got != want:
+            raise RequestRefused(
+                f"{model}: the request table asks for size {_trace.size_text(got)} (request {i}) but the "
+                f"current container's trace gives {_trace.size_text(want)} — the table was not derived from "
+                f"this container (a retrace since it was written?). A census at a size the verification "
+                f"never runs certifies keys nobody asks for; {regen}.")
+        reqs.append(req)
+    return reqs
+
+
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
-                 log_dir: Path, rungs: list = (), walk_extents: bool = False) -> dict:
+                 log_dir: Path, rungs: list = ()) -> dict:
     fam = _family(model)
-    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [],
+    row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [], "_table": [],
            "derived_breaks": [],
            "graph_sha": _graph_sha(model)}
+    try:
+        # First, before the analyser and before any shadow: a refused request costs nothing.
+        reqs = census_requests(model, fam, list(extra), requests)
+    except RequestRefused as e:
+        row.update(status="refused", refusal=str(e), requests=[shlex.join(r) for r in (requests or [])])
+        return row
     _all_breaks = frozen_dims(model)
     frozen, unadjudicated = split_frozen(_all_breaks)
     row["derived_breaks"] = unadjudicated
@@ -261,7 +323,6 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
         # model is certified for what it can run today. Dropping it harvested nothing for 17
         # of 59 containers (2026-09-21).
         row.update(status="retrace", frozen=frozen)
-    reqs = requests or [_zoo.request_args(model, fam, list(extra))]
     probe = _tiling_probe(model, fam, reqs[0], log_dir)
     if probe is not None:
         reqs = list(reqs) + [probe]
@@ -273,7 +334,13 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
             for rung in _rungs:
                 res = shadow(model, req, mode, hardware, _device_count(hardware), timeout, log_dir, rung_mb=rung,
                              tag=("probe" if ri else ""),
-                             walk_extents=(walk_extents and not ri and rung == _rungs[-1]))
+                             # The value-derived extent walk runs on the model's own request at the
+                             # top rung, always: taken without it, a census certified ONE speech
+                             # length, and every audio model with a codec missed at the next one
+                             # (chatterbox 32, openaudio 26, orpheus 22 misses, 2026-09-28). The
+                             # reason it was once off — the 512-step tail cutting a waveform into
+                             # thousands of buckets — is gone with the quarter-octave tail.
+                             walk_extents=(not ri and rung == _rungs[-1]))
                 res["request"] = "probe" if ri else "ordinary"
                 if ri and res["rc"] != 0 and "cannot run on this machine" in (res.get("error") or ""):
                     # A tiling probe the plan refuses at this rung (a 4 096-pixel request on a
@@ -281,8 +348,10 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                     # exists for it, and the model's own request is unaffected.
                     res["rc"] = 0
                     res["refused_at_rung"] = True
-                row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k != "keys"} | {"keys": len(res["keys"])})
+                row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k not in ("keys", "op_keys")}
+                                                         | {"keys": len(res["keys"])})
                 keys.update(res["keys"])
+                row["_table"].extend(table_rows(model, row["graph_sha"], mode, rung, res["keys"], res["op_keys"]))
                 if res["rc"] != 0:
                     # A PROBE that fails is not the model failing. The probe is a SECOND
                     # request the census composes to reach the tiled shapes (a 4 096-pixel
@@ -302,6 +371,31 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
     row["keys"] = len(keys)
     row["_keys"] = sorted(keys)
     return row
+
+
+def tool_revision() -> str:
+    """The census tool's tree, as the table's `tool` column: its commit, '+' when the tree differs."""
+    head = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    dirty = subprocess.run(["git", "-C", str(REPO), "status", "--porcelain", "--", "src", "tools"],
+                           capture_output=True, text=True).stdout.strip()
+    return (head or "unknown") + ("+" if dirty else "")
+
+
+def table_rows(model: str, container: str, mode: str, rung: int, keys: list, op_keys: list) -> list:
+    """The census table's rows for one shadow run: one per (op, key) the shadow recorded, and one with
+    op None for a key it formed outside any graph op (a flow's own call)."""
+    from neurobrix.kernels import census_table as T
+    ops_of = {}
+    for op, line in op_keys:
+        ops_of.setdefault(line, set()).add(op)
+    rows = []
+    for line in keys:
+        kernel, _, key = line.partition("::")
+        for op in sorted(ops_of.get(line) or [None], key=lambda o: o or ""):
+            rows.append({"model": model, "container": container, "mode": mode,
+                         "rungs_mb": [int(rung)] if rung else None, "op": op, "kernel": kernel, "key": key,
+                         "dtype": T.dtypes_of(key), "tool": TOOL_REV})
+    return rows
 
 
 def census_memory_class(hardware: str) -> int:
@@ -368,21 +462,29 @@ def main() -> int:
     ap.add_argument("--hardware", required=True, help="the profile the census is taken for (config/hardware/<id>.yml)")
     ap.add_argument("--models", default=None, help="comma-separated; default: every container in the cache")
     ap.add_argument("--rungs", default="ladder", help="'ladder' (default): every rung up to the profile's capacity; 'none': the profile's own budget only; or a comma-separated list of MB")
-    ap.add_argument("--walk-extents", action="store_true",
-                    help="run a stage whose length the flow learns only from VALUES (a vocoder's "
-                         "speech tokens) at every key class of that length, on the top rung; "
-                         "costs many runs of that stage and is what makes an audio model's "
-                         "directory serve a speech of any length")
     ap.add_argument("--modes", default="triton", help="comma-separated served modes: triton, triton-sequential")
     ap.add_argument("--extra", nargs="*", default=[], help="flags appended to every request")
-    ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model')
+    ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model; each must ask for the size '
+                         'the current container\'s trace gives (tools/trace_request.py writes such a table)')
     ap.add_argument("--timeout", type=int, default=3600, help="per shadow run, seconds")
     ap.add_argument("--jobs", type=int, default=2, help="shadow runs in flight (CPU-bound, no card)")
     ap.add_argument("--directory", default=None, help="<vendor>/<profile> of the certified directory to measure coverage against")
     ap.add_argument("--prove", default=None, help="a replay cache dir/file or census file the census must contain")
-    ap.add_argument("--out", required=True, help="census.json (certifier format: entries keyed by <kernel>::<key>)")
-    ap.add_argument("--logs", default=None, help="where the shadow logs and key records go (default: beside --out)")
+    ap.add_argument("--table", required=True, help="<vendor>/<profile> of THE census table this census writes "
+                         "(config/census/<vendor>/<profile>/<class>g.jsonl; the class is the --hardware profile's)")
+    ap.add_argument("--out", default=None, help="a census report JSON beside the logs (optional: the table is the product)")
+    ap.add_argument("--logs", required=True, help="where the shadow logs and key records go")
     a = ap.parse_args()
+    global TOOL_REV
+    TOOL_REV = tool_revision()
+    vendor, _, profile = a.table.partition("/")
+    if not vendor or not profile or "/" in profile:
+        print(f"--table {a.table!r}: name the table as <vendor>/<profile>", file=sys.stderr)
+        return 2
+    table_cls = census_memory_class(a.hardware)
+    if table_cls is None:
+        print(f"--hardware {a.hardware}: its memory class cannot be read, so no table can be named", file=sys.stderr)
+        return 2
 
     models = a.models.split(",") if a.models else sorted(
         p.name for p in CACHE.iterdir() if (p / "manifest.json").exists())
@@ -392,8 +494,7 @@ def main() -> int:
             print(f"unknown mode {m!r}; served modes are {sorted(MODES)}", file=sys.stderr)
             return 2
     per_model_requests = json.loads(Path(a.requests_json).read_text()) if a.requests_json else {}
-    out = Path(a.out)
-    log_dir = Path(a.logs) if a.logs else out.parent / (out.stem + "_runs")
+    log_dir = Path(a.logs)
     log_dir.mkdir(parents=True, exist_ok=True)
 
     if a.rungs == "none":
@@ -404,19 +505,42 @@ def main() -> int:
         rungs = [int(x) for x in a.rungs.split(",") if x.strip()]
     print(f"[census] rungs: {rungs or 'the profile budget only'}", flush=True)
 
+    # Every model's request is resolved BEFORE any shadow runs, so a stale table is refused at
+    # once, by name, not hours into a census. A refused model is still written as a row (status
+    # "refused", its reason) and the census's exit status says it; the others are censused.
+    for m in models:
+        try:
+            census_requests(m, _family(m), list(a.extra), per_model_requests.get(m))
+        except RequestRefused as e:
+            print(f"[census] REFUSED {e}", flush=True)
+
     t0 = time.time()
     rows = {}
     with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs,
-                                   a.walk_extents)
+        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs)
                 for m in models}
         for m, f in futs.items():
             rows[m] = f.result()
             r = rows[m]
+            if r["status"] == "refused":
+                continue                                  # said above, before the shadows
             print(f"[census] {m:44s} {r['family']:10s} {r['status']:8s} {r['keys']:5d} key(s)"
                   + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
                   + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
                      if r.get("derived_breaks") else ""), flush=True)
+
+    # THE census table: a model whose own request censused replaces its rows (a retrace replaces, never
+    # adds); a model whose census failed keeps its previous rows, said — a failed shadow is not the
+    # knowledge that a model forms no key.
+    from neurobrix.kernels import census_table as _T
+    table = _T.table_path(vendor, profile, table_cls)
+    for m, r in rows.items():
+        trows = r.pop("_table", [])
+        if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
+            removed, written = _T.replace_model(table, m, trows)
+            print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
+        else:
+            print(f"[census] table {table.name}: {m} — census {r['status']}, its previous rows kept", flush=True)
 
     entries = {}
     for m, r in rows.items():
@@ -429,7 +553,8 @@ def main() -> int:
               "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
               "modes": modes, "rungs_mb": rungs, "wall_s": round(time.time() - t0, 1),
               "models": rows, "retrace_queue": sorted(m for m, r in rows.items() if r["status"] == "retrace"),
-              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed")),
+              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed", "refused")),
+              "refused": {m: r["refusal"] for m, r in sorted(rows.items()) if r["status"] == "refused"},
               "probe_failed": sorted(m for m, r in rows.items() if "probe_failed" in r["status"]),
               "entries": entries}
     if a.directory:
@@ -440,10 +565,11 @@ def main() -> int:
                               "to_certify": sorted(k for k in entries if k not in served)}
     if a.prove:
         census["proof"] = prove(census, a.prove)
-    out.write_text(json.dumps(census, indent=1))
+    if a.out:
+        Path(a.out).write_text(json.dumps(census, indent=1))
     n_ok = sum(1 for r in rows.values() if r["status"] == "ok")
     print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); retrace queue {len(census['retrace_queue'])}; "
-          f"failed {len(census['failed'])}; {census['wall_s']} s; written {out}")
+          f"failed {len(census['failed'])} (refused {len(census['refused'])}); {census['wall_s']} s; table {table}")
     if a.directory:
         c = census["coverage"]
         print(f"[census] directory {a.directory}, {c['memory_class_gb']} GB class: {c['served']} served, "

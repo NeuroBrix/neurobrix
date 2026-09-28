@@ -29,7 +29,7 @@ def test_no_tool_spells_the_container_cache_path():
     # (2026-09-22) so the finding is not lost, and this gate grows as they are fixed.
     CHAIN = {"precision_zoo_campaign.py", "levers_byte_identity.py", "unroll_census_report.py",
              "artefact_voice.py", "ir_census.py", "certified_census.py", "certified_checkpoint.py",
-             "bucket_loss.py"}
+             "bucket_loss.py", "trace_request.py"}
     offenders = []
     for f in sorted((REPO / "tools").rglob("*.py")):
         if f.name not in CHAIN:

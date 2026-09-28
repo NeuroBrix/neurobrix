@@ -134,15 +134,21 @@ def _announce_first_sweep(tuned):
         # 2026-09-05 (upstream's on-disk cache was dropped: its key was a
         # torch-importing driver probe): seed once, capture every growth.
         from neurobrix.triton import autotune_cache as _atc
+        from neurobrix.kernels import autotune_certified as _cert_mode
+        # A CONFIRMATION run (--certified-only) serves the certified directory and nothing else:
+        # the local replay cache holds earlier SWEEPS, so it is never seeded here (a gate that
+        # read it looked "served" while 39 % of its key uses were replayed sweeps — the Mac,
+        # 2026-09-28). A census shadow is not a confirmation run and keeps its own rules.
+        _confirm = _cert_mode.certified_only() and not _census.active()
         if not _SEEDED[0]:
             _SEEDED[0] = True
-            try:
-                _n = _atc.seed()
-                from neurobrix.kernels import autotune_certified as _cert0
-                _cert0.note_local(_n)
-                _cert0.override_seeded()   # the directory first, even on a warm machine
-            except Exception:              # the replay cache is an optimisation, never a failure source
-                pass
+            if not _confirm:
+                try:
+                    _n = _atc.seed()
+                    _cert_mode.note_local(_n)
+                    _cert_mode.override_seeded()   # the directory first, even on a warm machine
+                except Exception:              # the replay cache is an optimisation, never a failure source
+                    pass
         # The certified directory (owner directive 2026-09-06, the engine
         # component): a shape the directory certifies for the profile in
         # force, this kernel and its dtype is applied here — no sweep, no
@@ -171,7 +177,10 @@ def _announce_first_sweep(tuned):
                     # an operand widened on load is keyed by the dtype it is computed in
                     twin = _cert.computed_key(tuned, key, kwargs)
                     applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin, memory_class=mcls)
-            except Exception as exc:            # the directory is an optimisation, never a failure source
+            except Exception as exc:            # the directory is an optimisation, never a failure source —
+                if _confirm:                    # except in a confirmation run, where it is the only source
+                    raise _cert.KeyNotCertified(f"CERTIFIED-ONLY: the certified lookup failed for {qual} "
+                                                f"at {key}: {exc}") from exc
                 print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
                 applied = False
             if applied:
@@ -179,6 +188,8 @@ def _announce_first_sweep(tuned):
             elif _cert.reseed_evicted(qual, tuned, key):
                 applied = True                  # the machine's own earlier sweep, put back for this card
             if not applied:
+                if _confirm:
+                    _cert.refuse_missing(qual, tuned, key)   # raises KeyNotCertified: never a sweep
                 _cert.announce_missing(qual, tuned, key)
         before = len(cache)
         result = original(*args, **kwargs)

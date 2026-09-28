@@ -9072,82 +9072,49 @@ def _next_power_of_2(n: int) -> int:
     return 1 << (n - 1).bit_length()
 
 
-def _triton_fft_forward(x_real, x_imag) -> tuple:
-    """Run forward FFT on separate real/imag tensors. Returns (real, imag).
+def _triton_fft_rows(x_real, x_imag, inverse: bool) -> tuple:
+    """The radix-2 FFT of every row along the last dim, all rows in ONE launch per step:
+    one bit-reversal, log2(N) butterfly stages and, for the inverse, one 1/N scale.
+    Returns (real, imag) in the input's shape. N must be a power of 2.
 
-    Input size must be power of 2.
-    """
-    from .ops.fft_op import bit_reverse_kernel, fft_stage_kernel
+    The rows were launched one at a time from the host — an STFT of a spoken sentence
+    is thousands of frames, so thousands of launches per stage: chatterbox's census
+    walk spent every py-spy sample inside that loop (2026-09-28), and every live
+    Triton run through `aten::stft` paid the same per-frame cost."""
+    from .ops.fft_op import bit_reverse_rows_kernel, fft_stage_rows_kernel, scale_kernel
 
     N = x_real.shape[-1]
     assert N > 0 and (N & (N - 1)) == 0, f"FFT size must be power of 2, got {N}"
-
-    # Flatten batch dims
     orig_shape = x_real.shape
-    if x_real.ndim > 1:
-        batch = x_real.numel() // N
-        x_real = x_real.reshape(batch, N)
-        x_imag = x_imag.reshape(batch, N)
-        # Process each batch element
-        out_real = NBXTensor.empty_like(x_real)
-        out_imag = NBXTensor.empty_like(x_imag)
-        for b in range(batch):
-            r, i = _triton_fft_forward_1d(x_real[b].contiguous(), x_imag[b].contiguous())
-            out_real[b] = r
-            out_imag[b] = i
-        return out_real.reshape(orig_shape), out_imag.reshape(orig_shape)
-
-    return _triton_fft_forward_1d(x_real.contiguous(), x_imag.contiguous())
-
-
-def _triton_fft_forward_1d(x_real, x_imag) -> tuple:
-    """1D forward FFT on contiguous tensors."""
-    from .ops.fft_op import bit_reverse_kernel, fft_stage_kernel
-
-    N = x_real.shape[0]
-    device = x_real.device
-
-    # Bit reversal
-    temp_real = NBXTensor.empty_like(x_real)
-    temp_imag = NBXTensor.empty_like(x_imag)
-    _set_device(x_real)
-    bit_reverse_kernel[(N,)](x_real, x_imag, temp_real, temp_imag, N)
-
-    # Butterfly stages
+    rows = x_real.numel() // N
+    xr = x_real.reshape(rows, N).contiguous()
+    xi = x_imag.reshape(rows, N).contiguous()
+    out_real = NBXTensor.empty_like(xr)
+    out_imag = NBXTensor.empty_like(xi)
     log2n = N.bit_length() - 1
+    total = rows * N
+    _set_device(xr)
+    bit_reverse_rows_kernel[_1d_grid(total)](xr, xi, out_real, out_imag, N, total, log2n,
+                                             BLOCK_SIZE=_EW_BLOCK)
+    pairs = rows * (N // 2)
     for stage in range(1, log2n + 1):
-        _set_device(temp_real)
-        fft_stage_kernel[(N // 2,)](temp_real, temp_imag, N, stage)
+        fft_stage_rows_kernel[_1d_grid(pairs)](out_real, out_imag, N, pairs, stage,
+                                               INVERSE=inverse, BLOCK_SIZE=_EW_BLOCK)
+    if inverse:
+        # 1/N through the house scale kernel (an NBXTensor has no torch-style in-place
+        # multiply — found by the 2026-09-05 bit gate).
+        scale_kernel[_1d_grid(total)](out_real, out_imag, total, 1.0 / N, BLOCK_SIZE=_EW_BLOCK)
+    return out_real.reshape(orig_shape), out_imag.reshape(orig_shape)
 
-    return temp_real, temp_imag
+
+def _triton_fft_forward(x_real, x_imag) -> tuple:
+    """Forward FFT of every row along the last dim. Returns (real, imag). N a power of 2."""
+    return _triton_fft_rows(x_real, x_imag, inverse=False)
 
 
-def _triton_ifft_1d(x_real, x_imag) -> tuple:
-    """1D inverse FFT on contiguous tensors. Returns (real, imag) scaled by 1/N."""
-    from .ops.fft_op import bit_reverse_kernel, ifft_stage_kernel, scale_kernel
-
-    N = x_real.shape[0]
-    device = x_real.device
-
-    # Bit reversal
-    temp_real = NBXTensor.empty_like(x_real)
-    temp_imag = NBXTensor.empty_like(x_imag)
-    _set_device(x_real)
-    bit_reverse_kernel[(N,)](x_real, x_imag, temp_real, temp_imag, N)
-
-    # Inverse butterfly stages
-    log2n = N.bit_length() - 1
-    for stage in range(1, log2n + 1):
-        _set_device(temp_real)
-        ifft_stage_kernel[(N // 2,)](temp_real, temp_imag, N, stage)
-
-    # 1/N through the house scale kernel (an NBXTensor has no torch-style
-    # in-place multiply — the previous form was a latent crash on a path no
-    # model of the zoo had exercised, found by the 2026-09-05 bit gate).
-    _BLOCK = 1024
-    scale_kernel[(triton.cdiv(N, _BLOCK),)](temp_real, temp_imag, N, 1.0 / N, BLOCK_SIZE=_BLOCK)
-
-    return temp_real, temp_imag
+def _triton_ifft(x_real, x_imag) -> tuple:
+    """Inverse FFT of every row along the last dim, scaled by 1/N. Returns (real, imag)."""
+    return _triton_fft_rows(x_real, x_imag, inverse=True)
 
 
 def _dft_rfft_matrices(N, N_bins, ref):
@@ -9292,19 +9259,7 @@ def fft_c2c_wrapper(x, dim: int = -1, norm: str = None,
     if forward:
         out_real, out_imag = _triton_fft_forward(x_real, x_imag)
     else:
-        # Inverse
-        if x_real.ndim > 1:
-            flat_r = x_real.reshape(-1, padded_N)
-            flat_i = x_imag.reshape(-1, padded_N)
-            results_r, results_i = [], []
-            for b in range(flat_r.shape[0]):
-                r, i = _triton_ifft_1d(flat_r[b].contiguous(), flat_i[b].contiguous())
-                results_r.append(r)
-                results_i.append(i)
-            out_real = NBXTensor.stack(results_r).reshape(x_real.shape)
-            out_imag = NBXTensor.stack(results_i).reshape(x_imag.shape)
-        else:
-            out_real, out_imag = _triton_ifft_1d(x_real, x_imag)
+        out_real, out_imag = _triton_ifft(x_real, x_imag)
 
     result = out_real
 
