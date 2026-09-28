@@ -23,6 +23,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 TOOL = Path(__file__).resolve().parents[3] / "tools" / "certified_catalogue_report.py"
 
 SNAPSHOT = """======================================================================
@@ -141,19 +143,23 @@ def test_a_count_field_wins_over_a_capped_sample(tmp_path):
         "139 + 4 + 0 + 8 = 151 = differ; the check must run and say so")
 
 
-def test_a_cell_that_ran_and_crashed_is_not_the_same_as_one_nobody_tried(tmp_path):
+# The record of 2026-09-11 carries the container's name of that day; a record written after the
+# rename of 2026-09-28 carries today's. Both belong to the same hub row.
+@pytest.mark.parametrize("recorded", ["Wan2.1-VACE-1.3B-diffusers", "Wan2.1-VACE-1.3B"])
+def test_a_cell_that_ran_and_crashed_is_not_the_same_as_one_nobody_tried(tmp_path, recorded):
     """Collapsing both into "not measured" erases the attempt AND the defect.
 
     Two Wan video cells ran on 2026-09-11 and crashed — one on a broadcast that
     cannot happen, one on a 6.4 GB allocation with 1.6 GB free. Each produced a
     named debt. A row that reads "not measured" for them says the opposite of
-    what happened.
+    what happened — and so does one that loses the record because the container
+    was renamed after it ran.
     """
     camps = tmp_path / "camps"
-    d = camps / "c" / "proof" / "Wan2.1-VACE-1.3B-diffusers"
+    d = camps / "c" / "proof" / recorded
     d.mkdir(parents=True)
     (d / "result.json").write_text(json.dumps({
-        "model": "Wan2.1-VACE-1.3B-diffusers", "family": "video", "weight_gb": 18.2,
+        "model": recorded, "family": "video", "weight_gb": 18.2,
         "A": {"rc": 1, "swept": 1, "certified_served": 36, "reps": [{"rc": 1}]},
         "B": {"rc": 1, "swept": 37, "reps": [{"rc": 1}]},
         "gate": {"identical": False, "ran": False},

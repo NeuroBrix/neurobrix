@@ -12,7 +12,7 @@ values or dtype are not what the oracle used. This walks every constant of every
 reports each difference with its kind.
 
     python3 tools/constant_load_differential.py            # the whole local cache
-    python3 tools/constant_load_differential.py --models Kokoro-82M,Wan2.1-T2V-1.3B-Diffusers
+    python3 tools/constant_load_differential.py --models Kokoro-82M,Wan2.1-T2V-1.3B
 
 torch is imported here as the ORACLE, which is what tools/ is for; nothing under src/ does.
 """

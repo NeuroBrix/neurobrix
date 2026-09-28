@@ -34,7 +34,7 @@ from neurobrix.core.prism.solver import ComponentMemory
 from tests.unit.prism._pinned_machine import container_root
 RUNG_MB = 16384
 GB = 1024 ** 3
-REAL_ENCODERS = ["Allegro-TI2V", "CogVideoX-5b-I2V", "Wan2.1-VACE-1.3B-diffusers"]
+REAL_ENCODERS = ["Allegro-TI2V", "CogVideoX-5b-I2V", "Wan2.1-VACE-1.3B"]
 
 
 def _decide(container, comp, activation_bytes):
