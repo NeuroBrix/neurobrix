@@ -38,6 +38,19 @@ certifier:
   printed nothing is not a push that landed. A remote that refuses is said,
   and retried at the next tick; the commit exists locally either way.
 
+* PUSHES ARE RATIONED, commits are not (the owner's account, 2026-09-28: suspended twice
+  for automated pushes; the supervisor, 05:41 and 06:16 — an unattended process pushes at
+  most once every 30 minutes per repository, only to a working branch, never `main`).
+  Commits stay at `--interval`; a push happens only when `--push-every` seconds have
+  passed since the last push of THIS REPOSITORY by any checkpointer — the time is kept
+  in the clone's common git directory (`certified_checkpoint.last_push`, under a file
+  lock), so two checkpointers of one clone share one ration, and every worktree of that
+  clone with them. A push not yet due is SAID in the record, with the time it becomes
+  due; the commits wait locally. The final checkpoint does not skip its push: it waits
+  for its turn, then pushes, so a pass never ends with its last entries unpushed and
+  never pushes early. `main` is refused by name. The library default is no ration (the
+  hermetic tests push twice in a second); the command line's default is the owner's 30 min.
+
 Exit: 0 when the producers are gone and the last checkpoint reached every
 remote; 3 when they are gone and a remote still lacks it (said, with the
 remote's name). `--once` runs a single checkpoint and exits with the same
@@ -47,6 +60,7 @@ triggers a last checkpoint.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import signal
@@ -135,14 +149,79 @@ def push_and_verify(repo: str, remote: str, branch: str) -> str:
     return ""
 
 
+#: Branches an unattended process never pushes (the supervisor, 2026-09-28 06:16: "only to a working branch").
+NEVER_PUSHED = ("main",)
+#: The owner's ration for an unattended process: one push per repository per 30 minutes (the command line's default).
+PUSH_EVERY_S = 1800.0
+
+
+def _stamp_path(repo: str) -> Path:
+    """The ration's record: one per CLONE (the common git directory every worktree of it shares)."""
+    common = Path(_git(repo, "rev-parse", "--git-common-dir").stdout.strip())
+    return (common if common.is_absolute() else Path(repo) / common) / "certified_checkpoint.last_push"
+
+
+def last_push(repo: str) -> float:
+    """Epoch seconds of this clone's last checkpoint push, 0.0 when none is recorded."""
+    try:
+        return float(_stamp_path(repo).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
+def _hm(t: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t))
+
+
+def unpushed(repo: str, remote: str, branch: str) -> bool:
+    """True when `remote` does not hold this branch's HEAD (read from the remote, never assumed)."""
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    ls = _git(repo, "ls-remote", remote, f"refs/heads/{branch}", check=False)
+    return ls.returncode != 0 or head not in ls.stdout
+
+
+def push_when_due(repo: str, remotes: List[str], branch: str, push_every: float, wait: bool,
+                  sleep=time.sleep) -> Dict[str, object]:
+    """Push every remote that lacks HEAD — if this clone's ration allows it now, or, with `wait`, as soon as it does.
+
+    Returns {"remotes": {remote: "" | reason}, "deferred_until": epoch | None}. The check and the push hold
+    one file lock, so two checkpointers of one clone cannot both find the ration free and both push."""
+    if branch in NEVER_PUSHED:
+        return {"remotes": {r: f"REFUSED: an unattended process never pushes {branch!r}" for r in remotes},
+                "deferred_until": None}
+    lacking = [r for r in remotes if unpushed(repo, r, branch)]
+    if not lacking:
+        return {"remotes": {r: "" for r in remotes}, "deferred_until": None}
+    lock_path = str(_stamp_path(repo)) + ".lock"
+    while True:
+        with open(lock_path, "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                due = last_push(repo) + push_every
+                now = time.time()
+                if push_every <= 0 or now >= due:
+                    out = {r: push_and_verify(repo, r, branch) for r in lacking}
+                    _stamp_path(repo).write_text(f"{now:.3f} {branch}\n")
+                    return {"remotes": {**{r: "" for r in remotes}, **out}, "deferred_until": None}
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+        if not wait:
+            return {"remotes": {}, "deferred_until": due}
+        sleep(max(1.0, due - time.time()))
+
+
 def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str], trailers: List[str],
-               record: Optional[str] = None, say=print, label: str = "") -> Dict[str, object]:
-    """One checkpoint: gate → commit the files that pass → push every remote → read back → record."""
+               record: Optional[str] = None, say=print, label: str = "", push_every: float = 0.0,
+               final: bool = False) -> Dict[str, object]:
+    """One checkpoint: gate → commit the files that pass → push every remote when the ration allows (the final
+    checkpoint waits for it) → read back → record."""
     stamp = time.strftime("%H:%M:%S", time.gmtime())
     files = changed_files(repo, rel_dir)
     result: Dict[str, object] = {"committed": [], "refused": [], "sha": None, "remotes": {}, "files": files}
     if not files:
-        _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}", say)
+        pushed = push_when_due(repo, remotes, current_branch(repo), push_every, wait=final)
+        result["remotes"] = pushed["remotes"]
+        _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}" + _push_words(pushed, push_every), say)
         return result
     abs_dir = str(Path(repo) / rel_dir)
     gate = run_gate(repo, abs_dir, gate_cmd)
@@ -174,16 +253,20 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
         return result
     sha = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     result["sha"] = sha; result["committed"] = to_commit
-    branch = current_branch(repo)
-    status = []
-    for remote in remotes:
-        why = push_and_verify(repo, remote, branch)
-        result["remotes"][remote] = why
-        status.append(f"{remote} {'ok' if not why else 'FAILED (' + why + ')'}")
-    _record(record, f"== checkpoint {sha} {stamp}: {len(to_commit)} file(s), +{added} entries, ~{changed} changed; "
-                    + "; ".join(status)
+    pushed = push_when_due(repo, remotes, current_branch(repo), push_every, wait=final)
+    result["remotes"] = pushed["remotes"]
+    _record(record, f"== checkpoint {sha} {stamp}: {len(to_commit)} file(s), +{added} entries, ~{changed} changed"
+                    + _push_words(pushed, push_every)
                     + (f"; REFUSED by the gate, not committed: {', '.join(refused_rel)}" if refused_rel else ""), say)
     return result
+
+
+def _push_words(pushed: Dict[str, object], push_every: float) -> str:
+    if pushed.get("deferred_until"):
+        return (f"; push not due — this clone pushed at {_hm(pushed['deferred_until'] - push_every)}, the next push at or "
+                f"after {_hm(pushed['deferred_until'])} (one per {push_every / 60:.0f} min per repository), commits kept locally")
+    status = [f"{r} {'ok' if not why else 'FAILED (' + why + ')'}" for r, why in (pushed.get("remotes") or {}).items()]
+    return ("; " + "; ".join(status)) if status else ""
 
 
 def _record(record: Optional[str], line: str, say=print) -> None:
@@ -195,7 +278,7 @@ def _record(record: Optional[str], line: str, say=print) -> None:
 
 def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes: List[str], gate_cmd: List[str],
         trailers: List[str], record: Optional[str], once: bool = False, poll: float = 10.0, say=print,
-        label: str = "") -> int:
+        label: str = "", push_every: float = 0.0) -> int:
     for pid in producers:
         if not producer_alive(pid):
             say(f"[checkpoint] producer {pid} ({producer_name(pid)}) is already gone at start — one last checkpoint, then exit")
@@ -207,7 +290,8 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
         final = once or stop["now"] or (bool(producers) and not alive)
         due = time.monotonic() - last >= interval
         if due or final:
-            res = checkpoint(repo, rel_dir, remotes, gate_cmd, trailers, record, say=say, label=label)
+            res = checkpoint(repo, rel_dir, remotes, gate_cmd, trailers, record, say=say, label=label,
+                             push_every=push_every, final=final)
             last = time.monotonic()
             if final:
                 failed = [r for r, why in (res.get("remotes") or {}).items() if why]
@@ -261,6 +345,9 @@ def main(argv=None) -> int:
     p.add_argument("--interval", type=float, default=600.0, help="seconds between checkpoints")
     p.add_argument("--poll", type=float, default=10.0)
     p.add_argument("--remotes", default="origin,gitlab")
+    p.add_argument("--push-every", type=float, default=PUSH_EVERY_S,
+                   help="seconds between two pushes of this repository by ANY checkpointer of this clone "
+                        "(default: the owner's 1800); commits keep --interval")
     p.add_argument("--record", default=None, help="a campaign RUN.md every checkpoint appends one line to")
     p.add_argument("--trailer", action="append", default=[], help="a line appended to each commit message")
     p.add_argument("--gate-cmd", default=None,
@@ -278,7 +365,7 @@ def main(argv=None) -> int:
         return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
     return run(a.repo, a.dir, a.producer_pid, a.interval, [r for r in a.remotes.split(",") if r], gate,
-               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label)
+               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label, push_every=a.push_every)
 
 
 if __name__ == "__main__":
