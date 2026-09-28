@@ -11,8 +11,8 @@ last-resort offload) · **engine cost** (a real, measured time, not an autotune)
 
 | model | mode(s) | class | what the cell does | cause, as measured | closes it | evidence |
 |---|---|---|---|---|---|---|
-| Wan2.2-I2V-A14B | all | trace | fails at `aten.div::9`, `(1,384,…)` vs `(1,7296,…)` | a frozen extent in the retraced graph | retrace (4-card VMM window, with Wan2.1-I2V) | queue-12/13 gate rows, 2026-09-27/28 |
-| Wan2.1-I2V-14B-480P | all | trace | fails at `aten.div::62`, `(1,7296,44,104)` vs `(1,384,44,104)` | the same frozen extent | the same window | queue-12/13 gate rows |
+| Wan2.2-I2V-A14B | all | trace | fails at `aten.div::9` (vae_encoder), `(1,384,…)` vs `(1,7296,…)` | **read from the graph (2026-09-28 20:56):** `aten.expand::9` broadcasts a channel norm `(1,1,1,28,44)` back to 384 channels, and the traced size argument writes the channel count 384 as an arithmetic EXPRESSION of the `time` symbol (s1, trace 9) — a trace-value collision: at another frame count the expression gives 7 296 (= 384 x 19). The channel is a constant; the tracer must not bind it to a symbol | Forge's collision guard at the source, then the retrace (4-card VMM window, with Wan2.1-I2V) | queue-12/13 gate rows; `vae_encoder/graph.json` expand::9 |
+| Wan2.1-I2V-14B-480P | all | trace | fails at `aten.div::62`, `(1,7296,44,104)` vs `(1,384,44,104)` | NOT the same op: its `expand::9` carries a literal 384; the mismatch appears later, at div::62 — to be read the same way | the same window | queue-12/13 gate rows |
 | Wan2.1-VACE-1.3B | — | trace | frozen dimension at `aten.div::9` | static scan | retrace | static scan 2026-09-2x |
 | Open-Sora-v2 | — | trace | frame-causal mask frozen | static scan | Forge fix, retrace | static scan |
 | Sana_1600M_4Kpx_BF16 | — | trace | a frozen dimension | static scan | retrace | static scan |
