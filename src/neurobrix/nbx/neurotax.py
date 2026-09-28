@@ -25,6 +25,14 @@ import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
+#: The one version of the neurotaxe (the owner, 2026-09-26: "NeuroTax 5.0, one version"). Forge
+#: writes it in the manifest (`neurotax_version`); the runtime loader refuses by name a container
+#: whose keys were written under another version — a key the parser no longer emits is a key no
+#: reader will find (the MoE fusion's expert match, first of them).
+#: 5.0: the parser is a fixed point on its own output — the SwiGLU gate is `ffn_gate` (was `gate`,
+#: the vendors' router token), diffusers' `attn1` is `attn` (was `self_attn`).
+NEUROTAX_VERSION = "5.0"
+
 
 class SynonymRegistry:
     """
@@ -69,7 +77,10 @@ class SynonymRegistry:
         # ATTENTION
         # ===========================================
         "attn": "attn",
-        "attn1": "self_attn",
+        # diffusers' attn1 is the block's self-attention: the same function the LLM `self_attn`
+        # names, so the same canonical token. It was `self_attn`, a VENDOR token the registry
+        # itself maps to `attn` — the parser rewrote its own output (5 164 keys, 2026-09-26).
+        "attn1": "attn",
         "attn2": "cross_attn",
         "attention": "attn",
         "self_attn": "attn",
@@ -121,8 +132,13 @@ class SynonymRegistry:
         "fc2": "down",
         "up_proj": "up",
         "down_proj": "down",
-        "gate_proj": "gate",
-        "w1": "gate",                    # LLaMA SwiGLU: w1 = gate_proj
+        # The SwiGLU gate. Its canonical token was `gate`, which vendors use for the MoE ROUTER
+        # (`mlp.gate`, mapped to `router` below): the parser turned every SwiGLU gate it had
+        # written into a router on a second pass (63 841 keys, 2026-09-26). `ffn_gate` is the name
+        # GGUF gives the SwiGLU gate (its router is `ffn_gate_inp`); no vendor uses it for anything
+        # else, and no key of the 49 containers carries it (census of 2026-09-26).
+        "gate_proj": "ffn_gate",
+        "w1": "ffn_gate",                # LLaMA SwiGLU: w1 = gate_proj
         "w2": "down",                    # LLaMA SwiGLU: w2 = down_proj
         "w3": "up",                      # LLaMA SwiGLU: w3 = up_proj
         "c_fc": "up",                    # GPT-2
@@ -439,6 +455,15 @@ class SynonymRegistry:
         r"^proj$",
         r"^head$",
         r"^lm_head$",
+        # Audio component names
+        r"^joint$",
+        r"^perception$",
+        r"^audio_tower$",
+        r"^multi_modal_projector$",
+        r"^embed_tokens$",
+        # LoRA wrapper tokens (preserve for suffix matching)
+        r"^base_layer$",
+        r"^base_model$",
     ]
 
     @classmethod
@@ -459,11 +484,6 @@ class SynonymRegistry:
         Resolve a vendor token with ZERO FALLBACK.
         Raises ValueError if token is unknown and not preserved.
         """
-        # Check if should preserve
-        for pattern in cls.PRESERVE_PATTERNS:
-            if re.match(pattern, token):
-                return token
-
         # Try to resolve
         if token in cls._REGISTRY:
             return cls._REGISTRY[token]
@@ -471,11 +491,31 @@ class SynonymRegistry:
         if lower in cls._REGISTRY:
             return cls._REGISTRY[lower]
 
+        # A preserved token with no translation stays as it is. The registry is read FIRST: the
+        # preserve list named tokens the registry translates (`mlp` -> `ffn`, `ln` -> `norm`,
+        # `lm_head` -> `head`, `embed_tokens` -> `token_embed`), and strict kept them raw while
+        # permissive translated them — two keys for one tensor.
+        for pattern in cls.PRESERVE_PATTERNS:
+            if re.match(pattern, token):
+                return token
+
+        # A canonical token the registry emits is placed: it is its own translation. Safe only
+        # because every canonical token that is ALSO a registry key maps to itself (the fixed
+        # point, `tests/unit/nbx/test_the_parser_is_a_fixed_point_on_its_own_output.py`) —
+        # otherwise strict would answer the token and permissive its translation.
+        if token in cls.canonical_tokens():
+            return token
+
         # ZERO FALLBACK - unknown token
         raise ValueError(
             f"ZERO FALLBACK: Unknown token '{token}' in '{original_name}'.\n"
             f"Add mapping to SynonymRegistry._REGISTRY or PRESERVE_PATTERNS."
         )
+
+    @classmethod
+    def canonical_tokens(cls) -> frozenset:
+        """Every token the registry translates TO."""
+        return frozenset(cls._REGISTRY.values())
 
     @classmethod
     def add_synonym(cls, vendor_term: str, neurotax_term: str):

@@ -4,7 +4,7 @@ Protocol: locked machine, sequential cells, daemon stopped before campaign,
 one pinned GPU per cell, n as stated, cross-engine (compiled + triton) per row.
 Gates: VQA = must-phrase containment on the answer; t2i = decodable PNG +
 mean band [80,220] + std>5. Artifacts under
-`validation_outputs/hub_benchmark_2026_08/s5_*/` (reports, transcripts, PNGs).
+`models/_agents/archives/dell/validation_outputs_pre_2026_09_01/hub_benchmark_2026_08/s5_*/` (reports, transcripts, PNGs).
 
 ## Results (median wall s/req, [min–max], gate)
 

@@ -20,12 +20,10 @@ the runtime stores them as ``global.control_hidden_states`` /
 ``global.control_hidden_states_scale`` and the InputResolver binds them by the
 zero-semantic ``global.<name>`` fallback.
 
-All-generate path (the unconditional / pure text→video mode): a zeros control
-clip with an all-white mask gives ``inactive == reactive == encode(0)`` and an
-all-ones reshaped mask, so a single ``vae_encoder`` pass suffices and both
-16-channel halves are equal. A real control video (first/last-frame
-interpolation, depth/pose control, …) is the same brick with two distinct
-encodes — deferred until a control-video CLI input exists.
+The CLI builds the vendor's pair — ``V * (1 - M)`` and ``V * M`` for a control
+clip V and a mask M (1 = generate) — on the encoder's batch axis, so one
+``vae_encoder`` pass makes both halves: all-generate (no image) is V = 0, M = 1;
+an input image is its padded clip with its frame kept (M = 0 there).
 
 Driven entirely by the ``vace_control_conditioning`` registry flag on the
 denoiser component. No flag → ``conditioning_spec`` returns None and every
@@ -41,6 +39,7 @@ from neurobrix.core.runtime.registry_flags import get_component_flag
 
 CONTROL_VAR = "global.control_hidden_states"
 SCALE_VAR = "global.control_hidden_states_scale"
+MASK_VAR = "global.vace_pixel_mask"
 
 
 def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
@@ -86,21 +85,32 @@ def _to_channels_first(latent: torch.Tensor, latent_channels: int) -> torch.Tens
 
 
 def build_control(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
-    """Build control_hidden_states = cat([inactive, reactive, mask], dim=1).
+    """Build control_hidden_states = cat([inactive, reactive, mask], dim=1) as the vendor does.
 
-    All-generate path: the vae_encoder encoded a zeros control clip, so
-    inactive == reactive == that latent; the mask is all-ones. Returns None if
-    the vae_encoder output is not yet resolved.
+    The vae_encoder encoded the pair the CLI built (batch 0 = ``V * (1 - M)``, batch 1 =
+    ``V * M``, image_dsp.vace_control_pair_np); both are normalized as the vendor normalizes
+    (``(x - mean) / std``) and the pixel mask ``global.vace_pixel_mask`` is folded into the
+    mask channels on the latent grid (image_dsp.vace_fold_mask_np). Returns None if the
+    vae_encoder output is not yet resolved.
     """
+    from neurobrix.core.module.vision.image_dsp import vace_fold_mask_np
+
     cond_comp = spec["condition_component"]
     latent = ctx.variable_resolver.resolved.get(f"{cond_comp}.output_0")
     if latent is None:
         latent = ctx.variable_resolver.get(f"{cond_comp}.output_0")
     if not isinstance(latent, torch.Tensor):
         return None
+    pixel_mask = ctx.variable_resolver.resolved.get(MASK_VAR)
+    if pixel_mask is None:
+        raise RuntimeError(f"ZERO FALLBACK: VACE control needs {MASK_VAR}, the pixel mask the CLI builds")
 
     mean, std, latent_channels = _vae_latent_stats(ctx)
-    latent = _to_channels_first(latent, latent_channels)  # [B, C, T, H, W]
+    latent = _to_channels_first(latent, latent_channels)  # [2, C, T, H, W]
+    if latent.shape[0] != 2:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the VACE control encoder must see the (inactive, reactive) pair on its "
+            f"batch axis, got batch {latent.shape[0]}")
     device, dtype = latent.device, latent.dtype
 
     # Normalize exactly as the vendor pipeline: (x - mean) * (1/std).
@@ -109,19 +119,19 @@ def build_control(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
         std_t = (1.0 / torch.tensor(std, device=device, dtype=dtype)).view(1, -1, 1, 1, 1)
         latent = (latent - mean_t) * std_t
 
-    # inactive == reactive == encode(0) for the zeros control clip; channel-cat.
-    video_latents = torch.cat([latent, latent], dim=1)  # [B, 2*z_dim, T, H, W]
-    b, _c, lt, lh, lw = video_latents.shape
-    mask = torch.ones(b, int(spec["mask_channels"]), lt, lh, lw,
-                      device=device, dtype=dtype)
-    control = torch.cat([video_latents, mask], dim=1)  # [B, 2*z_dim + mask_ch, ...]
+    video_latents = torch.cat([latent[0:1], latent[1:2]], dim=1)  # [1, 2*z_dim, T, H, W]
+    _b, _c, lt, lh, lw = video_latents.shape
+    pm = pixel_mask.detach().cpu().numpy() if isinstance(pixel_mask, torch.Tensor) else pixel_mask
+    mask = torch.from_numpy(vace_fold_mask_np(pm, lt, lh, lw, int(spec["mask_channels"]))).to(
+        device=device, dtype=dtype)
+    control = torch.cat([video_latents, mask], dim=1)  # [1, 2*z_dim + mask_ch, ...]
 
     import os as _os
     if _os.environ.get("NBX_DIAG_VACE") == "1":
         _lf = latent.float()
         print(f"   [NBX-DIAG-VACE] vae_latent shape={list(latent.shape)} "
               f"norm mean={_lf.mean():.3f} std={_lf.std():.3f} | "
-              f"control shape={list(control.shape)} "
+              f"control shape={list(control.shape)} mask mean={float(mask.float().mean()):.3f} "
               f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
     return control
 

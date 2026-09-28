@@ -17,6 +17,20 @@ from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 import re
 import os
 
+from neurobrix.nbx.neurotax import SynonymRegistry as _NeuroTax
+
+# The expert weights' key tokens, AS THE PARSER NAMES THEM — the neurotaxe has one reader.
+# Spelled here once, a renamed canonical token (the SwiGLU gate's `gate` -> `ffn_gate`,
+# 2026-09-26) would leave this reader matching nothing and the fusion silently off.
+_EXPERT = _NeuroTax.resolve("experts")
+_EXPERT_PROJ = {role: _NeuroTax.resolve(vendor) for role, vendor in
+                (("gate", "gate_proj"), ("up", "up_proj"), ("down", "down_proj"))}
+_EXPERT_ROLE = {token: role for role, token in _EXPERT_PROJ.items()}
+
+
+def _expert_tid(prefix: str, expert_id: int, role: str) -> str:
+    return f"param::{prefix}.{_EXPERT}.{expert_id}.{_EXPERT_PROJ[role]}.weight"
+
 
 def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
                         declared: bool = False) -> Dict[str, Any]:
@@ -931,13 +945,11 @@ def _trace_expert_blocks(
     NOTE: last_scatter_tid is now found by _find_moe_output() which uses data-driven
     detection instead of hardcoded op_type matching.
     """
-    # Pattern: param::block.X.ffn.expert.Y.{gate,up,down}.weight
-    # This pattern matches:
-    #   - DeepSeek v1/v2: param::block.1.ffn.expert.0.gate.weight
-    #   - Mixtral (future): param::model.layers.1.block_sparse_moe.experts.0.gate_proj.weight
-    # Group 1 = expert_id, Group 2 = gate|up|down
+    # Pattern: param::<prefix>.<expert>.Y.<swiglu gate|up|down>.weight, the tokens the parser
+    # emits (a container holds no raw vendor name). Group 1 = expert_id, group 2 = the token.
     weight_pattern = re.compile(
-        r"param::.*\.expert[s]?\.(\d+)\.(gate|up|down)(?:_proj)?\.weight"
+        rf"param::.*\.{re.escape(_EXPERT)}\.(\d+)\."
+        rf"({'|'.join(re.escape(t) for t in _EXPERT_PROJ.values())})\.weight"
     )
 
     # Collect weight tensor IDs from mm ops in the MoE subgraph
@@ -983,7 +995,7 @@ def _trace_expert_blocks(
                     m = weight_pattern.match(t_input)
                     if m:
                         expert_id = int(m.group(1))  # Group 1 = expert ID
-                        proj_type = m.group(2)       # Group 2 = gate|up|down
+                        proj_type = _EXPERT_ROLE[m.group(2)]  # the role: gate|up|down
                         if expert_id not in expert_weights:
                             expert_weights[expert_id] = {}
                         expert_weights[expert_id][proj_type] = t_input
@@ -1019,7 +1031,7 @@ def _trace_expert_blocks(
     # The weight pattern is e.g., "param::block.1.ffn.expert.0.gate.weight"
     # We need to extract "block.1" to reconstruct missing expert paths
     block_prefix = None
-    block_pattern = re.compile(r"param::(.*?)\.expert[s]?\.\d+")
+    block_pattern = re.compile(rf"param::(.*?)\.{re.escape(_EXPERT)}\.\d+")
     for projs in expert_weights.values():
         for tid in projs.values():
             m = block_pattern.match(tid)
@@ -1046,14 +1058,11 @@ def _trace_expert_blocks(
             # Some experts may be partially traced (e.g., gate+up present but down
             # was not activated during trace). Fill missing projections from pattern.
             gate_tid = projs.get("gate") or (
-                f"param::{block_prefix}.expert.{expert_id}.gate.weight"
-                if block_prefix else "")
+                _expert_tid(block_prefix, expert_id, "gate") if block_prefix else "")
             up_tid = projs.get("up") or (
-                f"param::{block_prefix}.expert.{expert_id}.up.weight"
-                if block_prefix else "")
+                _expert_tid(block_prefix, expert_id, "up") if block_prefix else "")
             down_tid = projs.get("down") or (
-                f"param::{block_prefix}.expert.{expert_id}.down.weight"
-                if block_prefix else "")
+                _expert_tid(block_prefix, expert_id, "down") if block_prefix else "")
             gate_ids.append(gate_tid)
             up_ids.append(up_tid)
             down_ids.append(down_tid)
@@ -1069,9 +1078,9 @@ def _trace_expert_blocks(
         elif block_prefix is not None:
             # Expert absent from graph (never activated during trace)
             # Construct tensor ID from pattern — weights ARE in the checkpoint
-            gate_tid = f"param::{block_prefix}.expert.{expert_id}.gate.weight"
-            up_tid = f"param::{block_prefix}.expert.{expert_id}.up.weight"
-            down_tid = f"param::{block_prefix}.expert.{expert_id}.down.weight"
+            gate_tid = _expert_tid(block_prefix, expert_id, "gate")
+            up_tid = _expert_tid(block_prefix, expert_id, "up")
+            down_tid = _expert_tid(block_prefix, expert_id, "down")
             gate_ids.append(gate_tid)
             up_ids.append(up_tid)
             down_ids.append(down_tid)
@@ -1110,7 +1119,9 @@ def _count_total_experts(
         return input_shapes[0][-1]
 
     # Fallback: count from weight tensor IDs
-    weight_pattern = re.compile(r"param::block\.\d+\.ffn\.expert\.(\d+)\.gate\.weight")
+    weight_pattern = re.compile(
+        rf"param::{re.escape(_NeuroTax.resolve('layers'))}\.\d+\.{re.escape(_NeuroTax.resolve('mlp'))}"
+        rf"\.{re.escape(_EXPERT)}\.(\d+)\.{re.escape(_EXPERT_PROJ['gate'])}\.weight")
     expert_ids = set()
     for tid in tensors:
         m = weight_pattern.match(tid)

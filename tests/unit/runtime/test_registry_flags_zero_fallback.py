@@ -61,10 +61,17 @@ def test_missing_model_component_flag_return_default(monkeypatch, tmp_path):
         "        requires_fp32_compute: true\n"
     )
     _point_registry_at(monkeypatch, p)
-    # Present flag resolves.
-    assert rf.get_component_flag("known-model", "vae_decoder",
-                                 "requires_fp32_compute",
-                                 default=False) is True
+    # A flag the registry declares resolves from the CONTAINER that carries it
+    # (2026-09-27 02:57: the registry serves the build only; see
+    # test_a_container_is_the_source_the_registry_a_check.py).
+    from neurobrix.nbx import component_flags
+    component_flags.register("known-model", {"vae_decoder": {"requires_fp32_compute": True}})
+    try:
+        assert rf.get_component_flag("known-model", "vae_decoder",
+                                     "requires_fp32_compute",
+                                     default=False) is True
+    finally:
+        component_flags.clear()
     # Absent flag / component / model → default (opt-in annotations).
     assert rf.get_component_flag("known-model", "vae_decoder",
                                  "activations_fp16_safe",
