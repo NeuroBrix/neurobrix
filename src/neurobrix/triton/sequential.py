@@ -27,14 +27,17 @@ class TritonSequentialDispatcher:
     """
 
     def __init__(self, device_idx: int = 0, compute_dtype: NBXDtype = NBXDtype.float16,
-                 activations_fp16_safe: bool = False, precision_contract=None):
+                 activations_fp16_safe: bool = False, precision_contract=None,
+                 graph_dtype=None):
         self.device_idx = device_idx
         self.compute_dtype = compute_dtype
         self.activations_fp16_safe = activations_fp16_safe
         from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
         from neurobrix.kernels import wrappers as _w
+        # graph_dtype: the component's traced `torch_dtype` (the AMP_FP32 cast-back rule
+        # reads it under bf16 compute) — the caller hands the DAG's own.
         self._dtype_engine = TritonDtypeEngine(
-            compute_dtype, has_native_bf16=_has_bf16())
+            compute_dtype, has_native_bf16=_has_bf16(), graph_dtype=graph_dtype)
         if precision_contract is not None:
             # (safe, fp32_op_uids, narrow_op_uids) — the same islands the
             # compiled and Triton-compiled engines honour (R30).

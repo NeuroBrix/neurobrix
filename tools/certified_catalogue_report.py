@@ -44,6 +44,8 @@ import statistics
 from datetime import date
 from pathlib import Path
 
+from container_renames import current_name
+
 REPO = Path(__file__).resolve().parents[1]
 CERTIFIED = REPO / "src" / "neurobrix" / "config" / "autotune" / "nvidia" / "volta"
 
@@ -99,14 +101,12 @@ INVALIDATION_MARKERS = ("INVALIDATED.md", "PERTURBATION_NOTE.md", "STALE.md")
 #: `Qwen3-Coder-30B-A3B-Instruct`'s measurement to its int4g128-ffnonly variant,
 #: which had never been run — a lying cell inside the document whose whole rule
 #: is that no cell lies.
+#: A measurement recorded under a container's FORMER name is read under its current one
+#: (`container_renames.current_name`), so the four Wan slugs match their containers exactly.
 ALIASES = {
     "qwen3-30b-a3b-thinking": "qwen3-30b-a3b-thinking-2507",
-    "wan2.1-vace-1.3b": "wan2.1-vace-1.3b-diffusers",
-    "wan2.1-t2v-1.3b": "wan2.1-t2v-1.3b-diffusers",
-    "wan2.1-i2v-14b-480p": "wan2.1-i2v-14b-480p-diffusers",
-    "wan2.2-i2v-a14b": "wan2.2-i2v-a14b-diffusers",
     "sana-1600m-4kpx-bf16": "sana_1600m_4kpx_bf16",
-    "sana-video-2b-720p": "sana-video_2b_720p_diffusers",
+    "sana-video-2b-720p": "sana-video_2b_720p",
     "whisper-v3-turbo": "whisper-large-v3-turbo",
     "voxtral-mini-3b": "voxtral-mini-3b-2507",
 }
@@ -115,8 +115,8 @@ ALIASES = {
 #: collapsing the two into "not measured" erases the attempt — along with the
 #: defect it found. Each failure here names the debt that carries its diagnosis.
 FAILED_CELLS = {
-    "Wan2.1-VACE-1.3B-diffusers": "D-WAN-VACE-BROADCAST-AT-DIV",
-    "Wan2.1-T2V-1.3B-Diffusers": "D-WAN-T2V-OOM-AT-5D-PAD",
+    "Wan2.1-VACE-1.3B": "D-WAN-VACE-BROADCAST-AT-DIV",
+    "Wan2.1-T2V-1.3B": "D-WAN-T2V-OOM-AT-5D-PAD",
     "mochi-1-preview": "D-MOCHI-CUDA-700-AT-MM",
 }
 
@@ -145,7 +145,8 @@ def _campaign_cells(campaigns: Path) -> dict:
         except (OSError, ValueError):
             continue
         a, b = d.get("A") or {}, d.get("B") or {}
-        model = d.get("model", result.parent.name)
+        # A record keeps the name the container had when it ran; it is joined under today's.
+        model = current_name(d.get("model", result.parent.name))
         if a.get("rc") != 0 or b.get("rc") != 0:
             # It was attempted and it failed. Kept, with its debt named.
             out[model] = {"failed": True,

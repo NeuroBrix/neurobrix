@@ -136,12 +136,26 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
     announced peak above the rung — a plan that is a function of the live reading again.
 
     Looser than the solver by design of what it can see: the solver also reserves the graph's
-    constants and the KV cache beside the segments; this checks peak + resident components."""
+    constants and the KV cache beside the segments; this checks peak + resident components.
+
+    CHANGED 2026-09-28 (e4b1370a's rule). It asserted peak + the TOTAL of every other component
+    <= usable: the all-at-once reserve, every whole component's activation peak live beside the
+    segments. The iterative flow unloads a pre_loop component after it runs and the loop's before
+    post_loop, so PixArt's VAE decode (5 120 MB once its fp32 widths are priced) is never live
+    beside the text encoder's segments. It now asserts peak + what the flow holds beside them,
+    read through the SOLVER's own `_resident_beside_streamed` (weights of other phases, totals of
+    the same phase; every total for a flow declaring no phases). Seen: with the solver back on the
+    old reserve, the PixArt and Flex cells go RED (the plan is refused); with no reserve at all,
+    every cell goes RED (peak over the usable rung)."""
     _pin_machine(monkeypatch, host_free, rung)
     p, s, seen = _plan(model, h, w, mode=mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
-    beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
+    # What sits beside the segments is what the FLOW holds with them — the solver's own helper
+    # (core/flow/base.py resident_together through PrismSolver._resident_beside_streamed), so
+    # this cell cannot drift from the rule the segments are cut by.
+    beside = s._resident_beside_streamed(NBXContainer.load(str(container_root(model))),
+                                         list(seen.items()), set(parts))
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
         assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
@@ -170,7 +184,11 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 [embedding::0, view::247] [moe_fused::block.12, view::467] [moe_fused::block.23, rms_norm::81]
       next      rung -> its usable part (0.92 x 15 564.8 = 14 319.6 MB), the whole-component
                 standard (test_no_component_falls_between_placing_whole_and_streaming.py):
-                still 3 segments, the boundaries below, identical in both modes.
+                still 3 segments, identical in both modes:
+                [embedding::0, split_with_sizes::35] [slice::502, view::427] [moe_fused::block.21, rms_norm::81]
+      a-partition-is-cut-at-the-request: activations sized at the REQUEST at the plan's compute
+                width (the profiler's resolver) instead of the trace's float32 widths, which doubled
+                them: 2 segments, the boundaries below, identical in both modes.
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -185,6 +203,10 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
         f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
+    # Three segments since the partition sizes each activation at its RUNTIME width (the estimator's
+    # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
+    # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
+    # 2 bytes; the solver's own note on this card already read three.
     assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
                              ["aten.slice::502", "aten.view::427"],
                              ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut

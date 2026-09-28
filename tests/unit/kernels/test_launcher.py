@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tests.unit.child_env import child_env
+from tests.unit.child_env import child_env, the_callers_door
 
 SRC = Path(__file__).resolve().parents[3] / "src"
 
@@ -98,7 +98,7 @@ print("torch" in sys.modules)
 """
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=600,
                          env=child_env({"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin",
-                                        "CUDA_VISIBLE_DEVICES": "0",
+                                        "CUDA_VISIBLE_DEVICES": the_callers_door("0"),
                                         "HOME": str(Path.home())}))
     assert out.returncode == 0, out.stderr[-1500:]
     assert _torch_verdict(out.stdout) == "False", (
@@ -165,7 +165,7 @@ print("torch" in sys.modules)
 """
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=1200,
                          env=child_env({"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin",
-                                        "CUDA_VISIBLE_DEVICES": "0",
+                                        "CUDA_VISIBLE_DEVICES": the_callers_door("0"),
                                         "HOME": str(Path.home()),
                                         "NBX_DISABLE_AUTOTUNE": "0"}))
     assert out.returncode == 0, out.stderr[-1500:]

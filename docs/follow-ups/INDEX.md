@@ -260,7 +260,7 @@ shape; 5D `[B,C,T,H,W]` tensors fail with
 `NBX_DISABLE_AUTO_FP32=1` → not Ch8-introduced.
 **Site**: `src/neurobrix/core/prism/solver.py` (or callee — exact
 line TBD on next investigation).
-**Repro**: `nbx run --model SANA-Video_2B_720p_diffusers --prompt "…" --output /tmp/x.mp4` (both modes) → exit 1.
+**Repro**: `nbx run --model SANA-Video_2B_720p --prompt "…" --output /tmp/x.mp4` (both modes) → exit 1.
 **Surfaced**: Ch8 verdict harness triage.
 
 ### P-FLEX1-VAE-FP32-GATE — P2

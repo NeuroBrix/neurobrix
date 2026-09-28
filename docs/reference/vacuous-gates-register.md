@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-117 entries, 111 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+119 entries, 113 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3562,6 +3562,62 @@ check, green after; on the real artefact it reads `geometry (64, 160) is not the
 
 **The lesson, in one line.** A mechanical check covers every output kind the matrix writes, or it
 is a green light for the kind it skips.
+
+### 112 — the lattice test checked its own copy of the snap, and the copy encoded the defect
+
+`tests/unit/prism/test_a_tiled_extent_lands_on_the_profile_s_lattice.py` asserted the tile-lattice
+rule on a helper `_snap` defined in the test file — `max(unit, (v // unit) * unit)` — never on
+`PrismSolver._spatial_component_tiling`. Its fourth cell pinned `_snap(15, 16) == 16`: "the floor is
+one unit". The solver carried the same expression, and that floor was the defect: CogVideoX-2b and
+CogVideoX-5b-I2V at 352x720x49 on a 16 GB V100 sized a 12-latent VAE tile under the 12 288 MB rung,
+the snap raised it to 16 — over the 4.80 GB tile budget — the function returned None and the plan
+sent the VAE to the host, 45 minutes of CPU decode per cell (regression matrix, 2026-09-26/27; found
+live with `NBX_PRISM_TILE_DIAG=1` on card 1, 2026-09-27 02:41). Offline plans read no vendor lattice
+and tiled on the card, so every reproduction without a card disagreed with the rack.
+
+What the test would have done with the code wrong: pass — it never called the code. The solver's own
+cell now exists (`test_a_tile_below_the_lattice_keeps_its_size.py`: the live figures, lattice 16,
+tile 12 kept; red on c657c7bf), and the helper mirrors the corrected rule with a pointer to it.
+
+**The lesson, in one line.** A test that re-implements the rule it guards guards the re-implementation.
+
+### 113 — the certifier's unified-memory flag was tested on a stub whose method the real class does not have
+
+`a-unified-certifier-counts-the-host-copies` (73b04e10) read the certifying device's memory kind
+with `dev.has_unified_memory()`. `DeviceSpec.has_unified_memory` is a `@property`: on every real
+hardware profile the call raised "'bool' object is not callable" before the first key. The gate
+built the device as a `SimpleNamespace` whose `has_unified_memory` was a lambda — callable, as the
+code assumed — and was green against that stub only. Found by the Mac's certify run on the branch
+(Apple M4 Pro, 2026-09-27 07:03:50), which died at start.
+
+**What the gate said about code that cannot run**: pass. A stub shaped by the code under test
+agrees with the code under test.
+
+**Repair.** The code reads the property; the gate builds a real `DeviceSpec(unified_memory=...)`
+and is red on 73b04e10 ("'bool' object is not callable"), green after.
+
+**The lesson, in one line.** A test double of a project class is built from the class, never from
+the call the code happens to make on it.
+
+### 114 — the two-writer test wrote only keys the two classes did not share
+
+The 2026-09-21 repair of two certifiers writing one kernel file (one per memory class, two cards)
+merged the file BY KEY: the disk's entries were added where the writer had none. Its gate wrote
+four keys, two per writer, all distinct — green. But a key both classes hold is one entry, a
+primary and its class variants, and the writer's copy of it, read at the start of its pass, won
+whole. On 2026-09-28/29 the 16 GB GEMM pass rewrote `baddbmm_kernel.fp32.json` after each of its
+keys for two hours: the 32 GB card's variant of eleven shared keys was absent from every
+checkpoint commit from 23:00 to 00:32, and the 32 GB card re-certified the same eleven on every
+pass (passes 8-11, a different winner each time).
+
+**What the gate said about the lost variant**: pass. It never gave two writers the same key.
+
+**Repair.** The writer places only what it just proved into the file as it stands under the lock
+(`file_certification`, the one placement rule); nothing it read earlier is written back. The gate
+now has the shared key, a stale writer and the other class's variant between its reads: red on
+the key-level merge, green after.
+
+**The lesson, in one line.** A merge is tested where its inputs overlap; disjoint inputs prove a union.
 
 ### 112 — the re-prove flag's help promised a serving the runtime refuses
 

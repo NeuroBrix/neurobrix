@@ -52,20 +52,35 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "linalg_vector_norm", "linalg_matrix_norm",
 })
 
-# Phase 2 — UNIFORM cast-back doctrine: every AMP_FP32_OPS goes through
-# the fp32-internal-compute-then-conditional-cast-back wrap. The cast-back
-# is gated SOLELY by the per-component `activations_fp16_safe` flag of the
-# precision contract — the component's calibration record, resolved by
-# core/runtime/precision_contract.resolve (read at call time via
-# _w._NBX_ACTIVATIONS_FP16_SAFE). When False (default, conservative —
-# no record, or a record whose islands this engine cannot pin per op),
-# output stays fp32 (matches PyTorch oracle). When True (a calibrated
-# component with no island), output is cast back to compute_dtype for
-# VRAM-preserving fp16-throughout flow.
+# UNIFORM cast-back doctrine: every AMP_FP32_OPS goes through the
+# fp32-internal-compute-then-cast-back wrap, and ONE rule decides its output
+# dtype — `amp_fp32_output_dtype` below (the compiled DtypeEngine carries its
+# torch-free twin; a test holds the two equal):
+#   * compute dtype bf16 on a bf16 GRAPH (the container's `torch_dtype`): the
+#     output is cast back to bf16, always. The op still computes in fp32; its
+#     fp32 result always fits bf16's range (bf16 has fp32's exponent), so the
+#     fp16 overflow reason for keeping it fp32 does not apply — and the
+#     vendor's graph returns x.dtype, bf16 there (Sana's DC-AE RMSNorm computes
+#     fp32 inside and returns x.dtype). Keeping it fp32 spread fp32 through the
+#     residual stream: twice the activation memory and not the vendor's
+#     numerics.
+#   * compute dtype bf16 on a graph of ANOTHER dtype (an fp32 graph the
+#     profile's preferred dtype coerced to bf16 compute): x.dtype was fp32 in
+#     the vendor's forward, so the output stays fp32 (Kokoro moved farther from
+#     its fp32 reference with the cast-back, Apple gate 2026-09-28).
+#   * compute dtype fp16: the output is cast back only under the precision
+#     contract — the per-component `activations_fp16_safe` flag (the
+#     component's calibration record, resolved by
+#     core/runtime/precision_contract.resolve, read at call time via
+#     _w._NBX_ACTIVATIONS_FP16_SAFE) or the op's membership of the record's
+#     narrow set. Otherwise (default, conservative — no record, or a record
+#     whose islands this engine cannot pin per op) the output stays fp32.
+# A contract island (`_wrap_fp32`) is decided BEFORE this rule and keeps its
+# fp32 output; under bf16 there is no contract, hence no island.
 # The previous `_AMP_FP32_OPS_OPT_IN_CAST_BACK` set was an additional
 # membership gate that fragmented the doctrine: rms_norm and div had
 # the cast-back hook but rsqrt/exp/layer_norm/batch_norm/etc did not.
-# Removed in favor of a single uniform gate (the contract flag).
+# Removed in favor of a single uniform gate.
 
 AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "_convolution", "conv1d", "conv2d", "conv3d", "convolution",
@@ -195,6 +210,69 @@ def _get_nbx_dtype(a) -> NBXDtype:
     if hasattr(a, 'nbx_dtype'):
         return a.nbx_dtype
     return NBXDtype.float32
+
+
+_GRAPH_FLOAT_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16", "float32", "float64"})
+
+
+def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: bool,
+                          narrowed: bool) -> str:
+    """The OUTPUT dtype (a name) of an op computed fp32-internal under the half compute
+    dtype `compute_dtype` (a name: "bfloat16" or "float16") — THE cast-back rule of the
+    AMP_FP32 class (see the doctrine above AMP_FP16_OPS).
+
+    `graph_dtype` is the component's GRAPH dtype — the container's traced `torch_dtype`
+    (graph.json top level), the dtype its vendor's forward ran in. Read under bf16 only:
+    the op returns bf16 when the graph is bf16 (the vendor's forward returns x.dtype, and
+    x is bf16 there — Sana's DC-AE RMSNorm); on a graph of another dtype that the
+    profile's preferred dtype coerced to bf16 compute, x.dtype was fp32 in the vendor's
+    forward and the output stays fp32 (measured 2026-09-28 on the Mac's Apple gate:
+    Kokoro's fp32 graph moved FARTHER from its fp32 reference with a bf16 cast-back).
+    A graph dtype the container does not state is refused by name under bf16.
+
+    `safe` is the component's `activations_fp16_safe` flag as THIS engine reads it for the
+    cast back; `narrowed` says the op is in the record's narrow set (the compiled engine
+    passes `safe=False`: its flag alone never narrows an fp32-class output). Both are read
+    only under fp16 — the contract does not exist under bf16
+    (precision_contract.resolve returns (False, set(), set())).
+
+    Pure, torch-free and device-free: the Triton wrapper, its compiled twin
+    (core/dtype/engine.py `amp_fp32_output_dtype`) and Prism's width pass
+    (core/prism/runtime_widths.py) all ask it. A compute dtype that is not half is refused
+    by name — no AMP wrap exists there, so a caller asking is a caller in error."""
+    if compute_dtype == "bfloat16":
+        if graph_dtype not in _GRAPH_FLOAT_NAMES:
+            raise ValueError(
+                f"amp_fp32_output_dtype: under bfloat16 compute the output follows the "
+                f"component's graph dtype, and {graph_dtype!r} is none of "
+                f"{sorted(_GRAPH_FLOAT_NAMES)} — the container's graph.json `torch_dtype` "
+                f"must state it")
+        return "bfloat16" if graph_dtype == "bfloat16" else "float32"
+    if compute_dtype == "float16":
+        return "float16" if (safe or narrowed) else "float32"
+    raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half "
+                     f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
+
+
+def graph_dtype_name(graph_dtype) -> Optional[str]:
+    """The component's graph dtype as a plain name ("bfloat16"), from what the container
+    carries (`torch_dtype`, "torch."-prefixed or not); None when it states none."""
+    if graph_dtype is None or graph_dtype == "":
+        return None
+    if isinstance(graph_dtype, NBXDtype):
+        return graph_dtype.name
+    return str(graph_dtype).rsplit(".", 1)[-1]
+
+
+def _cast_floats_to(result, dtype: NBXDtype):
+    """Every floating tensor of an op's result — one tensor, or the tuple/list a
+    `native_*_norm` returns (out, mean, rstd) — in `dtype`; everything else as is. The
+    Triton twin of the compiled engine's `DtypeEngine._to_compute_dtype`."""
+    if _is_float_tensor(result):
+        return result.to(dtype) if _get_nbx_dtype(result) != dtype else result
+    if isinstance(result, (tuple, list)):
+        return type(result)(_cast_floats_to(r, dtype) for r in result)
+    return result
 
 
 def numpy_staging_dtype(dtype: NBXDtype):
@@ -333,8 +411,12 @@ class TritonDtypeEngine:
     NBXDtype instead of torch.dtype.
     """
 
-    def __init__(self, compute_dtype: NBXDtype, has_native_bf16: bool = True):
+    def __init__(self, compute_dtype: NBXDtype, has_native_bf16: bool = True,
+                 graph_dtype=None):
         self.compute_dtype = compute_dtype
+        # The component's GRAPH dtype — the container's traced `torch_dtype` — read by
+        # the AMP_FP32 cast-back rule under bf16 (`amp_fp32_output_dtype`).
+        self.graph_dtype: Optional[str] = graph_dtype_name(graph_dtype)
         # On pre-Ampere (no native bf16) the weight loader upcasts fp16
         # weights to fp32 at bind time. mm/bmm/addmm wrappers consume those
         # fp32 weights directly and only upcast the activation per-call.
@@ -474,18 +556,19 @@ class TritonDtypeEngine:
             return func
 
         if op_name in AMP_FP32_OPS:
-            # Phase 2 — uniform cast-back: all AMP_FP32_OPS go through the
-            # fp32-internal-then-conditional-cast-back wrap. The cast-back
-            # decision is gated solely by the `activations_fp16_safe`
-            # contract flag (read at call time via _w global). When False
-            # (default), output stays fp32 (PyTorch-oracle parity). When
-            # True (calibrated, no island), output cast to compute_dtype.
+            # Uniform cast-back: all AMP_FP32_OPS go through the fp32-internal
+            # wrap; its output dtype is `amp_fp32_output_dtype` — bf16: back to
+            # bf16 on a bf16 graph, fp32 on another; fp16: back to fp16 only
+            # under the contract flag (read at call time via the _w global),
+            # else fp32.
             return self._wrap_fp32_internal_compute_dtype_output(func)
 
         if op_name in AMP_FP16_OPS:
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
                 # div is in _FP16_NEED_FP32 (FP16 op needing fp32 protection
-                # on V100, epsilon underflow). Same uniform cast-back wrap.
+                # on V100, epsilon underflow). Same uniform cast-back wrap —
+                # under fp16 only: under bf16 div is a plain AMP_FP16 op
+                # (inputs cast to bf16, output bf16) and never reaches it.
                 return self._wrap_fp32_internal_compute_dtype_output(func)
             return self._wrap_lower_precision(func)
 
@@ -610,27 +693,42 @@ class TritonDtypeEngine:
         return fp32_func
 
     def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False) -> Callable:
-        """Phase 1 opt-in cast-back: compute fp32 internally, output back to
-        compute_dtype.
+        """fp32 compute inside; the OUTPUT dtype is `amp_fp32_output_dtype`'s answer.
 
-        Used when `_NBX_ACTIVATIONS_FP16_SAFE` is True (per-component flag
-        of the precision contract, from the calibration record). The op's internal precision rationale
-        (RMSNorm pow→mean→rsqrt overflow risk, div epsilon underflow) is
-        preserved by upcasting inputs to fp32, but the output is brought
-        back to compute_dtype so downstream ops don't propagate fp32 in
-        the activation chain — VRAM-preserving for diffusion VAE/UNet
-        chains where ranges are confirmed fp16-safe.
-
-        When the flag is False (default conservative), this wrapper is
-        not selected; ops fall back to `_wrap_fp32` which leaves output
-        in fp32. Read flag at call time so a single TritonDtypeEngine
-        instance compiled before the registry-driven flag was applied
-        still picks up the new value.
+        The op's internal precision rationale (RMSNorm pow->mean->rsqrt overflow risk, div
+        epsilon underflow) is kept by upcasting the inputs to fp32; whether the result is
+        brought back to compute_dtype is the one rule:
+          * compute dtype bf16 on a bf16 GRAPH (`self.graph_dtype`, the container's
+            `torch_dtype`): always — every floating tensor of the result, a
+            `native_*_norm` tuple included (the compiled engine's `_to_compute_dtype`);
+            on a graph of another dtype coerced to bf16 compute: never (fp32 kept);
+          * compute dtype fp16: only under the precision contract — the per-component
+            `_NBX_ACTIVATIONS_FP16_SAFE` flag (read at call time, so an engine compiled
+            before the flag was applied still sees it) or `force_cast_back` (the op is in
+            the record's narrow set). The fp16 cast is the single-tensor one it always
+            was: a tuple result keeps the dtypes its kernel wrote (the fp16 contract is
+            held byte-identical by decision, 2026-09-28).
         """
         compute = self.compute_dtype
+        cname = compute.name
+        gname = self.graph_dtype
+        if compute == NBXDtype.bfloat16:
+            # decided now, not at the first call: an unstated graph dtype refuses at compile
+            amp_fp32_output_dtype(cname, gname, False, False)
         widens = bool(getattr(func, "_nbx_widens_on_load", False))
-        def cast_back_func(*args, **kwargs):
+
+        def cast_back(result):
             from neurobrix.kernels import wrappers as _w
+            if amp_fp32_output_dtype(cname, gname, _w._NBX_ACTIVATIONS_FP16_SAFE,
+                                     force_cast_back) != cname:
+                return result          # fp16 without the contract, or a non-bf16 graph: fp32
+            if compute == NBXDtype.bfloat16:
+                return _cast_floats_to(result, compute)
+            if _is_float_tensor(result) and _get_nbx_dtype(result) != compute:
+                result = result.to(compute)
+            return result
+
+        def cast_back_func(*args, **kwargs):
             if widens:
                 # The wrapper's kernel widens its loads to fp32: no materialised fp32 input.
                 # It STORES fp32, as every certified row ran it — asked to store fp16, the
@@ -638,26 +736,14 @@ class TritonDtypeEngine:
                 # differently and rounds a rare element one ulp apart (VibeVoice, the final
                 # gate of 2026-09-08: 2 of 75,776 at feat 2048) — so the cast back to the
                 # compute dtype stays the copy it was, exact by construction.
-                result = func(*args, out_dtype=NBXDtype.float32, **kwargs)
-                if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
-                        and _is_float_tensor(result)
-                        and _get_nbx_dtype(result) != compute):
-                    result = result.to(compute)
-                return result
+                return cast_back(func(*args, out_dtype=NBXDtype.float32, **kwargs))
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
                     if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
                 else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
                 for a in args
             )
-            result = func(*new_args, **kwargs)
-            # Cast back ONLY when the per-component opt-in flag is True.
-            # Default False = conservative behavior (output stays fp32).
-            if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
-                    and _is_float_tensor(result)
-                    and _get_nbx_dtype(result) != compute):
-                result = result.to(compute)
-            return result
+            return cast_back(func(*new_args, **kwargs))
         return cast_back_func
 
     def _wrap_lower_precision(self, func: Callable) -> Callable:

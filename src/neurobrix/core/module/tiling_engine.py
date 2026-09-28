@@ -478,6 +478,54 @@ class TilingEngine:
             rw = ts * sf
             rt = self.t_tile * self.t_scale if temporal else None
 
+        import numpy as np
+
+        def _out(p: int, axis: str) -> int:
+            """An input-space start as an output-space start on this axis."""
+            if axis == "t":
+                return p // self.t_scale if down else p * self.t_scale
+            return p // sf if down else p * sf
+
+        def _overlaps(p: int, positions: list, length: int, axis: str):
+            """(before, after): output extents this tile shares with its neighbours."""
+            i = positions.index(p)
+            o = _out(p, axis)
+            before = (_out(positions[i - 1], axis) + length - o) if i > 0 else 0
+            after = (o + length - _out(positions[i + 1], axis)) if i + 1 < len(positions) else 0
+            return max(0, before), max(0, after)
+
+        def _ramp(n: int, before: int, after: int):
+            """1 inside, a linear ramp across each shared overlap: (i + 0.5) / overlap, so the
+            two tiles' weights sum to exactly 1 at every overlapped pixel (a crossfade)."""
+            r = np.ones(n, dtype=np.float32)
+            if before > 0:
+                k = min(before, n)
+                r[:k] = np.minimum(r[:k], (np.arange(k, dtype=np.float32) + 0.5) / before)
+            if after > 0:
+                k = min(after, n)
+                r[n - k:] = np.minimum(r[n - k:], (np.arange(k, 0, -1, dtype=np.float32) - 0.5) / after)
+            return r
+
+        def _feather(osl, ty: int, tx: int, tt=None):
+            """The tile's blend weight over its placed extent `osl`, as the result's type."""
+            shape = [1] * out_ndim
+            factors = [(-2, _overlaps(ty, h_positions, rh, "s")), (-1, _overlaps(tx, w_positions, rw, "s"))]
+            if tt is not None:
+                factors.append((self.t_axis_out if down else 2, _overlaps(tt, t_positions, rt, "t")))
+            for axis, _ in factors:
+                shape[axis] = osl[axis].stop - osl[axis].start
+            arr = np.ones(shape, dtype=np.float32)
+            for axis, (before, after) in factors:
+                along = [1] * out_ndim
+                along[axis] = shape[axis]
+                arr = arr * _ramp(shape[axis], before, after).reshape(along)
+            arr = np.ascontiguousarray(arr)
+            if _is_nbx_tensor(first_result):
+                from neurobrix.kernels.nbx_tensor import NBXTensor
+                return NBXTensor.from_numpy(arr).to(first_result.dtype)
+            import torch
+            return torch.from_numpy(arr).to(device=first_result.device, dtype=first_result.dtype)
+
         def _accumulate(res, ty: int, tx: int, tt=None) -> None:
             # Explicit per-rank slice (NBXTensor-safe); the read-add-write
             # form works for both torch and NBXTensor (avoids relying on
@@ -522,8 +570,18 @@ class TilingEngine:
             else:
                 osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
                 rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
-            output[osl] = output[osl] + res[rsl]
-            weight[osl] = weight[osl] + 1
+            # Feathered, not boxed: each tile weighs 1 in its interior and ramps down across
+            # the overlap it shares with a neighbour — a symmetric crossfade. It is NOT the
+            # vendors' formula (diffusers' blend_h / blend_v ramp the previous tile's tail by
+            # i / blend_extent into the next tile's head and crop each tile to the stride), so a
+            # tile-level comparison with a vendor tiled decode keeps a residual by construction.
+            # A box weight switched the average abruptly wherever the tile count changed — a
+            # line at every tile stride: CogVideoX-2b's 64-px and Wan2.1-T2V's 96-px grids, both
+            # engines (2026-09-27). The temporal axis is tiled only for a LINEAR temporal map
+            # (Prism's gate): a causal decoder, whose first frame is special, is never cut in time.
+            w = _feather(osl, ty, tx, tt)
+            output[osl] = output[osl] + res[rsl] * w
+            weight[osl] = weight[osl] + w
 
         # NBX_TILE_CENSUS=1: one line per tile boundary — tracked live bytes,
         # pool-parked bytes, machine available. The three growth shapes name

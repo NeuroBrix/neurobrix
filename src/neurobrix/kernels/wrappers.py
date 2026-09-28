@@ -368,11 +368,13 @@ def get_hardware_profile():
 #   for this sequence. Read by self-managed wrappers (conv2d_wrapper)
 #   to decide output dtype, mirroring what cuDNN does in compiled mode.
 # - _NBX_ACTIVATIONS_FP16_SAFE: per-component flag of the precision
-#   contract (calibration record). When True, ops in AMP_FP32_OPS
-#   that produce fp32 internally cast their output back to compute_dtype
-#   (rms_norm, div, etc.) — VRAM-preserving for models whose activations
-#   are confirmed within fp16 range by the calibration record (neurobrix calibrate). Default
-#   False keeps the conservative fp32-output behavior.
+#   contract (calibration record). Read under an fp16 compute dtype only:
+#   when True, ops in AMP_FP32_OPS that produce fp32 internally cast their
+#   output back to compute_dtype (rms_norm, div, etc.) — VRAM-preserving for
+#   models whose activations are confirmed within fp16 range by the
+#   calibration record (neurobrix calibrate); False keeps the conservative
+#   fp32 output. Under bf16 the output is cast back whatever the flag says
+#   (triton/dtype.py `amp_fp32_output_dtype`).
 # ---------------------------------------------------------------------------
 _NBX_COMPUTE_DTYPE = None
 _NBX_ACTIVATIONS_FP16_SAFE: bool = False

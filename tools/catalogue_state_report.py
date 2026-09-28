@@ -36,6 +36,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from container_renames import by_current_name, current_name  # noqa: E402
+
 REPO = Path("/home/mlops/NeuroBrix_System")
 MEET = REPO / "validation_outputs/catalogue_meet_20260911/meet.json"
 TABLE = Path("/home/mlops/nbx/campaigns/prepared/CAMPAIGN_TABLE.md")
@@ -103,7 +106,7 @@ VITRINE = {
         artefact="qwen3_coder/answer.txt",
         instrument="the function it wrote was extracted and EXECUTED against eight cases it never saw",
         answer="8 of 8 — overlapping, touching, contained, empty, single, unsorted, disjoint and degenerate inputs all return exactly what they must (execution.json); 3591 s for 160 tokens, the model streaming per token on one 32 GB card"),
-    "Wan2.1-T2V-1.3B-Diffusers": dict(
+    "Wan2.1-T2V-1.3B": dict(
         artefact="wan_t2v/sailboat.mp4",
         instrument="the frames assembled and watched as a sequence (contact_sheet.png), beside the per-frame facts",
         answer="a wooden boat on a calm bay at sunrise, coherent and moving (frame-to-frame change 9.3, 12.9, 3.6, 4.1); two things named — the model drew a rowing boat where the request said sailboat, and five frames came back for eight asked (the VAE's temporal grid; the engine now says so)"),
@@ -200,7 +203,7 @@ CROSS_CUTTING = [
 ]
 
 OVERLAY = {
-    "SANA-Video_2B_720p_diffusers": dict(
+    "SANA-Video_2B_720p": dict(
         now="met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost",
         evidence="night bench card 3: arm A rc=0; arm B (sweeping, 25 video conv keys at 720p) "
                  "killed at the campaign's 5400 s run timeout on repetition 0 and cut by hand at "
@@ -341,12 +344,12 @@ def campaign_cells() -> dict:
         # The table carries a model twice where a cell was re-run; the FIRST row
         # is the one with its key counts, and overwriting it with the repeat
         # replaced "8/9 keys" with an em dash.
-        out.setdefault(name, dict(cost_s=cost, ratio=ratio, keys=cells[6],
+        out.setdefault(current_name(name), dict(cost_s=cost, ratio=ratio, keys=cells[6],
                                   certified=cells[7], bytes=cells[8] if len(cells) > 8 else "?"))
         m = None
     for camp in CAMPAIGNS:
         for name, row in campaign_dir_cells(camp).items():
-            out.setdefault(name, row)
+            out.setdefault(current_name(name), row)
     return out
 
 
@@ -482,11 +485,11 @@ DEBTS_BY_CONTAINER = {
     "Qwen3-Omni-30B-A3B-Instruct": ["D-DEEPSTACK-ZERO-EXTENT", "D-DECLARED-MOE-AS-EXECUTED-VIEW"],
     "Ming-Lite-Omni-1.5": ["D-DECLARED-MOE-AS-EXECUTED-VIEW"],
     "mochi-1-preview": ["D-MOCHI-CUDA-700-AT-MM"],
-    "Wan2.1-VACE-1.3B-diffusers": ["D-TEMPORAL-UNROLL", "D-WAN-VACE-BROADCAST-AT-DIV",
-                                   "D-NEGATIVE-ALLOCATION-SIZE-WAN-VACE", "D-WAN-VACE-FRAME-TOKENS-FROZEN"],
-    "Wan2.1-I2V-14B-480P-Diffusers": ["D-TEMPORAL-UNROLL (inferred)"],
-    "Wan2.2-I2V-A14B-Diffusers": ["D-TEMPORAL-UNROLL", "D-PRISM-WAN22-TRITON-ONE-CARD"],
-    "Wan2.1-T2V-1.3B-Diffusers": ["D-WAN-T2V-OOM-AT-5D-PAD", "D-WAN-T2V-VAE-ACTIVATION-12GB"],
+    "Wan2.1-VACE-1.3B": ["D-TEMPORAL-UNROLL", "D-WAN-VACE-BROADCAST-AT-DIV",
+                         "D-NEGATIVE-ALLOCATION-SIZE-WAN-VACE", "D-WAN-VACE-FRAME-TOKENS-FROZEN"],
+    "Wan2.1-I2V-14B-480P": ["D-TEMPORAL-UNROLL (inferred)"],
+    "Wan2.2-I2V-A14B": ["D-TEMPORAL-UNROLL", "D-PRISM-WAN22-TRITON-ONE-CARD"],
+    "Wan2.1-T2V-1.3B": ["D-WAN-T2V-OOM-AT-5D-PAD", "D-WAN-T2V-VAE-ACTIVATION-12GB"],
     "Allegro-TI2V": ["D2 (88 frames: declared limit until cuDNN >= 9.3)", "D-ALLEGRO-TI2V-FRAME-TOKENS-FROZEN"],
     "Allegro": ["D-ALLEGRO-TRITON-31H-PER-ARM", "D-VIDEO-CAMPAIGN-STIMULUS"],
     "Sana_1600M_4Kpx_BF16": ["D-PRISM-SANA4K-COMPILED-16GB"],
@@ -630,7 +633,9 @@ def main() -> int:
     args = ap.parse_args()
     rows = meet_rows()
     cells = campaign_cells()
-    blind = blind_axes(from_cache=args.from_cache)
+    # The census and the dated records name a container as it was called when they were taken;
+    # every line below is joined under today's name (container_renames).
+    blind = by_current_name(blind_axes(from_cache=args.from_cache))
 
     print("# The catalogue, one line per model — 2026-09-12\n")
     print("**47 entries on the registry.** Every cell is read from an artefact on this")
@@ -661,7 +666,8 @@ def main() -> int:
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
-        container = r.get("container") or slug
+        recorded = r.get("container") or slug     # the name the 2026-09-11 pass ran it under
+        container = current_name(recorded)
         cell = cells.get(container)
         ov = OVERLAY.get(slug) or OVERLAY.get(container)
         if ov:
@@ -713,7 +719,7 @@ def main() -> int:
         screened = r.get("screened_out")
         if screened is not None and incomplete:
             screened = f"{screened}†"
-        coverage = coverage_cell(memory_class_coverage(container))
+        coverage = coverage_cell(memory_class_coverage(recorded))   # the pass's own log
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "

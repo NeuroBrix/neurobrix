@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.child_env import the_callers_door, the_pinned_profile
+
 # A module guard stood here from 2026-08-27 to 2026-09-20 refusing any
 # CUDA_VISIBLE_DEVICES mask, because autodetect enumerated the whole machine and
 # a masked run placed on an ordinal the process could not address. Measured on
@@ -130,7 +132,7 @@ FAMILY_ROWS = [
         {"prompt": "a red apple on a wooden table", "steps": 4},
         "media:png", id="image"),
     pytest.param(
-        "Wan2.1-T2V-1.3B-Diffusers",
+        "Wan2.1-T2V-1.3B",
         {"prompt": "a red fox running through snow", "steps": 2,
          "num_frames": 5, "height": 480, "width": 832},
         "media:mp4", id="video"),
@@ -148,7 +150,7 @@ _DEFAULT_CELL_TIMEOUT_S = 600
 # a Prism placement class, not a warm-path defect; unpin when that
 # placement finding is fixed.
 _PINNED_ROWS = {
-    "Wan2.1-T2V-1.3B-Diffusers": {"visible": "2", "hardware": "v100-32g"},
+    "Wan2.1-T2V-1.3B": {"visible": "2", "hardware": "v100-32g"},
 }
 
 
@@ -189,8 +191,9 @@ def test_family_serve_warm(model: str, gen_kwargs: dict, verify: str,
            "PYTHONUNBUFFERED": "1"}
     pin = _PINNED_ROWS.get(model)
     if pin:
-        env["CUDA_VISIBLE_DEVICES"] = pin["visible"]
-        spec["hardware"] = pin["hardware"]
+        env["CUDA_VISIBLE_DEVICES"] = the_callers_door(pin["visible"])
+        if the_pinned_profile(pin["hardware"]):
+            spec["hardware"] = pin["hardware"]
     try:
         r = subprocess.run(
             [_sys.executable, str(Path(__file__).parent

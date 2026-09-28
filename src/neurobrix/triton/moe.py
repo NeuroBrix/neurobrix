@@ -765,10 +765,14 @@ def execute_moe_fused(
     # caller's stack, holding ~800 MB per MoE op and OOMing after 7-8
     # blocks on a 16 GB V100.
     if any_cpu_weight:
+        # The explicit del releases them: NBXTensor frees its device buffer at refcount zero.
+        # A full gc.collect() stood here on every call — once per MoE layer per decoded token.
+        # Without it deepseek-moe triton-sequential (32 GB V100, KV cache on) completes in 586 s,
+        # byte-identical to its triton output; with it the same request timed out at 900 s
+        # (2026-09-27, two runs in different windows of host load — a controlled timing of the
+        # collection itself is the proof still owed).
         del gate_weights, up_weights, down_weights
         del tables
-        import gc as _gc
-        _gc.collect()
 
     DeviceAllocator.set_device(act_dev)
     DeviceAllocator.ensure_triton_device(act_dev)
