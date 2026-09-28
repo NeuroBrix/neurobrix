@@ -165,6 +165,33 @@ COMPILED_FLOW_MODULES: Dict[str, str] = {
 }
 
 
+def _iterative_phases(flow: Dict[str, Any]) -> List[set]:
+    # Both engines' iterative handlers (core/flow/iterative_process.py, triton/flow/iterative_process.py)
+    # force-unload each pre_loop component after it runs, and the loop's and pre_loop's before post_loop,
+    # even in eager mode: each pre_loop component is alone, the loop's components are together, the
+    # post_loop's are together.
+    pre = list(flow.get("pre_loop") or [])
+    loop = list((flow.get("loop") or {}).get("components") or [])
+    post = list(flow.get("post_loop") or [])
+    return [{c} for c in pre] + ([set(loop)] if loop else []) + ([set(post)] if post else [])
+
+
+#: flow type -> the sets of components its handlers hold loaded AT THE SAME TIME, from the topology's
+#: flow. Torch-free: Prism reads it to know what sits beside a component it streams. A flow type not
+#: here declares no phases, and any of its components may be co-resident with any other.
+RESIDENT_PHASES = {
+    "iterative_process": _iterative_phases,
+}
+
+
+def resident_together(topology: Dict[str, Any]):
+    """The components a flow holds loaded together, as a list of sets, or None when its type
+    declares no phases."""
+    flow = (topology or {}).get("flow") or {}
+    phases = RESIDENT_PHASES.get(flow.get("type"))
+    return phases(flow) if phases else None
+
+
 def register_flow(flow_type: str):
     """
     Decorator to register flow handler classes.

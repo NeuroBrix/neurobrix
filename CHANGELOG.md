@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an upsample is fused into the next convolution, or a pixel shuffle reads a broadcast view, the
   source tensor stays in memory until that operation runs; the plan released it earlier.
 
+- **A model streamed layer by layer no longer reserves room for components that run at another
+  time.** When a component is too large for the GPU and is streamed, the plan reserved the working
+  memory of every other component beside it, although a text encoder and an image decoder never run
+  together. Only their weights are reserved now, plus everything a component running at the same
+  time needs.
+
 - **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
   read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
   3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.

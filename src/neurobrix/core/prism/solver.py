@@ -5188,8 +5188,19 @@ class PrismSolver:
         # reserving the activations, one level up.
         streamed = {name for name, mem in sorted_comps
                     if self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
-        resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
-                              if name not in streamed)
+        # But only what is live AT THE SAME TIME as the streamed component's segments.
+        # A whole component's WEIGHTS stay loaded beside it (a plan may load eagerly, a
+        # serve session never unloads); its ACTIVATIONS are live only while it runs, and
+        # the flow says which components run together: `core/flow/base.py
+        # resident_together` (the iterative handlers of both engines unload each pre_loop
+        # component after it runs and the loop's before post_loop). Reserving every
+        # component's activation peak beside the streamed one priced PixArt-XL-2-1024-MS's
+        # VAE decode (5 120 MB at 1024x2048 once its fp32 widths are counted) beside its
+        # TEXT ENCODER's segments, which run in another phase, and refused a plan that
+        # streams on the Mac (2026-09-28). A flow that declares no phases keeps every
+        # component concurrent — the TinyLlama case above, lm_head beside the model, is
+        # one — and reserves exactly what it did.
+        resident_beside = self._resident_beside_streamed(container, sorted_comps, streamed)
         # And the graph's CONSTANTS, which are resident beside every segment and
         # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
         # baked into graph.json is not a component, so it was invisible here while
@@ -5361,6 +5372,46 @@ class PrismSolver:
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
         return allocations, devices
+
+    def _resident_beside_streamed(self, container, sorted_comps, streamed) -> int:
+        """Bytes held beside a streamed component's segments by the components kept WHOLE.
+
+        A whole component CONCURRENT with the streamed one (same flow phase, or a flow that
+        declares no phases) counts its total — weights, activation peak, overhead. One that runs
+        in ANOTHER phase counts its weights and their share of the overhead only: its weights may
+        stay loaded, its activations are not live while the segments run. The phases are the
+        flow's own (`core/flow/base.py resident_together`, the rule the partition branch
+        introduced, 38751c12). With several streamed components the largest reserve is taken:
+        each is cut against the same budget. A streamed component no phase names keeps every
+        other component concurrent."""
+        from neurobrix.core.flow.base import resident_together
+        phases = resident_together(self._flow_topology(container))
+        whole = [(n, m) for n, m in sorted_comps if n not in streamed]
+
+        def _weights_only(m) -> int:
+            share = m.weight_bytes / max(m.weight_bytes + m.activation_bytes, 1)
+            return int(m.weight_bytes + m.overhead_bytes * share)
+
+        def _beside(s) -> int:
+            phase = next((ph for ph in phases if s in ph), None) if phases is not None else None
+            return sum(int(m.total_bytes) if (phases is None or phase is None or n in phase)
+                       else _weights_only(m) for n, m in whole)
+
+        if not streamed:
+            return sum(int(m.total_bytes) for _, m in whole)
+        return max(_beside(s) for s in streamed)
+
+    def _flow_topology(self, container) -> Dict[str, Any]:
+        """The container's topology.json (its flow), read from its cache — the NBXContainer object carries
+        only the flags from it. Empty when the container has no cache path or no topology.
+        (Brought from 38751c12, a-partition-is-cut-at-the-request, unchanged.)"""
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        import json as _json
+        from pathlib import Path as _P
+        path = _P(base) / "topology.json"
+        return _json.loads(path.read_text()) if path.exists() else {}
 
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
         """Per-component {weight_name: stored bytes} from the weights index.
