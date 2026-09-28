@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`neurobrix autotune certify` certifies the census table shipped with the engine, and nothing else.**
+  The kernel shapes to certify come from the committed census table of the hardware profile and the
+  card's memory class; `--census` is refused, and the machine's local tuning cache is no longer a
+  source of shapes.
+
 - **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
   depths the Metal backend's author recommends; the Apple profile declares them
   (`autotune.certify_num_stages`).

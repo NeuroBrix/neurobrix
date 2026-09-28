@@ -1,6 +1,6 @@
 """`neurobrix autotune` — the certified autotune directory's tool.
 
-    neurobrix autotune certify --profile <profile> [--vendor <vendor>] [--census PATH]
+    neurobrix autotune certify --profile <profile> [--vendor <vendor>]   (the census table of the card's memory class)
                                [--out DIR] [--kernels a,b] [--limit N] [--only-missing]
     neurobrix autotune check   [--dir DIR]          # the directory's gate, file by file
     neurobrix autotune status                       # what the profile in force would be served
