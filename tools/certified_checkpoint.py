@@ -123,6 +123,20 @@ def current_branch(repo: str) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
+def _something_to_push(repo: str, rel_dir: str, remotes) -> bool:
+    """Whether the final checkpoint would push anything: a change under `rel_dir` to commit, or a
+    local commit a remote does not have yet."""
+    st = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--", rel_dir], capture_output=True, text=True)
+    if st.stdout.strip():
+        return True
+    branch = subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+    for r in remotes:
+        ahead = subprocess.run(["git", "-C", repo, "rev-list", "--count", f"{r}/{branch}..HEAD"], capture_output=True, text=True)
+        if ahead.returncode != 0 or (ahead.stdout.strip() or "0") != "0":
+            return True                                   # unpushed commits, or a branch the remote lacks
+    return False
+
+
 def _push_stamp_path(repo: str) -> Path:
     """The repository's last-push stamp, in its common git dir so every worktree shares it."""
     common = subprocess.run(["git", "-C", repo, "rev-parse", "--git-common-dir"], capture_output=True, text=True)
@@ -242,7 +256,10 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
                 # (`--touch-push`): on 2026-09-28 a per-process window let this tool push 23 minutes
                 # after a manual batched push of the same repository (06:06 and 06:29).
                 return max(0.0, push_interval - (time.time() - last_push_time(repo)))
-            if final and remotes and seconds_until_push_window() > 0:
+            if final and remotes and seconds_until_push_window() > 0 and _something_to_push(repo, rel_dir, remotes):
+                # Only when there IS something to push: with nothing to commit and nothing unpushed, the
+                # final checkpoint used to sit out the whole window (13 minutes on 2026-09-28 behind a
+                # certifier that had certified nothing, the GPU idle behind it).
                 wait = seconds_until_push_window()
                 say(f"[checkpoint] final checkpoint: the repository's push window opens in {wait:.0f} s (at most one "
                     f"push per {push_interval:.0f} s); waiting, the commit is local meanwhile")
