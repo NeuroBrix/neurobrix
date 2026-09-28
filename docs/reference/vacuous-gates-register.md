@@ -3598,3 +3598,23 @@ and is red on 73b04e10 ("'bool' object is not callable"), green after.
 
 **The lesson, in one line.** A test double of a project class is built from the class, never from
 the call the code happens to make on it.
+
+### 114 — the two-writer test wrote only keys the two classes did not share
+
+The 2026-09-21 repair of two certifiers writing one kernel file (one per memory class, two cards)
+merged the file BY KEY: the disk's entries were added where the writer had none. Its gate wrote
+four keys, two per writer, all distinct — green. But a key both classes hold is one entry, a
+primary and its class variants, and the writer's copy of it, read at the start of its pass, won
+whole. On 2026-09-28/29 the 16 GB GEMM pass rewrote `baddbmm_kernel.fp32.json` after each of its
+keys for two hours: the 32 GB card's variant of eleven shared keys was absent from every
+checkpoint commit from 23:00 to 00:32, and the 32 GB card re-certified the same eleven on every
+pass (passes 8-11, a different winner each time).
+
+**What the gate said about the lost variant**: pass. It never gave two writers the same key.
+
+**Repair.** The writer places only what it just proved into the file as it stands under the lock
+(`file_certification`, the one placement rule); nothing it read earlier is written back. The gate
+now has the shared key, a stale writer and the other class's variant between its reads: red on
+the key-level merge, green after.
+
+**The lesson, in one line.** A merge is tested where its inputs overlap; disjoint inputs prove a union.
