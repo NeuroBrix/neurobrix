@@ -105,14 +105,47 @@ class LayerPartitioner:
     """Partition one component graph into budget-sized segments."""
 
     def __init__(self, graph: Dict[str, Any],
-                 weight_sizes: Optional[Dict[str, int]] = None):
+                 weight_sizes: Optional[Dict[str, int]] = None,
+                 symbol_map: Optional[Dict[str, int]] = None,
+                 compute_dtype_bytes: Optional[int] = None,
+                 widths: Optional[Dict[str, int]] = None):
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
+        # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
+        # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
+        # the same numbers Prism's placement estimate uses. Without it a tensor's `shape` is the
+        # TRACE's — SANA-Video's VAE input [1,128,9,14,22] where a 1280x512 request makes
+        # 21x64x160, ~77x more — and every segment was cut for the trace, not the run (the same
+        # bug written twice: the profiler already resolved it). No map = the trace, said so by
+        # the caller's absence of one, as before.
+        self._symbol_map = symbol_map
+        self._compute_dtype_bytes = compute_dtype_bytes
+        # {tensor_id: bytes per element} each activation is EXECUTED at (core/prism/runtime_widths),
+        # the width the placement estimate prices it at — a segment is cut at what the plan pays
+        self._widths = widths or {}
+        self._resolver = None
+        if symbol_map is not None:
+            if compute_dtype_bytes is None:
+                raise ValueError("ZERO FALLBACK: sizing at a request needs the plan's compute dtype width")
+            from neurobrix.core.prism.profiler import ActivationProfiler
+            self._resolver = ActivationProfiler(graph)
         self.ops: Dict[str, Any] = graph.get("ops") or {}
         self.order: List[str] = list(graph.get("execution_order") or [])
         # Authoritative sizes when the caller has the weights index; the
         # graph's own shape/dtype otherwise. The index wins because it
         # records what is STORED, which is what a load actually costs.
         self.weight_sizes = weight_sizes or {}
+
+    def _activation_bytes(self, t: Dict[str, Any]) -> int:
+        if self._resolver is None:
+            return tensor_bytes(t) or 0
+        shape = self._resolver._resolve_shape(t, self._symbol_map)
+        tid = t.get("tensor_id")
+        if tid in self._widths:
+            numel = 1
+            for d in shape:
+                numel *= int(d)
+            return numel * int(self._widths[tid])
+        return self._resolver._compute_size(shape, t, self._compute_dtype_bytes)
 
     # -- dataflow ---------------------------------------------------------
 
@@ -142,12 +175,12 @@ class LayerPartitioner:
                 t = self.tensors.get(tid)
                 if t is not None and not t.get("is_parameter") and tid not in alive:
                     alive.add(tid)
-                    live += tensor_bytes(t) or 0
+                    live += self._activation_bytes(t)
             for tid in op.get("input_tensor_ids") or []:
                 if tid in alive and last.get(tid) == i:
                     t = self.tensors.get(tid)
                     alive.discard(tid)
-                    live -= tensor_bytes(t) or 0
+                    live -= self._activation_bytes(t)
             curve.append(live)
         return curve
 
