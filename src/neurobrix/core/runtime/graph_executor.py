@@ -103,6 +103,26 @@ class ExecutionStats:
         )
 
 
+def computed_array_to_container(t, device, dtype_name: str):
+    """A computed-at-runtime array (a sincos or interpolated positional embedding, a traced buffer)
+    placed in the Triton branch's container at the component's compute dtype. No torch (R33)."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype as _nbx_dtype
+    dev_idx = (int(device.split(':')[1]) if isinstance(device, str) and ':' in device else 0)
+    DeviceAllocator.set_device(dev_idx)
+    want = _nbx_dtype(dtype_name)
+    if t.dtype == np.float64 and want != NBXDtype.float64:
+        # A formula gives float64; the device receives it at the compute dtype. The cast to
+        # float32 happens HERE, on the host, because a float64 element on a backend without
+        # float64 (Metal) is misread, not cast (`NBXTensor.to` refuses it by name). Measured
+        # 2026-09-28 on the real Sana 4K sincos grids at 3072x4096, 2048x2560 and 1024x1024:
+        # float64 -> float32 -> bf16 on the host gives the same bits as the ATen branch's single
+        # float64 -> bf16 rounding, 0 of 41 287 680 elements differing.
+        t = t.astype(np.float32)
+    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
+    return out.to(want) if out.nbx_dtype != want else out
+
+
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -518,15 +538,7 @@ class GraphExecutor:
                     if not triton:
                         import torch
                         return torch.from_numpy(t).to(dtype=self._placement_torch_dtype(), device=self.device)
-                    from neurobrix.kernels.nbx_tensor import (
-                        NBXTensor, DeviceAllocator, parse_dtype as _nbx_dtype)
-                    dev_idx = (int(self.device.split(':')[1])
-                               if isinstance(self.device, str) and ':' in self.device
-                               else 0)
-                    DeviceAllocator.set_device(dev_idx)
-                    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
-                    want = _nbx_dtype(str(self.dtype).replace("torch.", ""))
-                    return out.to(want) if out.nbx_dtype != want else out
+                    return computed_array_to_container(t, self.device, str(self.dtype).replace("torch.", ""))
                 if not triton or not is_torch_tensor(t):
                     return t
                 from neurobrix.kernels.nbx_tensor import (
