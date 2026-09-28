@@ -4762,3 +4762,23 @@ proof directory.
 (the 36 next-defect rows and 31 MoE decode rows the supervisor queued for the rack) copied under
 `models/_agents/mac.proofs.2026-09-26/` with their sha256 beside them, and one line naming which
 caller of `synthesize` compiles without running.
+
+## 2026-09-28 — owed to the rack by the Mac, delivered: granite-speech's segment cost on unified memory is a host copy the loader keeps (Mac, 19:58 CEST)
+
+The rack asked (peer 19:34 CEST) for the MPS allocator's and the process's memory at each segment
+boundary of a native granite-speech-3.3-8b run. Under the owner's rule of 19:55 (no whole-model run
+for a diagnosis) the Mac answered with a loader-level probe, no model run: granite's encoder
+(534 tensors, 839 MB as fp16) loaded through `WeightLoader.load_component` and released by
+`MemoryManager.unload_weights`, twice, readings from `torch.mps.current_allocated_memory()`,
+`torch.mps.driver_allocated_memory()`, the `footprint` tool and `vm.swapusage`
+(`archives/mac/granite_probe_2026_09_28/loader_probe_encoder.{py,log}`): start footprint 151 MB;
+after load 839 / 840 / 1 072 MB; after unload 0 / 8 / 1 095 MB; after the second load (0.3 s
+against 0.2 s) 839 / 840 / 1 089; after `mps.empty_cache` 0 / 0 / 1 089. The allocator releases;
+the process keeps about one component's worth of host bytes after the device copy is gone and the
+reload is served from it — a second copy of every resident segment on one pool, which for a 7.8 GB
+segment is the 16 GB of swap the matrix guard killed at 19:29:58.
+
+**Owed back by the rack:** the loader's unified-memory path (tensor by tensor to the device, the
+host bytes dropped) and Prism's pricing of a streamed segment at the segment plus its largest
+tensor's transient (the Dell, peer 20:00 CEST); the same probe on the Mac after the patch, its
+footprint back at the start figure after unload, is the landing criterion agreed.
