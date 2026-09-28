@@ -3542,7 +3542,7 @@ certified at once (deviation 7.4e-7, 17 of 17 accepted).
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
 kernel was handed, never from what the caller was asked for.
 
-### 111 — the re-prove flag's help promised a serving the runtime refuses
+### 112 — the re-prove flag's help promised a serving the runtime refuses
 
 `neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
 that a proof made under another code generator "stays correct and served meanwhile". The runtime
