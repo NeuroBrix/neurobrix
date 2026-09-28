@@ -7,8 +7,8 @@ configs; 448 ran 40.9 s. The unit is 16 (432 and 416 sit on the 448 plateau; 456
 
 What would this file do if the code were wrong? A lattice ignored → the first cell reads 457
 and fails; a lattice applied where the profile declares none → the second fails; the
-measurement override not winning → the third fails; a rounding UP or a floor below the unit →
-the fourth fails.
+measurement override not winning → the third fails; a rounding UP (including a tile below the unit
+raised to it — the solver's own cell is test_a_tile_below_the_lattice_keeps_its_size.py) → the fourth fails.
 """
 from __future__ import annotations
 
@@ -23,7 +23,11 @@ def _lattice(monkeypatch, profile):
 
 
 def _snap(v, unit):
-    return max(unit, (v // unit) * unit) if unit > 1 else v
+    # The solver's rule (2026-09-27): DOWN onto the unit; a tile sized below one unit keeps its size —
+    # rounding it up to the unit put CogVideoX's VAE over its tile budget and on the host. This helper
+    # mirrors the rule; the solver itself is exercised in test_a_tile_below_the_lattice_keeps_its_size.py
+    # (this file tested only its own copy of the rule — vacuous-gates register).
+    return (v // unit) * unit if unit > 1 and v >= unit else v
 
 
 def test_the_profile_s_lattice_snaps_the_extent_down(monkeypatch):
@@ -49,5 +53,5 @@ def test_the_measurement_override_wins(monkeypatch):
 
 def test_the_snap_is_down_and_never_below_the_unit():
     assert _snap(457, 16) == 448          # down, never 464
-    assert _snap(15, 16) == 16            # the floor is one unit, not zero
+    assert _snap(15, 16) == 15            # below one unit the sized tile is kept: never up, never zero
     assert _snap(457, 104) == 416 and _snap(457, 128) == 384

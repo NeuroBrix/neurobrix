@@ -4080,8 +4080,14 @@ class PrismSolver:
         # Nothing else downstream is rounded. A profile without the value keeps the extent as
         # computed; NBX_PRISM_TILE_ALIGN overrides it for a measurement.
         _align = self._tile_extent_lattice()
-        if _align > 1:
-            tile_size = max(_align, (tile_size // _align) * _align)
+        if _align > 1 and tile_size >= _align:
+            # DOWN onto the lattice, as the comment above says. A tile the budget sized BELOW one
+            # unit has nothing to snap down to and keeps its size: `max(_align, …)` stood here and
+            # rounded a 12-latent tile UP to 16 over the budget, the function then returned None and
+            # the component was sent to the host — CogVideoX-2b / -5b-I2V at 352x720x49 on a 16 GB
+            # V100 decoded 45 minutes on the CPU (regression matrix, 2026-09-27). Alignment is a
+            # performance nicety; it never trades a tile that fits for host execution.
+            tile_size = (tile_size // _align) * _align
         tile_size = max(window_alignment if window_alignment > 1 else 8,
                         min(tile_size, latent_h, latent_w))
 
