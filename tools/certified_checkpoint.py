@@ -123,18 +123,16 @@ def current_branch(repo: str) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
-def _something_to_push(repo: str, rel_dir: str, remotes) -> bool:
-    """Whether the final checkpoint would push anything: a change under `rel_dir` to commit, or a
-    local commit a remote does not have yet."""
-    st = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--", rel_dir], capture_output=True, text=True)
-    if st.stdout.strip():
-        return True
-    branch = subprocess.run(["git", "-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
-    for r in remotes:
+def _unpushed(repo: str, remotes) -> int:
+    """How many local commits the furthest-behind remote lacks (0 when every remote has HEAD, or when a
+    remote does not know the branch yet — counted as behind by the whole branch)."""
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    worst = 0
+    for r in remotes or []:
         ahead = subprocess.run(["git", "-C", repo, "rev-list", "--count", f"{r}/{branch}..HEAD"], capture_output=True, text=True)
-        if ahead.returncode != 0 or (ahead.stdout.strip() or "0") != "0":
-            return True                                   # unpushed commits, or a branch the remote lacks
-    return False
+        n = int(ahead.stdout.strip() or 0) if ahead.returncode == 0 else int(_git(repo, "rev-list", "--count", "HEAD").stdout.strip() or 0)
+        worst = max(worst, n)
+    return worst
 
 
 def _push_stamp_path(repo: str) -> Path:
@@ -178,6 +176,19 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
     files = changed_files(repo, rel_dir)
     result: Dict[str, object] = {"committed": [], "refused": [], "sha": None, "remotes": {}, "files": files}
     if not files:
+        # Nothing new — but a commit an earlier checkpoint left unpushed (its window was closed) is
+        # carried now if the remotes are given, i.e. the window is open: the push is a cadence, the
+        # commit is the proof, and the next open window pays the debt.
+        behind = _unpushed(repo, remotes)
+        if behind:
+            branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            for r in remotes:
+                result["remotes"][r] = push_and_verify(repo, r, branch)
+            outcome = "; ".join(f"{r} {'ok' if not why else 'FAILED: ' + why}" for r, why in result["remotes"].items())
+            _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}; {behind} unpushed commit(s) "
+                            f"pushed: {outcome}", say)
+            result["sha"] = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+            return result
         _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}", say)
         return result
     abs_dir = str(Path(repo) / rel_dir)
@@ -256,14 +267,11 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
                 # (`--touch-push`): on 2026-09-28 a per-process window let this tool push 23 minutes
                 # after a manual batched push of the same repository (06:06 and 06:29).
                 return max(0.0, push_interval - (time.time() - last_push_time(repo)))
-            if final and remotes and seconds_until_push_window() > 0 and _something_to_push(repo, rel_dir, remotes):
-                # Only when there IS something to push: with nothing to commit and nothing unpushed, the
-                # final checkpoint used to sit out the whole window (13 minutes on 2026-09-28 behind a
-                # certifier that had certified nothing, the GPU idle behind it).
-                wait = seconds_until_push_window()
-                say(f"[checkpoint] final checkpoint: the repository's push window opens in {wait:.0f} s (at most one "
-                    f"push per {push_interval:.0f} s); waiting, the commit is local meanwhile")
-                time.sleep(wait)
+            # The final checkpoint never waits for the window: it commits, and a push inside the window
+            # is left to the next batched push (the operator's, or the next checkpointer's), recorded as
+            # NOT pushed. It used to sleep out the window — 13 minutes behind a certifier that had
+            # certified nothing (2026-09-28 09:31), and a chain's GPU idle behind every pass that ended
+            # inside a window. The commit is what keeps the proof; the push is a cadence.
             push_now = bool(remotes) and seconds_until_push_window() == 0
             res = checkpoint(repo, rel_dir, remotes if push_now else [], gate_cmd, trailers, record, say=say, label=label)
             last = time.monotonic()
