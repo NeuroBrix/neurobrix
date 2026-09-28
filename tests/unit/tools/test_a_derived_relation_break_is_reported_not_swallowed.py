@@ -118,10 +118,13 @@ def test_the_relation_is_ARITHMETIC_on_the_trace_value(subject):
     for r in _derived(rows):
         v, lit = r["trace_value"], r["first_break"]["literal"]
         rel = r["first_break"]["relation"]
-        mm = _re.fullmatch(r"v([*+\-]|//)(\d+)", rel)
-        assert mm, f"{model}: unrecognised relation {rel!r}"
-        op, k = mm.group(1), int(mm.group(2))
-        expect = {"*": v * k, "+": v + k, "-": v - k, "//": v // k}[op]
+        if rel == "v*v":                       # the tool's square relation (c49f8ff7): a 2-D grid
+            expect = v * v                     # flattened to its token count (Sana 4K, 2026-09-28)
+        else:
+            mm = _re.fullmatch(r"v([*+\-]|//)(\d+)", rel)
+            assert mm, f"{model}: unrecognised relation {rel!r}"
+            op, k = mm.group(1), int(mm.group(2))
+            expect = {"*": v * k, "+": v + k, "-": v - k, "//": v // k}[op]
         assert lit == expect, f"{model}: {rel} on trace {v} should give {expect}, row says {lit}"
 
 

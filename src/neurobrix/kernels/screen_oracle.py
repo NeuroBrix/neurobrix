@@ -89,12 +89,24 @@ def _mm(named: Dict[str, Any], rows: Optional[tuple] = None) -> Optional[np.ndar
     so a shape over the screening budget is verified on named windows instead of not at all.
     A whole fp64 reference for a 4 194 304 x 540 output is 18 GB; three row windows of it are
     a few megabytes, and the per-element comparison is identical on them."""
-    a, b = _to_f64(named.get("a_ptr")), _to_f64(named.get("b_ptr"))
+    a_live = named.get("a_ptr")
+    if rows is not None:
+        # The rows are cut WHERE THE OPERAND LIVES, before it crosses. Cut after the read,
+        # the whole operand came to the host and was cast whole to float64 once per window
+        # (measured 2026-09-28: 4 096 MiB on the host for 64 rows of a 1 048 576 x 256 fp32
+        # operand; the certifier's footprint spiked by 3.7 GB per matmul key), so the window
+        # saved nothing where it was meant to. A device slice is a view whose strides no flat
+        # reader follows; it is made contiguous on the device first (`_materialise`'s rule).
+        r0, r1 = rows
+        if getattr(a_live, "_device", "cpu") != "cpu" and hasattr(a_live, "__getitem__"):
+            piece = a_live[r0:r1]
+            contiguous = getattr(piece, "contiguous", None)
+            a_live = contiguous() if callable(contiguous) else piece
+    a, b = _to_f64(a_live), _to_f64(named.get("b_ptr"))
     if a is None or b is None:
         return None
-    if rows is not None:
-        r0, r1 = rows
-        a = a[r0:r1]
+    if rows is not None and a.shape[0] != (r1 - r0):
+        a = a[r0:r1]                                    # a host operand: cut after the read
     out = a @ b
     bias = named.get("bias_ptr")
     if bias is not None:
@@ -103,6 +115,8 @@ def _mm(named: Dict[str, Any], rows: Optional[tuple] = None) -> Optional[np.ndar
             return None
         alpha = float(named.get("alpha", 1.0) or 1.0)
         beta = float(named.get("beta", 1.0) or 1.0)
+        if bv.ndim == 2 and rows is not None and bv.shape[0] != out.shape[0]:
+            bv = bv[r0:r1]                              # a per-row bias follows the window
         out = alpha * out + beta * (bv[None, :] if bv.ndim == 1 else bv)
     return out
 
