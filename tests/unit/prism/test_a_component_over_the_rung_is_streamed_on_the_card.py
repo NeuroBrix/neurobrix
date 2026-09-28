@@ -136,12 +136,26 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
     announced peak above the rung — a plan that is a function of the live reading again.
 
     Looser than the solver by design of what it can see: the solver also reserves the graph's
-    constants and the KV cache beside the segments; this checks peak + resident components."""
+    constants and the KV cache beside the segments; this checks peak + resident components.
+
+    CHANGED 2026-09-28 (e4b1370a's rule). It asserted peak + the TOTAL of every other component
+    <= usable: the all-at-once reserve, every whole component's activation peak live beside the
+    segments. The iterative flow unloads a pre_loop component after it runs and the loop's before
+    post_loop, so PixArt's VAE decode (5 120 MB once its fp32 widths are priced) is never live
+    beside the text encoder's segments. It now asserts peak + what the flow holds beside them,
+    read through the SOLVER's own `_resident_beside_streamed` (weights of other phases, totals of
+    the same phase; every total for a flow declaring no phases). Seen: with the solver back on the
+    old reserve, the PixArt and Flex cells go RED (the plan is refused); with no reserve at all,
+    every cell goes RED (peak over the usable rung)."""
     _pin_machine(monkeypatch, host_free, rung)
     p, s, seen = _plan(model, h, w, mode=mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert p.layer_stream_plan and parts, f"{model}: no streamed component in the plan"
-    beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
+    # What sits beside the segments is what the FLOW holds with them — the solver's own helper
+    # (core/flow/base.py resident_together through PrismSolver._resident_beside_streamed), so
+    # this cell cannot drift from the rule the segments are cut by.
+    beside = s._resident_beside_streamed(NBXContainer.load(str(container_root(model))),
+                                         list(seen.items()), set(parts))
     for name, part in parts.items():
         peak = (part.peak_resident_bytes + beside) / MB
         assert peak <= s._usable_mb(s._prepare_devices(profile(APPLE))[0]), (
