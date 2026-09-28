@@ -99,13 +99,23 @@ def test_a_rung_inside_the_band_streams_on_the_card(monkeypatch, band, where, mo
 
 @pytest.mark.parametrize("mode", MODES)
 def test_and_the_streamed_peak_stays_inside_the_usable_part_of_the_rung(monkeypatch, band, mode):
+    """CHANGED 2026-09-28 (e4b1370a's rule). It asserted peak + the TOTAL of every other component
+    <= usable — the all-at-once reserve, which counts the VAE's decode peak beside the text
+    encoder's segments though the iterative flow never holds them together. It now asserts peak +
+    what the flow holds beside the segments, read through the SOLVER's own
+    `_resident_beside_streamed`. Seen: with no reserve at all in the solver it goes RED. With the
+    solver back on the OLD reserve it stays green here — that reserve is larger, the segments
+    shrink, the peak stays inside the rung; that regression is caught where it refuses a plan
+    (test_a_component_over_the_rung_is_streamed_on_the_card, and
+    test_a_streamed_component_reserves_only_what_runs_beside_it)."""
     lo, hi = band
     rung = int((lo + hi) / 2)
-    p, s, seen, _ = _solve(rung, monkeypatch, mode)
+    p, s, seen, c = _solve(rung, monkeypatch, mode)
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     assert COMP in parts, f"{COMP} was not streamed at rung {rung}"
     dev = s._prepare_devices(profile(APPLE))[0]
-    beside = sum(m.total_bytes for n, m in seen.items() if n not in parts)
+    # the solver's own reserve (PrismSolver._resident_beside_streamed): what the flow holds with it
+    beside = s._resident_beside_streamed(c, list(seen.items()), set(parts))
     peak = (parts[COMP].peak_resident_bytes + beside) / MB
     assert peak <= s._usable_mb(dev), (
         f"streamed peak {peak:.1f} MB over the usable {s._usable_mb(dev):.1f} MB of the "
