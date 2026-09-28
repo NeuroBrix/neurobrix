@@ -244,7 +244,7 @@ def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
 
 
 def census_model(model: str, hardware: str, modes: list, extra: list, requests: list, timeout: int,
-                 log_dir: Path, rungs: list = (), walk_extents: bool = False) -> dict:
+                 log_dir: Path, rungs: list = ()) -> dict:
     fam = _family(model)
     row = {"family": fam, "status": "ok", "keys": 0, "modes": {}, "requests": [], "frozen": [],
            "derived_breaks": [],
@@ -273,7 +273,13 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
             for rung in _rungs:
                 res = shadow(model, req, mode, hardware, _device_count(hardware), timeout, log_dir, rung_mb=rung,
                              tag=("probe" if ri else ""),
-                             walk_extents=(walk_extents and not ri and rung == _rungs[-1]))
+                             # The value-derived extent walk runs on the model's own request at the
+                             # top rung, always: taken without it, a census certified ONE speech
+                             # length, and every audio model with a codec missed at the next one
+                             # (chatterbox 32, openaudio 26, orpheus 22 misses, 2026-09-28). The
+                             # reason it was once off — the 512-step tail cutting a waveform into
+                             # thousands of buckets — is gone with the quarter-octave tail.
+                             walk_extents=(not ri and rung == _rungs[-1]))
                 res["request"] = "probe" if ri else "ordinary"
                 if ri and res["rc"] != 0 and "cannot run on this machine" in (res.get("error") or ""):
                     # A tiling probe the plan refuses at this rung (a 4 096-pixel request on a
@@ -368,11 +374,6 @@ def main() -> int:
     ap.add_argument("--hardware", required=True, help="the profile the census is taken for (config/hardware/<id>.yml)")
     ap.add_argument("--models", default=None, help="comma-separated; default: every container in the cache")
     ap.add_argument("--rungs", default="ladder", help="'ladder' (default): every rung up to the profile's capacity; 'none': the profile's own budget only; or a comma-separated list of MB")
-    ap.add_argument("--walk-extents", action="store_true",
-                    help="run a stage whose length the flow learns only from VALUES (a vocoder's "
-                         "speech tokens) at every key class of that length, on the top rung; "
-                         "costs many runs of that stage and is what makes an audio model's "
-                         "directory serve a speech of any length")
     ap.add_argument("--modes", default="triton", help="comma-separated served modes: triton, triton-sequential")
     ap.add_argument("--extra", nargs="*", default=[], help="flags appended to every request")
     ap.add_argument("--requests-json", default=None, help='{"<model>": [[flags...], ...]} — whole requests per model')
@@ -407,8 +408,7 @@ def main() -> int:
     t0 = time.time()
     rows = {}
     with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs,
-                                   a.walk_extents)
+        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs)
                 for m in models}
         for m, f in futs.items():
             rows[m] = f.result()
