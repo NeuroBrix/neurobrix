@@ -5,7 +5,7 @@
         --source <campaign census dir>@<tool tree revision> [--source ...]
 
 Each source is a directory the census tool wrote: its census JSON (the models' `graph_sha`) and its
-`census_runs/<model>.<mode>[.probe][.r<rung>][.walk].keys` files, which keep what the merged JSON
+`<model>.<mode>[.probe][.r<rung>][.walk].keys` files (under `census_runs/`, or in the directory itself), which keep what the merged JSON
 lost — the MODE and the RUNG each key was formed at. A model's rows come from the LAST source that
 holds it (a later census of a model replaces an earlier one, never adds to it), and only when the
 graph sha that source recorded is the container's in the cache today: a model retraced since its
@@ -69,6 +69,8 @@ def source_models(src: Path) -> dict:
             doc = json.loads(f.read_text())
         except (ValueError, OSError):
             continue
+        if not isinstance(doc, dict):             # a directory may hold other JSON (lists of keys, perf
+            continue                              # tables): only a census document names models
         for model, row in (doc.get("models") or {}).items():
             if isinstance(row, dict) and row.get("graph_sha"):
                 out[model] = row["graph_sha"]
@@ -80,7 +82,10 @@ def rows_of_source(src: Path, tool: str):
     from neurobrix.kernels import census_table as T
     shas = source_models(src)
     by_model, unhashed = {}, set()
-    for kf in sorted((src / "census_runs").glob("*.keys")):
+    # the census tool writes its key files under census_runs/ beside the census JSON, or straight into
+    # the --logs directory it was given (the Mac's campaigns: one logs_<tag>/ per invocation)
+    runs = src / "census_runs" if (src / "census_runs").is_dir() else src
+    for kf in sorted(runs.glob("*.keys")):
         parsed = parse_keys_name(kf.name)
         if parsed is None:
             raise SystemExit(f"{kf}: a key file name the census tool does not write")
