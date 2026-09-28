@@ -1625,6 +1625,24 @@ class PrismSolver:
                 self._identify_residual_chain_specs(comp.graph)
             )
             if not ap.overflow_ops and not has_chains:
+                # THE FIGURE A STRATEGY IS GATED ON IS THE FIGURE THE PLAN EXECUTES UNDER.
+                # `_compute_memory` prices this component's residual adds IN PLACE whenever it
+                # has candidates — also when nothing overflows, its in-place-only pass — and the
+                # strategy gates compare that figure. A plan that then installs nothing runs
+                # those adds out of place, holding a third buffer the gate never saw. Measured
+                # on the Mac, 2026-09-28: Sana_1600M_4Kpx_BF16 triton at 3072x4096, single_gpu
+                # accepted at 8 420 MB weights + 6 144 MB activation (+5 %) under a 16 384 MB
+                # rung; no op overflowed 0.85 of the card alone, so no interceptor was
+                # registered, and aten.add::86 ran full size — 3 x 3.2 GB — to an 18 157 MB
+                # footprint and an out-of-memory in the decode. So the adds the estimate
+                # assumed are installed with the plan: no band streaming, no fusion, only
+                # the add written into the buffer of its dead input (numerically the add).
+                _priced_in_place = self._identify_inplace_add_candidates_static(comp.graph)
+                if _priced_in_place:
+                    _iplan = OpLevelTilingPlan(comp.name)
+                    for _uid, _reuse in _priced_in_place:
+                        _iplan.add_inplace_add(_uid, _reuse)
+                    result[comp.name] = _iplan
                 continue
 
             # Look for upsample→conv adjacency in execution_order
