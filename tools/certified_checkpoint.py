@@ -123,6 +123,40 @@ def current_branch(repo: str) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
+def _unpushed(repo: str, remotes) -> int:
+    """How many local commits the furthest-behind remote lacks (0 when every remote has HEAD, or when a
+    remote does not know the branch yet — counted as behind by the whole branch)."""
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    worst = 0
+    for r in remotes or []:
+        ahead = subprocess.run(["git", "-C", repo, "rev-list", "--count", f"{r}/{branch}..HEAD"], capture_output=True, text=True)
+        n = int(ahead.stdout.strip() or 0) if ahead.returncode == 0 else int(_git(repo, "rev-list", "--count", "HEAD").stdout.strip() or 0)
+        worst = max(worst, n)
+    return worst
+
+
+def _push_stamp_path(repo: str) -> Path:
+    """The repository's last-push stamp, in its common git dir so every worktree shares it."""
+    common = subprocess.run(["git", "-C", repo, "rev-parse", "--git-common-dir"], capture_output=True, text=True)
+    d = common.stdout.strip() if common.returncode == 0 and common.stdout.strip() else ".git"
+    if not os.path.isabs(d):
+        d = os.path.join(repo, d)
+    return Path(d) / "nbx-last-push"
+
+
+def last_push_time(repo: str) -> float:
+    """Epoch seconds of the repository's last recorded push (0.0 when none was recorded)."""
+    try:
+        return float(_push_stamp_path(repo).read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def touch_push(repo: str, when: Optional[float] = None) -> None:
+    """Record a push of this repository now (this tool's pushes, and manual batched ones via `--touch-push`)."""
+    _push_stamp_path(repo).write_text(f"{when if when is not None else time.time():.0f}\n")
+
+
 def push_and_verify(repo: str, remote: str, branch: str) -> str:
     """Push, then read the remote back. Returns "" when the remote holds HEAD, else the reason."""
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -138,10 +172,23 @@ def push_and_verify(repo: str, remote: str, branch: str) -> str:
 def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str], trailers: List[str],
                record: Optional[str] = None, say=print, label: str = "") -> Dict[str, object]:
     """One checkpoint: gate → commit the files that pass → push every remote → read back → record."""
-    stamp = time.strftime("%H:%M:%S", time.gmtime())
+    stamp = time.strftime("%H:%M:%S %Z", time.localtime())   # the machine's clock, its zone named (never a bare UTC)
     files = changed_files(repo, rel_dir)
     result: Dict[str, object] = {"committed": [], "refused": [], "sha": None, "remotes": {}, "files": files}
     if not files:
+        # Nothing new — but a commit an earlier checkpoint left unpushed (its window was closed) is
+        # carried now if the remotes are given, i.e. the window is open: the push is a cadence, the
+        # commit is the proof, and the next open window pays the debt.
+        behind = _unpushed(repo, remotes)
+        if behind:
+            branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            for r in remotes:
+                result["remotes"][r] = push_and_verify(repo, r, branch)
+            outcome = "; ".join(f"{r} {'ok' if not why else 'FAILED: ' + why}" for r, why in result["remotes"].items())
+            _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}; {behind} unpushed commit(s) "
+                            f"pushed: {outcome}", say)
+            result["sha"] = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+            return result
         _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}", say)
         return result
     abs_dir = str(Path(repo) / rel_dir)
@@ -195,7 +242,15 @@ def _record(record: Optional[str], line: str, say=print) -> None:
 
 def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes: List[str], gate_cmd: List[str],
         trailers: List[str], record: Optional[str], once: bool = False, poll: float = 10.0, say=print,
-        label: str = "") -> int:
+        label: str = "", push_interval: float = 1800.0) -> int:
+    """Checkpoints every `interval` seconds; PUSHES at most once every `push_interval` seconds.
+
+    The owner's account was suspended twice for automated pushes, and on 2026-09-28 this
+    checkpointer pushed a working branch four times in an hour (supervisor 05:41): an
+    unattended process pushes at most once every 30 minutes per repository, to a working
+    branch only. Commits are local and as frequent as the interval; a commit made inside the
+    push window stays local and is said so; the final checkpoint waits for the window to open
+    rather than leave a proof only where it was written."""
     for pid in producers:
         if not producer_alive(pid):
             say(f"[checkpoint] producer {pid} ({producer_name(pid)}) is already gone at start — one last checkpoint, then exit")
@@ -207,8 +262,25 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
         final = once or stop["now"] or (bool(producers) and not alive)
         due = time.monotonic() - last >= interval
         if due or final:
-            res = checkpoint(repo, rel_dir, remotes, gate_cmd, trailers, record, say=say, label=label)
+            def seconds_until_push_window():
+                # the window is the REPOSITORY's, shared by every worktree and by manual pushes
+                # (`--touch-push`): on 2026-09-28 a per-process window let this tool push 23 minutes
+                # after a manual batched push of the same repository (06:06 and 06:29).
+                return max(0.0, push_interval - (time.time() - last_push_time(repo)))
+            # The final checkpoint never waits for the window: it commits, and a push inside the window
+            # is left to the next batched push (the operator's, or the next checkpointer's), recorded as
+            # NOT pushed. It used to sleep out the window — 13 minutes behind a certifier that had
+            # certified nothing (2026-09-28 09:31), and a chain's GPU idle behind every pass that ended
+            # inside a window. The commit is what keeps the proof; the push is a cadence.
+            push_now = bool(remotes) and seconds_until_push_window() == 0
+            res = checkpoint(repo, rel_dir, remotes if push_now else [], gate_cmd, trailers, record, say=say, label=label)
             last = time.monotonic()
+            if res.get("sha"):
+                if push_now and any(not why for why in (res.get("remotes") or {}).values()):
+                    touch_push(repo)
+                elif not push_now:
+                    _record(record, f"== {res['sha']}: committed, NOT pushed (the repository's push window opens in "
+                                    f"{seconds_until_push_window():.0f} s)", say)
             if final:
                 failed = [r for r, why in (res.get("remotes") or {}).items() if why]
                 if failed:
@@ -258,7 +330,10 @@ def main(argv=None) -> int:
     p.add_argument("--dir", default="src/neurobrix/config/autotune", help="relative to --repo")
     p.add_argument("--producer-pid", type=int, action="append", default=[],
                    help="a certifier (or its chain) to hold; the last one gone triggers the final checkpoint")
-    p.add_argument("--interval", type=float, default=600.0, help="seconds between checkpoints")
+    p.add_argument("--interval", type=float, default=600.0, help="seconds between checkpoints (commits)")
+    p.add_argument("--push-interval", type=float, default=1800.0,
+                   help="seconds between PUSHES, at least; the owner's rule is one automated push per 30 minutes per "
+                        "repository, working branches only (2026-09-28)")
     p.add_argument("--poll", type=float, default=10.0)
     p.add_argument("--remotes", default="origin,gitlab")
     p.add_argument("--record", default=None, help="a campaign RUN.md every checkpoint appends one line to")
@@ -268,6 +343,8 @@ def main(argv=None) -> int:
                         "(default: the engine's `autotune check --dir`)")
     p.add_argument("--label", default="", help="a short name for the pass, in each commit's subject")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--touch-push", action="store_true",
+                   help="record a push of --repo made by hand now, so this tool's window counts it; then exit")
     p.add_argument("--allow-parent-as-producer", action="store_true",
                    help="permit --producer-pid to name the shell that launched this "
                         "checkpointer; only correct if that shell will NOT wait on it")
@@ -277,8 +354,11 @@ def main(argv=None) -> int:
         print(deadlock, file=sys.stderr)
         return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
+    if a.touch_push:
+        touch_push(a.repo); print(f"[checkpoint] push of {a.repo} recorded at {time.strftime('%H:%M:%S')}")
+        return 0
     return run(a.repo, a.dir, a.producer_pid, a.interval, [r for r in a.remotes.split(",") if r], gate,
-               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label)
+               a.trailer, a.record, once=a.once, poll=a.poll, label=a.label, push_interval=a.push_interval)
 
 
 if __name__ == "__main__":

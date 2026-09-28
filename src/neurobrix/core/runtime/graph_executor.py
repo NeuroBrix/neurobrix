@@ -103,6 +103,73 @@ class ExecutionStats:
         )
 
 
+def computed_array_to_container(t, device, dtype_name: str):
+    """A computed-at-runtime array (a sincos or interpolated positional embedding, a traced buffer)
+    placed in the Triton branch's container at the component's compute dtype. No torch (R33)."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype as _nbx_dtype
+    dev_idx = (int(device.split(':')[1]) if isinstance(device, str) and ':' in device else 0)
+    DeviceAllocator.set_device(dev_idx)
+    want = _nbx_dtype(dtype_name)
+    if t.dtype == np.float64 and want != NBXDtype.float64:
+        # A formula gives float64; the device receives it at the compute dtype. The cast to
+        # float32 happens HERE, on the host, because a float64 element on a backend without
+        # float64 (Metal) is misread, not cast (`NBXTensor.to` refuses it by name). Measured
+        # 2026-09-28 on the real Sana 4K sincos grids at 3072x4096, 2048x2560 and 1024x1024:
+        # float64 -> float32 -> bf16 on the host gives the same bits as the ATen branch's single
+        # float64 -> bf16 rounding, 0 of 41 287 680 elements differing.
+        t = t.astype(np.float32)
+    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
+    return out.to(want) if out.nbx_dtype != want else out
+
+
+
+_SAVED_INPUTS: set = set()
+
+
+def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> None:
+    """NBX_SAVE_INPUTS=<component>:<dir>[,<component>:<dir>]: the FIRST call's inputs of that component
+    saved whole as .npy — a hand-off instrument (2026-09-28: one latent, the VAE's input of a
+    Triton run at 3072x4096, decoded by the vendor's own autoencoder on another machine; the
+    per-op dump keeps norms and heads only). Both modes, one path: a torch tensor through
+    `.detach().cpu()` (bf16 upcast to float32, since numpy has no bf16), an NBXTensor through
+    `.numpy()` (bf16 arrives as 2-byte void bits: saved as uint16 beside a float32 copy). Off
+    unless the variable names this component. Never raises into the run: a failure is said."""
+    spec = os.environ.get("NBX_SAVE_INPUTS")
+    if not spec:
+        return
+    targets = dict(item.split(":", 1) for item in spec.split(",") if ":" in item)
+    out = targets.get(component)
+    if not out or (component, mode) in _SAVED_INPUTS:
+        return
+    _SAVED_INPUTS.add((component, mode))
+    import numpy as np
+    os.makedirs(out, exist_ok=True)
+    for name, t in (inputs or {}).items():
+        try:
+            safe = str(name).replace("/", "_").replace(".", "_")
+            if is_torch_tensor(t):
+                arr = t.detach().cpu()
+                if str(arr.dtype) == "torch.bfloat16":
+                    arr = arr.float()
+                np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), arr.numpy())
+            elif hasattr(t, "numpy"):
+                host = np.asarray(t.numpy())
+                if host.dtype.kind == "V" and host.dtype.itemsize == 2:
+                    bits = np.ascontiguousarray(host).view(np.uint16)
+                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.bf16bits.npy"), bits)
+                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"),
+                            (bits.astype(np.uint32) << 16).view(np.float32).reshape(host.shape))
+                else:
+                    np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), host)
+            elif isinstance(t, np.ndarray):
+                np.save(os.path.join(out, f"{component}.{mode}.{safe}.npy"), t)
+            else:
+                continue
+            print(f"[save-inputs] {component} ({mode}) {name}: {getattr(t, 'shape', '?')} saved under {out}", flush=True)
+        except Exception as exc:                                       # noqa: BLE001
+            print(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})", flush=True)
+
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -518,15 +585,7 @@ class GraphExecutor:
                     if not triton:
                         import torch
                         return torch.from_numpy(t).to(dtype=self._placement_torch_dtype(), device=self.device)
-                    from neurobrix.kernels.nbx_tensor import (
-                        NBXTensor, DeviceAllocator, parse_dtype as _nbx_dtype)
-                    dev_idx = (int(self.device.split(':')[1])
-                               if isinstance(self.device, str) and ':' in self.device
-                               else 0)
-                    DeviceAllocator.set_device(dev_idx)
-                    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
-                    want = _nbx_dtype(str(self.dtype).replace("torch.", ""))
-                    return out.to(want) if out.nbx_dtype != want else out
+                    return computed_array_to_container(t, self.device, str(self.dtype).replace("torch.", ""))
                 if not triton or not is_torch_tensor(t):
                     return t
                 from neurobrix.kernels.nbx_tensor import (
@@ -2584,6 +2643,7 @@ class GraphExecutor:
         Returns:
             Output tensors
         """
+        _save_inputs_if_asked(getattr(self, "_component_name", None) or "?", inputs, getattr(self, "mode", "?"))
         # Explicit per-call callback wins over the persistent one
         # (installed by zero3). _execute_compiled_graph consumes via
         # self._pre_op_callback — reset in finally so the instance
