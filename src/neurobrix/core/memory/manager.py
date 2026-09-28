@@ -41,8 +41,8 @@ class MemoryManager:
 
         CRITICAL: Sync every device that holds memory in this dict BEFORE
         clearing references, then drop refs (which triggers ComponentArena
-        and NBXTensor finalizers that call cudaFree), then GC, then
-        empty_cache.
+        and NBXTensor finalizers that call cudaFree), then empty_cache. No
+        heap collection: this runs once per streamed segment per step.
 
         Why the pre-clear sync matters: ComponentArena.free() (triton path)
         calls DeviceAllocator.free_cuda directly with no internal sync.
@@ -120,8 +120,12 @@ class MemoryManager:
         # this memory are now guaranteed to have completed.
         weights_dict.clear()
 
-        # Step 3: force garbage collection
-        gc.collect()
+        # Step 3 is the reference drop above, not a heap collection. A full gc.collect() stood
+        # here from v0.1.0, with no measurement of its need, and layer streaming calls this for
+        # every segment of every decode step: the 30B MoE census shadows spent 999 of 999 profile
+        # samples in it (2026-09-29). NBXTensor and ComponentArena free their device memory at
+        # refcount zero; the flow boundary (`release_flow_memory`) still collects once per stage.
+        # The zero3 MoE path dropped its own per-call collect the same way (84f2cb88).
 
         # Step 4: per-device cache flush. device_empty_cache(None) is a
         # no-op (core/device_utils.py:43) — same trap as device_sync. We

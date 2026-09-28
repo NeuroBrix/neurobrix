@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Models that stream their layers run faster.** When a model is larger than the card and its
+  layers are loaded one segment at a time, releasing each segment no longer pauses for a full
+  garbage collection. On a V100 16 GB, MiniCPM-o 4.5 streamed at a 12 GB budget completes a
+  32-token answer in 357 s instead of 417 s, with byte-identical output and the same memory use.
+
 - **Every run's plan now states the host memory it expects to hold.** Beside the cards it plans, a run
   prints `Host:` (and `--explain-plan` a `host memory` line and a JSON field): the runtime's own base,
   measured on the machine when its hardware profile is generated, plus what the chosen plan keeps in
