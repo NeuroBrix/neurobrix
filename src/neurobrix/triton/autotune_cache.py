@@ -87,11 +87,42 @@ def _arch_fingerprint() -> Optional[str]:
         return None
 
 
+def _running_generator() -> Optional[str]:
+    """The code generator about to run, as the certified directory's proofs record it
+    (`kernels.autotune_certified.running_generator`: the Triton distribution, the target, and the
+    out-of-tree backend's source hash where one generates the code). None when it cannot be named."""
+    try:
+        from neurobrix.kernels.autotune_certified import running_generator
+        return running_generator()
+    except Exception:
+        return None
+
+
+def _generator_tag() -> Optional[str]:
+    """A file-safe tag of the running generator: its backend hash's short id where the backend is
+    out of tree (`msl-v0.1-42e` -> `42e`), else the whole identity flattened."""
+    gen = _running_generator()
+    if not gen:
+        return None
+    import re as _re
+    m = _re.search(r"msl-v[\d.]+-([0-9a-f]{3,})", gen)   # the proof records the short id (`msl-v0.1-42e`)
+    tag = m.group(1) if m else _re.sub(r"[^0-9A-Za-z.]+", "_", gen).strip("_")
+    return tag[:40] or None
+
+
 def _artifact_path() -> Optional[str]:
+    """The replay artifact of THIS backend, arch AND code generator. A configuration is a property
+    of the compiler that produced it (the certified directory's generator door, 2026-09-06): a
+    sweep made under one generator is never seeded under another. Before 2026-09-28 the file was
+    named by arch alone, and on the Mac the two "served" gates of the triton-ext bump took 545 of
+    their 1 400 key uses from sweeps the retired compiler had made. No generator name, no artifact."""
     arch = _arch_fingerprint()
     if arch is None:
         return None
-    return os.path.join(_dir(), f"autotune_configs_{arch}.json")
+    gen = _generator_tag()
+    if gen is None:
+        return None
+    return os.path.join(_dir(), f"autotune_configs_{arch}-{gen}.json")
 
 
 def _autotuners() -> Iterator[Tuple[str, object]]:
