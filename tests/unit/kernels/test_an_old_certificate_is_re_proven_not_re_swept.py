@@ -52,6 +52,7 @@ def _certify_once(root, monkeypatch, stored_proof_backend):
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)
     tol = Z._tolerance(vendor, profile, dtype)
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the setup's own sweep under a still witness
     # the certificate as the retired generator left it: a full sweep's entry, its backend relabelled
     first = Z.certify_key(qual, tuner, key, tol, np.random.default_rng(7), bench=lambda fn: (fn(), 0.5)[1])
     old = {k: first[k] for k in ("config", "proof", "excluded")}
@@ -98,6 +99,7 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)
     tol = Z._tolerance(vendor, profile, dtype)
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the setup's own sweep under a still witness
     first = Z.certify_key(qual, tuner, key, tol, np.random.default_rng(7), bench=lambda fn: (fn(), 0.5)[1])
     old = {k: first[k] for k in ("config", "proof", "excluded")}
     old_backend = dict(Z._backend()); old_backend["backend_hash"] = "msl-v0.1-retired000"; old_backend["triton"] = "3.7.9+retired"
@@ -132,6 +134,7 @@ def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_
     vendor, profile = C.active_profile()
     dtype = C.output_dtype(tuner, key)
     tol = Z._tolerance(vendor, profile, dtype)
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the setup's own sweep under a still witness
     first = Z.certify_key(qual, tuner, key, tol, np.random.default_rng(7), bench=lambda fn: (fn(), 0.5)[1])
     old = {k: first[k] for k in ("config", "proof", "excluded")}
     old_backend = dict(Z._backend()); old_backend["backend_hash"] = "msl-v0.1-retired000"; old_backend["triton"] = "3.7.9+retired"
