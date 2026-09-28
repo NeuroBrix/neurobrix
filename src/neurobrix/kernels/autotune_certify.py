@@ -154,11 +154,28 @@ def f32_to_bf16_bits(a: np.ndarray) -> np.ndarray:
     is forced to a quiet NaN.
     """
     a = np.ascontiguousarray(a, dtype=np.float32)
-    u = a.view(np.uint32)
-    bias = np.uint32(0x7FFF) + ((u >> np.uint32(16)) & np.uint32(1))
-    bits = ((u + bias) >> np.uint32(16)).astype(np.uint16)
-    bits[np.isnan(a)] = np.uint16(0x7FC0)
-    return bits
+    # Streamed through a 1 MB chunk, like `_arr`'s rounding: written as whole-array expressions,
+    # the bias, the sum and the shift were each a full-size uint32 temporary beside the array,
+    # three to four copies of a 5.1 GB operand, which is what took the Mac's certifier to its
+    # 14 GB guard on CogVideoX-5b-I2V's last convolution (2026-09-28 01:22) while the key's own
+    # tensors fit the unified-memory bound. Same bits, same rule; the peak is the output plus
+    # one chunk (tests/unit/kernels/test_f32_to_bf16_bits_streams.py).
+    flat = a.reshape(-1)
+    u = flat.view(np.uint32)
+    bits = np.empty(flat.shape, dtype=np.uint16)
+    step = 1 << 18
+    for i in range(0, flat.size, step):
+        uc = u[i:i + step]
+        t = np.right_shift(uc, np.uint32(16))
+        np.bitwise_and(t, np.uint32(1), out=t)
+        np.add(t, np.uint32(0x7FFF), out=t)
+        np.add(t, uc, out=t)
+        np.right_shift(t, np.uint32(16), out=t)
+        bits[i:i + step] = t
+        nan = np.isnan(flat[i:i + step])
+        if nan.any():
+            bits[i:i + step][nan] = np.uint16(0x7FC0)
+    return bits.reshape(a.shape)
 
 
 def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
@@ -185,14 +202,171 @@ def _itemsize(dtype_name: str) -> int:
     return 2 if dtype_name == "bf16" else np.dtype(_NP[dtype_name]).itemsize
 
 
-def _refuse_oversize(card_bytes, specs, what: str) -> None:
-    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw."""
+def _unified_bytes_per_element(dt) -> int:
+    """What one element of a synthesized tensor costs on a device whose memory IS the host's:
+    the host draw (float32, float64 for an fp64 operand — `_arr`), the device copy at its own
+    width, and the float32 readback. For a half type 4 + 2 + 4 = 10, the Mac's measured
+    ceiling (2026-09-27: 6.4, 8.2 and >= 9.8 B/elem at 358M, 642M and 1 456M elements)."""
+    return (8 if str(dt) == "fp64" else 4) + _itemsize(dt) + 4
+
+
+def _refuse_oversize(card_bytes, specs, what: str, unified: bool = False) -> None:
+    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw.
+    On a unified-memory device the host copies live in the same pool as the device buffers,
+    so every copy is counted: a conv sized at 3 GB of device bytes took the Mac's certifier
+    past 14 GB and was killed by its guard (2026-09-27)."""
     if card_bytes is None:
         return
-    asked = sum(int(np.prod(shape, dtype=np.int64)) * _itemsize(dt) for shape, dt in specs)
+    per = _unified_bytes_per_element if unified else _itemsize
+    asked = sum(int(np.prod(shape, dtype=np.int64)) * per(dt) for shape, dt in specs)
     if asked > card_bytes:
         raise KeyTooLargeForClass(asked, int(card_bytes), what)
 
+
+
+# ---------------------------------------------------------------------------
+# the price of a key: what a certification holds at each of its phases
+# ---------------------------------------------------------------------------
+def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
+    """The operands `synthesize` draws for `key` — (shape, dtype) of each input and of the
+    output, plus the geometry its oracle is windowed on — read from the same key fields, so the
+    price and the synthesis cannot disagree about what is drawn."""
+    short = C.kernel_short(qual)
+    dts = C.key_dtypes(key)
+    out_dt = C.output_dtype(tuner, key)
+    d = lambda i, default="fp16": (dts[i] if len(dts) > i else default)   # noqa: E731
+    if short in ("matmul_kernel", "addmm_kernel"):
+        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        ins = [("a", (M, K), d(0)), ("b", (K, N), d(1))]
+        if short == "addmm_kernel":
+            ins.append(("bias", (N,), d(2)))
+        return {"family": "mm", "inputs": ins, "out": ((M, N), out_dt), "mnk": (M, N, K), "batch": 1,
+                "row_windowed_launch": True}
+    if short == "baddbmm_kernel":
+        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
+        B = 2
+        ins = [("a", (B, M, K), d(0)), ("b", (B, K, N), d(1))]
+        if has_bias:
+            ins.append(("bias", (B, M, N), d(3, d(0))))
+        return {"family": "mm", "inputs": ins, "out": ((B, M, N), out_dt), "mnk": (M, N, K), "batch": B,
+                "row_windowed_launch": False}
+    if short == "conv2d_forward_kernel":
+        (n, ci, h, w, co, oh, ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
+        ci_g = ci // max(groups, 1)
+        return {"family": "conv", "inputs": [("x", (n, ci, h, w), d(0)), ("w", (co, ci_g, kh, kw), d(1))],
+                "out": ((n, co, oh, ow), out_dt), "geometry": (n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw)}
+    if short == "depthwise_conv2d_kernel":
+        (c, h, w, oh, ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
+        return {"family": "conv", "inputs": [("x", (1, c, h, w), d(0)), ("w", (c, 1, kh, kw), d(1))],
+                "out": ((1, c, oh, ow), out_dt), "geometry": (1, c, h, w, c, oh, ow, 1, kh, kw, ph, pw)}
+    return None
+
+
+def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_bytes: int) -> None:
+    """Refuse a key whose priced peak, over the process's floor, exceeds the working-set budget —
+    before a value is drawn, naming the phases and the budget."""
+    pr = price_key(qual, tuner, key)
+    if pr is None:
+        return
+    asked = int(floor_bytes) + int(pr["peak"])
+    if asked > budget_bytes:
+        mib = lambda b: f"{b / 2**20:.0f} MiB"                             # noqa: E731
+        raise KeyTooLargeForClass(
+            asked, int(budget_bytes),
+            f"{C.kernel_short(qual)} priced at its peak phase: draws {mib(pr['draws'])} + device "
+            f"{mib(pr['device'])} + max(oracle {mib(pr['oracle'])}, deviation {mib(pr['deviation'])}) "
+            f"over a {mib(floor_bytes)} floor = {mib(asked)}, against a {mib(budget_bytes)} working-set "
+            f"budget (the figure the run's guard kills at)")
+
+def _draw_bytes(dt: str) -> int:
+    """What one element of a drawn operand costs on the host for the whole key (`_arr`: float32,
+    float64 for an fp64 operand, the integral dtype's own width for a mask)."""
+    if dt in _INTEGRAL:
+        return np.dtype(_NP[dt]).itemsize
+    return 8 if dt == "fp64" else 4
+
+
+def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Dict[str, int]]:
+    """The bytes a certification of `key` holds, phase by phase, from what the code allocates —
+    never a constant per element. Measured on the Mac 2026-09-28 (`NBX_CERTIFY_PHASES=1`,
+    results/certifier_price): a depthwise key's peak is the windowed fp64 conv oracle (three
+    output windows, each an fp64 input slab, its padded copy and a kept fp64 block), a matmul
+    key's is its draws and the row-windowed launch oracle, and none of it is 10 bytes per element.
+
+    Phases, each held in full while the next one is built:
+      draws     — every input drawn on the host at `_draw_bytes`, alive for the whole key (the
+                  oracle closures read them);
+      device    — every operand and the output on the device at the key's width, plus `do_bench`'s
+                  256 MiB flush buffer; on a unified-memory device these bytes are the host's;
+      oracle    — the fp64 reference: whole under ORACLE_MAX_MACS, windowed above it
+                  (`_row_windows` / `_conv_windows`), with the transient of one window's build on
+                  top of the blocks kept;
+      deviation — the kept oracle plus one candidate's readback of what is compared (fp32 read,
+                  float64 cast), whole or on the windows.
+    `peak` = draws + device + max(oracle, deviation). The process's own floor (its memory before
+    the key) is not in it: the caller adds what it measures."""
+    ops = _key_operands(qual, tuner, key)
+    if ops is None:
+        return None
+    E = lambda shape: int(np.prod(shape, dtype=np.int64))                # noqa: E731
+    draws = sum(E(shape) * _draw_bytes(dt) for _, shape, dt in ops["inputs"])
+    out_shape, out_dt = ops["out"]
+    device = sum(E(shape) * _itemsize(dt) for _, shape, dt in ops["inputs"]) + E(out_shape) * _itemsize(out_dt)
+    device += 256 * 2 ** 20                                              # do_bench's flush buffer
+    e_out = E(out_shape)
+    if ops["family"] == "mm":
+        M, N, K = ops["mnk"]; B = ops["batch"]
+        ea = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "a")
+        eb = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "b")
+        ebias = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "bias")
+        wins = _row_windows(M * B, N, K)
+        if wins is None:                                                 # whole: a, b, bias, out in float64
+            oracle = 8 * (ea + eb + ebias + e_out)
+            kept = 8 * e_out
+            deviation = kept + e_out * (4 + 8)
+        else:
+            rows = wins[0][1] - wins[0][0]
+            if ops["row_windowed_launch"]:
+                # the launch oracle (`screen_oracle._mm`): the rows cut on the device, read as
+                # fp32 and cast to float64; b whole the same way; the window's product kept
+                per_win = rows * K * (4 + 8) + eb * (4 + 8) + rows * N * 8
+                kept = len(wins) * rows * N * 8
+                oracle = kept + per_win
+            else:
+                # the synthesized oracle (`_matmul_oracle_fn`): a's rows cast to float64 from
+                # the host draw, b whole in float64, the window's product kept
+                wins_b = _row_windows(M, N, K, cap=max(1, ORACLE_MAX_MACS // B)) or [(0, M)]
+                rows = wins_b[0][1] - wins_b[0][0]
+                per_win = B * rows * K * 8 + eb * 8 + B * rows * N * 8
+                kept = len(wins_b) * B * rows * N * 8
+                oracle = kept + per_win
+            deviation = kept + kept // 8 * (4 + 8)                       # the windows' readback and cast
+        return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+                "peak": draws + device + max(oracle, deviation)}
+    n, ci, h, w, co, oh, ow, ci_g, kh, kw, ph, pw = ops["geometry"]
+    ew = sum(E(shape) for name, shape, _ in ops["inputs"] if name == "w")
+    wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
+    if wins is None:                                                     # whole: x and its padded copy, w, out in float64
+        ex = n * ci * h * w
+        ex_pad = n * ci * (h + 2 * ph) * (w + 2 * pw)
+        oracle = 8 * (ex + ex_pad + ew + e_out)
+        kept = 8 * e_out
+        deviation = kept + e_out * (4 + 8)
+    else:
+        # per window (`conv2d_reference_window`): the input slab of its receptive field in
+        # float64, the slab padded, w in float64, the output block kept
+        kept = 0; per_win = 0
+        for (ni, r0, r1, c0, c1) in wins:
+            rh, rw = r1 - r0, c1 - c0
+            slab = ci * (rh + kh - 1) * (rw + kw - 1)
+            block = co * rh * rw
+            kept += 8 * block
+            per_win = max(per_win, 8 * (2 * slab + ew))
+        oracle = kept + per_win
+        deviation = kept + kept // 8 * (4 + 8)
+    return {"draws": draws, "device": device, "oracle": oracle, "deviation": deviation,
+            "peak": draws + device + max(oracle, deviation)}
 
 def _arr(rng, shape, dtype_name, scale=0.1):
     if dtype_name not in _NP:
@@ -394,8 +568,9 @@ def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
     return lambda: WindowedOracle([(w, _conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w)) for w in wins], oh, ow, n)
 
 
-def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None,
-               values: bool = True) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], np.ndarray]], str]]:
+def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = None, unified: bool = False,
+               values: bool = True, budget_bytes: Optional[int] = None,
+               floor_bytes: int = 0) -> Optional[Tuple[Callable[[], Any], Optional[Callable[[], np.ndarray]], str]]:
     """(call, oracle_fn, output_arg_name): a callable that runs the wrapper on
     inputs of this key's shape and dtypes, a callable computing the fp64
     oracle of the same inputs (LAZY: only once the wrapper's key is known to
@@ -413,6 +588,11 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
     arr = _arr if values else _spec
+    if budget_bytes is not None:
+        # THE PRICE BEFORE ANY DRAW (supervisor, 2026-09-28 05:41): what this key's certification
+        # will hold at its peak phase, over the process's measured floor, against the budget the
+        # run is gated on — the same figure its guard kills at. Refused by name, with the phases.
+        _refuse_unpriced(qual, tuner, key, budget_bytes, floor_bytes)
 
     def to(a):
         """The NBXTensor the kernel must receive, with the dtype the key names.
@@ -434,7 +614,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
                                       ((K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
-                                      ((M, N), out_dt)], short)
+                                      ((M, N), out_dt)], short, unified=unified)
         a = arr(rng, (M, K), dts[0] if dts else "fp16")
         b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
@@ -449,7 +629,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((B, K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((B, M, N), out_dt)]
                          + ([((B, M, N), dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16"))]
-                            if has_bias else []), short)
+                            if has_bias else []), short, unified=unified)
         a = arr(rng, (B, M, K), dts[0] if dts else "fp16")
         b = arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
         if has_bias:
@@ -461,7 +641,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
                                       ((co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((n, co, _oh, _ow), out_dt)], short)
+                                      ((n, co, _oh, _ow), out_dt)], short, unified=unified)
         x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
@@ -470,7 +650,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
         _refuse_oversize(card_bytes, [((1, c, h, w), dts[0] if dts else "fp16"),
                                       ((c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((1, c, _oh, _ow), out_dt)], short)
+                                      ((1, c, _oh, _ow), out_dt)], short, unified=unified)
         x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
@@ -619,7 +799,11 @@ def _read_certifying_device() -> Optional[Dict[str, Any]]:
     # `ordinal` is the CUDA ordinal in the visible set (0 under a pin to any physical card),
     # not the physical card; the visible set is recorded beside it so the pair says which.
     return {"ordinal": idx, "visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
-            "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0)}
+            "name": str(getattr(dev, "name", "?")), "memory_mb": int(getattr(dev, "memory_mb", 0) or 0),
+            # `DeviceSpec.has_unified_memory` is a PROPERTY. It was called as a method, which
+            # raised "'bool' object is not callable" on every profile that lists its devices
+            # (the Mac's first certify on 2026-09-27); the test's stub had made it a method.
+            "unified": bool(dev.has_unified_memory) if hasattr(dev, "has_unified_memory") else False}
 
 
 def _clocks_mhz():
@@ -1052,19 +1236,41 @@ def launch_oracle(qual: str, tuner, meta, out_tensor):
     return RowWindowedOracle(blocks, m)
 
 
+
+def _phase(label: str) -> None:
+    """NBX_CERTIFY_PHASES=1: one line per phase of a key with the process's memory now and at
+    its peak so far (macOS `footprint`-style figures from `getrusage` and `mach`-free reading:
+    resident bytes now, peak resident bytes). Written for the price door (2026-09-28): the
+    certifier's peak is host memory in one phase, and a price that does not know which phase
+    prices the wrong bytes."""
+    if os.environ.get("NBX_CERTIFY_PHASES") != "1":
+        return
+    import resource, time as _t
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss           # bytes on macOS
+    try:
+        import psutil                                                    # optional: resident now
+        now = psutil.Process().memory_info().rss
+    except Exception:                                                    # noqa: BLE001
+        now = -1
+    print(f"[phase] {_t.strftime('%H:%M:%S')} {label}: rss_now={now/2**20:.0f}MiB peak_rss={peak/2**20:.0f}MiB", flush=True)
+
+
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
-                card_bytes: Optional[int] = None,
-                num_stages: Optional[Tuple[int, ...]] = None) -> Dict[str, Any]:
+                card_bytes: Optional[int] = None, unified: bool = False,
+                num_stages: Optional[Tuple[int, ...]] = None, budget_bytes: Optional[int] = None,
+                floor_bytes: int = 0) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
     proof, excluded) for the directory. Raises when nothing survives."""
     from neurobrix.kernels import launcher as L
     from neurobrix.triton import autotune_cache as atc
     from triton.runtime.autotuner import Autotuner
-    made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes)
+    made = synthesize(qual, tuner, key, rng, card_bytes=card_bytes, unified=unified,
+                      budget_bytes=budget_bytes, floor_bytes=floor_bytes)
     if made is None:
         raise RuntimeError(f"no synthesizer for {qual}")
     call, oracle_fn, out_name = made
+    _phase("synthesized")
     oracle_box: Dict[str, Any] = {}
     bench = bench or (lambda fn: L.do_bench(fn, warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
     upstream_prune = getattr(Autotuner.prune_configs, "_nbx_upstream", Autotuner.prune_configs)
@@ -1115,6 +1321,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             oracle = oracle_box.get("v")
             if oracle is None:
                 oracle = oracle_box["v"] = oracle_fn()
+        _phase("oracle built")
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
         configs = restrict_num_stages(list(upstream_prune(tuner, kwargs)), num_stages)
@@ -1152,6 +1359,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 DeviceAllocator.stream_synchronize(0)
                 run_s = time.time() - t_one                # the run every config makes anyway, timed
                 dev = deviation_against(out_tensor, oracle)
+                _phase("deviation measured")
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
                 continue
@@ -1579,8 +1787,12 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False) -> Dict[str, Any]:
-    """Certify every census shape for `profile` on this machine; write the files."""
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+    """Certify every census shape for `profile` on this machine; write the files.
+
+    `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
+    draw and refused by name over it (`price_key`, `_refuse_unpriced`). It is the figure the run's
+    guard kills at, passed by the same script, so the door and the guard agree on one number."""
     if log is None:
         def log(*a):                      # a run of hours, read while it runs: never buffered
             print(*a, flush=True)
@@ -1607,6 +1819,14 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # on it could never say its class and would be served to no card.
     certifying_device = _certifying_device()
     certifying_class = C.memory_class_gb((certifying_device or {}).get("memory_mb"))
+    # The working-set budget (`--working-set-mb`): what this run may hold, the figure its guard
+    # kills at; None = no price door (the operand bound alone). The floor is the process now.
+    budget_bytes = int(working_set_mb) * 2**20 if working_set_mb else None
+    import resource as _res
+    floor_bytes = int(_res.getrusage(_res.RUSAGE_SELF).ru_maxrss) if working_set_mb else 0
+    if budget_bytes is not None:
+        log(f"[certify] working-set budget {budget_bytes / 2**20:.0f} MiB; the process's floor now "
+            f"{floor_bytes / 2**20:.0f} MiB; every key is priced by its phases before any draw")
     if certifying_class is None:
         raise RuntimeError("the certifying card is not described by the hardware profile in force "
                            f"(device {certifying_device}): refused — a proof must say which card's memory it was made on")
@@ -1649,7 +1869,9 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 tol = _tolerance(vendor, profile, dtype)
                 entry = certify_key(qual, tuner, key, tol, rng,
                                     card_bytes=int(certifying_device["memory_mb"]) * 2**20,
-                                    num_stages=_num_stages_space(vendor, profile))
+                                    unified=bool(certifying_device.get("unified")),
+                                    num_stages=_num_stages_space(vendor, profile),
+                                    budget_bytes=budget_bytes, floor_bytes=floor_bytes)
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
                 # again. Counted apart so the exit code can still mean something.

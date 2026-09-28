@@ -197,6 +197,18 @@ def _rss_tree(pid: int) -> int:
         except OSError:
             continue
     return total
+def _pid_alive(pid: int) -> bool:
+    """Whether a reservation's process still exists — `os.kill(pid, 0)`, which every POSIX host
+    answers. It read `/proc/<pid>` before, which macOS does not have: on the Mac every
+    reservation was pruned as dead the moment another process read the ledger, so two cells
+    over half the budget both reserved (test_the_matrix_budgets_the_host, red 2026-09-28)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                                    # exists, not ours
+    return True
 
 
 def _ledger(out: Path, change):
@@ -206,7 +218,7 @@ def _ledger(out: Path, change):
         fcntl.flock(lk, fcntl.LOCK_EX)
         try:
             led = json.loads(path.read_text()) if path.exists() else {}
-            led = {p: n for p, n in led.items() if Path(f"/proc/{p}").exists()}
+            led = {p: n for p, n in led.items() if _pid_alive(int(p))}
             result = change(led)
             path.write_text(json.dumps(led))
             return result
