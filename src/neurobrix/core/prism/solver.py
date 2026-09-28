@@ -403,6 +403,9 @@ class ExecutionPlan:
     # resolution; reuses the R31 TilingEngine brick). Each entry:
     # {"tile_size", "scale_factor", "overlap", "window_alignment"}.
     component_tiling: Dict = field(default_factory=dict)
+    # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
+    # it, a measured peak judges it.
+    host_footprint: Dict = field(default_factory=dict)
 
     @property
     def primary_device(self) -> str:
@@ -926,6 +929,8 @@ class PrismSolver:
         # executor will still have. Default "compiled" keeps every existing caller's behaviour.
         self._mode = str(mode or "compiled")
         self._serve_mode = serve_mode
+        # {component: elements of its graph outputs at the request} — the host estimate's output term.
+        self._output_elements: Dict[str, int] = {}
         # The REQUEST's serve intent, never toggled. `_serve_mode` is set False for the cold
         # re-evaluation and restored before the KV check; a reserve taken during the cold pass from
         # the toggled flag was one turn while the check then demanded two.
@@ -1552,6 +1557,19 @@ class PrismSolver:
                     print(f"   [OpTiling] {_cn}: dropped full-extent op-level "
                           f"tiling (component-level tiling active — per-tile "
                           f"extents fit without band streaming)")
+
+        # Step 7.9: what this plan holds in host memory on its engine — priced from the plan, per the
+        # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
+        # included) + what the engine adds, this machine's measured value carried by the hardware profile
+        # (or absent and said to be) + what the plan holds and loads.
+        from neurobrix.core.prism.host_footprint import host_footprint, engine_of, resident_bytes_now
+        from neurobrix.triton.weight_loader import is_block_key   # torch-free
+        _engine = engine_of(self._mode)
+        _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
+        plan.host_footprint = host_footprint(
+            plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
+            _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
+            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -2277,6 +2295,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                     )
+                    self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
                     if smallest_gpu_bytes > 0 and ap.overflow_ops:
@@ -5319,6 +5338,32 @@ class PrismSolver:
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
         return allocations, devices
 
+    def _output_bytes(self, container) -> int:
+        """What the run's output boundary holds on the host: the largest graph output among the plan's
+        components at the request, times what the family's save path holds per element
+        (output_dispatch.host_bytes_per_output_element). The largest, not a named component: which one is
+        final is the flow's business, and the largest bounds it."""
+        from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
+        family = (container.get_manifest() or {}).get("family")
+        elements = max(self.__dict__.get("_output_elements", {}).values(), default=0)
+        if not family or not elements:
+            return 0
+        return int(elements) * host_bytes_per_output_element(family)
+
+    def _stored_dtypes_by_component(self, container) -> Dict[str, set]:
+        """Per-component {stored floating dtypes} from the weights index (what a load converts FROM)."""
+        out: Dict[str, set] = {}
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return out
+        import json as _json
+        from pathlib import Path as _P
+        for index in (_P(base) / "components").glob("*/weights_index.json"):
+            tensors = (_json.loads(index.read_text()).get("tensors") or {})
+            out[index.parent.name] = {str(v.get("dtype")) for v in tensors.values()
+                                      if isinstance(v, dict) and str(v.get("dtype", "")).startswith(("float", "bfloat"))}
+        return out
+
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
         """Per-component {weight_name: stored bytes} from the weights index.
 
@@ -6042,6 +6087,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype}
+    if plan.host_footprint:
+        rec["host_footprint"] = dict(plan.host_footprint)
     return rec
 
 
@@ -6064,6 +6111,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
     lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
                  + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
+    if plan.host_footprint:
+        from neurobrix.core.prism.host_footprint import summary as _host_summary
+        lines.append(f"host memory     {_host_summary(plan.host_footprint)}")
     for name, alloc in plan.components.items():
         mem = plan.component_memory.get(name)
         where = ", ".join(alloc.devices) if getattr(alloc, "devices", None) else str(alloc.device)

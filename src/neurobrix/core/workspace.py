@@ -22,6 +22,23 @@ SYSTEM_YML = Path(__file__).resolve().parent.parent / "config" / "system.yml"
 _root: Optional[Path] = None
 
 
+def io_workers() -> int:
+    """How many shard reads the weight loaders keep in flight: `NBX_IO_WORKERS`, else `io.num_workers`
+    in config/system.yml — read by every loader AND by Prism's host estimate (each read in flight holds
+    a shard in host memory), so the figure has one source. Until 2026-09-27 four modules each wrote
+    `8` beside a comment saying it "matches system.yml io.num_workers", and none read the file."""
+    env = os.environ.get("NBX_IO_WORKERS")
+    if env:
+        return int(env)
+    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
+    n = (cfg.get("io") or {}).get("num_workers")
+    if not isinstance(n, int) or n < 1:
+        raise RuntimeError(
+            f"ZERO FALLBACK: no I/O worker count is configured: looked at $NBX_IO_WORKERS and "
+            f"{SYSTEM_YML} under `io.num_workers` (got {n!r}).")
+    return n
+
+
 class SnapshotNotPresent(Exception):
     """A snapshot is not in the configured root, and nothing fetches it here."""
 

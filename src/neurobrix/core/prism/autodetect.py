@@ -319,6 +319,71 @@ def load_default_profile():
 # MAIN DETECTION ORCHESTRATOR (OS-FIRST)
 # ============================================================================
 
+#: One probe per engine, measured from the state a run plans in (the CLI imported, no engine yet): the
+#: engine's own modules imported, its device context created and its compute libraries loaded the way a
+#: run's first ops load them — a GEMM, a convolution and an attention on the compiled engine (cuBLAS,
+#: cuDNN and the SDPA kernels are loaded on first use, not at import), a Triton kernel compiled and
+#: launched on the Triton engine (the JIT's compiler is loaded on first launch). The probe prints its
+#: resident memory at the planning state, then its peak, in MB; the difference is what the engine adds.
+#: Each runs under the interpreter and the card door of the process that builds the profile. The Triton
+#: probe imports no torch (R33) and uses only kernels that are certified or need no autotune sweep, so
+#: building a profile writes no autotune cache (read: the replay cache's files and mtimes unchanged).
+#: The probe's own memory, in MB: VmRSS ("now") / VmHWM ("peak") from /proc/self/status on Linux — never
+#: ru_maxrss there, which Linux carries across fork and exec (a probe started by a large process would
+#: report its parent's size: the base measured 0 inside a 2.4 GB test process, 2026-09-27); ru_maxrss
+#: elsewhere (macOS: bytes, and no /proc).
+_MB_OF = ("import resource, sys\n"
+          "def _mb(kind):\n"
+          "    if sys.platform.startswith('linux'):\n"
+          "        key = 'VmRSS:' if kind == 'now' else 'VmHWM:'\n"
+          "        return next(int(l.split()[1]) for l in open('/proc/self/status') if l.startswith(key)) // 1024\n"
+          "    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // (1 << 20)\n")
+_PLANNING_STATE = (_MB_OF +
+                   "import neurobrix.cli.commands.run, neurobrix.nbx.container, neurobrix.core.prism.solver\n"
+                   "print(_mb('now'))\n")
+_BASE_PROBES = {
+    "compiled": (
+        "import torch\n"
+        "import torch.nn.functional as F\n"
+        "import neurobrix.core.runtime.graph_executor\n"
+        "if torch.cuda.is_available():\n"
+        "    a = torch.ones(64, 64, device='cuda', dtype=torch.float16)\n"
+        "    (a @ a).sum().item()\n"
+        "    x = torch.ones(1, 4, 8, 8, device='cuda', dtype=torch.float16)\n"
+        "    F.conv2d(x, torch.ones(4, 4, 3, 3, device='cuda', dtype=torch.float16), padding=1).sum().item()\n"
+        "    q = torch.ones(1, 2, 16, 32, device='cuda', dtype=torch.float16)\n"
+        "    F.scaled_dot_product_attention(q, q, q).sum().item()\n"),
+    "triton": (
+        "import neurobrix.triton.flow.iterative_process\n"
+        "from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype\n"
+        "from neurobrix.kernels import wrappers\n"
+        "if DeviceAllocator.device_count() > 0:\n"
+        "    DeviceAllocator.set_device(0)\n"
+        "    a = NBXTensor.zeros((64, 64), NBXDtype.float16)\n"
+        "    wrappers.add(a, a)\n"
+        "    wrappers.mm(a, a)\n"),
+}
+_PEAK_MB = "print(_mb('peak'))\n"
+
+
+def _measure_runtime_base_mb() -> Dict[str, int]:
+    """{engine: MB} — what the engine's device work adds to a process at the planning state, measured on
+    this machine. An engine whose probe cannot run here is left out, and a plan on this profile says its
+    base is unmeasured: a number is never written that was not measured."""
+    import sys as _sys
+    out: Dict[str, int] = {}
+    for engine, code in _BASE_PROBES.items():
+        try:
+            r = subprocess.run([_sys.executable, "-c", _PLANNING_STATE + code + _PEAK_MB],
+                               capture_output=True, text=True, timeout=300)
+            lines = [l.strip() for l in r.stdout.strip().splitlines()]
+            if r.returncode == 0 and len(lines) >= 2 and lines[0].isdigit() and lines[-1].isdigit():
+                out[engine] = int(lines[-1]) - int(lines[0])
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return out
+
+
 def detect_hardware() -> Dict[str, Any]:
     """
     Detect all hardware (CPU + GPUs + interconnects). Returns a hardware profile dict.
@@ -333,6 +398,8 @@ def detect_hardware() -> Dict[str, Any]:
 
     # --- CPU (always) ---
     cpu = _detect_cpu(os_type)
+    # The runtime's own base, measured here per engine: the base of Prism's host estimate.
+    cpu["runtime_base_mb"] = _measure_runtime_base_mb()
 
     # --- GPUs (OS-specific cascade) ---
     devices, brand = _detect_gpus(os_type)
