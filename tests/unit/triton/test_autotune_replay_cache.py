@@ -83,3 +83,29 @@ def test_the_replay_cache_relocates_with_the_environment(monkeypatch, tmp_path):
     finally:
         monkeypatch.delenv("NEUROBRIX_REPLAY_CACHE")
         importlib.reload(atc)
+
+
+def test_the_replay_cache_is_keyed_by_the_code_generator(rig, monkeypatch):
+    """A configuration is a property of the compiler that produced it (the certified directory's
+    door says so at every run). The replay cache was named by backend and arch only, so a sweep
+    made under one generator was seeded under another: on 2026-09-28, after the triton-ext bump
+    on the Mac, 545 of the two 'served' gates' 1 400 key uses came from sweeps the retired
+    compiler had made. Red under the old naming: the same path for two generators, and the
+    capture of the first seeds the second."""
+    tuner, tmp_path = rig
+    monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))   # `_dir()` reads the environment when used
+    monkeypatch.setattr(atc, "_running_generator", lambda: "triton 3.8.0+git4a15f415 cuda-70 msl-v0.1-b1c")
+    path_a = atc._artifact_path()
+    key = atc.key_of(tuner, (_T("fp16"), _T("fp16"), _T("fp16")), {})
+    from triton.runtime.autotuner import Config
+    tuner.cache[key] = Config({"BLOCK_M": 64, "BLOCK_N": 64}, num_warps=4, num_stages=2)
+    assert atc.capture() == 1
+    monkeypatch.setattr(atc, "_running_generator", lambda: "triton 3.8.0+git4a15f415 cuda-70 msl-v0.1-42e")
+    path_b = atc._artifact_path()
+    assert path_a != path_b, "two generators, one replay file: a sweep under one is served under the other"
+    tuner.cache.clear()
+    assert atc.seed() == 0, "the other generator's sweep was seeded"
+    monkeypatch.setattr(atc, "_running_generator", lambda: "triton 3.8.0+git4a15f415 cuda-70 msl-v0.1-b1c")
+    assert atc.seed() == 1, "the same generator's sweep must still seed"
+    monkeypatch.setattr(atc, "_running_generator", lambda: None)
+    assert atc._artifact_path() is None, "an engine that cannot name its generator keeps no replay cache"
