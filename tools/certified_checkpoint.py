@@ -123,6 +123,28 @@ def current_branch(repo: str) -> str:
     return _git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
 
 
+def _push_stamp_path(repo: str) -> Path:
+    """The repository's last-push stamp, in its common git dir so every worktree shares it."""
+    common = subprocess.run(["git", "-C", repo, "rev-parse", "--git-common-dir"], capture_output=True, text=True)
+    d = common.stdout.strip() if common.returncode == 0 and common.stdout.strip() else ".git"
+    if not os.path.isabs(d):
+        d = os.path.join(repo, d)
+    return Path(d) / "nbx-last-push"
+
+
+def last_push_time(repo: str) -> float:
+    """Epoch seconds of the repository's last recorded push (0.0 when none was recorded)."""
+    try:
+        return float(_push_stamp_path(repo).read_text().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def touch_push(repo: str, when: Optional[float] = None) -> None:
+    """Record a push of this repository now (this tool's pushes, and manual batched ones via `--touch-push`)."""
+    _push_stamp_path(repo).write_text(f"{when if when is not None else time.time():.0f}\n")
+
+
 def push_and_verify(repo: str, remote: str, branch: str) -> str:
     """Push, then read the remote back. Returns "" when the remote holds HEAD, else the reason."""
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -210,28 +232,30 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
     stop = {"now": False}
     signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__("now", True))
     last = time.monotonic()
-    last_push = None                       # None: no push yet in this run
     while True:
         alive = [p for p in producers if producer_alive(p)]
         final = once or stop["now"] or (bool(producers) and not alive)
         due = time.monotonic() - last >= interval
         if due or final:
-            def push_window_open():
-                return last_push is None or time.monotonic() - last_push >= push_interval
-            if final and remotes and not push_window_open():
-                wait = push_interval - (time.monotonic() - last_push)
-                say(f"[checkpoint] final checkpoint: the push window opens in {wait:.0f} s (at most one push per "
-                    f"{push_interval:.0f} s); waiting, the commit is local meanwhile")
-                time.sleep(max(0.0, wait))
-            push_now = bool(remotes) and push_window_open()
+            def seconds_until_push_window():
+                # the window is the REPOSITORY's, shared by every worktree and by manual pushes
+                # (`--touch-push`): on 2026-09-28 a per-process window let this tool push 23 minutes
+                # after a manual batched push of the same repository (06:06 and 06:29).
+                return max(0.0, push_interval - (time.time() - last_push_time(repo)))
+            if final and remotes and seconds_until_push_window() > 0:
+                wait = seconds_until_push_window()
+                say(f"[checkpoint] final checkpoint: the repository's push window opens in {wait:.0f} s (at most one "
+                    f"push per {push_interval:.0f} s); waiting, the commit is local meanwhile")
+                time.sleep(wait)
+            push_now = bool(remotes) and seconds_until_push_window() == 0
             res = checkpoint(repo, rel_dir, remotes if push_now else [], gate_cmd, trailers, record, say=say, label=label)
             last = time.monotonic()
             if res.get("sha"):
-                if push_now:
-                    last_push = time.monotonic()
-                else:
-                    _record(record, f"== {res['sha']}: committed, NOT pushed (the push window opens in "
-                                    f"{push_interval - (time.monotonic() - last_push):.0f} s)", say)
+                if push_now and any(not why for why in (res.get("remotes") or {}).values()):
+                    touch_push(repo)
+                elif not push_now:
+                    _record(record, f"== {res['sha']}: committed, NOT pushed (the repository's push window opens in "
+                                    f"{seconds_until_push_window():.0f} s)", say)
             if final:
                 failed = [r for r, why in (res.get("remotes") or {}).items() if why]
                 if failed:
@@ -294,6 +318,8 @@ def main(argv=None) -> int:
                         "(default: the engine's `autotune check --dir`)")
     p.add_argument("--label", default="", help="a short name for the pass, in each commit's subject")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--touch-push", action="store_true",
+                   help="record a push of --repo made by hand now, so this tool's window counts it; then exit")
     p.add_argument("--allow-parent-as-producer", action="store_true",
                    help="permit --producer-pid to name the shell that launched this "
                         "checkpointer; only correct if that shell will NOT wait on it")
@@ -303,6 +329,9 @@ def main(argv=None) -> int:
         print(deadlock, file=sys.stderr)
         return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
+    if a.touch_push:
+        touch_push(a.repo); print(f"[checkpoint] push of {a.repo} recorded at {time.strftime('%H:%M:%S')}")
+        return 0
     return run(a.repo, a.dir, a.producer_pid, a.interval, [r for r in a.remotes.split(",") if r], gate,
                a.trailer, a.record, once=a.once, poll=a.poll, label=a.label, push_interval=a.push_interval)
 

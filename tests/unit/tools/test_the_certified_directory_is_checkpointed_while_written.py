@@ -209,3 +209,22 @@ def test_pushes_are_batched_to_one_per_window_and_the_final_one_waits_for_it(rep
     assert _remote_head(repo["tmp"], "origin") == head and _remote_head(repo["tmp"], "gitlab") == head, \
         "the final commit did not reach every remote"
     assert elapsed >= 4.0, f"the run ended in {elapsed:.1f} s: pushes were not held to one per 4 s window"
+
+
+def test_the_push_window_is_the_repositorys_not_the_process_s(repo):
+    """A push recorded for the repository by another process (a manual batched push, `--touch-push`) holds this
+    run's pushes too: on 2026-09-28 a per-process window let the tool push 23 minutes after a manual push of the
+    same repository. Seen red on the per-process window (the first checkpoint pushed at once)."""
+    import time
+    CP.touch_push(repo["path"])                                  # a push of this repository, just now, by someone else
+    _write(repo["dir"], "k.fp32.json", 3)
+    before = _remote_head(repo["tmp"], "origin")
+    t0 = time.monotonic()
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=3.0)
+    elapsed = time.monotonic() - t0
+    assert rc == 0
+    assert elapsed >= 2.5, f"the final checkpoint pushed after {elapsed:.1f} s: it did not wait for the repository's window"
+    assert _remote_head(repo["tmp"], "origin") == _head(repo["path"]) != before
+    assert CP.last_push_time(repo["path"]) >= t0 - 1
