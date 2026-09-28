@@ -38,8 +38,8 @@ def capture_fft(rng, out):
     """The kernels driven directly (the inverse wrapper carries an unrelated
     latent defect — a torch-style `mul_` on an NBXTensor — fixed separately)."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import _triton_fft_forward, _set_device
-    from neurobrix.kernels.ops.fft_op import bit_reverse_kernel, ifft_stage_kernel
+    from neurobrix.kernels.wrappers import _triton_fft_forward, _set_device, _1d_grid, _EW_BLOCK
+    from neurobrix.kernels.ops import fft_op
     for N in (256, 1024, 4096):
         xr = _nbx((rng.standard_normal((2, N))).astype(np.float32))
         xi = _nbx((rng.standard_normal((2, N))).astype(np.float32))
@@ -50,11 +50,27 @@ def capture_fft(rng, out):
         yi = _nbx((rng.standard_normal((N,))).astype(np.float32))
         tr, ti = NBXTensor.empty_like(yr), NBXTensor.empty_like(yi)
         _set_device(yr)
-        bit_reverse_kernel[(N,)](yr, yi, tr, ti, N)
-        for stage in range(1, N.bit_length()):
-            ifft_stage_kernel[(N // 2,)](tr, ti, N, stage)
+        # The inverse butterfly stages without the 1/N scale, as this capture has always taken
+        # them — through whichever kernels the tree carries: the one-row kernels (before
+        # 2026-09-28) or the row-batched ones, so a capture of each compares byte for byte.
+        if hasattr(fft_op, "bit_reverse_rows_kernel"):
+            log2n = N.bit_length() - 1
+            fft_op.bit_reverse_rows_kernel[_1d_grid(N)](yr, yi, tr, ti, N, N, log2n, BLOCK_SIZE=_EW_BLOCK)
+            for stage in range(1, log2n + 1):
+                fft_op.fft_stage_rows_kernel[_1d_grid(N // 2)](tr, ti, N, N // 2, stage, INVERSE=True,
+                                                               BLOCK_SIZE=_EW_BLOCK)
+        else:
+            fft_op.bit_reverse_kernel[(N,)](yr, yi, tr, ti, N)
+            for stage in range(1, N.bit_length()):
+                fft_op.ifft_stage_kernel[(N // 2,)](tr, ti, N, stage)
         out[f"ifft_stages_N{N}_real"] = _host(tr, np.float32)
         out[f"ifft_stages_N{N}_imag"] = _host(ti, np.float32)
+        # A long batch — the STFT shape that made the per-row loop cost thousands of launches.
+        br = _nbx((rng.standard_normal((37, N))).astype(np.float32))
+        bi = _nbx((rng.standard_normal((37, N))).astype(np.float32))
+        r, i = _triton_fft_forward(br, bi)
+        out[f"fft_fwd_rows37_N{N}_real"] = _host(r, np.float32)
+        out[f"fft_fwd_rows37_N{N}_imag"] = _host(i, np.float32)
 
 
 def capture_grid_sampler(rng, out):
