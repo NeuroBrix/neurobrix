@@ -77,7 +77,7 @@ _RANK = {"bool": 0, "uint8": 1, "int8": 2, "int16": 3, "int32": 4, "int64": 5,
 # A test reads the engine's own sets and fails on any drift.
 # ---------------------------------------------------------------------------
 
-# core/dtype/engine.py:399-463 AMP_FP32_OPS. Unlike the Triton set it keeps the nearest
+# core/dtype/engine.py:420-484 AMP_FP32_OPS. Unlike the Triton set it keeps the nearest
 # upsamples and holds no `rms_norm` (the compiled rms_norm is `rms_norm_fp32`, below).
 ATEN_AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "acos", "asin", "cosh", "erfinv", "exp", "expm1",
@@ -103,7 +103,7 @@ ATEN_AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "cumprod", "cumsum", "sum",
     "linalg_vector_norm", "linalg_matrix_norm",
 })
-# core/dtype/engine.py:467-493 AMP_FP16_OPS.
+# core/dtype/engine.py:488-514 AMP_FP16_OPS.
 ATEN_AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "_convolution", "conv1d", "conv2d", "conv3d", "conv_tbc", "convolution",
     "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
@@ -116,20 +116,20 @@ ATEN_AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "prelu",
     "div",
 })
-# core/dtype/engine.py:498 _FP16_NEED_FP32, :504 _FP16_GEMM_OPS, :510-513 _FP32_OPS_HALF_IO.
+# core/dtype/engine.py:519 _FP16_NEED_FP32, :525 _FP16_GEMM_OPS, :531-534 _FP32_OPS_HALF_IO.
 ATEN_FP16_NEED_FP32: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
 ATEN_FP16_GEMM_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "addmm"})
 ATEN_FP32_OPS_HALF_IO: FrozenSet[str] = frozenset({
     "native_layer_norm", "layer_norm", "native_group_norm", "group_norm",
     "_softmax", "softmax", "_log_softmax", "log_softmax",
 })
-# core/dtype/engine.py:517-531 AMP_PROMOTE_OPS.
+# core/dtype/engine.py:538-552 AMP_PROMOTE_OPS.
 ATEN_AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
     "dot", "vdot", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d", "index_put",
     "tensordot", "scatter_add", "index_add",
 })
-# core/dtype/engine.py:556-558 AMP_CREATION_FILL_OPS (the clamp; output = the resolved dtype).
+# core/dtype/engine.py:577-579 AMP_CREATION_FILL_OPS (the clamp; output = the resolved dtype).
 ATEN_AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({"full", "new_full", "full_like"})
 
 
@@ -297,7 +297,7 @@ def _aten_kwarg_remap(name: str, c: str) -> str:
 
 
 def _aten_to_copy(name: str, c: str) -> str:
-    """`DtypeEngine._make_to_copy` (core/dtype/engine.py:1031-1047): a half target becomes
+    """`DtypeEngine._make_to_copy` (core/dtype/engine.py:1055-1071): a half target becomes
     the compute dtype (whatever it is); fp32 and every other target are preserved."""
     return c if name in _HALF else name
 
@@ -368,8 +368,8 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             out[tid] = name
         elif tid in graph_inputs or meta.get("is_input"):
             # A component input is cast to C (TritonDtypeEngine.cast_runtime_inputs,
-            # triton/dtype.py:389-449; GraphExecutor._prepare_execution on the ATen branch);
-            # a SEAM enters in the dtype its producer gave it (dtype.py:429-438).
+            # triton/dtype.py:427-487; GraphExecutor._prepare_execution on the ATen branch);
+            # a SEAM enters in the dtype its producer gave it (dtype.py:467-476).
             out[tid] = name if is_seam_tensor(meta) else c
         else:
             out[tid] = rule.weight_dtype(tid, name)
@@ -404,6 +404,10 @@ class _Rules:
     def __init__(self, dag, c, engine, has_native_bf16, contract, tiling):
         self.dag, self.c, self.engine = dag, c, engine
         self.half = c in _HALF
+        # The component's GRAPH dtype — the container's traced `torch_dtype`, the source
+        # both engines read (TritonSequence / TritonSequentialDispatcher / DtypeEngine
+        # `graph_dtype`): the AMP_FP32 cast-back rule reads it under bf16 compute.
+        self.graph_dtype = _tdt.graph_dtype_name(dag.get("torch_dtype"))
         self.native_bf16 = bool(has_native_bf16)
         self.contract = contract
         self.tiling = tiling
@@ -521,7 +525,7 @@ class _Rules:
 
 
 class _TritonRules(_Rules):
-    """`TritonDtypeEngine.wrap_op` (triton/dtype.py:467-547) in its order, then the wrapper
+    """`TritonDtypeEngine.wrap_op` (triton/dtype.py:505-586) in its order, then the wrapper
     the op lands in. Both Triton engines; their differences are named where they occur."""
 
     def __init__(self, *a):
@@ -534,7 +538,7 @@ class _TritonRules(_Rules):
 
     def complex_dtype(self, name: str) -> str:
         # A complex output keeps the traced complex type; NBX complex is complex64 at most
-        # (sequence.py:2688-2689; `_wrap_complex_output`, dtype.py:489-490, 585-615).
+        # (sequence.py:2688-2689; `_wrap_complex_output`, dtype.py:527-528, 624-654).
         return _triton_remap(name, self.c)
 
     def remap_explicit(self, name: str) -> str:
@@ -550,10 +554,10 @@ class _TritonRules(_Rules):
 
     def amp_fp32_out(self) -> str:
         # `_wrap_fp32_internal_compute_dtype_output`: fp32 compute; the output is the engine's
-        # own rule, CALLED — `amp_fp32_output_dtype`: C = bf16 -> bf16 always; C = fp16 -> C
-        # only when the component is activations_fp16_safe (`_NBX_ACTIVATIONS_FP16_SAFE`, set
-        # from the contract, sequence.py:3025-3029), else fp32.
-        return _tdt.amp_fp32_output_dtype(self.c, self.contract.safe, False)
+        # own rule, CALLED — `amp_fp32_output_dtype`: C = bf16 -> bf16 on a bf16 graph, fp32
+        # on another; C = fp16 -> C only when the component is activations_fp16_safe
+        # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029), else fp32.
+        return _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, False)
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
@@ -585,7 +589,7 @@ class _TritonRules(_Rules):
         if explicit is not None and (name in _CASTS or not fl or name.endswith("_like")
                                      or name.startswith("new_")):
             return self.remap_explicit(explicit)
-        # dtype.py:495-497 — a contract island computes AND stores fp32 whatever its class
+        # dtype.py:533-535 — a contract island computes AND stores fp32 whatever its class
         # (`_wrap_fp32` overrides `_NBX_COMPUTE_DTYPE` for a self-managed conv, :573-610).
         # triton_sequential wraps `custom::rms_norm` with no op_uid (sequential.py:176-179):
         # islands and the narrow set never reach it there.
@@ -593,7 +597,7 @@ class _TritonRules(_Rules):
         if self.half and not seq_rms and uid in self.contract.fp32_op_uids:
             return "float32"
         if (self.half and not seq_rms and uid in self.contract.narrow_op_uids
-                and name in _tdt.AMP_FP32_OPS):                            # :498-499
+                and name in _tdt.AMP_FP32_OPS):                            # :536-537
             return c
         r = self._class_rule(uid, op, name, fl, ins)
         if explicit is not None:
@@ -602,27 +606,27 @@ class _TritonRules(_Rules):
 
     def _class_rule(self, uid, op, name, fl, ins) -> str:
         c = self.c
-        if name in _tdt.AMP_SCALAR_FILL_OPS:                               # :507-508
+        if name in _tdt.AMP_SCALAR_FILL_OPS:                               # :545-546
             return self.first(fl) or self.default(op, fl)
         if name == "where":
             # `where_wrapper` allocates `empty_like(x)` (wrappers.py:1491-1504).
             return self.first(fl) or self.default(op, fl)
-        if name in _tdt._SELF_MANAGED_OPS:                                  # :513-514
+        if name in _tdt._SELF_MANAGED_OPS:                                  # :551-552
             return self._self_managed(uid, op, name, fl, ins)
-        if not self.half:                                                   # :517-518
+        if not self.half:                                                   # :555-556
             return self._unwrapped(uid, op, name, fl, ins)
-        if name in _tdt.AMP_FP32_OPS:                                       # :520-525
+        if name in _tdt.AMP_FP32_OPS:                                       # :558-564
             r = self.amp_fp32_out()
             if self.tseq and name == "rms_norm" and self.is_tiled(uid, op):
                 # A tiled rms_norm in triton_sequential runs unwrapped: the NBX wrapper at
                 # x's dtype (fused_upsample_conv.py:574-615, graph_executor.py:3217-3230).
                 r = _wider(r, self.first(fl) or r)
             return r
-        if name in _tdt.AMP_FP16_OPS:                                       # :527-534
+        if name in _tdt.AMP_FP16_OPS:                                       # :566-573
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
                 return self.amp_fp32_out()
             return self._lower_precision(uid, op, name, fl, ins)
-        if name in _tdt.AMP_PROMOTE_OPS:                                    # :536-537, 716-736
+        if name in _tdt.AMP_PROMOTE_OPS:                                    # :575-576, 761-781
             return self.widest(fl) or self.default(op, fl)
         return self._unwrapped(uid, op, name, fl, ins)
 
@@ -654,7 +658,7 @@ class _TritonRules(_Rules):
         return self.default(op, fl)
 
     def _lower_precision(self, uid, op, name, fl, ins) -> str:
-        """`_wrap_lower_precision` (dtype.py:702-714): float operands cast to C, then the
+        """`_wrap_lower_precision` (dtype.py:747-759): float operands cast to C, then the
         wrapper decides the store."""
         c = self.c
         if name in _CONV:
@@ -695,11 +699,11 @@ class _TritonRules(_Rules):
 
 
 class _AtenRules(_Rules):
-    """`DtypeEngine.compile_op` (core/dtype/engine.py:643-793) in its order, then torch's own
+    """`DtypeEngine.compile_op` (core/dtype/engine.py:665-817) in its order, then torch's own
     promotion for what it leaves unwrapped."""
 
     def complex_dtype(self, name: str) -> str:
-        # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:835-863):
+        # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:859-887):
         # the traced complex type is kept, complex128 included.
         return name
 
@@ -712,15 +716,15 @@ class _AtenRules(_Rules):
         name = op_type.split("::")[-1].split(".")[0]      # config.strip_aten_prefix (:136-150)
         fl = self.floats(ins, w)
         explicit = _explicit_dtype(op)
-        if name == "_to_copy":                                              # :658-659
+        if name == "_to_copy":                                              # :680-681
             traced = _name((op.get("output_dtypes") or [None])[0]
                            or self.tensors[op["output_tensor_ids"][0]]["dtype"])
             return _aten_to_copy(traced, c)
         if explicit is not None and (name in _CASTS or not fl or name.endswith("_like")
                                      or name.startswith("new_")
                                      or name in ATEN_AMP_CREATION_FILL_OPS):
-            return self.remap_explicit(explicit)                            # :678-679
-        if uid in self.contract.fp32_op_uids:                               # :686-689
+            return self.remap_explicit(explicit)                            # :700-701
+        if uid in self.contract.fp32_op_uids:                               # :708-711
             return "float32"
         r = self._class_rule(uid, op, name, fl, ins)
         if explicit is not None:
@@ -744,16 +748,17 @@ class _AtenRules(_Rules):
                 r = _wider(r, self.first(fl) or r)
             return r
         if self.half:
-            contract = self.contract.safe and c == "float16"               # :703-705
-            if name in ATEN_AMP_FP32_OPS:                                   # :706-729
+            contract = self.contract.safe and c == "float16"               # :725-727
+            if name in ATEN_AMP_FP32_OPS:                                   # :728-753
                 if contract and name in ATEN_FP32_OPS_HALF_IO:
                     return c
-                # The store is the engine's `amp_fp32_output_dtype(c, False, narrowed)`
+                # The store is the engine's `amp_fp32_output_dtype(c, graph, False, narrowed)`
                 # (engine.py; its torch-free twin in triton/dtype.py is CALLED here — a test
-                # holds the twins equal): bf16 -> bf16; fp16 -> C only when narrowed.
+                # holds the twins equal): bf16 -> bf16 on a bf16 graph, fp32 on another;
+                # fp16 -> C only when narrowed.
                 return _tdt.amp_fp32_output_dtype(
-                    c, False, contract and uid in self.contract.narrow_op_uids)
-            if name in ATEN_AMP_FP16_OPS:                                   # :730-767
+                    c, self.graph_dtype, False, contract and uid in self.contract.narrow_op_uids)
+            if name in ATEN_AMP_FP16_OPS:                                   # :754-791
                 if c == "float16" and name in ATEN_FP16_NEED_FP32:
                     if contract and name in ATEN_FP16_GEMM_OPS:
                         return c
@@ -761,9 +766,9 @@ class _AtenRules(_Rules):
                         return c                                            # div, narrowed
                     return "float32"
                 return c
-            if name in ATEN_AMP_PROMOTE_OPS:                                # :768-769
+            if name in ATEN_AMP_PROMOTE_OPS:                                # :792-793
                 return self.widest(fl) or self.default(op, fl)
-            if name == "mul" and c == "float16":                            # :775-786, 895-948
+            if name == "mul" and c == "float16":                            # :799-810, 919-972
                 a = (op.get("input_tensor_ids") or [None, None])
                 if len(a) >= 2 and a[0] == a[1] and fl and fl[0][1] == "float16":
                     return "float32"
