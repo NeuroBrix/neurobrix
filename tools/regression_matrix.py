@@ -148,6 +148,8 @@ HOST_PER_WEIGHT_BYTE = 1.7
 HOST_SHARE = 0.8
 #: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness).
 HOST_HEADROOM = 16 << 30
+#: How often a running cell's host footprint is sampled for its peak.
+PEAK_SAMPLE_S = 1.0
 
 
 def _host_bytes() -> int:
@@ -190,6 +192,44 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _children_rss() -> int:
+    """Resident bytes of every process this runner started (its cell's process tree), the runner excluded."""
+    me = os.getpid()
+    try:
+        kids = [int(c) for c in Path(f"/proc/{me}/task/{me}/children").read_text().split()]
+    except OSError:
+        return 0
+    return sum(_rss_tree(k) for k in kids)
+
+
+class PeakRSS:
+    """The peak of `_children_rss()` while it runs, sampled every PEAK_SAMPLE_S — a cell's host peak,
+    written in its row. It is the PROOF of the host estimate, never its source (the owner, 2026-09-27
+    14:27): the engine treats technologies, not model names, so a reservation is what the plan the
+    engine chose says the run will hold on the host — a per-model table of peaks is refused."""
+
+    def __init__(self, interval: float = PEAK_SAMPLE_S):
+        import threading
+        self.peak, self._interval = 0, interval
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self):
+        while True:
+            self.peak = max(self.peak, _children_rss())
+            if self._stop.wait(self._interval):
+                return
+
+    def __enter__(self):
+        self._t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        self._t.join()
+        self.peak = max(self.peak, _children_rss())
+
+
 def _ledger(out: Path, change):
     """Read-modify-write the host reservations {pid: bytes} under an exclusive flock, dead pids pruned."""
     path = out / "host_ledger.json"
@@ -223,18 +263,92 @@ def reserve_host(out: Path, need: int) -> bool:
             return False
         led[str(os.getpid())] = need
         return True
-    return _ledger(out, take)
+
+    def in_turn(led):
+        # IN ARRIVAL ORDER: a cell that could not be admitted waits in `host_waiting.json` {pid: since},
+        # and no later cell is admitted past a living earlier waiter. Without it a cell needing most of
+        # the budget never saw the ledger empty — smaller cells kept slipping in: Wan2.2-I2V-A14B
+        # (200 of 201 GiB) waited 1 h 46 min on card 0 with both gates running (2026-09-27). The
+        # queue is its own file so a runner still on the older code keeps reading a plain ledger.
+        wpath = out / "host_waiting.json"
+        waiting = json.loads(wpath.read_text()) if wpath.exists() else {}
+        waiting = {p: t for p, t in waiting.items() if Path(f"/proc/{p}").exists()}
+        me = str(os.getpid())
+        mine = waiting.get(me, time.time())
+        ahead = [p for p, t in waiting.items() if p != me and t < mine]
+        admitted = not ahead and take(led)
+        if admitted:
+            waiting.pop(me, None)
+        else:
+            waiting[me] = mine
+        wpath.write_text(json.dumps(waiting))
+        return admitted
+    return _ledger(out, in_turn)
 
 
 def release_host(out: Path) -> None:
     _ledger(out, lambda led: led.pop(str(os.getpid()), None))
 
 
+def cell_request(model: str) -> list:
+    """The request a cell runs, and the one its plan is asked for: THE shared derivation
+    (tools/trace_request.derived_request — the family's confirmation request at its confirmation
+    size), the same the census takes, so the table holds what a cell forms."""
+    return derived_request(model, Z.family_of(model))
+
+
+def plan_host_need(model: str, mode: str, gpu: str, src: Path):
+    """(bytes, "plan") — the host footprint the ENGINE's plan states for this request on this card
+    (`plan.host_footprint.total_bytes`, Prism's host estimate, the owner's 14:27 rule: a reservation is
+    what the plan the engine chose says the run will hold), or None when the tree under test prints
+    no such figure (a tree before prism-prices-the-host). Asked with `--explain-plan --json` in the
+    cell's own environment; nothing runs."""
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
+           "--explain-plan", "--json"]
+    def _none(why):
+        # Said, never silent: the cell then reserves the static estimate and the reason is in its log.
+        print(f"[matrix] {model} {mode}: no plan host figure ({why}) — the static estimate is reserved", flush=True)
+        return None
+    try:
+        p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return _none("the plan query timed out at 900 s")
+    t = p.stdout
+    try:
+        doc = json.loads(t[t.index("{"):])
+    except ValueError:
+        tail = (p.stderr or p.stdout).strip().splitlines()[-1:] or ["no output"]
+        return _none(f"rc {p.returncode}, no plan JSON: {tail[0][:160]}")
+    hf = (doc.get("plan", doc) or {}).get("host_footprint") or {}
+    total = hf.get("total_bytes")
+    if not (isinstance(total, int) and total > 0):
+        return _none("the tree states no host_footprint")
+    return int(total), "plan"
+
+
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
     """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
     runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
-    gate runs — nothing runs beside a gate) holds every new cell."""
-    need = int(container_bytes(model) * HOST_PER_WEIGHT_BYTE)
+    gate runs — nothing runs beside a gate) holds every new cell.
+
+    The reservation is the plan's own host figure when the tree states one, the static estimate
+    (container bytes x HOST_PER_WEIGHT_BYTE) otherwise — written in the row either way
+    (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
+    estimate while the host used 17 GB (2026-09-28 07:49)."""
+    planned = plan_host_need(model, mode, gpu, src)
+    if planned is None:
+        # A tree that states no host figure (one before prism-prices-the-host) may be PRICED by another
+        # tree named in `<out>/price_src` — only one whose plans are proven identical to it (a plan
+        # census, both engines), so the figure is the host footprint of the very plan this cell runs.
+        # Said in the row as `plan@<tree>`.
+        pf = out / "price_src"
+        if pf.exists():
+            ptree = Path(pf.read_text().strip())
+            got = plan_host_need(model, mode, gpu, ptree / "src")
+            if got:
+                planned = (got[0], f"plan@{ptree.name}")
+    need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
@@ -244,15 +358,18 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             return None
         time.sleep(30)
     try:
-        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved", flush=True)
-        return _run_cell(model, mode, gpu, out, timeout, src)
+        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved ({need_from})", flush=True)
+        with PeakRSS() as peak:
+            row = _run_cell(model, mode, gpu, out, timeout, src)
+        row.update(host_peak_rss=peak.peak, host_reserved=need, host_reserved_from=need_from)
+        return row
     finally:
         release_host(out)
 
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
-    req = derived_request(model, family)
+    req = cell_request(model)
     size = off_trace_size(model, family)
     ext = Z.output_ext(family, req)
     d = out / model
@@ -265,8 +382,10 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            "NEUROBRIX_REPLAY_CACHE": str(out / f"replay_card{gpu}"), "PYTHONNOUSERSITE": "1"}
     # The cell runs under the interpreter the matrix was launched with (the pinned engine
     # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
+    # Every cell is a CONFIRMATION run (the owner's method, 2026-09-28 20:06): served entirely from
+    # the certified directory, a missing key an error naming its census row — never a runtime sweep.
     cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *req, *MODES[mode],
-           "--output", str(art)]
+           "--certified-only", "--output", str(art)]
     rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
@@ -289,7 +408,42 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     return row
 
 
+def full_matrix(cache: Path = None) -> set:
+    """Every cell the matrix holds: each container of the shared cache (a directory with a manifest)
+    in every mode — derived from the cache, never a hand-kept list."""
+    cache = cache or CACHE
+    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in MODES}
+
+
+def cells_of_lists(paths) -> set:
+    """The cells a gate's card lists name ("<model> <mode>,<mode>" per line)."""
+    cells = set()
+    for p in paths:
+        for line in Path(p).read_text().splitlines():
+            if line.strip():
+                model, modes = line.split()
+                cells |= {(model, m) for m in modes.split(",")}
+    return cells
+
+
+def refuse_a_partial_gate(lists, cache: Path = None) -> None:
+    """A queue's gate covers EVERY cell of the matrix (the supervisor, 2026-09-27 16:25): queue-9's
+    gate ran lists inherited from queue-8 and never ran Sana_1600M_4Kpx_BF16 native — a regression
+    it would have seen landed on main. Refused by name when the union of the gate's lists is not
+    the full matrix."""
+    full, named = full_matrix(cache), cells_of_lists(lists)
+    missing, unknown = sorted(full - named), sorted(named - full)
+    if missing or unknown:
+        raise SystemExit(
+            f"REFUSED: this gate's cell lists are not the matrix's full list — {len(missing)} of "
+            f"{len(full)} cells missing{': ' + ', '.join(f'{m}/{mo}' for m, mo in missing[:8]) if missing else ''}"
+            f"{'; unknown: ' + ', '.join(f'{m}/{mo}' for m, mo in unknown[:8]) if unknown else ''}. "
+            f"A gate spares no cell.")
+
+
 def cmd_run(a) -> int:
+    if getattr(a, "gate_lists", None):
+        refuse_a_partial_gate(a.gate_lists)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
@@ -340,7 +494,8 @@ def _judgment_time(j) -> float:
     offset = {"CEST": 2, "CET": 1, "UTC": 0, "GMT": 0}.get(zone)
     if offset is None:
         raise SystemExit(f"judgment date {j['date']!r}: unknown zone {zone!r}")
-    return float(calendar.timegm(time.strptime(stamp, "%Y-%m-%d %H:%M")) - offset * 3600)
+    fmt = "%Y-%m-%d %H:%M:%S" if stamp.count(":") == 2 else "%Y-%m-%d %H:%M"   # a judge may stamp seconds
+    return float(calendar.timegm(time.strptime(stamp, fmt)) - offset * 3600)
 
 
 def load_rows(out: Path) -> list:
@@ -482,6 +637,8 @@ def main() -> int:
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--modes", default=",".join(MODES))
+    r.add_argument("--gate-lists", nargs="+", default=None,
+                   help="this run is a queue gate: the card lists of the whole gate; refused unless together they name every cell of the matrix")
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
