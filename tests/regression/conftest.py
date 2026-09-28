@@ -102,7 +102,7 @@ MODEL_TIMEOUT_S: Dict[str, int] = {
     "Qwen3-Coder-30B-A3B-Instruct": 360,
     "deepseek-moe-16b-chat":        420,
     "Sana_1600M_4Kpx_BF16":         900,
-    "SANA-Video_2B_720p_diffusers": 1200,
+    "SANA-Video_2B_720p":           1200,
 }
 
 
@@ -224,7 +224,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # clean run does not report them as FAILED.
     # ------------------------------------------------------------------
     ("Flex.1-alpha",                   "triton", "P-FLEX1-VAE-FP32-GATE — Flex.1-alpha VAE does not satisfy the Ch8 conv-dominance auto-fp32 gate; triton path was already failing pre-Ch8. Diagnose VAE structure vs gate thresholds."),
-    ("SANA-Video_2B_720p_diffusers",   None,     "P-PRISM-VIDEO-5D-UNPACK — `too many values to unpack (expected 4)` in the Prism video allocator (reproduces with NBX_DISABLE_AUTO_FP32=1, i.e. not the Ch8 auto-fp32). 5D [B,C,T,H,W] tensors hit a hardcoded 4-tuple unpack."),
+    ("SANA-Video_2B_720p",             None,     "P-PRISM-VIDEO-5D-UNPACK — `too many values to unpack (expected 4)` in the Prism video allocator (reproduces with NBX_DISABLE_AUTO_FP32=1, i.e. not the Ch8 auto-fp32). 5D [B,C,T,H,W] tensors hit a hardcoded 4-tuple unpack."),
 
     # ------------------------------------------------------------------
     # Sana 4Kpx — standing INDETERMINATE per project memory

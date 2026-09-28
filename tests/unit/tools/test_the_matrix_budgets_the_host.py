@@ -21,7 +21,12 @@ def _child(out, need, q):
     R.release_host(Path(out))
 
 
-def test_two_cells_over_half_the_budget_never_overlap(tmp_path):
+def test_two_cells_over_half_the_budget_never_overlap(tmp_path, monkeypatch):
+    # The ledger's mutual exclusion is under test, not this host's live memory: the admission also
+    # reads MemAvailable, and on a loaded rack (2026-09-28 20:20, a census and a decode beside it)
+    # both cells were refused by the reading and the test failed for a reason it does not test —
+    # the reading has its own test below. Forked children inherit the pin.
+    monkeypatch.setattr(R, "_mem_available", lambda: R._host_bytes())
     need = int(R._host_bytes() * R.HOST_SHARE) // 2 + 1
     q = mp.Queue()
     procs = [mp.Process(target=_child, args=(str(tmp_path), need, q)) for _ in range(2)]

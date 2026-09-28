@@ -183,7 +183,16 @@ autotune:
       - {up_to: 64, step: 1}
       - {up_to: 256, step: 16}
       - {up_to: 1024, step: 32}
-      - {up_to: 8192, step: 128}
+      # 1 024-8 192 by an EIGHTH of an octave (2026-09-28, both classes, cards 0 and 2): the fine
+      # 128-step was never measured coarser there, and an audio codec's widths spend ~95 % of their
+      # classes in it. W8 (these rows) against the 128-step and a quarter-octave, 38 widths across the
+      # buckets, 1x1 and 1x7 one-row convs at 128 and 512 channels: W8 equal to the 128-step on every
+      # shape (median 0.0 %, max identical), the quarter-octave up to +15.6 % (512 ch, 1x1) and
+      # +11.4 % (512 ch, 1x7, 32 GB) — above the run-to-run spread (p95 3.1 %, max 8.6 %). 24 classes
+      # instead of 56. The measurement: docs/reference/owed-proofs.md, 2026-09-28.
+      - {up_to: 2048, step: 128}
+      - {up_to: 4096, step: 256}
+      - {up_to: 8192, step: 512}
       - {up_to: 16384, step: 2048}
       - {up_to: 32768, step: 4096}
       - {up_to: 65536, step: 8192}

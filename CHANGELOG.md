@@ -7,12 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Every run's plan now states the host memory it expects to hold.** Beside the cards it plans, a run
+  prints `Host:` (and `--explain-plan` a `host memory` line and a JSON field): the runtime's own base,
+  measured on the machine when its hardware profile is generated, plus what the chosen plan keeps in
+  host memory and what loading holds. The figure starts from what the planning process already holds
+  (the loaded model description included), adds what the engine's device work adds — measured on the
+  machine when its hardware profile is generated, with the engine's compute libraries loaded as a run
+  loads them — then what the plan holds and loads. A profile generated before this release says the
+  engine's part is unmeasured until it is regenerated.
+
+- **The number of weight files read in parallel is configurable in one place.** `io.num_workers` in
+  `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
+  written their own value. An unconfigured count stops with a message naming both places.
+
 ### Added
+
+- The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
+- The certifier prices a key by its phases before any draw (`autotune_certify.price_key`: the host draws, the device copies, the fp64 oracle whole or windowed per `_row_windows`/`_conv_windows`, the readback) and refuses it by name over a working-set budget (`neurobrix autotune certify --working-set-mb`, the figure the run's guard kills at); the 10 B/elem constant stood 12 % under a small depthwise key and 40 % over a large one on the Mac (2026-09-28, 20 keys measured one per process, `results/certifier_price`). `NBX_CERTIFY_PHASES=1` prints the process's memory at each phase of a key. Test: `tests/unit/kernels/test_the_certifier_prices_a_key_by_its_phases.py` (16 measured peaks, injection: conv windows shrunk to 1x1 -> 0.48x/0.66x/0.82x, red).
+- The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
 
 - **`neurobrix run --certified-only`: a confirmation run served entirely from the certified kernel
   settings.** A kernel shape the certified directory does not cover fails the run with its name, its
   shape and what the census says about it, instead of tuning at runtime; the machine's local tuning
   cache is neither read nor written. Also set by `NBX_AUTOTUNE_CERTIFIED_ONLY=1`.
+
+
 
 - The local replay cache (`~/.neurobrix/replay_cache/autotune_configs_<backend>-<arch>-<generator>.json`) is keyed by the code generator as well as the backend and arch: a sweep made under one compiler is never seeded under another (the certified directory's door already refused to serve another compiler's proof; the replay cache did not). An engine that cannot name its generator keeps no replay cache. Test: `test_the_replay_cache_is_keyed_by_the_code_generator` (red under the old naming: one file for two generators, the first's capture seeded into the second).
 - `neurobrix autotune certify --reprove-generator`'s help said a proof made under another code generator 'stays correct and served meanwhile'; the runtime does the opposite and says so (`a configuration is a property of the compiler that produced it`: the shape sweeps at runtime and lands in the replay cache). The help now states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1` override.
@@ -32,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that length on the largest memory rung, so a certified directory serves a speech of any length.
 
 ### Changed
+
+- **In a model published in bfloat16 and run in bfloat16, normalizations, softmax and the
+  other float32-internal operations return bfloat16**, in both engines, as the model's own
+  code does: they still compute in float32 inside, but no longer hand float32 to the rest of
+  the network, which halves the activation memory they used to spread through residual
+  streams. A float32 model run in bfloat16 keeps their float32 outputs, and float16 compute
+  is unchanged.
+
+- **A model too large for the card is streamed on the card before any of it is computed on the host.** The
+  planner now sizes streamed segments for the request actually made (not the size the model was traced
+  at), keeps a decoder that fits in tiles resident beside the streamed part, counts only what the flow
+  holds loaded together, and ranks every plan that computes on the host below every plan that does not.
 
 - **`neurobrix autotune certify` certifies the census table shipped with the engine, and nothing else.**
   The kernel shapes to certify come from the committed census table of the hardware profile and the
@@ -61,6 +94,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plan performs the in-place additions it was priced with.** When a decoder's large residual
+  additions were counted as done in place but no single operation overflowed the card, the plan left
+  them out of place, holding a buffer its memory figure never counted; they now run in place.
+
+- **The memory plan counts the activations the engine keeps in full precision.** Under a half
+  precision compute type the engines still keep some intermediate results in float32 (normalization
+  outputs without a calibration record, float16 matrix products on GPUs without native bfloat16, and
+  whatever such a result is added to). The plan priced them at half their size, so it could accept a
+  placement that then ran out of memory (Sana 1600M 4Kpx's image decoder at 3072x4096).
+
+- **The memory plan keeps a tensor alive while a fused or broadcast operation still reads it.** When
+  an upsample is fused into the next convolution, or a pixel shuffle reads a broadcast view, the
+  source tensor stays in memory until that operation runs; the plan released it earlier.
+
+- **A model streamed layer by layer no longer reserves room for components that run at another
+  time.** When a component is too large for the GPU and is streamed, the plan reserved the working
+  memory of every other component beside it, although a text encoder and an image decoder never run
+  together. Only their weights are reserved now, plus everything a component running at the same
+  time needs.
+
 - **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
   read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
   3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.
@@ -70,10 +123,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
   rest of the model's. The same applies to a host-memory weight that is only reshaped before use (SANA-Video's
   output modulation in `--compiled` on a 32 GB card).
+- **Mixture-of-experts models whose experts live in host memory decode faster.** Every expert layer
+  ran a full Python garbage collection for every generated token.
 - **`--triton-sequential` generates text at the speed of a cached decode.** It re-ran the whole
   context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
   experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
   old recompute path as a reference in both engines.
+
+- **SANA-Video renders at the requested size on large-memory GPUs.** When its decoder was split into
+  tiles, the tiles were stitched on a canvas eight times too small, so a 1280x512 request came out
+  as a 160x64 video. The tile scale now comes from the model's own measured shapes, and a model whose
+  declared scale contradicts them is refused with both numbers.
+
+- **Videos decoded in tiles no longer show a grid.** When a video decoder had to be split into tiles
+  to fit the GPU, the tiles were averaged with equal weight where they overlap, leaving a line at
+  every tile boundary (a 64-pixel grid on CogVideoX-2b, 96 pixels on Wan2.1). The overlaps are now
+  crossfaded across their overlap.
+
+- **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
+  whose GPU shares memory with the host (unified memory), the certifier now counts its host-side copies of each
+  test tensor when it decides whether a shape fits.
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
@@ -110,6 +179,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Such an encoder (the Wan family's) was always planned whole, so a long clip at a large size ran
   out of memory before its first layer. It is now tiled in height and width with the whole clip in
   every tile, the way the model's own tiled encoding works; it is never split in time.
+
+- **Video VAEs that need tiling no longer fall back to the CPU on 16 GB cards.** When the memory budget
+  sized a decode tile smaller than the GPU's preferred alignment, the planner rounded it up past the
+  budget and sent the whole decoder to the host (CogVideoX at 352x720 decoded for most of an hour).
+  The tile now keeps the size that fits.
 
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are

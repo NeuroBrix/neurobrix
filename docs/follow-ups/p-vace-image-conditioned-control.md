@@ -4,7 +4,7 @@
 
 ## Problem
 
-`Wan2.1-VACE-1.3B-diffusers` runs the all-generate (pure text→video) path and
+`Wan2.1-VACE-1.3B` (named `Wan2.1-VACE-1.3B-diffusers` until 2026-09-28) runs the all-generate (pure text→video) path and
 only that path. Given a still reference image it takes a route that produces a
 video tensor with a temporal extent of **0**, and the request fails inside the
 VAE encoder.
@@ -67,6 +67,6 @@ Requires a GPU to validate: the arm produces an `.mp4` that must be inspected
 
 ## Scope
 
-`Wan2.1-VACE-1.3B-diffusers` (the only container declaring
+`Wan2.1-VACE-1.3B` (the only container declaring
 `vace_control_conditioning`). Not a blocker for the all-generate path, which is
 what the model is otherwise measured on.

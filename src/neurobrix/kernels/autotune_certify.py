@@ -1602,25 +1602,31 @@ def _tolerance(vendor: str, profile: str, dtype: str) -> float:
     return tol
 
 
-def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, entries: Dict[str, Dict]) -> None:
-    """Write the kernel's file with this writer's entries MERGED into what the file holds.
+def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, fresh: Dict[str, Dict],
+                cache: Optional[Dict[str, Dict]] = None) -> None:
+    """Place this writer's FRESH certifications (key -> config, proof, excluded) into the kernel's
+    file as it stands on disk now, each by the memory class its proof names, and write it back.
 
     Two certifiers write one kernel's file at once — one per memory class, pinned to two cards
-    of one profile (2026-09-21: the 16 GB and 32 GB matrix rounds). Each held its own `entries`
-    from the start and rewrote the whole file after every key, so each rewrite dropped the
-    other's proofs, and their fixed `.json.tmp` collided (`os.replace` found the other's rename
-    gone, rc 1). The file is written under an exclusive lock, from the union of what is on disk
-    and what this writer proved, through a temp file only this process names; the caller's
-    `entries` learns the union so its next write carries both classes."""
+    of one profile. The first repair (2026-09-21) merged by KEY: the disk's entries were added
+    to the writer's own only where the writer had none. That kept disjoint keys, but a key both
+    classes hold is ONE entry (a primary and its class variants): the writer's copy, read at the
+    start of its pass, won whole — and erased every variant the other card had filed since. On
+    2026-09-28/29 the 16 GB GEMM pass rewrote `baddbmm_kernel.fp32.json` after each of its keys
+    for two hours; the 32 GB card's variant of eleven shared keys was absent from every
+    checkpoint in that window, and the 32 GB card certified the same eleven again on every pass.
+    Now nothing a writer read earlier is written back: the file under the lock is the base, and
+    only what this writer just proved is placed into it (`file_certification`, the one placement
+    rule). `cache`, the caller's view of the file, is refreshed to what was written."""
     import fcntl
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix(".json.lock")
     with open(lock, "a+") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         try:
-            if path.exists():
-                for k, v in _read_file(path).items():
-                    entries.setdefault(k, v)
+            entries = _read_file(path)
+            for ktext, cert in fresh.items():
+                C.file_certification(entries, ktext, cert)
             doc = {"format": C.format_for(entries), "vendor": vendor, "profile": profile, "kernel": qual, "dtype": dtype,
                    "entries": dict(sorted(entries.items()))}     # the stamp is what every entry satisfies, never the writer's era
             tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
@@ -1628,6 +1634,22 @@ def _write_file(path: Path, vendor: str, profile: str, qual: str, dtype: str, en
             os.replace(tmp, path)
         finally:
             fcntl.flock(lk, fcntl.LOCK_UN)
+    if cache is not None:
+        cache.clear()
+        cache.update(entries)
+
+
+def _file_entries(cache: Dict[str, Dict[str, Dict]], dtype: str, path: Path) -> Dict[str, Dict]:
+    """The certify loop's view of one kernel file, READ ONCE per dtype and pass. It was
+    `cache.setdefault(dtype, _read_file(path))`, whose default is evaluated on every call: every
+    key of the census re-read and re-parsed its whole kernel file (up to 21 MB, 0.25 s) and threw
+    it away — the 16 and 32 GB GEMM certifiers sat 8-10 minutes in it before their first key, the
+    card idle (py-spy, 2026-09-29), which the supervisor saw as the cards waiting between passes. The view is refreshed by `_write_file` after
+    each certification, so reading it once loses nothing."""
+    entries = cache.get(dtype)
+    if entries is None:
+        entries = cache[dtype] = _read_file(path)
+    return entries
 
 
 def _read_file(path: Path) -> Dict[str, Dict]:
@@ -1863,7 +1885,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 break
             dtype = C.output_dtype(tuner, key)
             path = C.file_for(vendor, profile, qual, dtype, root=root)
-            entries = per_dtype.setdefault(dtype, _read_file(path))
+            entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
             if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
@@ -1900,7 +1922,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: REFUSED — {exc}")
                 continue
-            _write_file(path, vendor, profile, qual, dtype, entries)
+            _write_file(path, vendor, profile, qual, dtype, {ktext: entry}, cache=entries)
             done += 1
             summary["certified"] += 1
             summary["excluded_configs"] += len(entry["excluded"])

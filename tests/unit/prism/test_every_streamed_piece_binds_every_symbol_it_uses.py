@@ -51,8 +51,8 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
 
 # (model, height, width, host MB free, rung MB): the Mac's own reading and rung for each case.
 CASES = [
-    ("PixArt-XL-1024", 2048, 1024, 11198, 8192),        # the Mac's render (8e786e70)
-    ("PixArt-Sigma-XL-1024", 2048, 1024, 11198, 8192),
+    ("PixArt-XL-2-1024-MS", 2048, 1024, 11198, 8192),        # the Mac's render (8e786e70)
+    ("PixArt-Sigma-XL-2-1024-MS", 2048, 1024, 11198, 8192),
     ("Flex.1-alpha", 1024, 1024, 18186, 16384),
 ]
 
@@ -60,7 +60,7 @@ CASES = [
 # this rack's 2026-09-24 pinned-machine census), at the container's own default request, swept over
 # rungs so the rung that streams it is found rather than assumed. A model no rung streams FAILS its
 # cell: a case the gate never reaches is not a case it proved.
-SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p_diffusers", "DeepSeek-Coder-V2-Lite-Instruct",
+SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p", "DeepSeek-Coder-V2-Lite-Instruct",
          "Qwen3-30B-A3B-Thinking-2507", "Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Omni-30B-A3B-Instruct",
          "Qwen3-VL-30B-A3B-Thinking", "deepseek-moe-16b-chat", "granite-speech-3.3-8b"]
 RUNGS = [4096, 8192, 16384]

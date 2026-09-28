@@ -35,6 +35,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from tests.unit.child_env import the_callers_door, the_pinned_profile
+
 try:
     import pytest
 except ModuleNotFoundError:  # script-mode under a pytest-less GPU venv
@@ -124,10 +126,13 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
         # Device selection and the pinned profile are CUDA facts, not the
         # test's subject. Elsewhere Prism autodetects the hardware, which is
         # what it is for.
-        env["CUDA_VISIBLE_DEVICES"] = env.get("NBX_TEST_GPU", "2")
+        env["CUDA_VISIBLE_DEVICES"] = env.get("NBX_TEST_GPU") or the_callers_door("2")
     env.update(arm_env)
     out = outdir / f"{tag}.txt"
-    hardware = ["--hardware", "v100-32g"] if backend == "cuda" else []
+    # The pinned profile travels with a card the test chose (NBX_TEST_GPU, or its default when
+    # the caller set no door); on the caller's card the profile is read from the card.
+    profile = "v100-32g" if os.environ.get("NBX_TEST_GPU") else the_pinned_profile("v100-32g")
+    hardware = ["--hardware", profile] if backend == "cuda" and profile else []
     # THIS interpreter, not whichever `python3` the PATH offers. The arms are
     # a comparison against each other and against the parent process's engine;
     # a different interpreter is a different install, and here it was one

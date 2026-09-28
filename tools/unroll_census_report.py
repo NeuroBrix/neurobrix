@@ -75,7 +75,7 @@ def main() -> int:
           f"(Wan2.1-VACE/vae_encoder): {dict(sorted(ref.items()))}\n")
     print("| component | line | chunk-loop groups at k=3 | identical to the anchor |")
     print("|---|---|---|---|")
-    for model in ("Wan2.1-I2V-14B-480P-Diffusers", "Wan2.2-I2V-A14B-Diffusers"):
+    for model in ("Wan2.1-I2V-14B-480P", "Wan2.2-I2V-A14B"):
         g = CACHE / model / "components" / "vae_encoder" / "graph.json"
         if not g.exists():
             continue

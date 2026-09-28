@@ -109,13 +109,24 @@ def write(path: Path, rows: Iterable[Dict]) -> int:
 
 def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, int]:
     """The model's rows replaced by `rows` (a new census of that container), every other model's kept:
-    a retrace replaces, never adds. Returns (rows removed, rows written for the model)."""
+    a retrace replaces, never adds. Returns (rows removed, rows written for the model).
+
+    Under an exclusive lock beside the table: many census processes (one per model, the supervisor's
+    2026-09-28 21:56) write one class table, and an unlocked read-modify-write lets the last writer
+    drop the rows the others wrote in between."""
+    import fcntl
     rows = list(rows)
     if any(r.get("model") != model for r in rows):
         raise ValueError(f"replace_model({model!r}) was handed rows of another model")
-    old = read(path)
-    kept = [r for r in old if r["model"] != model]
-    write(path, kept + rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            old = read(path)
+            kept = [r for r in old if r["model"] != model]
+            write(path, kept + rows)
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
     return len(old) - len(kept), len(rows)
 
 

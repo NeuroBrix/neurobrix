@@ -43,6 +43,8 @@ def _refusal(monkeypatch, rung, force):
 
 
 def test_the_retraced_container_plans_what_the_old_one_refused(monkeypatch):
+    # A strict xfail until release-candidate-1 (2026-09-28): main's 3-segment plan sized its
+    # activations at the trace; with the partition sized at the request (38751c12) it plans.
     """The Mac's 2048x1024 refusal (14 420 MB against the rung) was the OLD container's: its
     transformer declared `seq_len` at two symbol ids, and the reserve followed. The re-traced
     container plans batch 2 at 2048x1024 under layer_streaming at the 4096 MB rung — a claim
