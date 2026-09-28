@@ -4788,3 +4788,35 @@ predicted frame count (0 misses the same day). Live runs are unchanged, pinned b
 
 **For the Mac:** the same three models miss the same way on Metal (your 09:59 and 11:52 findings);
 a census taken from this branch on Apple walks them without being asked.
+
+## 2026-09-28 21:11 — the one-row convolution width ladder below 8 192: measured, and coarsened to an eighth of an octave
+
+The 2026-09-22 04:05/02:40 entries measured the width ladder's tail ABOVE 8 192 only: both of its
+candidates (Wq, Woct) keep the fine 128-step below it, so 1 024-8 192 had never been measured
+coarser — and an audio codec's one-row convolutions spend ~95 % of their width classes there
+(chatterbox's census walk: 95 of its largest family's 101 widths). Measured 2026-09-28, directory
+off, private replay cache, synthetic tensors, `tools/bucket_loss.py --kernel conv2d --dim W`, 38
+widths across the candidate buckets (each floor+1 and top, plus the codecs' real 2 176 and 3 206),
+fp16, one card of each class (card 0 = 16 GB, card 2 = 32 GB):
+
+| shape | class | 128-step (today) median / max | W8 (eighth-octave) | Wq1k (quarter-octave) |
+|---|---|---|---|---|
+| 1x1, 128 ch | 16 GB | 0.0 / 18.4 % | 0.0 / 18.4 % | 0.0 / 27.5 % |
+| 1x1, 128 ch | 32 GB | 0.0 / 20.8 % | 0.0 / 20.8 % | 0.0 / 30.8 % |
+| 1x7, 128 ch | 16 GB | 0.0 / 24.3 % | 0.0 / 24.6 % | 0.0 / 33.4 % |
+| 1x7, 128 ch | 32 GB | 0.0 / 24.3 % | 0.0 / 24.8 % | 0.0 / 34.4 % |
+| 1x1, 512 ch | 16 GB | 0.0 / 0.0 % | 0.0 / 0.0 % | 0.0 / 15.6 % |
+| 1x1, 512 ch | 32 GB | 0.0 / 0.0 % | 0.0 / 0.0 % | 0.0 / 15.4 % |
+| 1x7, 512 ch | 16 GB | 0.0 / 35.3 % | 0.0 / 35.3 % | 0.0 / 35.3 % |
+| 1x7, 512 ch | 32 GB | 0.0 / 24.3 % | 0.0 / 24.3 % | 0.0 / 35.7 % |
+
+**The noise floor**, the 1x1 128-channel list swept twice on card 0: per-configuration run-to-run
+spread median 0.1 %, p95 3.1 %, max 8.6 %; 36 of 38 sizes chose the same configuration twice. So
+the maxima above are real — and they are the SAME under today's ladder: they sit in buckets 1 408,
+1 664 and 1 920 (a width just above a bucket floor served by its top's configuration), where W8 and
+the 128-step coincide. **W8 costs nothing measurable beyond today's ladder on any shape of either
+class; the quarter-octave does (up to +15.6 % at 512 ch 1x1).** Decided: `config/vendors/nvidia/
+volta.yml` `autotune.buckets.W` rows 1 024-8 192 become 128 / 256 / 512 steps (24 classes, not 56).
+The files: `nbx/campaigns/2026_09_28_w_ladder/` (the sweeps, the repeat, the RUN.md).
+
+**For the Mac:** the ladder is profile data; an Apple profile measures its own before adopting it.
