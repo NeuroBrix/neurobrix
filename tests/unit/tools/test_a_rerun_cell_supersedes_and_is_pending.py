@@ -32,3 +32,12 @@ def test_a_judgment_after_the_rerun_applies(tmp_path):
     (tmp_path / "judgments.jsonl").write_text(json.dumps(
         {"model": "M", "mode": "native", "judged": "new", "verdict": "works", "date": "2026-09-27 04:05 CEST"}) + "\n")
     assert R.load_rows(tmp_path)[0]["verdict"] == "works"
+
+
+def test_a_judgment_stamped_to_the_second_is_read():
+    """A judge wrote '2026-09-27 05:58:45 CEST' and every reader of the matrix crashed in
+    load_rows (unconverted data remains: :45) — the stamp's precision is the judge's choice."""
+    import regression_matrix as R
+    a = R._judgment_time({"date": "2026-09-27 05:58:45 CEST"})
+    b = R._judgment_time({"date": "2026-09-27 05:58 CEST"})
+    assert a - b == 45
