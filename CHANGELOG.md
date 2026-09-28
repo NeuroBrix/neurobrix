@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--triton` speech models compute their spectrograms in a handful of GPU launches instead of one per
+  frame.** The Triton FFT behind `stft`/`istft` (chatterbox, MiniCPM-o) processed every frame of a
+  spectrogram separately; it now processes all frames at once, with bit-identical results.
+
 - **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
   depths the Metal backend's author recommends; the Apple profile declares them
   (`autotune.certify_num_stages`).
