@@ -11,10 +11,17 @@ classes, all of one class — a stage whose length the flow learns only from VAL
   below `audio_token_start`, no frame survives the filter, and the codec NEVER ran — its census
   recorded 8 keys, all from the prefill.
 
-What each test would do if the code were wrong: a census tool that walked only when asked would
-record no walking shadow and the first test fails (seen red: the flag was the only way in); an
-autoregressive flow without the walk would run the codec zero times and the second test fails;
-a DualAR flow without it would decode at the shadow's one length and the third test fails.
+Kokoro is the fourth audio model and is NOT walked, on purpose: its Triton decoder runs every
+block at exactly the traced frame length (`triton/flow/audio.py`, `_try_chunked_forward` pads the
+last block), so its keys do not depend on how many frames the durations predict — it verified at
+0 misses the same day.
+
+What each test would do if the code were wrong, each SEEN red on its injection (2026-09-28): the
+tool's walk turned back into an opt-in — no walking shadow, the first test fails; the
+autoregressive flow's walk branch disabled — the codec runs zero times (`[] == [1..10]`); the
+DualAR flow's disabled — it decodes at the shadow's one length (`[3] == [1..12]`); the walk's
+no-key guard removed — a stage that never ran prints a walk and the last test fails. The two
+live tests pin that outside a shadow each site decodes once, as before.
 """
 from __future__ import annotations
 
@@ -142,3 +149,31 @@ def test_the_dual_ar_codec_is_walked_over_its_frames(shadow, monkeypatch):
     codes = np.zeros((1, 9, 3), dtype=np.int64)                     # the shadow reached 3 frames
     e._decode_codes(codes, "model", [{"component": "model"}, {"component": "codec.decoder"}], max_tokens=12)
     assert sorted(set(seen)) == list(range(1, 13)), seen
+
+
+def test_a_live_dual_ar_run_decodes_its_own_frames_once(monkeypatch):
+    from neurobrix.triton.flow import dual_ar as da
+    monkeypatch.setattr(da, "NBXTensor", SimpleNamespace(from_numpy=lambda a: a))
+    monkeypatch.setattr(da, "release_flow_memory", lambda dev: None)
+    rv, seen, unloaded = {}, [], []
+
+    class Quantizer:
+        def run(self, inputs):
+            return {"output": inputs["indices"]}
+
+    e = da.TritonDualAREngine.__new__(da.TritonDualAREngine)
+    e.ctx = SimpleNamespace(executors={"codec.quantizer": Quantizer(), "codec.decoder": object()},
+                            variable_resolver=SimpleNamespace(resolved=rv), persistent_mode=False,
+                            primary_device="cuda:0")
+    e._ensure_weights_loaded = lambda name: None
+    e._unload_component_weights = unloaded.append
+    e._execute_component = lambda *a: seen.append(rv["codec.decoder.x"].shape[2])
+    e._decode_codes(np.zeros((1, 9, 5), dtype=np.int64), "model",
+                    [{"component": "model"}, {"component": "codec.decoder"}], max_tokens=12)
+    assert seen == [5]
+    assert unloaded == ["model", "model.fast", "codec.quantizer", "codec.decoder"]
+
+
+def test_a_walk_whose_stage_never_ran_is_refused(shadow):
+    with pytest.raises(RuntimeError, match="no extent recorded a key"):
+        census.walk_extent(1, 40, lambda n: None, name="a stage its filter kept from running")

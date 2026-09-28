@@ -332,7 +332,7 @@ class TritonDualAREngine:
             # reach, and openaudio's run decoded others (26 misses, 2026-09-28). The census
             # meets every key class of that extent up to the request's token bound.
             _census.walk_extent(1, max_tokens, lambda n: _decode(
-                np.ascontiguousarray(codes_np[:, :, np.arange(n) % max(1, T)])),
+                np.ascontiguousarray(codes_np[:, :, np.arange(n) % T])),
                 name=f"{codec_q} frames")
         else:
             _decode(codes_np)
