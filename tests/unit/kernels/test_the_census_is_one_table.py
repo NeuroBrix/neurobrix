@@ -58,3 +58,20 @@ def test_a_key_is_found_by_its_line(tmp_path):
     path, rows = T.rows_for("neurobrix.kernels.ops.matmul.matmul_kernel", K1, "nvidia", "volta", 16, tmp_path)
     assert [r["model"] for r in rows] == ["A"]
     assert T.rows_for("neurobrix.kernels.ops.matmul.matmul_kernel", K2, "nvidia", "volta", 16, tmp_path)[1] == []
+
+
+def test_consolidation_reads_a_logs_dir_and_skips_foreign_json(tmp_path, monkeypatch):
+    """The Mac's campaigns (2026-09-28 20:51): key files straight in a logs directory, beside JSON lists
+    that are not census documents. Consolidation must read the former and step over the latter."""
+    import json
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import census_table as CT
+    src = tmp_path / "logs_x"
+    src.mkdir()
+    (src / "perf_keys.json").write_text(json.dumps(["not", "a", "census"]))
+    (src / "census.json").write_text(json.dumps({"models": {"M": {"graph_sha": "abc"}}}))
+    (src / "M.triton.walk.keys").write_text(f"neurobrix.kernels.ops.matmul.matmul_kernel::{K1}\n")
+    by_model, unhashed = CT.rows_of_source(src, "t")
+    assert list(by_model) == ["M"] and by_model["M"][0]["mode"] == "triton" and not unhashed
