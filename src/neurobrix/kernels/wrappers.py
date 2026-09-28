@@ -1157,13 +1157,36 @@ def floor_divide_wrapper(a, b):
     a_dtype = a.dtype
     _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
     if _is_int:
-        a_f = a.to(NBXDtype.float64)
-        b_f = b.to(NBXDtype.float64) if hasattr(b, "to") else b
+        wide = _int_division_widening_dtype(a, b)
+        a_f = a.to(wide)
+        b_f = b.to(wide) if hasattr(b, "to") else b
     else:
         a_f = a
         b_f = b
     out = floor_wrapper(div(a_f, b_f))
     return out.to(a_dtype) if out.dtype != a_dtype else out
+
+
+def _int_division_widening_dtype(a, b):
+    """The float dtype an integer division widens through: float64 where the backend has it
+    (exact below 2^53), float32 where it has none (Metal; exact below 2^24, and REFUSED by name
+    above, because a float64 element there is misread, not computed — `backend_has_fp64`,
+    2026-09-28). The magnitude check is one reduction per integer division, a rare op."""
+    from .nbx_tensor import backend_has_fp64
+    if backend_has_fp64():
+        return NBXDtype.float64
+    limit = 1 << 24
+    for t in (a, b):
+        if hasattr(t, "to") and hasattr(t, "numel") and t.numel() > 0:
+            # measured through float32 (exact below 2^24, and anything at or above it reads as such)
+            m = int(amax_wrapper(abs_wrapper(t.to(NBXDtype.float32))).item())
+            if m >= limit:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: an integer division with |values| up to {m} on a backend with no "
+                    f"float64 ('{__import__('neurobrix.kernels.nbx_tensor', fromlist=['_detect_gpu_backend'])._detect_gpu_backend()}'): "
+                    f"the float32 widening is exact only below 2^24, and float64 is misread there. "
+                    f"An integer division kernel is the extension that lifts this.")
+    return NBXDtype.float32
 
 
 def round_wrapper(x):
@@ -1435,8 +1458,9 @@ def div(a, b, rounding_mode=None) :
         a_dtype = a.dtype
         _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
         if _is_int:
-            a_f = a.to(NBXDtype.float64)
-            b_f = b.to(NBXDtype.float64) if hasattr(b, "to") else b
+            wide = _int_division_widening_dtype(a, b)
+            a_f = a.to(wide)
+            b_f = b.to(wide) if hasattr(b, "to") else b
         else:
             a_f, b_f = a, b
         out = trunc_wrapper(div(a_f, b_f))

@@ -184,3 +184,68 @@ def test_the_engines_real_gate_is_wired_and_refuses_a_deviation_above_tolerance(
     assert "depthwise_conv2d_kernel.fp32.json" in names
     assert "depthwise_conv2d_kernel.fp16.json" in [Path(f).name for f in res["refused"]]
     assert "depthwise_conv2d_kernel.fp16.json" not in names   # the fixture's stand-in k.fp32.json is refused too, rightly
+
+
+def test_pushes_are_batched_to_one_per_window_and_the_final_one_does_not_wait(repo):
+    """Commits every interval, pushes at most once per `push_interval`; a final checkpoint inside the window
+    commits and returns at once, recorded as not pushed — the next run whose window is open carries it. Why: the
+    owner's account was suspended twice for automated pushes (supervisor 05:41, 2026-09-28: one push per 30 min
+    per repository); and a final checkpoint that slept out the window held a chain's GPU idle for the whole window
+    (13 minutes on 2026-09-28 09:31). Seen red on the tool that pushed at every checkpoint (every commit pushed at
+    once), and red again on the tool whose final checkpoint waited (this run took the whole window)."""
+    import threading, time
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2.6)"])
+    def writer():
+        for k in range(2, 5):                               # a new certified entry every second
+            time.sleep(1.0)
+            _write(repo["dir"], "k.fp32.json", k)
+    threading.Thread(target=writer, daemon=True).start()
+    t0 = time.monotonic()
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [p.pid], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, poll=0.2, say=lambda *_: None, push_interval=30.0)
+    elapsed = time.monotonic() - t0
+    assert rc == 0
+    commits = [l for l in _sh("git", "-C", repo["path"], "log", "--format=%h %s").splitlines() if "checkpoint" in l]
+    assert len(commits) >= 2, commits
+    pushed = _remote_head(repo["tmp"], "origin")
+    assert pushed == _remote_head(repo["tmp"], "gitlab") and pushed in _sh("git", "-C", repo["path"], "log", "--format=%H"), \
+        "the first checkpoint's push did not reach every remote"
+    assert pushed != _head(repo["path"]), "a second push happened inside the 30 s window"
+    assert elapsed < 8.0, f"the run took {elapsed:.1f} s: the final checkpoint waited for the window"
+
+
+def test_the_push_window_is_the_repositorys_not_the_process_s(repo):
+    """A push recorded for the repository by another process (a manual batched push, `--touch-push`) holds this
+    run's pushes too: on 2026-09-28 a per-process window let the tool push 23 minutes after a manual push of the
+    same repository. Seen red on the per-process window (the first checkpoint pushed at once)."""
+    import time
+    CP.touch_push(repo["path"])                                  # a push of this repository, just now, by someone else
+    _write(repo["dir"], "k.fp32.json", 3)
+    before = _remote_head(repo["tmp"], "origin")
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    assert rc == 0
+    assert _head(repo["path"]) != before, "the entry was not committed"
+    assert _remote_head(repo["tmp"], "origin") == before, "the tool pushed inside the repository's window"
+    # a later run whose window is open carries it
+    CP.touch_push(repo["path"], when=time.time() - 60)
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    assert rc == 0 and _remote_head(repo["tmp"], "origin") == _head(repo["path"]) != before
+
+
+def test_a_final_checkpoint_with_nothing_to_push_does_not_wait_for_the_window(repo):
+    """With nothing to commit and nothing unpushed, the final checkpoint returns at once even inside
+    the push window. Seen red: it slept the whole window (13 minutes behind a certifier that certified
+    nothing on 2026-09-28, the GPU idle)."""
+    import time
+    CP.touch_push(repo["path"])                                  # the window is closed for 30 s
+    t0 = time.monotonic()
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    elapsed = time.monotonic() - t0
+    assert rc == 0
+    assert elapsed < 5.0, f"the final checkpoint waited {elapsed:.1f} s with nothing to push"
