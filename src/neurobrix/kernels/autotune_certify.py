@@ -69,23 +69,26 @@ def _contenders(results, factor=None):
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
-def census(path: Optional[str] = None) -> Dict[str, List[tuple]]:
-    """{kernel qualname: [key, ...]} from the machine's replay cache (default)
-    or a census file of the same shape (`{"entries": {"<qual>::<key>": ...}}`)."""
-    from neurobrix.triton import autotune_cache as atc
-    src = path or atc._artifact_path()
-    if not src or not os.path.exists(src):
-        return {}
-    doc = json.load(open(src))
-    entries = doc.get("entries", doc) if isinstance(doc, dict) else {}
+def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple]]:
+    """{kernel qualname: [key, ...]} from THE census table of this profile and memory class
+    (`config/census/<vendor>/<profile>/<class>g.jsonl`, `kernels/census_table.py`) — and from nothing
+    else. It used to default to the machine's replay cache (earlier runtime sweeps) or take any census
+    JSON: the owner's method (2026-09-28) certifies exactly the committed table."""
+    from neurobrix.kernels import census_table as T
+    path = T.table_path(vendor, profile, memory_class)
+    if not path.exists():
+        raise RuntimeError(f"there is no census table {path}: the certifier certifies the table and nothing "
+                           f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
-    for ident in entries:
-        if "::" not in ident:
+    seen = set()
+    for row in T.read(path):
+        ident = T.key_line(row["kernel"], row["key"])
+        if ident in seen:
             continue
-        qual, ktext = ident.split("::", 1)
-        key = C.parse_key(ktext)
+        seen.add(ident)
+        key = C.parse_key(row["key"])
         if key is not None:
-            out.setdefault(qual, []).append(key)
+            out.setdefault(row["kernel"], []).append(key)
     return out
 
 
@@ -1613,7 +1616,12 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     log(f"[certify] certifying on {certifying_device['name']} ordinal {certifying_device['ordinal']} "
         f"(CUDA_VISIBLE_DEVICES={certifying_device['visible_devices']}), "
         f"{certifying_device['memory_mb']} MB = memory class {certifying_class} GB; entries serve that class only")
-    shapes = census(census_path)
+    if census_path:
+        raise RuntimeError(f"--census {census_path}: REFUSED — the certifier certifies the committed census table of "
+                           f"the profile and the card's memory class, and nothing else (the owner's method, 2026-09-28)")
+    shapes = census(vendor, profile, certifying_class)
+    log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
+        f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
     if kernels:
         want = set(kernels)
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
