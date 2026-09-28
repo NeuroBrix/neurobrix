@@ -69,7 +69,7 @@ def census(tmp_path, monkeypatch):
 
     def fake_shadow(model, request, mode, hardware, n_dev, timeout, log_dir, rung_mb=0, tag="", walk_extents=False):
         calls.append({"request": list(request), "tag": tag})
-        return {"mode": mode, "rung_mb": rung_mb, "rc": 0, "wall_s": 0.0, "keys": [], "error": "", "command": ""}
+        return {"mode": mode, "rung_mb": rung_mb, "rc": 0, "wall_s": 0.0, "keys": [], "op_keys": [], "error": "", "command": ""}
 
     monkeypatch.setattr(CC, "shadow", fake_shadow)
     logs = tmp_path / "logs"
