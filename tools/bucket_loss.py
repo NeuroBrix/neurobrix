@@ -107,6 +107,38 @@ def ladder_Woct(v):
     return p
 
 
+def ladder_Wq1k(v):
+    """The one-row convolution width ladder quarter-octave from 1 024 (1 280, 1 536, 1 792, 2 048,
+    2 560, ... 8 192, then Wq's rows): the candidate for 1 024-8 192, where Wq and Woct keep the fine
+    step and an audio codec's widths spend ~95 % of their classes (chatterbox's census walk,
+    2026-09-28: 95 of its largest conv family's 101 widths below 8 192). Never measured before
+    2026-09-28 — Wq and Woct both equal the fine ladder there."""
+    if v <= 1024:
+        return _fine(v)
+    if v <= 8192:
+        p = 1024
+        while p * 2 < v:
+            p *= 2
+        step = p // 4
+        return -(-v // step) * step
+    return ladder_Wq(v)
+
+
+def ladder_W8(v):
+    """The one-row convolution width ladder EIGHTH-octave from 1 024 (1 152, 1 280, ... 2 048, 2 304,
+    ... 8 192, then Wq's rows): 24 buckets over 1 024-8 192 against the fine ladder's 56 and Wq1k's 12.
+    Its tops are all in the 2026-09-28 sweep's size list, so it is evaluated from that sweep."""
+    if v <= 1024:
+        return _fine(v)
+    if v <= 8192:
+        p = 1024
+        while p * 2 < v:
+            p *= 2
+        step = p // 8
+        return -(-v // step) * step
+    return ladder_Wq(v)
+
+
 def ladder_profile(v, _dim="M"):
     """The ladder the PROFILE actually ships, read through the engine's own `bucket_of`.
 
@@ -119,7 +151,7 @@ def ladder_profile(v, _dim="M"):
 
 
 LADDERS = {"L16": ladder_L16, "Lpow2": ladder_Lpow2, "Lmix": ladder_Lmix, "exact": lambda v: v,
-           "Wq": ladder_Wq, "Woct": ladder_Woct,
+           "Wq": ladder_Wq, "Woct": ladder_Woct, "Wq1k": ladder_Wq1k, "W8": ladder_W8,
            "profile": ladder_profile, "profileW": lambda v: ladder_profile(v, "W")}
 
 
