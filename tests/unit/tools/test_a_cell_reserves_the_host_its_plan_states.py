@@ -58,3 +58,19 @@ def test_the_row_says_where_its_reservation_came_from(tmp_path, no_request, monk
     row = R.run_cell("M", "triton", "0", tmp_path, 60, src)
     assert seen["need"] == 7 << 30
     assert row["host_reserved"] == 7 << 30 and row["host_reserved_from"] == "plan"
+
+
+def test_a_tree_stating_none_is_priced_by_the_tree_named_in_price_src(tmp_path, no_request, monkeypatch):
+    """A tree before prism-prices-the-host is priced by a plan-identical tree named in <out>/price_src.
+    If the code ignored price_src, the static estimate would be reserved (RED)."""
+    under = _fake_tree(tmp_path / "under", {"strategy": "single_gpu"})
+    pricer = _fake_tree(tmp_path / "pricer", {"host_footprint": {"total_bytes": 9 << 30}})
+    out = tmp_path / "out"; out.mkdir()
+    (out / "price_src").write_text(str(pricer.parent))
+    seen = {}
+    monkeypatch.setattr(R, "container_bytes", lambda model: 100 << 30)
+    monkeypatch.setattr(R, "reserve_host", lambda o, need: seen.setdefault("need", need) or True)
+    monkeypatch.setattr(R, "release_host", lambda o: None)
+    monkeypatch.setattr(R, "_run_cell", lambda *a, **k: {"model": "M"})
+    row = R.run_cell("M", "triton", "0", out, 60, under)
+    assert seen["need"] == 9 << 30 and row["host_reserved_from"] == "plan@pricer"
