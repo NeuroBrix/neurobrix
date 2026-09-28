@@ -203,5 +203,10 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
         f"{dev.capacity_mb}); the premise of this control is gone, re-measure it")
     parts = getattr(s, "_layer_stream_partitions", None) or {}
     cut = {n: [[g.first_op, g.last_op] for g in part.segments] for n, part in parts.items()}
-    assert cut == {"model": [["aten.embedding::0", "aten.view::307"],
-                             ["moe_fused::block.15", "custom.rms_norm::81"]]}, cut
+    # Three segments since the partition sizes each activation at its RUNTIME width (the estimator's
+    # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
+    # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
+    # 2 bytes; the solver's own note on this card already read three.
+    assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
+                             ["aten.slice::502", "aten.view::427"],
+                             ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut
