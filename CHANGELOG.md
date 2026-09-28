@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
   for, in both engines. A request can turn it off with `use_resolution_binning`.
 
-- **A census can enumerate a stage whose length comes from values.** `--walk-extents` runs
-  such a stage at every key class of that length, on the largest memory rung.
+- **A census enumerates every stage whose length comes from values.** Such a stage — an audio
+  model's vocoder or codec, whose length is the speech it generated — runs at every key class of
+  that length on the largest memory rung, so a certified directory serves a speech of any length.
 
 ### Changed
 

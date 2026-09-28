@@ -170,7 +170,13 @@ def walk_extent(lo: int, hi: int, run, name: str = ""):
         # (instrumentation that lies by construction). The run fails with the graph's own words.
         raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: every extent refused; "
                            f"first: {sorted(seen[refused[0]])[0]}")
-    classes = len({v for v in seen.values()}) - (1 if refused else 0)
+    keyed = {v for n, v in seen.items() if v and n not in refused}
+    if not keyed:
+        # Every extent the graph took launched nothing: a stage that never ran at any length (the
+        # flow's own filter kept it from running) would otherwise print a walk and certify no key.
+        raise RuntimeError(f"census extent walk {name or ''} {lo}..{hi}: no extent recorded a key "
+                           f"in {len(seen)} run(s) — the stage never ran")
+    classes = len(keyed)
     print(f"[census] extent {name or 'walk'} {lo}..{hi}: {classes} key class(es) in {len(seen)} run(s), "
           f"{_t.perf_counter() - t0:.1f} s" + (f"; refused at {len(refused)} extent(s) up to {refused[-1]}" if refused else ""),
           flush=True)
