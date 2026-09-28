@@ -339,8 +339,12 @@ class TritonSequence:
         # Engines
         self._symbol_resolver: Optional[SymbolResolver] = None
         from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
+        # graph_dtype: the container's traced `torch_dtype` (graph.json top level; a
+        # streamed segment and a const-fold sub-graph carry it too) — the AMP_FP32
+        # cast-back rule reads it under bf16 compute.
         self._dtype_engine = TritonDtypeEngine(
-            compute_dtype, has_native_bf16=_has_bf16())
+            compute_dtype, has_native_bf16=_has_bf16(),
+            graph_dtype=dag.get("torch_dtype"))
         self._compute_dtype = compute_dtype
         # Per-component flag of the precision contract
         # `activations_fp16_safe` (the calibration record, resolved in

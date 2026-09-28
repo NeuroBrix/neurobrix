@@ -71,10 +71,17 @@ def _op(uid, op_type, ins, outs, **attrs):
             "output_tensor_ids": list(outs), "attributes": attrs}
 
 
-def _dag(tensors, ops, inputs, outputs):
+def _dag(tensors, ops, inputs, outputs, graph="float32"):
+    """`graph`: the component's traced `torch_dtype` (every container states one); the
+    fixtures' tensors are traced fp32."""
     return {"tensors": tensors, "ops": {o["op_uid"]: o for o in ops},
             "execution_order": [o["op_uid"] for o in ops],
-            "input_tensor_ids": list(inputs), "output_tensor_ids": list(outputs)}
+            "input_tensor_ids": list(inputs), "output_tensor_ids": list(outputs),
+            "torch_dtype": graph}
+
+
+def _graph(dag, g):
+    return {**dag, "torch_dtype": g}
 
 
 def _w(dag, engine="triton", c="float16", bf16=False, contract=NONE, tiling=None):
@@ -376,26 +383,31 @@ def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Under bf16 an fp32-internal op returns the compute dtype (decision 2026-09-28) — the
-# pass CALLS the engines' rule (`triton/dtype.py amp_fp32_output_dtype`). Seen red
-# (2026-09-28, nbx/campaigns/2026_09_28_bf16_castback/injections.txt), each alone:
+# Under bf16 on a bf16 GRAPH an fp32-internal op returns the compute dtype (decision
+# 2026-09-28, refined on the Apple gate: on a graph of another dtype coerced to bf16 compute
+# the output stays fp32) — the pass CALLS the engines' rule (`triton/dtype.py
+# amp_fp32_output_dtype`) with the component's `torch_dtype`, the engines' own source. Seen red
+# (2026-09-28, nbx/campaigns/2026_09_28_bf16_castback/injections.txt, injections2.txt), each alone:
 #   * the unchanged pass (427c8c91): test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes.
-#   * the Triton mirror, or the ATen mirror, restored to its old rule while the engines carry
-#     the new one: both tests below.
-#   * the rule changed in an ENGINE only (the Triton wrapper's old gate; the compiled twin
-#     without its bf16 clause; `compile_op` reading the flag as `safe`):
-#     test_the_mirrors_answer_what_the_engines_execute (the drift door; green on the
-#     unchanged tree, where mirror and engines agree on the old rule).
+#   * the 4398f9d2 pass (no graph dtype): test_an_fp32_graph_coerced_to_bf16_keeps_its_fp32_norm_output
+#     and test_the_mirrors_answer_what_the_engines_execute.
+#   * the pass reading the compute dtype as the graph's, or the rule ignoring the graph:
+#     test_an_fp32_graph_coerced_to_bf16_* and the drift door.
+#   * the Triton mirror, or the ATen mirror, restored to its pre-cast-back rule: the drift
+#     door and test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes.
+#   * the rule changed in an ENGINE only (a wrapper reading the compute dtype as the graph's;
+#     the compiled twin without its bf16 clause; `compile_op` reading the flag as `safe`):
+#     test_the_mirrors_answer_what_the_engines_execute (the drift door).
 # ---------------------------------------------------------------------------
 
-def _one(op_type, attrs=None):
+def _one(op_type, attrs=None, graph="bfloat16"):
     T = {"input::x": _t([2, 8], is_input=True), "y": _t([2, 8])}
     return _dag(T, [_op("op::0", op_type, ["input::x"], ["y"], **(attrs or {}))],
-                ["input::x"], ["y"])
+                ["input::x"], ["y"], graph=graph)
 
 
 def test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes():
-    g = _block()
+    g = _graph(_block(), "bfloat16")
     for eng in ("triton", "triton_sequential"):
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert [w[t] for t in ("r0", "p1", "a0", "c1", "a1")] == ["bfloat16"] * 5, eng
@@ -411,8 +423,27 @@ def test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes():
                           contract=NONE)["y"] == 4
 
 
+def test_an_fp32_graph_coerced_to_bf16_keeps_its_fp32_norm_output():
+    """The graph dtype is the component's `torch_dtype`, the engines' own source: an fp32
+    graph the profile runs in bf16 keeps the fp32 AMP_FP32 output (and the residual add
+    follows it), priced at 4 bytes; a graph that states none is refused by name."""
+    g = _block()                                              # torch_dtype float32
+    for eng in ("triton", "triton_sequential"):
+        w = _w(g, eng, c="bfloat16", bf16=True)
+        assert [w[t] for t in ("r0", "a0", "c1", "a1")] == [
+            "float32", "float32", "bfloat16", "float32"], eng
+        assert runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)["r0"] == 4
+    for eng in ("compiled", "sequential"):
+        assert _w(_one("aten::layer_norm", graph="float32"), eng, c="bfloat16",
+                  bf16=True)["y"] == "float32"
+    unstated = {k: v for k, v in g.items() if k != "torch_dtype"}
+    with pytest.raises(ValueError, match="graph dtype"):
+        _w(unstated, "triton", c="bfloat16", bf16=True)
+
+
 def _contracts():
     return [("bfloat16", NONE),
+            ("bfloat16:float32", NONE),                      # an fp32 graph run in bf16
             ("float16", NONE),
             ("float16", PrecisionContract(True, frozenset(), frozenset())),
             ("float16", PrecisionContract(True, frozenset(), frozenset({"op::0"})))]
@@ -441,27 +472,31 @@ def test_the_mirrors_answer_what_the_engines_execute():
         def is_contiguous(self):
             return True
 
-    for c, k in _contracts():
+    for ck, k in _contracts():
+        c, _, graph = ck.partition(":")
+        graph = graph or c
         for op_type, fn, extra in (("aten::exp", torch.ops.aten.exp, ()),
                                    ("aten::rsqrt", torch.ops.aten.rsqrt, ()),
                                    ("aten::layer_norm", torch.ops.aten.layer_norm, ([8],))):
             tc = getattr(torch, c)
-            eng = DtypeEngine(tc, activations_fp16_safe=k.safe,
+            eng = DtypeEngine(tc, graph_dtype=getattr(torch, graph), activations_fp16_safe=k.safe,
                               narrow_op_uids=k.narrow_op_uids, fp32_op_uids=k.fp32_op_uids)
             got = eng.compile_op(op_type, fn, {}, op_uid="op::0")(
                 torch.rand(2, 8, dtype=tc) + 0.5, *extra).dtype
-            want = _w(_one(op_type), "compiled", c=c, bf16=c == "bfloat16", contract=k)["y"]
+            want = _w(_one(op_type, graph=graph), "compiled", c=c, bf16=c == "bfloat16",
+                      contract=k)["y"]
             assert str(got).replace("torch.", "") == want, (op_type, c, k)
         for op_type in ("aten::exp", "custom::rms_norm", "aten::layer_norm"):
             prev = _wr.get_activations_fp16_safe()
             _wr.set_activations_fp16_safe(k.safe)
             try:
-                teng = TritonDtypeEngine(getattr(NBXDtype, c))
+                teng = TritonDtypeEngine(getattr(NBXDtype, c), graph_dtype=graph)
                 teng.set_precision_contract(k.safe, k.fp32_op_uids, k.narrow_op_uids)
                 name = op_type.split("::")[-1]
                 got = teng.wrap_op(name, lambda x, *a, **kw: Fake(x.nbx_dtype),
                                    op_uid="op::0")(Fake(getattr(NBXDtype, c))).nbx_dtype.name
             finally:
                 _wr.set_activations_fp16_safe(prev)
-            want = _w(_one(op_type), "triton", c=c, bf16=c == "bfloat16", contract=k)["y"]
+            want = _w(_one(op_type, graph=graph), "triton", c=c, bf16=c == "bfloat16",
+                      contract=k)["y"]
             assert got == want, (op_type, c, k)
