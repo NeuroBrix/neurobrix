@@ -30,9 +30,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   under the hub record's name, and prints the name to use with `run` and `remove`. A model
   extracted under a hand-chosen name before this release is refused the same way, whichever path
   opens it. One repository under two names is a duplicate, not two models.
+- **A model runs from what its container declares, on every machine.** Per-component settings
+  that some video models read from a developer-only file now come from the container itself,
+  whatever name or path the model is requested by;
+  a developer checkout whose file disagrees with a container refuses to run it and names the
+  setting, instead of running it differently from everyone else.
 
 ### Fixed
 
+- **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
+  read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
+  3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.
+
+- **Models whose weights are offloaded to host memory no longer fail on a small head.** A component
+  with no transformer blocks (Janus-Pro-7B's image-generation head) kept its weights on the host and
+  the first matrix multiply failed with "cuda:0 ... cpu"; its weights now reach the GPU like the
+  rest of the model's. The same applies to a host-memory weight that is only reshaped before use (SANA-Video's
+  output modulation in `--compiled` on a 32 GB card).
+- **`--triton-sequential` generates text at the speed of a cached decode.** It re-ran the whole
+  context for every new token, while `--sequential` and `--triton` keep a cache; large mixture-of-
+  experts models could not finish a short answer in fifteen minutes. `NBX_KV_RECOMPUTE=1` keeps the
+  old recompute path as a reference in both engines.
+- **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
+  planner read which processes share a card by the process's own device number; under a remap that
+  number names a different physical card, whose occupants then shrank or inflated the plan.
 - **On Apple GPUs, memory the engine frees is given back.** Every Metal buffer freed by the Triton
   engines used to stay allocated for the life of the process (a PyObjC 12.2.2 defect,
   [pyobjc#690](https://github.com/ronaldoussoren/pyobjc/issues/690)), so a long run or a large
@@ -58,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
   planner read which processes share a card by the process's own device number; under a remap that
   number names a different physical card, whose occupants then shrank or inflated the plan.
+- **Wan2.1-VACE conditions on an input image the way the reference pipeline does.** The control
+  signal now encodes the kept frames and the frames to generate separately and folds the frame
+  mask as the vendor does, instead of reusing the image's encoding for both halves.
+
+- **A video encoder whose first frame is encoded alone can now be tiled when it does not fit.**
+  Such an encoder (the Wan family's) was always planned whole, so a long clip at a large size ran
+  out of memory before its first layer. It is now tiled in height and width with the whole clip in
+  every tile, the way the model's own tiled encoding works; it is never split in time.
 
 - **`neurobrix autotune certify` no longer exhausts host memory on shapes too large for the card.**
   Such a shape is now reported as too large before its inputs are generated, and inputs are
