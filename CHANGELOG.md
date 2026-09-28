@@ -13,7 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings.** A kernel shape the certified directory does not cover fails the run with its name, its
   shape and what the census says about it, instead of tuning at runtime; the machine's local tuning
   cache is neither read nor written. Also set by `NBX_AUTOTUNE_CERTIFIED_ONLY=1`.
-
+- `neurobrix autotune certify --reprove-generator`'s help said a proof made under another code generator 'stays correct and served meanwhile'; the runtime does the opposite and says so (`a configuration is a property of the compiler that produced it`: the shape sweeps at runtime and lands in the replay cache). The help now states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1` override.
+- The certified-directory checkpointer stamps its log lines with the machine's local clock and names the zone (`17:41:13 CEST`); it printed a bare `time.gmtime()` hour (`15:41:13` for a push made at 17:41:13 CEST, 2026-09-28). Test: `test_the_checkpoint_stamp_is_the_machines_local_clock_and_names_its_zone` (red under TZ=Asia/Tokyo with the old stamp: the UTC hour, no zone).
+- `NBX_SAVE_INPUTS=<component>:<dir>` saves a component's first-call inputs whole as `.npy` in both modes (a torch bf16 input as float32; an NBXTensor bf16 input as its uint16 bits beside a float32 copy) — the hand-off instrument for decoding one Metal latent with the vendor's own autoencoder on another machine (2026-09-28). Test: `tests/unit/runtime/test_a_components_inputs_can_be_saved_whole.py` (red on a hook that ignores the variable and on one that saves the bf16 bits raw).
+- The certified-directory checkpointer's final checkpoint commits and returns instead of sleeping out the push window (13 minutes behind a pass that certified nothing, and a chain's GPU idle behind every pass ending inside a window, 2026-09-28); a checkpoint whose window is open pushes the branch's unpushed commits even with nothing new to commit, and its push window is the repository's (`.git/nbx-last-push`, `--touch-push` after a manual push), not the process's. Tests in `tests/unit/tools/test_the_certified_directory_is_checkpointed_while_written.py`.
+- The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
+- The certifier prices a key by its phases before any draw (`autotune_certify.price_key`: the host draws, the device copies, the fp64 oracle whole or windowed per `_row_windows`/`_conv_windows`, the readback) and refuses it by name over a working-set budget (`neurobrix autotune certify --working-set-mb`, the figure the run's guard kills at); the 10 B/elem constant stood 12 % under a small depthwise key and 40 % over a large one on the Mac (2026-09-28, 20 keys measured one per process, `results/certifier_price`). `NBX_CERTIFY_PHASES=1` prints the process's memory at each phase of a key. Test: `tests/unit/kernels/test_the_certifier_prices_a_key_by_its_phases.py` (16 measured peaks, injection: conv windows shrunk to 1x1 -> 0.48x/0.66x/0.82x, red).
+- The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
   does.** When a model's container records the vendor's resolution binning, the request is mapped
   to the nearest trained size, rendered there, and resized and centre-cropped back to the size asked
@@ -84,6 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the float32 minimum became minus infinity when narrowed to bfloat16 or float16, and a fully
   masked row could then turn to NaN; it now saturates to the half type's own minimum, as the
   `--compiled` engines already did.
+- **Kernel certification on Apple GPUs no longer runs out of memory on large shapes.** On a machine
+  whose GPU shares memory with the host, the certifier now counts its host-side copies of each
+  test tensor when it decides whether a shape fits.
+- **A job pinned to one GPU with `CUDA_VISIBLE_DEVICES` budgets that GPU, not the first one.** The
+  planner read which processes share a card by the process's own device number; under a remap that
+  number names a different physical card, whose occupants then shrank or inflated the plan.
 - **Wan2.1-VACE conditions on an input image the way the reference pipeline does.** The control
   signal now encodes the kept frames and the frames to generate separately and folds the frame
   mask as the vendor does, instead of reusing the image's encoding for both halves.
