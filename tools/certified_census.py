@@ -516,31 +516,32 @@ def main() -> int:
 
     t0 = time.time()
     rows = {}
+    # THE census table: a model whose own request censused replaces its rows (a retrace replaces, never
+    # adds) THE MOMENT its census ends — a certifier reading the table meanwhile certifies it without
+    # waiting for the whole catalogue (the supervisor, 2026-09-28 21:56); a model whose census failed
+    # keeps its previous rows, said — a failed shadow is not the knowledge that a model forms no key.
+    from concurrent.futures import as_completed
+    from neurobrix.kernels import census_table as _T
+    table = _T.table_path(vendor, profile, table_cls)
     with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futs = {m: pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs)
+        futs = {pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs): m
                 for m in models}
-        for m, f in futs.items():
+        for f in as_completed(futs):
+            m = futs[f]
             rows[m] = f.result()
             r = rows[m]
+            trows = r.pop("_table", [])
             if r["status"] == "refused":
                 continue                                  # said above, before the shadows
             print(f"[census] {m:44s} {r['family']:10s} {r['status']:8s} {r['keys']:5d} key(s)"
                   + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
                   + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
                      if r.get("derived_breaks") else ""), flush=True)
-
-    # THE census table: a model whose own request censused replaces its rows (a retrace replaces, never
-    # adds); a model whose census failed keeps its previous rows, said — a failed shadow is not the
-    # knowledge that a model forms no key.
-    from neurobrix.kernels import census_table as _T
-    table = _T.table_path(vendor, profile, table_cls)
-    for m, r in rows.items():
-        trows = r.pop("_table", [])
-        if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
-            removed, written = _T.replace_model(table, m, trows)
-            print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
-        else:
-            print(f"[census] table {table.name}: {m} — census {r['status']}, its previous rows kept", flush=True)
+            if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
+                removed, written = _T.replace_model(table, m, trows)
+                print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
+            else:
+                print(f"[census] table {table.name}: {m} — census {r['status']}, its previous rows kept", flush=True)
 
     entries = {}
     for m, r in rows.items():
