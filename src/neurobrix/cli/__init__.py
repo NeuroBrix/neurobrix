@@ -83,6 +83,11 @@ def _add_run_arguments(p):
                                  'fusion, TritonSequentialDispatcher). Equivalent of '
                                  '--sequential but for the Triton backend. Useful for '
                                  'debugging individual Triton kernels.')
+    p.add_argument('--certified-only', action='store_true', dest='certified_only',
+                            help='Confirmation run: every autotuned kernel is served from the '
+                                 'certified directory, or the run fails naming the missing key '
+                                 'and its census row — never a runtime sweep, never the local '
+                                 'replay cache (NBX_AUTOTUNE_CERTIFIED_ONLY=1).')
     p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
 
@@ -209,7 +214,8 @@ For more information: https://neurobrix.es
     certify_p = autotune_sub.add_parser('certify', help='run every candidate config on every shape the zoo met, against the fp64 oracle; write the files with their proofs')
     certify_p.add_argument('--profile', required=True, help='the vendor profile this machine carries (its file stem, e.g. volta)')
     certify_p.add_argument('--vendor', default=None, help='the vendor directory (default: the one in force)')
-    certify_p.add_argument('--census', default=None, help='a census file of shapes (default: the machine replay cache)')
+    certify_p.add_argument('--census', default=None, help='REFUSED if given: the certifier reads the committed census '
+                                                        'table of the profile and the card\'s memory class, nothing else')
     certify_p.add_argument('--out', default=None, help='write here instead of the engine directory (a contributor draft)')
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')

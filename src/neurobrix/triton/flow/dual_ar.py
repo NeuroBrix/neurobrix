@@ -262,57 +262,80 @@ class TritonDualAREngine:
         codec_q = "codec.quantizer"
         if codec_q not in self.ctx.executors:
             raise RuntimeError(f"ZERO FALLBACK: DualAR requires '{codec_q}' for RVQ decode.")
-        self._ensure_weights_loaded(codec_q)
-        q_out = self.ctx.executors[codec_q].run({"indices": NBXTensor.from_numpy(codes_np)})
-        z = q_out.get("output") if isinstance(q_out, dict) else q_out
-        if z is None:
-            raise RuntimeError("ZERO FALLBACK: codec.quantizer.decode produced no features.")
-        print(f"   [{codec_q}] decode codes {list(codes_np.shape)} -> features {list(z.shape)}")
-
-        _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
-        if _dump_z:
-            np.save(_dump_z, _to_numpy(z).astype(np.float32))
-            print(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
-
-        # Bind RVQ features to the decoder input (topology connects
-        # model.output_0 -> codec.decoder.x; mirror the compiled binding set).
-        for key in ("global.x", "x", "codec.decoder.x", "model.output_0", f"{comp_name}.output_0"):
-            self.ctx.variable_resolver.resolved[key] = z
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = [int(c[0]) for c in acoustic_codes]
 
-        if not self.ctx.persistent_mode:
-            self._unload_component_weights(comp_name)
-            self._unload_component_weights("model.fast")
-            self._unload_component_weights(codec_q)
-            release_flow_memory(self.ctx.primary_device)
-
-        # -- Step 4: Codec decoder (forward stages) --
-        for stage in stages[1:]:
-            codec_name = stage["component"]
-            if codec_name not in self.ctx.executors:
-                print(f"   [{codec_name}] Skipped (not in executors)")
-                continue
-
-            print(f"   [{codec_name}] Running forward pass...")
-            codec_start = time.perf_counter()
-            self._ensure_weights_loaded(codec_name)
-
-            # DAC decoder is fully symbolic (born-at-source seq) — single pass, no
-            # trace-seq chunking (R30 mirror of core/flow/dual_ar.py).
-            self._execute_component(codec_name, "forward", None)
-
-            codec_elapsed = (time.perf_counter() - codec_start) * 1000
-            print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
-
-            if not self.ctx.persistent_mode:
-                self._unload_component_weights(codec_name)
-                release_flow_memory(self.ctx.primary_device)
+        self._decode_codes(codes_np, comp_name, stages, max_tokens)
 
         # -- Step 5: Output waveform --
         from neurobrix.core.flow.audio_utils import postprocess_audio_output
         postprocess_audio_output(self.ctx)
 
         return self.ctx.variable_resolver.resolve_all()
+
+    def _decode_codes(self, codes_np: np.ndarray, comp_name: str, stages: list, max_tokens: int) -> None:
+        """Steps 3 and 4: the acoustic code grid [1, num_codebooks, T] through the RVQ decode and the
+        codec stages — at T, or, in a census shadow, at every key class of T up to max_tokens."""
+        import os as _os_diag
+        codec_q = "codec.quantizer"
+        T = codes_np.shape[2]
+
+        def _decode(codes: np.ndarray) -> None:
+            self._ensure_weights_loaded(codec_q)
+            q_out = self.ctx.executors[codec_q].run({"indices": NBXTensor.from_numpy(codes)})
+            z = q_out.get("output") if isinstance(q_out, dict) else q_out
+            if z is None:
+                raise RuntimeError("ZERO FALLBACK: codec.quantizer.decode produced no features.")
+            print(f"   [{codec_q}] decode codes {list(codes.shape)} -> features {list(z.shape)}")
+
+            _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
+            if _dump_z:
+                np.save(_dump_z, _to_numpy(z).astype(np.float32))
+                print(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
+
+            # Bind RVQ features to the decoder input (topology connects
+            # model.output_0 -> codec.decoder.x; mirror the compiled binding set).
+            for key in ("global.x", "x", "codec.decoder.x", "model.output_0", f"{comp_name}.output_0"):
+                self.ctx.variable_resolver.resolved[key] = z
+
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(comp_name)
+                self._unload_component_weights("model.fast")
+                self._unload_component_weights(codec_q)
+                release_flow_memory(self.ctx.primary_device)
+
+            # -- Step 4: Codec decoder (forward stages) --
+            for stage in stages[1:]:
+                codec_name = stage["component"]
+                if codec_name not in self.ctx.executors:
+                    print(f"   [{codec_name}] Skipped (not in executors)")
+                    continue
+
+                print(f"   [{codec_name}] Running forward pass...")
+                codec_start = time.perf_counter()
+                self._ensure_weights_loaded(codec_name)
+
+                # DAC decoder is fully symbolic (born-at-source seq) — single pass, no
+                # trace-seq chunking (R30 mirror of core/flow/dual_ar.py).
+                self._execute_component(codec_name, "forward", None)
+
+                codec_elapsed = (time.perf_counter() - codec_start) * 1000
+                print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
+
+                if not self.ctx.persistent_mode:
+                    self._unload_component_weights(codec_name)
+                    release_flow_memory(self.ctx.primary_device)
+
+        from neurobrix.kernels import census as _census
+        if _census.walks_extents():
+            # The codec's extent is the number of frames generated before the end token — a
+            # value a shadow does not have: it decodes the one length its draws happened to
+            # reach, and openaudio's run decoded others (26 misses, 2026-09-28). The census
+            # meets every key class of that extent up to the request's token bound.
+            _census.walk_extent(1, max_tokens, lambda n: _decode(
+                np.ascontiguousarray(codes_np[:, :, np.arange(n) % T])),
+                name=f"{codec_q} frames")
+        else:
+            _decode(codes_np)
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
         """Run chunked forward if input seq_len exceeds graph's trace-time seq_len."""

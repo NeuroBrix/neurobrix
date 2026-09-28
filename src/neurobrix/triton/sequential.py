@@ -160,6 +160,20 @@ class TritonSequentialDispatcher:
     def dispatch(self, op_type: str, inputs: List[Any],
                  attributes: Dict[str, Any], op_uid: Optional[str] = None,
                  op_record: Optional[Dict[str, Any]] = None) -> Any:
+        """Dispatch one op; while keys are recorded, name it for every key it forms, and no longer
+        once it returns (a key a flow forms between ops must not be charged to the last one)."""
+        from neurobrix.kernels import census as _key_census
+        if not _key_census.recording():
+            return self._dispatch(op_type, inputs, attributes, op_uid=op_uid, op_record=op_record)
+        _key_census.set_op(op_uid)
+        try:
+            return self._dispatch(op_type, inputs, attributes, op_uid=op_uid, op_record=op_record)
+        finally:
+            _key_census.set_op(None)
+
+    def _dispatch(self, op_type: str, inputs: List[Any],
+                  attributes: Dict[str, Any], op_uid: Optional[str] = None,
+                  op_record: Optional[Dict[str, Any]] = None) -> Any:
         """Dispatch a single op to Triton kernel (`op_uid` keys the precision
         contract's per-op islands; `op_record` is the op's graph entry, read
         for the traced `output_dtypes` — see TritonDtypeEngine.wrap_op)."""
