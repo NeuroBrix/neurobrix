@@ -2287,15 +2287,20 @@ class PrismSolver:
                             int(d.memory_mb * 1024 * 1024) for d in profile.devices
                         )
                     # First pass: worst-case + overflow_ops detection.
-                    # `force_compute_dtype_for_fp` aligns the activation
-                    # estimate with the runtime compute dtype — graph
-                    # tensors traced as fp32 (PyTorch autocast off /
-                    # fp32 capture path) actually flow through fp16
-                    # kernels at runtime, halving their byte footprint.
-                    # Without this override the estimator doubles the
-                    # activation bill for any model where trace dtype
-                    # != runtime compute dtype (Sana 4Kpx VAE: graph
-                    # tensors fp32, runtime fp16 → 2× over-estimation).
+                    #
+                    # THE WIDTH EACH ACTIVATION IS EXECUTED AT. A graph traced
+                    # in fp32 runs mostly at the compute dtype, not wholly: the
+                    # engines keep AMP_FP32 outputs, fp32 matmul stores and
+                    # whatever a wider operand reaches in fp32 unless the
+                    # component's precision contract narrows them. Levelling
+                    # every float to the compute dtype (the former
+                    # `force_compute_dtype_for_fp`) planned Sana 4Kpx's VAE at
+                    # 6 144 MB for a 3072x4096 decode that held 15 360 MB of
+                    # activations when it ran out of memory (2026-09-28). The
+                    # widths come from the engine's own rules
+                    # (core/prism/runtime_widths).
+                    widths = self._activation_widths(
+                        comp, container, profiler, input_config, comp_dtype_str, profile)
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -2305,7 +2310,7 @@ class PrismSolver:
                         # component's weights are on it. Both sites must pass a
                         # weights figure or neither -- see the note there.
                         resident_bytes=weight_bytes or 0,
-                        force_compute_dtype_for_fp=True,
+                        widths=widths,
                         # PLACEMENT estimate: no symbol binds below its
                         # witnessed trace extent (the audio-tower
                         # seq_len-misbinding class, D7 scoping note
@@ -2353,7 +2358,12 @@ class PrismSolver:
                                 dtype_bytes=dtype_bytes,
                                 zero_alloc_uids=zero_uids,
                                 inplace_adds=inplace_adds,
-                                force_compute_dtype_for_fp=True,
+                                widths=widths,
+                                # The fused-upsample proxies and the broadcast
+                                # chain's expand/clone/view CARRY their input to
+                                # their consumer: its buffer lives until then.
+                                # The residual-chain sentinels carry nothing.
+                                source_holding_uids=fusion_uids | f2a_uids,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -2374,7 +2384,7 @@ class PrismSolver:
                                 input_config=input_config,
                                 dtype_bytes=dtype_bytes,
                                 inplace_adds=inplace_adds,
-                                force_compute_dtype_for_fp=True,
+                                widths=widths,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -2480,6 +2490,39 @@ class PrismSolver:
             return None
         with open(p) as f:
             return json.load(f)
+
+    def _activation_widths(self, comp, container, profiler, input_config,
+                           compute_dtype: str, profile) -> Dict[str, int]:
+        """{tensor_id: bytes per element} this component's activations are EXECUTED at,
+        under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
+
+        What the pass needs and where it comes from here:
+          * the compute dtype: the component's plan dtype;
+          * the engine: `self._mode`, recorded by `solve` before any rung runs;
+          * `has_native_bf16`: the profile's (the Triton matmul store reads it). With no
+            profile it is taken False — fp16 matmuls then store fp32, the WIDER answer;
+          * the precision contract: `plan_time_contract`, the runtime's own functions over
+            the container's record (see there for what the plan cannot read and prices
+            wider). A container with no cache path has no record to read: conservative;
+          * the op-level tiling plan: NOT KNOWN here — it is detected after placement
+            (`_detect_op_level_tiling_pairs`). `tiling=None`: every structurally eligible
+            fused / tiled op is priced at the wider of its tiled and untiled width;
+          * the request's shapes, for the matmul store's M <= 4 rule: the profiler's own
+            resolution under the placement-floored symbol map this estimate uses."""
+        from neurobrix.core.prism.runtime_widths import (
+            conservative_contract, plan_time_contract, runtime_widths)
+        cache_path = getattr(container, "cache_path", None)
+        if cache_path:
+            contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype)
+        else:
+            contract = conservative_contract("the container has no cache path to read a record from")
+        native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
+        tensors = comp.graph.get("tensors", {})
+        symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
+        return runtime_widths(
+            comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
+            contract=contract, tiling=None,
+            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
 
     def _graph_as_executed(self, comp, container):
         """The component as the engines will run it: with the declared-MoE
@@ -5182,8 +5225,19 @@ class PrismSolver:
         # reserving the activations, one level up.
         streamed = {name for name, mem in sorted_comps
                     if self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
-        resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
-                              if name not in streamed)
+        # But only what is live AT THE SAME TIME as the streamed component's segments.
+        # A whole component's WEIGHTS stay loaded beside it (a plan may load eagerly, a
+        # serve session never unloads); its ACTIVATIONS are live only while it runs, and
+        # the flow says which components run together: `core/flow/base.py
+        # resident_together` (the iterative handlers of both engines unload each pre_loop
+        # component after it runs and the loop's before post_loop). Reserving every
+        # component's activation peak beside the streamed one priced PixArt-XL-2-1024-MS's
+        # VAE decode (5 120 MB at 1024x2048 once its fp32 widths are counted) beside its
+        # TEXT ENCODER's segments, which run in another phase, and refused a plan that
+        # streams on the Mac (2026-09-28). A flow that declares no phases keeps every
+        # component concurrent — the TinyLlama case above, lm_head beside the model, is
+        # one — and reserves exactly what it did.
+        resident_beside = self._resident_beside_streamed(container, sorted_comps, streamed)
         # And the graph's CONSTANTS, which are resident beside every segment and
         # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
         # baked into graph.json is not a component, so it was invisible here while
@@ -5381,6 +5435,46 @@ class PrismSolver:
             out[index.parent.name] = {str(v.get("dtype")) for v in tensors.values()
                                       if isinstance(v, dict) and str(v.get("dtype", "")).startswith(("float", "bfloat"))}
         return out
+
+    def _resident_beside_streamed(self, container, sorted_comps, streamed) -> int:
+        """Bytes held beside a streamed component's segments by the components kept WHOLE.
+
+        A whole component CONCURRENT with the streamed one (same flow phase, or a flow that
+        declares no phases) counts its total — weights, activation peak, overhead. One that runs
+        in ANOTHER phase counts its weights and their share of the overhead only: its weights may
+        stay loaded, its activations are not live while the segments run. The phases are the
+        flow's own (`core/flow/base.py resident_together`, the rule the partition branch
+        introduced, 38751c12). With several streamed components the largest reserve is taken:
+        each is cut against the same budget. A streamed component no phase names keeps every
+        other component concurrent."""
+        from neurobrix.core.flow.base import resident_together
+        phases = resident_together(self._flow_topology(container))
+        whole = [(n, m) for n, m in sorted_comps if n not in streamed]
+
+        def _weights_only(m) -> int:
+            share = m.weight_bytes / max(m.weight_bytes + m.activation_bytes, 1)
+            return int(m.weight_bytes + m.overhead_bytes * share)
+
+        def _beside(s) -> int:
+            phase = next((ph for ph in phases if s in ph), None) if phases is not None else None
+            return sum(int(m.total_bytes) if (phases is None or phase is None or n in phase)
+                       else _weights_only(m) for n, m in whole)
+
+        if not streamed:
+            return sum(int(m.total_bytes) for _, m in whole)
+        return max(_beside(s) for s in streamed)
+
+    def _flow_topology(self, container) -> Dict[str, Any]:
+        """The container's topology.json (its flow), read from its cache — the NBXContainer object carries
+        only the flags from it. Empty when the container has no cache path or no topology.
+        (Brought from 38751c12, a-partition-is-cut-at-the-request, unchanged.)"""
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return {}
+        import json as _json
+        from pathlib import Path as _P
+        path = _P(base) / "topology.json"
+        return _json.loads(path.read_text()) if path.exists() else {}
 
     def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
         """Per-component {weight_name: stored bytes} from the weights index.
