@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A large image no longer runs out of memory in its decoder where the plan had priced it to fit.**
+  A plan that counted a decoder's large residual additions as done in place now performs them in place,
+  so the memory it runs under is the memory it was accepted on (Sana 4Kpx at 3072x4096 on an 18 GB
+  Apple GPU ran out of memory in the decode).
+
 - **Sana 1600M 4Kpx renders again at non-square sizes with the compiled engine.** A load-time pass had
   read a channel count in the image decoder as a spatial size (they coincide on a square trace), so a
   3072x4096 request failed in the decoder's tiled residual chain. The pass is back to its previous rule.
