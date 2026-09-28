@@ -59,6 +59,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output kind
 from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
+from container_renames import by_current_name, current_name  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
@@ -361,6 +362,9 @@ def load_rows(out: Path) -> list:
     latest, older = {}, {}
     for f in sorted(out.glob("rows_card*.jsonl")):
         for r in map(json.loads, f.read_text().splitlines()):
+            # A row keeps the name its container had when it ran; it is one cell with today's.
+            if current_name(r["model"]) != r["model"]:
+                r["recorded_as"], r["model"] = r["model"], current_name(r["model"])
             k = (r["model"], r["mode"])
             if k in latest and _row_time(r) < _row_time(latest[k]):
                 older.setdefault(k, []).append(r)
@@ -373,7 +377,7 @@ def load_rows(out: Path) -> list:
     if jf.exists():
         for l in jf.read_text().splitlines():
             j = json.loads(l)
-            judged[(j["model"], j["mode"])] = j
+            judged[(current_name(j["model"]), j["mode"])] = j
     rows = []
     for k, r in latest.items():
         if k in older:
@@ -400,7 +404,8 @@ def cmd_judge(a) -> int:
 def cmd_table(a) -> int:
     out = Path(a.out)
     rows = load_rows(out)
-    proofs = json.loads(Path(a.proofs).read_text()) if a.proofs and Path(a.proofs).exists() else {}
+    proofs = by_current_name(json.loads(Path(a.proofs).read_text())
+                             if a.proofs and Path(a.proofs).exists() else {})
     by = {}
     for r in rows:
         by.setdefault(r["model"], {})[r["mode"]] = r
@@ -448,7 +453,8 @@ def cmd_export(a) -> int:
     its manifest.json's; the verdict is the judge's, 'pending' until an outside judgment is written."""
     out = Path(a.out)
     repos = catalogue_repo_ids(Path(a.catalogue))
-    proofs = json.loads(Path(a.proofs).read_text()) if a.proofs and Path(a.proofs).exists() else {}
+    proofs = by_current_name(json.loads(Path(a.proofs).read_text())
+                             if a.proofs and Path(a.proofs).exists() else {})
     rows = load_rows(out)
     lines = []
     for r in rows:

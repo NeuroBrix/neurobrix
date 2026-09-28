@@ -130,7 +130,7 @@ FAMILY_ROWS = [
         {"prompt": "a red apple on a wooden table", "steps": 4},
         "media:png", id="image"),
     pytest.param(
-        "Wan2.1-T2V-1.3B-Diffusers",
+        "Wan2.1-T2V-1.3B",
         {"prompt": "a red fox running through snow", "steps": 2,
          "num_frames": 5, "height": 480, "width": 832},
         "media:mp4", id="video"),
@@ -148,7 +148,7 @@ _DEFAULT_CELL_TIMEOUT_S = 600
 # a Prism placement class, not a warm-path defect; unpin when that
 # placement finding is fixed.
 _PINNED_ROWS = {
-    "Wan2.1-T2V-1.3B-Diffusers": {"visible": "2", "hardware": "v100-32g"},
+    "Wan2.1-T2V-1.3B": {"visible": "2", "hardware": "v100-32g"},
 }
 
 
