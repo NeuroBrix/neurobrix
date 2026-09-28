@@ -373,3 +373,95 @@ def test_an_nbx_dtype_is_named_by_its_member_not_its_string(monkeypatch):
     assert str(NBXDtype.bfloat16) == "1"
     assert RW._nbx_name(NBXDtype.bfloat16) == "bfloat16"
     assert RW._nbx_name(NBXDtype.float32) == "float32"
+
+
+# ---------------------------------------------------------------------------
+# Under bf16 an fp32-internal op returns the compute dtype (decision 2026-09-28) — the
+# pass CALLS the engines' rule (`triton/dtype.py amp_fp32_output_dtype`). Seen red
+# (2026-09-28, nbx/campaigns/2026_09_28_bf16_castback/injections.txt), each alone:
+#   * the unchanged pass (427c8c91): test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes.
+#   * the Triton mirror, or the ATen mirror, restored to its old rule while the engines carry
+#     the new one: both tests below.
+#   * the rule changed in an ENGINE only (the Triton wrapper's old gate; the compiled twin
+#     without its bf16 clause; `compile_op` reading the flag as `safe`):
+#     test_the_mirrors_answer_what_the_engines_execute (the drift door; green on the
+#     unchanged tree, where mirror and engines agree on the old rule).
+# ---------------------------------------------------------------------------
+
+def _one(op_type, attrs=None):
+    T = {"input::x": _t([2, 8], is_input=True), "y": _t([2, 8])}
+    return _dag(T, [_op("op::0", op_type, ["input::x"], ["y"], **(attrs or {}))],
+                ["input::x"], ["y"])
+
+
+def test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes():
+    g = _block()
+    for eng in ("triton", "triton_sequential"):
+        w = _w(g, eng, c="bfloat16", bf16=True)
+        assert [w[t] for t in ("r0", "p1", "a0", "c1", "a1")] == ["bfloat16"] * 5, eng
+        b = runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)
+        assert b["r0"] == 2 and b["a1"] == 2
+    for eng in ("compiled", "sequential"):
+        assert _w(_one("aten::layer_norm"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
+        assert runtime_widths(_one("aten::exp"), "bfloat16", eng, has_native_bf16=True,
+                              contract=NONE)["y"] == 2
+    # fp16 unchanged: no contract -> fp32 (4 bytes) on both engines
+    assert runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)["r0"] == 4
+    assert runtime_widths(_one("aten::exp"), "float16", "compiled", has_native_bf16=False,
+                          contract=NONE)["y"] == 4
+
+
+def _contracts():
+    return [("bfloat16", NONE),
+            ("float16", NONE),
+            ("float16", PrecisionContract(True, frozenset(), frozenset())),
+            ("float16", PrecisionContract(True, frozenset(), frozenset({"op::0"})))]
+
+
+def test_the_mirrors_answer_what_the_engines_execute():
+    """Behavioural drift door: the width pass's answer for one AMP_FP32 op equals the dtype
+    the engine's own wrapper RETURNS — compiled on CPU torch tensors, Triton on duck-typed
+    tensors (no card) — for bf16 and for fp16 without contract, with the flag, with the
+    narrow set. The mirrored SETS are compared above; this compares the RULE."""
+    torch = pytest.importorskip("torch")
+    from neurobrix.core.dtype.engine import DtypeEngine
+    from neurobrix.kernels import wrappers as _wr
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from neurobrix.triton.dtype import TritonDtypeEngine
+
+    class Fake:
+        def __init__(self, dt):
+            self.nbx_dtype = dt
+        def is_floating_point(self):
+            return True
+        def to(self, dt):
+            return Fake(dt)
+        def contiguous(self):
+            return self
+        def is_contiguous(self):
+            return True
+
+    for c, k in _contracts():
+        for op_type, fn, extra in (("aten::exp", torch.ops.aten.exp, ()),
+                                   ("aten::rsqrt", torch.ops.aten.rsqrt, ()),
+                                   ("aten::layer_norm", torch.ops.aten.layer_norm, ([8],))):
+            tc = getattr(torch, c)
+            eng = DtypeEngine(tc, activations_fp16_safe=k.safe,
+                              narrow_op_uids=k.narrow_op_uids, fp32_op_uids=k.fp32_op_uids)
+            got = eng.compile_op(op_type, fn, {}, op_uid="op::0")(
+                torch.rand(2, 8, dtype=tc) + 0.5, *extra).dtype
+            want = _w(_one(op_type), "compiled", c=c, bf16=c == "bfloat16", contract=k)["y"]
+            assert str(got).replace("torch.", "") == want, (op_type, c, k)
+        for op_type in ("aten::exp", "custom::rms_norm", "aten::layer_norm"):
+            prev = _wr.get_activations_fp16_safe()
+            _wr.set_activations_fp16_safe(k.safe)
+            try:
+                teng = TritonDtypeEngine(getattr(NBXDtype, c))
+                teng.set_precision_contract(k.safe, k.fp32_op_uids, k.narrow_op_uids)
+                name = op_type.split("::")[-1]
+                got = teng.wrap_op(name, lambda x, *a, **kw: Fake(x.nbx_dtype),
+                                   op_uid="op::0")(Fake(getattr(NBXDtype, c))).nbx_dtype.name
+            finally:
+                _wr.set_activations_fp16_safe(prev)
+            want = _w(_one(op_type), "triton", c=c, bf16=c == "bfloat16", contract=k)["y"]
+            assert got == want, (op_type, c, k)

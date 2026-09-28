@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Under bfloat16, normalizations, softmax and the other float32-internal operations return
+  bfloat16**, in both engines, as the models' own code does: they still compute in float32
+  inside, but no longer hand float32 to the rest of the network, which halves the activation
+  memory they used to spread through residual streams. float16 compute is unchanged.
+
 - **Kernel certification on Apple GPUs tries every tile at pipeline depths 1 and 2 only**, the
   depths the Metal backend's author recommends; the Apple profile declares them
   (`autotune.certify_num_stages`).

@@ -367,9 +367,35 @@ def traced_output_is_complex(op_meta: Optional[Dict[str, Any]]) -> bool:
                for d in (op_meta.get("output_dtypes") or ()))
 
 
+def amp_fp32_output_dtype(compute_dtype: str, safe: bool, narrowed: bool) -> str:
+    """The OUTPUT dtype (a name) of an op computed fp32-internal under the half compute
+    dtype `compute_dtype` ("bfloat16" or "float16") — the cast-back rule of the AMP_FP32
+    class, the SAME rule in both engines.
+
+    * bfloat16: the output is bf16, always. An fp32-internal result always fits bf16's
+      range (bf16 has fp32's exponent), so the fp16 overflow reason for keeping it fp32
+      does not apply; the vendors' graphs return x.dtype (Sana's DC-AE RMSNorm computes
+      fp32 inside and returns x.dtype), and an fp32 output spread fp32 through the residual
+      stream — twice the activation memory, not the vendor's numerics.
+    * float16: fp16 only under the precision contract — `safe` (the engine's flag, where
+      the flag alone narrows: this engine passes False, its contract narrows per op) or
+      `narrowed` (the op is in the record's narrow set); fp32 otherwise.
+
+    Torch-free twin of triton/dtype.py `amp_fp32_output_dtype` (that module imports
+    triton, this one torch — neither may import the other); a unit test holds the two
+    equal over every input (tests/unit/runtime/test_under_bf16_an_fp32_internal_op_returns_the_compute_dtype.py)."""
+    if compute_dtype == "bfloat16":
+        return "bfloat16"
+    if compute_dtype == "float16":
+        return "float16" if (safe or narrowed) else "float32"
+    raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half "
+                     f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
+
+
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
-# Output stays in fp32 — downstream FP16 ops bring it back to compute_dtype.
+# Output: `amp_fp32_output_dtype` — bf16 compute: bf16; fp16 compute: fp32 unless
+# the precision contract narrows it (downstream FP16 ops bring fp32 back to C).
 AMP_FP32_OPS: FrozenSet[str] = frozenset({
     # --- AT_FORALL_FP32 (PyTorch 100% match) ---
     # Transcendental / exponential
@@ -572,8 +598,11 @@ class DtypeEngine:
     4. _to_copy: Prism-driven remapping
     5. Constants: convert to compute_dtype
 
-    Output behavior matches PyTorch autocast:
-    - FP32 ops output fp32 → dtype propagates until next FP16 op
+    Output behavior:
+    - FP32 ops compute in fp32; their output is `amp_fp32_output_dtype`'s —
+      bf16 compute: bf16 (the vendors' x.dtype); fp16 compute: fp32 unless the
+      precision contract narrows the op → an fp32 output propagates until the
+      next FP16 op
     - FP16 ops output compute_dtype → brings the chain back to half-precision
     """
 
@@ -685,10 +714,16 @@ class DtypeEngine:
                     inner = self._make_safe_softmax(func)
                 else:
                     inner = self._make_fp32_wrapper(func)
-                # Contract: fp32 compute, fp16 store — only where the graph
-                # shows no precision-class consumer (the vendor's island
-                # otherwise; narrowed at the next matmul's own input cast).
-                if contract and op_uid is not None and op_uid in self.narrow_op_uids:
+                # fp32 compute; the store is `amp_fp32_output_dtype`'s: under
+                # bf16 the compute dtype always; under fp16 the compute dtype
+                # only where the contract narrows the op — the graph shows no
+                # precision-class consumer (the vendor's island otherwise;
+                # narrowed at the next matmul's own input cast). This engine's
+                # flag alone never narrows an fp32-class output (safe=False).
+                narrowed = (contract and op_uid is not None
+                            and op_uid in self.narrow_op_uids)
+                cname = str(self.compute_dtype).replace("torch.", "")
+                if amp_fp32_output_dtype(cname, False, narrowed) == cname:
                     return self._make_store_in_compute_dtype(inner)
                 return inner
 
@@ -835,7 +870,10 @@ class DtypeEngine:
         AT_FORALL_FP32_SET_OPT_DTYPE. These ops need fp32 precision to
         avoid overflow/underflow in half-precision.
 
-        Output stays in fp32. Downstream FP16 ops (matmul, conv) will
+        This wrapper's output is fp32; where `amp_fp32_output_dtype` says
+        the store is compute_dtype (bf16 always, fp16 under the contract's
+        narrow set), compile_op wraps it in `_make_store_in_compute_dtype`.
+        An fp32 output flows until downstream FP16 ops (matmul, conv)
         cast back to compute_dtype, creating the mixed-precision chain:
 
             pow(fp32) → mean(fp32) → rsqrt(fp32) → mul(fp32) → mm(fp16)
@@ -1226,22 +1264,31 @@ class DtypeEngine:
         Apply AMP output processing for a single op call at runtime
         (the --sequential mirror of compile_op's wrappers).
 
-        Standard PyTorch AMP does no output processing. Under the
-        activations_fp16_safe contract the fp32-COMPUTED ops (FP32-class
-        ops that are not half-IO kernels, and `div`) store their result in
-        compute_dtype — same rule as compile_op; `mul` (the guarded square
-        included) is never narrowed. Vendor fp32 pins (fp32_op_uids) keep
-        their fp32 result.
+        The store of an fp32-COMPUTED op is compile_op's, by the same rule
+        (`amp_fp32_output_dtype`): an FP32-class op stores its result in
+        compute_dtype under bf16 always, and under fp16 only where the
+        activations_fp16_safe contract narrows it (a half-IO kernel under the
+        contract already wrote compute_dtype); the fp16 `div` stores
+        compute_dtype where the contract narrows it; `mul` (the guarded
+        square included) is never narrowed. Vendor fp32 pins (fp32_op_uids)
+        keep their fp32 result.
         """
-        if not (self.activations_fp16_safe and self.compute_dtype == torch.float16):
+        if self.compute_dtype not in (torch.float16, torch.bfloat16):
             return result
         if op_uid is not None and op_uid in self.fp32_op_uids:
             return result
         op_name = strip_aten_prefix(op_type)
-        if op_uid is None or op_uid not in self.narrow_op_uids:
+        contract = (self.activations_fp16_safe
+                    and self.compute_dtype == torch.float16)
+        narrowed = contract and op_uid is not None and op_uid in self.narrow_op_uids
+        if op_name in AMP_FP32_OPS:
+            if contract and op_name in _FP32_OPS_HALF_IO:
+                return result
+            cname = str(self.compute_dtype).replace("torch.", "")
+            if amp_fp32_output_dtype(cname, False, narrowed) == cname:
+                return self._to_compute_dtype(result)
             return result
-        if ((op_name in AMP_FP32_OPS and op_name not in _FP32_OPS_HALF_IO)
-                or op_name == "div"):
+        if op_name == "div" and narrowed:
             return self._to_compute_dtype(result)
         return result
 
