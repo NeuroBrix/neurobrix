@@ -59,35 +59,12 @@ sys.path.insert(0, str(REPO / "src"))
 
 import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output kind
 from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
+# The request a cell runs at is DERIVED from the current container's trace, in ONE place the
+# certification census imports too: a census and the verification it serves ask for one request.
+from trace_request import derived_request, off_trace_size  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
-LATTICE = {"image": 64, "video": 32}
-
-
-def off_trace_size(model: str, family: str):
-    """(height, width) for an image or video request: the container's own size, height at three
-    quarters on the family's lattice, width kept. None for the families whose judged request is
-    already away from the trace, or when the container states no size (said in the row)."""
-    if family not in LATTICE:
-        return None
-    from neurobrix.core.runtime.loader import NBXRuntimeLoader
-    from neurobrix.core.runtime.resolution.container_size import container_output_size
-    pkg = NBXRuntimeLoader().load(str(CACHE / model))
-    size = container_output_size(pkg.manifest, pkg.defaults,
-                                 pkg.topology.get("components", {}) or {}, pkg.components)
-    if size is None:
-        # The container states no size: the engine then renders at the family's own default
-        # (executor: "a family constant is the last resort"), which is what it was traced at.
-        from neurobrix.core.config import get_family_config
-        fam_defaults = get_family_config(family).get("defaults") or {}
-        if "height" not in fam_defaults or "width" not in fam_defaults:
-            return None
-        size = (fam_defaults["height"], fam_defaults["width"])
-    h, w = (int(v) for v in size)
-    step = LATTICE[family]
-    h2 = max(step, (h * 3 // 4) // step * step)
-    return (h2, w) if h2 != h else (max(step, h - step), w)
 
 
 def first_error(log: Path) -> str:
@@ -261,10 +238,8 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
-    req = Z.request_args(model, family, [])
+    req = derived_request(model, family)
     size = off_trace_size(model, family)
-    if size is not None:
-        req = req + ["--height", str(size[0]), "--width", str(size[1])]
     ext = Z.output_ext(family, req)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
