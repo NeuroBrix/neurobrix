@@ -986,23 +986,26 @@ class KeyNotCertified(RuntimeError):
     """A key a confirmation run met that the certified directory does not serve."""
 
 
-def census_row(kernel_qual: str, key: tuple) -> str:
-    """Where the census stands on this key, in words: the table named by NBX_CENSUS_TABLE holds it
-    (a certification gap) or not (a census defect), or no table was named."""
-    path = os.environ.get("NBX_CENSUS_TABLE", "").strip()
-    line = f"{kernel_qual}::{key_repr(tuple(key))}"
-    if not path:
-        return f"no census table named (NBX_CENSUS_TABLE) to say whether it holds {line}"
+def census_row(kernel_qual: str, key: tuple, memory_class: Optional[int]) -> str:
+    """Where the census table stands on this key, in words: the table of the profile in force and
+    this card's memory class holds it (a certification gap) or not (a census defect)."""
+    from neurobrix.kernels import census_table
+    prof = active_profile()
+    if prof is None:
+        return "no vendor profile is bound, so no census table can be named"
+    if memory_class is None:
+        return f"the card's memory class is unknown, so no {prof[0]}/{prof[1]} census table can be named"
+    line = census_table.key_line(kernel_qual, key_repr(tuple(key)))
     try:
-        doc = json.loads(Path(path).read_text(encoding="utf-8"))
-        entries = doc.get("entries") or {}
+        path, rows = census_table.rows_for(kernel_qual, key_repr(tuple(key)), prof[0], prof[1], memory_class)
     except Exception as exc:  # noqa: BLE001 — said: an unreadable table is not an absent row
-        return f"the census table {path} could not be read ({type(exc).__name__}: {exc})"
-    row = entries.get(line)
-    if row is None:
-        return (f"ABSENT from the census table {path} — a CENSUS defect: fix the census tool so the "
-                f"shadow forms {line}, certify it, re-run the cell")
-    models = ", ".join((row or {}).get("models") or []) or "no model named"
+        return f"the census table could not be read ({type(exc).__name__}: {exc})"
+    if not path.exists():
+        return f"there is no census table {path} — take the census for this profile and memory class first"
+    if not rows:
+        return (f"ABSENT from the census table {path} — a CENSUS defect: fix the census tool so the shadow "
+                f"forms {line}, certify it, re-run the cell")
+    models = ", ".join(sorted({r["model"] for r in rows}))
     return (f"present in the census table {path} (models: {models}) but not certified for this card — "
             f"a CERTIFICATION gap: certify the table, re-run the cell")
 
@@ -1013,18 +1016,22 @@ def refuse_missing(kernel_qual: str, tuner, key: tuple) -> None:
     prof = active_profile()
     where = f"{prof[0]}/{prof[1]}" if prof else "the profile in force"
     why = ""
+    here = None
+    try:
+        here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
+    except Exception:  # noqa: BLE001 — an unknown class is said by census_row
+        here = None
     try:
         raw = lookup(kernel_qual, tuner, key, ignore_switch=True, any_class=True)
         if raw is not None:
             covered = sorted(covered_memory_classes(raw))
-            here = executing_memory_class(list((getattr(tuner, "nargs", None) or {}).values()) or None)
             why = (f"; the directory certifies it for {', '.join(f'{c} GB' for c in covered) or 'no known memory class'} "
                    f"and this card is {f'{here} GB' if here is not None else 'of unknown memory'} (register 56)")
     except Exception as exc:  # noqa: BLE001 — the reason failed to compute: said, the refusal stands
         why = f"; (could not read what the directory holds for it: {exc})"
     raise KeyNotCertified(
         f"CERTIFIED-ONLY: no certified setting for {kernel_short(kernel_qual)} {output_dtype(tuner, key)} "
-        f"({describe_key(tuner, key)}) on {where}{why}. {census_row(kernel_qual, key)}. A confirmation run "
+        f"({describe_key(tuner, key)}) on {where}{why}. {census_row(kernel_qual, key, here)}. A confirmation run "
         f"never sweeps.")
 
 

@@ -12,7 +12,7 @@ What each test would do if the code were wrong:
   succeeds: `test_a_missing_key_fails_the_confirmation_run_naming_it` fails (seen red, 2026-09-28);
 * the replay cache still seeded under the flag — the pre-seeded config serves the key and the run
   succeeds: `test_the_replay_cache_is_neither_read_nor_written` fails;
-* `census_row` answering the wrong way round — the two table tests fail.
+* `census_row` answering the wrong way round, or reading another class's table — the table tests fail.
 The control (the same injected miss WITHOUT the flag sweeps and succeeds) proves the refusal is what
 fails the first test, not the injection.
 """
@@ -61,7 +61,7 @@ def test_a_missing_key_fails_the_confirmation_run_naming_it(tmp_path):
     r = _run(tmp_path, NBX_AUTOTUNE_CERTIFIED_ONLY="1")
     assert r.returncode != 0, "the confirmation run swept a missing key instead of failing"
     assert "KeyNotCertified" in r.stderr and "CERTIFIED-ONLY: no certified setting for" in r.stderr, r.stderr[-1500:]
-    assert "no census table named" in r.stderr, r.stderr[-1500:]
+    assert "census table" in r.stderr, r.stderr[-1500:]
     assert not any((tmp_path / "replay").glob("*.json")), "a confirmation run wrote the replay cache"
 
 
@@ -87,23 +87,37 @@ def _key():
     return ("neurobrix.kernels.ops.matmul.matmul_kernel", (19, 2048, 2048, True, True, "fp16", "fp16", "fp16"))
 
 
-def test_a_key_absent_from_the_census_table_is_named_a_census_defect(tmp_path, monkeypatch):
+def _table(tmp_path, monkeypatch, rows):
+    """A real census table (the P1 format) for nvidia/volta 16 GB under a tmp root, and that profile bound."""
+    from neurobrix.kernels import census_table as T
     from neurobrix.kernels import autotune_certified as C
-    t = tmp_path / "census.json"
-    t.write_text(json.dumps({"entries": {}}))
-    monkeypatch.setenv("NBX_CENSUS_TABLE", str(t))
-    assert "CENSUS defect" in C.census_row(*_key())
+    monkeypatch.setattr(T, "ROOT", tmp_path / "census")
+    monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
+    T.write(T.table_path("nvidia", "volta", 16), rows)
+    return C
+
+
+def test_a_key_absent_from_the_census_table_is_named_a_census_defect(tmp_path, monkeypatch):
+    C = _table(tmp_path, monkeypatch, [])
+    assert "CENSUS defect" in C.census_row(*_key(), 16)
 
 
 def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkeypatch):
-    from neurobrix.kernels import autotune_certified as C
     from neurobrix.kernels.autotune_certified import key_repr
     qual, key = _key()
-    t = tmp_path / "census.json"
-    t.write_text(json.dumps({"entries": {f"{qual}::{key_repr(key)}": {"models": ["TinyLlama-1.1B-Chat-v1.0"]}}}))
-    monkeypatch.setenv("NBX_CENSUS_TABLE", str(t))
-    row = C.census_row(qual, key)
-    assert "CERTIFICATION gap" in row and "TinyLlama-1.1B-Chat-v1.0" in row
+    row = {"model": "TinyLlama-1.1B-Chat-v1.0", "container": "3b8bbc487525959b", "mode": "triton", "rungs_mb": [16384],
+           "op": None, "kernel": qual, "key": key_repr(key), "dtype": "fp16,fp16,fp16", "tool": "test"}
+    C = _table(tmp_path, monkeypatch, [row])
+    said = C.census_row(qual, key, 16)
+    assert "CERTIFICATION gap" in said and "TinyLlama-1.1B-Chat-v1.0" in said
+    other = C.census_row(qual, key, 32)            # the 32 GB class reads ANOTHER table, absent here
+    assert "32g.jsonl" in other and "CERTIFICATION gap" not in other, other
+
+
+def test_a_card_of_unknown_memory_names_no_table(monkeypatch):
+    from neurobrix.kernels import autotune_certified as C
+    monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
+    assert "memory class is unknown" in C.census_row(*_key(), None)
 
 
 def test_the_run_command_takes_the_flag():
