@@ -61,8 +61,9 @@ WEIGHTS_INDEX_PATTERNS = [
 
 # PARALLEL LOADING: Number of concurrent shard loads
 # safetensors loading is I/O-bound, threading helps significantly
-# Default: 8 workers (optimal for NVMe, matches system.yml io.num_workers)
-PARALLEL_SHARD_WORKERS = int(os.environ.get("NBX_IO_WORKERS", "8"))
+# The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
+from neurobrix.core.workspace import io_workers as _io_workers
+PARALLEL_SHARD_WORKERS = _io_workers()
 
 # Centralized dtype conversion — single source of truth
 from neurobrix.core.dtype.converter import safe_dtype_convert

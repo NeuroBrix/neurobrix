@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Every run's plan now states the host memory it expects to hold.** Beside the cards it plans, a run
+  prints `Host:` (and `--explain-plan` a `host memory` line and a JSON field): the runtime's own base,
+  measured on the machine when its hardware profile is generated, plus what the chosen plan keeps in
+  host memory and what loading holds. The figure starts from what the planning process already holds
+  (the loaded model description included), adds what the engine's device work adds — measured on the
+  machine when its hardware profile is generated, with the engine's compute libraries loaded as a run
+  loads them — then what the plan holds and loads. A profile generated before this release says the
+  engine's part is unmeasured until it is regenerated.
+
+- **The number of weight files read in parallel is configurable in one place.** `io.num_workers` in
+  `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
+  written their own value. An unconfigured count stops with a message naming both places.
+
 ### Added
 
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
