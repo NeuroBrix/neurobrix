@@ -13,13 +13,14 @@ re-run on the NEW container at the request derived from the new trace — never 
 So the derivation lives here and both tools import it:
 
 * `off_trace_size(model, family)` — for an image or video request, the container's own size
-  (`resolution.container_size`, the executor's and the plan's one authority) with the height
-  taken to three quarters on the family's lattice (64 pixels for an image, 32 for a video) and
-  the width kept: a non-square request away from the trace, the one class that catches a
-  swapped or frozen spatial axis. None for the families whose judged request is already away
+  (`resolution.container_size`, the executor's and the plan's one authority) scaled by the
+  family's `confirmation.size_fraction`, then the height taken to three quarters, on the family's
+  lattice (64 pixels for an image, 32 for a video): a smaller, non-square request away from the
+  trace, the one class that catches a swapped or frozen spatial axis. None for the families whose judged request is already away
   from its trace extents (a prompt is not 23 tokens, a clip is not the trace clip).
 * `derived_request(model, family)` — the family's judged request (`precision_zoo_campaign.
-  request_args`: its calibration section, its media, its bound) at that size.
+  request_args`: its calibration section, its media, its bound) with the family's `confirmation:`
+  values (the owner's method, 2026-09-28: the smallest request that still judges), at that size.
 * `requested_size(request)` — the (height, width) a request asks for, as the CLI reads it.
 
 The container is read through `core.paths.cache_dir()` at call time — the same door the engine
@@ -50,12 +51,27 @@ LATTICE = {"image": 64, "video": 32}
 SIZE_FLAGS = ("--height", "--width")
 
 
+def confirmation(family: str) -> dict:
+    """The family's `confirmation:` section (config/families/<family>.yml): the smallest request that
+    still judges a model of the family — the owner's method, 2026-09-28: a matrix or gate cell
+    CONFIRMS a certified model, it does not render for quality ({} when the family's own stimulus
+    already is that). Data, so the values are changed in the YAML, never here."""
+    from neurobrix.core.config import get_family_config
+    return dict(get_family_config(family).get("confirmation") or {})
+
+
 def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
-    """(height, width) for an image or video request: the container's own size, height at three
-    quarters on the family's lattice, width kept. None for the families whose judged request is
-    already away from the trace, or when the container states no size (said in the row)."""
+    """(height, width) for an image or video request: the container's own size scaled by the
+    family's `confirmation.size_fraction`, then the height at three quarters, both on the family's
+    lattice — a smaller, NON-SQUARE request away from the trace, the one class that catches a
+    swapped or frozen spatial axis, at the cost of a confirmation. Never the traced size itself.
+    None for the families whose judged request is already away from the trace, or when the
+    container states no size (said in the row)."""
     if family not in LATTICE:
         return None
+    frac = confirmation(family).get("size_fraction")
+    if frac is None:
+        raise ValueError(f"family {family!r} has a lattice but its YAML names no confirmation.size_fraction")
     from neurobrix.core.paths import cache_dir
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.resolution.container_size import container_output_size
@@ -72,15 +88,32 @@ def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
         size = (fam_defaults["height"], fam_defaults["width"])
     h, w = (int(v) for v in size)
     step = LATTICE[family]
-    h2 = max(step, (h * 3 // 4) // step * step)
-    return (h2, w) if h2 != h else (max(step, h - step), w)
+    h2 = max(step, (int(h * float(frac)) * 3 // 4) // step * step)
+    w2 = max(step, int(w * float(frac)) // step * step)
+    if (h2, w2) == (h, w):
+        h2 = max(step, h - step)
+    return (h2, w2)
+
+
+def _with_flags(req: list, flags: dict) -> list:
+    """`req` with each `--<flag> <value>` set to the given value (replaced when present, added when not)."""
+    req = list(req)
+    for k, v in flags.items():
+        flag = "--" + k.replace("_", "-")
+        if flag in req:
+            req[req.index(flag) + 1] = str(v)
+        else:
+            req += [flag, str(v)]
+    return req
 
 
 def derived_request(model: str, family: Optional[str] = None) -> list:
-    """The request a model is run at: the family's own judged request at the container's
-    off-trace size (no size flag for a family that has none)."""
+    """The request a model is run at — the matrix's confirmation cell and the census that must cover
+    it: the family's own judged request with its `confirmation:` values, at the confirmation size
+    (no size flag for a family that has none)."""
     family = family or Z.family_of(model)
-    req = Z.request_args(model, family, [])
+    req = _with_flags(Z.request_args(model, family, []),
+                      {k: v for k, v in confirmation(family).items() if k != "size_fraction"})
     size = off_trace_size(model, family)
     if size is not None:
         req = req + ["--height", str(size[0]), "--width", str(size[1])]
