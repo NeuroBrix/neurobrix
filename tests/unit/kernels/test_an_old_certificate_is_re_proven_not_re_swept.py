@@ -67,6 +67,7 @@ def _certify_once(root, monkeypatch, stored_proof_backend):
     monkeypatch.setattr(T, "ROOT", root / "table")
     T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the witness held still: this case is not the drift case
     benches = []
     summary = Z.certify(profile, vendor=vendor, reprove_generator=True, log=lambda *a, **k: None,
                         bench=lambda fn: (benches.append(1), fn(), 0.5)[2])
@@ -109,6 +110,7 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     monkeypatch.setattr(T, "ROOT", root / "table")
     T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the witness held still
     benches = []
     summary = Z.certify(profile, vendor=vendor, reprove_generator=True, log=lambda *a, **k: None,
                         bench=lambda fn: (benches.append(1), fn(), 0.5)[2])
