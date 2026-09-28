@@ -133,3 +133,29 @@ def test_a_table_without_a_size_is_refused_for_a_spatial_model(census):
 def test_an_extra_size_flag_is_refused(census):
     row, calls = census(None, extra=STALE)
     assert calls == [] and row["status"] == "refused", row
+
+
+def test_a_plan_refused_below_the_top_rung_is_not_a_failed_model(monkeypatch, tmp_path):
+    """Janus-Pro-7B and CogVideoX-5b-I2V, 2026-09-28: the plan refused at the 4 GB rung, every other
+    rung censused — the model read `failed`, and the table kept its OLD rows. A refusal below the top
+    rung is an arithmetic answer; at the top rung it stays a failure. (Seen red with the old rule.)"""
+    import certified_census as CC2
+
+    def fake_shadow(model, req, mode, hw, n_dev, timeout, log_dir, rung_mb=0, tag="", walk_extents=False):
+        if rung_mb == 4096:
+            return {"mode": mode, "rung_mb": rung_mb, "rc": 1, "wall_s": 0.0, "keys": [], "op_keys": [],
+                    "error": "UNEXPECTED ERROR: This model cannot run on this machine.", "command": ""}
+        return {"mode": mode, "rung_mb": rung_mb, "rc": 0, "wall_s": 0.0, "keys": ["k::(1,)"], "op_keys": [],
+                "error": "", "command": ""}
+
+    monkeypatch.setattr(CC2, "shadow", fake_shadow)
+    monkeypatch.setattr(CC2, "_family", lambda m: "llm")
+    monkeypatch.setattr(CC2, "_graph_sha", lambda m: "s")
+    monkeypatch.setattr(CC2, "frozen_dims", lambda m: [])
+    monkeypatch.setattr(CC2, "_device_count", lambda hw: 1)
+    monkeypatch.setattr(CC2, "_tiling_probe", lambda *a, **k: None)
+    row = CC2.census_model("M", "hw", ["triton"], [], [["--prompt", "x"]], 60, tmp_path, rungs=[4096, 8192])
+    assert row["status"] == "ok", row["status"]
+    monkeypatch.setattr(CC2, "shadow", lambda *a, **k: {**fake_shadow(*a, **k), "rc": 1,
+                                                        "error": "UNEXPECTED ERROR: This model cannot run on this machine."})
+    assert CC2.census_model("M", "hw", ["triton"], [], [["--prompt", "x"]], 60, tmp_path, rungs=[4096, 8192])["status"] == "failed"

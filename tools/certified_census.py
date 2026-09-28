@@ -342,10 +342,15 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
                              # thousands of buckets — is gone with the quarter-octave tail.
                              walk_extents=(not ri and rung == _rungs[-1]))
                 res["request"] = "probe" if ri else "ordinary"
-                if ri and res["rc"] != 0 and "cannot run on this machine" in (res.get("error") or ""):
-                    # A tiling probe the plan refuses at this rung (a 4 096-pixel request on a
-                    # 4 GB rung) is a legitimate arithmetic answer, not a failed shadow: no key
-                    # exists for it, and the model's own request is unaffected.
+                refused = res["rc"] != 0 and "cannot run on this machine" in (res.get("error") or "")
+                if refused and (ri or rung != _rungs[-1]):
+                    # A plan the solver refuses at a rung BELOW the top — a tiling probe anywhere, or
+                    # the model's own request on a rung too small for it (Janus-Pro-7B and
+                    # CogVideoX-5b-I2V at 4 GB, 2026-09-28) — is a legitimate arithmetic answer, not a
+                    # failed shadow: no key exists for that plan, and the rungs that plan it are
+                    # unaffected. Counted as a failure, it made the table keep the model's OLD rows and
+                    # drop every key the other rungs formed. At the TOP rung (the profile's own budget)
+                    # a refusal stays a failure: the model then cannot run on this class at all.
                     res["rc"] = 0
                     res["refused_at_rung"] = True
                 row["modes"].setdefault(mode, []).append({k: v for k, v in res.items() if k not in ("keys", "op_keys")}
