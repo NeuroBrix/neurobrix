@@ -172,7 +172,7 @@ def push_and_verify(repo: str, remote: str, branch: str) -> str:
 def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str], trailers: List[str],
                record: Optional[str] = None, say=print, label: str = "") -> Dict[str, object]:
     """One checkpoint: gate → commit the files that pass → push every remote → read back → record."""
-    stamp = time.strftime("%H:%M:%S", time.gmtime())
+    stamp = time.strftime("%H:%M:%S %Z", time.localtime())   # the machine's clock, its zone named (never a bare UTC)
     files = changed_files(repo, rel_dir)
     result: Dict[str, object] = {"committed": [], "refused": [], "sha": None, "remotes": {}, "files": files}
     if not files:
