@@ -26,9 +26,16 @@ def test_the_trace_is_what_it_sizes_without_a_request():
 
 
 def test_the_request_is_what_it_sizes_with_one():
-    # 100 x 100 at the request, computed at the plan's width (2 bytes), as the profiler prices it.
-    curve = LayerPartitioner(_graph(), symbol_map={"s1": 100}, compute_dtype_bytes=2).live_activation_curve()
-    assert max(curve) == 100 * 100 * 2
+    # 100 x 100 at the request, at the width the runtime EXECUTES each activation at — the widths the plan
+    # prices it with (core/prism/runtime_widths, given by the solver). Since the estimator (2026-09-28) an
+    # fp32 activation the engine keeps in fp32 costs 4 bytes, not the compute dtype's 2: the partition cuts
+    # at what the plan pays, in both directions.
+    g = _graph()
+    for width in (2, 4):
+        widths = {tid: width for tid in g["tensors"]}
+        curve = LayerPartitioner(g, symbol_map={"s1": 100}, compute_dtype_bytes=2,
+                                 widths=widths).live_activation_curve()
+        assert max(curve) == 100 * 100 * width, (width, max(curve))
 
 
 def test_a_request_without_the_plans_width_is_refused():

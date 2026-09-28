@@ -135,11 +135,11 @@ class LayerPartitioner:
         # records what is STORED, which is what a load actually costs.
         self.weight_sizes = weight_sizes or {}
 
-    def _activation_bytes(self, t: Dict[str, Any]) -> int:
+    def _activation_bytes(self, tid: str, t: Dict[str, Any]) -> int:
         if self._resolver is None:
             return tensor_bytes(t) or 0
         shape = self._resolver._resolve_shape(t, self._symbol_map)
-        tid = t.get("tensor_id")
+        # the width by the tensor's id in the graph — its key, which an entry need not repeat inside it
         if tid in self._widths:
             numel = 1
             for d in shape:
@@ -175,12 +175,12 @@ class LayerPartitioner:
                 t = self.tensors.get(tid)
                 if t is not None and not t.get("is_parameter") and tid not in alive:
                     alive.add(tid)
-                    live += self._activation_bytes(t)
+                    live += self._activation_bytes(tid, t)
             for tid in op.get("input_tensor_ids") or []:
                 if tid in alive and last.get(tid) == i:
                     t = self.tensors.get(tid)
                     alive.discard(tid)
-                    live -= self._activation_bytes(t)
+                    live -= self._activation_bytes(tid, t)
             curve.append(live)
         return curve
 
