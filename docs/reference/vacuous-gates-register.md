@@ -3619,7 +3619,7 @@ the key-level merge, green after.
 
 **The lesson, in one line.** A merge is tested where its inputs overlap; disjoint inputs prove a union.
 
-### 112 — the re-prove flag's help promised a serving the runtime refuses
+### 115 — the re-prove flag's help promised a serving the runtime refuses
 
 `neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
 that a proof made under another code generator "stays correct and served meanwhile". The runtime
