@@ -60,7 +60,7 @@ CASES = [
 # this rack's 2026-09-24 pinned-machine census), at the container's own default request, swept over
 # rungs so the rung that streams it is found rather than assumed. A model no rung streams FAILS its
 # cell: a case the gate never reaches is not a case it proved.
-SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p_diffusers", "DeepSeek-Coder-V2-Lite-Instruct",
+SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p", "DeepSeek-Coder-V2-Lite-Instruct",
          "Qwen3-30B-A3B-Thinking-2507", "Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Omni-30B-A3B-Instruct",
          "Qwen3-VL-30B-A3B-Thinking", "deepseek-moe-16b-chat", "granite-speech-3.3-8b"]
 RUNGS = [4096, 8192, 16384]

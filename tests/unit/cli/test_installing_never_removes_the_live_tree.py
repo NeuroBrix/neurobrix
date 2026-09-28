@@ -174,7 +174,7 @@ def test_a_real_model_name_is_not_mistaken_for_an_install_artifact():
     `.replaced` would vanish from every listing, and the previous test would
     still be green — a guard that refuses everything passes every red-side check.
     """
-    for name in ["Wan2.1-T2V-1.3B-Diffusers", "real-esrgan-x8", "locknet", "installing-model"]:
+    for name in ["Wan2.1-T2V-1.3B", "real-esrgan-x8", "locknet", "installing-model"]:
         assert not is_install_artifact(name), name
 
 
