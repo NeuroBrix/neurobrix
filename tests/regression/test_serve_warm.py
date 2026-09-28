@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.child_env import the_callers_door, the_pinned_profile
+
 # A module guard stood here from 2026-08-27 to 2026-09-20 refusing any
 # CUDA_VISIBLE_DEVICES mask, because autodetect enumerated the whole machine and
 # a masked run placed on an ordinal the process could not address. Measured on
@@ -189,8 +191,9 @@ def test_family_serve_warm(model: str, gen_kwargs: dict, verify: str,
            "PYTHONUNBUFFERED": "1"}
     pin = _PINNED_ROWS.get(model)
     if pin:
-        env["CUDA_VISIBLE_DEVICES"] = pin["visible"]
-        spec["hardware"] = pin["hardware"]
+        env["CUDA_VISIBLE_DEVICES"] = the_callers_door(pin["visible"])
+        if the_pinned_profile(pin["hardware"]):
+            spec["hardware"] = pin["hardware"]
     try:
         r = subprocess.run(
             [_sys.executable, str(Path(__file__).parent
