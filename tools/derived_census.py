@@ -98,9 +98,20 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         res._bind(sid, int(v))
     T, ops = g["tensors"], g["ops"]
 
+    # Tensors computed from parameters and constants alone cannot depend on the request: their
+    # shape is the traced one, whatever their annotation says (Flex's transposed context-embedder
+    # weight annotates T5's 4096 width with the image-token symbol — 4096 at the trace).
+    fixed = set(t for t, m in T.items() if m.get("is_parameter") or m.get("constant")
+                or t.startswith(("param::", "buffer::")))
+    for uid_ in g["execution_order"]:
+        o_ = ops[uid_]
+        ins_ = o_.get("input_tensor_ids") or []
+        if ins_ and all(t in fixed for t in ins_):
+            fixed.update(o_.get("output_tensor_ids") or [])
+
     def shape(tid):
         ss = T[tid].get("symbolic_shape")
-        if T[tid].get("is_parameter") or tid.startswith(("param::", "buffer::")):
+        if tid in fixed:
             # A parameter is its stored shape — no request moves it (an annotation on it that
             # names a symbol is a collision: real-esrgan's [64, 192, 3, 3] weight read H + W).
             return list(T[tid]["shape"])
@@ -181,6 +192,84 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
     unhandled[f"NOTE matmul contraction from the weight ({k_weight}), the activation's annotation "
               f"says {k_act} — an extent collision in the container"] += 1
     return k_weight
+
+
+def _bind_from_shapes(g: dict, inputs: dict) -> dict:
+    """{symbol: value} of a graph fed `inputs` {input name: shape} — the runtime's own binder."""
+    from neurobrix.triton.symbols import SymbolResolver
+    res = SymbolResolver(g.get("symbolic_context") or {})
+    feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
+    res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
+    return dict(res.bindings)
+
+
+def _flux_loop_inputs(model, comp, g, flow, plan, ic, text_axis, enc_len):
+    """The FLUX-video denoiser's inputs as the Triton flow builds them (triton/flow/
+    iterative_process.py + triton/flux_video_conditioning.py): the 5-D latent — the post-loop VAE's
+    own input at the plan's binding — packed (`packed_5d_shape`), the positional ids and cond
+    (`conditioning_shapes`), the text at its finalized length; batch 1 here (the CFG batch is
+    applied after). None for any other component."""
+    ins = {sp.get("input_name"): sp for sp in g["tensors"].values() if sp.get("input_name")}
+    loop = flow.get("loop") or {}
+    if comp not in (loop.get("components") or []):
+        return None
+    four_d = H_declared(flow_topo=topo_of(model), comps=loop.get("components") or [])
+    if "img_ids" not in ins and not four_d:
+        return None
+    from neurobrix.core.prism.profiler import ActivationProfiler
+    from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler as H
+    from neurobrix.triton import flux_video_conditioning as FV
+    from neurobrix.triton.symbols import SymbolResolver
+    vae = next((c for c in flow.get("post_loop") or []), None)
+    if vae is None:
+        return None
+    gv = json.loads((CACHE / model / "components" / vae / "graph.json").read_text())
+    bv = ActivationProfiler(gv).build_symbol_map(ic, placement_floor=False)
+    rv = SymbolResolver(gv.get("symbolic_context") or {})
+    for sid, v in bv.items():
+        if v is not None:
+            rv._bind(sid, int(v))
+    zin = next(sp for sp in gv["tensors"].values() if sp.get("input_name"))
+    ss = zin.get("symbolic_shape")
+    latent = [rv.resolve(d) for d in ss["dims"]] if isinstance(ss, dict) and ss.get("dims") else zin["shape"]
+    latent = [1, *latent[1:]]
+    out = {}
+    if len(latent) == 5 and "img_ids" in ins:
+        packed = H.packed_5d_shape(latent)
+        txt_seq = next((n for (lc, inp), n in text_axis.items() if lc == comp and inp == "txt"), None)
+        if txt_seq is None:
+            return None
+        cs = FV.conditioning_shapes(1, packed[1], packed[2], latent[1], latent[2], latent[3], latent[4],
+                                    txt_seq)
+        out = {"img": packed, "img_ids": cs["img_ids"], "txt_ids": cs["txt_ids"], "cond": cs["cond"],
+               "txt": [1, txt_seq, ins["txt"]["shape"][-1]]}
+    elif len(latent) == 4 and four_d:
+        # the 4-D FLUX pack of the state input (`_pack_latents`), the text inputs at their
+        # finalized lengths
+        out[loop.get("state_input", "hidden_states")] = H.packed_4d_shape(latent)
+        for (lc, inp), n in text_axis.items():
+            if lc == comp and inp in ins:
+                out[inp] = [1, n, ins[inp]["shape"][-1]]
+    else:
+        return None
+    for name, sp in ins.items():
+        if name not in out:
+            out[name] = [1, *sp["shape"][1:]] if sp.get("shape") else [1]
+    return out
+
+
+_TOPO = {}
+
+
+def topo_of(model):
+    if model not in _TOPO:
+        _TOPO[model] = json.loads((CACHE / model / "topology.json").read_text())
+    return _TOPO[model]
+
+
+def H_declared(flow_topo, comps):
+    from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler as H
+    return H.declared_packing(flow_topo, comps) is not None
 
 
 def _mark_attention_layouts(g: dict) -> None:
@@ -679,6 +768,18 @@ def compare(a) -> int:
     # encoder's own length, not to the encoder's binding.
     from neurobrix.core.components.handlers.text_encoder_handler import finalized_text_length
     from neurobrix.core.runtime.registry_flags import get_component_flag
+    # The length each pre-loop text encoder is tokenized to (`diffusion_max_length`, the
+    # TextProcessor's cascade: the encoder's declared shape, then the tokenizer's maximum) —
+    # Prism's map binds the trace's (Open-Sora's T5 traced at 31, tokenized to 512).
+    from neurobrix.core.module.text.processor import diffusion_max_length
+    enc_len = {}
+    if flow.get("type") == "iterative_process":
+        for enc in flow.get("pre_loop") or []:
+            tok = "tokenizer" + (("_" + enc.split("text_encoder_", 1)[1])
+                                 if enc.startswith("text_encoder_") else "")
+            n = diffusion_max_length(topo, enc, (topo.get("extracted_values") or {}).get(tok) or {})
+            if n:
+                enc_len[enc] = n
     text_axis = {}                                    # (loop comp, input name) -> length
     for conn in topo.get("connections") or []:
         src, dst = conn.get("from", ""), conn.get("to", "")
@@ -686,11 +787,14 @@ def compare(a) -> int:
         comp_, _, inp = dst.partition(".")
         if enc not in (flow.get("pre_loop") or []) or comp_ not in loop_comps:
             continue
+        if "hidden_state" not in _out:
+            continue            # a pooled vector is no sequence; finalization acts on the hidden state
         ge = json.loads((CACHE / a.model / "components" / enc / "graph.json").read_text())
         be = ActivationProfiler(ge).build_symbol_map(ic, placement_floor=False)
         te = (ge.get("symbolic_context") or {}).get("symbols") or {}
-        lens = [int(be[sid]) for sid, i in te.items() if i.get("name") in ("seq_len", "sequence_length")
-                and be.get(sid) is not None]
+        lens = ([enc_len[enc]] if enc in enc_len else
+                [int(be[sid]) for sid, i in te.items() if i.get("name") in ("seq_len", "sequence_length")
+                 and be.get(sid) is not None])
         if not lens:
             continue
         cfg = dict((topo.get("extracted_values") or {}).get("tokenizer") or {})
@@ -735,17 +839,30 @@ def compare(a) -> int:
             # a tensor-parallel component, `_should_use_sequential_cfg`), and nothing else. The
             # request's InputConfig carries that batch (guidance doubles it); Prism's map binds
             # every batch symbol to its trace value instead.
-            if comp in loop_comps and not str(c.get("devices", [""])[0]).startswith("tp:"):
+            if comp in enc_len:
+                for sid, info in table.items():
+                    if info.get("name") in ("seq_len", "sequence_length"):
+                        syms[sid] = enc_len[comp]
+            fx = _flux_loop_inputs(a.model, comp, g, flow, plan, ic, text_axis, enc_len)
+            if fx is not None:
+                syms = _bind_from_shapes(g, fx)
+            # the CFG batch — unless the loop denoiser embeds its guidance (the CFG engine's own
+            # rule, `guidance_embedding_component`: no batch-2 pass)
+            from neurobrix.triton.cfg.engine import guidance_embedding_component
+            if (comp in loop_comps and not str(c.get("devices", [""])[0]).startswith("tp:")
+                    and guidance_embedding_component(topo) is None):
                 for sid, info in table.items():
                     if info.get("name") == "batch":
                         syms[sid] = int(ic.batch_size)
-            for (lc, inp), n in text_axis.items():
+            # The denoiser's text axis (when its inputs were not all built above): the symbols of
+            # the text input's sequence dim and of its attention mask — named by SOURCE, never by
+            # symbol name (Flex names its image-token symbol `seq_len` too).
+            for (lc, inp), n in (text_axis.items() if fx is None else ()):
                 if lc != comp:
                     continue
-                names = {info.get("name") for info in table.values()
-                         if (info.get("source") or "") == f"input::{inp}::dim_1"}
                 for sid, info in table.items():
-                    if info.get("name") in names:
+                    src = info.get("source") or ""
+                    if src == f"input::{inp}::dim_1" or ("mask" in src and src.endswith("::dim_1")):
                         syms[sid] = n
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
