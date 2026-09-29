@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **When a video or image model streams its weights from host memory under `--triton`, the card
+  that computes it is planned too.** The large decoders and encoders are tiled on the card as they
+  are in the other plans, and the plan says which component the card cannot hold, instead of
+  promising that the run will complete and failing on an out-of-memory allocation.
+
 - **A request is planned at its own size.** The memory plan priced every frame count, height and
   width at least at the size the model was prepared with, one axis at a time: a video asked in
   portrait at the same area as its landscape size was priced as a square of the larger side, and a
