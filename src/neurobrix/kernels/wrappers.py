@@ -3739,7 +3739,8 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # a Prism op-level interceptor). 4 GiB default leaves headroom for weights,
 # activations and arena overhead on V100 32 GB. Override via env var
 # NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
-_NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 1024 * 1024 * 1024)))
+from neurobrix.core.prism import conv3d_chunk as _c3
+_NBX_CONV2D_BAND_BYTES = _c3.BAND_BYTES     # one definition, Prism's and the wrapper's
 #: A matmul launch whose OUTPUT holds more than this many elements is split along M. The
 #: boundary is 2^31 because that is where an int32 element offset wraps; the margin below it
 #: is deliberate, so a tile that straddles the boundary is never the last one.
@@ -3783,8 +3784,7 @@ _NBX_CONV3D_EAGER_FREE_BYTES = int(
 # Chunking splits the folded batch axis (B*T frames): spatial conv2d is
 # independent per frame and the per-frame kt accumulation order is
 # preserved, so the math is unchanged.
-_NBX_CONV3D_CHUNK_BYTES = int(
-    os.environ.get("NBX_CONV3D_CHUNK_BYTES", str(1 * 1024 * 1024 * 1024)))
+_NBX_CONV3D_CHUNK_BYTES = _c3.CHUNK_BYTES   # one definition, Prism's and the wrapper's
 
 # Diagnostic trace — when set, every conv2d_wrapper call prints the
 # (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
@@ -3917,53 +3917,10 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
             f"{tuple(weight.shape)}, temporal stride {st}, padding {pt}, dilation {dt} -> "
             f"T_out={_t_out}")
 
-    # Temporal chunk-streaming gate (see _NBX_CONV3D_CHUNK_BYTES). Evaluated
-    # BEFORE the temporal pad so the pad copy counts toward the one-shot
-    # path's allocation peak. Fires ONLY when the folded transient exceeds
-    # the deterministic floor AND the one-shot peak cannot fit the driver-
-    # free bytes — every run that fits keeps the exact path below.
-    # NOTE: x.device returns the tensor itself (NBX device-context pattern);
-    # the raw device string lives in _device.
-    if str(getattr(x, '_device', '')).startswith('cuda'):
-        T_out_est = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
-        if T_out_est > 0:
-            ds_in = dtype_size(x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype)
-            ds_out = (dtype_size(_NBX_COMPUTE_DTYPE)
-                      if _NBX_COMPUTE_DTYPE is not None else ds_in)
-            oh_est = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
-            ow_est = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
-            fold_in = B * T_out_est * Cin * H * W * ds_in
-            fold_out = B * T_out_est * Cout * oh_est * ow_est * ds_out
-            if max(fold_in, fold_out) > _NBX_CONV3D_CHUNK_BYTES:
-                # One-shot allocation peak (mirrors the loop below with the
-                # #37 eager frees active — all transients are >= 1 GiB here):
-                #  - during the folded conv2d at kti>=1:
-                #      pad + accumulator + x2 + y2 (+ band machinery)
-                #  - during the accumulate add at kti>=1:
-                #      pad + out_old + y + out_new
-                pad_bytes = (B * Cin * (T + 2 * pt) * H * W * ds_in
-                             if pt > 0 else 0)
-                band_extra = (_NBX_CONV2D_BAND_BYTES
-                              if fold_out > _NBX_CONV2D_BAND_BYTES else 0)
-                acc_extra = fold_out if kt >= 2 else 0
-                need = pad_bytes + max(
-                    fold_out + fold_in + band_extra + acc_extra,
-                    2 * fold_out + acc_extra,
-                ) + 256 * 1024 * 1024
-                free = DeviceAllocator.device_free_bytes(
-                    getattr(x, '_device_idx', None))
-                if free >= 0 and need > free:
-                    if _NBX_CONV2D_TRACE:
-                        print(f"[CONV3D] CHUNK-STREAM in=({B},{Cin},{T},{H},{W}) "
-                              f"kt={kt} need={need/1e9:.2f}GB free={free/1e9:.2f}GB",
-                              flush=True)
-                    return _conv3d_via_conv2d_chunked(
-                        x, weight, bias, st, sh, sw, pt, ph, pw, dt, dh, dw,
-                        groups,
-                        max(fold_in, fold_out) // max(1, T_out_est))
-
-    # Pad the temporal axis only (constant_pad_nd pads from the last dim:
-    # [W_l,W_r, H_l,H_r, T_l,T_r]); H/W padding is applied by conv2d.
+    # The chunked variant is a PLAN decision (`core/prism/conv3d_chunk.py`; the supervisor's
+    # decision 2, 2026-09-29): Prism registers `conv3d_chunked_wrapper` as this op's interceptor
+    # when the one-shot peak exceeds the op's planned budget. It read the driver's free bytes here,
+    # so a key a live run formed depended on the memory free at that instant.
     if pt > 0:
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
@@ -4008,6 +3965,22 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
     return out
 
 
+def conv3d_chunked_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1,
+                           transposed=False, output_padding=0, groups=1, *args, **kwargs):
+    """A 3-D convolution Prism planned to chunk (op-level tiling, `conv3d_chunks`): the chunked
+    path, the chunk sized from the folded bytes per output frame (`conv3d_chunk`)."""
+    def _triple(v):
+        return (v[0], v[1], v[2]) if isinstance(v, (list, tuple)) else (v, v, v)
+    st, sh, sw = _triple(stride)
+    pt, ph, pw = _triple(padding)
+    dt, dh, dw = _triple(dilation)
+    ds_in = dtype_size(x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype)
+    ds_out = dtype_size(_NBX_COMPUTE_DTYPE) if _NBX_COMPUTE_DTYPE is not None else ds_in
+    _need, frame = _c3.conv3d_need(x.shape, weight.shape, (st, sh, sw), (pt, ph, pw), (dt, dh, dw),
+                                   ds_in, ds_out)
+    return _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw, dt, dh, dw, groups, frame)
+
+
 def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
                                dt, dh, dw, groups, frame_bytes):
     """Temporal chunk-streaming variant of _conv3d_via_conv2d — identical
@@ -4033,7 +4006,7 @@ def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
-    tc = max(1, int(_NBX_CONV3D_CHUNK_BYTES // max(1, frame_bytes)))
+    tc = _c3.chunk_frames(frame_bytes)
     # Per-kt 2D weight slices, materialised once (tiny; contiguous-guard on
     # the non-contiguous dim-2 slice, same as the one-shot path).
     w2s = [weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)

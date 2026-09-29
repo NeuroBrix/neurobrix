@@ -231,7 +231,8 @@ class TilingView:
     @classmethod
     def from_plan(cls, plan) -> "TilingView":
         return cls(fusion_convs={c: u for u, c, _tf in plan.fusion_pairs},
-                   tiled_ops=frozenset(uid for uid, _t, _tf in plan.tiled_ops))
+                   tiled_ops=frozenset(uid for uid, _t, _tf in plan.tiled_ops)
+                   | frozenset(getattr(plan, "conv3d_chunks", ()) or ()))
 
 
 # ---------------------------------------------------------------------------
