@@ -169,6 +169,62 @@ def prompt_token_ids(tokenizer, prompt: str, defaults: dict, is_image_ar: bool, 
     return _flatten_tokenizer_output(token_ids)
 
 
+def session_lm_config(defaults: Dict, topology: Dict, lm_name: str) -> Dict[str, Any]:
+    """The LM facts the decode session sizes its KV cache from: the package's `lm_config`, else
+    the LM component's extracted values. The derived census reads the same."""
+    lm_config = (defaults or {}).get("lm_config", {})
+    if lm_config:
+        return lm_config
+    extracted = ((topology or {}).get("extracted_values") or {}).get(lm_name, {})
+    return {
+        "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
+        "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
+        "hidden_size": extracted.get("hidden_size"),
+        "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
+        "head_dim": extracted.get("head_dim"),
+        # Mirror of the compiled extraction (R30): the window is
+        # load-bearing for the prompt-aware KV ceiling — without
+        # it a build on this path would get no model-limit guard.
+        "max_position_embeddings": extracted.get("max_position_embeddings"),
+    }
+
+
+def session_kv_params(lm_config: Dict, kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
+    """`TritonKVCache`'s parameters: the Prism plan's cache when it planned one, else sized from
+    the LM config (see docs/reference/red-cells.md: the second branch's constants). The derived
+    census keys the decode from the same choice."""
+    if kv_plan is not None:
+        # Prism path — uses precomputed budget
+        return dict(
+            num_layers=kv_plan.num_layers,
+            num_kv_heads=kv_plan.num_kv_heads,
+            k_head_dim=kv_plan.k_head_dim,
+            v_head_dim=kv_plan.v_head_dim,
+            max_cache_len=kv_plan.max_cache_len,
+            dtype=parse_dtype(kv_plan.dtype),
+            window_ceiling=window,
+            decode_budget=decode_budget,
+            # Serve plans carry a small initial size (the compiled
+            # cache honours it; the triton cache now does too —
+            # the serve prefill lever, 2026-09-03).
+            initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
+        )
+    # Legacy fallback from lm_config
+    hidden_dim = lm_config.get("hidden_size", 2048)
+    num_heads = lm_config.get("num_heads") or 32
+    head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
+    return dict(
+        num_layers=lm_config.get("num_layers") or 22,
+        num_kv_heads=lm_config.get("num_kv_heads") or num_heads,
+        k_head_dim=head_dim,
+        v_head_dim=head_dim,
+        max_cache_len=decode_budget + 128,
+        dtype=NBXDtype.float16,
+        window_ceiling=window,
+        decode_budget=decode_budget,
+    )
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -607,7 +663,7 @@ class TritonAutoregressiveHandler:
                                f"Available: {list(self.ctx.executors.keys())}")
 
         # Get LM config for KV cache setup
-        lm_config = self.ctx.pkg.defaults.get("lm_config", {})
+        lm_config = session_lm_config(self.ctx.pkg.defaults, self.ctx.pkg.topology, lm_name)
 
         # MoE config — propagate norm_topk_prob to the executor BEFORE the
         # TritonSequence compiles. Mirror of core/flow/autoregressive.py:667-676.
@@ -627,20 +683,6 @@ class TritonAutoregressiveHandler:
                         "for MoE model.\n"
                         "Add to the model registry: moe.norm_topk_prob")
                 executor.set_moe_config(norm_topk_prob=norm_topk)
-
-        if not lm_config:
-            extracted = self.ctx.pkg.topology.get("extracted_values", {}).get(lm_name, {})
-            lm_config = {
-                "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
-                "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
-                "hidden_size": extracted.get("hidden_size"),
-                "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
-                "head_dim": extracted.get("head_dim"),
-                # Mirror of the compiled extraction (R30): the window is
-                # load-bearing for the prompt-aware KV ceiling — without
-                # it a build on this path would get no model-limit guard.
-                "max_position_embeddings": extracted.get("max_position_embeddings"),
-            }
 
         hidden_dim = lm_config.get("hidden_size", 2048)
         num_heads = lm_config.get("num_heads") or 32
@@ -724,40 +766,8 @@ class TritonAutoregressiveHandler:
             if _mt is None:
                 _mt = require_max_tokens(self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
-            kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
-            if kv_plan is not None:
-                # Prism path — uses precomputed budget
-                cache_dtype = parse_dtype(kv_plan.dtype)
-                kv_params = dict(
-                    num_layers=kv_plan.num_layers,
-                    num_kv_heads=kv_plan.num_kv_heads,
-                    k_head_dim=kv_plan.k_head_dim,
-                    v_head_dim=kv_plan.v_head_dim,
-                    max_cache_len=kv_plan.max_cache_len,
-                    dtype=cache_dtype,
-                    window_ceiling=_window,
-                    decode_budget=_decode_budget,
-                    # Serve plans carry a small initial size (the compiled
-                    # cache honours it; the triton cache now does too —
-                    # the serve prefill lever, 2026-09-03).
-                    initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
-                )
-            else:
-                # Legacy fallback from lm_config
-                num_kv_heads = lm_config.get("num_kv_heads") or num_heads
-                head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
-                num_layers = lm_config.get("num_layers") or 22
-                max_tokens = _decode_budget
-                kv_params = dict(
-                    num_layers=num_layers,
-                    num_kv_heads=num_kv_heads,
-                    k_head_dim=head_dim,
-                    v_head_dim=head_dim,
-                    max_cache_len=max_tokens + 128,
-                    dtype=NBXDtype.float16,
-                    window_ceiling=_window,
-                    decode_budget=_decode_budget,
-                )
+            kv_params = session_kv_params(lm_config, getattr(self.ctx.plan, 'kv_cache_plan', None),
+                                          _window, _decode_budget)
 
             # EXECUTOR-scoped cache persistence: the KV BUFFERS must
             # outlive the per-request session — warm serving creates a

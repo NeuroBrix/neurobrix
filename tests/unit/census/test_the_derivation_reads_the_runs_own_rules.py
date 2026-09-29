@@ -232,3 +232,65 @@ def test_the_plan_is_sized_at_the_resolution_bin_the_run_uses(tmp_path):
                                        "--width", "512"])
     ic = request_input_config(args, {"family": "image", "dtype": "float16"}, "image", tmp_path)
     assert (ic.height, ic.width) == (768, 1280)
+
+
+class _WordTokenizer:
+    """One id per whitespace word; a BOS id first when specials are asked for."""
+    def encode(self, text, add_special_tokens=False, padding=False):
+        return ([0] if add_special_tokens else []) + [len(w) for w in text.split()]
+
+
+def test_the_speech_prompt_is_the_flows_own_context():
+    """`speaker_prompt_ids` is the context the next-token-diffusion flow prefills, and the census
+    keys the LM's prefill from its length (VibeVoice: 48 tokens for the derived prompt, the walk's
+    48). Injection: the closing speech-start id dropped -> the last id and the length RED."""
+    import ast
+    import inspect
+    from neurobrix.triton.flow import next_token_diffusion as NTD
+    ids = NTD.speaker_prompt_ids(_WordTokenizer(), "a b c", 999)
+    base = NTD.speaker_prompt_ids(_WordTokenizer(), "", 999)
+    assert ids[0] == 0 and ids[-1] == 999
+    assert len(ids) - len(base) == 3
+    # the flow builds its prompt by this function, not by a copy of it
+    src = inspect.getsource(NTD.TritonNextTokenDiffusionEngine.execute)
+    import textwrap
+    calls = {n.func.id for n in ast.walk(ast.parse(textwrap.dedent(src)))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    assert "speaker_prompt_ids" in calls
+
+
+def test_the_decode_cache_is_the_sessions_own_choice():
+    """`session_kv_params`: the plan's cache when Prism planned one, else sized from the LM config
+    (`session_lm_config`, extracted values when the package has no `lm_config`) — VibeVoice's
+    session caches 12 heads in float16 because its plan carries no cache. Injection: the plan
+    branch ignored -> the first case RED."""
+    from types import SimpleNamespace
+    from neurobrix.triton.flow.autoregressive import session_kv_params, session_lm_config
+    lmc = session_lm_config({}, {"extracted_values": {"lm": {"num_layers": 28, "num_heads": 12,
+                                                             "hidden_size": 1536}}}, "lm")
+    plan = SimpleNamespace(num_layers=28, num_kv_heads=2, k_head_dim=128, v_head_dim=128,
+                           max_cache_len=4096, dtype="bfloat16")
+    p = session_kv_params(lmc, plan, 0, 2048)
+    assert (p["num_kv_heads"], p["dtype"], p["max_cache_len"]) == (2, NBXDtype.bfloat16, 4096)
+    f = session_kv_params(lmc, None, 0, 2048)
+    assert (f["num_layers"], f["num_kv_heads"], f["k_head_dim"], f["dtype"], f["max_cache_len"]) == \
+        (28, 12, 128, F16, 2176)
+    assert session_lm_config({"lm_config": {"num_layers": 3}}, {}, "lm") == {"num_layers": 3}
+
+
+def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
+    """The interceptor's prefill drops the graph's mask for `is_causal`; a one-token prefill (the
+    CFG negative context) then takes the vector kernel, whatever a frozen mask says (VibeVoice's
+    causal mask is annotated [23, 23]). Injection: the prefill rule removed -> launches, RED."""
+    import collections
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import derived_census as D
+    shapes = {"q": [1, 12, 1, 128], "k": [1, 12, 1, 128], "v": [1, 12, 1, 128], "m": [23, 23]}
+    o = {"attributes": {"args": [{"type": "tensor", "tensor_id": t} for t in "qkvm"]}}
+    args = ("aten::scaled_dot_product_attention", "u", o, list("qkvm"), shapes.__getitem__,
+            lambda _t: F16, LK, None, "float16", False, 1 << 40, 16, 64, 0,
+            collections.Counter())
+    assert D._op_launches(*args, None, None)                     # the graph's mask: the math route
+    assert not D._op_launches(*args, None, {"prefill": True})    # through the interceptor: none
