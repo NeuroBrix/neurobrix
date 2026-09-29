@@ -641,12 +641,14 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         cfg = float(NTD._require_default(defaults, "cfg_scale"))
         gl = json.loads((root / "components" / lm / "graph.json").read_text())
         dim = gl["tensors"]["input::inputs_embeds"]["shape"][-1]
-        # The cache the session builds: the plan's when Prism planned one, else the session's own
-        # sizing from the LM config — one function for both.
+        # The cache the session builds: the plan's (a plan without one is refused by the session's
+        # own function, named here as the census row that should hold its keys).
         lmc = session_lm_config(defaults, topo, lm)
-        kvp = session_kv_params(lmc, SimpleNamespace(**plan["kv_cache"]) if plan.get("kv_cache")
-                                else None, int(lmc.get("max_position_embeddings") or 0),
-                                decode_bound(mt))
+        if not plan.get("kv_cache"):
+            raise SystemExit(f"{model}: the plan carries no KV cache for {lm} — the session refuses "
+                             f"it; the census cannot key a decode the run would not reach")
+        kvp = session_kv_params(SimpleNamespace(**plan["kv_cache"]),
+                                int(lmc.get("max_position_embeddings") or 0), decode_bound(mt))
 
         def prefill(n, lm=lm, dim=dim):
             return [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n],

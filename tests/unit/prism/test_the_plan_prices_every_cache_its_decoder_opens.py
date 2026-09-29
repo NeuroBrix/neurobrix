@@ -113,7 +113,30 @@ def test_both_sessions_refuse_a_plan_without_the_cache():
     from neurobrix.triton.flow.autoregressive import session_kv_params
     lmc = {"num_layers": 2, "num_heads": 2, "hidden_size": 16}
     with pytest.raises(RuntimeError, match="no KV cache"):
-        session_kv_params(lmc, None, 0, 64)
+        session_kv_params(None, 0, 64)
     ctx = SimpleNamespace(plan=SimpleNamespace(kv_cache_plan=None))
     with pytest.raises(RuntimeError, match="no KV cache"):
         StateCacheFactory.create(ctx, lmc, "cuda", "float16")
+
+
+def test_a_decoder_without_its_facts_is_refused_by_name():
+    """No lm_config and no extracted values for the decoding component: refused, naming what is
+    missing — never a dict of Nones that every `if not lm_config` gate lets through (review
+    2026-09-29)."""
+    import pytest
+    with pytest.raises(RuntimeError, match="num_layers, num_heads, hidden_size"):
+        F.lm_config_of({}, {"extracted_values": {}}, "model.language_model")
+
+
+def test_serving_a_decoder_without_a_declared_window_is_refused_by_that_name(tmp_path):
+    """Serve plans the full context window; VibeVoice's decoder declares none (its extracted
+    values carry no max_position_embeddings). The plan said 'no strategy can fit model + KV cache'
+    — a budget — where the cause is the missing window."""
+    import pytest
+    from neurobrix.core.prism.solver import PrismSolver
+    solver = PrismSolver.__new__(PrismSolver)
+    solver._serve_mode = True
+    solver._serve_requested = True
+    c = _Container(tmp_path, VIBEVOICE_TOPO, {"cfg_scale": 1.3, "max_tokens": 2048})
+    with pytest.raises(RuntimeError, match="declares none for 'model.language_model'"):
+        solver._compute_kv_cache_plan(c, "float16", 16 * 2 ** 30)
