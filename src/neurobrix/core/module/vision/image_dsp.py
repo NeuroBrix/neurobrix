@@ -295,12 +295,8 @@ def native_patch_grid_video_np(video_path: str, preprocessing_cfg: dict,
             float(tp) / tgt_fps)
 
 
-def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray:
-    """CLIP-preprocessed view [1,3,cs,cs] float32, data-driven from the
-    embedded modules/image_processor/preprocessor_config.json."""
-    from PIL import Image
-    pc = preprocessor_config
-
+def _clip_sizes(pc: dict):
+    """(resize side, crop side) of the CLIP view `clip_centercrop_np` produces."""
     def _dim(d, k, default):
         v = d.get(k)
         if isinstance(v, dict):
@@ -308,7 +304,22 @@ def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray
         return int(v) if v is not None else default
 
     rs = _dim(pc, "size", 224)
-    cs = _dim(pc, "crop_size", rs)
+    return rs, _dim(pc, "crop_size", rs)
+
+
+def clip_view_shape(preprocessor_config: dict) -> tuple:
+    """The shape of the CLIP view `clip_centercrop_np` produces, [1, 3, cs, cs] — the plan binds the
+    image encoder's input to it (`core/prism/flow_bindings.FlowBindings.pixel_view`)."""
+    cs = _clip_sizes(preprocessor_config)[1]
+    return (1, 3, cs, cs)
+
+
+def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray:
+    """CLIP-preprocessed view [1,3,cs,cs] float32, data-driven from the
+    embedded modules/image_processor/preprocessor_config.json."""
+    from PIL import Image
+    pc = preprocessor_config
+    rs, cs = _clip_sizes(pc)
     mean = np.asarray(pc.get("image_mean", list(_CLIP_MEAN)), dtype=np.float32)
     std = np.asarray(pc.get("image_std", list(_CLIP_STD)), dtype=np.float32)
 

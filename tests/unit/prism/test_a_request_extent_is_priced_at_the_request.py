@@ -59,3 +59,22 @@ def test_the_flows_batch_is_priced_at_the_flows_batch():
     req = InputConfig(batch_size=2, height=480, width=832, num_frames=81, temporal_compression=4,
                       vae_scale=8, flow=_Flow())
     assert ActivationProfiler(g).build_symbol_map(req, placement_floor=True)["s0"] == 2
+
+
+def test_an_image_encoder_is_priced_at_the_view_the_run_feeds_it():
+    """Wan2.1-I2V's image encoder declares `height`/`width` symbols (trace 224) on `pixel_values`; the
+    run feeds it the CLIP view of the build's own processor (224x224), whatever the request. Bound by
+    name, the unfloored map priced the request's latent grid (60x104 at 480x832) — a guess the old
+    per-axis floor only covered by coincidence (review 2026-09-29). The flow binds the view."""
+    from neurobrix.core.prism.flow_bindings import FlowBindings
+    from tests.unit.prism._pinned_machine import container_root
+    import json
+    root = container_root("Wan2.1-I2V-14B-480P-Diffusers")
+    topo = json.loads((root / "topology.json").read_text())
+    dag = json.loads((root / "components" / "image_encoder" / "graph.json").read_text())
+    req = InputConfig(batch_size=2, height=480, width=832, num_frames=81, temporal_compression=4,
+                      vae_scale=8, flow=FlowBindings(topo, root))
+    m = ActivationProfiler(dag).build_symbol_map(req, placement_floor=True)
+    table = dag["symbolic_context"]["symbols"]
+    got = {table[s]["name"]: v for s, v in m.items() if s in table and table[s]["name"] in ("height", "width")}
+    assert got == {"height": 224, "width": 224}, got
