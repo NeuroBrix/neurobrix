@@ -27,7 +27,11 @@ frozen spatial axis.
 
 Each cell records: rc, wall time, the engine's own execute time, the artefact's path, size and
 sha256, the mechanical judgment (`judge_artefact`: degeneracy and geometry for an image, empty
-or single-token for a text), the first error line on failure, and the request it ran. The
+or single-token for a text), the first error line on failure, and the request it ran; the
+confirmation run's misses (`misses`, `first_missing_key` — the key a KeyNotCertified named) and
+the reference it compared against (`engine`, `tree_dirty` of the certified directory and census,
+`certified_dir_override`). A row is reused only when it measured this engine against a clean
+reference; a run's every asked cell must have a row at its end. The
 CONTENT judgment (an eye for an image, an STT for a WAV, a reader for a text) is written into
 the row afterwards by the judge, with the artefact's path, so the table carries links that
 open — never a PASS pronounced from rc or from two arms agreeing (R29).
@@ -67,16 +71,122 @@ from container_renames import by_current_name, current_name  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
 CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
+#: The certified reference a cell reads, under the `--src` tree: the directory and the census tables.
+#: A gate compares against the COMMITTED reference — a row says whether the working copy differed.
+CERTIFIED_REFERENCE = ("neurobrix/config/autotune", "neurobrix/config/census")
+#: The engine's relocation of the certified directory (kernels/autotune_certified.directory()).
+CERTIFIED_DIR_ENV = "NEUROBRIX_AUTOTUNE_CERTIFIED_DIR"
+DIRTY_PATHS_CAP = 20
+#: The exception line a confirmation run's miss leaves in the traceback (`<module>.KeyNotCertified:
+#: CERTIFIED-ONLY: ...`). Anchored on the message head: a traceback also prints the source line
+#: `# raises KeyNotCertified: never a sweep` of kernels/ops/_configs.py, which is not a miss.
+KEY_NOT_CERTIFIED = r"KeyNotCertified: (CERTIFIED-ONLY:[^\n]*)"
 
 
 def first_error(log: Path) -> str:
     text = log.read_text(errors="replace") if log.exists() else ""
-    for pat in (r"(KILLED by SIGKILL[^\n]*)", r"(TIMEOUT after[^\n]*)", r"(ZERO FALLBACK[^\n]*)",
+    # The miss comes before the generic errors: the lookup-failed miss is raised `from` an inner
+    # KeyError/ValueError whose line is in the same traceback and would otherwise name the cell.
+    for pat in (r"(KILLED by SIGKILL[^\n]*)", r"(TIMEOUT after[^\n]*)", r"(KeyNotCertified: CERTIFIED-ONLY[^\n]*)",
+                r"(ZERO FALLBACK[^\n]*)",
                 r"((?:Runtime|Value|Shape\w*|OutOfMemory|Key|Index)Error[^\n]*)", r"(Traceback[^\n]*)"):
         m = re.findall(pat, text)
         if m:
             return m[-1][:300]
     return text.strip().splitlines()[-1][:300] if text.strip() else ""
+
+
+def missing_keys(log: Path) -> list:
+    """The KeyNotCertified messages of a cell's log, distinct, in order of first appearance — one per
+    key the certified directory did not serve (a message printed twice is one miss)."""
+    text = log.read_text(errors="replace") if log.exists() else ""
+    seen = []
+    for msg in re.findall(KEY_NOT_CERTIFIED, text):
+        if msg not in seen:
+            seen.append(msg)
+    return seen
+
+
+def missing_key_text(msg: str) -> str:
+    """The kernel and the key a KeyNotCertified message names — both of its raise sites
+    (autotune_certified.refuse_missing, kernels/ops/_configs.py's failed lookup); the message's head
+    when neither form reads, never nothing."""
+    m = (re.match(r"CERTIFIED-ONLY: no certified setting for ([^()\n]*\([^()\n]*\))", msg)
+         or re.match(r"CERTIFIED-ONLY: the certified lookup failed for (\S+ at \([^()\n]*\))", msg))
+    return m.group(1) if m else msg[:300]
+
+
+def engine_sha(tree: Path) -> str:
+    """The tree's HEAD, short — "" when git cannot say (never equal to anything)."""
+    return subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def reference_state(src: Path) -> dict:
+    """Whether the certified reference the cells read differs from the tree's HEAD: `git status
+    --porcelain` of the `--src` tree's repository limited to CERTIFIED_REFERENCE. `tree_dirty` is
+    True/False, None when git cannot say (the reason in the paths) — None is never clean."""
+    p = subprocess.run(["git", "-C", str(src.parent), "status", "--porcelain", "--untracked-files=all", "--",
+                        *(str(src / d) for d in CERTIFIED_REFERENCE)], capture_output=True, text=True)
+    if p.returncode != 0:
+        return {"tree_dirty": None, "tree_dirty_count": None,
+                "tree_dirty_paths": [f"git status failed (rc {p.returncode}): {p.stderr.strip()[:160]}"]}
+    paths = [l[3:] for l in p.stdout.splitlines() if l.strip()]
+    return {"tree_dirty": bool(paths), "tree_dirty_count": len(paths), "tree_dirty_paths": paths[:DIRTY_PATHS_CAP]}
+
+
+def read_jsonl(path: Path) -> list:
+    """Every record of a JSON-lines file the matrix appends to. A LAST line with no newline is a write
+    cut mid-append (a kill): said on stderr and skipped, never read as a row. Any other line that does
+    not parse is refused by name — a row is never guessed."""
+    lines = path.read_text().split("\n")
+    tail = lines.pop()                                 # "" when the file ends in a newline
+    if tail:
+        print(f"[matrix] {path}: the last line ({len(tail)} bytes) has no newline — a write cut mid-append; "
+              f"skipped, never read as a row", file=sys.stderr, flush=True)
+    recs = []
+    for n, line in enumerate(lines, 1):
+        try:
+            recs.append(json.loads(line))
+        except ValueError as exc:
+            raise SystemExit(f"REFUSED: {path}:{n} is not a row ({exc}): {line[:120]!r} — only a cut LAST "
+                             f"line is skipped")
+    return recs
+
+
+def append_jsonl(path: Path, rec: dict) -> None:
+    """One whole line per record, flushed and fsynced before the call returns. A cut last line an
+    earlier kill left is moved to `<file>.torn` first (said on stderr): glued to this line it would
+    become a malformed line that is no longer last, and the reader would refuse the whole file."""
+    with open(path, "ab+") as f:
+        end = f.seek(0, os.SEEK_END)
+        if end:
+            f.seek(end - 1)
+            if f.read(1) != b"\n":
+                f.seek(0)
+                data = f.read()
+                keep = data.rfind(b"\n") + 1
+                torn = path.with_name(path.name + ".torn")
+                with open(torn, "ab") as t:
+                    t.write(data[keep:] + b"\n")
+                    t.flush()
+                    os.fsync(t.fileno())
+                f.truncate(keep)
+                print(f"[matrix] {path}: a cut last line ({end - keep} bytes) moved to {torn} before this append",
+                      file=sys.stderr, flush=True)
+        f.write((json.dumps(rec) + "\n").encode())
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def write_atomic(path: Path, text: str) -> None:
+    """The whole file or the previous one: written to a temporary beside it, fsynced, then renamed."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def last_stage(log: Path) -> dict:
@@ -390,14 +500,21 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            "--certified-only", "--output", str(art)]
     rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
+    misses = missing_keys(log)
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
            "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
            "off_trace_size": list(size) if size else None, "log": str(log),
            "python": sys.executable,
            "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-           "engine": subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"],
-                                    capture_output=True, text=True).stdout.strip(),
-           "engine_tree": str(tree)}
+           "engine": engine_sha(tree),
+           "engine_tree": str(tree),
+           # the reference the cell compared against: the tree's working copy of the certified
+           # directory and census (dirty or not), and any relocation of the directory it inherited
+           **reference_state(src),
+           "certified_dir_override": env.get(CERTIFIED_DIR_ENV) or None,
+           # a confirmation run's misses: the key and its census row, from the KeyNotCertified line
+           "misses": len(misses),
+           "first_missing_key": missing_key_text(misses[0]) if misses else None}
     if art.exists() and rc == 0:
         row.update(artefact=str(art), sha256=sha256(art), bytes=art.stat().st_size,
                    mechanical=mechanical(art, family, size))
@@ -434,6 +551,10 @@ def refuse_a_partial_gate(lists, cache: Path = None) -> None:
     it would have seen landed on main. Refused by name when the union of the gate's lists is not
     the full matrix."""
     full, named = full_matrix(cache), cells_of_lists(lists)
+    if not full:
+        # An empty cache is an empty matrix, and empty lists "cover" it: a gate over no cell proves nothing.
+        raise SystemExit(f"REFUSED: the cache {cache or CACHE} holds no container — a gate over an empty "
+                         f"matrix proves nothing.")
     missing, unknown = sorted(full - named), sorted(named - full)
     if missing or unknown:
         raise SystemExit(
@@ -443,9 +564,38 @@ def refuse_a_partial_gate(lists, cache: Path = None) -> None:
             f"A gate spares no cell.")
 
 
+def refuse(why: str) -> int:
+    """A run refused by name before any cell: exit 2."""
+    print(f"REFUSED: {why}", file=sys.stderr, flush=True)
+    return 2
+
+
 def cmd_run(a) -> int:
     if getattr(a, "gate_lists", None):
         refuse_a_partial_gate(a.gate_lists)
+    # The request, refused by name before any cell: an empty list is not a run, and a name the cache
+    # does not hold is not a cell (it would be judged by its absence).
+    models = [m.strip() for m in a.models.split(",")]
+    modes = [m.strip() for m in a.modes.split(",")]
+    blank = [i for i, m in enumerate(models, 1) if not m]
+    if blank:
+        return refuse(f"--models {a.models!r}: entry {', '.join(map(str, blank))} names no model")
+    absent = [m for m in models if not (CACHE / m / "manifest.json").exists()]
+    if absent:
+        return refuse(f"--models: {', '.join(absent)} — no container of that name in the cache {CACHE}")
+    blank = [i for i, m in enumerate(modes, 1) if not m]
+    if blank:
+        return refuse(f"--modes {a.modes!r}: entry {', '.join(map(str, blank))} names no mode")
+    unknown = [m for m in modes if m not in MODES]
+    if unknown:
+        return refuse(f"--modes: {', '.join(unknown)} — not a mode of the matrix ({', '.join(MODES)})")
+    override = os.environ.get(CERTIFIED_DIR_ENV) or None
+    if override and not getattr(a, "allow_certified_dir_override", False):
+        return refuse(f"{CERTIFIED_DIR_ENV}={override} is set: every cell would read that directory, not the "
+                      f"committed one of --src. A gate compares against the committed reference; unset it, or "
+                      f"pass --allow-certified-dir-override for a run that is not a gate.")
+    asked = list(dict.fromkeys((m, mode) for m in models for mode in modes))
+    src = Path(a.src)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
@@ -453,31 +603,57 @@ def cmd_run(a) -> int:
     # handed to another card without running its finished ones twice.
     latest = {}
     for f in out.glob("rows_card*.jsonl"):
-        for r in map(json.loads, f.read_text().splitlines()):
+        for r in read_jsonl(f):
             latest[(r["model"], r["mode"])] = r if _row_time(r) >= _row_time(latest.get((r["model"], r["mode"]))) \
                 else latest[(r["model"], r["mode"])]
     # --rerun: the listed cells run again although they have a row; the new row names the one it
     # supersedes (kept, never deleted — the supervisor's rule of 2026-09-27 02:57).
-    done = set() if a.rerun else set(latest)
-    todo = [(m.strip(), mode) for m in a.models.split(",") if m.strip() for mode in a.modes.split(",")
-            if (m.strip(), mode) not in done]
+    # Without it, an earlier row is done only when it measured THIS engine against a clean reference:
+    # its engine sha is this run's and neither its tree nor this one had the certified reference dirty.
+    here, here_state = engine_sha(src.parent), reference_state(src)
+    done = set()
+    for cell in asked:
+        prev = latest.get(cell)
+        if a.rerun or prev is None:
+            continue
+        if not here:
+            why = "this run's engine sha is unknown"
+        elif prev.get("engine") != here:
+            why = f"its engine {prev.get('engine') or 'unknown'} is not this run's {here}"
+        elif prev.get("tree_dirty") is not False:
+            why = f"its tree's certified reference was {'dirty' if prev.get('tree_dirty') else 'unrecorded'}"
+        elif here_state["tree_dirty"] is not False:
+            why = f"this tree's certified reference is {'dirty' if here_state['tree_dirty'] else 'unreadable'}"
+        else:
+            done.add(cell)
+            continue
+        print(f"[matrix] {cell[0]} {cell[1]}: the earlier row ({prev.get('date')}) is not reused — {why}; "
+                  f"the cell runs again", flush=True)
+    todo = [cell for cell in asked if cell not in done]
     while todo:
         deferred = []
         for i, (model, mode) in enumerate(todo):
             # A cell the host budget cannot take now is deferred while this pass has cells left;
             # the pass's last cell waits for the budget (and the deferred ones come next pass).
-            row = run_cell(model, mode, a.gpu, out, a.timeout, Path(a.src), wait=i == len(todo) - 1)
+            row = run_cell(model, mode, a.gpu, out, a.timeout, src, wait=i == len(todo) - 1)
             if row is None:
                 deferred.append((model, mode))
                 continue
             prev = latest.get((model, mode))
-            if a.rerun and prev is not None:
+            if prev is not None:
                 row["supersedes"] = {k: prev.get(k) for k in ("date", "gpu", "rc", "wall_s", "error", "engine", "sha256")}
-            with open(rows_path, "a") as f:
-                f.write(json.dumps(row) + "\n")
+            append_jsonl(rows_path, row)
             print(f"[matrix] {model} {mode} rc={row['rc']} {row.get('wall_s')}s "
                   f"{row.get('error', '')[:120]}", flush=True)
         todo = deferred
+    # Every cell asked for has a row in the matrix — read back from the files, never from this loop's
+    # own bookkeeping: a cell with no row is an error naming it.
+    have = {(r["model"], r["mode"]) for f in out.glob("rows_card*.jsonl") for r in read_jsonl(f)}
+    lost = [cell for cell in asked if cell not in have]
+    if lost:
+        print(f"ERROR: {len(lost)} cell(s) asked for have no row in {out}: "
+              f"{', '.join(f'{m}/{mo}' for m, mo in lost)}", file=sys.stderr, flush=True)
+        return 1
     return 0
 
 
@@ -506,7 +682,7 @@ def load_rows(out: Path) -> list:
     taken after the row it would judge: a re-run cell is pending until judged again."""
     latest, older = {}, {}
     for f in sorted(out.glob("rows_card*.jsonl")):
-        for r in map(json.loads, f.read_text().splitlines()):
+        for r in read_jsonl(f):
             # A row keeps the name its container had when it ran; it is one cell with today's.
             if current_name(r["model"]) != r["model"]:
                 r["recorded_as"], r["model"] = r["model"], current_name(r["model"])
@@ -520,8 +696,7 @@ def load_rows(out: Path) -> list:
     judged = {}
     jf = out / "judgments.jsonl"
     if jf.exists():
-        for l in jf.read_text().splitlines():
-            j = json.loads(l)
+        for j in read_jsonl(jf):
             judged[(current_name(j["model"]), j["mode"])] = j
     rows = []
     for k, r in latest.items():
@@ -540,8 +715,7 @@ def cmd_judge(a) -> int:
         raise SystemExit("verdict: works | broken | not-runnable-here(<reason>)")
     rec = {"model": a.model, "mode": a.mode, "judged": a.judged, "verdict": a.verdict,
            "date": time.strftime("%Y-%m-%d %H:%M %Z")}
-    with open(Path(a.out) / "judgments.jsonl", "a") as f:
-        f.write(json.dumps(rec) + "\n")
+    append_jsonl(Path(a.out) / "judgments.jsonl", rec)
     print(json.dumps(rec))
     return 0
 
@@ -570,7 +744,7 @@ def cmd_table(a) -> int:
                              else f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}")
         lines.append(f"| {model} | {by[model][next(iter(by[model]))]['family']} | "
                      f"{lp.get('date') or '—'} {lp.get('verdict') or ''} | " + " | ".join(cells) + " |")
-    (out / "table.md").write_text("\n".join(lines) + "\n")
+    write_atomic(out / "table.md", "\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
 
@@ -630,7 +804,7 @@ def cmd_export(a) -> int:
             "cause_class": r.get("cause_class"),
         })
     dest = Path(a.dest)
-    dest.write_text("".join(json.dumps(x) + "\n" for x in lines))
+    write_atomic(dest, "".join(json.dumps(x) + "\n" for x in lines))
     unnamed = sorted({x["container"] for x in lines if x["repo_id"] is None})
     print(f"{len(lines)} rows -> {dest}; containers without a catalogue line: {unnamed or 'none'}")
     return 0
@@ -650,6 +824,9 @@ def main() -> int:
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
+    r.add_argument("--allow-certified-dir-override", action="store_true",
+                   help=f"run although {CERTIFIED_DIR_ENV} relocates the certified directory (never a gate: "
+                        f"a gate compares against the committed reference); the row records the override")
     t = sub.add_parser("table")
     t.add_argument("--out", required=True)
     t.add_argument("--proofs", default=None)
