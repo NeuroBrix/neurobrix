@@ -138,20 +138,10 @@ class TritonDualAREngine:
             raise RuntimeError("ZERO FALLBACK: DualAR requires 'model.fast' (re-trace with the fast split).")
         self._ensure_weights_loaded("model.fast")
 
-        prompt_ids = [int(x) for x in np.asarray(input_ids_np).reshape(-1)]
-        bos_id = defaults.get("bos_token_id")
-        if bos_id is not None and prompt_ids and prompt_ids[0] == bos_id:
-            prompt_ids = prompt_ids[1:]
-        interleave_id = special.get("<|interleave|>")
-        tok = self.ctx.modules.get("tokenizer")
-        speaker_ids = []
-        if tok is not None:
-            try:
-                _s = tok.encode("<|speaker:0|>", add_special_tokens=False)
-            except TypeError:
-                _s = tok.encode("<|speaker:0|>")
-            speaker_ids = [int(x) for x in (_s.tolist() if hasattr(_s, "tolist") else _s)]
-        prompt_ids = ([interleave_id] if interleave_id is not None else []) + speaker_ids + prompt_ids
+        from neurobrix.core.flow.audio_utils import dual_ar_prompt_ids
+        prompt_ids = dual_ar_prompt_ids(np.asarray(input_ids_np).reshape(-1).tolist(),
+                                        defaults.get("bos_token_id"), special.get("<|interleave|>"),
+                                        self.ctx.modules.get("tokenizer"))
         print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
         rep_pen = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))

@@ -83,7 +83,8 @@ def prompt_tokens(model: str, prompt: str) -> int:
 
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
                      has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
-                     sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None):
+                     sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
+                     tiled_tf=None):
     """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
     the plan's `TilingView` for the component (its op-level tiling, empty when it has none)."""
     from neurobrix.core.prism import runtime_widths as RW
@@ -98,6 +99,10 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
 
     def shape(tid):
         ss = T[tid].get("symbolic_shape")
+        if T[tid].get("is_parameter") or tid.startswith(("param::", "buffer::")):
+            # A parameter is its stored shape — no request moves it (an annotation on it that
+            # names a symbol is a collision: real-esrgan's [64, 192, 3, 3] weight read H + W).
+            return list(T[tid]["shape"])
         if isinstance(ss, dict) and ss.get("dims"):
             conc = ss.get("concrete") or T[tid].get("shape") or []
             for i, d in enumerate(ss["dims"]):
@@ -136,7 +141,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled)
+                                    unhandled, (tiled_tf or {}).get(uid))
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -150,12 +155,27 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     return out
 
 
+def _mask_numel(o: dict, shape):
+    """The element count of an SDPA op's attn_mask argument (positional 3 or the kwarg), None
+    when it has none — what `_try_decode_vec` tests."""
+    a_ = (o.get("attributes") or {})
+    args = a_.get("args") or []
+    m = args[3] if len(args) > 3 else (a_.get("kwargs") or {}).get("attn_mask")
+    if not isinstance(m, dict) or m.get("type") != "tensor":
+        return None
+    n = 1
+    for d in shape(m["tensor_id"]):
+        n *= d
+    return n
+
+
 class AnnotationContradiction(ValueError):
     """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
 
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
-                 sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled):
+                 sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled,
+                 tile_factor=None):
     """The launches of one op; None when the op launches no autotuned kernel."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
@@ -183,9 +203,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             elif route == "chunked":
                 launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
                                                              has_native_bf16, rows)
-            elif Tq == 1:
-                unhandled["sdpa: Tq=1 decode-vec gate (not yet derived)"] += 1
-                launches = []
+            elif Tq == 1 and LK.decode_vec_takes(D, Dv, _mask_numel(o, shape), Tk):
+                launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
         elif kind == "aten::addmm":
@@ -199,6 +218,15 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             at = o.get("attributes") or {}
             x_s, w_s = shape(ins[0]), shape(ins[1])
             nd = len(w_s) - 2
+            groups_ = int(at.get("groups", 1))
+            if not bool(at.get("transposed", False)) and x_s[1] != w_s[1] * groups_:
+                # The weight fixes a convolution's input channels (the op cannot run otherwise);
+                # an annotation that makes them a function of a spatial symbol collides with a
+                # trace value (real-esrgan-x4: 192 channels annotated as an expression that
+                # gives 896 at 448 px). Derived from the contract; the collision is named.
+                unhandled[f"NOTE conv input channels from the weight ({w_s[1] * groups_}), the "
+                          f"annotation says {x_s[1]} — a channel/extent collision in the container"] += 1
+                x_s = [x_s[0], w_s[1] * groups_, *x_s[2:]]
             stride = at.get("stride", [1] * nd)
             padding = at.get("padding", [0] * nd)
             dilation = at.get("dilation", [1] * nd)
@@ -215,8 +243,17 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 xd = wd = comp_d = C_
             else:
                 xd, wd, comp_d = dt(ins[0]), dt(ins[1]), C_
-            launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
-                                        xd, wd, comp_d, conv_band_bytes)
+            if tile_factor is not None and nd == 2 and not transposed:
+                # Prism's op-level tiled conv (`tiled_conv2d_spatial`, self-managed: no AMP cast —
+                # its per-band conv2d_wrapper narrows and stores at the compute dtype).
+                launches = LK.tiled_conv2d_launches(
+                    x_s[0], x_s[1], x_s[2], x_s[3], w_s[0], w_s[2], w_s[3], stride[0], stride[1],
+                    padding[0], padding[1], dilation[0], dilation[1], groups, dt(ins[0]), dt(ins[1]),
+                    C_ if C_ in (NBXDtype.float16, NBXDtype.bfloat16) else None, conv_band_bytes,
+                    tile_factor)
+            else:
+                launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
+                                            xd, wd, comp_d, conv_band_bytes)
         elif kind == "aten::lstm":
             # aten::lstm(input, (h0, c0), params, has_biases, num_layers, dropout, train,
             # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as traced
@@ -248,8 +285,19 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = LK.dft_r2c_launches(M, x_s[d], bool(a_[3].get("value")), has_native_bf16)
             else:
                 launches = LK.dft_c2r_launches(M, x_s[d], int(a_[3].get("value")), has_native_bf16)
-        elif kind in ("aten::baddbmm", "aten::linear", "aten::matmul",
-                      "aten::stft", "aten::istft"):
+        elif kind in ("aten::linear", "aten::matmul"):
+            # AMP_FP16 ops: `_wrap_lower_precision` casts the float operands to the compute dtype
+            # when it is half (an island's operands are fp32 — `dt` answers that); then
+            # `matmul_wrapper` routes by rank (`linear_wrapper` passes the weight transposed).
+            a_s, w_s = shape(ins[0]), shape(ins[1])
+            b_s = [w_s[1], w_s[0]] if kind == "aten::linear" and len(w_s) == 2 else w_s
+            C_ = {"float16": NBXDtype.float16, "bfloat16": NBXDtype.bfloat16}.get(cdtype)
+            ad, bd = dt(ins[0]), dt(ins[1])
+            if C_ is not None and not (ad == bd == NBXDtype.float32 and uid in contract.fp32_op_uids):
+                ad = C_ if ad.name in ("float16", "bfloat16", "float32") else ad
+                bd = C_ if bd.name in ("float16", "bfloat16", "float32") else bd
+            launches = LK.matmul_launches(a_s, b_s, ad, bd, has_native_bf16)
+        elif kind in ("aten::baddbmm", "aten::stft", "aten::istft"):
             unhandled[f"{kind} (not yet derived)"] += 1
             launches = []
         else:
@@ -327,6 +375,137 @@ def tile_bindings(g: dict, syms: dict, spec: dict) -> list:
     return [out]
 
 
+def plan_tiling(plan: dict, comp: str):
+    """(TilingView, {tiled op uid: tile factor}) of a component — the plan's op-level cut as the
+    width pass and the tiled launches read it (empty when the component has none)."""
+    from neurobrix.core.prism import runtime_widths as RW_
+    ot = (plan.get("op_level_tiling_ops") or {}).get(comp) or {}
+    fus = ot.get("fusion_pairs", [])
+    til = ot.get("tiled_ops", [])
+    view = RW_.TilingView(fusion_convs={f[1]: f[0] for f in fus},
+                          tiled_ops=frozenset(t[0] for t in til))
+    # A fused upsample->conv streams the same band cut over the upsampled extent — the conv's own
+    # input in the graph — so its conv derives through the same tiled launches.
+    return view, {**{f[1]: int(f[2]) for f in fus}, **{t[0]: int(t[1]) for t in til}}
+
+
+class _Shape:
+    """A shape the runtime's binder reads (`SymbolResolver.bind_from_inputs` reads `.shape`)."""
+    def __init__(self, shape):
+        self.shape = tuple(int(d) for d in shape)
+
+
+def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, has_native_bf16: bool,
+                  sdpa: tuple, unhandled: collections.Counter, tiling=None, tiled_tf=None):
+    """(launches, {output tensor id: shape}) of one component fed `inputs` {input name: shape}:
+    its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
+    derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
+    from neurobrix.triton.symbols import SymbolResolver
+    g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    res = SymbolResolver(g.get("symbolic_context") or {})
+    feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
+    res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
+    syms = dict(res.bindings)
+    launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
+                                tiling=tiling, tiled_tf=tiled_tf)
+    outs = {}
+    for tid in g.get("output_tensor_ids") or []:
+        ss = (g["tensors"].get(tid) or {}).get("symbolic_shape")
+        outs[tid] = ([res.resolve(d) for d in ss["dims"]] if isinstance(ss, dict) and ss.get("dims")
+                     else list(g["tensors"][tid]["shape"]))
+    return launches, outs
+
+
+def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str = ""):
+    """The flows' value-derived extents — each site of `census.walk_extent` in the Triton flows —
+    as (name, lo, hi, chain) with chain(n) = [(component, {input: shape} | callable of the
+    previous stage's outputs)], built from the flows' own functions and bounds."""
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.core.runtime_values import require_max_tokens
+    comps = {c["name"] for c in plan["components"]}
+    flow = topo.get("flow") or {}
+    sites = []
+    # dual_ar (triton/flow/dual_ar.py `_decode_codes`): the acoustic code grid [1, codebooks, n]
+    # through codec.quantizer, whose features feed every later codec stage; n in 1..max_tokens.
+    if flow.get("type") == "dual_ar" and "codec.quantizer" in comps:
+        mt = decode_bound(require_max_tokens(defaults))
+        gq = json.loads((CACHE / model / "components" / "codec.quantizer" / "graph.json").read_text())
+        cb = gq["tensors"]["input::indices"]["shape"][1]
+        later = [st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])[1:]
+                 if st.get("component") in comps]
+
+        def chain(n, cb=cb, later=later):
+            return [("codec.quantizer", {"indices": [1, cb, n]})] + [
+                (c, lambda outs: {"x": next(iter(outs.values()))}) for c in later]
+        sites.append(("codec frames", 1, int(mt), chain))
+        # The slow model runs on the whole grid [1, rows, clen] every step: clen from the prompt
+        # column count P (the flows' own `dual_ar_prompt_ids` over `tts_llm_token_ids`) to
+        # P + max_tokens - 1 in a live run (the shadow's pace stops at max_tokens — a walk
+        # bound, named where it differs).
+        if "model" in comps:
+            from neurobrix.core.flow.audio_utils import (apply_tts_template, dual_ar_prompt_ids,
+                                                         tts_llm_token_ids)
+            from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
+            root = CACHE / model
+            tok = load_tokenizer_from_path(root / "modules" / "tokenizer", None)
+            special_p = root / "modules" / "tokenizer" / "special_tokens.json"
+            special = json.loads(special_p.read_text()) if special_p.exists() else {}
+            tpl = defaults.get("tts_prompt_template")
+            text_ids = tts_llm_token_ids(tok, apply_tts_template(prompt, tpl), templated=tpl is not None)
+            P = len(dual_ar_prompt_ids(text_ids, defaults.get("bos_token_id"),
+                                       special.get("<|interleave|>"), tok))
+            gm = json.loads((root / "components" / "model" / "graph.json").read_text())
+            rows = gm["tensors"]["input::inp"]["shape"][1]
+
+            def grid(n, rows=rows):
+                return [("model", {"inp": [1, rows, n]})]
+            sites.append(("slow model grid columns", P, P + int(mt) - 1, grid))
+    # autoregressive SNAC codec (triton/flow/autoregressive.py `_run_snac_codec_decoder`): the
+    # n generated tokens redistributed into three codebooks by the flow's own function.
+    if defaults.get("audio_output_type") == "snac_tokens" and "codec.decoder" in comps:
+        from neurobrix.core.flow.audio_utils import redistribute_snac_codes
+        mt = decode_bound(require_max_tokens(defaults))
+        start, vocab = defaults["audio_token_start"], defaults["vocab_size"]
+
+        def chain(n, start=start, vocab=vocab):
+            codes = redistribute_snac_codes([start] * n, start, vocab)
+            if codes is None:
+                return []
+            return [("codec.decoder", {f"c{i}": [1, len(codes[i])] for i in range(3)})]
+        sites.append(("codec.decoder audio tokens", 1, int(mt), chain))
+    return sites
+
+
+def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt=""):
+    """Every key class of every value-derived extent, by the census's own bisection
+    (`census.bisect_extent`) over the derived keys — nothing runs."""
+    from neurobrix.kernels import census as _census
+    from neurobrix.core.prism import runtime_widths as RW_
+    dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
+    found = set()
+    for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt):
+        seen = {}
+
+        def at(n):
+            if n not in seen:
+                keys = set()
+                outs = None
+                for comp, feed in chain(n):
+                    view, tiled_tf = plan_tiling(plan, comp)
+                    inputs = feed(outs) if callable(feed) else feed
+                    launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
+                                                   has_native_bf16, sdpa, unhandled, tiling=view,
+                                                   tiled_tf=tiled_tf)
+                    keys |= set(launches)
+                found.update(keys)
+                seen[n] = frozenset((q_, k) for _u, q_, k in keys)
+            return seen[n]
+        _census.bisect_extent(lo, hi, at)
+        print(f"[derived] extent {name} {lo}..{hi}: {len(set(seen.values()))} key class(es) "
+              f"in {len(seen)} derivation(s)")
+    return found
+
+
 def compare(a) -> int:
     from trace_request import derived_request
     from neurobrix.core.prism.loader import load_profile
@@ -396,8 +575,17 @@ def compare(a) -> int:
         if get_component_flag(manifest.get("model_name"), enc, "zero_pad_embeddings", default=False):
             cfg["zero_pad_embeddings"] = True
         text_axis[(comp_, inp)] = finalized_text_length(cfg, max(lens))
+    _prompt = request[request.index("--prompt") + 1] if "--prompt" in request else ""
+    _defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
+        if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
+    # A component an extent site drives is derived at every class of that extent, not at the
+    # plan's one binding (which binds a value-derived axis to its trace).
+    covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt)
+               for comp, _f in chain(lo)}
     for c in plan["components"]:
         comp = c["name"]
+        if comp in covered:
+            continue
         g = json.loads((CACHE / a.model / "components" / comp / "graph.json").read_text())
         table = (g.get("symbolic_context") or {}).get("symbols") or {}
         syms = {}
@@ -437,13 +625,16 @@ def compare(a) -> int:
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
         for b in (tile_bindings(g, syms, tilings[comp]) if comp in tilings else [syms]):
-            ot = (plan.get("op_level_tiling_ops") or {}).get(comp) or {}
-            view = RW_.TilingView(fusion_convs={cv: up for up, cv in ot.get("fusion_pairs", [])},
-                                  tiled_ops=frozenset(ot.get("tiled_ops", [])))
+            view, tiled_tf = plan_tiling(plan, comp)
             for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, b,
                                                 prof.has_native_bf16, budget, min_rows, max_chunks,
-                                                unhandled, tiling=view):
+                                                unhandled, tiling=view, tiled_tf=tiled_tf):
                 derived.add((uid, q_, C.key_repr(key)))
+    defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
+        if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
+    for uid, q_, key in derive_extents(a.model, a.mode, topo, defaults, plan, prof.has_native_bf16,
+                                       (budget, min_rows, max_chunks), unhandled, prompt=_prompt):
+        derived.add((uid, q_, C.key_repr(key)))
     walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}
     d_keys = {(q_, k) for _, q_, k in derived}

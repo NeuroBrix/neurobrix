@@ -147,6 +147,23 @@ def extent_ids(ids: list, n: int) -> list:
     return (ids + [ids[-1]] * max(0, n - len(ids)))[:n]
 
 
+def bisect_extent(lo: int, hi: int, at) -> None:
+    """Every key class of an extent in [lo, hi], met once: `at(n)` answers the key set at n (and
+    remembers it); between two extents whose sets differ, the midpoint, until the differing pair
+    is adjacent. Keys are monotone step functions of the extent (a bucket top, an exact extent),
+    so two extents with one set bracket a range with that set. The ONE bisection: the shadow's
+    `walk_extent` runs the flow at n; the derived census derives the keys at n."""
+    stack = [(lo, hi)]
+    while stack:
+        a, b = stack.pop()
+        if b - a <= 1 or at(a) == at(b):
+            continue
+        m = (a + b) // 2
+        at(m)
+        stack.append((m, b))
+        stack.append((a, m))
+
+
 def walk_extent(lo: int, hi: int, run, name: str = ""):
     """Run `run(n)` at every KEY CLASS of an extent the flow learns only from values — the
     number of speech tokens a vocoder receives, the frames a codec decodes — instead of at the
@@ -179,15 +196,7 @@ def walk_extent(lo: int, hi: int, run, name: str = ""):
                 _OBSERVERS.remove(obs)
         return seen[n]
 
-    stack = [(lo, hi)]
-    while stack:
-        a, b = stack.pop()
-        if b - a <= 1 or at(a) == at(b):
-            continue
-        m = (a + b) // 2
-        at(m)
-        stack.append((m, b))
-        stack.append((a, m))
+    bisect_extent(lo, hi, at)
     refused = sorted(n for n, v in seen.items() if any(k.startswith("<refused>") for k in v))
     if len(refused) == len(seen):
         # Every extent refused: the walk recorded nothing and the model would read as censused

@@ -157,25 +157,12 @@ class DualAREngine(FlowHandler):
         input_ids = self.ctx.variable_resolver.resolved.get("global.input_ids")
         if input_ids is None:
             raise RuntimeError("ZERO FALLBACK: DualAR requires tokenized input_ids.")
-        prompt_ids = [int(x) for x in input_ids.squeeze(0).tolist()]
         # Vendor builds ContentSequence(modality="interleave").append([TextPart(text)],
-        # speaker=0): the exact prompt is <|interleave|> + "<|speaker:0|>" (encoded
-        # as TEXT subwords — it is NOT a special token) + the text tokens, with no
-        # leading BOS and no trailing im_end (generation emits the audio then
-        # im_end). Verified against fish_speech ContentSequence.encode_for_inference.
-        bos_id = defaults.get("bos_token_id")
-        if bos_id is not None and prompt_ids and prompt_ids[0] == bos_id:
-            prompt_ids = prompt_ids[1:]
-        interleave_id = special.get("<|interleave|>")
-        tok = self.ctx.modules.get("tokenizer")
-        speaker_ids = []
-        if tok is not None:
-            try:
-                _s = tok.encode("<|speaker:0|>", add_special_tokens=False)
-            except TypeError:
-                _s = tok.encode("<|speaker:0|>")
-            speaker_ids = [int(x) for x in (_s.tolist() if hasattr(_s, "tolist") else _s)]
-        prompt_ids = ([interleave_id] if interleave_id is not None else []) + speaker_ids + prompt_ids
+        # speaker=0): <|interleave|> + "<|speaker:0|>" (TEXT subwords) + the text tokens, no
+        # leading BOS (fish_speech ContentSequence.encode_for_inference) — `dual_ar_prompt_ids`.
+        from neurobrix.core.flow.audio_utils import dual_ar_prompt_ids
+        prompt_ids = dual_ar_prompt_ids(input_ids.squeeze(0).tolist(), defaults.get("bos_token_id"),
+                                        special.get("<|interleave|>"), self.ctx.modules.get("tokenizer"))
         print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
         from .audio_utils import sample_token

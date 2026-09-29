@@ -550,6 +550,12 @@ class _TritonRules(_Rules):
         name = tid.split("::", 1)[1] if "::" in tid else tid
         if name in self.fp32_constants:
             return "float32"
+        meta = self.tensors.get(tid) or {}
+        if meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"):
+            # An embedded constant is decoded at its traced dtype and bound as is
+            # (triton/constants.py `load_constants_from_graph`) — no compute-dtype cast: swin2SR's
+            # relative-coordinates table reached its MLP in fp32 in the census walk.
+            return traced
         return super().weight_dtype(tid, traced)
 
     def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:

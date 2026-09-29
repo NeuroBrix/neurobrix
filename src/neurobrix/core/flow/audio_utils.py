@@ -228,6 +228,41 @@ def postprocess_text_output(ctx: FlowContext) -> None:
     print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
+def apply_tts_template(prompt: str, tts_template: Optional[str]) -> str:
+    """The container's `tts_prompt_template` around the prompt (its `{text}` slot), or the prompt."""
+    return tts_template.format(text=prompt) if tts_template and "{text}" in tts_template else prompt
+
+
+def tts_llm_token_ids(tokenizer, text: str, templated: bool) -> List[int]:
+    """The token ids of a TTS prompt on the LLM tokenization path: a templated text carries its own
+    special tokens, so the tokenizer adds none; a bare prompt takes the tokenizer's own. The
+    Triton audio flow and the derived census call it."""
+    try:
+        ids = tokenizer.encode(text, add_special_tokens=not templated)
+    except TypeError:
+        ids = tokenizer.encode(text)
+    ids = ids.get("input_ids", ids) if isinstance(ids, dict) else ids
+    return [int(x) for x in (ids.tolist() if hasattr(ids, "tolist") else list(ids))]
+
+
+def dual_ar_prompt_ids(input_ids: List[int], bos_id, interleave_id, tokenizer) -> List[int]:
+    """The dual-AR slow model's prompt column ids (fish_speech ContentSequence.encode_for_inference,
+    verified by the flows): the text ids without a leading BOS, after <|interleave|> and the TEXT
+    subwords of "<|speaker:0|>" (not a special token). Both dual-AR flows and the derived census
+    call it — the census's grid starts at its length."""
+    ids = [int(x) for x in input_ids]
+    if bos_id is not None and ids and ids[0] == bos_id:
+        ids = ids[1:]
+    speaker = []
+    if tokenizer is not None:
+        try:
+            s = tokenizer.encode("<|speaker:0|>", add_special_tokens=False)
+        except TypeError:
+            s = tokenizer.encode("<|speaker:0|>")
+        speaker = [int(x) for x in (s.tolist() if hasattr(s, "tolist") else s)]
+    return ([interleave_id] if interleave_id is not None else []) + speaker + ids
+
+
 def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size,
                             codebook_size: int = 4096):
     """Zero Outsider (ZO-0): redistribute an orpheus SNAC token stream (7 tokens

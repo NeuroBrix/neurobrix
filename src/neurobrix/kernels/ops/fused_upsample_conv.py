@@ -310,7 +310,9 @@ def _fused_upsample_conv2d_torch(
     # of REAL pixels above and below each band. Pre-upsample halo derived
     # by dividing through the nearest-upsample ratio (one pre row covers
     # `up_sh` upsample rows, so halo_post / up_sh pre rows is enough).
-    halo_post = (kh - 1) * dh // 2
+    # Rounded up to whole strides; the rows skipped are halo // stride (2026-09-29, the stride-2
+    # misalignment — the NBX twin reads the same cut from launch_keys.tiled_conv2d_bands).
+    halo_post = -(-((kh - 1) * dh // 2) // sh_st) * sh_st
 
     for oh_start in range(0, conv_out_h, band_oh):
         oh_end = min(oh_start + band_oh, conv_out_h)
@@ -403,10 +405,10 @@ def _fused_upsample_conv2d_torch(
         # all internal-frontier output rows by halo_top toward the top.
         # Cap actual_band_h by available conv_band height after the
         # halo offset, not by raw conv_band.shape[2].
-        avail_after_halo = conv_band.shape[2] - halo_top
+        avail_after_halo = conv_band.shape[2] - halo_top // sh_st
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top // sh_st:halo_top // sh_st + actual_band_h, :]
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -501,7 +503,10 @@ def _tiled_conv2d_spatial_torch(
 
     tile_factor = max(1, int(tile_factor))
     band_oh = (out_h + tile_factor - 1) // tile_factor
-    halo_h = (kh - 1) * dh // 2
+    # The halo rounded up to whole strides, the leading rows skipped = halo // stride: at stride 2
+    # a 1-row halo misaligned every internal band by half an output row (2026-09-29; the NBX twin
+    # reads the same cut from launch_keys.tiled_conv2d_bands).
+    halo_h = -(-((kh - 1) * dh // 2) // sh_st) * sh_st
 
     for oh_start in range(0, out_h, band_oh):
         oh_end = min(oh_start + band_oh, out_h)
@@ -561,10 +566,10 @@ def _tiled_conv2d_spatial_torch(
         # all internal-frontier output rows by halo_top toward the top.
         # Cap actual_band_h by available conv_band height after the
         # halo offset, not by raw conv_band.shape[2].
-        avail_after_halo = conv_band.shape[2] - halo_top
+        avail_after_halo = conv_band.shape[2] - halo_top // sh_st
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top // sh_st:halo_top // sh_st + actual_band_h, :]
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -692,40 +697,11 @@ def _tiled_conv2d_spatial_nbx(
         (N, out_c, out_h, out_w),
         device=input_tensor.device, dtype=input_tensor.dtype,
     )
-    tile_factor = max(1, int(tile_factor))
-    band_oh = (out_h + tile_factor - 1) // tile_factor
-    halo_h = (kh - 1) * dh // 2
-
-    for oh_start in range(0, out_h, band_oh):
-        oh_end = min(oh_start + band_oh, out_h)
-        is_top_band = (oh_start == 0)
-        is_bot_band = (oh_end == out_h)
-
-        # Input rows the kernel needs to produce [oh_start, oh_end):
-        # core range minus pad_h, then extend by halo_h for internal frontiers.
-        in_inner_start = oh_start * sh_st - pad_h
-        in_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
-        halo_top = 0 if is_top_band else halo_h
-        halo_bot = 0 if is_bot_band else halo_h
-        in_read_start = in_inner_start - halo_top
-        in_read_end = in_inner_end + halo_bot
-
-        in_clamped_start = max(0, in_read_start)
-        in_clamped_end = min(IH, in_read_end)
-        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: removed redundant
-        # `+ (pad_h if is_top_band/is_bot_band else 0)`. `in_inner_start
-        # = oh_start*sh_st - pad_h` already shifts by -pad_h, so the
-        # max(0, -in_read_start) term ALREADY provides image-edge
-        # padding for the top/bot band. Adding it twice shifted band-1
-        # output up by pad_h rows on top and similarly for bot — caused
-        # cos near 0 vs F.conv2d at any (kh>=3, pad_h>=1) signature
-        # (microtest scripts/microtest_tiled_conv2d_small_scale.py).
-        pad_top_real = max(0, -in_read_start)
-        pad_bot_real = max(0, in_read_end - IH)
-
-        if in_clamped_end <= in_clamped_start:
-            continue
-
+    # The bands are `launch_keys.tiled_conv2d_bands` — the cut the derived census keys with.
+    from neurobrix.kernels.launch_keys import tiled_conv2d_bands
+    for (oh_start, oh_end, in_clamped_start, in_clamped_end,
+         pad_top_real, pad_bot_real, skip) in tiled_conv2d_bands(
+            IH, out_h, kh, sh_st, dh, pad_h, tile_factor):
         # POINT 6 FIX (P-SANA-4KPX-RUNTIME): see `_fused_upsample_conv2d_nbx`
         # for the full rationale — H-slice on an NCHW tensor produces a
         # non-contiguous view; the downstream conv/pad Triton wrappers use
@@ -752,14 +728,14 @@ def _tiled_conv2d_spatial_nbx(
         # conv_band[0] is the convolution at the halo row, not at the
         # band's first useful output row. Skip the halo rows on the
         # read side.
-        avail_after_halo = conv_band.shape[2] - halo_top
+        avail_after_halo = conv_band.shape[2] - skip
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
         # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
         # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
         if bias is not None:
             conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, skip:skip + actual_band_h, :]
     return output
 
 
@@ -806,49 +782,14 @@ def _fused_upsample_conv2d_nbx(
         device=pre_input.device, dtype=pre_input.dtype,
     )
 
-    tile_factor = max(1, int(tile_factor))
-    band_oh = (conv_out_h + tile_factor - 1) // tile_factor
     pre_h = pre_input.shape[2]
-    # POINT 5 FIX (P-SANA-4KPX-RUNTIME): mirror `_fused_upsample_conv2d_torch`
-    # halo logic exactly. Previous version applied `padding=(pad_h, pad_w)` on
-    # every band — at internal frontiers this filled zeros where the kernel
-    # should have read from the next band's upsample rows (real halo), causing
-    # value divergence at every band frontier (~50 max_abs at Sana 4Kpx,
-    # 98%+ of elements differ from torch path). NBX backend now matches.
-    halo_post = (kh - 1) * dh // 2
-
     from neurobrix.kernels.wrappers import constant_pad_nd_wrapper
-
-    for oh_start in range(0, conv_out_h, band_oh):
-        oh_end = min(oh_start + band_oh, conv_out_h)
-
-        up_inner_start = oh_start * sh_st - pad_h
-        up_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
-        is_top_band = (oh_start == 0)
-        is_bot_band = (oh_end == conv_out_h)
-        halo_top = 0 if is_top_band else halo_post
-        halo_bot = 0 if is_bot_band else halo_post
-        up_read_start = up_inner_start - halo_top
-        up_read_end = up_inner_end + halo_bot
-
-        up_clamped_start = max(0, up_read_start)
-        up_clamped_end = min(OH, up_read_end)
-        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: previous formula
-        # `+ (pad_h if is_top_band else 0)` double-counted edge padding.
-        # `up_inner_start = oh_start*sh_st - pad_h`, so for is_top_band
-        # (oh_start=0) we have up_inner_start = -pad_h and up_read_start
-        # = -pad_h (halo_top=0). Then max(0, -up_read_start) = pad_h
-        # already provides the image-top zero padding. Adding pad_h
-        # again over-padded by one row, shifting band-1 output up by
-        # pad_h rows. Symmetric on bot_band via in_read_end formula.
-        # Validated by microtest scripts/microtest_tiled_conv2d_small_scale.py
-        # which sweeps (kh, pad_h) at 1024^2 — pad_h=0 already PASS
-        # pre-fix, pad_h>0 FAIL pre-fix, all PASS post-fix.
-        pad_top_real = max(0, -up_read_start)
-        pad_bot_real = max(0, up_read_end - OH)
-
-        if up_clamped_end <= up_clamped_start:
-            continue
+    # The bands over the UPSAMPLED extent are `launch_keys.tiled_conv2d_bands` — one cut with the
+    # standalone tiled conv and the derived census (the halo rounded to whole strides).
+    from neurobrix.kernels.launch_keys import tiled_conv2d_bands
+    for (oh_start, oh_end, up_clamped_start, up_clamped_end,
+         pad_top_real, pad_bot_real, skip) in tiled_conv2d_bands(
+            OH, conv_out_h, kh, sh_st, dh, pad_h, tile_factor):
 
         # Pre-upsample rows that produce [up_clamped_start, up_clamped_end).
         # nearest mapping: pre_row = floor(up_row / up_sh).
@@ -897,7 +838,7 @@ def _fused_upsample_conv2d_nbx(
         # conv_band read side. Internal band frontiers (halo_top > 0)
         # write F.conv2d output row `oh_start + halo_top - 1` at
         # output row `oh_start` without this offset.
-        avail_after_halo = conv_band.shape[2] - halo_top
+        avail_after_halo = conv_band.shape[2] - skip
         if avail_after_halo < actual_band_h:
             actual_band_h = avail_after_halo
         # Bias add inside band — keeps the broadcast bounded to one band's
@@ -906,7 +847,7 @@ def _fused_upsample_conv2d_nbx(
         # identical (bias is per-channel, applies element-wise on H,W).
         if bias is not None:
             conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, skip:skip + actual_band_h, :]
 
     return output
 
