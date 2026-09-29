@@ -50,7 +50,11 @@ def _rekey_proof(entry: dict, new_key: tuple) -> None:
 def migrate_directory(directory: Path, dry: bool) -> int:
     from neurobrix.kernels import autotune_certified as C
     n = 0
-    for path in sorted(directory.glob("conv2d_forward_kernel.*.json")):
+    found = sorted(directory.glob("conv2d_forward_kernel.*.json"))
+    if not found:
+        raise SystemExit(f"[migrate] REFUSED: no conv2d_forward_kernel file under {directory.resolve()} — name the "
+                         f"certified directory itself (e.g. src/neurobrix/config/autotune/nvidia/volta)")
+    for path in found:
         with open(path.with_suffix(".json.lock"), "a+") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
             try:
@@ -83,7 +87,14 @@ def migrate_tables(tables: Path, dry: bool) -> int:
     from neurobrix.kernels import autotune_certified as C
     from neurobrix.kernels import census_table as T
     n = 0
-    for path in sorted(tables.glob("*g.jsonl")):
+    found = sorted(tables.glob("*g.jsonl"))
+    if not found:
+        # `--tables nvidia/volta` (the help's own form) resolved against the working directory, globbed
+        # nothing and printed "0 re-keyed in all" — a silence read as "nothing to do" (2026-09-29: 1 140
+        # stale rows were there). A directory with no table is refused by name.
+        raise SystemExit(f"[migrate] REFUSED: no census table (*g.jsonl) under {tables.resolve()} — name the "
+                         f"table directory itself (e.g. src/neurobrix/config/census/nvidia/volta)")
+    for path in found:
         with open(str(path) + ".lock", "a") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
             try:
