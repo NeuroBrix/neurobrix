@@ -163,6 +163,7 @@ def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(mon
     widening._nbx_widens_on_load = True
     eng = D.TritonDtypeEngine.__new__(D.TritonDtypeEngine)
     eng.compute_dtype = NBXDtype.float16
+    eng.graph_dtype = "float16"      # set by __init__ (bb89cde9); the fp16 rule never reads it
     x16 = NBXTensor.from_numpy(np.ones((2, 8), dtype=np.float16))
     monkeypatch.setattr(_w, "_NBX_ACTIVATIONS_FP16_SAFE", False)
     with _Count() as c:
