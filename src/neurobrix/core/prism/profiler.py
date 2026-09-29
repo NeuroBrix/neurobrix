@@ -481,7 +481,9 @@ class ActivationProfiler:
         """Symbol map for THIS graph: positional base + name-driven overrides.
 
         `placement_floor=True` (PLACEMENT estimates only — never the
-        per-request paths): no named symbol binds BELOW its trace value.
+        per-request paths): no symbol whose binding is a guess binds BELOW its
+        trace value; the request's own extents (time, height, width) bind as
+        asked.
         The trace is a WITNESSED extent; placement must stay safe for
         extents >= trace. Root case (2026-08-10, D7 scoping note):
         Qwen3-Omni thinker.audio_tower's mel-frame axis is NAMED
@@ -608,19 +610,27 @@ class ActivationProfiler:
                 # Unknown named symbol: trace value (matches the trace, never
                 # worse than the legacy positional guess).
                 symbol_map[sid] = trace
+            # The floor is for a binding that is a GUESS (a `seq_len` axis taking the global text
+            # length, the 2026-08-10 case), never for an extent the request states: frames, height
+            # and width are the request's own, exactly as the pixel-space branch above binds them
+            # unfloored. Floored one axis at a time, Wan2.1-VACE at 832x480 — the vendor's portrait
+            # size, traced at 480x832 — priced its width at the trace's 104 latent columns where it
+            # asked for 60: a 104x104 grid, the transformer 18.04 GiB instead of 10.41, and the plan
+            # fell from lazy_sequential to cpu_streaming (2026-09-29).
             if (placement_floor and isinstance(trace, int)
+                    and name not in ("time", "height", "width")
                     and sid in symbol_map
                     and isinstance(symbol_map[sid], int)
                     and symbol_map[sid] < trace):
                 symbol_map[sid] = trace
-        # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`) — then
-        # the placement floor, as for every named symbol. `flow=False` is the rules' own recursion
-        # (a rule binding another component by name alone).
+        # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`): the
+        # CFG batch, the VACE pair, an encoder's length, a denoiser's text axis — each the extent
+        # the flow runs, never a guess, so never floored. Floored, Wan2.2-I2V's transformer (traced
+        # at batch 3, a collision-free stimulus) was priced at 3 for a CFG batch of 2 (2026-09-29).
+        # `flow=False` is the rules' own recursion (a rule binding another component by name alone).
         if flow and getattr(input_config, "flow", None) is not None:
             for sid, v in input_config.flow.overrides(self.dag, input_config).items():
-                trace = (syms.get(sid) or {}).get("trace_value") if isinstance(syms.get(sid), dict) else None
-                symbol_map[sid] = (max(int(v), trace) if (placement_floor and isinstance(trace, int))
-                                   else int(v))
+                symbol_map[sid] = int(v)
         return symbol_map
 
     def trace_symbol_map(self) -> Dict[str, int]:

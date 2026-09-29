@@ -3678,3 +3678,24 @@ three counts on both injections.
 
 **The lesson, in one line.** A parametrized proof of a global patch must prove the patch was
 applied in every case, not only in the first.
+
+### 118 — a test asserted the placement floor on the request's own extents as if it were the rule
+
+**Gate**: `tests/unit/prism/test_symbol_map_names_its_hypothesis.py::test_the_declared_map_binds_time_to_time`,
+its two placement assertions (`placement["s1"] == 9` for a 5-latent-frame request, `placement["s3"]
+== 176` for a 64-column one).
+
+**What the gate said about the defect**: green. The floor was written for a GUESSED binding — an
+audio axis named `seq_len` taking the global text length (2026-08-10) — and the test pinned it on
+frames and width, which the request states. The defect it protected was measured on 2026-09-29:
+Wan2.1-VACE at 832x480 (the vendor's portrait size, traced at 480x832) priced its width at the
+trace's 104 latent columns, the transformer 18.04 GiB instead of 10.41 for the same token count,
+and the plan fell to cpu_streaming; Wan2.2-I2V's transformer, traced at batch 3, was priced at 3
+for the flow's CFG batch of 2 (12.26 GiB for 8.19) and fell to cpu_streaming at its vendor default.
+
+**Repair.** The floor applies only to a binding that is not the request's or the flow's own
+extent; `test_a_request_extent_is_priced_at_the_request.py` holds the swap, the fewer frames and
+the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
+
+**The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
+the rule; pin it on the case it was written for.

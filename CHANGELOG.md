@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A request is planned at its own size.** The memory plan priced every frame count, height and
+  width at least at the size the model was prepared with, one axis at a time: a video asked in
+  portrait at the same area as its landscape size was priced as a square of the larger side, and a
+  guided request was priced at the preparation's batch. Wan2.1-VACE at 832x480 and Wan2.2-I2V at
+  480x832 were planned to stream from host memory on a 16 GB card; both now plan on the card.
+
 - **Speech and image generators that decode with a cache are planned with that cache.** VibeVoice
   keeps two decoding contexts (the prompt and the guidance context) and its memory plan counted
   none of them (about 0.7 GB unplanned); Janus's image generation decodes two sequences under

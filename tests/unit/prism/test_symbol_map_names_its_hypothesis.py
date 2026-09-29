@@ -92,9 +92,10 @@ def test_the_declared_map_binds_time_to_time():
 
     # 17 frames at temporal compression 4 -> (17-1)//4 + 1 = 5 latent frames.
     assert per_request["s1"] == 5, "time binds to the latent frame count"
-    # The placement estimate never binds a named symbol BELOW its witnessed
-    # trace (9 here), which is the 2026-08-10 floor and not a disagreement.
-    assert placement["s1"] == 9
+    # The placement estimate binds the request's own frame count too: the
+    # 2026-08-10 floor is for a GUESSED binding (a `seq_len` axis taking the
+    # global text length), never for an extent the request states (2026-09-29).
+    assert placement["s1"] == 5
     # The guess binds the same axis to a latent HEIGHT — a factor of 12 away
     # from the per-request answer, silently.
     assert guess["s1"] == 64
@@ -102,7 +103,7 @@ def test_the_declared_map_binds_time_to_time():
     # declared table says it is a width. Nothing in the positional map is
     # checked against the table it contradicts.
     assert guess["s3"] == 64 * 64
-    assert placement["s3"] == 176, "width keeps its witnessed trace under the floor"
+    assert placement["s3"] == 64, "width is the request's, under the placement map too"
 
 
 def test_an_unnamed_graph_still_gets_the_positional_base():
