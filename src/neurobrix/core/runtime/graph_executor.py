@@ -175,6 +175,15 @@ class GraphExecutor:
     #: conservative contract: GLM-4.1V streamed, same tokens, logits off from whole (30.3190 vs
     #: 30.3169 at step 0) while whole run twice was identical. None: resolve as a component.
     _contract_from = None
+    #: The executor whose COMPONENT state this one loads under: the runtime resolution the
+    #: runtime sets per request (`set_runtime_resolution`, on the component's executor only) and
+    #: the component handler the factory attaches to it. A `layer_streaming` piece is built by the
+    #: strategy, not the factory, and the runtime never reaches it — so its computable buffers
+    #: (a sincos pos_embed, absent from the weights by construction) were never computed, and the
+    #: op reading one met None: Sana_1600M_4Kpx_BF16 streamed in 24 pieces, `aten.add::0` (patch
+    #: embed + pos_embed), the Mac 2026-09-29. Read at EVERY load, never copied once at build: a
+    #: piece outlives a request, and the next request may ask another resolution. None: its own.
+    _component_from = None
 
     def __init__(
         self,
@@ -1860,6 +1869,12 @@ class GraphExecutor:
         Uses shard_map from Prism for multi-GPU placement.
         Same lifecycle for both native and triton — only tensor FORMAT differs.
         """
+        if self._component_from is not None:
+            # A piece loads under its component's state AS IT IS NOW (`_component_from`).
+            src = self._component_from
+            self._runtime_height = src._runtime_height
+            self._runtime_width = src._runtime_width
+            self._component_handler = src._component_handler
         if os.environ.get("NBX_WEIGHTS_LOAD_TRACE"):
             import traceback as _tb_wl
             print(f"[WEIGHTS_LOAD] component={component} mode={self.mode}",
