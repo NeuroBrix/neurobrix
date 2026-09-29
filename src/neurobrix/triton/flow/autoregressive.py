@@ -124,6 +124,51 @@ def _phase_mem_note() -> str:
     return note
 
 
+def prompt_token_ids(tokenizer, prompt: str, defaults: dict, is_image_ar: bool, chat_mode: bool):
+    """The prompt's token ids by the autoregressive flow's rule (`_tokenize` priorities 1-3): the
+    SFT format for an image-AR model, the HF chat template when chat_mode is on, else a basic encode
+    WITH the tokenizer's specials and no padding (orpheus, openaudio). `_tokenize` calls it; so does
+    the derived census, whose prefill length is its length."""
+    sft_format = defaults.get("sft_format")
+    special_token_ids = defaults.get("special_token_ids")
+    if (is_image_ar and sft_format and special_token_ids
+            and hasattr(tokenizer, "format_generation_prompt")):
+        # Priority 1: SFT format (Janus-style image AR). Only taken for
+        # image-AR models to avoid disturbing the LLM path.
+        token_ids = tokenizer.format_generation_prompt(
+            prompt=prompt,
+            sft_format=sft_format,
+            special_token_ids=special_token_ids,
+            is_unconditional=False,
+        )
+    elif (chat_mode and not is_image_ar
+          and hasattr(tokenizer, "apply_chat_template")
+          and (not hasattr(tokenizer, "has_chat_template")
+               or tokenizer.has_chat_template())):
+        # Priority 2: HF chat_template — ONLY when chat_mode is enabled
+        # (TextProcessor parity). Preserves the Triton chat-LLM path
+        # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
+        messages = [{"role": "user", "content": prompt}]
+        token_ids = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True)
+    elif hasattr(tokenizer, "encode_with_mask"):
+        # Priority 3a: basic tokenization WITH special tokens (TextProcessor
+        # parity for chat_mode=False models — orpheus, openaudio).
+        _r = tokenizer.encode_with_mask(
+            prompt, padding=False, add_special_tokens=True)
+        token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
+    elif hasattr(tokenizer, "encode"):
+        # Priority 3b: basic encode (with special tokens when supported).
+        try:
+            token_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        except TypeError:
+            token_ids = tokenizer.encode(prompt)
+    else:
+        raise RuntimeError("Tokenizer has no encode method.")
+
+    return _flatten_tokenizer_output(token_ids)
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -437,41 +482,7 @@ class TritonAutoregressiveHandler:
         else:
             chat_mode = bool(defaults.get("chat_mode", False))
 
-        if (is_image_ar and sft_format and special_token_ids
-                and hasattr(tokenizer, "format_generation_prompt")):
-            # Priority 1: SFT format (Janus-style image AR). Only taken for
-            # image-AR models to avoid disturbing the LLM path.
-            token_ids = tokenizer.format_generation_prompt(
-                prompt=prompt,
-                sft_format=sft_format,
-                special_token_ids=special_token_ids,
-                is_unconditional=False,
-            )
-        elif (chat_mode and not is_image_ar
-              and hasattr(tokenizer, "apply_chat_template")
-              and (not hasattr(tokenizer, "has_chat_template")
-                   or tokenizer.has_chat_template())):
-            # Priority 2: HF chat_template — ONLY when chat_mode is enabled
-            # (TextProcessor parity). Preserves the Triton chat-LLM path
-            # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
-            messages = [{"role": "user", "content": prompt}]
-            token_ids = tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True)
-        elif hasattr(tokenizer, "encode_with_mask"):
-            # Priority 3a: basic tokenization WITH special tokens (TextProcessor
-            # parity for chat_mode=False models — orpheus, openaudio).
-            _r = tokenizer.encode_with_mask(
-                prompt, padding=False, add_special_tokens=True)
-            token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
-        elif hasattr(tokenizer, "encode"):
-            # Priority 3b: basic encode (with special tokens when supported).
-            try:
-                token_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            except TypeError:
-                token_ids = tokenizer.encode(prompt)
-        else:
-            raise RuntimeError("Tokenizer has no encode method.")
-
+        token_ids = prompt_token_ids(tokenizer, prompt, defaults, is_image_ar, chat_mode)
         token_ids = _flatten_tokenizer_output(token_ids)
         ids_np_cond = np.array([token_ids], dtype=np.int64)
 

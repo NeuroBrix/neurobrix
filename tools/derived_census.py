@@ -58,9 +58,11 @@ def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) 
 
 
 def prompt_tokens(model: str, prompt: str) -> int:
-    """The prefill length: the prompt through the container's own tokenizer and chat template,
-    as the autoregressive flow's `_tokenize` does for a chat-mode model."""
+    """The prefill length: the prompt through the container's own tokenizer by the autoregressive
+    flow's own rule (`triton/flow/autoregressive.prompt_token_ids`: SFT format / chat template /
+    basic encode with specials, unpadded)."""
     from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
+    from neurobrix.triton.flow.autoregressive import prompt_token_ids
     root = CACHE / model
     topo = json.loads((root / "topology.json").read_text())
     mods = topo.get("modules") or {}
@@ -68,17 +70,11 @@ def prompt_tokens(model: str, prompt: str) -> int:
     if not tok:
         raise SystemExit(f"{model}: no tokenizer module in its topology")
     path = (tok.get("path") if isinstance(tok, dict) else tok) or "modules/tokenizer"   # the executor's default
-    path = str(path).rstrip("/")
     defaults = json.loads((root / "runtime" / "defaults.json").read_text()) if (root / "runtime" / "defaults.json").exists() else {}
-    tokenizer = load_tokenizer_from_path(root / path, None)
-    if bool(defaults.get("chat_mode", False)) and hasattr(tokenizer, "apply_chat_template"):
-        ids = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], add_generation_prompt=True)
-    else:
-        ids = tokenizer.encode(prompt)
-    ids = ids.get("input_ids", ids) if isinstance(ids, dict) else ids
-    while isinstance(ids, (list, tuple)) and ids and isinstance(ids[0], (list, tuple)):
-        ids = ids[0]
-    return len(ids)
+    tokenizer = load_tokenizer_from_path(root / str(path).rstrip("/"), None)
+    gen_type = ((topo.get("flow") or {}).get("generation") or {}).get("type")
+    return len(prompt_token_ids(tokenizer, prompt, defaults, gen_type == "autoregressive_image",
+                                bool(defaults.get("chat_mode", False))))
 
 
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
