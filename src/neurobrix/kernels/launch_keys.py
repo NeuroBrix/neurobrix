@@ -264,8 +264,8 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
     out_c at dilation 1; band streaming (per-band recursion at the original padding) when the
     output, sized at the INPUT's dtype, exceeds `band_bytes`; otherwise one `conv2d_forward_kernel`
     launch. The output dtype is the run's compute dtype when set (`_NBX_COMPUTE_DTYPE`), else the
-    input's. REPRODUCED, not fixed: the plain kernel's `fp16` key flag compares a Triton dtype to
-    an IntEnum and is always False (named for a decision — fixing it re-keys every conv entry)."""
+    input's. The `fp16` key flag names an fp16 input (fixed 2026-09-29, aaad1c48; the entries were
+    re-keyed in place)."""
     from neurobrix.kernels.nbx_tensor import dtype_size
     out_h, out_w = conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw)
     if out_h <= 0 or out_w <= 0:
@@ -297,7 +297,7 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
         return out_launches
     iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, dw)
     return [(CONV2D, (N, in_c, in_h, iw_k, out_c, out_h, ow_k, kh, kw, sh, sw, ph, pw, dh, dw, groups,
-                      False, tag(x), tag(w), tag(out)))]
+                      x == F16, tag(x), tag(w), tag(out)))]
 
 
 def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool, groups: int,

@@ -198,7 +198,15 @@ def walked_pairs(walked: Path, model: str, mode: str, rung):
             if kl not in with_op:
                 q_, _, k = kl.partition("::")
                 pairs.add((None, q_, k))
-    return pairs
+    # Logs walked before the conv key's fp16 flag was fixed (aaad1c48) carry False for fp16 inputs:
+    # read them as the migration re-keyed the table (tools/migrate_conv_fp16_key.py `migrated`).
+    import migrate_conv_fp16_key as _MG
+    from neurobrix.kernels import autotune_certified as _C
+    fixed = set()
+    for op, q_, k in pairs:
+        m = _MG.migrated(_C.parse_key(k)) if q_ == _MG.KERNEL else None
+        fixed.add((op, q_, _C.key_repr(m) if m else k))
+    return fixed
 
 
 def compare(a) -> int:
