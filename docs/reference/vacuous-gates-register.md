@@ -3639,3 +3639,42 @@ exactly the three; green restored.
 
 **The lesson, in one line.** A scope question is answered by the language's scope table, not by a
 walk that flattens scopes.
+
+### 116 — a container stub that answered what the real container never does
+
+**Gate**: `tests/unit/prism/test_the_plan_prices_every_cache_its_decoder_opens.py`, first version
+(2026-09-29, never landed): the plan prices a next-token-diffusion decode cache and an image-AR
+guidance batch, on a stub container.
+
+**What it was for**: Prism priced no cache for VibeVoice's two-context decoder (714 MiB) and
+one sequence for Janus's two.
+
+**What the gate said**: green, six of six — while the plan comparison over 49 containers x 2
+rungs came back 98/98 unchanged. The stub's `get_topology()` returned the topology; the real
+container's is the deprecated alias of `get_graph()` and returns None on every plan, so the
+solver's reads through it (the new rule, and its own image-VQ detection since whenever it was
+written) saw no flow at all.
+
+**Repair.** The stub is the real container's shape: the topology on disk in its cache,
+`get_topology()` returning None; the solver reads the flow through its own `_flow_topology`. Red
+with the alias restored, green after; the plan comparison moved.
+
+**The lesson, in one line.** A stub proves the code against the stub; the measurement over the
+real objects is what found it.
+
+### 117 — a class-level patch flagged done made two of three cases compare the vendor with itself
+
+**Gate**: the build-side proof that a video VAE's one-pass encode equals the vendor's chunked
+encode, first version (2026-09-29, never landed), parametrized over three frame counts.
+
+**What the gate said about the injected defect** (frame 0 dropped from the pass): red at the
+first count, GREEN at the other two. The patch installs itself on the class and flags the class
+done; the next case's patcher returned early on the flag, the case's "patched" call ran the
+vendor's own method, and compared it with itself.
+
+**Repair.** Each case restores the vendor classes (method, flag) and asserts the patch is in
+place before comparing; the proof then runs in a fresh process per library release. Red at all
+three counts on both injections.
+
+**The lesson, in one line.** A parametrized proof of a global patch must prove the patch was
+applied in every case, not only in the first.

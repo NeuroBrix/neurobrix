@@ -1009,7 +1009,7 @@ class PrismSolver:
 
         # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
         try:
-            topology = container.get_topology() or {}
+            topology = self._flow_topology(container)
         except Exception as exc:
             # `gen_type = ""` stood here, and an empty generation type reads as
             # "not an image-VQ model" — a container whose topology cannot be
@@ -2626,11 +2626,32 @@ class PrismSolver:
         return bool(lm["norm_topk_prob"])
 
     def _read_lm_config(self, container) -> Optional[Dict]:
-        """Read lm_config from defaults.json. Returns None if not LLM."""
+        """The LM facts of the decoder this container's flow runs, or None when it runs none: the
+        package's `lm_config`, else — for a flow that opens a decode session — the facts that
+        session builds its cache from (`core.runtime.lm_facts`, one reader for the plan and both
+        engines). A next-token-diffusion package carries no `lm_config`, and its KV-cached decoder
+        ran unplanned (VibeVoice, 2026-09-29: 714 MiB)."""
+        from neurobrix.core.runtime.lm_facts import decode_lm_component, lm_config_of
         defaults = self._read_defaults(container)
         if not defaults:
             return None
-        return defaults.get("lm_config")
+        if defaults.get("lm_config"):
+            return defaults.get("lm_config")
+        topology = self._flow_topology(container)
+        lm = decode_lm_component(topology, list((topology.get("components") or {}).keys()))
+        if lm is None:
+            return None
+        return {**lm_config_of(defaults, topology, lm), "component_name": lm}
+
+    def _kv_sequences(self, container) -> int:
+        """How many sequences the decode cache holds at once (`lm_facts.decode_sequences`): the
+        guidance batch of an image-AR generation, the negative context of a next-token diffusion."""
+        from neurobrix.core.runtime.lm_facts import decode_sequences
+        return decode_sequences(self._flow_topology(container), self._read_defaults(container) or {})
+
+    def _kv_token_bytes(self, container, lm_config: Dict[str, Any], dtype_str: str) -> int:
+        """Bytes one cached position costs across every sequence the cache holds."""
+        return self._kv_per_token_bytes(lm_config, dtype_str) * self._kv_sequences(container)
 
 
     #: How a declared symbol's NAME maps onto the request that will be run.
@@ -2868,7 +2889,7 @@ class PrismSolver:
         # where max_pos=262144 adds ~25GB vs max_tokens=32768 adding ~3.2GB).
         cache_len = (max_tokens + prompt_margin) if max_tokens else max_pos
 
-        return cache_len * self._kv_per_token_bytes(lm_config, target_dtype_str)
+        return cache_len * self._kv_token_bytes(container, lm_config, target_dtype_str)
 
     @staticmethod
     def _kv_per_token_bytes(lm_config: Dict[str, Any], dtype_str: str) -> int:
@@ -2902,7 +2923,7 @@ class PrismSolver:
         lm_config = self._read_lm_config(container)
         if not lm_config:
             return 0
-        return self._kv_min_tokens(container) * self._kv_per_token_bytes(lm_config, dtype_str)
+        return self._kv_min_tokens(container) * self._kv_token_bytes(container, lm_config, dtype_str)
 
     def _compute_kv_cache_plan(
         self, container, target_dtype: str, remaining_vram_bytes: int
@@ -2932,7 +2953,8 @@ class PrismSolver:
         v_head_dim_val: int = lm_config.get("v_head_dim", head_dim)
         max_pos: int = lm_config.get("max_position_embeddings") or 0
 
-        per_token_bytes: int = self._kv_per_token_bytes(lm_config, target_dtype)
+        # every sequence the cache holds (the guidance batch, a negative context) at once
+        per_token_bytes: int = self._kv_token_bytes(container, lm_config, target_dtype)
 
         # Prism decides max_cache_len from remaining VRAM budget
         defaults = self._read_defaults(container)
