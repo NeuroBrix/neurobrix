@@ -63,7 +63,8 @@ def test_a_large_file_read_just_before_the_plan_does_not_lower_the_reading(tmp_p
     """The orpheus case on this machine: a 2 GB file written and read back (its pages now file-backed and active),
     then the reading the plan takes. It must not fall by the file's size."""
     size = 2 * 1024 * MB
-    before = H.memory_state().available_mb         # the quiet host, before the copy
+    anon0 = _anonymous_mb()
+    before = H.memory_state().available_mb         # the host before the copy
     f = tmp_path / "weights.bin"
     with open(f, "wb") as fh:                      # the copy: the pages are written into the cache
         chunk = os.urandom(MB)
@@ -76,6 +77,18 @@ def test_a_large_file_read_just_before_the_plan_does_not_lower_the_reading(tmp_p
                 pass
     time.sleep(1)
     after = H.memory_state().available_mb
+    anon_growth = max(0, _anonymous_mb() - anon0)  # other processes' anonymous pages taken meanwhile: not the file's
+    f.unlink()                                     # 2 GB: not left to pytest's three-run retention
     assert before is not None and after is not None
-    assert after >= before - 0.25 * (size // MB), (
-        f"the reading fell from {before} to {after} MB after reading a {size // MB} MB file: the file cache is subtracted")
+    assert after >= before - 0.25 * (size // MB) - anon_growth, (
+        f"the reading fell from {before} to {after} MB after reading a {size // MB} MB file "
+        f"(anonymous pages grew {anon_growth} MB meanwhile): the file cache is subtracted")
+
+
+def _anonymous_mb() -> int:
+    """`Anonymous pages` from vm_stat — what other processes take between the two readings, discounted so the
+    test judges the FILE's pages and not the host's churn (it went red once beside a 9 GB copy, 2026-09-29)."""
+    import re, subprocess
+    text = subprocess.run(["vm_stat"], capture_output=True, text=True).stdout
+    page = re.search(r"page size of (\d+) bytes", text); anon = re.search(r"Anonymous pages:\s+(\d+)", text)
+    return int(anon.group(1)) * int(page.group(1)) // MB if anon and page else 0
