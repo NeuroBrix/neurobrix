@@ -193,32 +193,14 @@ def _load_voicepack_np(engine, phoneme_count: int) -> None:
 def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> None:
     """Zero-torch g2p: text → IPA → phoneme IDs, bound as NBXTensor. Mirror of
     core/flow/stages/kokoro.preprocess_phonemizer_input (which uses torch)."""
-    _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
-    lang = _lang_map.get(klang, "en-us")
-    from neurobrix.core.module.audio.g2p import g2p_phonemes, refusal_for_language
-    # R30 mirror of the compiled path's language gate (stages/kokoro.py): the
-    # voice and the embedded lexicon must speak one language, or the model says
-    # other words, fluently. Landed on the compiled path first and measured NOT
-    # to fire here (vitrine 2026-09-16, 17:47: the French request went straight
-    # through this mirror) — a gate in one mode only is no gate.
-    _voice = None
-    for _key in ("global.speaker", "speaker", "global.voice", "voice"):
-        _v = engine.ctx.variable_resolver.resolved.get(_key)
-        if isinstance(_v, str) and _v:
-            _voice = _v
-            break
-    if _voice is None:
-        _voice = engine.ctx.pkg.defaults.get("voice")
-    _refusal = refusal_for_language(_voice, klang)
-    if _refusal:
-        raise RuntimeError(_refusal)
-    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str, lang, klang)
-    ids = [0]
-    for ch in phonemes:
-        if ch in phoneme_vocab:
-            ids.append(phoneme_vocab[ch])
-    ids.append(0)
+    from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+    # R30 mirror of the compiled path (stages/kokoro.py): ONE text-to-ids function, whose
+    # language gate refuses a voice the embedded lexicon does not speak — measured NOT to
+    # fire here once when it lived only in the compiled path (vitrine 2026-09-16, 17:47).
+    phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,
+                                request_voice(engine.ctx.variable_resolver.resolved,
+                                              engine.ctx.pkg.defaults))
     actual_len = len(ids)
     _set_device_for(engine.ctx)
     input_ids = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))

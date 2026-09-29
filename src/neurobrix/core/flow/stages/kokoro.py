@@ -266,34 +266,15 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     # espeak-distilled lexicon embedded in the .nbx (modules/g2p/en_lexicon.txt.gz)
     # + a stdlib LTS fallback. NO `kokoro`/`phonemizer`/`espeak-ng` import at
     # runtime (R34); the embedded lexicon retains espeak's license.
-    _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
-    from neurobrix.core.module.audio.g2p import g2p_phonemes, refusal_for_language
-    # The voice and the lexicon must speak the same language. Read the voice the
-    # request asks for in the same order the voicepack loader will, and refuse
-    # here — before a single phoneme — when it speaks a language the embedded
-    # lexicon does not: the model would otherwise say other words, fluently
-    # (2026-09-16, `ff_siwis` on the American lexicon).
-    _voice = None
-    for _key in ("global.speaker", "speaker", "global.voice", "voice"):
-        _v = engine.ctx.variable_resolver.resolved.get(_key)
-        if isinstance(_v, str) and _v:
-            _voice = _v
-            break
-    if _voice is None:
-        _voice = engine.ctx.pkg.defaults.get("voice")
-    _refusal = refusal_for_language(_voice, klang)
-    if _refusal:
-        raise RuntimeError(_refusal)
-    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str,
-                            _lang_map.get(klang, "en-us"), klang)
-
-    # Step 2: Map phonemes to IDs
-    ids = [0]  # BOS/padding
-    for ch in phonemes:
-        if ch in phoneme_vocab:
-            ids.append(phoneme_vocab[ch])
-    ids.append(0)  # EOS/padding
+    from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+    # The voice and the lexicon must speak the same language — `phoneme_ids` refuses before
+    # a single phoneme when the requested voice speaks a language the embedded lexicon does
+    # not: the model would otherwise say other words, fluently (2026-09-16, `ff_siwis` on
+    # the American lexicon). One text-to-ids function for both engines and the census.
+    phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,
+                                request_voice(engine.ctx.variable_resolver.resolved,
+                                              engine.ctx.pkg.defaults))
 
     # Step 3: Feed the ACTUAL phoneme sequence — no padding to the trace seq_len.
     # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that

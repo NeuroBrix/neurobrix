@@ -282,10 +282,28 @@ def request_input_config(args, manifest: dict, family, cache_path):
                 extra=[("the container manifest's dtype", manifest.get("dtype"))],
                 why="It sizes every tensor in the plan.")
 
+    # The text's length where the flow's own preprocessing makes it without a tokenizer:
+    # a phonemizer container (the audio flow's condition — `phoneme_vocab` declared, no
+    # tokenizer module) runs its text components at len(phoneme ids), computed by the SAME
+    # function the flow calls (`g2p.phoneme_ids`). Without it every `seq_len` symbol bound to
+    # its trace extent: Kokoro planned 23 phonemes and ran 94 (census 2026-09-28).
+    seq_len = None
+    _vocab = cached_defaults.get("phoneme_vocab")
+    _prompt = getattr(args, 'prompt', None)
+    if _vocab and _prompt is not None and "tokenizer" not in (manifest.get("modules") or {}):
+        from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+        _tpl = cached_defaults.get("tts_prompt_template")
+        _text = _tpl.format(text=_prompt) if _tpl and "{text}" in _tpl else _prompt
+        seq_len = len(phoneme_ids(_text, str(cache_path), _vocab,
+                                  cached_defaults.get("phoneme_lang", "a"),
+                                  request_voice({"speaker": getattr(args, 'speaker', None)},
+                                                cached_defaults))[1])
+
     input_config = InputConfig(
         batch_size=batch_size,
         height=height,
         width=width,
+        seq_len=seq_len,
         dtype=dtype,
         vae_scale=vae_scale,
         num_frames=num_frames,

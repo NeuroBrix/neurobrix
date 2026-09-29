@@ -167,8 +167,39 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
                 xd, wd, comp_d = dt(ins[0]), dt(ins[1]), C_
             launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
                                         xd, wd, comp_d, conv_band_bytes)
+        elif kind == "aten::lstm":
+            # aten::lstm(input, (h0, c0), params, has_biases, num_layers, dropout, train,
+            # bidirectional, batch_first) — `lstm_wrapper`'s signature, the args as traced
+            a_ = (o.get("attributes") or {}).get("args") or []
+            val = lambda i: a_[i].get("value") if i < len(a_) else None
+            x_s = shape(ins[0])
+            batch_first = bool(val(8))
+            if len(x_s) == 2:
+                B_, T_, I_ = 1, x_s[0], x_s[1]
+            elif batch_first:
+                B_, T_, I_ = x_s
+            else:
+                T_, B_, I_ = x_s
+            H_ = shape(ins[1])[-1]
+            launches = LK.lstm_launches(B_, T_, I_, H_, int(val(4)), bool(val(7)), dt(ins[0]),
+                                        has_native_bf16)
+        elif kind in ("aten::_fft_r2c", "aten::_fft_c2r"):
+            # _fft_r2c(x, dim, normalization, onesided); _fft_c2r(x, dim, normalization,
+            # last_dim_size) — the transform over one dim, every other dim flattened into M
+            a_ = (o.get("attributes") or {}).get("args") or []
+            x_s = shape(ins[0])
+            dims = a_[1].get("value")
+            d = (dims[0] if isinstance(dims, list) else dims) % len(x_s)
+            M = 1
+            for i, e in enumerate(x_s):
+                if i != d:
+                    M *= e
+            if kind == "aten::_fft_r2c":
+                launches = LK.dft_r2c_launches(M, x_s[d], bool(a_[3].get("value")), has_native_bf16)
+            else:
+                launches = LK.dft_c2r_launches(M, x_s[d], int(a_[3].get("value")), has_native_bf16)
         elif kind in ("aten::baddbmm", "aten::linear", "aten::matmul",
-                      "aten::lstm", "aten::stft", "aten::istft"):
+                      "aten::stft", "aten::istft"):
             unhandled[f"{kind} (not yet derived)"] += 1
             launches = []
         else:
