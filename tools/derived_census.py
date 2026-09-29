@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""The DERIVED census (the owner's ruling, 2026-09-29 01:37): the autotune keys a model's runs form,
+computed from its graphs and the hardware profile — never by executing it.
+
+    python tools/derived_census.py compare --model M --hardware PROFILE --rung MB --mode triton \\
+        --walked <census logs dir>
+
+For each component the tool reads, and computes nothing a run would compute differently:
+  * the PLAN the runtime would receive — `neurobrix run --explain-plan --json` under the census door
+    (no card visible, NBX_CENSUS=1) at the rung's budget: the engine's own planning path;
+  * the SYMBOLS at the request — bound with the runtime's `SymbolResolver`; an autoregressive
+    prefill's length is the prompt's token count through the container's own tokenizer;
+  * the RUNTIME DTYPES — `runtime_widths.runtime_dtypes` under the plan-time contract;
+  * the KEYS — `kernels.launch_keys`, the functions the wrappers themselves decide with.
+
+`compare` sets the derived (op, key) pairs against a walked census's `.ops` pairs for the same
+model, mode and rung: reproduced / missed / extra. This is the acceptance test's unit.
+
+Stage: the matmul family and the attention math route on an autoregressive LM's prefill. Every
+op kind or phase not yet derived is COUNTED and named, never skipped in silence.
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "tools"))
+
+CACHE = Path.home() / ".neurobrix" / ("ca" "che")
+MODE_FLAGS = {"triton": "--triton", "triton-sequential": "--triton-sequential"}
+
+
+def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) -> dict:
+    """The plan the runtime would receive, from the engine's own `--explain-plan --json`."""
+    env = dict(os.environ)
+    env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
+                "NBX_PRISM_BUDGET_MB": str(int(rung)), "PYTHONPATH": str(REPO / "src"),
+                "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"})
+    r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model, *request,
+                        MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
+                       env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
+    if r.returncode != 0:
+        raise SystemExit(f"{model}: the plan could not be read (rc {r.returncode}): {r.stderr[-800:]}")
+    return json.loads(r.stdout)
+
+
+def prompt_tokens(model: str, prompt: str) -> int:
+    """The prefill length: the prompt through the container's own tokenizer and chat template,
+    as the autoregressive flow's `_tokenize` does for a chat-mode model."""
+    from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
+    root = CACHE / model
+    topo = json.loads((root / "topology.json").read_text())
+    mods = topo.get("modules") or {}
+    tok = mods.get("tokenizer")
+    if not tok:
+        raise SystemExit(f"{model}: no tokenizer module in its topology")
+    path = (tok.get("path") if isinstance(tok, dict) else tok) or "modules/tokenizer"   # the executor's default
+    path = str(path).rstrip("/")
+    defaults = json.loads((root / "runtime" / "defaults.json").read_text()) if (root / "runtime" / "defaults.json").exists() else {}
+    tokenizer = load_tokenizer_from_path(root / path, None)
+    if bool(defaults.get("chat_mode", False)) and hasattr(tokenizer, "apply_chat_template"):
+        ids = tokenizer.apply_chat_template([{"role": "user", "content": prompt}], add_generation_prompt=True)
+    else:
+        ids = tokenizer.encode(prompt)
+    ids = ids.get("input_ids", ids) if isinstance(ids, dict) else ids
+    while isinstance(ids, (list, tuple)) and ids and isinstance(ids[0], (list, tuple)):
+        ids = ids[0]
+    return len(ids)
+
+
+def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
+                     has_native_bf16: bool, sdpa_budget_bytes: int, unhandled: collections.Counter):
+    """[(op uid, kernel qual, key tuple)] for one component at one symbol binding."""
+    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from neurobrix.triton.symbols import SymbolResolver
+    g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    res = SymbolResolver(g.get("symbolic_context") or {})
+    for sid, v in symbols.items():
+        res._bind(sid, int(v))
+    T, ops = g["tensors"], g["ops"]
+
+    def shape(tid):
+        ss = T[tid].get("symbolic_shape")
+        if isinstance(ss, dict) and ss.get("dims"):
+            return [res.resolve(d) for d in ss["dims"]]
+        return list(T[tid]["shape"])
+
+    contract = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    engine = "triton" if mode == "triton" else "triton_sequential"
+    rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
+                           shape_of=shape)
+    dt = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
+    out = []
+    for uid in g["execution_order"]:
+        o = ops[uid]
+        kind = o["op_type"]
+        ins = [t for t in o["input_tensor_ids"]]
+        if kind in ("aten::mm",):
+            (M, K), (_, N) = shape(ins[0]), shape(ins[1])
+            launches = LK.mm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
+        elif kind == "aten::bmm":
+            (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
+            launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
+        elif kind == "aten::scaled_dot_product_attention":
+            q, k, v = (shape(t) for t in ins[:3])
+            B, H, Tq, D = q
+            if k[2] == D and k[3] == Tq and k[2] != Tq:        # the wrapper reads a pre-transposed K by its shape
+                k = [k[0], k[1], k[3], k[2]]
+            Hk, Tk, Dv = k[1], k[2], v[3]
+            scores = B * H * Tq * Tk * 4
+            math_route = Dv != D or scores <= sdpa_budget_bytes
+            if not math_route:
+                unhandled["sdpa: flash or chunked route (not yet derived)"] += 1
+                launches = []
+            elif Tq == 1:
+                unhandled["sdpa: Tq=1 decode-vec gate (not yet derived)"] += 1
+                launches = []
+            else:
+                groups = H // Hk
+                qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
+                s_out = LK.matmul_out_dtype(qd, groups * Tq, True, has_native_bf16)
+                launches = (LK.bmm_launches(groups * Tq, D, Tk, qd, kd, has_native_bf16)
+                            + LK.bmm_launches(groups * Tq, Tk, Dv, vd, vd, has_native_bf16))
+                del s_out
+        elif kind in ("aten::addmm", "aten::baddbmm", "aten::linear", "aten::matmul",
+                      "aten::convolution", "aten::conv1d", "aten::lstm", "aten::stft", "aten::istft"):
+            unhandled[f"{kind} (not yet derived)"] += 1
+            launches = []
+        else:
+            continue
+        for q_, key in launches:
+            out.append((uid, q_, key))
+    return out
+
+
+def walked_pairs(walked: Path, model: str, mode: str, rung: int):
+    """{(op uid or None, kernel, key repr)} from a walked census's `<rec>.ops` + `<rec>` files."""
+    pairs = set()
+    for rec in sorted(walked.glob(f"{model}.{mode}.r{rung}*.keys")):
+        ops = Path(str(rec) + ".ops")
+        with_op = set()
+        if ops.exists():
+            for line in ops.read_text().splitlines():
+                op, _, kl = line.partition("\t")
+                q_, _, k = kl.partition("::")
+                pairs.add((op, q_, k)); with_op.add(kl)
+        for kl in rec.read_text().splitlines():
+            if kl not in with_op:
+                q_, _, k = kl.partition("::")
+                pairs.add((None, q_, k))
+    return pairs
+
+
+def compare(a) -> int:
+    from trace_request import derived_request
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.kernels import autotune_certified as C
+    from neurobrix.kernels import census as _census
+    request = derived_request(a.model)
+    plan = plan_record(a.model, request, a.mode, a.hardware, a.rung)
+    prof = load_profile(a.hardware)
+    _census._bind_target(a.hardware, None)     # the vendor ladders the keys are bucketed with
+    prompt = request[request.index("--prompt") + 1]
+    P = prompt_tokens(a.model, prompt)
+    unhandled: collections.Counter = collections.Counter()
+    derived = set()
+    from neurobrix.kernels import wrappers as W
+    W.set_hardware_profile(prof)
+    budget = W._sdpa_math_scores_budget_bytes_for(0) or 0
+    topo = json.loads((CACHE / a.model / "topology.json").read_text())
+    flow = topo.get("flow") or {}
+    gen = flow.get("generation") or {}
+    # The autoregressive text flow (triton/flow/autoregressive.py): the LM component runs the
+    # prefill over the prompt's tokens; the HEAD component runs on the last position only —
+    # `TritonTextStrategy.get_logits` selects hidden[:, T-1] before `_head.run` — so its sequence
+    # symbol is 1. Both names are the topology's own (`lm_component`, `head_component`).
+    head = gen.get("head_component", "lm_head") if flow.get("type") == "autoregressive_generation" else None
+    for c in plan["components"]:
+        comp = c["name"]
+        g = json.loads((CACHE / a.model / "components" / comp / "graph.json").read_text())
+        syms = {}
+        for sid, info in ((g.get("symbolic_context") or {}).get("symbols") or {}).items():
+            name = info.get("name")
+            if name == "batch":
+                syms[sid] = 1
+            elif name in ("seq_len", "sequence_length"):
+                syms[sid] = 1 if comp == head else P
+            else:
+                unhandled[f"{comp}: symbol {sid} '{name}' has no binding yet"] += 1
+        if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
+            continue
+        for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, syms,
+                                            prof.has_native_bf16, budget, unhandled):
+            derived.add((uid, q_, C.key_repr(key)))
+    walked = walked_pairs(Path(a.walked), a.model, a.mode, a.rung)
+    w_keys = {(q_, k) for _, q_, k in walked}
+    d_keys = {(q_, k) for _, q_, k in derived}
+    w_op = {p for p in walked if p[0] is not None}
+    print(f"[derived] {a.model} {a.mode} r{a.rung}: prompt {P} tokens; plan {plan['strategy']}, "
+          f"components {[(c['name'], c['dtype']) for c in plan['components']]}")
+    print(f"[derived] KEYS  walked {len(w_keys)} derived {len(d_keys)}: reproduced {len(w_keys & d_keys)}, "
+          f"missed {len(w_keys - d_keys)}, extra {len(d_keys - w_keys)}")
+    print(f"[derived] PAIRS walked-with-op {len(w_op)}: reproduced {len(w_op & derived)}, "
+          f"missed {len(w_op - derived)}")
+    for q_, k in sorted(w_keys - d_keys)[:20]:
+        print(f"   MISSED {q_.split('.')[-1]} {k}")
+    for q_, k in sorted(d_keys - w_keys)[:20]:
+        print(f"   EXTRA  {q_.split('.')[-1]} {k}")
+    for why, n in unhandled.most_common():
+        print(f"   NOT YET: {n:4d} x {why}")
+    return 0
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    c = sub.add_parser("compare")
+    c.add_argument("--model", required=True)
+    c.add_argument("--hardware", required=True)
+    c.add_argument("--rung", type=int, required=True)
+    c.add_argument("--mode", choices=sorted(MODE_FLAGS), required=True)
+    c.add_argument("--walked", required=True, help="a census logs directory (<model>.<mode>.r<rung>*.keys + .ops)")
+    a = ap.parse_args(argv)
+    return compare(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
