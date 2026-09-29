@@ -19,6 +19,7 @@ proof or whose proof does not re-read.
 from __future__ import annotations
 
 import datetime as _dt
+import contextlib
 import json
 import os
 import warnings
@@ -81,14 +82,26 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
                            f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
     seen = set()
-    for row in T.read(path):
+    unparsed = []
+    rows = T.read(path)
+    if not rows:
+        # the tools' contract (docs/reference/tool-contracts.md): an input that names nothing is
+        # refused by name — an empty table certified nothing and exited 0
+        raise RuntimeError(f"the census table {path} holds no row: nothing to certify — take the census first")
+    for row in rows:
         ident = T.key_line(row["kernel"], row["key"])
         if ident in seen:
             continue
         seen.add(ident)
         key = C.parse_key(row["key"])
-        if key is not None:
-            out.setdefault(row["kernel"], []).append(key)
+        if key is None:
+            unparsed.append(ident)
+            continue
+        out.setdefault(row["kernel"], []).append(key)
+    if unparsed:
+        # a row the certifier cannot read was dropped in silence: a key never certified, never said
+        raise RuntimeError(f"the census table {path}: {len(unparsed)} key(s) do not parse, e.g. {unparsed[0]!r} — "
+                           f"refused, never skipped")
     return out
 
 
@@ -1668,14 +1681,24 @@ def _file_entries(cache: Dict[str, Dict[str, Dict]], dtype: str, path: Path) -> 
     return entries
 
 
+class UnreadableCertifiedFile(RuntimeError):
+    """A certified file that exists and cannot be read: refused, never taken as empty."""
+
+
 def _read_file(path: Path) -> Dict[str, Dict]:
+    """The file's entries; {} only when it does not exist. A file that exists and does not parse was
+    read as {} and the next writer, under the lock, wrote its fresh entries over it — every proof in
+    it gone in silence (the tools audit, 2026-09-29). Refused by name."""
     if not path.exists():
         return {}
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return dict(doc.get("entries") or {}) if isinstance(doc, dict) else {}
+    except (OSError, ValueError) as e:
+        raise UnreadableCertifiedFile(f"{path}: {type(e).__name__}: {e} — refused, never overwritten; "
+                                      f"restore it from git") from e
+    if not isinstance(doc, dict):
+        raise UnreadableCertifiedFile(f"{path}: not a certified file (a {type(doc).__name__})")
+    return dict(doc.get("entries") or {})
 
 
 _STICKY_MARKS = ("error 700", "rc=700", "illegal memory access", "STICKY")
@@ -1900,9 +1923,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     shapes = census(vendor, profile, certifying_class)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
-    if kernels:
-        want = set(kernels)
-        shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+    shapes = select_kernels(shapes, kernels)
     if shard:
         k_, n_ = shard_spec(shard)
         shapes = {q: [key for key in ks if shard_of(q, key, n_) == k_] for q, ks in shapes.items()}
@@ -1916,12 +1937,60 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # Certifications reach their file at a BOUNDED SHARE of the pass (`_BoundedWriter`); every
     # pending one is written before this function returns, on every path.
     writer = _BoundedWriter(vendor, profile)
+    with sigterm_ends_through_finally():
+        return _certify_pass(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                             reprove_generator, certifying_device, certifying_class, budget_bytes,
+                             floor_bytes, rng, summary, log, writer, bench, reprove_class)
+
+
+def _certify_pass(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                  reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes, rng,
+                  summary, log, writer, bench, reprove_class):
+    """The loop, and every pending proof written on EVERY exit (`writer.flush_all`)."""
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
                              floor_bytes, rng, summary, log, writer, bench, reprove_class=reprove_class)
     finally:
         writer.flush_all()
+
+
+def select_kernels(shapes: Dict[str, List[tuple]], kernels: Optional[List[str]]) -> Dict[str, List[tuple]]:
+    """The census table's kernels this pass certifies: all when `kernels` is None; else those named
+    (qualname or short name). A list that names nothing, or a name the table does not hold, is
+    refused by name — `--kernels ""` used to mean every kernel, an unknown name certified 0 and
+    exited 0 (the tools audit, 2026-09-29)."""
+    if kernels is None:
+        return shapes
+    want = set(kernels)
+    if not want:
+        raise RuntimeError("--kernels names no kernel: refused (leave it out for every kernel)")
+    unknown = sorted(k for k in want if not any(q == k or C.kernel_short(q) == k for q in shapes))
+    if unknown:
+        raise RuntimeError(f"--kernels {', '.join(unknown)}: no such kernel in the census table "
+                           f"(it holds {', '.join(sorted(C.kernel_short(q) for q in shapes))})")
+    return {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+
+
+@contextlib.contextmanager
+def sigterm_ends_through_finally():
+    """SIGTERM (a watchdog, a working-set guard, `kill`) ends the pass as an exception, so every
+    `finally` inside runs — the bounded writer's pending proofs reach their files instead of dying
+    with the process (the tools audit, 2026-09-29: no handler existed). The main thread only;
+    the previous handler restored."""
+    import signal as _signal
+    import threading as _threading
+    if _threading.current_thread() is not _threading.main_thread():
+        yield
+        return
+
+    def _on_term(signum, frame):
+        raise SystemExit(128 + signum)
+    prev = _signal.signal(_signal.SIGTERM, _on_term)
+    try:
+        yield
+    finally:
+        _signal.signal(_signal.SIGTERM, prev)
 
 
 _WRITE_SHARE = 0.10     # a certified file's rewrites may cost at most a tenth of the certifier's time

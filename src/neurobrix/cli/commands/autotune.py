@@ -118,7 +118,13 @@ def cmd_autotune(args) -> int:
             print(refusal)
             return 3
         from neurobrix.kernels.autotune_certify import certify
-        kernels = [k for k in (args.kernels or "").split(",") if k] or None
+        kernels = None
+        if args.kernels is not None:
+            kernels = [k for k in args.kernels.split(",") if k.strip()]
+            if not kernels:
+                print(f"ERROR: --kernels {args.kernels!r} names no kernel (leave it out to certify every kernel "
+                      f"of the census table).")
+                return 2
         print("=" * 70)
         print(f"NeuroBrix autotune certify — profile {args.vendor + '/' if args.vendor else ''}{args.profile}")
         print("=" * 70)
