@@ -552,10 +552,11 @@ class _TritonRules(_Rules):
             return "float32"
         meta = self.tensors.get(tid) or {}
         if meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"):
-            # An embedded constant is decoded at its traced dtype and bound as is
-            # (triton/constants.py `load_constants_from_graph`) — no compute-dtype cast: swin2SR's
-            # relative-coordinates table reached its MLP in fp32 in the census walk.
-            return traced
+            # An embedded constant is bound by the loader's own rule (`constant_load_dtype`,
+            # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
+            # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
+            # positional table became fp16 (the census walk).
+            return _tdt.constant_load_dtype(traced, self.c)
         return super().weight_dtype(tid, traced)
 
     def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
