@@ -42,19 +42,43 @@ Row columns: model, container (a hash of the components' graph.json — **OPEN:*
 where the tiling probe lives, is not hashed), mode, rungs_mb, ops, kernel, key, dtype, tool
 (the walk marks a dirty tree `+`; **OPEN:** the derivation does not).
 
-## The certifier — next
+## The certifier
 
-The certifier's audit (2026-09-29) is written up; its fixes follow in this order: the lock
-contended by two processes; a corrupt certified file refused, never overwritten; `--kernels`
-empty or matching nothing refused; an empty census table refused; SIGTERM flushes the pending
-proofs; `--only-missing` on a complete directory leaves identical bytes; the migration's two
-empty-glob refusals tested.
+`src/neurobrix/kernels/autotune_certify.py`, `autotune_certified.py`, `cli/commands/autotune.py`
+(`neurobrix autotune certify`). Contract commit 100ed7af (release-candidate-1). Test:
+`tests/unit/kernels/test_the_certifier_holds_its_contract.py`.
 
-## The gate — after the certifier
+| # | clause | how it holds |
+|---|---|---|
+| 1 | one key function | the launcher and the certifier form the key with `key_of`; the certifier refuses a table key the wrapper cannot form (`UnreachableCensusKey`). **OPEN:** no CPU round trip from the loop through filing to `lookup`/`apply` |
+| 2 | two writers | `_write_file` under `<file>.json.lock`, the disk's file as base; `restamp` under the same lock — test: two processes stalled between read and write; a restamp blocked by a held lock |
+| 2 | a corrupt file | refused (`UnreadableCertifiedFile`), never read as empty and overwritten |
+| 3 | idempotence | entries written sorted — test: the same proof twice, same bytes. **OPEN:** an end-to-end `--only-missing` pass on a complete directory (needs a card) |
+| 4 | inputs | `--kernels` naming nothing or an unknown kernel, an empty table, an unparsable key: refused by name |
+| 5 | exits | `sigterm_ends_through_finally`: SIGTERM ends a pass through the writer's flush — test: a child process sent SIGTERM |
 
-The gate harness (`tools/regression_matrix.py`) records per cell a miss count and the first
-missing key; refuses an empty model list and a list that does not match the lists it was given;
-never takes an earlier row from another engine sha as done; records whether the certified
-directory it read was the committed one. The checkpointer refuses main inside `checkpoint()`,
-refuses a second instance, and counts a failed push against its window; its dead
-30-minute test file is removed or ported.
+## The checkpointer
+
+`tools/certified_checkpoint.py`. Contract commit 4c3a857f (release-candidate-1). Test:
+`tests/unit/tools/test_the_checkpointer_holds_its_contract.py` with the four existing suites.
+
+| clause | how it holds |
+|---|---|
+| the committed bytes are the gated bytes | the changed files read once, a copy gated, those blobs committed through a temporary index (the repository's hooks run); the real index reset for those paths |
+| main is never pushed | refused inside `checkpoint()`, on the branch at push time |
+| one per repository | an exclusive lock in the common git dir for the process's life; a second instance refused by name |
+| at most one push per 30 minutes | every ATTEMPT spends the window; the stamp replaced atomically |
+| an input that names nothing | a `--dir` that does not exist refused |
+
+## The gate harness
+
+`tools/regression_matrix.py`. Contract commit d10cec52 (release-candidate-1 828e9fd6). Test:
+`tests/unit/tools/test_the_gate_harness_holds_its_contract.py` (18 tests, each red on its
+injection) with the 11 existing harness suites.
+
+| clause | how it holds |
+|---|---|
+| a miss is counted and named | each row: `misses` (distinct KeyNotCertified), `first_missing_key`; `first_error` names the miss over its inner error |
+| inputs | a blank model or mode, an unknown mode, a model absent from the cache, an empty cache refused before any cell; a cell asked for with no row is an error naming it |
+| the committed reference | each row records `tree_dirty` over the `--src` tree's config/autotune and config/census, and `certified_dir_override`; the override refuses the run unless `--allow-certified-dir-override`; an earlier row is reused only at the same engine sha with a clean reference on both sides |
+| readable files | a cut last line skipped and said, a malformed inner line refused; appends fsynced, a cut fragment moved aside; the table and the export written atomically. **OPEN:** `host_ledger.json` / `host_waiting.json` rewritten in place under their flock |
