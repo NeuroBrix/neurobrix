@@ -3699,3 +3699,22 @@ the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
 
 **The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
 the rule; pin it on the case it was written for.
+### 115 — the re-prove flag's help promised a serving the runtime refuses
+
+`neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
+that a proof made under another code generator "stays correct and served meanwhile". The runtime
+does the opposite and says so at every run under a new generator (`kernels/autotune_certified.py`,
+the generator door): "a configuration is a property of the compiler that produced it" — the entry
+is not served, the shape sweeps at runtime and lands in the local replay cache. Measured on the
+Mac after the `adbf6e84` bump landed: the 30 keys the 17:01 re-prove pass refused (24 witness
+drifts, 6 price-door) swept at runtime in every Triton cell that reached them (six of the 24
+cells of each gate carried "no certified setting"), and 545 of the two "served" gates' 1 400 key
+uses came from the replay cache, keyed by architecture without the generator. Nothing checked the
+help text against the door; it was read as a fact by the person who queued the gate.
+
+**What would have caught it.** Prose that states a serving, a cost or a neutrality is an
+assertion like an `assert`: either a test pins it or the sentence says it is unverified. Here the
+door's own test (`test_autotune_certified_directory.py`) proved the refusal; the help text lived
+beside it unread. The fix states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1`
+override in the help; the RED LINES of 2026-09-28 20:06 (release-decisions) make the runtime's
+door the only truth: a confirmation run is certified-only, and a miss is an error, never a sweep.
