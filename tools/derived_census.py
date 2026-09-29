@@ -892,13 +892,15 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
     return found
 
 
-def compare(a) -> int:
-    from trace_request import derived_request
+def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
+    """The (op uid, kernel, key) triples one request forms at one rung and mode — DERIVED from the
+    plan record and the graphs, never executed — with the plan, the prompt's token count and the
+    items the derivation cannot place yet (`unhandled`, a Counter: a model with any is not derived)."""
     from neurobrix.core.prism.loader import load_profile
     from neurobrix.kernels import autotune_certified as C
     from neurobrix.kernels import census as _census
-    request = derived_request(a.model)
-    rung = None if a.rung == "profile" else int(a.rung)
+    from types import SimpleNamespace
+    a = SimpleNamespace(model=model, hardware=hardware, mode=mode)
     plan = plan_record(a.model, request, a.mode, a.hardware, rung)
     prof = load_profile(a.hardware)
     _census._bind_target(a.hardware, None)     # the vendor ladders the keys are bucketed with
@@ -1027,6 +1029,14 @@ def compare(a) -> int:
                                                  bool(args_[7].get("value")), _Dt.float32,
                                                  prof.has_native_bf16):
                     derived.add((None, q_, C.key_repr(key)))
+    return derived, plan, P, unhandled
+
+
+def compare(a) -> int:
+    from trace_request import derived_request
+    request = derived_request(a.model)
+    rung = None if a.rung == "profile" else int(a.rung)
+    derived, plan, P, unhandled = derive_keys(a.model, a.hardware, a.mode, rung, request)
     walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}
     d_keys = {(q_, k) for _, q_, k in derived}
@@ -1046,6 +1056,66 @@ def compare(a) -> int:
     return 0
 
 
+def table(a) -> int:
+    """THE census table of the profile's memory class, DERIVED (the owner's red line: the census is a
+    derivation from graph.json + the profile through the launcher's key functions, never an execution).
+    Per model: the census's own requests (its derived request and the family's tiling probe,
+    `certified_census.census_requests` / `_tiling_probe`), every served Triton mode, every rung of the
+    class's ladder (`rungs_for`); its rows replace the model's rows (`census_table.replace_model`), each
+    row the census's own form, its `tool` column naming the derivation. A model the derivation cannot
+    place completely (any `unhandled` item) writes NOTHING and is said by name with its items: a partial
+    table would certify a partial model. A plan the solver refuses at a rung below the class's top, or
+    for the probe, is no key there (the census's own rule); at the top rung it refuses the model."""
+    import certified_census as CC
+    from neurobrix.kernels import census_table as T
+    hw = a.hardware
+    cls = CC.census_memory_class(hw)
+    rungs = CC.rungs_for(hw) if a.rungs == "ladder" else [int(x) for x in a.rungs.split(",") if x.strip()]
+    modes = [m for m in a.modes.split(",") if m]
+    vendor, profile = a.table.split("/", 1)
+    path = T.table_path(vendor, profile, cls)
+    rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True,
+                         text=True).stdout.strip() or "unknown"
+    worst = 0
+    for model in [m for m in a.models.split(",") if m]:
+        fam = CC._family(model)
+        reqs = CC.census_requests(model, fam, [], None)
+        probe = CC._tiling_probe(model, fam, reqs[0], Path(a.logs))
+        if probe is not None:
+            reqs.append(probe)
+        container = CC._graph_sha(model)
+        rows, refused = [], []
+        for mode in modes:
+            for ri, req in enumerate(reqs):
+                for rung in rungs:
+                    try:
+                        derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+                    except SystemExit as e:
+                        if rung != rungs[-1] or ri:
+                            continue          # refused below the top rung, or the probe: no key there
+                        refused.append(f"{mode} r{rung} request {ri}: {e}")
+                        continue
+                    if unhandled:
+                        refused.extend(f"{mode} r{rung} request {ri}: {n} x {why}"
+                                       for why, n in unhandled.most_common())
+                        continue
+                    for uid, q_, key in sorted(derived, key=lambda t: (t[1], t[2], t[0] or "")):
+                        rows.append({"model": model, "container": container, "mode": mode,
+                                     "rungs_mb": [int(rung)], "ops": [uid], "kernel": q_, "key": key,
+                                     "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
+        if refused:
+            worst = 1
+            print(f"[derived table] {model}: NOT written — the derivation cannot place it completely:")
+            for line in refused[:30]:
+                print(f"   {line}")
+            continue
+        removed, _ = T.replace_model(path, model, rows)
+        written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
+        print(f"[derived table] {model}: {written} row(s) written ({removed} replaced) into {path.name} "
+              f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
+    return worst
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1055,8 +1125,15 @@ def main(argv=None) -> int:
     c.add_argument("--rung", required=True, help="the rung in MB, or 'profile' for a census at the profile's own budget")
     c.add_argument("--mode", choices=sorted(MODE_FLAGS), required=True)
     c.add_argument("--walked", required=True, help="a census logs directory (<model>.<mode>.r<rung>*.keys + .ops)")
+    t = sub.add_parser("table", help="write the class's census table from the derivation (no execution)")
+    t.add_argument("--models", required=True, help="comma-separated")
+    t.add_argument("--hardware", required=True)
+    t.add_argument("--table", required=True, help="<vendor>/<profile> of THE census table written")
+    t.add_argument("--modes", default="triton,triton-sequential")
+    t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
+    t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
     a = ap.parse_args(argv)
-    return compare(a)
+    return table(a) if a.cmd == "table" else compare(a)
 
 
 if __name__ == "__main__":
