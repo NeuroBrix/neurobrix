@@ -145,6 +145,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An image model streamed layer by layer computes its positional embedding at the requested size.**
+  When a diffusion transformer too large for its memory budget was run a few layers at a time, the pieces
+  never received the request's resolution, so a positional embedding computed at load time (Sana's)
+  was never built and the run failed on its first addition; each piece now loads under its model's
+  resolution, read again at every request.
+
 - **A plan performs the in-place additions it was priced with.** When a decoder's large residual
   additions were counted as done in place but no single operation overflowed the card, the plan left
   them out of place, holding a buffer its memory figure never counted; they now run in place.
