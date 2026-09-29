@@ -1895,7 +1895,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer)
+                             floor_bytes, rng, summary, log, writer, bench)
     finally:
         writer.flush_all()
 
@@ -1942,7 +1942,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer):
+                  rng, summary, log, writer, bench):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
