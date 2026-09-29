@@ -12883,7 +12883,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:39:29+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       11264,
+       13824,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.132227583058994e-06
+      ],
+      "deviation": 3.132227583058994e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 5627-5636; rows 11255-11264) of 11264 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 132.569091796875,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 2.091,
+       "runs": 0.172,
+       "bench": 1.064
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(11264, 1536, 1536, True, True, 'fp16', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -13526,7 +13620,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:39:38+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       11264,
+       5120,
+       13824,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       5.699331695079278e-06
+      ],
+      "deviation": 5.699331695079278e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 5627-5636; rows 11255-11264) of 11264 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 133.00428771972656,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 1.852,
+       "runs": 0.148,
+       "bench": 1.067
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(11264, 5120, 5120, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -13617,7 +13805,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:39:42+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       11264,
+       5120,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.5162155485524196e-06
+      ],
+      "deviation": 3.5162155485524196e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-25; rows 5619-5644; rows 11239-11264) of 11264 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 49.29536056518555,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.794,
+       "runs": 0.063,
+       "bench": 0.398
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(11264, 64, 1536, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -13892,7 +14174,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 32,
+       "BLOCK_N": 32,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 2,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:39:44+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       11264,
+       64,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       2.8498718415522073e-06
+      ],
+      "deviation": 2.8498718415522073e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-2034; rows 4615-6649; rows 9230-11264) of 11264 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 0.8794697168327513,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.461,
+       "runs": 0.026,
+       "bench": 0.194
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(11264, 8960, 1536, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -44390,7 +44766,102 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:40:28+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       163840,
+       13824,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 2,
+      "launch_deviations": [
+       2.8000225229239436e-06,
+       2.821215365569666e-06
+      ],
+      "deviation": 2.821215365569666e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 77629-77638; rows 155259-155268) of 155268 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 1824.0921630859375,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 2.956,
+       "runs": 1.845,
+       "bench": 14.702
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(163840, 144, 144, True, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
    "config": {
@@ -46753,7 +47224,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 2,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:41:37+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       163840,
+       5120,
+       13824,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       5.2777352921225996e-06
+      ],
+      "deviation": 5.2777352921225996e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 81915-81924; rows 163831-163840) of 163840 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 1923.146728515625,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 2.777,
+       "runs": 1.939,
+       "bench": 15.388
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(163840, 5120, 5120, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -46844,7 +47409,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:03+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       163840,
+       5120,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.754381332205371e-06
+      ],
+      "deviation": 3.754381332205371e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-25; rows 81907-81932; rows 163815-163840) of 163840 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 714.3598022460938,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.901,
+       "runs": 0.726,
+       "bench": 5.709
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(163840, 540, 180, True, False, 'fp32', 'fp32', 'fp32', 'fp32')": {
    "config": {
@@ -47283,7 +47942,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:21+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       163840,
+       64,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.6285701888915874e-06
+      ],
+      "deviation": 3.6285701888915874e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-2034; rows 80903-82937; rows 161806-163840) of 163840 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 9.067264080047607,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.363,
+       "runs": 0.021,
+       "bench": 0.18
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(163840, 8960, 1536, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -50354,7 +51107,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:28+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       176,
+       13824,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.481926078164461e-06
+      ],
+      "deviation": 3.481926078164461e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 83-92; rows 167-176) of 176 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 2.7767729575817404,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 1.789,
+       "runs": 0.014,
+       "bench": 0.069
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(176, 4096, 1024, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -50629,7 +51476,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:33+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       176,
+       5120,
+       13824,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       5.8489659555097085e-06
+      ],
+      "deviation": 5.8489659555097085e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-9; rows 83-92; rows 167-176) of 176 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 2.3262080401182175,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 1.716,
+       "runs": 0.008,
+       "bench": 0.168
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(176, 5120, 5120, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -50720,7 +51661,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 64,
+       "BLOCK_N": 64,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 2,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:35+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       176,
+       5120,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.1479580400261644e-06
+      ],
+      "deviation": 3.1479580400261644e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-25; rows 75-100; rows 151-176) of 176 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 0.882566097236815,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.743,
+       "runs": 0.012,
+       "bench": 0.225
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(176, 64, 5120, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -50811,7 +51846,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 32,
+       "BLOCK_N": 32,
+       "BLOCK_K": 64,
+       "GROUP_M": 8
+      },
+      "num_warps": 2,
+      "num_stages": 4,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:35+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       176,
+       64,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       2.033397807386805e-06
+      ],
+      "deviation": 2.033397807386805e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-176) of 176 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 0.33430960528629344,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.01,
+       "runs": 0.008,
+       "bench": 0.079
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(1792, 1024, 4096, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -213858,7 +214987,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 32,
+       "BLOCK_N": 64,
+       "BLOCK_K": 64,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:22+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       544,
+       1280,
+       1280,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       1.4284992200120258e-06
+      ],
+      "deviation": 1.4284992200120258e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 1 row window(s) of the output (rows 0-544) of 544 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 0.37343922724206763,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.037,
+       "runs": 0.039,
+       "bench": 0.077
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(544, 16, 2304, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -214685,7 +215908,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 32,
+       "BLOCK_N": 64,
+       "BLOCK_K": 64,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:23+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       544,
+       5120,
+       1280,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       1.8671822414796533e-06
+      ],
+      "deviation": 1.8671822414796533e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-101; rows 221-322; rows 443-544) of 544 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 0.7375516782001573,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.298,
+       "runs": 0.048,
+       "bench": 0.181
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(544, 5120, 5120, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
@@ -214776,7 +216093,101 @@
      "fallback": null
     }
    },
-   "excluded": []
+   "excluded": [],
+   "variants": {
+    "32g": {
+     "config": {
+      "kwargs": {
+       "BLOCK_M": 32,
+       "BLOCK_N": 128,
+       "BLOCK_K": 32,
+       "GROUP_M": 8
+      },
+      "num_warps": 4,
+      "num_stages": 3,
+      "num_ctas": 1,
+      "maxnreg": null
+     },
+     "proof": {
+      "date": "2026-09-29T10:42:25+00:00",
+      "engine_version": "0.5.4",
+      "backend": {
+       "triton": "3.8.0",
+       "name": "cuda"
+      },
+      "shape": [
+       544,
+       5120,
+       5120,
+       true,
+       true,
+       "fp32",
+       "fp16",
+       "fp16",
+       "fp32"
+      ],
+      "launches": 1,
+      "launch_deviations": [
+       3.1809630573578886e-06
+      ],
+      "deviation": 3.1809630573578886e-06,
+      "tolerance": 0.0001,
+      "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-25; rows 259-284; rows 519-544) of 544 rows",
+      "machine": {
+       "hostname": "metatron",
+       "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+       "python": "3.10.12",
+       "hardware_profile": "auto-v100-32gb-32g",
+       "has_native_bf16": false,
+       "target": "cuda-70",
+       "device": {
+        "ordinal": 0,
+        "visible_devices": "2",
+        "name": "Tesla V100-SXM2-32GB",
+        "memory_mb": 32768,
+        "unified": false
+       },
+       "clocks_mhz": {
+        "0": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "1": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "2": {
+         "graphics": 1290,
+         "memory": 877
+        },
+        "3": {
+         "graphics": 1290,
+         "memory": 877
+        }
+       }
+      },
+      "best_ms": 2.965661544066209,
+      "second_ms": null,
+      "candidates": 1,
+      "accepted": 1,
+      "benched": 1,
+      "could_not_run": 0,
+      "seconds": {
+       "oracle": 0.727,
+       "runs": 0.026,
+       "bench": 0.215
+      },
+      "stability_witness": null,
+      "reproven_from": "memory class 16 GB",
+      "built": {
+       "gpu": true,
+       "how": "no backend compilation fallback was raised during the certifying run",
+       "fallback": null
+      }
+     },
+     "excluded": []
+    }
+   }
   },
   "(544, 8192, 4096, True, True, 'fp32', 'fp16', 'fp16', 'fp32')": {
    "config": {
