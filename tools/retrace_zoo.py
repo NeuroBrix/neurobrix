@@ -929,6 +929,26 @@ def registry_checkpoint_file(name: str) -> str | None:
     return None
 
 
+def registry_source_repository(name: str) -> str | None:
+    """The directory name of the repository the build toolchain's registry names as this model's SOURCE
+    (`hf_repo`'s last segment), or None when the entry names none. The owner's naming rule (2026-09-28
+    03:06): a model keeps its maker's MODEL name and its source repository is recorded beside it — so
+    `Sana_1600M_4Kpx_BF16` is built from `Sana_1600M_4Kpx_BF16_diffusers`, and a snapshot named after
+    the model is another checkpoint (the original one, a transformer file only). Sana-1024 had been
+    reached through a hand-made link (name -> _diffusers, 2026-09-21); Sana-4K has no link and a real
+    directory under its name, and its retrace refused "no COMPLETE snapshot" (2026-09-29)."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return None
+    import yaml
+    doc = yaml.safe_load(reg.read_text()) or {}
+    for section in doc.values():
+        if isinstance(section, dict) and isinstance(section.get(name), dict):
+            repo = section[name].get("hf_repo")
+            return repo.rstrip("/").rsplit("/", 1)[-1] if isinstance(repo, str) and repo else None
+    return None
+
+
 def snapshot_has_a_format(p: Path, name: str | None = None) -> bool:
     """The layouts the toolchain's format detector accepts: a diffusers pipeline
     (model_index.json), a transformers model (config.json), a NeMo archive (*.nemo),
@@ -990,6 +1010,15 @@ class Model:
         self.hub = hub.get(name)                       # "org/name" or None (a new entry)
         self.registry_name = REGISTRY_ALIAS.get(name, name)
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
+
+    def snapshot_names(self):
+        """The directory names a snapshot of this model may have, the registry's source repository FIRST
+        (`registry_source_repository`), then the registry name and the model name."""
+        out = []
+        for nm in (registry_source_repository(self.registry_name), self.registry_name, self.name):
+            if nm and nm not in out:
+                out.append(nm)
+        return out
 
     def current_request(self):
         """The request this attempt runs, memoised. An output and a verdict belong to it: the
@@ -1156,7 +1185,7 @@ class Model:
         steps = _opt("--steps", gen.get("num_inference_steps"))
         guidance = _opt("--guidance", gen.get("guidance_scale"))
         snap = next((root / nm for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots")
-                     for nm in (self.registry_name, self.name) if (root / nm).is_dir()), None)
+                     for nm in self.snapshot_names() if (root / nm).is_dir()), None)
         if prompt is None or snap is None:
             return {"error": "no prompt in the request or no snapshot on this machine"}
         out = self.dir / f"vendor_seed{seed}.png"; meta = out.with_suffix(".json")
@@ -1356,7 +1385,7 @@ class Model:
         re-download tool touched — the toolchain's completion marker."""
         snap_logs = Path(self.args.out) / "snap"
         for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
-            for nm in (self.registry_name, self.name):
+            for nm in self.snapshot_names():
                 p = root / nm
                 if not (p.is_dir() and any(p.iterdir())):
                     continue
@@ -1402,7 +1431,7 @@ class Model:
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         root = Path(self.args.models_root)
         found = None                                   # the builder writes <models-root>/<family>/<name>/model.nbx
-        for nm in (self.registry_name, self.name):
+        for nm in self.snapshot_names():
             for cand in [root / self.family / nm / "model.nbx", root / nm / "model.nbx"] + sorted(root.glob(f"*/{nm}/*.nbx")):
                 if cand.exists():
                     found = cand; break
