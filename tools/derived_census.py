@@ -280,6 +280,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
             mask_n = _mask_numel(o, shape)
             q_round = None
+            if decode_kv is not None and "uids" in decode_kv and uid not in decode_kv["uids"]:
+                decode_kv = None      # a cross-attention: K/V the encoder's, never the cache
             if decode_kv is not None and decode_kv.get("prefill"):
                 # A prefill through the KV interceptor (`intercept`, `_is_prefill`): the graph's
                 # mask is dropped for `is_causal` — the SDPA sees no mask at any length.
@@ -665,6 +667,12 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # (`tokenize_around_span`) with the vision tokens spliced in: L0 .. L0 + max_tokens - 1.
     if flow.get("type") == "vlm" and image_path and prompt:
         sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req))
+    # encoder_decoder (triton/flow/encoder_decoder.py `_decode_one_window`): the decoder runs ONE
+    # token per step on the encoder's frames — its self-attentions through the KV cache (step 1 a
+    # prefill of one token, then the cache's 2 .. max_tokens - 1), its cross-attentions native
+    # (`decoder_self_attention_plan`, the flow's own split).
+    if flow.get("type") == "encoder_decoder":
+        sites.extend(_encoder_decoder_sites(model, topo, defaults, plan))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -678,6 +686,33 @@ class _Stub:
     """The attributes the frontend helpers read from a flow context — nothing else."""
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def _encoder_decoder_sites(model, topo, defaults, plan):
+    from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    stages = (topo.get("flow") or {}).get("stages") or []
+    enc = next((st["component"] for st in stages if st.get("execution") == "forward"), None)
+    dec = next((st["component"] for st in stages if st.get("execution") == "autoregressive"), None)
+    if not enc or not dec:
+        return []
+    kvp = decoder_self_attention_plan(runtime_graph(model, dec))
+    if kvp is None or not (kvp["arange_uids"] or kvp.get("position_slice_uids")):
+        return []                 # the flow's recompute path: the whole sequence every step
+    ge = json.loads((CACHE / model / "components" / enc / "graph.json").read_text())
+    frames = ge["tensors"][ge["output_tensor_ids"][0]]["shape"]      # the window's encoder frames
+    gd = json.loads((CACHE / model / "components" / dec / "graph.json").read_text())["tensors"]
+    ids_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and "ids" in k)
+    enc_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and k != f"input::{ids_in}")
+    dtype = {c["name"]: c["dtype"] for c in plan["components"]}[dec]
+    mt = decode_bound(defaults.get("max_tokens"))
+    self_uids = set(kvp["self_attn_uids"])
+
+    def step(n):
+        kv = ({"prefill": True, "uids": self_uids} if n == 1 else
+              {"len": n, "dtype": dtype, "heads": kvp["num_heads"], "uids": self_uids})
+        return [(dec, {ids_in: [1, 1], enc_in: list(frames), "__kv__": kv})]
+    return [(f"{dec} self-attention KV length", 1, int(mt) - 1, step)]
 
 
 def vlm_splice_path(model: str, topo: dict) -> bool:
@@ -836,11 +871,15 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                         keys |= set(launches)
                         continue
                     inputs = dict(feed(outs) if callable(feed) else feed)
-                    kv_prefill = inputs.pop("__kv_prefill__", False)
+                    kv = inputs.pop("__kv__", None)
+                    if inputs.pop("__kv_prefill__", False):
+                        kv = {"prefill": True}
+                    if kv is not None and "dtype" in kv:
+                        from neurobrix.kernels.nbx_tensor import NBXDtype
+                        kv = dict(kv, dtype=NBXDtype[str(kv["dtype"]).replace("torch.", "")])
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
                                                    has_native_bf16, sdpa, unhandled, tiling=view,
-                                                   tiled_tf=tiled_tf,
-                                                   decode_kv={"prefill": True} if kv_prefill else None)
+                                                   tiled_tf=tiled_tf, decode_kv=kv)
                     keys |= set(launches)
                 found.update(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
@@ -903,6 +942,11 @@ def compare(a) -> int:
                                        "--hardware", a.hardware])
     ic = request_input_config(args, manifest, manifest.get("family"), CACHE / a.model)
     loop_comps = set((flow.get("loop") or {}).get("components") or [])
+    if flow.get("type") == "rnnt":
+        # the rnnt flow executes its forward stages' graphs; the greedy decoder and the joint run
+        # on the host from their weights (`_run_lstm_np`, `_run_joint_np`) — no launch
+        runs = {st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])
+                if st.get("execution", "forward") == "forward"}
     if flow.get("type") == "vlm" and vlm_splice_path(a.model, topo):
         _v = flow["vlm"]
         runs = {_v["vision_component"], _v["lm_component"]}
@@ -960,6 +1004,27 @@ def compare(a) -> int:
                                        audio_path=_audio, max_tokens_req=_mt_req,
                                        image_path=_image):
         derived.add((uid, q_, C.key_repr(key)))
+    if flow.get("type") == "rnnt":
+        # the greedy decoder's LSTM runs through `lstm_wrapper` directly, one step at a time in
+        # float32 (`TritonRNNTEngine._run_lstm_np`: [T=1, B=1, I], the weights cast once) — its
+        # launches outside any op, its geometry the component's own traced lstm
+        from neurobrix.kernels import launch_keys as LK_
+        from neurobrix.kernels.nbx_tensor import NBXDtype as _Dt
+        for st in (flow.get("audio") or {}).get("stages") or []:
+            if st.get("execution") != "rnnt_greedy":
+                continue
+            g = runtime_graph(a.model, st["component"])
+            for o in (g.get("ops") or {}).values():
+                if o.get("op_type") != "aten::lstm":
+                    continue
+                ins_ = o.get("input_tensor_ids") or []
+                args_ = (o.get("attributes") or {}).get("args") or []
+                I_ = g["tensors"][ins_[0]]["shape"][-1]
+                H_ = g["tensors"][ins_[1]]["shape"][-1]
+                for q_, key in LK_.lstm_launches(1, 1, I_, H_, int(args_[4].get("value")),
+                                                 bool(args_[7].get("value")), _Dt.float32,
+                                                 prof.has_native_bf16):
+                    derived.add((None, q_, C.key_repr(key)))
     walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}
     d_keys = {(q_, k) for _, q_, k in derived}
