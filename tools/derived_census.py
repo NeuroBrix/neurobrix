@@ -560,19 +560,36 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # autoregressive text (triton/flow/autoregressive.py): after the prefill, each decode step runs
     # the LM at ONE position against the KV cache — its length P + 1 .. P + max_tokens, K/V the
     # cache's (the plan's kv_cache: dtype, KV heads), through the interceptor's attention call.
+    # An image-AR generation (the VQ image strategy) runs its fixed token count, the LM on
+    # [cond, uncond] under guidance, and per step the head once per branch, the codebook embedding
+    # and the aligner on one token; the VQ decoder on the whole code sequence at the end.
     if flow.get("type") == "autoregressive_generation" and plan.get("kv_cache") and prompt:
         from neurobrix.core.runtime.decode_bound import decode_bound as _db
+        from neurobrix.triton.flow import autoregressive as AR
         gen = flow.get("generation") or {}
-        head = gen.get("head_component", "lm_head")
-        lms = [c for c in comps if c != head]
+        lm = AR.session_lm_name(gen, [c for c in (topo.get("components") or {}) if c in comps])
         P = prompt_tokens(model, prompt)
-        mt = _db(max_tokens_req if max_tokens_req is not None else require_max_tokens(defaults))
+        image_ar = gen.get("type") == "autoregressive_image"
+        B = 2 if image_ar and AR.image_cfg_weight({}, defaults) > 1.0 else 1
+        mt = _db(AR.image_token_count(defaults) if image_ar else
+                 max_tokens_req if max_tokens_req is not None else require_max_tokens(defaults))
         kv = plan["kv_cache"]
 
-        def decode(n, lms=lms, kv=kv):
-            return [(c, {"__decode__": {"len": n, "dtype": kv.get("dtype"),
-                                        "heads": kv.get("num_kv_heads")}}) for c in lms]
+        def decode(n, lm=lm, kv=kv, B=B):
+            return [(lm, {"__decode__": {"len": n, "dtype": kv.get("dtype"), "batch": B,
+                                         "heads": kv.get("num_kv_heads")}})]
         sites.append(("decode KV length", P + 1, P + int(mt), decode))
+        if image_ar:
+            def one(comp, lead):
+                """The component's single input at its trace shape, the leading dim `lead`."""
+                g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                sp = next(t for t in g["tensors"].values() if t.get("input_name"))
+                return {sp["input_name"]: [lead, *sp["shape"][1:]]}
+            steps = [(gen["head_component"], one(gen["head_component"], 1)),
+                     (gen["embed_component"], one(gen["embed_component"], 1)),
+                     (gen["aligner_component"], one(gen["aligner_component"], 1)),
+                     (gen["decoder_component"], one(gen["decoder_component"], int(mt)))]
+            sites.append(("image-AR step and VQ decode", 1, 1, lambda _n, st=steps: st))
     # next_token_diffusion (triton/flow/next_token_diffusion.py `_generate_kv`): the LM prefills
     # the speaker prompt (the flow's own `speaker_prompt_ids`) and, under CFG, a negative context
     # of the speech start token alone; then every step decodes ONE position per context against
@@ -718,9 +735,10 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                         # one position: every batch / sequence symbol at 1, the cache's K and V
                         from neurobrix.kernels.nbx_tensor import NBXDtype
                         g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
-                        syms = {sid: 1 for sid, i in ((g.get("symbolic_context") or {})
-                                                      .get("symbols") or {}).items()}
                         d = dict(feed["__decode__"])
+                        syms = {sid: (int(d.get("batch") or 1) if i.get("name") == "batch" else 1)
+                                for sid, i in ((g.get("symbolic_context") or {})
+                                               .get("symbols") or {}).items()}
                         d["dtype"] = NBXDtype[str(d["dtype"]).replace("torch.", "")]
                         launches = derive_component(model, comp, dtypes[comp], mode, syms,
                                                     has_native_bf16, *sdpa, unhandled, tiling=view,
@@ -769,8 +787,17 @@ def compare(a) -> int:
     # symbol is 1. Both names are the topology's own (`lm_component`, `head_component`).
     autoregressive_text = flow.get("type") == "autoregressive_generation"
     head = gen.get("head_component", "lm_head") if autoregressive_text else None
+    lm_batch, runs = 1, None
     if autoregressive_text:
         P = prompt_tokens(a.model, request[request.index("--prompt") + 1])
+        if gen.get("type") == "autoregressive_image":
+            # the image strategy runs the LM on [cond, uncond] under guidance, and only the
+            # components its generation names (the understanding tower never runs)
+            from neurobrix.triton.flow import autoregressive as AR_
+            _d = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text())
+            lm_batch = 2 if AR_.image_cfg_weight({}, _d) > 1.0 else 1
+            runs = {gen[k] for k in ("lm_component", "head_component", "embed_component",
+                                     "aligner_component", "decoder_component") if gen.get(k)}
     # Every other flow: the component's symbols as Prism binds them for THIS request — the run's own
     # InputConfig (`run.request_input_config`, from the request parsed by the CLI's own parser)
     # through `ActivationProfiler.build_symbol_map` at the request (no placement floor).
@@ -800,7 +827,7 @@ def compare(a) -> int:
                if not (isinstance(_f, dict) and "__decode__" in _f)}   # decode ADDS to the prefill
     for c in plan["components"]:
         comp = c["name"]
-        if comp in covered:
+        if comp in covered or (runs is not None and comp not in runs):
             continue
         g = json.loads((CACHE / a.model / "components" / comp / "graph.json").read_text())
         table = (g.get("symbolic_context") or {}).get("symbols") or {}
@@ -809,7 +836,7 @@ def compare(a) -> int:
             for sid, info in table.items():
                 name = info.get("name")
                 if name == "batch":
-                    syms[sid] = 1
+                    syms[sid] = 1 if comp == head else lm_batch
                 elif name in ("seq_len", "sequence_length"):
                     syms[sid] = 1 if comp == head else P
                 else:
