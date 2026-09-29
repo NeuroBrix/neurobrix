@@ -10,7 +10,12 @@ lost — the MODE and the RUNG each key was formed at. A model's rows come from 
 holds it (a later census of a model replaces an earlier one, never adds to it), and only when the
 graph sha that source recorded is the container's in the cache today: a model retraced since its
 census is left out and named, never written with keys of a graph that no longer exists. The census
-tree's revision is the `tool` column; `op` is None for these rows (the shadow did not record it).
+tree's revision is the `tool` column; `ops` is [None] for these rows (the shadow did not record them).
+
+    python tools/census_table.py migrate <table.jsonl> [...]
+
+converts a table written one row per (op, key) — the schema before 2026-09-29 — to one row per key
+with its `ops` list, in place, under the table's lock; a table already converted is left as it is.
 
 Nothing here runs a model or touches a device.
 """
@@ -98,7 +103,7 @@ def rows_of_source(src: Path, tool: str):
                 continue
             kernel, key = line.split("::", 1)
             by_model.setdefault(model, []).append(
-                {"model": model, "container": shas[model], "mode": mode, "rungs_mb": [rung] if rung is not None else None, "op": None,
+                {"model": model, "container": shas[model], "mode": mode, "rungs_mb": [rung] if rung is not None else None, "ops": [None],
                  "kernel": kernel, "key": key, "dtype": T.dtypes_of(key), "tool": tool})
     return by_model, unhashed
 
@@ -131,6 +136,37 @@ def consolidate(a) -> int:
     return 0
 
 
+def migrate(a) -> int:
+    """One row per (op, key) -> one row per key with its ops list; the rungs merged as `write` merges them."""
+    import fcntl
+    from neurobrix.kernels import census_table as T
+    for p in map(Path, a.table):
+        if not p.exists():
+            raise SystemExit(f"{p}: no such table")
+        with open(str(p) + ".lock", "a") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            try:
+                rows, old = [], 0
+                for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    if "op" in row and "ops" not in row:
+                        row["ops"] = [row.pop("op")]
+                        old += 1
+                    elif "ops" not in row:
+                        raise SystemExit(f"{p}:{n}: a row with neither op nor ops")
+                    rows.append(row)
+                if not old:
+                    print(f"[census-table] {p}: already one row per key ({len(rows)} rows)", flush=True)
+                    continue
+                n = T.write(p, rows)
+            finally:
+                fcntl.flock(lk, fcntl.LOCK_UN)
+        print(f"[census-table] {p}: {len(rows)} rows (one per op) -> {n} (one per key)", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -140,8 +176,10 @@ def main(argv=None) -> int:
     c.add_argument("--class", dest="cls", type=int, required=True, help="the memory class in GB (16, 32)")
     c.add_argument("--source", action="append", required=True, help="<census dir>@<tool tree revision>, oldest first")
     c.add_argument("--root", default=None, help="the table root (default: the engine package's config/census)")
+    m = sub.add_parser("migrate")
+    m.add_argument("table", nargs="+", help="a census table file written one row per (op, key)")
     a = ap.parse_args(argv)
-    return consolidate(a)
+    return consolidate(a) if a.cmd == "consolidate" else migrate(a)
 
 
 if __name__ == "__main__":
