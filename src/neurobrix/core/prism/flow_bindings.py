@@ -47,11 +47,13 @@ class FlowBindings:
     """A request's flow, as far as symbol bindings go: built once per request from the container's
     topology (`run.request_input_config`), asked per component graph by `build_symbol_map`."""
 
-    def __init__(self, topology: Dict[str, Any], cache_path, model_name: Optional[str] = None,
+    def __init__(self, topology: Dict[str, Any], cache_path, container_name: Optional[str] = None,
                  tp_components=()):
         self.topology = topology or {}
         self.cache_path = Path(cache_path) if cache_path is not None else None
-        self.model_name = model_name
+        # the name the container registers its flags under: its MANIFEST model_name, never the
+        # name the request used (a path, an alias)
+        self.container_name = container_name
         self.tp_components = set(tp_components or ())
         self.flow = self.topology.get("flow") or {}
         self._graphs: Dict[str, Dict[str, Any]] = {}
@@ -108,7 +110,7 @@ class FlowBindings:
                     continue
                 n = max(lens)
             cfg = dict((self.topology.get("extracted_values") or {}).get("tokenizer") or {})
-            if get_component_flag(self.model_name, enc, "zero_pad_embeddings", default=False):
+            if get_component_flag(self.container_name, enc, "zero_pad_embeddings", default=False):
                 cfg["zero_pad_embeddings"] = True
             out[(comp, inp)] = finalized_text_length(cfg, n)
         return out
