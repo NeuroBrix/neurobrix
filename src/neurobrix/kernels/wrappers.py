@@ -14,6 +14,7 @@ import triton
 # The bucket of a request-dependent key dimension (kernels/autotune_bucket.py): the key
 # carries the bucket's top, the kernel runs the true size (the owner's decision, 2026-09-21).
 from neurobrix.kernels.autotune_bucket import bucket_of as _bucket_of
+from neurobrix.kernels import launch_keys as _lk
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
@@ -1867,26 +1868,9 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     FlagGems / similar — see Phase 1.5 follow-up.
     """
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
-    is_fp16 = (dt == NBXDtype.float16)
-    is_bf16 = (dt == NBXDtype.bfloat16)
-    is_half = is_fp16 or is_bf16
-
-    # NBX_FORCE_FP32_ACCUM diagnostic: always store fp32 for any half
-    # input. Pairs with the input upcast in mm/bmm/addmm wrappers so
-    # the entire matmul chain operates in fp32 - isolates the dtype
-    # variable from the P-SANA-4KPX-RUNTIME bug hunt.
-    if NBX_FORCE_FP32_ACCUM and is_half:
-        return NBXDtype.float32
-
-    # (1) Hardware gate: fp16 on hardware without native bf16 gets fp32.
-    if is_fp16 and not _NBX_HAS_NATIVE_BF16:
-        return NBXDtype.float32
-
-    # (2) + (3) legacy M gate + force_fp32 escape hatch.
-    if is_half and (M <= 4 or force_fp32):
-        return NBXDtype.float32
-
-    return dt
+    # The decision is `launch_keys.matmul_out_dtype` — the one the derived census computes keys
+    # with (NBX_FORCE_FP32_ACCUM first, then the hardware gate, then the M / force_fp32 gate).
+    return _lk.matmul_out_dtype(dt, M, force_fp32, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
 
 
 def _apply_matmul_epilogue(c, epilogue_code: int):
@@ -2189,28 +2173,22 @@ def mm(a, b, _epilogue: int = 0) :
     # kernel; cuBLAS reaches 0.295 ms via dedicated HMMA path we cannot
     # match by flag-flipping). Real speedup needs a HMMA-tuned Triton
     # kernel or FlagGems adoption — see Phase 1.5 follow-up.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic: upcast BOTH inputs to fp32 on any
-    # hardware when the env var is set. Sacrifices VRAM/perf to isolate
-    # the dtype-intermediate hypothesis in P-SANA-4KPX-RUNTIME. The
-    # existing fp16-only Volta gate below missed bf16 inputs, which on
-    # Volta have no native HMMA support and may degrade through Triton's
-    # tl.dot lowering.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
+    # The operand decisions are `launch_keys.mm_dtypes` — the function the derived census keys
+    # with; the wrapper only performs the casts it names. NBX_FORCE_FP32_ACCUM (a diagnostic)
+    # widens both half inputs first.
+    #
     # The fp16 activation is NOT materialised as fp32 any more: the kernels widen it in
     # registers — matmul_kernel through PROMOTE_A, the GEMV kernels on every load — the same
     # numbers the copy produced (an exact widening), without the copy per matmul. The store
     # dtype is decided by _matmul_out_dtype from the hardware gate, as before (fp32 here).
-    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
-    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
+    a_to, b_to, promote_a, promote_b = _lk.mm_dtypes(a.nbx_dtype, b.nbx_dtype,
+                                                     _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
 
-    # Dtype alignment. Three situations:
+    # Dtype alignment (decided in `launch_keys.mm_dtypes`). Three situations:
     #   1. Same dtype  → no-op.
     #   2. fp32 act × fp16 weight on pre-Ampere → this is the common case
     #      (the activation widened in-kernel). Keep the weight fp16 in memory; the kernel
@@ -2239,18 +2217,6 @@ def mm(a, b, _epilogue: int = 0) :
     # bf16 -> fp32 is lossless, so promoting per tile yields the same fp32
     # values the materialised cast did; the outputs are expected to be
     # bit-identical and that is checked, not assumed.
-    promote_b = (a_eff == NBXDtype.float32
-                 and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16))
-    if a_eff != b_nbx and not promote_b:
-        if promote_a:                       # widened for real when the pair needs the widest
-            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
-
     M, K = a.shape
     K2, N = b.shape
     assert K == K2, f"Incompatible dimensions: {K} vs {K2}"
@@ -2376,34 +2342,16 @@ def bmm(a, b, allow_strided_b: bool = False) :
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
-    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-
-    # Dtype alignment — see mm() for the full rationale. Fast path: when
-    # activation is fp32 (after step 2) and weight is fp16 on pre-Ampere,
-    # leave the weight fp16 and let the kernel promote its tile via
-    # PROMOTE_B. All other mismatches fall back to the widening path, so
-    # the batched kernel always sees matched dtypes or PROMOTE_B=True.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_nbx == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
-    if a_nbx != b_nbx and not promote_b:
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
+    # The operand decisions are `launch_keys.bmm_dtypes` — the function the derived census keys
+    # with (NBX_FORCE_FP32_ACCUM first; an fp16 activation widened in memory on hardware without
+    # native bf16 — bmm has no PROMOTE_A; an fp16 weight under fp32 widened in the kernel there;
+    # any other mismatch widened to the widest). The wrapper only casts.
+    a_to, b_to, promote_b = _lk.bmm_dtypes(a.nbx_dtype, b.nbx_dtype,
+                                           _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
 
     B, M, K = a.shape
     B2, K2, N = b.shape
@@ -2605,53 +2553,19 @@ def addmm(bias, a, b,
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
-    # The fp16 activation is widened in the kernel's registers (PROMOTE_A, as mm), not
-    # materialised as fp32 per call: PixArt's DiT took a copy of every (8192, 1152)
-    # activation, a copy of every transposed weight and a cast of every bias per linear
-    # (the copy census of 2026-09-07).
-    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
-    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
+    # The operand decisions are `launch_keys.addmm_dtypes` — the function the derived census
+    # keys with (NBX_FORCE_FP32_ACCUM first; PROMOTE_A / PROMOTE_B in-kernel widenings on hardware
+    # without native bf16; any other mismatch widened to the widest; the bias widened in-kernel
+    # under an fp32 activation, else cast to the activation's dtype). The wrapper only casts.
+    a_to, b_to, bias_to, promote_a, promote_b, promote_bias = _lk.addmm_dtypes(
+        a.nbx_dtype, b.nbx_dtype, bias.nbx_dtype, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
+    if bias.nbx_dtype != bias_to:
+        bias = bias.to(bias_to)
 
-    # Dtype alignment (see mm() for rationale). Same two branches:
-    # promote_b keeps fp16 weight fp16 + kernel casts tile inline;
-    # otherwise fall back to full widening.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_eff == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
-    if a_eff != b_nbx and not promote_b:
-        if promote_a:                       # widened for real when the pair needs the widest
-            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
-        a_eff = a.nbx_dtype
-    # Bias tracks the accumulator dtype — it is added inside the kernel after
-    # tl.dot. A bias narrower than an fp32 accumulator is widened on load
-    # (PROMOTE_BIAS, exact); a bias that would have to be NARROWED to the
-    # activation dtype keeps its cast copy (a rounding the kernel's epilogue
-    # would otherwise apply in another order).
-    promote_bias = (bias.nbx_dtype != a_eff and a_eff == NBXDtype.float32
-                    and bias.nbx_dtype in (NBXDtype.float16, NBXDtype.bfloat16))
-    if bias.nbx_dtype != a_eff and not promote_bias:
-        bias = bias.to(a_eff)
-
-    # N-D activation: addmm is strictly 2-D. Flatten the leading dims of `a`
-    # ([..., M, K] @ [K, N]), addmm in 2-D, restore the leading shape. Mirror
-    # of the matmul() ND×2D path; raw N-D `a` unpacked a 2-tuple → "too many
-    # values to unpack" (Flex DiT feeds a 3-D activation to addmm). Bias is the
-    # Linear bias ([N] or [1, N]) and broadcasts over the flattened rows.
     if a.ndim > 2:
         orig_lead = a.shape[:-1]
         K_ = a.shape[-1]
