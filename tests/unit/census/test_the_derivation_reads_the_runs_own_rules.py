@@ -159,3 +159,22 @@ def test_the_extent_bisection_evaluates_both_ends_of_a_short_range():
             assert sorted(set(seen)) == want
         else:
             assert {lo, hi} <= set(seen)
+
+
+def test_a_spatial_downscaler_reads_pixels_whatever_its_time_map():
+    """`is_downscale_graph`: a rank-5 graph whose output is spatially smaller than its input reads
+    PIXELS — its docstring's rule. It required a temporal class, so CogVideoX-5b-I2V's image encoder
+    (time a concrete 1) and Allegro-TI2V's / Wan2.1-I2V's (a time map neither class recognises)
+    were bound latent-side: priced 8 x 8 too small per frame and derived at the latent grid while
+    the walk encoded 160 x 352 pixels. Injection: the temporal-class requirement restored -> RED."""
+    from neurobrix.core.prism.profiler import is_downscale_graph
+
+    def dag(t_in, t_out):
+        return {"tensors": {"input::x": {"shape": [1, 3, t_in, 112, 176]},
+                            "o": {"shape": [1, 16, t_out, 14, 22]}},
+                "input_tensor_ids": ["input::x"], "output_tensor_ids": ["o"]}
+    assert is_downscale_graph(dag(1, 1))          # an image encoder, time concrete
+    assert is_downscale_graph(dag(20, 5))
+    up = {"tensors": {"input::x": {"shape": [1, 16, 1, 14, 22]}, "o": {"shape": [1, 3, 1, 112, 176]}},
+          "input_tensor_ids": ["input::x"], "output_tensor_ids": ["o"]}
+    assert not is_downscale_graph(up)             # a decoder upsamples
