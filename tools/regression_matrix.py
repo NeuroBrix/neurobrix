@@ -269,24 +269,31 @@ def _host_bytes() -> int:
 
 
 def _mem_available() -> int:
-    for line in Path("/proc/meminfo").read_text().splitlines():
-        if line.startswith("MemAvailable:"):
-            return int(line.split()[1]) << 10
-    raise SystemExit("/proc/meminfo has no MemAvailable: the host budget cannot be measured")
+    """The host's available bytes from the ENGINE's one reader (`core.host_memory.memory_state`:
+    MemAvailable on Linux, vm_stat + sysctl on macOS) — the harness read /proc/meminfo itself and
+    every cell was refused on the Mac, where no /proc exists (the Mac, 2026-09-29 16:02)."""
+    from neurobrix.core.host_memory import memory_state
+    st = memory_state()
+    if st.available_mb is None:
+        raise SystemExit(f"the host's available memory cannot be read ({st.source}): the host budget cannot be measured")
+    return int(st.available_mb) << 20
 
 
 def _rss_tree(pid: int) -> int:
-    """Resident bytes of a runner and every process under it (its cell)."""
-    total, todo = 0, [pid]
-    while todo:
-        p = todo.pop()
+    """Resident bytes of a runner and every process under it (its cell) — psutil, which every host
+    answers (it read /proc/<pid>/status and /proc/<pid>/task/<pid>/children, Linux only)."""
+    import psutil
+    try:
+        root = psutil.Process(pid)
+        procs = [root] + root.children(recursive=True)
+    except psutil.Error:
+        return 0
+    total = 0
+    for p in procs:
         try:
-            for line in Path(f"/proc/{p}/status").read_text().splitlines():
-                if line.startswith("VmRSS:"):
-                    total += int(line.split()[1]) << 10
-            todo += [int(c) for c in Path(f"/proc/{p}/task/{p}/children").read_text().split()]
-        except OSError:
-            continue
+            total += p.memory_info().rss
+        except psutil.Error:
+            continue                                    # ended between the listing and the read
     return total
 
 
@@ -306,10 +313,10 @@ def _pid_alive(pid: int) -> bool:
 
 def _children_rss() -> int:
     """Resident bytes of every process this runner started (its cell's process tree), the runner excluded."""
-    me = os.getpid()
+    import psutil
     try:
-        kids = [int(c) for c in Path(f"/proc/{me}/task/{me}/children").read_text().split()]
-    except OSError:
+        kids = [c.pid for c in psutil.Process(os.getpid()).children()]
+    except psutil.Error:
         return 0
     return sum(_rss_tree(k) for k in kids)
 
@@ -384,7 +391,7 @@ def reserve_host(out: Path, need: int) -> bool:
         # queue is its own file so a runner still on the older code keeps reading a plain ledger.
         wpath = out / "host_waiting.json"
         waiting = json.loads(wpath.read_text()) if wpath.exists() else {}
-        waiting = {p: t for p, t in waiting.items() if Path(f"/proc/{p}").exists()}
+        waiting = {p: t for p, t in waiting.items() if _pid_alive(int(p))}
         me = str(os.getpid())
         mine = waiting.get(me, time.time())
         ahead = [p for p, t in waiting.items() if p != me and t < mine]
