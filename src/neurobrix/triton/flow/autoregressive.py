@@ -20,6 +20,10 @@ from neurobrix.triton.session import TritonLMSession
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
+# the LM facts, the session's LM and the image-AR guidance weight: one reader for the plan and
+# both engines' sessions (core/runtime/lm_facts.py)
+from neurobrix.core.runtime.lm_facts import (  # noqa: F401  (re-exported for the census)
+    image_guidance_weight as image_cfg_weight, lm_config_of as session_lm_config, session_lm_name)
 
 
 
@@ -169,53 +173,10 @@ def prompt_token_ids(tokenizer, prompt: str, defaults: dict, is_image_ar: bool, 
     return _flatten_tokenizer_output(token_ids)
 
 
-def image_cfg_weight(resolved: Dict, defaults: Dict) -> float:
-    """An image-AR request's guidance weight: the CLI's, else the package's. Above 1 the flow
-    runs the LM on [cond, uncond] (batch 2) and the head once per branch."""
-    cli_cfg = (resolved or {}).get("global.guidance_scale")
-    cfg_weight = float(cli_cfg) if cli_cfg is not None else defaults.get("guidance_scale")
-    if cfg_weight is None:
-        raise RuntimeError(
-            "guidance_scale missing from defaults.json for "
-            "autoregressive_image. Set in the model registry at import.")
-    return float(cfg_weight)
-
-
 def image_token_count(defaults: Dict) -> int:
     """The VQ image's token count — the image-AR generator's fixed length: (image / patch)^2."""
     num_patches = defaults["image_size"] // defaults["patch_size"]
     return num_patches * num_patches
-
-
-def session_lm_name(gen_info: Dict, component_names) -> str:
-    """The component the decode session runs as the LM: the generation's `lm_component` when it
-    is a component, else the first component that is neither the text head nor a codec."""
-    lm_name = gen_info.get("lm_component", "language_model")
-    if lm_name not in component_names:
-        for name in component_names:
-            if name not in ("lm_head", "codec.decoder"):
-                return name
-    return lm_name
-
-
-def session_lm_config(defaults: Dict, topology: Dict, lm_name: str) -> Dict[str, Any]:
-    """The LM facts the decode session sizes its KV cache from: the package's `lm_config`, else
-    the LM component's extracted values. The derived census reads the same."""
-    lm_config = (defaults or {}).get("lm_config", {})
-    if lm_config:
-        return lm_config
-    extracted = ((topology or {}).get("extracted_values") or {}).get(lm_name, {})
-    return {
-        "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
-        "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
-        "hidden_size": extracted.get("hidden_size"),
-        "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
-        "head_dim": extracted.get("head_dim"),
-        # Mirror of the compiled extraction (R30): the window is
-        # load-bearing for the prompt-aware KV ceiling — without
-        # it a build on this path would get no model-limit guard.
-        "max_position_embeddings": extracted.get("max_position_embeddings"),
-    }
 
 
 def session_kv_params(lm_config: Dict, kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:

@@ -842,17 +842,8 @@ class AutoregressiveHandler(FlowHandler):
         _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
 
         # Get lm_config
-        lm_config = self.ctx.pkg.defaults.get("lm_config", {})
-        if not lm_config:
-            extracted = self.ctx.pkg.topology.get("extracted_values", {}).get(lm_name, {})
-            lm_config = {
-                "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
-                "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
-                "hidden_size": extracted.get("hidden_size"),
-                "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
-                "head_dim": extracted.get("head_dim"),
-                "max_position_embeddings": extracted.get("max_position_embeddings"),
-            }
+        from neurobrix.core.runtime.lm_facts import lm_config_of
+        lm_config = lm_config_of(self.ctx.pkg.defaults, self.ctx.pkg.topology, lm_name)
 
         # MoE config — values MUST come from lm_config (built by the build toolchain from model_registry.yml)
         num_experts = lm_config.get("num_experts")
