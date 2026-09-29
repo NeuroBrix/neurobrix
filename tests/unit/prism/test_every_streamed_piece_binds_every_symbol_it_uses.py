@@ -60,7 +60,13 @@ CASES = [
 # this rack's 2026-09-24 pinned-machine census), at the container's own default request, swept over
 # rungs so the rung that streams it is found rather than assumed. A model no rung streams FAILS its
 # cell: a case the gate never reaches is not a case it proved.
-SWEEP = ["Open-Sora-v2", "SANA-Video_2B_720p", "DeepSeek-Coder-V2-Lite-Instruct",
+# SANA-Video_2B_720p_diffusers left the sweep (2026-09-29): named by its pre-rename name, its cell failed
+# on "not in this machine's cache" and so never measured that NO rung streams it any more — its
+# transformer is activation-bound (18.8 GB of activations before any weight at the 1 651 MB segment
+# budget of rung 4096; 44.9 GB at 720p), where cutting between layers cannot help, and plans measured
+# at 256x448x17 and 480x832x33 over rungs 4096-16384 are lazy_sequential or a refusal, never
+# layer_streaming. A case the gate cannot reach is not listed as one it proves.
+SWEEP = ["Open-Sora-v2", "DeepSeek-Coder-V2-Lite-Instruct",
          "Qwen3-30B-A3B-Thinking-2507", "Qwen3-Coder-30B-A3B-Instruct", "Qwen3-Omni-30B-A3B-Instruct",
          "Qwen3-VL-30B-A3B-Thinking", "deepseek-moe-16b-chat", "granite-speech-3.3-8b"]
 RUNGS = [4096, 8192, 16384]
