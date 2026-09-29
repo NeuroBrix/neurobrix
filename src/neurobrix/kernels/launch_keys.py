@@ -211,3 +211,129 @@ def chunked_math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D
     for c in {min(rows, Tq)} | ({Tq % rows} if Tq % rows else set()):
         out += math_attention_launches(B, H, Hk, c, Tk, D, Dv, q, k, v, native_bf16, force_accum)
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Convolutions: conv2d (and conv1d as H=1, conv3d as kt conv2d launches), depthwise, bands.
+# ---------------------------------------------------------------------------------------------
+
+_NARROWEST_FIRST = (F16, BF16, F32)
+
+
+def conv_width_key(in_h: int, out_h: int, in_w: int, out_w: int, kw: int, stride_w: int, pad_w: int,
+                   dil_w: int) -> Tuple[int, int]:
+    """The width a convolution's key carries: a ONE-ROW convolution (a 1-D conv over a sequence)
+    keys its width on the profile's W ladder, the output width derived from the input's top by the
+    convolution's arithmetic; a 2-D convolution keeps its exact extents."""
+    if int(in_h) == 1 and int(out_h) == 1:
+        top = int(bucket_of("W", int(in_w)))
+        return top, (top + 2 * int(pad_w) - int(dil_w) * (int(kw) - 1) - 1) // int(stride_w) + 1
+    return int(in_w), int(out_w)
+
+
+def conv_dtypes(x: NBXDtype, w: NBXDtype) -> Tuple[NBXDtype, NBXDtype]:
+    """A convolution's operands, narrowed to the narrowest of the pair when they differ."""
+    if x != w:
+        n = next(d for d in _NARROWEST_FIRST if d in (x, w))
+        return n, n
+    return x, w
+
+
+def conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw) -> Tuple[int, int]:
+    return ((in_h + 2 * ph - dh * (kh - 1) - 1) // sh + 1,
+            (in_w + 2 * pw - dw * (kw - 1) - 1) // sw + 1)
+
+
+def conv2d_route(N: int, in_c: int, out_c: int, out_h: int, out_w: int, dh: int, dw: int, groups: int,
+                 x: NBXDtype, band_bytes: int, depthwise_enabled: bool = True) -> str:
+    """"depthwise" (groups == in_c == out_c at dilation 1), "band" (the output, sized at the
+    input's dtype, over `band_bytes`) or "plain" — the order the wrapper tests them in."""
+    from neurobrix.kernels.nbx_tensor import dtype_size
+    if depthwise_enabled and groups == in_c and groups == out_c and dh == 1 and dw == 1:
+        return "depthwise"
+    if N * out_c * out_h * out_w * dtype_size(x) > band_bytes:
+        return "band"
+    return "plain"
+
+
+def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int,
+                    sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int,
+                    x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int,
+                    depthwise_enabled: bool = True) -> List[Launch]:
+    """`conv2d_wrapper` on a 4-D weight: narrowing; the depthwise stencil when groups == in_c ==
+    out_c at dilation 1; band streaming (per-band recursion at the original padding) when the
+    output, sized at the INPUT's dtype, exceeds `band_bytes`; otherwise one `conv2d_forward_kernel`
+    launch. The output dtype is the run's compute dtype when set (`_NBX_COMPUTE_DTYPE`), else the
+    input's. REPRODUCED, not fixed: the plain kernel's `fp16` key flag compares a Triton dtype to
+    an IntEnum and is always False (named for a decision — fixing it re-keys every conv entry)."""
+    from neurobrix.kernels.nbx_tensor import dtype_size
+    out_h, out_w = conv_out_hw(in_h, in_w, kh, kw, sh, sw, ph, pw, dh, dw)
+    if out_h <= 0 or out_w <= 0:
+        return []
+    x, w = conv_dtypes(x, w)
+    out = compute if compute is not None else x
+    route = conv2d_route(N, in_c, out_c, out_h, out_w, dh, dw, groups, x, band_bytes, depthwise_enabled)
+    if route == "depthwise":
+        iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, 1)
+        return [(DEPTHWISE, (in_c, in_h, iw_k, out_h, ow_k, kh, kw, sh, sw, ph, pw, x == F16,
+                             tag(x), tag(w), tag(out)))]
+    xb = dtype_size(x)
+    if route == "band":
+        band_target = max(1, band_bytes // 2)
+        rows_per_band = max(1, band_target // max(1, N * out_c * out_w * xb))
+        tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
+        band_oh = (out_h + tile_factor - 1) // tile_factor
+        out_launches: List[Launch] = []
+        for oh0 in range(0, out_h, band_oh):
+            oh1 = min(oh0 + band_oh, out_h)
+            ih0 = max(0, oh0 * sh - ph)
+            ih1 = min(in_h, (oh1 - 1) * sh + dh * (kh - 1) + 1 - ph)
+            if ih1 <= ih0:
+                continue
+            for l in conv2d_launches(N, in_c, ih1 - ih0, in_w, out_c, kh, kw, sh, sw, ph, pw, dh, dw,
+                                     groups, x, w, compute, band_bytes, depthwise_enabled):
+                if l not in out_launches:
+                    out_launches.append(l)
+        return out_launches
+    iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, dw)
+    return [(CONV2D, (N, in_c, in_h, iw_k, out_c, out_h, ow_k, kh, kw, sh, sw, ph, pw, dh, dw, groups,
+                      False, tag(x), tag(w), tag(out)))]
+
+
+def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool, groups: int,
+                  x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int,
+                  depthwise_enabled: bool = True) -> List[Launch]:
+    """`conv2d_wrapper` by the weight's rank: a transposed convolution forms no autotuned key; a
+    3-D weight is conv1d as conv2d at H = 1; a 5-D weight is conv3d as kt conv2d launches over
+    [B*T_out, Cin, H, W] (identical keys). REPRODUCED as the census forms it: the chunked conv3d
+    variant is gated by the driver's free bytes, which a census answers -1 — a live run can chunk
+    and form keys this derivation does not (named)."""
+    def _n(v, n):
+        v = list(v) if isinstance(v, (list, tuple)) else [v]
+        return v + [v[-1]] * (n - len(v)) if len(v) < n else v[:n]
+    if transposed:
+        return []
+    if len(w_shape) == 3:
+        N, C, L = x_shape
+        Co, Cg, K = w_shape
+        s, p, d = _n(stride, 1)[0], _n(padding, 1)[0], _n(dilation, 1)[0]
+        return conv2d_launches(N, C, 1, L, Co, 1, K, 1, s, 0, p, 1, d, groups, x, w, compute,
+                               band_bytes, depthwise_enabled)
+    if len(w_shape) == 5:
+        B, Cin, T, H, W = x_shape
+        Cout, Cg, kt, kh, kw = w_shape
+        st, sh, sw = _n(stride, 3)
+        pt, ph, pw = _n(padding, 3)
+        dt, dh, dw = _n(dilation, 3)
+        T_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
+        if T_out <= 0:
+            return []
+        return conv2d_launches(B * T_out, Cin, H, W, Cout, kh, kw, sh, sw, ph, pw, dh, dw, groups,
+                               x, w, compute, band_bytes, depthwise_enabled)
+    N, C, H, W = x_shape
+    Co, Cg, kh, kw = w_shape
+    sh, sw = _n(stride, 2)
+    ph, pw = _n(padding, 2)
+    dh, dw = _n(dilation, 2)
+    return conv2d_launches(N, C, H, W, Co, kh, kw, sh, sw, ph, pw, dh, dw, groups, x, w, compute,
+                           band_bytes, depthwise_enabled)

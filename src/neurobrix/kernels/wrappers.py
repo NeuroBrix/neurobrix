@@ -3717,20 +3717,7 @@ def _conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w):
     the convolution's own arithmetic so a certifier synthesising at the top forms the same
     key. A 2-D convolution keeps its exact extents (bounded by resolutions and tile edges;
     the ladder measured 37–40 % loss where the conv optimum flips)."""
-    if int(in_h) == 1 and int(out_h) == 1:
-        top = int(_bucket_of("W", int(in_w)))
-        return top, (top + 2 * int(pad_w) - int(dil_w) * (int(kw) - 1) - 1) // int(stride_w) + 1
-    return int(in_w), int(out_w)
-
-
-def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
-    """Return True when the conv2d output alone would exceed the spatial
-    band-streaming threshold. Output is the dominant transient because the
-    @triton.jit kernel accumulates in fp32 internally but writes the final
-    output at compute_dtype. Weights are residence-cost (already in arena),
-    not per-launch transients."""
-    out_bytes = N * out_c * out_h * out_w * dtype_bytes
-    return out_bytes > _NBX_CONV2D_BAND_BYTES
+    return _lk.conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w)
 
 
 def conv_transpose_wrapper(
@@ -4111,13 +4098,13 @@ def conv2d_wrapper(
     # Step 2: dtype alignment NARROWING (opposite of mm widening)
     x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
     w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
-    if x_nbx != w_nbx:
-        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
-        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
-        if x_nbx != narrowest:
-            x = x.to(narrowest)
-        if w_nbx != narrowest:
-            weight = weight.to(narrowest)
+    # `launch_keys.conv_dtypes`: the pair narrowed to the narrowest when they differ — the
+    # function the derived census keys with.
+    x_to, w_to = _lk.conv_dtypes(x_nbx, w_nbx)
+    if x_nbx != x_to:
+        x = x.to(x_to)
+    if w_nbx != w_to:
+        weight = weight.to(w_to)
 
     x_c = x.contiguous()
     w_c = weight.contiguous()
@@ -4146,7 +4133,10 @@ def conv2d_wrapper(
     # depthwise pattern (groups == in_c == out_c, weight (C,1,kh,kw)) on
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
     # ~1800x gap. Route to the dedicated stencil kernel instead.
-    if (os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1") and groups == in_c and groups == out_c and dil_h == 1 and dil_w == 1:
+    _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
+                              _NBX_CONV2D_BAND_BYTES,
+                              depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
+    if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
         return _depthwise_conv2d_dispatch(
@@ -4156,7 +4146,7 @@ def conv2d_wrapper(
             out_dtype,
         )
 
-    if _conv2d_should_band_stream(N, out_c, out_h, out_w, out_dtype_bytes):
+    if _route == "band":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] BAND-STREAM triggered (out > {_NBX_CONV2D_BAND_BYTES/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
