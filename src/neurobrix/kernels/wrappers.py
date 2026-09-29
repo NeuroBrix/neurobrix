@@ -8383,9 +8383,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
     # to fp32. For the common LLM case where all three match, this is a
     # no-op — zero overhead.
-    if not ((k.dtype if q_round is not None else q.dtype) == k.dtype == v.dtype):
-        q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
-        q_round = None
+    _qd, _kd, _vd, q_round = _lk.sdpa_operand_dtypes(q._dtype, k._dtype, v._dtype, q_round)
+    if _qd != q._dtype or _kd != k._dtype or _vd != v._dtype:
+        q, k, v = q.to(_qd), k.to(_kd), v.to(_vd)
 
     # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
     # Hocine scope decision = option B: hardware + memory-budget, ZERO

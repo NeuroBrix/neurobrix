@@ -3618,3 +3618,24 @@ now has the shared key, a stale writer and the other class's variant between its
 the key-level merge, green after.
 
 **The lesson, in one line.** A merge is tested where its inputs overlap; disjoint inputs prove a union.
+
+### 115 — the unbound-name walk counted a nested function's parameters as the outer function's names
+
+**Gate**: `tests/unit/cli/test_a_command_reads_no_unbound_name.py`, first version (2026-09-29,
+never landed): an AST walk of each function in `cli/commands/run.py` for names read and bound
+nowhere.
+
+**What it was for**: extracting `request_input_config` out of `cmd_run` left three reads of
+`height`, `width` and `num_frames` behind; every video request died at its inputs with NameError,
+while `--explain-plan` — which returns before those lines — stayed green over 196 plans.
+
+**What the gate said about the injected defect** (the restoring line removed): pass. The walk
+added every nested function's and lambda's parameters to the enclosing function's bound set, and
+a helper inside `cmd_run` takes `height=`/`width=` — so the three reads looked bound.
+
+**Repair.** Python's own scoping answers the question: `symtable` resolves each read, and a read
+resolved to the module level where nothing defines it is reported. Red on the injection, naming
+exactly the three; green restored.
+
+**The lesson, in one line.** A scope question is answered by the language's scope table, not by a
+walk that flattens scopes.

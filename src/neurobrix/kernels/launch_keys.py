@@ -221,6 +221,16 @@ def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool) -> List[Launc
 # Attention (scaled_dot_product_attention): the route, then the math route's two bmm launches.
 # ---------------------------------------------------------------------------------------------
 
+def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
+                        q_round: Optional[NBXDtype] = None):
+    """The (q, k, v) dtypes `scaled_dot_product_attention_wrapper` computes attention with: tl.dot
+    on V100 needs matching operands, so three that disagree are all cast to fp32 (Q judged at its
+    KV-cache rounding `q_round` when the cache asks for one). Returns (q, k, v, q_round)."""
+    if not ((k if q_round is not None else q) == k == v):
+        return F32, F32, F32, None
+    return q, k, v, q_round
+
+
 def _pow2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
