@@ -102,6 +102,8 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
                            shape_of=shape)
     dt = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
+    from neurobrix.kernels import wrappers as _W
+    conv_band_bytes = _W._NBX_CONV2D_BAND_BYTES
     out = []
     for uid in g["execution_order"]:
         o = ops[uid]
@@ -113,7 +115,12 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         elif kind == "aten::bmm":
             (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
             launches = LK.bmm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
-        elif kind == "aten::scaled_dot_product_attention":
+        elif kind in ("aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
+                      "aten::_scaled_dot_product_efficient_attention",
+                      "aten::_scaled_dot_product_flash_attention",
+                      "aten::_scaled_dot_product_flash_attention_for_cpu"):
+            # every SDPA spelling reaches `scaled_dot_product_attention_wrapper` with (q, k, v)
+            # first (dispatch.py: the fused-backend spellings through `_meta_sdpa_efficient`)
             q, k, v = (shape(t) for t in ins[:3])
             B, H, Tq, D = q
             if k[2] == D and k[3] == Tq and k[2] != Tq:        # the wrapper reads a pre-transposed K by its shape
@@ -131,8 +138,37 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
                 launches = []
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
-        elif kind in ("aten::addmm", "aten::baddbmm", "aten::linear", "aten::matmul",
-                      "aten::convolution", "aten::conv1d", "aten::lstm", "aten::stft", "aten::istft"):
+        elif kind == "aten::addmm":
+            bias_s, a_s, b_s = shape(ins[0]), shape(ins[1]), shape(ins[2])
+            K = a_s[-1]
+            M = 1
+            for d in a_s[:-1]:
+                M *= d
+            launches = LK.addmm_launches(M, K, b_s[-1], dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
+        elif kind in ("aten::convolution", "aten::conv1d"):
+            at = o.get("attributes") or {}
+            x_s, w_s = shape(ins[0]), shape(ins[1])
+            nd = len(w_s) - 2
+            stride = at.get("stride", [1] * nd)
+            padding = at.get("padding", [0] * nd)
+            dilation = at.get("dilation", [1] * nd)
+            transposed = bool(at.get("transposed", False))
+            groups = int(at.get("groups", 1))
+            # aten::convolution is a lower-precision op for the dtype engine: its float operands
+            # are cast to the compute dtype C, and C is the store dtype (`_NBX_COMPUTE_DTYPE`);
+            # an fp32 island runs it all in fp32. A compute dtype that is not half leaves the
+            # operands at their producers' dtypes.
+            C_ = NBXDtype.float16 if cdtype == "float16" else (NBXDtype.bfloat16 if cdtype == "bfloat16" else NBXDtype.float32)
+            if uid in contract.fp32_op_uids:
+                xd = wd = comp_d = NBXDtype.float32
+            elif C_ in (NBXDtype.float16, NBXDtype.bfloat16):
+                xd = wd = comp_d = C_
+            else:
+                xd, wd, comp_d = dt(ins[0]), dt(ins[1]), C_
+            launches = LK.conv_launches(x_s, w_s, stride, padding, dilation, transposed, groups,
+                                        xd, wd, comp_d, conv_band_bytes)
+        elif kind in ("aten::baddbmm", "aten::linear", "aten::matmul",
+                      "aten::lstm", "aten::stft", "aten::istft"):
             unhandled[f"{kind} (not yet derived)"] += 1
             launches = []
         else:
@@ -175,8 +211,7 @@ def compare(a) -> int:
     plan = plan_record(a.model, request, a.mode, a.hardware, rung)
     prof = load_profile(a.hardware)
     _census._bind_target(a.hardware, None)     # the vendor ladders the keys are bucketed with
-    prompt = request[request.index("--prompt") + 1]
-    P = prompt_tokens(a.model, prompt)
+    P = None
     unhandled: collections.Counter = collections.Counter()
     derived = set()
     from neurobrix.kernels import wrappers as W
@@ -190,19 +225,41 @@ def compare(a) -> int:
     # prefill over the prompt's tokens; the HEAD component runs on the last position only —
     # `TritonTextStrategy.get_logits` selects hidden[:, T-1] before `_head.run` — so its sequence
     # symbol is 1. Both names are the topology's own (`lm_component`, `head_component`).
-    head = gen.get("head_component", "lm_head") if flow.get("type") == "autoregressive_generation" else None
+    autoregressive_text = flow.get("type") == "autoregressive_generation"
+    head = gen.get("head_component", "lm_head") if autoregressive_text else None
+    if autoregressive_text:
+        P = prompt_tokens(a.model, request[request.index("--prompt") + 1])
+    # Every other flow: the component's symbols as Prism binds them for THIS request — the run's own
+    # InputConfig (`run.request_input_config`, from the request parsed by the CLI's own parser)
+    # through `ActivationProfiler.build_symbol_map` at the request (no placement floor).
+    from neurobrix.cli import create_parser
+    from neurobrix.cli.commands.run import request_input_config
+    from neurobrix.core.prism.profiler import ActivationProfiler
+    manifest = json.loads((CACHE / a.model / "manifest.json").read_text())
+    args = create_parser().parse_args(["run", "--model", a.model, *request, MODE_FLAGS[a.mode],
+                                       "--hardware", a.hardware])
+    ic = request_input_config(args, manifest, manifest.get("family"), CACHE / a.model)
     for c in plan["components"]:
         comp = c["name"]
         g = json.loads((CACHE / a.model / "components" / comp / "graph.json").read_text())
+        table = (g.get("symbolic_context") or {}).get("symbols") or {}
         syms = {}
-        for sid, info in ((g.get("symbolic_context") or {}).get("symbols") or {}).items():
-            name = info.get("name")
-            if name == "batch":
-                syms[sid] = 1
-            elif name in ("seq_len", "sequence_length"):
-                syms[sid] = 1 if comp == head else P
-            else:
-                unhandled[f"{comp}: symbol {sid} '{name}' has no binding yet"] += 1
+        if autoregressive_text:
+            for sid, info in table.items():
+                name = info.get("name")
+                if name == "batch":
+                    syms[sid] = 1
+                elif name in ("seq_len", "sequence_length"):
+                    syms[sid] = 1 if comp == head else P
+                else:
+                    unhandled[f"{comp}: symbol {sid} '{name}' has no binding yet"] += 1
+        else:
+            bound = ActivationProfiler(g).build_symbol_map(ic, placement_floor=False)
+            for sid, info in table.items():
+                if bound.get(sid) is not None:
+                    syms[sid] = int(bound[sid])
+                else:
+                    unhandled[f"{comp}: symbol {sid} '{info.get('name')}' unbound by the plan's map"] += 1
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
         for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, syms,
