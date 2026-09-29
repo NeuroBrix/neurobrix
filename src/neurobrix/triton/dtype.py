@@ -254,6 +254,21 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
 
 
+def constant_load_dtype(traced: str, compute: str) -> str:
+    """The dtype (a name) an embedded graph constant is bound in by the Triton engines
+    (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
+    when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
+    bf16), to float32 otherwise; float64 narrows to float32, complex128 to complex64; every other
+    dtype is kept as traced. The loader and Prism's width pass both ask it."""
+    if traced == "bfloat16":
+        return compute if compute in ("float16", "bfloat16") else "float32"
+    if traced == "float64":
+        return "float32"
+    if traced == "complex128":
+        return "complex64"
+    return traced
+
+
 def graph_dtype_name(graph_dtype) -> Optional[str]:
     """The component's graph dtype as a plain name ("bfloat16"), from what the container
     carries (`torch_dtype`, "torch."-prefixed or not); None when it states none."""

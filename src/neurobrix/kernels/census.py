@@ -153,6 +153,8 @@ def bisect_extent(lo: int, hi: int, at) -> None:
     is adjacent. Keys are monotone step functions of the extent (a bucket top, an exact extent),
     so two extents with one set bracket a range with that set. The ONE bisection: the shadow's
     `walk_extent` runs the flow at n; the derived census derives the keys at n."""
+    at(lo)          # both ends, always: a range of one or two extents has no midpoint to reach them
+    at(hi)
     stack = [(lo, hi)]
     while stack:
         a, b = stack.pop()

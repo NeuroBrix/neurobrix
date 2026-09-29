@@ -409,14 +409,21 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
                                 tiling=tiling, tiled_tf=tiled_tf)
     outs = {}
-    for tid in g.get("output_tensor_ids") or []:
-        ss = (g["tensors"].get(tid) or {}).get("symbolic_shape")
-        outs[tid] = ([res.resolve(d) for d in ss["dims"]] if isinstance(ss, dict) and ss.get("dims")
-                     else list(g["tensors"][tid]["shape"]))
+    for i, tid in enumerate(g.get("output_tensor_ids") or []):
+        meta = g["tensors"].get(tid) or {}
+        ss = meta.get("symbolic_shape")
+        shp = ([res.resolve(d) for d in ss["dims"]] if isinstance(ss, dict) and ss.get("dims")
+               else list(meta["shape"]))
+        # the executor stores an output under its name AND its position (`output_<i>`), and the
+        # topology's connections use either
+        outs[f"output_{i}"] = shp
+        if meta.get("output_name"):
+            outs[meta["output_name"]] = shp
     return launches, outs
 
 
-def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str = ""):
+def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str = "",
+                 audio_path=None, max_tokens_req=None):
     """The flows' value-derived extents — each site of `census.walk_extent` in the Triton flows —
     as (name, lo, hi, chain) with chain(n) = [(component, {input: shape} | callable of the
     previous stage's outputs)], built from the flows' own functions and bounds."""
@@ -473,17 +480,100 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
                 return []
             return [("codec.decoder", {f"c{i}": [1, len(codes[i])] for i in range(3)})]
         sites.append(("codec.decoder audio tokens", 1, int(mt), chain))
+    # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
+    # (the frontend's own preprocessing choice and fit), their embeddings between the declared
+    # prefix and suffix ids, then the language model over the WHOLE context every step — its
+    # length from L0 to L0 + max_tokens - 1.
+    if flow.get("type") == "audio_llm" and audio_path:
+        sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req))
     return sites
 
 
-def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt=""):
+class _Stub:
+    """The attributes the frontend helpers read from a flow context — nothing else."""
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
+    from neurobrix.core.module.audio.mel_dsp import extract_features_np, fixed_window_mels
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.triton import audio_frontend as AF
+    root = CACHE / model
+    flow = topo.get("flow") or {}
+    audio = flow.get("audio") or {}
+    stages = audio.get("stages") or []
+    fwd = [st["component"] for st in stages if st.get("execution", "forward") != "autoregressive"]
+    lm = next(st["component"] for st in stages if st.get("execution") == "autoregressive")
+    graph = lambda c: json.loads((root / "components" / c / "graph.json").read_text())
+    ctx = _Stub(executors={fwd[0]: _Stub(_dag=graph(fwd[0]))}, nbx_path_str=str(root))
+    input_shape = AF._component_input_shape(ctx, fwd[0])
+    prep = AF.resolve_preprocessing((audio.get("input") or {}).get("preprocessing"), input_shape)
+    cfg = AF._model_config_path(ctx)
+    wins = None
+    if prep == "mel_spectrogram" and os.environ.get("NBX_DISABLE_STT_CHUNKING") != "1":
+        wins = fixed_window_mels(str(audio_path), Path(cfg), input_shape)
+    feats = (AF.fit_features(wins[0][None], input_shape) if wins is not None
+             else AF.fit_features(extract_features_np(prep, str(audio_path), Path(cfg), input_shape),
+                                  input_shape))
+    n_win = len(wins) if wins is not None else 1
+    variable = (audio.get("input") or {}).get("variable", "global.input_features")
+    conns = topo.get("connections") or []
+
+    def feeds(comp, produced):
+        """{input name: shape} of `comp` from the topology's connections: the features variable,
+        a previous stage's named output, a length scalar."""
+        out = {}
+        for c in conns:
+            src, dst = c.get("from", ""), c.get("to", "")
+            if not dst.startswith(comp + "."):
+                continue
+            inp = dst[len(comp) + 1:]
+            if src in (variable, variable.split(".")[-1], "global." + variable.split(".")[-1]):
+                out[inp] = list(feats.shape)
+            elif src in produced:
+                # the flow's frame pooling to the target's feature width (`pooled_frames_shape`)
+                from neurobrix.triton.flow.audio_llm import pooled_frames_shape
+                tg = graph(comp)
+                tfeat = next((sp["shape"][-1] for sp in tg["tensors"].values()
+                              if sp.get("input_name") == inp and len(sp.get("shape", [])) >= 3), None)
+                out[inp] = (pooled_frames_shape(produced[src], tfeat) if tfeat else None) or produced[src]
+            elif src.endswith("length") or "length" in inp:
+                out[inp] = [1]
+        return out
+
+    # The forward stages once (every window has the same fitted shape), fed through the topology's
+    # connections; their last output gives the embeddings count per window.
+    sites = []
+    produced = {}
+    fwd_steps = []
+    for comp in fwd:
+        fwd_steps.append((comp, feeds(comp, produced)))
+        _l, outs = run_at_inputs(model, comp, {c["name"]: c["dtype"] for c in plan["components"]}[comp],
+                                 "triton", fwd_steps[-1][1], False, (0, 1, 1), collections.Counter())
+        for name, shp in outs.items():
+            produced[f"{comp}.{name}"] = shp
+    last_out = next(iter(v for k, v in produced.items() if k.startswith(fwd[-1] + ".")))
+    A = int(last_out[1]) * n_win
+    dim = int(last_out[-1])
+    L0 = len(defaults.get("stt_prefix_ids", [1])) + A + len(defaults.get("stt_suffix_ids", []))
+    mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
+    sites.append(("audio forward stages", 1, 1, lambda _n, st=list(fwd_steps): st))
+    sites.append((f"{lm} context", L0, L0 + int(mt) - 1,
+                  lambda n, dim=dim: [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})]))
+    return sites
+
+
+def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt="",
+                   audio_path=None, max_tokens_req=None):
     """Every key class of every value-derived extent, by the census's own bisection
     (`census.bisect_extent`) over the derived keys — nothing runs."""
     from neurobrix.kernels import census as _census
     from neurobrix.core.prism import runtime_widths as RW_
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     found = set()
-    for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt):
+    for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt, audio_path,
+                                            max_tokens_req):
         seen = {}
 
         def at(n):
@@ -580,7 +670,10 @@ def compare(a) -> int:
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     # A component an extent site drives is derived at every class of that extent, not at the
     # plan's one binding (which binds a value-derived axis to its trace).
-    covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt)
+    _audio = (REPO / request[request.index("--audio") + 1]) if "--audio" in request else None
+    _mt_req = args.max_tokens if getattr(args, "max_tokens", None) is not None else None
+    covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt,
+                                                           _audio, _mt_req)
                for comp, _f in chain(lo)}
     for c in plan["components"]:
         comp = c["name"]
@@ -633,7 +726,8 @@ def compare(a) -> int:
     defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     for uid, q_, key in derive_extents(a.model, a.mode, topo, defaults, plan, prof.has_native_bf16,
-                                       (budget, min_rows, max_chunks), unhandled, prompt=_prompt):
+                                       (budget, min_rows, max_chunks), unhandled, prompt=_prompt,
+                                       audio_path=_audio, max_tokens_req=_mt_req):
         derived.add((uid, q_, C.key_repr(key)))
     walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}

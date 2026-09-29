@@ -119,3 +119,43 @@ def test_the_torch_fused_upsample_conv_equals_upsample_then_conv(sh, kh):
     proxy = FusionUpsampleProxy(x, 2.0, 2.0, list(up.shape))
     got = _fused_upsample_conv2d_torch(proxy, w, None, (sh, 1), (kh // 2, 1), (1, 1), False, (0, 0), 1, 4)
     assert torch.equal(got, full)
+
+
+def test_an_embedded_constant_is_bound_by_the_loaders_rule():
+    """`constant_load_dtype` is the Triton loader's rule (GraphExecutor._load_constant_triton) and
+    the width pass's: a bf16 constant decodes to the half compute dtype (canary's positional table,
+    fp16 in the walk), an fp32 one stays fp32 (swin2SR's coordinates table). Injection: every
+    constant cast to the compute dtype -> the fp32 case, RED."""
+    from neurobrix.triton.dtype import constant_load_dtype
+    assert constant_load_dtype("bfloat16", "float16") == "float16"
+    assert constant_load_dtype("bfloat16", "bfloat16") == "bfloat16"
+    assert constant_load_dtype("bfloat16", "float32") == "float32"
+    assert constant_load_dtype("float32", "float16") == "float32"
+    assert constant_load_dtype("float64", "float16") == "float32"
+    assert constant_load_dtype("int64", "float16") == "int64"
+
+
+def test_the_audio_towers_frames_are_pooled_to_the_projectors_width():
+    """`pooled_frames_shape`: Voxtral's audio tower [1, 1500, 1280] reaches a projector reading 5120
+    features as [1, 375, 5120] (the flow's reshape, the walk's 375 audio tokens); equal widths or a
+    width that does not divide are left alone."""
+    from neurobrix.triton.flow.audio_llm import pooled_frames_shape
+    assert pooled_frames_shape([1, 1500, 1280], 5120) == [1, 375, 5120]
+    assert pooled_frames_shape([1, 1502, 1280], 5120) == [1, 375, 5120]
+    assert pooled_frames_shape([1, 141, 4096], 4096) is None
+    assert pooled_frames_shape([1, 10, 1000], 1500) is None
+
+
+def test_the_extent_bisection_evaluates_both_ends_of_a_short_range():
+    """`census.bisect_extent` met no extent at all on a range of one or two values (the loop's
+    first test skipped an adjacent pair before evaluating it): a shadow walked with max_tokens <= 2
+    recorded nothing, and the derivation's one-shot forward stages derived nothing. Injection: the
+    two endpoint calls removed -> [] here, RED."""
+    from neurobrix.kernels import census
+    for lo, hi, want in ((1, 1, [1]), (1, 2, [1, 2]), (3, 9, None)):
+        seen = []
+        census.bisect_extent(lo, hi, lambda n: seen.append(n) or frozenset({n // 4}))
+        if want is not None:
+            assert sorted(set(seen)) == want
+        else:
+            assert {lo, hi} <= set(seen)
