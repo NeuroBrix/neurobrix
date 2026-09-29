@@ -92,7 +92,24 @@ def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
     w2 = max(step, int(w * float(frac)) // step * step)
     if (h2, w2) == (h, w):
         h2 = max(step, h - step)
-    return (h2, w2)
+    return inside_envelope((h2, w2), pkg.topology)
+
+
+def inside_envelope(size: Tuple[int, int], topology: dict) -> Tuple[int, int]:
+    """`size` when it is inside the model's documented envelope, else the envelope's minimum.
+
+    The container carries the envelope (extracted_values["_global"]["envelope"], written by the
+    build from the registry with its citation): `min`, the smallest size the vendor states the
+    model supports, or None when it states none (the supervisor, 2026-09-29 15:20, reading (b)).
+    A half size under that minimum judged nothing (CogVideoX at 160x352: flat orange; Wan2.2-I2V
+    at 32x32: colour fields), so the confirmation moves up to it; inside, the half size is kept —
+    its keys and its judged results with it. Compared by pixel count, whatever the orientation.
+    A container without the value keeps the half size."""
+    env = ((topology.get("extracted_values") or {}).get("_global") or {}).get("envelope") or {}
+    lo = env.get("min")
+    if lo and size[0] * size[1] < int(lo["height"]) * int(lo["width"]):
+        return (int(lo["height"]), int(lo["width"]))
+    return size
 
 
 def _with_flags(req: list, flags: dict) -> list:
