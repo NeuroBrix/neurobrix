@@ -128,6 +128,7 @@ def cmd_autotune(args) -> int:
                               reprove_unclocked=getattr(args, "reprove_unclocked", False),
                               reprove_generator=getattr(args, "reprove_generator", False),
                               working_set_mb=getattr(args, "working_set_mb", None),
+                              shard=getattr(args, "shard", None),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")

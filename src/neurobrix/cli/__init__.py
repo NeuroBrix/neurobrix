@@ -220,6 +220,9 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    certify_p.add_argument('--shard', default=None, metavar='K/N',
+                           help="certify only the keys of shard K of N (a stable hash of kernel and key): the cards "
+                                "of one memory class split one kernel's keys without overlap")
     certify_p.add_argument('--working-set-mb', type=int, default=None,
                            help='the working-set budget of this run in MiB: every key is priced by its phases before any '
                                 'draw and refused by name over it; pass the figure the run\'s guard kills at '

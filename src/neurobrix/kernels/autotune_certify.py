@@ -1824,11 +1824,31 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     return False
 
 
+def shard_spec(text: str) -> Tuple[int, int]:
+    """'K/N' -> (K, N), 0 <= K < N; refused otherwise."""
+    try:
+        k, n = (int(x) for x in str(text).split("/"))
+    except ValueError:
+        raise RuntimeError(f"--shard {text!r}: expected K/N") from None
+    if not 0 <= k < n:
+        raise RuntimeError(f"--shard {text!r}: K must be in [0, N)")
+    return k, n
+
+
+def shard_of(qual: str, key: tuple, n: int) -> int:
+    """The shard of a (kernel, key) among `n`: a stable hash of the kernel and the key's text, so
+    the cards of one memory class certify one kernel's keys disjointly and between them wholly —
+    and a key stays in its shard across passes and processes."""
+    import hashlib
+    return int(hashlib.sha256(f"{qual}::{C.key_repr(key)}".encode()).hexdigest(), 16) % n
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            shard: Optional[str] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -1883,6 +1903,10 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if kernels:
         want = set(kernels)
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+    if shard:
+        k_, n_ = shard_spec(shard)
+        shapes = {q: [key for key in ks if shard_of(q, key, n_) == k_] for q, ks in shapes.items()}
+        log(f"[certify] shard {k_}/{n_}: {sum(len(v) for v in shapes.values())} key(s) of those kernels")
     rng = np.random.default_rng(seed)
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
