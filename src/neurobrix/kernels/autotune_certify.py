@@ -187,6 +187,11 @@ def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
             << np.uint32(16)).view(np.float32)
 
 
+class WitnessDrift(RuntimeError):
+    """The regime witness moved beyond its tolerance across a sweep or a re-prove: not a measurement.
+    A key refused for this is neither certified nor swept — its retry pass re-proves it (inbox 60, 65)."""
+
+
 class KeyTooLargeForClass(RuntimeError):
     """The key's operands alone exceed the certifying card: refused BEFORE a value is drawn.
 
@@ -1261,10 +1266,17 @@ def _phase(label: str) -> None:
 def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
                 card_bytes: Optional[int] = None, unified: bool = False,
                 num_stages: Optional[Tuple[int, ...]] = None, budget_bytes: Optional[int] = None,
-                floor_bytes: int = 0) -> Dict[str, Any]:
+                floor_bytes: int = 0, only_config: Optional[Dict[str, Any]] = None,
+                reproven_from: Optional[str] = None) -> Dict[str, Any]:
     """Run every candidate of `tuner` on this key's inputs, compare each to the
     fp64 oracle, exclude beyond `tolerance`, time the rest; the entry (config,
-    proof, excluded) for the directory. Raises when nothing survives."""
+    proof, excluded) for the directory. Raises when nothing survives.
+
+    With `only_config` (a stored configuration, as the directory records it) the
+    candidates are THAT one configuration: the oracle and one timing under the
+    witness — a certificate made under a retired code generator is re-PROVEN, not
+    re-swept (the owner, 2026-09-29 01:37, release-decisions); the proof then
+    carries `reproven_from`, the generator label it was first proven under."""
     from neurobrix.kernels import launcher as L
     from neurobrix.triton import autotune_cache as atc
     from triton.runtime.autotuner import Autotuner
@@ -1327,7 +1339,10 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
         _phase("oracle built")
         state["t_oracle"] = round(time.time() - t_or, 3)
         state["oracle"] = ORACLE + (" " + oracle.describe if hasattr(oracle, "describe") else "")
-        configs = restrict_num_stages(list(upstream_prune(tuner, kwargs)), num_stages)
+        if only_config is not None:
+            configs = [atc._config_from_dict(only_config)]          # re-prove: the stored configuration, alone
+        else:
+            configs = restrict_num_stages(list(upstream_prune(tuner, kwargs)), num_stages)
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
         if out_idx is None or out_idx >= len(args):
@@ -1438,7 +1453,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             _tol = float(_proto["witness"]["drift_tolerance"])
             _drift = abs(_w_close - _w_open) / max(_w_open, 1e-9)
             if _drift > _tol:
-                raise RuntimeError(
+                raise WitnessDrift(
                     f"{qual} at {key!r}: the witness drifted {_drift*100:.1f}% "
                     f"across the sweep ({_w_open:.4f} -> {_w_close:.4f} ms, "
                     f"tolerance {_tol*100:.0f}%): the GPU regime moved while "
@@ -1519,6 +1534,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
              # whenever a protocol was declared; `proof_records_regime` reads
              # either, and an entry with neither is not served.
              "stability_witness": state.get("stability_witness"),
+             **({"reproven_from": reproven_from} if reproven_from else {}),
              "built": {"gpu": not fell_back,
                        "how": "no backend compilation fallback was raised during "
                               "the certifying run",
@@ -1808,7 +1824,7 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     return False
 
 
-def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
+def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
@@ -1873,6 +1889,62 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                                "excluded_configs": 0, "started": time.time()}
     done = 0
     attempts = 0                                  # `limit` bounds the shapes TRIED, failures included
+    # Certifications reach their file at a BOUNDED SHARE of the pass (`_BoundedWriter`); every
+    # pending one is written before this function returns, on every path.
+    writer = _BoundedWriter(vendor, profile)
+    try:
+        return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                             reprove_generator, certifying_device, certifying_class, budget_bytes,
+                             floor_bytes, rng, summary, log, writer, bench)
+    finally:
+        writer.flush_all()
+
+
+_WRITE_SHARE = 0.10     # a certified file's rewrites may cost at most a tenth of the certifier's time
+
+
+class _BoundedWriter:
+    """When a certification reaches its kernel file. A kernel file is 13-21 MB of JSON, and
+    rewriting it after every key took 36.7 % of a 16 GB conv pass (py-spy, 2026-09-29: `_write_file`
+    beside 36.2 % of bench waits) while the card sat idle. A file is written when the time since its
+    last write reaches that write's own duration over `_WRITE_SHARE` — the rewrites then cost at most
+    that share of the pass — and `flush_all` writes whatever is pending. Each write still places only
+    what this writer proved into the file as it stands, under the file's lock (`_write_file`)."""
+
+    def __init__(self, vendor: str, profile: str, share: float = _WRITE_SHARE, write=None, clock=time.time):
+        self.vendor, self.profile, self.share, self.clock = vendor, profile, share, clock
+        self.write = write or _write_file
+        self.pending: Dict[Path, Dict[str, Dict]] = {}
+        self.where: Dict[Path, Tuple[str, str, Dict[str, Dict]]] = {}
+        self.last: Dict[Path, Tuple[float, float]] = {}
+
+    def add(self, path: Path, qual: str, dtype: str, cache: Dict[str, Dict], ktext: str, entry: Dict) -> None:
+        self.pending.setdefault(path, {})[ktext] = entry
+        self.where[path] = (qual, dtype, cache)
+        at, cost = self.last.get(path, (float("-inf"), 0.0))
+        if self.clock() - at >= cost / self.share:
+            self.flush(path)
+
+    def flush(self, path: Path) -> None:
+        fresh = self.pending.pop(path, None)
+        if not fresh:
+            return
+        qual, dtype, cache = self.where[path]
+        t0 = self.clock()
+        self.write(path, self.vendor, self.profile, qual, dtype, fresh, cache=cache)
+        t1 = self.clock()
+        self.last[path] = (t1, t1 - t0)
+
+    def flush_all(self) -> None:
+        for path in list(self.pending):
+            self.flush(path)
+
+
+def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                  reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
+                  rng, summary, log, writer, bench):
+    done = 0
+    attempts = 0
     for qual, keys in shapes.items():
         tuner = tuners.get(qual)
         if tuner is None:
@@ -1893,15 +1965,42 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 continue                      # certified FOR THIS CARD's memory class already (and, with
                                               # --reprove-unclocked, at a recorded clock; with
                                               # --reprove-generator, under the running code generator)
+            # RE-PROVE, NOT RE-SWEEP (the owner, 2026-09-29 01:37): a certificate this class holds under
+            # another code generator keeps its configuration — proven again here by the oracle and one
+            # timing under the witness. A sweep only where that configuration fails the oracle, or where
+            # there is no entry at all; the summary says how many of each and why.
+            stored = C.entry_for_memory_class(entries.get(ktext), certifying_class) if reprove_generator else None
+            stored_label = C.proof_backend(stored.get("proof")) if stored else None
+            reprove = bool(stored and stored.get("config") and stored_label
+                           and stored_label != C.proof_backend({"backend": _backend()}))
             attempts += 1
             t0 = time.time()
             try:
                 tol = _tolerance(vendor, profile, dtype)
-                entry = certify_key(qual, tuner, key, tol, rng,
-                                    card_bytes=int(certifying_device["memory_mb"]) * 2**20,
-                                    unified=bool(certifying_device.get("unified")),
-                                    num_stages=_num_stages_space(vendor, profile),
-                                    budget_bytes=budget_bytes, floor_bytes=floor_bytes)
+                common = dict(card_bytes=int(certifying_device["memory_mb"]) * 2**20,
+                              unified=bool(certifying_device.get("unified")),
+                              num_stages=_num_stages_space(vendor, profile),
+                              budget_bytes=budget_bytes, floor_bytes=floor_bytes, bench=bench)
+                if reprove:
+                    try:
+                        entry = certify_key(qual, tuner, key, tol, rng, only_config=stored["config"],
+                                            reproven_from=stored_label, **common)
+                        summary["reproven"] = summary.get("reproven", 0) + 1
+                    except (UnreachableCensusKey, KeyTooLargeForClass, WitnessDrift):
+                        raise                         # a drift is a refusal for the retry pass, never a sweep
+                    except Exception as exc:          # the stored configuration fails the oracle under
+                        log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
+                            f"configuration does not re-prove under the running generator ({exc}); swept")
+                        entry = certify_key(qual, tuner, key, tol, rng, **common)
+                        summary["swept"] = summary.get("swept", 0) + 1
+                        summary.setdefault("swept_why", {}).setdefault("stored configuration failed the oracle", 0)
+                        summary["swept_why"]["stored configuration failed the oracle"] += 1
+                else:
+                    entry = certify_key(qual, tuner, key, tol, rng, **common)
+                    if reprove_generator:
+                        summary["swept"] = summary.get("swept", 0) + 1
+                        why = "no entry for this class" if not stored else "no configuration in the stored entry"
+                        summary.setdefault("swept_why", {})[why] = summary.get("swept_why", {}).get(why, 0) + 1
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
                 # again. Counted apart so the exit code can still mean something.
@@ -1922,7 +2021,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: REFUSED — {exc}")
                 continue
-            _write_file(path, vendor, profile, qual, dtype, {ktext: entry}, cache=entries)
+            writer.add(path, qual, dtype, entries, ktext, entry)
             done += 1
             summary["certified"] += 1
             summary["excluded_configs"] += len(entry["excluded"])
