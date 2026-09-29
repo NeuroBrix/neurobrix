@@ -42,7 +42,11 @@ def without_triton():
     clamped to 2 stages instead of 5. Measured 2026-09-10; the test passed
     alone and failed in the battery, which is the signature.
 
-    A test that reaches into sys.modules owes the session the table it found.
+    A test that reaches into sys.modules owes the session the table it found — and the package
+    attributes: a re-import rebinds `neurobrix.cli.commands.run` on its package, and restoring the
+    table alone left `commands.run` (the fresh module) and `sys.modules[...run]` (the old one) two
+    objects. A later test patched one and the code read the other: the calibrate test passed alone
+    and failed after any earlier import of `run` (2026-09-29, the merge-queue-14 battery).
     """
     saved = dict(sys.modules)
     for k in [k for k in sys.modules
@@ -58,6 +62,11 @@ def without_triton():
         for k in [k for k in sys.modules if k not in saved]:
             del sys.modules[k]
         sys.modules.update(saved)
+        for name, mod in saved.items():
+            parent, _, child = name.rpartition(".")
+            holder = sys.modules.get(parent) if parent else None
+            if holder is not None and hasattr(holder, child) and getattr(holder, child) is not mod:
+                setattr(holder, child, mod)
 
 
 def _fresh(module: str):
