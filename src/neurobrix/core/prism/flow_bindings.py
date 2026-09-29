@@ -13,6 +13,10 @@
 * **A FLUX denoiser's packed inputs** — the flow packs the latent (`packed_4d_shape` /
   `packed_5d_shape`) and synthesizes its positional ids and cond (`conditioning_shapes`); its image
   tokens are that packing, not the trace's.
+* **An image encoder's view** — the request's image reaches `global.pixel_values` as the CLIP view
+  of the build's own processor (`input_processor.prepare_image_inputs`, `image_dsp.clip_view_shape`),
+  whatever the request's height and width: Wan2.1-I2V's image encoder runs at 224x224. Its height and
+  width symbols bound by name took the request's latent grid (60x104 at 480x832).
 * **A VACE control encoder's pair** — under the loop component's `vace_control_conditioning`
   flag the run feeds the component `global.image` reaches the (inactive, reactive) clips stacked on
   its batch (`image_dsp.VACE_CONTROL_CLIPS`, the CLI's `vace_control_pair_np`).
@@ -80,6 +84,24 @@ class FlowBindings:
             if n:
                 out[enc] = n
         return out
+
+    def pixel_view(self, comp: str) -> Optional[Dict[str, tuple]]:
+        """{input name: shape} of the image view the run feeds `comp` through `global.pixel_values`:
+        the CLIP view of the build's processor, when the build embeds one and the flow declares no
+        VLM preprocessing of its own (`input_processor.prepare_image_inputs`'s own branch); None
+        otherwise."""
+        if self.flow.get("vlm") or self.cache_path is None:
+            return None
+        cfg = self.cache_path / "modules" / "image_processor" / "preprocessor_config.json"
+        if not cfg.exists():
+            return None
+        names = [c.get("to", "").partition(".")[2] for c in self.topology.get("connections") or []
+                 if c.get("from") == "global.pixel_values" and c.get("to", "").partition(".")[0] == comp]
+        if not names:
+            return None
+        from neurobrix.core.module.vision.image_dsp import clip_view_shape
+        shape = clip_view_shape(json.loads(cfg.read_text()))
+        return {n: shape for n in names}
 
     def text_axes(self, input_config) -> Dict[tuple, int]:
         """{(loop component, input name): finalized length} — each pre-loop encoder's HIDDEN STATE
@@ -189,6 +211,10 @@ class FlowBindings:
             return {}
         table = (dag.get("symbolic_context") or {}).get("symbols") or {}
         out: Dict[str, int] = {}
+        view = self.pixel_view(comp)
+        if view:
+            out.update({sid: v for sid, v in bind_from_shapes(dag, view).items()
+                        if (table.get(sid) or {}).get("name") != "batch"})
         pair = self.vace_control_batch(comp)
         if pair:
             for sid, info in table.items():
