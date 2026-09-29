@@ -552,12 +552,22 @@ class _TritonRules(_Rules):
             return "float32"
         return super().weight_dtype(tid, traced)
 
-    def amp_fp32_out(self) -> str:
+    def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
         # `_wrap_fp32_internal_compute_dtype_output`: fp32 compute; the output is the engine's
         # own rule, CALLED — `amp_fp32_output_dtype`: C = bf16 -> bf16 on a bf16 graph, fp32
         # on another; C = fp16 -> C only when the component is activations_fp16_safe
-        # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029), else fp32.
-        return _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, False)
+        # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029) or the
+        # op is in the record's narrow set, else fp32. Under fp16 the cast back is the
+        # single-tensor one: a TUPLE result (`native_layer_norm`, `native_group_norm` — the
+        # op's traced outputs are several) keeps the fp32 its kernel wrote from the fp32
+        # inputs (triton/dtype.py `cast_back`, the fp16 contract held byte-identical by
+        # decision 2026-09-28). Measured by the census walk: Kokoro's albert projections and
+        # PixArt's VAE attention read the norm's output in fp32.
+        r = _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed)
+        if (self.c == "float16" and op is not None
+                and len(op.get("output_tensor_ids") or []) > 1):
+            return "float32"
+        return r
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
@@ -598,7 +608,7 @@ class _TritonRules(_Rules):
             return "float32"
         if (self.half and not seq_rms and uid in self.contract.narrow_op_uids
                 and name in _tdt.AMP_FP32_OPS):                            # :536-537
-            return c
+            return self.amp_fp32_out(op, narrowed=True)
         r = self._class_rule(uid, op, name, fl, ins)
         if explicit is not None:
             r = _wider(r, self.remap_explicit(explicit))
@@ -616,7 +626,7 @@ class _TritonRules(_Rules):
         if not self.half:                                                   # :555-556
             return self._unwrapped(uid, op, name, fl, ins)
         if name in _tdt.AMP_FP32_OPS:                                       # :558-564
-            r = self.amp_fp32_out()
+            r = self.amp_fp32_out(op)
             if self.tseq and name == "rms_norm" and self.is_tiled(uid, op):
                 # A tiled rms_norm in triton_sequential runs unwrapped: the NBX wrapper at
                 # x's dtype (fused_upsample_conv.py:574-615, graph_executor.py:3217-3230).
@@ -624,7 +634,7 @@ class _TritonRules(_Rules):
             return r
         if name in _tdt.AMP_FP16_OPS:                                       # :566-573
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
-                return self.amp_fp32_out()
+                return self.amp_fp32_out(op)
             return self._lower_precision(uid, op, name, fl, ins)
         if name in _tdt.AMP_PROMOTE_OPS:                                    # :575-576, 761-781
             return self.widest(fl) or self.default(op, fl)

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A text-to-speech plan is sized for the text it is given.** A phonemizer model (Kokoro) was
+  planned at its trace length (23 phonemes) whatever the prompt; the plan now binds the length the
+  run will phonemize, from the same function the run uses. Plans under fp16 also price a layer or
+  group normalisation's output at the width the engine actually stores (fp32).
+
 - **Models that stream their layers run faster.** When a model is larger than the card and its
   layers are loaded one segment at a time, releasing each segment no longer pauses for a full
   garbage collection. On a V100 16 GB, MiniCPM-o 4.5 streamed at a 12 GB budget completes a

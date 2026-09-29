@@ -152,6 +152,71 @@ def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: 
                        ieee, promote_b, False, tag(a), tag(b), tag(out), tag(out)))]
 
 
+def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
+    """The dtype `mm` stores for these operands (its launch or its per-row GEMV alike)."""
+    a, b, promote_a, _ = mm_dtypes(a, b, native_bf16, force_accum)
+    return matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
+
+
+def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
+    """The dtype `bmm` stores for these operands."""
+    a, b, _ = bmm_dtypes(a, b, native_bf16, force_accum)
+    return matmul_out_dtype(a, M, True, native_bf16, force_accum)
+
+
+# ---------------------------------------------------------------------------------------------
+# Recurrence and spectra: `lstm_wrapper` and the DFT route of the FFT wrappers, as the matmul
+# launches their generic calls make.
+# ---------------------------------------------------------------------------------------------
+
+def lstm_launches(B: int, T: int, I: int, H: int, num_layers: int, bidirectional: bool,
+                  x: NBXDtype, native_bf16: bool) -> List[Launch]:
+    """`lstm_wrapper` -> `_lstm_run_direction`, per layer and direction: the input projection
+    x[B,T,I] @ W_ih^T (matmul's N-D x 2-D route: `bmm` over B batches of [T, I]), then one
+    h[B,H] @ W_hh^T `mm` per step. The weights and the initial state are cast to the input's
+    dtype `x` (`cdt`, read once); the elementwise gate arithmetic promotes to the wider operand,
+    so the state after a step is the widest of the projection's, the step mm's and `x`, and a
+    later layer reads the concatenation at its FIRST operand's dtype (`NBXTensor.cat`): the
+    forward direction's first step. The state's dtype is iterated to its fixed point (it can
+    only widen), so the step keys are every dtype the state takes."""
+    nd = 2 if bidirectional else 1
+    out: List[Launch] = []
+    layer_in = x
+    for layer in range(int(num_layers)):
+        first_fwd = None
+        for d in range(nd):
+            out += bmm_launches(T, I if layer == 0 else H * nd, 4 * H, layer_in, x, native_bf16)
+            wx = bmm_out(T, layer_in, x, native_bf16)
+            h, seen, first = x, set(), None
+            for _step in range(max(int(T), 0)):
+                if h in seen:
+                    break
+                seen.add(h)
+                out += mm_launches(B, H, 4 * H, h, x, native_bf16)
+                h = _widest(_widest(wx, mm_out(B, h, x, native_bf16)), x)
+                first = h if first is None else first
+            if d == 0:
+                first_fwd = first if first is not None else x
+        layer_in = first_fwd
+    return list(dict.fromkeys(out))
+
+
+def dft_r2c_launches(M: int, N: int, onesided: bool, native_bf16: bool) -> List[Launch]:
+    """`fft_r2c_wrapper` on a length that is not a power of two: `_dft_r2c`, the frames flattened
+    to [M, N] and widened to fp32, times the fp32 cos and -sin matrices (two `mm`). A power of
+    two runs the radix-2 butterfly (no autotuned kernel)."""
+    if N > 1 and (N & (N - 1)) == 0:
+        return []
+    bins = N // 2 + 1 if onesided else N
+    return mm_launches(M, N, bins, F32, F32, native_bf16)
+
+
+def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool) -> List[Launch]:
+    """`fft_c2r_wrapper` -> `_dft_c2r`, any length: the complex64 spectrum's real and imaginary
+    parts [M, bins] times the fp32 inverse matrices [bins, N] (two `mm`, one key)."""
+    return mm_launches(M, bins, N, F32, F32, native_bf16)
+
+
 # ---------------------------------------------------------------------------------------------
 # Attention (scaled_dot_product_attention): the route, then the math route's two bmm launches.
 # ---------------------------------------------------------------------------------------------

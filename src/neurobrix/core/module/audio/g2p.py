@@ -333,3 +333,35 @@ def g2p_phonemes(prompt: str, nbx_path_str: str,
     `lang`/`kokoro_lang` are accepted for signature compatibility; the embedded
     lexicon is American-English (Kokoro phoneme_lang 'a')."""
     return load_runner(nbx_path_str).convert(prompt)
+
+
+_ESPEAK_LANG = {"a": "en-us", "b": "en-gb"}
+
+
+def request_voice(resolved: Dict, defaults: Dict) -> Optional[str]:
+    """The voice a request asks for, read in the order the voicepack loader reads it: the
+    request's speaker/voice variables, then the container's default voice."""
+    for key in ("global.speaker", "speaker", "global.voice", "voice"):
+        v = resolved.get(key)
+        if isinstance(v, str) and v:
+            return v
+    return defaults.get("voice")
+
+
+def phoneme_ids(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,
+                phoneme_lang: str, voice: Optional[str]):
+    """(IPA string, phoneme ids) for a prompt — the ONE text-to-ids path of a phonemizer model.
+
+    Both engines' preprocessing (core/flow/stages/kokoro.py, triton/audio_frontend.py) call
+    it, and so does the derived census (tools/derived_census.py), which binds the text
+    components' sequence symbol from `len(ids)` without running anything: one function, so
+    the census's length is the run's length. Refuses a voice whose language the embedded
+    lexicon does not speak (`refusal_for_language`). Ids are framed by the pad id 0 on each
+    side; a character outside the vocabulary is not a phoneme the model knows and is dropped,
+    as the vendor's own mapping does."""
+    refusal = refusal_for_language(voice, phoneme_lang)
+    if refusal:
+        raise RuntimeError(refusal)
+    phonemes = g2p_phonemes(prompt, nbx_path_str,
+                            _ESPEAK_LANG.get(phoneme_lang, "en-us"), phoneme_lang)
+    return phonemes, [0] + [phoneme_vocab[ch] for ch in phonemes if ch in phoneme_vocab] + [0]
