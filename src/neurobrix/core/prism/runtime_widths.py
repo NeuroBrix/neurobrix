@@ -551,14 +551,31 @@ class _TritonRules(_Rules):
         name = tid.split("::", 1)[1] if "::" in tid else tid
         if name in self.fp32_constants:
             return "float32"
+        meta = self.tensors.get(tid) or {}
+        if meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"):
+            # An embedded constant is bound by the loader's own rule (`constant_load_dtype`,
+            # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
+            # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
+            # positional table became fp16 (the census walk).
+            return _tdt.constant_load_dtype(traced, self.c)
         return super().weight_dtype(tid, traced)
 
-    def amp_fp32_out(self) -> str:
+    def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
         # `_wrap_fp32_internal_compute_dtype_output`: fp32 compute; the output is the engine's
         # own rule, CALLED — `amp_fp32_output_dtype`: C = bf16 -> bf16 on a bf16 graph, fp32
         # on another; C = fp16 -> C only when the component is activations_fp16_safe
-        # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029), else fp32.
-        return _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, False)
+        # (`_NBX_ACTIVATIONS_FP16_SAFE`, set from the contract, sequence.py:3025-3029) or the
+        # op is in the record's narrow set, else fp32. Under fp16 the cast back is the
+        # single-tensor one: a TUPLE result (`native_layer_norm`, `native_group_norm` — the
+        # op's traced outputs are several) keeps the fp32 its kernel wrote from the fp32
+        # inputs (triton/dtype.py `cast_back`, the fp16 contract held byte-identical by
+        # decision 2026-09-28). Measured by the census walk: Kokoro's albert projections and
+        # PixArt's VAE attention read the norm's output in fp32.
+        r = _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed)
+        if (self.c == "float16" and op is not None
+                and len(op.get("output_tensor_ids") or []) > 1):
+            return "float32"
+        return r
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
@@ -599,7 +616,7 @@ class _TritonRules(_Rules):
             return "float32"
         if (self.half and not seq_rms and uid in self.contract.narrow_op_uids
                 and name in _tdt.AMP_FP32_OPS):                            # :536-537
-            return c
+            return self.amp_fp32_out(op, narrowed=True)
         r = self._class_rule(uid, op, name, fl, ins)
         if explicit is not None:
             r = _wider(r, self.remap_explicit(explicit))
@@ -617,7 +634,7 @@ class _TritonRules(_Rules):
         if not self.half:                                                   # :555-556
             return self._unwrapped(uid, op, name, fl, ins)
         if name in _tdt.AMP_FP32_OPS:                                       # :558-564
-            r = self.amp_fp32_out()
+            r = self.amp_fp32_out(op)
             if self.tseq and name == "rms_norm" and self.is_tiled(uid, op):
                 # A tiled rms_norm in triton_sequential runs unwrapped: the NBX wrapper at
                 # x's dtype (fused_upsample_conv.py:574-615, graph_executor.py:3217-3230).
@@ -625,7 +642,7 @@ class _TritonRules(_Rules):
             return r
         if name in _tdt.AMP_FP16_OPS:                                       # :566-573
             if c == "float16" and name in _tdt._FP16_NEED_FP32:
-                return self.amp_fp32_out()
+                return self.amp_fp32_out(op)
             return self._lower_precision(uid, op, name, fl, ins)
         if name in _tdt.AMP_PROMOTE_OPS:                                    # :575-576, 761-781
             return self.widest(fl) or self.default(op, fl)
@@ -691,8 +708,12 @@ class _TritonRules(_Rules):
             # dropped (triton/sequential.py `_cat_inputs_or_refuse`).
             return self.first_dimensioned(fl) or self.default(op, fl)
         if name in _SDPA:
-            # The flash path allocates `empty_like(q)` (wrappers.py:8781), the math path
-            # casts its result to q's dtype (:7967-7968).
+            # The flash path allocates `empty_like(q)`, the math path casts its result to q's
+            # dtype — q AFTER the wrapper's operand alignment (`launch_keys.sdpa_operand_dtypes`:
+            # q, k, v that disagree are all cast to fp32 before any route), so an fp32 V makes
+            # an fp32 output (measured: Wan's cross-attention, fp16 q/k and fp32 v, 2026-09-29).
+            if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
+                return "float32"
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)

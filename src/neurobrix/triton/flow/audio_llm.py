@@ -438,19 +438,28 @@ class TritonAudioLLMEngine:
                     break
             if target_feat is None:
                 continue
-            src_feat = src.shape[-1]
-            if target_feat == src_feat:
+            pooled = pooled_frames_shape(list(src.shape), target_feat)
+            if pooled is None:
                 continue
-            if target_feat > src_feat and target_feat % src_feat == 0:
-                pool = target_feat // src_feat
-                B, T, D = src.shape
-                new_T = T // pool
-                if new_T * pool <= T:
-                    reshaped = src[:, :new_T * pool, :].reshape(
-                        B, new_T, target_feat)
-                    resolved[src_key] = reshaped
-                    print(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] "
-                          f"→ [{B}, {new_T}, {target_feat}]")
+            B, T, D = src.shape
+            new_T = pooled[1]
+            reshaped = src[:, :new_T * (target_feat // D), :].reshape(B, new_T, target_feat)
+            resolved[src_key] = reshaped
+            print(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] "
+                  f"→ [{B}, {new_T}, {target_feat}]")
+
+
+def pooled_frames_shape(src_shape, target_feat: int):
+    """The frame pooling between an audio tower and a projector that expects `target_feat`
+    features: [B, T, D] -> [B, T // p, D * p] with p = target_feat / D (the tail frames that do
+    not fill a group dropped), or None when the widths already agree or do not divide. The flow
+    reshapes by it; the derived census binds the projector with it."""
+    if len(src_shape) != 3:
+        return None
+    B, T, D = src_shape
+    if target_feat == D or not (target_feat > D and target_feat % D == 0):
+        return None
+    return [B, T // (target_feat // D), target_feat]
 
 
 _SAMPLING_PARAMS = ("temperature", "top_k", "top_p",

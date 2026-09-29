@@ -124,6 +124,136 @@ def _phase_mem_note() -> str:
     return note
 
 
+def prompt_token_ids(tokenizer, prompt: str, defaults: dict, is_image_ar: bool, chat_mode: bool):
+    """The prompt's token ids by the autoregressive flow's rule (`_tokenize` priorities 1-3): the
+    SFT format for an image-AR model, the HF chat template when chat_mode is on, else a basic encode
+    WITH the tokenizer's specials and no padding (orpheus, openaudio). `_tokenize` calls it; so does
+    the derived census, whose prefill length is its length."""
+    sft_format = defaults.get("sft_format")
+    special_token_ids = defaults.get("special_token_ids")
+    if (is_image_ar and sft_format and special_token_ids
+            and hasattr(tokenizer, "format_generation_prompt")):
+        # Priority 1: SFT format (Janus-style image AR). Only taken for
+        # image-AR models to avoid disturbing the LLM path.
+        token_ids = tokenizer.format_generation_prompt(
+            prompt=prompt,
+            sft_format=sft_format,
+            special_token_ids=special_token_ids,
+            is_unconditional=False,
+        )
+    elif (chat_mode and not is_image_ar
+          and hasattr(tokenizer, "apply_chat_template")
+          and (not hasattr(tokenizer, "has_chat_template")
+               or tokenizer.has_chat_template())):
+        # Priority 2: HF chat_template — ONLY when chat_mode is enabled
+        # (TextProcessor parity). Preserves the Triton chat-LLM path
+        # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
+        messages = [{"role": "user", "content": prompt}]
+        token_ids = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True)
+    elif hasattr(tokenizer, "encode_with_mask"):
+        # Priority 3a: basic tokenization WITH special tokens (TextProcessor
+        # parity for chat_mode=False models — orpheus, openaudio).
+        _r = tokenizer.encode_with_mask(
+            prompt, padding=False, add_special_tokens=True)
+        token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
+    elif hasattr(tokenizer, "encode"):
+        # Priority 3b: basic encode (with special tokens when supported).
+        try:
+            token_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        except TypeError:
+            token_ids = tokenizer.encode(prompt)
+    else:
+        raise RuntimeError("Tokenizer has no encode method.")
+
+    return _flatten_tokenizer_output(token_ids)
+
+
+def image_cfg_weight(resolved: Dict, defaults: Dict) -> float:
+    """An image-AR request's guidance weight: the CLI's, else the package's. Above 1 the flow
+    runs the LM on [cond, uncond] (batch 2) and the head once per branch."""
+    cli_cfg = (resolved or {}).get("global.guidance_scale")
+    cfg_weight = float(cli_cfg) if cli_cfg is not None else defaults.get("guidance_scale")
+    if cfg_weight is None:
+        raise RuntimeError(
+            "guidance_scale missing from defaults.json for "
+            "autoregressive_image. Set in the model registry at import.")
+    return float(cfg_weight)
+
+
+def image_token_count(defaults: Dict) -> int:
+    """The VQ image's token count — the image-AR generator's fixed length: (image / patch)^2."""
+    num_patches = defaults["image_size"] // defaults["patch_size"]
+    return num_patches * num_patches
+
+
+def session_lm_name(gen_info: Dict, component_names) -> str:
+    """The component the decode session runs as the LM: the generation's `lm_component` when it
+    is a component, else the first component that is neither the text head nor a codec."""
+    lm_name = gen_info.get("lm_component", "language_model")
+    if lm_name not in component_names:
+        for name in component_names:
+            if name not in ("lm_head", "codec.decoder"):
+                return name
+    return lm_name
+
+
+def session_lm_config(defaults: Dict, topology: Dict, lm_name: str) -> Dict[str, Any]:
+    """The LM facts the decode session sizes its KV cache from: the package's `lm_config`, else
+    the LM component's extracted values. The derived census reads the same."""
+    lm_config = (defaults or {}).get("lm_config", {})
+    if lm_config:
+        return lm_config
+    extracted = ((topology or {}).get("extracted_values") or {}).get(lm_name, {})
+    return {
+        "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
+        "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
+        "hidden_size": extracted.get("hidden_size"),
+        "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
+        "head_dim": extracted.get("head_dim"),
+        # Mirror of the compiled extraction (R30): the window is
+        # load-bearing for the prompt-aware KV ceiling — without
+        # it a build on this path would get no model-limit guard.
+        "max_position_embeddings": extracted.get("max_position_embeddings"),
+    }
+
+
+def session_kv_params(lm_config: Dict, kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
+    """`TritonKVCache`'s parameters: the Prism plan's cache when it planned one, else sized from
+    the LM config (see docs/reference/red-cells.md: the second branch's constants). The derived
+    census keys the decode from the same choice."""
+    if kv_plan is not None:
+        # Prism path — uses precomputed budget
+        return dict(
+            num_layers=kv_plan.num_layers,
+            num_kv_heads=kv_plan.num_kv_heads,
+            k_head_dim=kv_plan.k_head_dim,
+            v_head_dim=kv_plan.v_head_dim,
+            max_cache_len=kv_plan.max_cache_len,
+            dtype=parse_dtype(kv_plan.dtype),
+            window_ceiling=window,
+            decode_budget=decode_budget,
+            # Serve plans carry a small initial size (the compiled
+            # cache honours it; the triton cache now does too —
+            # the serve prefill lever, 2026-09-03).
+            initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
+        )
+    # Legacy fallback from lm_config
+    hidden_dim = lm_config.get("hidden_size", 2048)
+    num_heads = lm_config.get("num_heads") or 32
+    head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
+    return dict(
+        num_layers=lm_config.get("num_layers") or 22,
+        num_kv_heads=lm_config.get("num_kv_heads") or num_heads,
+        k_head_dim=head_dim,
+        v_head_dim=head_dim,
+        max_cache_len=decode_budget + 128,
+        dtype=NBXDtype.float16,
+        window_ceiling=window,
+        decode_budget=decode_budget,
+    )
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -437,41 +567,7 @@ class TritonAutoregressiveHandler:
         else:
             chat_mode = bool(defaults.get("chat_mode", False))
 
-        if (is_image_ar and sft_format and special_token_ids
-                and hasattr(tokenizer, "format_generation_prompt")):
-            # Priority 1: SFT format (Janus-style image AR). Only taken for
-            # image-AR models to avoid disturbing the LLM path.
-            token_ids = tokenizer.format_generation_prompt(
-                prompt=prompt,
-                sft_format=sft_format,
-                special_token_ids=special_token_ids,
-                is_unconditional=False,
-            )
-        elif (chat_mode and not is_image_ar
-              and hasattr(tokenizer, "apply_chat_template")
-              and (not hasattr(tokenizer, "has_chat_template")
-                   or tokenizer.has_chat_template())):
-            # Priority 2: HF chat_template — ONLY when chat_mode is enabled
-            # (TextProcessor parity). Preserves the Triton chat-LLM path
-            # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
-            messages = [{"role": "user", "content": prompt}]
-            token_ids = tokenizer.apply_chat_template(
-                messages, add_generation_prompt=True)
-        elif hasattr(tokenizer, "encode_with_mask"):
-            # Priority 3a: basic tokenization WITH special tokens (TextProcessor
-            # parity for chat_mode=False models — orpheus, openaudio).
-            _r = tokenizer.encode_with_mask(
-                prompt, padding=False, add_special_tokens=True)
-            token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
-        elif hasattr(tokenizer, "encode"):
-            # Priority 3b: basic encode (with special tokens when supported).
-            try:
-                token_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            except TypeError:
-                token_ids = tokenizer.encode(prompt)
-        else:
-            raise RuntimeError("Tokenizer has no encode method.")
-
+        token_ids = prompt_token_ids(tokenizer, prompt, defaults, is_image_ar, chat_mode)
         token_ids = _flatten_tokenizer_output(token_ids)
         ids_np_cond = np.array([token_ids], dtype=np.int64)
 
@@ -482,15 +578,7 @@ class TritonAutoregressiveHandler:
         # prefill MUST run at batch=2 for shapes to bind correctly.
         use_cfg = False
         if is_image_ar:
-            cli_cfg = self.ctx.variable_resolver.resolved.get(
-                "global.guidance_scale")
-            cfg_weight = (float(cli_cfg) if cli_cfg is not None
-                          else defaults.get("guidance_scale"))
-            if cfg_weight is None:
-                raise RuntimeError(
-                    "guidance_scale missing from defaults.json for "
-                    "autoregressive_image. Set in the model registry at import.")
-            use_cfg = float(cfg_weight) > 1.0
+            use_cfg = image_cfg_weight(self.ctx.variable_resolver.resolved, defaults) > 1.0
 
         if use_cfg:
             token_ids_un = tokenizer.format_generation_prompt(
@@ -558,7 +646,6 @@ class TritonAutoregressiveHandler:
         """Create TritonLMSession with executor and KV cache."""
         from neurobrix.triton.sequence import TritonSequence
 
-        lm_name = gen_info.get("lm_component", "language_model")
         # Resolve the LM component name against the live executor map, NOT
         # `pkg.components`. `pkg.components` is populated only from component
         # dirs that ship a `runtime.json` (loader.py:72-77) — a build-side
@@ -574,11 +661,7 @@ class TritonAutoregressiveHandler:
         # it is robust regardless of which components carry a runtime.json.
         # Mirrors the native path (core/flow/autoregressive.py), which never
         # consults pkg.components for this. (R30: triton + triton_sequential.)
-        if lm_name not in self.ctx.executors:
-            for name in self.ctx.executors:
-                if name not in ("lm_head", "codec.decoder"):
-                    lm_name = name
-                    break
+        lm_name = session_lm_name(gen_info, self.ctx.executors)
 
         device_idx = parse_device_idx(self.ctx.primary_device)
 
@@ -596,7 +679,7 @@ class TritonAutoregressiveHandler:
                                f"Available: {list(self.ctx.executors.keys())}")
 
         # Get LM config for KV cache setup
-        lm_config = self.ctx.pkg.defaults.get("lm_config", {})
+        lm_config = session_lm_config(self.ctx.pkg.defaults, self.ctx.pkg.topology, lm_name)
 
         # MoE config — propagate norm_topk_prob to the executor BEFORE the
         # TritonSequence compiles. Mirror of core/flow/autoregressive.py:667-676.
@@ -616,20 +699,6 @@ class TritonAutoregressiveHandler:
                         "for MoE model.\n"
                         "Add to the model registry: moe.norm_topk_prob")
                 executor.set_moe_config(norm_topk_prob=norm_topk)
-
-        if not lm_config:
-            extracted = self.ctx.pkg.topology.get("extracted_values", {}).get(lm_name, {})
-            lm_config = {
-                "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
-                "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
-                "hidden_size": extracted.get("hidden_size"),
-                "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
-                "head_dim": extracted.get("head_dim"),
-                # Mirror of the compiled extraction (R30): the window is
-                # load-bearing for the prompt-aware KV ceiling — without
-                # it a build on this path would get no model-limit guard.
-                "max_position_embeddings": extracted.get("max_position_embeddings"),
-            }
 
         hidden_dim = lm_config.get("hidden_size", 2048)
         num_heads = lm_config.get("num_heads") or 32
@@ -713,40 +782,8 @@ class TritonAutoregressiveHandler:
             if _mt is None:
                 _mt = require_max_tokens(self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
-            kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
-            if kv_plan is not None:
-                # Prism path — uses precomputed budget
-                cache_dtype = parse_dtype(kv_plan.dtype)
-                kv_params = dict(
-                    num_layers=kv_plan.num_layers,
-                    num_kv_heads=kv_plan.num_kv_heads,
-                    k_head_dim=kv_plan.k_head_dim,
-                    v_head_dim=kv_plan.v_head_dim,
-                    max_cache_len=kv_plan.max_cache_len,
-                    dtype=cache_dtype,
-                    window_ceiling=_window,
-                    decode_budget=_decode_budget,
-                    # Serve plans carry a small initial size (the compiled
-                    # cache honours it; the triton cache now does too —
-                    # the serve prefill lever, 2026-09-03).
-                    initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
-                )
-            else:
-                # Legacy fallback from lm_config
-                num_kv_heads = lm_config.get("num_kv_heads") or num_heads
-                head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
-                num_layers = lm_config.get("num_layers") or 22
-                max_tokens = _decode_budget
-                kv_params = dict(
-                    num_layers=num_layers,
-                    num_kv_heads=num_kv_heads,
-                    k_head_dim=head_dim,
-                    v_head_dim=head_dim,
-                    max_cache_len=max_tokens + 128,
-                    dtype=NBXDtype.float16,
-                    window_ceiling=_window,
-                    decode_budget=_decode_budget,
-                )
+            kv_params = session_kv_params(lm_config, getattr(self.ctx.plan, 'kv_cache_plan', None),
+                                          _window, _decode_budget)
 
             # EXECUTOR-scoped cache persistence: the KV BUFFERS must
             # outlive the per-request session — warm serving creates a
@@ -858,15 +895,7 @@ class TritonAutoregressiveHandler:
                 raise RuntimeError(
                     f"autoregressive_image requires executors: missing {missing}")
 
-            cli_cfg = self.ctx.variable_resolver.resolved.get(
-                "global.guidance_scale")
-            cfg_weight = (float(cli_cfg) if cli_cfg is not None
-                          else defaults.get("guidance_scale"))
-            if cfg_weight is None:
-                raise RuntimeError(
-                    "guidance_scale missing from defaults.json for "
-                    "autoregressive_image.")
-            cfg_weight = float(cfg_weight)
+            cfg_weight = image_cfg_weight(self.ctx.variable_resolver.resolved, defaults)
 
             lm_vocab_size = defaults.get("lm_vocab_size")
             codebook_size = defaults.get("codebook_size")
@@ -1054,10 +1083,7 @@ class TritonImageStrategy:
 
     def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
         """VQ image generator: fixed max_tokens = num_patches², no EOS."""
-        image_size = defaults["image_size"]
-        patch_size = defaults["patch_size"]
-        num_patches = image_size // patch_size
-        max_tokens = num_patches * num_patches
+        max_tokens = image_token_count(defaults)
         config = {
             "max_tokens": max_tokens,
             "temperature": defaults["temperature"],
