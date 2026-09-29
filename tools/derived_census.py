@@ -41,8 +41,10 @@ def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) 
     """The plan the runtime would receive, from the engine's own `--explain-plan --json`."""
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
-                "NBX_PRISM_BUDGET_MB": str(int(rung)), "PYTHONPATH": str(REPO / "src"),
+                "PYTHONPATH": str(REPO / "src"),
                 "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"})
+    if rung is not None:
+        env["NBX_PRISM_BUDGET_MB"] = str(int(rung))
     r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model, *request,
                         MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
@@ -76,7 +78,8 @@ def prompt_tokens(model: str, prompt: str) -> int:
 
 
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
-                     has_native_bf16: bool, sdpa_budget_bytes: int, unhandled: collections.Counter):
+                     has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
+                     sdpa_max_chunks: int, unhandled: collections.Counter):
     """[(op uid, kernel qual, key tuple)] for one component at one symbol binding."""
     from neurobrix.core.prism import runtime_widths as RW
     from neurobrix.kernels import launch_keys as LK
@@ -116,21 +119,18 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             if k[2] == D and k[3] == Tq and k[2] != Tq:        # the wrapper reads a pre-transposed K by its shape
                 k = [k[0], k[1], k[3], k[2]]
             Hk, Tk, Dv = k[1], k[2], v[3]
-            scores = B * H * Tq * Tk * 4
-            math_route = Dv != D or scores <= sdpa_budget_bytes
-            if not math_route:
-                unhandled["sdpa: flash or chunked route (not yet derived)"] += 1
+            route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks)
+            qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
+            if route == "flash":
                 launches = []
+            elif route == "chunked":
+                launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
+                                                             has_native_bf16, rows)
             elif Tq == 1:
                 unhandled["sdpa: Tq=1 decode-vec gate (not yet derived)"] += 1
                 launches = []
             else:
-                groups = H // Hk
-                qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
-                s_out = LK.matmul_out_dtype(qd, groups * Tq, True, has_native_bf16)
-                launches = (LK.bmm_launches(groups * Tq, D, Tk, qd, kd, has_native_bf16)
-                            + LK.bmm_launches(groups * Tq, Tk, Dv, vd, vd, has_native_bf16))
-                del s_out
+                launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
         elif kind in ("aten::addmm", "aten::baddbmm", "aten::linear", "aten::matmul",
                       "aten::convolution", "aten::conv1d", "aten::lstm", "aten::stft", "aten::istft"):
             unhandled[f"{kind} (not yet derived)"] += 1
@@ -142,10 +142,15 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     return out
 
 
-def walked_pairs(walked: Path, model: str, mode: str, rung: int):
-    """{(op uid or None, kernel, key repr)} from a walked census's `<rec>.ops` + `<rec>` files."""
+def walked_pairs(walked: Path, model: str, mode: str, rung):
+    """{(op uid or None, kernel, key repr)} from a walked census's `<rec>.ops` + `<rec>` files: the
+    rung's `<model>.<mode>.r<rung>[.walk].keys`, or — `rung` None, a census taken at the profile's
+    own budget (the Mac's 18 GB walks) — `<model>.<mode>[.walk].keys`. A `.probe.` file holds the
+    probe request's keys, not the walk's, and is never read here."""
     pairs = set()
-    for rec in sorted(walked.glob(f"{model}.{mode}.r{rung}*.keys")):
+    pats = ([f"{model}.{mode}.r{rung}.keys", f"{model}.{mode}.r{rung}.walk.keys"] if rung is not None
+            else [f"{model}.{mode}.keys", f"{model}.{mode}.walk.keys"])
+    for rec in sorted(p for pat in pats for p in walked.glob(pat)):
         ops = Path(str(rec) + ".ops")
         with_op = set()
         if ops.exists():
@@ -166,7 +171,8 @@ def compare(a) -> int:
     from neurobrix.kernels import autotune_certified as C
     from neurobrix.kernels import census as _census
     request = derived_request(a.model)
-    plan = plan_record(a.model, request, a.mode, a.hardware, a.rung)
+    rung = None if a.rung == "profile" else int(a.rung)
+    plan = plan_record(a.model, request, a.mode, a.hardware, rung)
     prof = load_profile(a.hardware)
     _census._bind_target(a.hardware, None)     # the vendor ladders the keys are bucketed with
     prompt = request[request.index("--prompt") + 1]
@@ -176,6 +182,7 @@ def compare(a) -> int:
     from neurobrix.kernels import wrappers as W
     W.set_hardware_profile(prof)
     budget = W._sdpa_math_scores_budget_bytes_for(0) or 0
+    min_rows, max_chunks = W._sdpa_math_min_chunk_rows(), W._sdpa_math_max_chunks()
     topo = json.loads((CACHE / a.model / "topology.json").read_text())
     flow = topo.get("flow") or {}
     gen = flow.get("generation") or {}
@@ -199,9 +206,9 @@ def compare(a) -> int:
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
         for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, syms,
-                                            prof.has_native_bf16, budget, unhandled):
+                                            prof.has_native_bf16, budget, min_rows, max_chunks, unhandled):
             derived.add((uid, q_, C.key_repr(key)))
-    walked = walked_pairs(Path(a.walked), a.model, a.mode, a.rung)
+    walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}
     d_keys = {(q_, k) for _, q_, k in derived}
     w_op = {p for p in walked if p[0] is not None}
@@ -226,7 +233,7 @@ def main(argv=None) -> int:
     c = sub.add_parser("compare")
     c.add_argument("--model", required=True)
     c.add_argument("--hardware", required=True)
-    c.add_argument("--rung", type=int, required=True)
+    c.add_argument("--rung", required=True, help="the rung in MB, or 'profile' for a census at the profile's own budget")
     c.add_argument("--mode", choices=sorted(MODE_FLAGS), required=True)
     c.add_argument("--walked", required=True, help="a census logs directory (<model>.<mode>.r<rung>*.keys + .ops)")
     a = ap.parse_args(argv)

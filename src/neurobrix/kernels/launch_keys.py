@@ -150,3 +150,64 @@ def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: 
     ieee = (not native_bf16) and out == F32
     return [(BADDBMM, (bucket_of("M", M), bucket_of("N", N), bucket_of("K", K),
                        ieee, promote_b, False, tag(a), tag(b), tag(out), tag(out)))]
+
+
+# ---------------------------------------------------------------------------------------------
+# Attention (scaled_dot_product_attention): the route, then the math route's two bmm launches.
+# ---------------------------------------------------------------------------------------------
+
+def _pow2(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
+                    min_chunk_rows: int, max_chunks: int) -> int:
+    """Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the
+    arch's row block (`memory.sdpa_math_min_chunk_rows`); 0 when the shape cannot chunk within
+    the arch's chunk ceiling (`memory.sdpa_math_max_chunks`)."""
+    if not min_chunk_rows:
+        return 0
+    rows = (bound // (batch * nheads * Tk * 4)) // min_chunk_rows * min_chunk_rows
+    if rows >= min_chunk_rows and -(-Tq // rows) <= max_chunks:
+        return rows
+    return 0
+
+
+def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
+               min_chunk_rows: int, max_chunks: int, force_math: bool = False) -> Tuple[str, int]:
+    """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
+    when the value head dim differs; else by the fp32 scores' size against the executing device's
+    budget — a non-power-of-two head dim falls back to a 2 GiB bound when the arch declares none;
+    over the bound, chunked when the rows fit the arch's ceiling; otherwise flash."""
+    if force_math or Dv != D:
+        return ("math", 0)
+    scores = batch * nheads * Tq * Tk * 4
+    bound = budget_bytes if _pow2(D) else (budget_bytes or (2 << 30))
+    if scores <= bound:
+        return ("math", 0)
+    if bound:
+        rows = sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
+        if rows:
+            return ("chunked", rows)
+    return ("flash", 0)
+
+
+def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int,
+                            q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool,
+                            force_accum: bool = False) -> List[Launch]:
+    """`_math_attention`: scores = bmm(q as [B*Hk, groups*Tq, D], k^T) — q in its (possibly
+    rounded) dtype, k in its own; then p = softmax(scores) cast to v's dtype and bmm(p, v)."""
+    M = (H // Hk) * Tq
+    return (bmm_launches(M, D, Tk, q, k, native_bf16, force_accum)
+            + bmm_launches(M, Tk, Dv, v, v, native_bf16, force_accum))
+
+
+def chunked_math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int,
+                                    q: NBXDtype, k: NBXDtype, v: NBXDtype, native_bf16: bool,
+                                    rows: int, force_accum: bool = False) -> List[Launch]:
+    """`_math_attention_chunked`: the math route over query-row chunks of `rows`, the last one the
+    remainder — each chunk forms its own pair of keys."""
+    out: List[Launch] = []
+    for c in {min(rows, Tq)} | ({Tq % rows} if Tq % rows else set()):
+        out += math_attention_launches(B, H, Hk, c, Tk, D, Dv, q, k, v, native_bf16, force_accum)
+    return out
