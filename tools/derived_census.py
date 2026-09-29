@@ -57,21 +57,27 @@ def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) 
     return json.loads(r.stdout)
 
 
+def container_tokenizer(model: str):
+    """The container's tokenizer module, where the executor loads it from."""
+    from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
+    root = CACHE / model
+    topo = json.loads((root / "topology.json").read_text())
+    tok = (topo.get("modules") or {}).get("tokenizer")
+    path = ((tok.get("path") if isinstance(tok, dict) else tok) or "modules/tokenizer")   # the executor's default
+    if not (root / str(path).rstrip("/")).exists():
+        raise SystemExit(f"{model}: no tokenizer module at {path}")
+    return load_tokenizer_from_path(root / str(path).rstrip("/"), None)
+
+
 def prompt_tokens(model: str, prompt: str) -> int:
     """The prefill length: the prompt through the container's own tokenizer by the autoregressive
     flow's own rule (`triton/flow/autoregressive.prompt_token_ids`: SFT format / chat template /
     basic encode with specials, unpadded)."""
-    from neurobrix.core.module.tokenizer.sp_tokenizer import load_tokenizer_from_path
     from neurobrix.triton.flow.autoregressive import prompt_token_ids
     root = CACHE / model
     topo = json.loads((root / "topology.json").read_text())
-    mods = topo.get("modules") or {}
-    tok = mods.get("tokenizer")
-    if not tok:
-        raise SystemExit(f"{model}: no tokenizer module in its topology")
-    path = (tok.get("path") if isinstance(tok, dict) else tok) or "modules/tokenizer"   # the executor's default
     defaults = json.loads((root / "runtime" / "defaults.json").read_text()) if (root / "runtime" / "defaults.json").exists() else {}
-    tokenizer = load_tokenizer_from_path(root / str(path).rstrip("/"), None)
+    tokenizer = container_tokenizer(model)
     gen_type = ((topo.get("flow") or {}).get("generation") or {}).get("type")
     return len(prompt_token_ids(tokenizer, prompt, defaults, gen_type == "autoregressive_image",
                                 bool(defaults.get("chat_mode", False))))
@@ -251,7 +257,11 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
             mask_n = _mask_numel(o, shape)
             q_round = None
-            if decode_kv is not None:
+            if decode_kv is not None and decode_kv.get("prefill"):
+                # A prefill through the KV interceptor (`intercept`, `_is_prefill`): the graph's
+                # mask is dropped for `is_causal` — the SDPA sees no mask at any length.
+                mask_n = None
+            elif decode_kv is not None:
                 # A decode step through the KV interceptor (triton/kv_cache.py `intercept`): K and V
                 # are the cache's — `len` positions, its KV heads (GQA un-expanded), its dtype; Q is
                 # read in the cache's dtype (`q_dtype_of_kv`); a mask of the prefill length is
@@ -462,7 +472,8 @@ class _Shape:
 
 
 def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, has_native_bf16: bool,
-                  sdpa: tuple, unhandled: collections.Counter, tiling=None, tiled_tf=None):
+                  sdpa: tuple, unhandled: collections.Counter, tiling=None, tiled_tf=None,
+                  decode_kv=None):
     """(launches, {output tensor id: shape}) of one component fed `inputs` {input name: shape}:
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
@@ -473,7 +484,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
     syms = dict(res.bindings)
     launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
-                                tiling=tiling, tiled_tf=tiled_tf)
+                                tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv)
     outs = {}
     for i, tid in enumerate(g.get("output_tensor_ids") or []):
         meta = g["tensors"].get(tid) or {}
@@ -562,6 +573,45 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             return [(c, {"__decode__": {"len": n, "dtype": kv.get("dtype"),
                                         "heads": kv.get("num_kv_heads")}}) for c in lms]
         sites.append(("decode KV length", P + 1, P + int(mt), decode))
+    # next_token_diffusion (triton/flow/next_token_diffusion.py `_generate_kv`): the LM prefills
+    # the speaker prompt (the flow's own `speaker_prompt_ids`) and, under CFG, a negative context
+    # of the speech start token alone; then every step decodes ONE position per context against
+    # its KV cache — the prompt context P + 1 .. P + max_steps, the negative 2 .. 1 + max_steps.
+    if flow.get("type") == "next_token_diffusion" and prompt:
+        from types import SimpleNamespace
+        from neurobrix.triton.flow import next_token_diffusion as NTD
+        from neurobrix.triton.flow.autoregressive import session_kv_params, session_lm_config
+        lm = NTD.TritonNextTokenDiffusionEngine.LM
+        root = CACHE / model
+        tok = container_tokenizer(model)
+        start_id = NTD.special_token_id(tok, NTD.SPEECH_START_TOKEN)
+        if start_id is None:
+            raise SystemExit(f"{model}: its tokenizer has no {NTD.SPEECH_START_TOKEN}")
+        P = len(NTD.speaker_prompt_ids(tok, prompt, start_id))
+        mt = int(max_tokens_req if max_tokens_req is not None else require_max_tokens(defaults))
+        cfg = float(NTD._require_default(defaults, "cfg_scale"))
+        gl = json.loads((root / "components" / lm / "graph.json").read_text())
+        dim = gl["tensors"]["input::inputs_embeds"]["shape"][-1]
+        # The cache the session builds: the plan's when Prism planned one, else the session's own
+        # sizing from the LM config — one function for both.
+        lmc = session_lm_config(defaults, topo, lm)
+        kvp = session_kv_params(lmc, SimpleNamespace(**plan["kv_cache"]) if plan.get("kv_cache")
+                                else None, int(lmc.get("max_position_embeddings") or 0),
+                                decode_bound(mt))
+
+        def prefill(n, lm=lm, dim=dim):
+            return [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n],
+                          "__kv_prefill__": True})]
+
+        def decode(n, lm=lm, kvp=kvp):
+            return [(lm, {"__decode__": {"len": n, "dtype": kvp["dtype"].name,
+                                         "heads": kvp["num_kv_heads"]}})]
+        sites.append((f"{lm} prompt prefill", P, P, prefill))
+        lo = P + 1
+        if cfg != 1.0:
+            sites.append((f"{lm} negative prefill", 1, 1, prefill))
+            lo = 2
+        sites.append((f"{lm} decode KV length", lo, P + mt, decode))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -677,10 +727,12 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                                                     tiled_tf=tiled_tf, decode_kv=d)
                         keys |= set(launches)
                         continue
-                    inputs = feed(outs) if callable(feed) else feed
+                    inputs = dict(feed(outs) if callable(feed) else feed)
+                    kv_prefill = inputs.pop("__kv_prefill__", False)
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
                                                    has_native_bf16, sdpa, unhandled, tiling=view,
-                                                   tiled_tf=tiled_tf)
+                                                   tiled_tf=tiled_tf,
+                                                   decode_kv={"prefill": True} if kv_prefill else None)
                     keys |= set(launches)
                 found.update(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
