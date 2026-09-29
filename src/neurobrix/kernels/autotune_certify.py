@@ -1873,6 +1873,62 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                                "excluded_configs": 0, "started": time.time()}
     done = 0
     attempts = 0                                  # `limit` bounds the shapes TRIED, failures included
+    # Certifications reach their file at a BOUNDED SHARE of the pass (`_BoundedWriter`); every
+    # pending one is written before this function returns, on every path.
+    writer = _BoundedWriter(vendor, profile)
+    try:
+        return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                             reprove_generator, certifying_device, certifying_class, budget_bytes,
+                             floor_bytes, rng, summary, log, writer)
+    finally:
+        writer.flush_all()
+
+
+_WRITE_SHARE = 0.10     # a certified file's rewrites may cost at most a tenth of the certifier's time
+
+
+class _BoundedWriter:
+    """When a certification reaches its kernel file. A kernel file is 13-21 MB of JSON, and
+    rewriting it after every key took 36.7 % of a 16 GB conv pass (py-spy, 2026-09-29: `_write_file`
+    beside 36.2 % of bench waits) while the card sat idle. A file is written when the time since its
+    last write reaches that write's own duration over `_WRITE_SHARE` — the rewrites then cost at most
+    that share of the pass — and `flush_all` writes whatever is pending. Each write still places only
+    what this writer proved into the file as it stands, under the file's lock (`_write_file`)."""
+
+    def __init__(self, vendor: str, profile: str, share: float = _WRITE_SHARE, write=None, clock=time.time):
+        self.vendor, self.profile, self.share, self.clock = vendor, profile, share, clock
+        self.write = write or _write_file
+        self.pending: Dict[Path, Dict[str, Dict]] = {}
+        self.where: Dict[Path, Tuple[str, str, Dict[str, Dict]]] = {}
+        self.last: Dict[Path, Tuple[float, float]] = {}
+
+    def add(self, path: Path, qual: str, dtype: str, cache: Dict[str, Dict], ktext: str, entry: Dict) -> None:
+        self.pending.setdefault(path, {})[ktext] = entry
+        self.where[path] = (qual, dtype, cache)
+        at, cost = self.last.get(path, (float("-inf"), 0.0))
+        if self.clock() - at >= cost / self.share:
+            self.flush(path)
+
+    def flush(self, path: Path) -> None:
+        fresh = self.pending.pop(path, None)
+        if not fresh:
+            return
+        qual, dtype, cache = self.where[path]
+        t0 = self.clock()
+        self.write(path, self.vendor, self.profile, qual, dtype, fresh, cache=cache)
+        t1 = self.clock()
+        self.last[path] = (t1, t1 - t0)
+
+    def flush_all(self) -> None:
+        for path in list(self.pending):
+            self.flush(path)
+
+
+def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                  reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
+                  rng, summary, log, writer):
+    done = 0
+    attempts = 0
     for qual, keys in shapes.items():
         tuner = tuners.get(qual)
         if tuner is None:
@@ -1922,7 +1978,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
                 summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: REFUSED — {exc}")
                 continue
-            _write_file(path, vendor, profile, qual, dtype, {ktext: entry}, cache=entries)
+            writer.add(path, qual, dtype, entries, ktext, entry)
             done += 1
             summary["certified"] += 1
             summary["excluded_configs"] += len(entry["excluded"])
