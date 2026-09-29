@@ -25,6 +25,6 @@ def test_a_thousand_keys_read_the_file_once(tmp_path, monkeypatch):
 
 def test_the_certify_loop_takes_its_view_through_the_once_reader():
     import inspect
-    src = inspect.getsource(CF.certify)
+    src = inspect.getsource(CF._certify_loop)     # the loop certify() runs
     assert "_file_entries(per_dtype, dtype, path)" in src
     assert "setdefault(dtype, _read_file" not in src
