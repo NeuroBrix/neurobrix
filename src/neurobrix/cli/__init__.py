@@ -220,9 +220,6 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
-    certify_p.add_argument('--shard', default=None, metavar='K/N',
-                           help="certify only the keys of shard K of N (a stable hash of kernel and key): the cards "
-                                "of one memory class split one kernel's keys without overlap")
     certify_p.add_argument('--working-set-mb', type=int, default=None,
                            help='the working-set budget of this run in MiB: every key is priced by its phases before any '
                                 'draw and refused by name over it; pass the figure the run\'s guard kills at '
@@ -240,13 +237,6 @@ For more information: https://neurobrix.es
                                 'pass — until then the RUNTIME DOES NOT SERVE IT (a configuration is a property of the compiler '
                                 'that produced it: the shape sweeps at runtime and lands in the local replay cache; '
                                 'NBX_AUTOTUNE_ANY_GENERATOR=1 serves it anyway, at the caller\'s risk)')
-                                '(the Triton version); a proof made under another one is re-ranked by this optimisation pass — '
-                                'it stays correct and served meanwhile')
-    certify_p.add_argument('--reprove-class', type=int, default=None, metavar='GB',
-                           help='a key this card\'s memory class has no certificate for, where the GB class holds one, '
-                                'keeps that configuration: re-proven on this card by the oracle and one timing and filed '
-                                'under this card\'s class; swept only where it fails the oracle or no entry exists '
-                                '(use with --only-missing)')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
