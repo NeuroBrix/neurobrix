@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Diffusion plans size each component at the batch and length it actually runs.** The
+  denoiser under classifier-free guidance runs two prompts at once; a text encoder runs at the length
+  its prompt is padded to; a FLUX-style denoiser runs on the packed latent — the memory plan now uses
+  those, not the sizes the model was traced at.
+
 - **Models that snap the request to a trained resolution are planned at that resolution.** A
   model trained on a table of sizes (the Sana pipelines) runs at the nearest entry of its table,
   not at the size asked for; its memory plan was sized at the size asked for (320 x 512 planned,

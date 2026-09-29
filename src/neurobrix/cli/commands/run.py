@@ -310,11 +310,19 @@ def request_input_config(args, manifest: dict, family, cache_path):
                                   request_voice({"speaker": getattr(args, 'speaker', None)},
                                                 cached_defaults))[1])
 
+    # The flow's per-component bindings (CFG batch, a diffusion encoder's length, the denoiser's
+    # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan
+    # and the derived census.
+    from neurobrix.core.prism.flow_bindings import FlowBindings
+    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
+             if _topo_path.exists() else None)
+
     input_config = InputConfig(
         batch_size=batch_size,
         height=height,
         width=width,
         seq_len=seq_len,
+        flow=_flow,
         dtype=dtype,
         vae_scale=vae_scale,
         num_frames=num_frames,

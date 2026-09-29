@@ -48,6 +48,11 @@ class InputConfig:
     # defaults.json (`temporal_compression_ratio`), data-driven.
     num_frames: Optional[int] = None
     temporal_compression: Optional[int] = None
+    # The request's flow (`core.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
+    # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
+    # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
+    # packed inputs. None: the name-driven map alone.
+    flow: Optional[Any] = None
 
     def positional_symbol_map(self) -> Dict[str, int]:
         """The POSITIONAL base, which GUESSES what each symbol id means.
@@ -472,7 +477,7 @@ class ActivationProfiler:
         return last_use
 
     def build_symbol_map(self, input_config: InputConfig,
-                         placement_floor: bool = False) -> Dict[str, int]:
+                         placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
         """Symbol map for THIS graph: positional base + name-driven overrides.
 
         `placement_floor=True` (PLACEMENT estimates only — never the
@@ -608,6 +613,14 @@ class ActivationProfiler:
                     and isinstance(symbol_map[sid], int)
                     and symbol_map[sid] < trace):
                 symbol_map[sid] = trace
+        # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`) — then
+        # the placement floor, as for every named symbol. `flow=False` is the rules' own recursion
+        # (a rule binding another component by name alone).
+        if flow and getattr(input_config, "flow", None) is not None:
+            for sid, v in input_config.flow.overrides(self.dag, input_config).items():
+                trace = (syms.get(sid) or {}).get("trace_value") if isinstance(syms.get(sid), dict) else None
+                symbol_map[sid] = (max(int(v), trace) if (placement_floor and isinstance(trace, int))
+                                   else int(v))
         return symbol_map
 
     def trace_symbol_map(self) -> Dict[str, int]:
