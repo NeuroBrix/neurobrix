@@ -116,9 +116,12 @@ def test_the_host_budget_honours_the_prism_budget_door_on_unified_memory(monkeyp
     """On a unified profile the host IS the card's memory: the door caps it (9675411a)."""
     s = _Solver()
     undoored = s._host_budget_mb(_PU())
-    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "8192")
+    # a door rung this host does NOT land on undoored: 8192 is a real rung of the ladder, and so is
+    # 4096 — on the Mac the undoored reading rounds onto 8192 (2026-09-29), which made the cell vacuous
+    door = 4096.0 if undoored == 8192.0 else 8192.0
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(int(door)))
     doored = s._host_budget_mb(_PU())
-    assert doored == 8192.0, f"the door was ignored: host budget stayed {doored}"
+    assert doored == door, f"the door was ignored: host budget stayed {doored}"
     assert undoored != doored, (
         "the cell cannot fail: the undoored budget already equals the door's value on this "
         f"machine ({undoored}). Pick a rung this host does not land on."
