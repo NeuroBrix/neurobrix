@@ -1077,6 +1077,7 @@ def table(a) -> int:
     rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True,
                          text=True).stdout.strip() or "unknown"
     worst = 0
+    Path(a.logs).mkdir(parents=True, exist_ok=True)     # a tiling probe's resized input lands here
     for model in [m for m in a.models.split(",") if m]:
         fam = CC._family(model)
         reqs = CC.census_requests(model, fam, [], None)
@@ -1084,7 +1085,7 @@ def table(a) -> int:
         if probe is not None:
             reqs.append(probe)
         container = CC._graph_sha(model)
-        rows, refused = [], []
+        rows, refused, notes = [], [], collections.Counter()
         for mode in modes:
             for ri, req in enumerate(reqs):
                 for rung in rungs:
@@ -1095,9 +1096,16 @@ def table(a) -> int:
                             continue          # refused below the top rung, or the probe: no key there
                         refused.append(f"{mode} r{rung} request {ri}: {e}")
                         continue
-                    if unhandled:
-                        refused.extend(f"{mode} r{rung} request {ri}: {n} x {why}"
-                                       for why, n in unhandled.most_common())
+                    # A NOTE is a key derived from the op's own contract (the weight fixes a matmul's
+                    # contraction or a convolution's input channels: the op cannot run otherwise) where
+                    # the container's annotation disagrees — the key is the run's, the annotation
+                    # defect is named; it passes and is reported. Anything else refuses the model.
+                    for why, n in unhandled.items():
+                        if why.startswith("NOTE "):
+                            notes[why] += n
+                    hard = [(why, n) for why, n in unhandled.most_common() if not why.startswith("NOTE ")]
+                    if hard:
+                        refused.extend(f"{mode} r{rung} request {ri}: {n} x {why}" for why, n in hard)
                         continue
                     for uid, q_, key in sorted(derived, key=lambda t: (t[1], t[2], t[0] or "")):
                         rows.append({"model": model, "container": container, "mode": mode,
@@ -1105,7 +1113,9 @@ def table(a) -> int:
                                      "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
         if refused:
             worst = 1
-            print(f"[derived table] {model}: NOT written — the derivation cannot place it completely:")
+            kept = sorted({r.get("tool") for r in T.read(path) if r["model"] == model} - {None})
+            print(f"[derived table] {model}: NOT written — the derivation cannot place it completely; the "
+                  f"table KEEPS its existing rows for this model (tool {', '.join(kept) or 'none: no rows'}):")
             for line in refused[:30]:
                 print(f"   {line}")
             continue
@@ -1113,6 +1123,8 @@ def table(a) -> int:
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced) into {path.name} "
               f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
+        for why, n in notes.most_common():
+            print(f"   derived from the op's contract, the annotation named: {n} x {why}")
     return worst
 
 
