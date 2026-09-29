@@ -1,12 +1,10 @@
 """
 StateCacheFactory — Declarative KV Cache Creation
 
-ZERO HARDCODE: All config from Prism plan or defaults.json lm_config.
+ZERO HARDCODE: the cache's geometry and budget come from the Prism plan's KVCachePlan, and only
+from it — a decoding flow's plan always carries one (core/runtime/lm_facts); a plan without one is
+refused by name. The LM facts (lm_config) only raise the growth ceiling to the model's window.
 ZERO SEMANTIC: Pure cache allocation — no model-specific knowledge.
-
-Consolidates the two creation paths:
-1. Prism KVCachePlan (preferred — precomputed budget trade-offs)
-2. Legacy defaults.json lm_config (fallback)
 
 Usage:
     wrapper = StateCacheFactory.create(ctx, lm_name, device, dtype)
