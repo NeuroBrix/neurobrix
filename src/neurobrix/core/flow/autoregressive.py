@@ -769,7 +769,8 @@ class AutoregressiveHandler(FlowHandler):
         from neurobrix.core.module.cache.factory import StateCacheFactory
         from neurobrix.core.runtime.factory import ExecutorFactory
 
-        lm_name = gen_info.get("lm_component", "language_model")
+        from neurobrix.core.runtime.lm_facts import session_lm_name
+        lm_name = session_lm_name(gen_info, self.ctx.executors)
         device = self._parse_device()
 
         # Get dtype from Prism allocation
@@ -856,9 +857,6 @@ class AutoregressiveHandler(FlowHandler):
                 )
             executor.set_moe_config(norm_topk_prob=norm_topk)
 
-        # Create KV cache
-        kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype)
-
         # Detect SDPA ops
         sdpa_op_types = {
             "aten::scaled_dot_product_attention",
@@ -881,6 +879,9 @@ class AutoregressiveHandler(FlowHandler):
                 print("   [autoregressive] NBX_KV_RECOMPUTE=1: KV cache OFF, O(n) recompute reference", flush=True)
             kv_wrapper = None
         else:
+            # The KV cache, behind the same gate as the Triton session (R30): a graph without
+            # SDPA, or the recompute reference, never asks for one.
+            kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype)
             # Register interceptors
             if hasattr(executor, 'register_op_interceptors'):
                 interceptors = kv_wrapper.get_interceptors()

@@ -179,7 +179,7 @@ def image_token_count(defaults: Dict) -> int:
     return num_patches * num_patches
 
 
-def session_kv_params(lm_config: Dict, kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
+def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
     """`TritonKVCache`'s parameters: the Prism plan's cache. The derived census keys the decode
     from the same. A plan without a cache for a decoding flow is refused by name: Prism prices
     every cache a flow opens (`core.runtime.lm_facts`), so a missing one is a plan that did not
@@ -652,8 +652,12 @@ class TritonAutoregressiveHandler:
                         "Add to the model registry: moe.norm_topk_prob")
                 executor.set_moe_config(norm_topk_prob=norm_topk)
 
-        hidden_dim = lm_config.get("hidden_size", 2048)
-        num_heads = lm_config.get("num_heads") or 32
+        hidden_dim = lm_config.get("hidden_size")
+        num_heads = lm_config.get("num_heads")
+        if not hidden_dim or not num_heads:
+            raise RuntimeError(
+                f"ZERO FALLBACK: 'hidden_size' / 'num_heads' not found for '{lm_name}' "
+                f"(R30: the compiled session refuses the same way).")
 
         # Graph inputs — from the executor's OWN parsed DAG (R30 mirror of
         # the compiled _session_dag rule): the 244 MB graph.json of a 30B
@@ -734,7 +738,7 @@ class TritonAutoregressiveHandler:
             if _mt is None:
                 _mt = require_max_tokens(self.ctx.pkg.defaults)
             _decode_budget = decode_bound(int(_mt))
-            kv_params = session_kv_params(lm_config, getattr(self.ctx.plan, 'kv_cache_plan', None),
+            kv_params = session_kv_params(getattr(self.ctx.plan, 'kv_cache_plan', None),
                                           _window, _decode_budget)
 
             # EXECUTOR-scoped cache persistence: the KV BUFFERS must

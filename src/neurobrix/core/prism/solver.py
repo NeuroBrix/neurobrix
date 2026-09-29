@@ -1030,7 +1030,11 @@ class PrismSolver:
         else:
             self._model_category = "diffusion"
 
-        self._needs_kv_cache = self._model_category in ("llm", "image_vq")
+        # every flow that opens a decode session has its cache planned, whatever its family
+        # declares (the sessions refuse a plan without one): core/runtime/lm_facts
+        from neurobrix.core.runtime.lm_facts import decode_lm_component
+        self._needs_kv_cache = self._model_category in ("llm", "image_vq") or decode_lm_component(
+            topology, list((topology.get("components") or {}).keys())) is not None
 
         # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
         # and the genuine all-fp32 fallback below).
@@ -2964,6 +2968,11 @@ class PrismSolver:
 
         if getattr(self, '_serve_mode', False):
             # Serve mode: target full context window, VRAM is the constraint
+            if not max_pos:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: serving plans the decoder's full context window, and this "
+                    f"container declares none for '{lm_config.get('component_name', 'its LM')}' "
+                    f"(no max_position_embeddings in its LM facts) — its build must record it.")
             upper_bound = max_pos
         else:
             # Run mode: single-shot, only need max_tokens + margin

@@ -421,11 +421,12 @@ class InferenceEngine:
     def _get_max_cache_len(self) -> int:
         """Get KV cache capacity from Prism plan."""
         kv_plan = getattr(self._plan, 'kv_cache_plan', None)
-        if kv_plan is not None:
-            return kv_plan.max_cache_len
-        # Fallback to max_position_embeddings from lm_config
-        lm_config = self._pkg.defaults.get("lm_config", {})
-        return lm_config.get("max_position_embeddings", 2048)
+        if kv_plan is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans "
+                "the cache of every flow that decodes (core/runtime/lm_facts); a plan without one "
+                "did not see this flow.")
+        return kv_plan.max_cache_len
 
     def new_conversation(self) -> None:
         """Start a new conversation, clearing history."""
