@@ -106,7 +106,7 @@ def test_a_key_in_the_census_table_is_named_a_certification_gap(tmp_path, monkey
     from neurobrix.kernels.autotune_certified import key_repr
     qual, key = _key()
     row = {"model": "TinyLlama-1.1B-Chat-v1.0", "container": "3b8bbc487525959b", "mode": "triton", "rungs_mb": [16384],
-           "op": None, "kernel": qual, "key": key_repr(key), "dtype": "fp16,fp16,fp16", "tool": "test"}
+           "ops": [None], "kernel": qual, "key": key_repr(key), "dtype": "fp16,fp16,fp16", "tool": "test"}
     C = _table(tmp_path, monkeypatch, [row])
     said = C.census_row(qual, key, 16)
     assert "CERTIFICATION gap" in said and "TinyLlama-1.1B-Chat-v1.0" in said
