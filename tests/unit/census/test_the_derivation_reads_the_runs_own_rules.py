@@ -319,3 +319,49 @@ def test_an_image_ar_generation_is_keyed_by_the_strategys_own_rules():
         tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
         assert name in {n.func.id for n in ast.walk(tree)
                         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}, fn.__name__
+
+
+class _TemplateTokenizer:
+    """A chat template that writes the image placeholder as a run of `run` ids between a user
+    header and the text, then an assistant header."""
+    def __init__(self, run):
+        self.run = run
+
+    def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=True):
+        text = messages[0]["content"][1]["text"]
+        return [1, 2] + [9] * self.run + [len(w) for w in text.split()] + [3, 4]
+
+
+def test_the_vlm_context_is_the_template_around_the_modality_span():
+    """`tokenize_around_span` gives the flow's (prefix, suffix) around the placeholder run, whatever
+    its length in the template; the LM context is prefix + vision tokens + suffix (Qwen3-VL: 4 +
+    196 + 15 = 215, the walk's 224 class). Injection: the suffix taken from the first placeholder
+    -> RED."""
+    import ast
+    import inspect
+    import textwrap
+    from neurobrix.triton.flow import vlm as V
+    for run in (1, 5):
+        pre, suf = V.tokenize_around_span(_TemplateTokenizer(run), "a bb", 9, "image")
+        assert (pre, suf) == ([1, 2], [1, 2, 3, 4])
+    tree = ast.parse(textwrap.dedent(inspect.getsource(V.TritonVLMEngine._tokenize_around_span)))
+    assert "tokenize_around_span" in {n.func.id for n in ast.walk(tree)
+                                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+
+def test_a_value_bound_symbol_is_read_from_the_feeds_value():
+    """A vision tower binds symbols from its grid's VALUES (`input::grid_thw::val_1`); the census
+    feeds the request's own grid array and the runtime's binder reads it. Injection: the feed
+    without its value -> the binder's read refused, RED."""
+    import numpy as np
+    from neurobrix.triton.symbols import SymbolResolver
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import derived_census as D
+    ctx = {"symbols": {"s0": {"name": "val_grid_thw_1", "source": "input::grid_thw::val_1"},
+                       "s1": {"name": "val_grid_thw_2_fd2", "source": "input::grid_thw::val_2_fd2"}}}
+    res = SymbolResolver(ctx)
+    feed = {"input::grid_thw": D._Shape(np.array([[1, 28, 32]]))}
+    res.bind_from_inputs(feed, list(feed), {})
+    assert dict(res.bindings) == {"s0": 28, "s1": 16}
