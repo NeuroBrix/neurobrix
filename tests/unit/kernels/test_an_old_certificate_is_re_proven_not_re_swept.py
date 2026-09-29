@@ -158,3 +158,40 @@ def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_
     assert summary.get("swept", 0) == 0, f"a drift opened a sweep: {summary}"
     assert summary.get("reproven", 0) == 0 and summary.get("failed", 0) == 1, summary
     assert path.read_text() == before, "a refused key leaves the stored entry as it was, for the retry"
+
+
+def test_another_memory_class_s_configuration_is_re_proven_on_this_card(root, monkeypatch):
+    """The same ruling across memory classes (the supervisor, 2026-09-29 11:33): a key this card's class
+    has no certificate for, where the other class holds one, keeps that configuration — the oracle and
+    one timing on THIS card, filed under this card's class beside the other's, recorded as re-proven
+    from that class. Red before `--reprove-class`: the key was swept over the whole space."""
+    qual = "neurobrix.kernels.ops.matmul.matmul_kernel"
+    tuner, key = _matmul_key()
+    vendor, profile = C.active_profile()
+    dtype = C.output_dtype(tuner, key)
+    tol = Z._tolerance(vendor, profile, dtype)
+    monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)
+    first = Z.certify_key(qual, tuner, key, tol, np.random.default_rng(7), bench=lambda fn: (fn(), 0.5)[1])
+    here = C.proof_memory_class(first["proof"])
+    there_mb = 16384 if here != 16 else 32768
+    there = C.memory_class_gb(there_mb)
+    old = {k: first[k] for k in ("config", "proof", "excluded")}
+    machine = dict(old["proof"]["machine"], device=dict(old["proof"]["machine"]["device"], memory_mb=there_mb))
+    old["proof"] = dict(old["proof"], machine=machine)
+    assert C.proof_memory_class(old["proof"]) == there != here
+    path = C.file_for(vendor, profile, qual, dtype, root=root)
+    Z._write_file(path, vendor, profile, qual, dtype, {C.key_repr(key): old})
+    tuner.cache.pop(key, None); C.reset()
+    monkeypatch.setattr(T, "ROOT", root / "table")
+    T.write(T.table_path(vendor, profile, here), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
+                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
+    benches = []
+    summary = Z.certify(profile, vendor=vendor, only_missing=True, reprove_class=there, log=lambda *a, **k: None,
+                        bench=lambda fn: (benches.append(1), fn(), 0.5)[2])
+    entries = json.loads(path.read_text())["entries"]
+    mine = C.entry_for_memory_class(entries[C.key_repr(key)], here)
+    assert summary.get("reproven", 0) == 1 and summary.get("swept", 0) == 0, summary
+    assert len(benches) == 1, f"one configuration timed once ({len(benches)} benches)"
+    assert mine is not None and mine["config"] == old["config"], "the other class's configuration, filed for this class"
+    assert mine["proof"].get("reproven_from") == f"memory class {there} GB"
+    assert C.entry_for_memory_class(entries[C.key_repr(key)], there)["proof"] == old["proof"], "the other class's proof kept"

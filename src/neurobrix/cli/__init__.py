@@ -238,6 +238,11 @@ For more information: https://neurobrix.es
                            help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
                                 '(the Triton version); a proof made under another one is re-ranked by this optimisation pass — '
                                 'it stays correct and served meanwhile')
+    certify_p.add_argument('--reprove-class', type=int, default=None, metavar='GB',
+                           help='a key this card\'s memory class has no certificate for, where the GB class holds one, '
+                                'keeps that configuration: re-proven on this card by the oracle and one timing and filed '
+                                'under this card\'s class; swept only where it fails the oracle or no entry exists '
+                                '(use with --only-missing)')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')

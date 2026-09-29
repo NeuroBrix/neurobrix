@@ -1848,7 +1848,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
             reprove_generator: bool = False, working_set_mb: Optional[int] = None,
-            shard: Optional[str] = None) -> Dict[str, Any]:
+            shard: Optional[str] = None, reprove_class: Optional[int] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -1919,7 +1919,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, reprove_class=reprove_class)
     finally:
         writer.flush_all()
 
@@ -1966,7 +1966,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, reprove_class: Optional[int] = None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -1997,6 +1997,17 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             stored_label = C.proof_backend(stored.get("proof")) if stored else None
             reprove = bool(stored and stored.get("config") and stored_label
                            and stored_label != C.proof_backend({"backend": _backend()}))
+            # ACROSS MEMORY CLASSES (the owner's 01:37 ruling, the supervisor's 2026-09-29 11:33): a key
+            # this class has no certificate for, where another class of the same SKU family holds one,
+            # keeps that configuration — proven again on THIS card by the oracle and one timing, and
+            # filed under this card's class (the proof names this card). The two V100 SKUs share SMs
+            # and HBM bandwidth and differ in capacity; the per-class rule stands: the proof is made here.
+            from_class = None
+            if not reprove and reprove_class is not None and reprove_class != certifying_class:
+                other = C.entry_for_memory_class(entries.get(ktext), int(reprove_class))
+                if other and other.get("config"):
+                    stored, reprove, from_class = other, True, int(reprove_class)
+                    stored_label = f"memory class {int(reprove_class)} GB"
             attempts += 1
             t0 = time.time()
             try:
@@ -2014,16 +2025,19 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                         raise                         # a drift is a refusal for the retry pass, never a sweep
                     except Exception as exc:          # the stored configuration fails the oracle under
                         log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
-                            f"configuration does not re-prove under the running generator ({exc}); swept")
+                            f"configuration does not re-prove "
+                            f"{'on this card (' + stored_label + ')' if from_class else 'under the running generator'} "
+                            f"({exc}); swept")
                         entry = certify_key(qual, tuner, key, tol, rng, **common)
                         summary["swept"] = summary.get("swept", 0) + 1
                         summary.setdefault("swept_why", {}).setdefault("stored configuration failed the oracle", 0)
                         summary["swept_why"]["stored configuration failed the oracle"] += 1
                 else:
                     entry = certify_key(qual, tuner, key, tol, rng, **common)
-                    if reprove_generator:
+                    if reprove_generator or reprove_class is not None:
                         summary["swept"] = summary.get("swept", 0) + 1
-                        why = "no entry for this class" if not stored else "no configuration in the stored entry"
+                        why = ("no entry for this class" if not stored else "no configuration in the stored entry") \
+                            if reprove_generator else f"no entry for memory class {int(reprove_class)} GB"
                         summary.setdefault("swept_why", {})[why] = summary.get("swept_why", {}).get(why, 0) + 1
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
