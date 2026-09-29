@@ -164,6 +164,35 @@ def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bo
     return matmul_out_dtype(a, M, True, native_bf16, force_accum)
 
 
+def matmul_route(a_rank: int, b_rank: int) -> str:
+    """`matmul_wrapper`'s route by operand ranks (torch.matmul semantics): "mm" (2-D x 2-D), "bmm"
+    (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV — no autotuned kernel), "batched" (N-D x 2-D:
+    the leading dims folded into bmm's batch), "general" (N-D x N-D: both batches collapsed)."""
+    if a_rank == 2 and b_rank == 2:
+        return "mm"
+    if a_rank == 3 and b_rank == 3:
+        return "bmm"
+    if a_rank == 2 and b_rank == 1:
+        return "mv"
+    if a_rank >= 3 and b_rank == 2:
+        return "batched"
+    if a_rank >= 3 and b_rank >= 3:
+        return "general"
+    raise ValueError(f"matmul: unsupported ranks {a_rank} x {b_rank}")
+
+
+def matmul_launches(a_shape, b_shape, a: NBXDtype, b: NBXDtype, native_bf16: bool,
+                    force_accum: bool = False) -> List[Launch]:
+    """`matmul_wrapper` (and `linear_wrapper`, which calls it with the transposed weight): the
+    launch of the route `matmul_route` names — bmm's key carries no batch."""
+    route = matmul_route(len(a_shape), len(b_shape))
+    if route == "mm":
+        return mm_launches(a_shape[0], a_shape[1], b_shape[1], a, b, native_bf16, force_accum)
+    if route == "mv":
+        return []
+    return bmm_launches(a_shape[-2], a_shape[-1], b_shape[-1], a, b, native_bf16, force_accum)
+
+
 # ---------------------------------------------------------------------------------------------
 # Recurrence and spectra: `lstm_wrapper` and the DFT route of the FFT wrappers, as the matmul
 # launches their generic calls make.
@@ -229,6 +258,15 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
     if not ((k if q_round is not None else q) == k == v):
         return F32, F32, F32, None
     return q, k, v, q_round
+
+
+def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int) -> bool:
+    """Whether a single-query attention on the math route runs the vector decode kernel (no
+    autotuned key) — `_try_decode_vec`'s contract: equal head dims, and a mask that is one bias
+    per key (or none). Outside it, the math route's two bmm launches."""
+    if headdim != headdim_v:
+        return False
+    return mask_numel is None or mask_numel == seqlen_k
 
 
 def _pow2(n: int) -> bool:
@@ -392,6 +430,55 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
     iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, dw)
     return [(CONV2D, (N, in_c, in_h, iw_k, out_c, out_h, ow_k, kh, kw, sh, sw, ph, pw, dh, dw, groups,
                       x == F16, tag(x), tag(w), tag(out)))]
+
+
+def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
+    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo): per band
+    (oh_start, oh_end, in_start, in_end, pad_top, pad_bot, skip) — the output rows, the input
+    rows read (clamped), the image-edge padding added, the band's leading conv rows to skip.
+    The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries -pad_h
+    (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14 — adding pad_h again on the edge bands shifted the
+    first and last bands by pad_h rows, cos near 0 against F.conv2d at kh >= 3, pad_h >= 1)."""
+    tf = max(1, int(tile_factor))
+    band_oh = (out_h + tf - 1) // tf
+    # The halo in input rows, rounded up to a whole number of strides: the band's first conv row
+    # must be an output row, so the rows skipped on the read side are halo // stride. At stride 1
+    # this is the halo it always was; at stride 2 a 1-row halo misaligned every internal band by
+    # half an output row (found by this function's test, 2026-09-29 — Prism tiles strided convs).
+    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
+    bands = []
+    for oh_start in range(0, out_h, band_oh):
+        oh_end = min(oh_start + band_oh, out_h)
+        halo_top = 0 if oh_start == 0 else halo_h
+        halo_bot = 0 if oh_end == out_h else halo_h
+        read_start = oh_start * sh - pad_h - halo_top
+        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
+        start, end = max(0, read_start), min(IH, read_end)
+        if end <= start:
+            continue
+        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
+                      halo_top // sh))
+    return bands
+
+
+def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int,
+                          sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int,
+                          x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int,
+                          tile_factor: int) -> List[Launch]:
+    """The launches of an op-level tiled conv: per band of `tiled_conv2d_bands`, the band's rows
+    (padded by the image-edge rows, and by pad_w on both sides whenever any padding applies) run
+    through `conv2d_wrapper` at padding 0."""
+    out_h = (IH + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    out: List[Launch] = []
+    for _o0, _o1, start, end, pt, pb, _ht in tiled_conv2d_bands(IH, out_h, kh, sh, dh, ph, tile_factor):
+        padded = pt > 0 or pb > 0 or pw > 0
+        bh = end - start + pt + pb
+        bw = IW + 2 * pw if padded else IW
+        for l in conv2d_launches(N, in_c, bh, bw, out_c, kh, kw, sh, sw, 0, 0, dh, dw, groups,
+                                 x, w, compute, band_bytes):
+            if l not in out:
+                out.append(l)
+    return out
 
 
 def conv_launches(x_shape, w_shape, stride, padding, dilation, transposed: bool, groups: int,

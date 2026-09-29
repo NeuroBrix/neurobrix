@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tiled convolutions with a stride of 2 or more produce correct output.** When a large
+  convolution is split into bands to fit the card (or fused with the upsample before it), every band
+  after the first was shifted by half an output row whenever the convolution's stride was above 1.
+  Stride-1 convolutions — the common case — are unchanged, byte for byte.
+
 - **A text-to-speech plan is sized for the text it is given.** A phonemizer model (Kokoro) was
   planned at its trace length (23 phonemes) whatever the prompt; the plan now binds the length the
   run will phonemize, from the same function the run uses. Plans under fp16 also price a layer or

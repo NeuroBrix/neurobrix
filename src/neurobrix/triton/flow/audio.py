@@ -155,8 +155,8 @@ class TritonAudioEngine:
             )
 
         tts_template = self.ctx.pkg.defaults.get("tts_prompt_template")
-        if tts_template and "{text}" in tts_template:
-            prompt = tts_template.format(text=prompt)
+        from neurobrix.core.flow.audio_utils import apply_tts_template
+        prompt = apply_tts_template(prompt, tts_template)
 
         tokenizer = self.ctx.modules.get("tokenizer")
 
@@ -188,13 +188,10 @@ class TritonAudioEngine:
         device = self.ctx.primary_device
 
         if tokenization == "llm":
-            add_special = tts_template is None
-            try:
-                ids = tokenizer.encode(prompt, add_special_tokens=add_special)
-            except TypeError:
-                ids = tokenizer.encode(prompt)
-            if not isinstance(ids, list):
-                ids = list(ids)
+            # `prompt` already carries the template (applied above): a templated text carries
+            # its own special tokens — `tts_llm_token_ids`, the census's function too.
+            from neurobrix.core.flow.audio_utils import tts_llm_token_ids
+            ids = tts_llm_token_ids(tokenizer, prompt, templated=tts_template is not None)
             input_ids_np = np.array([ids], dtype=np.int64)
             input_ids = NBXTensor.from_numpy(input_ids_np)
             attention_mask_np = np.ones_like(input_ids_np)

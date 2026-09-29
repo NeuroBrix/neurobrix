@@ -2412,13 +2412,14 @@ def matmul_wrapper(a, b):
     - 2D × 1D → mv
     - ND × 2D → reshape to batched mm
     """
-    if a.ndim == 2 and b.ndim == 2:
+    route = _lk.matmul_route(a.ndim, b.ndim)      # the route the derived census keys with
+    if route == "mm":
         return mm(a, b)
-    if a.ndim == 3 and b.ndim == 3:
+    if route == "bmm":
         return bmm(a, b)
-    if a.ndim == 2 and b.ndim == 1:
+    if route == "mv":
         return mv_wrapper(a, b)
-    if a.ndim >= 3 and b.ndim == 2:
+    if route == "batched":
         # Batched: reshape a to (batch, M, K), mm each, reshape back
         orig_shape = a.shape
         M, K = orig_shape[-2], orig_shape[-1]
@@ -2426,7 +2427,7 @@ def matmul_wrapper(a, b):
         a_3d = a.contiguous().view(batch, M, K)
         result = bmm(a_3d, b.unsqueeze(0).expand(batch, K, b.shape[1]))
         return result.view(*orig_shape[:-1], b.shape[1])
-    if a.ndim >= 3 and b.ndim >= 3:
+    if route == "general":
         # General batched matmul. bmm is strictly 3D, so collapse the leading
         # batch dims into one, bmm, then restore the batch shape. Passing raw 4-D
         # tensors straight to bmm unpacked a 3-tuple → "too many values".
@@ -7983,14 +7984,10 @@ def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                     batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Route guard for the vector decode kernel: returns the output or
     None when the shape/mask is outside the kernel's contract."""
-    if headdim != v.shape[3]:
+    if not _lk.decode_vec_takes(headdim, v.shape[3],
+                                None if attn_mask is None else attn_mask.numel(), seqlen_k):
         return None
-    bias = None
-    if attn_mask is not None:
-        if attn_mask.numel() == seqlen_k:
-            bias = attn_mask.reshape(seqlen_k)
-        else:
-            return None
+    bias = attn_mask.reshape(seqlen_k) if attn_mask is not None else None
     return _decode_attn_vec(q, k, v, bias, softmax_scale,
                             batch, nheads, nheads_k, seqlen_k, headdim, q_round=q_round)
 

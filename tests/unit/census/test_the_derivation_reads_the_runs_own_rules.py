@@ -61,3 +61,61 @@ def test_a_conv_row_over_the_band_budget_is_refused_not_recursed():
     with pytest.raises(LK.ConvRowOverBand):
         LK.conv2d_launches(1, 256, 1, 1 << 25, 256, 1, 7, 1, 1, 0, 3, 1, 1, 1,
                            F16, F16, F16, 4 * GiB)
+
+
+@pytest.mark.parametrize("IH,kh,sh,dh,ph,tf", [(37, 3, 1, 1, 1, 4), (64, 3, 2, 1, 1, 3), (50, 5, 1, 2, 4, 5),
+                                               (29, 1, 1, 1, 0, 2)])
+def test_the_tiled_conv_band_cut_rebuilds_the_whole_conv(IH, kh, sh, dh, ph, tf):
+    """`launch_keys.tiled_conv2d_bands` is the band cut `_tiled_conv2d_spatial_nbx` iterates (and
+    the derived census keys the tiled conv with): a convolution rebuilt band by band from it —
+    each band read with its halo, padded only at the image edges, run at padding 0, its halo
+    rows skipped — equals the whole convolution exactly. Injection: pad_h added again on the edge
+    bands (the 2026-05-14 defect) -> the rebuilt rows shift, RED; the halo unrounded -> the
+    stride-2 case, RED (the defect this test found)."""
+    torch = pytest.importorskip("torch")
+    F = torch.nn.functional
+    g = torch.Generator().manual_seed(0)
+    x = torch.randn(1, 3, IH, 11, generator=g, dtype=torch.float64)
+    w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)
+    full = F.conv2d(x, w, stride=(sh, 1), padding=(ph, 1), dilation=(dh, 1))
+    out = torch.empty_like(full)
+    for o0, o1, s0, s1, pt, pb, skip in LK.tiled_conv2d_bands(IH, full.shape[2], kh, sh, dh, ph, tf):
+        band = F.pad(x[:, :, s0:s1, :], (1, 1, pt, pb))
+        cb = F.conv2d(band, w, stride=(sh, 1), padding=0, dilation=(dh, 1))
+        n = min(o1 - o0, cb.shape[2] - skip)
+        out[:, :, o0:o0 + n] = cb[:, :, skip:skip + n]
+    assert torch.equal(out, full)
+
+
+@pytest.mark.parametrize("sh,kh", [(1, 3), (2, 3), (2, 5), (3, 3)])
+def test_the_torch_tiled_conv_equals_the_whole_conv_at_any_stride(sh, kh):
+    """The compiled engine's twin (`_tiled_conv2d_spatial_torch`), whose arithmetic mirrors the
+    band cut: equal to F.conv2d at stride 1, 2 and 3. Before 2026-09-29 every stride-2 internal
+    band was shifted by half an output row (the halo skipped as output rows). Injection: the
+    halo left unrounded -> the stride-2 cases differ, RED."""
+    torch = pytest.importorskip("torch")
+    from neurobrix.kernels.ops.fused_upsample_conv import _tiled_conv2d_spatial_torch
+    g = torch.Generator().manual_seed(1)
+    x = torch.randn(1, 3, 41, 9, generator=g, dtype=torch.float64)
+    w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)
+    full = torch.nn.functional.conv2d(x, w, stride=(sh, 1), padding=(kh // 2, 1))
+    got = _tiled_conv2d_spatial_torch(x, w, None, sh, 1, kh // 2, 1, 1, 1, 1, 4)
+    assert torch.equal(got, full)
+
+
+@pytest.mark.parametrize("sh,kh", [(1, 3), (2, 3), (1, 5)])
+def test_the_torch_fused_upsample_conv_equals_upsample_then_conv(sh, kh):
+    """The compiled engine's fused upsample->conv (`_fused_upsample_conv2d_torch`) streams bands of
+    the upsampled extent: equal to upsample-then-conv at stride 1 and 2 (the halo rounded to whole
+    strides, 2026-09-29). Injection: the halo left unrounded -> the stride-2 case, RED."""
+    torch = pytest.importorskip("torch")
+    from neurobrix.kernels.ops.fused_upsample_conv import (FusionUpsampleProxy,
+                                                           _fused_upsample_conv2d_torch)
+    g = torch.Generator().manual_seed(2)
+    x = torch.randn(1, 3, 13, 7, generator=g, dtype=torch.float64)
+    w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)
+    up = torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+    full = torch.nn.functional.conv2d(up, w, stride=(sh, 1), padding=(kh // 2, 1))
+    proxy = FusionUpsampleProxy(x, 2.0, 2.0, list(up.shape))
+    got = _fused_upsample_conv2d_torch(proxy, w, None, (sh, 1), (kh // 2, 1), (1, 1), False, (0, 0), 1, 4)
+    assert torch.equal(got, full)
