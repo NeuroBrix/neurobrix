@@ -1072,13 +1072,25 @@ def table(a) -> int:
     cls = CC.census_memory_class(hw)
     rungs = CC.rungs_for(hw) if a.rungs == "ladder" else [int(x) for x in a.rungs.split(",") if x.strip()]
     modes = [m for m in a.modes.split(",") if m]
+    models = [m.strip() for m in a.models.split(",")]
+    # Every input refused BY NAME before anything is derived (the tools audit, 2026-09-29): an empty
+    # --modes or --rungs derived no row and wrote each named model's rows as none.
+    for what, got in (("--modes", modes), ("--rungs", rungs)):
+        if not got:
+            raise SystemExit(f"{what} {getattr(a, what[2:])!r}: nothing — a derivation over no {what[2:]} "
+                             f"forms no key")
+    if not a.models.strip() or any(not m for m in models):
+        raise SystemExit(f"--models {a.models!r}: an empty name")
+    absent = [m for m in models if not (CACHE / m / "manifest.json").exists()]
+    if absent:
+        raise SystemExit(f"--models: not in the cache {CACHE}: {', '.join(absent)}")
     vendor, profile = a.table.split("/", 1)
     path = T.table_path(vendor, profile, cls)
     rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True,
                          text=True).stdout.strip() or "unknown"
     worst = 0
     Path(a.logs).mkdir(parents=True, exist_ok=True)     # a tiling probe's resized input lands here
-    for model in [m for m in a.models.split(",") if m]:
+    for model in models:
         fam = CC._family(model)
         reqs = CC.census_requests(model, fam, [], None)
         probe = CC._tiling_probe(model, fam, reqs[0], Path(a.logs))
@@ -1111,6 +1123,9 @@ def table(a) -> int:
                         rows.append({"model": model, "container": container, "mode": mode,
                                      "rungs_mb": [int(rung)], "ops": [uid], "kernel": q_, "key": key,
                                      "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
+        if not rows and not refused:
+            refused.append("every request, mode and rung derived no key — not the knowledge that the "
+                           "model forms none")
         if refused:
             worst = 1
             kept = sorted({r.get("tool") for r in T.read(path) if r["model"] == model} - {None})

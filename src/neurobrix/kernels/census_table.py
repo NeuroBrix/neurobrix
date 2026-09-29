@@ -30,6 +30,7 @@ device: a table is data.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -114,12 +115,35 @@ def write(path: Path, rows: Iterable[Dict]) -> int:
     out = sorted(merged.values(), key=_sort_key)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        for row in out:
-            fh.write(json.dumps(row, sort_keys=True) + "\n")
-    os.chmod(tmp, 0o644)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for row in out:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        # the table stays what it was; the half-written temporary never outlives the failure
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
     return len(out)
+
+
+@contextlib.contextmanager
+def locked(path: Path):
+    """The table's exclusive lock (a sidecar `<table>.lock`): every read-modify-write of a table
+    holds it — `replace_model` and every whole-table rewrite (consolidate, migrate). Readers need
+    none: `write` replaces the file atomically."""
+    import fcntl
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(str(path) + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, int]:
@@ -129,20 +153,24 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, in
     Under an exclusive lock beside the table: many census processes (one per model, the supervisor's
     2026-09-28 21:56) write one class table, and an unlocked read-modify-write lets the last writer
     drop the rows the others wrote in between."""
-    import fcntl
     rows = list(rows)
     if any(r.get("model") != model for r in rows):
         raise ValueError(f"replace_model({model!r}) was handed rows of another model")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(path) + ".lock", "a") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
-        try:
-            old = read(path)
-            kept = [r for r in old if r["model"] != model]
-            write(path, kept + rows)
-        finally:
-            fcntl.flock(lk, fcntl.LOCK_UN)
+    if not rows:
+        # A door, not a census: a census that formed no key (no mode asked, an empty key record, a
+        # shadow that ran nothing) is not the knowledge that the model forms none — replacing its
+        # rows by nothing unserved it silently (the tools audit, 2026-09-29).
+        raise EmptyCensus(f"replace_model({model!r}): no rows — a census that formed no key is not the "
+                          f"knowledge that the model forms none; its rows in {path.name} are kept")
+    with locked(path):
+        old = read(path)
+        kept = [r for r in old if r["model"] != model]
+        write(path, kept + rows)
     return len(old) - len(kept), len(rows)
+
+
+class EmptyCensus(ValueError):
+    """A model's rows would be replaced by none."""
 
 
 _INDEX: Dict[Path, Tuple[float, Dict[str, List[Dict]]]] = {}

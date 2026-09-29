@@ -170,6 +170,33 @@ def rungs_for(hardware: str) -> list:
     return [r for r in memory_ladder_mb() if r <= cap]
 
 
+def record_lines(path: Path) -> list:
+    """The WHOLE lines of a shadow's key record (appended and flushed per key): a shadow killed in
+    the middle of a write leaves a last line without its newline, which is a fragment of a key, never
+    a key — dropped, and said on stderr."""
+    if not path.exists():
+        return []
+    text = path.read_text()
+    lines = text.splitlines()
+    if lines and not text.endswith("\n"):
+        print(f"[census] {path.name}: a last line without its newline dropped (a write cut short): "
+              f"{lines[-1][:120]!r}", file=sys.stderr, flush=True)
+        lines = lines[:-1]
+    return lines
+
+
+def write_json_atomic(path: Path, obj) -> None:
+    """A report every reader can open whatever the exit: written beside itself, then replaced."""
+    path = Path(path)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(obj, indent=1))
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, timeout: int, log_dir: Path,
            rung_mb: int = 0, tag: str = "", walk_extents: bool = False) -> dict:
     """One shadow run; returns its keys and its fate. A failure is reported, never folded.
@@ -201,9 +228,9 @@ def shadow(model: str, request: list, mode: str, hardware: str, n_dev: int, time
     t0 = time.time()
     with open(log, "w") as fh:
         rc = _zoo.run_group(cmd, env, fh, timeout, cwd=str(REPO))
-    keys = rec.read_text().splitlines() if rec.exists() else []
+    keys = record_lines(rec)
     # (op uid, key line): the op each key was formed by, from the shadow's own record (census.set_op)
-    op_keys = [tuple(l.split("\t", 1)) for l in ops_rec.read_text().splitlines() if "\t" in l] if ops_rec.exists() else []
+    op_keys = [tuple(l.split("\t", 1)) for l in record_lines(ops_rec) if "\t" in l]
     tail = ""
     if rc != 0:
         lines = [l for l in log.read_text(errors="replace").splitlines() if "Error" in l or "ERROR" in l]
@@ -507,9 +534,28 @@ def main() -> int:
         print(f"--hardware {a.hardware}: its memory class cannot be read, so no table can be named", file=sys.stderr)
         return 2
 
-    models = a.models.split(",") if a.models else sorted(
-        p.name for p in CACHE.iterdir() if (p / "manifest.json").exists())
+    # Every input is refused BY NAME before anything runs (the tools audit, 2026-09-29): an empty
+    # --models censused the whole cache, an empty --modes censused nothing and wrote every named
+    # model's rows as none, a name absent from the cache ended in a traceback.
+    if a.models is not None:
+        models = [m.strip() for m in a.models.split(",")]
+        if not a.models.strip() or any(not m for m in models):
+            print(f"--models {a.models!r}: an empty name — name each model, or leave --models out for "
+                  f"every container in the cache", file=sys.stderr)
+            return 2
+        absent = [m for m in models if not (CACHE / m / "manifest.json").exists()]
+        if absent:
+            print(f"--models: not in the cache {CACHE}: {', '.join(absent)}", file=sys.stderr)
+            return 2
+    else:
+        models = sorted(p.name for p in CACHE.iterdir() if (p / "manifest.json").exists())
+        if not models:
+            print(f"the cache {CACHE} holds no container — a census of nothing is refused", file=sys.stderr)
+            return 2
     modes = [m.strip() for m in a.modes.split(",") if m.strip()]
+    if not modes:
+        print(f"--modes {a.modes!r}: no mode — a census that runs no shadow forms no key", file=sys.stderr)
+        return 2
     for m in modes:
         if m not in MODES:
             print(f"unknown mode {m!r}; served modes are {sorted(MODES)}", file=sys.stderr)
@@ -544,25 +590,41 @@ def main() -> int:
     from concurrent.futures import as_completed
     from neurobrix.kernels import census_table as _T
     table = _T.table_path(vendor, profile, table_cls)
-    with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
-        futs = {pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs): m
-                for m in models}
-        for f in as_completed(futs):
-            m = futs[f]
-            rows[m] = f.result()
-            r = rows[m]
-            trows = r.pop("_table", [])
-            if r["status"] == "refused":
-                continue                                  # said above, before the shadows
-            print(f"[census] {m:44s} {r['family']:10s} {r['status']:8s} {r['keys']:5d} key(s)"
-                  + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
-                  + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
-                     if r.get("derived_breaks") else ""), flush=True)
-            if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
-                removed, written = _T.replace_model(table, m, trows)
-                print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
-            else:
-                print(f"[census] table {table.name}: {m} — census {r['status']}, its previous rows kept", flush=True)
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, a.jobs)) as pool:
+            futs = {pool.submit(census_model, m, a.hardware, modes, a.extra, per_model_requests.get(m), a.timeout, log_dir, rungs): m
+                    for m in models}
+            for f in as_completed(futs):
+                m = futs[f]
+                rows[m] = f.result()
+                r = rows[m]
+                trows = r.pop("_table", [])
+                if r["status"] == "refused":
+                    continue                                  # said above, before the shadows
+                print(f"[census] {m:44s} {r['family']:10s} {r['status']:8s} {r['keys']:5d} key(s)"
+                      + (f"  frozen: {len(r['frozen'])} symbol(s)" if r["frozen"] else "")
+                      + (f"  UNADJUDICATED: {len(r['derived_breaks'])} derived-relation break(s)"
+                         if r.get("derived_breaks") else ""), flush=True)
+                if r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed") and not trows:
+                    # every shadow ran and none formed a key: not the knowledge that the model forms none
+                    r["status"] = "no_keys"
+                    print(f"[census] table {table.name}: {m} — no key formed by any shadow, its previous rows kept",
+                          flush=True)
+                elif r["status"] in ("ok", "retrace", "probe_failed", "retrace+probe_failed"):
+                    removed, written = _T.replace_model(table, m, trows)
+                    print(f"[census] table {table.name}: {m} — {removed} row(s) replaced by {written}", flush=True)
+                else:
+                    print(f"[census] table {table.name}: {m} — census {r['status']}, its previous rows kept", flush=True)
+
+    except BaseException as e:
+        # an exit through an exception still leaves a readable report that SAYS it was cut, so an
+        # earlier run's report is never read as this one's (the tools audit, 2026-09-29)
+        if a.out:
+            write_json_atomic(Path(a.out), {"format": FORMAT, "hardware": a.hardware, "modes": modes,
+                                            "interrupted": f"{type(e).__name__}: {e}",
+                                            "models": {m: {k: v for k, v in r.items() if not k.startswith('_')}
+                                                       for m, r in rows.items()}})
+        raise
 
     entries = {}
     for m, r in rows.items():
@@ -575,7 +637,7 @@ def main() -> int:
               "date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
               "modes": modes, "rungs_mb": rungs, "wall_s": round(time.time() - t0, 1),
               "models": rows, "retrace_queue": sorted(m for m, r in rows.items() if r["status"] == "retrace"),
-              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed", "refused")),
+              "failed": sorted(m for m, r in rows.items() if r["status"] in ("failed", "unreadable", "retrace+failed", "refused", "no_keys")),
               "refused": {m: r["refusal"] for m, r in sorted(rows.items()) if r["status"] == "refused"},
               "probe_failed": sorted(m for m, r in rows.items() if "probe_failed" in r["status"]),
               "entries": entries}
@@ -588,7 +650,7 @@ def main() -> int:
     if a.prove:
         census["proof"] = prove(census, a.prove)
     if a.out:
-        Path(a.out).write_text(json.dumps(census, indent=1))
+        write_json_atomic(Path(a.out), census)
     n_ok = sum(1 for r in rows.values() if r["status"] == "ok")
     print(f"\n[census] {len(entries)} key(s) from {n_ok} model(s); retrace queue {len(census['retrace_queue'])}; "
           f"failed {len(census['failed'])} (refused {len(census['refused'])}); {census['wall_s']} s; table {table}")
