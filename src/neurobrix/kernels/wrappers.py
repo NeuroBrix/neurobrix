@@ -4254,7 +4254,13 @@ def conv2d_wrapper(
 
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
-    fp16 = x.dtype == NBXDtype.float16
+    # The key's `fp16` flag names an fp16 INPUT. It compared `x.dtype` — the Triton element type —
+    # to an NBXDtype member and was False for every launch (5 378 directory entries carried it).
+    # The kernel's only use of the flag casts the loaded blocks to fp16 before tl.dot, a no-op on
+    # an fp16 input: TTIR, TTGIR, LLIR and PTX are identical with the flag right (sm_70, three
+    # shapes, 2026-09-29), so the certified entries were MIGRATED to the right key, not re-proven
+    # (tools/migrate_conv_fp16_key.py).
+    fp16 = (x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype) == NBXDtype.float16
 
     # Phase 1.5 conv2d autotune: BLOCK_SIZE_*/num_warps/num_stages chosen
     # adaptively per shape signature, persisted via cache_results=True.
