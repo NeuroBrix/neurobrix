@@ -175,7 +175,7 @@ class FlowBindings:
         from neurobrix.core.runtime.registry_flags import get_component_flag
         from neurobrix.core.module.vision.image_dsp import VACE_CONTROL_CLIPS
         loop = (self.flow.get("loop") or {}).get("components") or []
-        if not any(get_component_flag(self.model_name, c, "vace_control_conditioning", default=None)
+        if not any(get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)
                    for c in loop):
             return None
         fed = {conn.get("to", "").partition(".")[0] for conn in self.topology.get("connections") or []
