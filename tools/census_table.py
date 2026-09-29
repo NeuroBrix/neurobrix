@@ -131,38 +131,34 @@ def consolidate(a) -> int:
         print(f"[census-table] {model}: LEFT OUT — {why} (from {origin[model]})", flush=True)
         del chosen[model]
     out = T.table_path(a.vendor, a.profile, a.cls, Path(a.root) if a.root else None)
-    n = T.write(out, [r for rows in chosen.values() for r in rows])
+    with T.locked(out):                 # a rewrite of the whole table holds the writers' lock
+        n = T.write(out, [r for rows in chosen.values() for r in rows])
     print(f"[census-table] {out}: {n} rows, {len(chosen)} models; {len(stale)} left out", flush=True)
     return 0
 
 
 def migrate(a) -> int:
     """One row per (op, key) -> one row per key with its ops list; the rungs merged as `write` merges them."""
-    import fcntl
     from neurobrix.kernels import census_table as T
     for p in map(Path, a.table):
         if not p.exists():
             raise SystemExit(f"{p}: no such table")
-        with open(str(p) + ".lock", "a") as lk:
-            fcntl.flock(lk, fcntl.LOCK_EX)
-            try:
-                rows, old = [], 0
-                for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-                    if not line.strip():
-                        continue
-                    row = json.loads(line)
-                    if "op" in row and "ops" not in row:
-                        row["ops"] = [row.pop("op")]
-                        old += 1
-                    elif "ops" not in row:
-                        raise SystemExit(f"{p}:{n}: a row with neither op nor ops")
-                    rows.append(row)
-                if not old:
-                    print(f"[census-table] {p}: already one row per key ({len(rows)} rows)", flush=True)
+        with T.locked(p):
+            rows, old = [], 0
+            for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
                     continue
-                n = T.write(p, rows)
-            finally:
-                fcntl.flock(lk, fcntl.LOCK_UN)
+                row = json.loads(line)
+                if "op" in row and "ops" not in row:
+                    row["ops"] = [row.pop("op")]
+                    old += 1
+                elif "ops" not in row:
+                    raise SystemExit(f"{p}:{n}: a row with neither op nor ops")
+                rows.append(row)
+            if not old:
+                print(f"[census-table] {p}: already one row per key ({len(rows)} rows)", flush=True)
+                continue
+            n = T.write(p, rows)
         print(f"[census-table] {p}: {len(rows)} rows (one per op) -> {n} (one per key)", flush=True)
     return 0
 
