@@ -215,8 +215,31 @@ def runtime_graph(model: str, comp: str) -> dict:
         GraphExecutor._mark_sdpa_k_layout(stub)
         manifest = json.loads((CACHE / model / "manifest.json").read_text())
         g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True)
+        if comp == declared_moe_lm(model):
+            # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): fused, declared
+            g = detect_and_fuse_moe(g, manifest.get("family"), norm_topk_prob=True, declared=True) \
+                if not any(o.get("op_type") == "custom::moe_fused"
+                           for o in (g.get("ops") or {}).values()) else g
         _RUNTIME_GRAPHS[key] = g
     return _RUNTIME_GRAPHS[key]
+
+
+def declared_moe_lm(model: str):
+    """The component a flow declares a MoE LM (`set_moe_config`, when the package's lm_config
+    names num_experts > 1): the vlm flow's `lm_component`, the decode session's LM."""
+    root = CACHE / model
+    dp = root / "runtime" / "defaults.json"
+    lmc = (json.loads(dp.read_text()) if dp.exists() else {}).get("lm_config") or {}
+    if not (lmc.get("num_experts") or 0) > 1:
+        return None
+    topo = json.loads((root / "topology.json").read_text())
+    flow = topo.get("flow") or {}
+    if flow.get("type") == "vlm":
+        return (flow.get("vlm") or {}).get("lm_component")
+    if flow.get("type") == "autoregressive_generation":
+        from neurobrix.triton.flow.autoregressive import session_lm_name
+        return session_lm_name(flow.get("generation") or {}, list(topo.get("components") or {}))
+    return None
 
 
 class AnnotationContradiction(ValueError):
@@ -466,9 +489,16 @@ def plan_tiling(plan: dict, comp: str):
 
 
 class _Shape:
-    """A shape the runtime's binder reads (`SymbolResolver.bind_from_inputs` reads `.shape`)."""
+    """A shape the runtime's binder reads (`SymbolResolver.bind_from_inputs` reads `.shape`);
+    an array feed also answers `.numpy()`, where the binder reads a value-sourced symbol."""
     def __init__(self, shape):
-        self.shape = tuple(int(d) for d in shape)
+        self._value = shape if hasattr(shape, "dtype") else None
+        self.shape = tuple(int(d) for d in (shape.shape if self._value is not None else shape))
+
+    def numpy(self):
+        if self._value is None:
+            raise SystemExit("a value-sourced symbol read from a shape-only feed")
+        return self._value
 
 
 def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, has_native_bf16: bool,
@@ -500,7 +530,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
 
 
 def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str = "",
-                 audio_path=None, max_tokens_req=None):
+                 audio_path=None, max_tokens_req=None, image_path=None):
     """The flows' value-derived extents — each site of `census.walk_extent` in the Triton flows —
     as (name, lo, hi, chain) with chain(n) = [(component, {input: shape} | callable of the
     previous stage's outputs)], built from the flows' own functions and bounds."""
@@ -629,6 +659,12 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             sites.append((f"{lm} negative prefill", 1, 1, prefill))
             lo = 2
         sites.append((f"{lm} decode KV length", lo, P + mt, decode))
+    # vlm (triton/flow/vlm.py, the splice path): the image through the request's own preprocessing,
+    # the vision tower on its patch grid (value-bound symbols from the grid itself), then the LM
+    # over the WHOLE context every step — the chat-templated prompt around the modality span
+    # (`tokenize_around_span`) with the vision tokens spliced in: L0 .. L0 + max_tokens - 1.
+    if flow.get("type") == "vlm" and image_path and prompt:
+        sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -642,6 +678,60 @@ class _Stub:
     """The attributes the frontend helpers read from a flow context — nothing else."""
     def __init__(self, **kw):
         self.__dict__.update(kw)
+
+
+def vlm_splice_path(model: str, topo: dict) -> bool:
+    """Whether the vlm flow takes its splice path (the flow's own contract detection: neither a
+    staged vision graph nor a masked-splice LM graph)."""
+    v = (topo.get("flow") or {}).get("vlm") or {}
+    g = lambda c: json.loads((CACHE / model / "components" / c / "graph.json").read_text())
+    return (bool(v.get("vision_component")) and bool(v.get("lm_component"))
+            and "input::all_pixel_values" not in g(v["vision_component"])["tensors"]
+            and "input::image_pos_masks" not in g(v["lm_component"])["tensors"])
+
+
+def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+    import numpy as np
+    from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.triton.flow.vlm import tokenize_around_span
+    if not vlm_splice_path(model, topo):
+        return []
+    v = topo["flow"]["vlm"]
+    vis, lm = v["vision_component"], v["lm_component"]
+    in_cfg = v.get("input") or {}
+    ins = prepare_image_inputs(topo, model, str(image_path), CACHE / model)
+    pix = ins[in_cfg.get("image_variable", "global.pixel_values")]
+    grid = np.asarray(ins[in_cfg.get("grid_variable", "global.image_grid_thw")])
+    dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
+    step = (vis, {"hidden_states": list(pix.shape), "grid_thw": grid})
+    _l, outs = run_at_inputs(model, vis, dtypes[vis], "triton", step[1], False, (0, 1, 1),
+                             collections.Counter())
+    emb = outs["output_0"]
+    n_modal = int(emb[-2]) if len(emb) >= 2 else int(emb[0])
+    t, h, w_ = (int(x) for x in grid.reshape(-1)[:3])
+    merge = int(v["spatial_merge_size"])
+    if n_modal != t * (h // merge) * (w_ // merge):
+        raise SystemExit(f"{model}: the vision tower gives {n_modal} tokens, the grid "
+                         f"{t}x{h}x{w_} / {merge} names {t * (h // merge) * (w_ // merge)}")
+    pre, suf = tokenize_around_span(container_tokenizer(model), prompt, v["image_token_id"], "image")
+    L0 = len(pre) + n_modal + len(suf)
+    gl = json.loads((CACHE / model / "components" / lm / "graph.json").read_text())["tensors"]
+    H = gl["input::inputs_embeds"]["shape"][-1]
+    ds = sorted((k[len("input::"):] for k in gl if k.startswith("input::deepstack_visual_embeds.")),
+                key=lambda n: int(n.rsplit(".", 1)[1]))
+    mask_rank = len((gl.get("input::visual_pos_masks") or {}).get("shape") or [])
+    mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
+
+    def context(n):
+        feed = {"inputs_embeds": [1, n, H], "position_ids": [3, 1, n]}
+        if mask_rank:
+            feed["visual_pos_masks"] = [1, n] if mask_rank == 2 else [1, n, H]
+        for i, name in enumerate(ds):
+            feed[name] = outs[f"output_{i + 1}"]
+        return [(lm, feed)]
+    return [("vision tower", 1, 1, lambda _n, st=[step]: st),
+            (f"{lm} context", L0, L0 + int(mt) - 1, context)]
 
 
 def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
@@ -714,7 +804,7 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
 
 
 def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt="",
-                   audio_path=None, max_tokens_req=None):
+                   audio_path=None, max_tokens_req=None, image_path=None):
     """Every key class of every value-derived extent, by the census's own bisection
     (`census.bisect_extent`) over the derived keys — nothing runs."""
     from neurobrix.kernels import census as _census
@@ -722,7 +812,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     found = set()
     for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt, audio_path,
-                                            max_tokens_req):
+                                            max_tokens_req, image_path):
         seen = {}
 
         def at(n):
@@ -813,16 +903,20 @@ def compare(a) -> int:
                                        "--hardware", a.hardware])
     ic = request_input_config(args, manifest, manifest.get("family"), CACHE / a.model)
     loop_comps = set((flow.get("loop") or {}).get("components") or [])
+    if flow.get("type") == "vlm" and vlm_splice_path(a.model, topo):
+        _v = flow["vlm"]
+        runs = {_v["vision_component"], _v["lm_component"]}
     tilings = plan.get("component_tiling") or {}
-    _prompt = request[request.index("--prompt") + 1] if "--prompt" in request else ""
+    _prompt = args.prompt or ""                              # the parser's answer: the LAST --prompt
     _defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     # A component an extent site drives is derived at every class of that extent, not at the
     # plan's one binding (which binds a value-derived axis to its trace).
     _audio = (REPO / request[request.index("--audio") + 1]) if "--audio" in request else None
     _mt_req = args.max_tokens if getattr(args, "max_tokens", None) is not None else None
+    _image = getattr(args, "input_image", None)
     covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt,
-                                                           _audio, _mt_req)
+                                                           _audio, _mt_req, _image)
                for comp, _f in chain(lo)
                if not (isinstance(_f, dict) and "__decode__" in _f)}   # decode ADDS to the prefill
     for c in plan["components"]:
@@ -863,7 +957,8 @@ def compare(a) -> int:
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     for uid, q_, key in derive_extents(a.model, a.mode, topo, defaults, plan, prof.has_native_bf16,
                                        (budget, min_rows, max_chunks), unhandled, prompt=_prompt,
-                                       audio_path=_audio, max_tokens_req=_mt_req):
+                                       audio_path=_audio, max_tokens_req=_mt_req,
+                                       image_path=_image):
         derived.add((uid, q_, C.key_repr(key)))
     walked = walked_pairs(Path(a.walked), a.model, a.mode, rung)
     w_keys = {(q_, k) for _, q_, k in walked}
