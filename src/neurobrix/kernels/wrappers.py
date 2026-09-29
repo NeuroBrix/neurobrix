@@ -8440,74 +8440,17 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # path regardless of hardware/headdim.
     import os as _os_fma
     _use_math_forced = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
-    _use_math = _use_math_forced
-    # Asymmetric head_dim (MLA class — e.g. DeepSeek-V2 qk 192 / v 128):
-    # the flash kernel is structurally single-headdim — one BLOCK_HEADDIM
-    # constexpr shared by both tl.dot operands, V strides read with the K
-    # tile geometry, output allocated q-shaped (empty_like(q)) — so it
-    # CANNOT compute p @ V when v head_dim != qk head_dim. Route to the
-    # math composition unconditionally: it carries D_v independently
-    # end-to-end. Pure shape signal, no model/family knowledge (R34).
-    # A Dv-aware flash tile is the named perf follow-up if MLA
-    # long-context prefill ever needs it (P-TRITON-MLA).
     headdim_v = v.shape[3]
-    if not _use_math and headdim_v != headdim:
-        _use_math = True
-    if not _use_math:
-        _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
-        # NBXTensor._device is the bare device TYPE ("cuda"); the index
-        # lives in _device_idx (engraved trap: .device returns SELF).
-        _q_dev_idx = getattr(q, "_device_idx", None)
-        if not _is_power_of_2(headdim):
-            # Non-pow2 head_dim: math WHILE the fp32 scores tensor fits a
-            # sane memory bound; FLASH beyond it. The flash kernel fully
-            # supports non-pow2 head dims (BLOCK_HEADDIM = next_power_of_2 +
-            # masked d-axis loads `offs_d < headdim, other=0.0` — the Dao
-            # EVEN_HEADDIM pattern), so the old UNCONDITIONAL math guard was
-            # conservatism, and at video-native scale it is fatal: Allegro
-            # 720p×88f = 79200 tokens, hd=96 → math scores [2,24,79200²]
-            # fp32 = 1.204 TB (guaranteed OOM — no behavior existed to
-            # regress on that branch). Bound = the per-arch vendor-yml
-            # budget where defined (Volta 128 MB), else a universal 2 GiB
-            # sanity floor — PixArt hd=72 / Sana hd=112 image-scale scores
-            # stay ≤ the floor on every arch → their math path is
-            # byte-unchanged (R23).
-            _bound = _sdpa_math_scores_budget_bytes_for(_q_dev_idx) or (2 << 30)
-            _use_math = _scores_bytes <= _bound
-            if not _use_math and _bound:
-                # Same chunked ladder as the pow2 branch: an over-cap
-                # image-scale shape (PixArt hd=72 / Sana hd=112 on a
-                # 16G card) chunks deterministically instead of
-                # silently landing on the Volta flash band-risk path;
-                # video-scale shapes exceed the chunk ceiling and keep
-                # their existing flash path unchanged.
-                _chunk_rows = _sdpa_chunked_rows_within(
-                    _bound, batch, nheads, seqlen_q, seqlen_k)
-                if _chunk_rows:
-                    _use_math = "chunked"
-        else:
-            # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
-            # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
-            # true memory cost, independent of q's dtype. Budget is 0
-            # on non-Volta (no yml key) → this never fires there.
-            _budget = _sdpa_math_scores_budget_bytes_for(_q_dev_idx)
-            _use_math = _scores_bytes <= _budget
-            if not _use_math and _budget:
-                # P-NONDET-LONG-ROW (2026-08-23): over-budget pow2
-                # shapes routed to flash, whose Volta masked-load
-                # specialisation (the D>=128 detour's landing path) is
-                # NON-DETERMINISTIC — the canonical long row's prefill
-                # was fp-different on every run. CHUNKED math keeps
-                # every chunk's scores inside the budget and is
-                # deterministic by construction. Bounded by the
-                # per-arch chunk ceiling: LLM-class prefills chunk 2-16
-                # times; video-scale shapes (30-500+ chunks) keep their
-                # existing path and are REGISTERED as the residual
-                # non-deterministic class on this hardware.
-                _chunk_rows = _sdpa_chunked_rows_within(
-                    _budget, batch, nheads, seqlen_q, seqlen_k)
-                if _chunk_rows:
-                    _use_math = "chunked"
+    # The route is `launch_keys.sdpa_route` — the function the derived census keys with: math
+    # when forced or when the value head dim differs; else by the fp32 scores' size against this
+    # device's budget (a non-power-of-two head dim falls back to 2 GiB when the arch declares no
+    # budget); over it, chunked when the rows fit the arch's ceiling; otherwise flash.
+    _q_dev_idx = getattr(q, "_device_idx", None)
+    _route, _chunk_rows = _lk.sdpa_route(
+        batch, nheads, seqlen_q, seqlen_k, headdim, headdim_v,
+        _sdpa_math_scores_budget_bytes_for(_q_dev_idx), _sdpa_math_min_chunk_rows(),
+        _sdpa_math_max_chunks(), force_math=_use_math_forced)
+    _use_math = {"math": True, "chunked": "chunked", "flash": False}[_route]
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1":
         # Print once PER DISTINCT EXECUTING DEVICE, not once per process:
         # on heterogeneous rigs the budget is per-device, so a single line
