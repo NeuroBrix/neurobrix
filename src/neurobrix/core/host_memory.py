@@ -97,17 +97,8 @@ def _largest_residents(count: int = 3) -> Tuple[Tuple[str, int], ...]:
     return tuple(found)
 
 
-def _macos_state() -> MemoryState:
-    """`vm_stat` for pages, `sysctl` for the totals and for swap.
-
-    Available is free + inactive + purgeable + speculative pages. Inactive
-    and purgeable pages are reclaimable on demand, which is why macOS itself
-    counts them as available; wired and compressed pages are not, and are
-    deliberately excluded.
-    """
-    vm = _run(["vm_stat"])
-    if not vm:
-        return MemoryState(source="vm_stat unavailable")
+def _available_mb_from_vm_stat(vm: str) -> int:
+    """The available figure from a `vm_stat` text (the reader's one parsing, testable on a captured text)."""
     page = re.search(r"page size of (\d+) bytes", vm)
     page_size = int(page.group(1)) if page else 4096
 
@@ -115,9 +106,29 @@ def _macos_state() -> MemoryState:
         m = re.search(rf"{label}:\s+(\d+)", vm)
         return int(m.group(1)) if m else 0
 
-    available_pages = (pages("Pages free") + pages("Pages inactive")
-                       + pages("Pages purgeable") + pages("Pages speculative"))
-    available_mb = available_pages * page_size // _MB
+    # The reclaimable set, what a new allocation gets back WITHOUT the compressor: free pages, purgeable
+    # pages, and the whole file cache — `File-backed pages`, active or inactive (Activity Monitor's
+    # "Cached Files"); the speculative queue is already inside it (measured on this M4 Pro:
+    # active + inactive + speculative == file-backed + anonymous). Anonymous pages are NOT counted,
+    # active or inactive: they come back only through the compressor and swap. The previous formula
+    # (free + inactive + purgeable + speculative) subtracted every ACTIVE file page — 4.4 GB of the
+    # container just copied when orpheus-3b was refused at placement (2026-09-29, inbox 68).
+    available_pages = (pages("Pages free") + pages("Pages purgeable") + pages("File-backed pages"))
+    return available_pages * page_size // _MB
+
+
+def _macos_state() -> MemoryState:
+    """`vm_stat` for pages, `sysctl` for the totals and for swap.
+
+    Available is free + purgeable + file-backed pages: the file cache is
+    reclaimable on demand whichever queue holds it, and is never subtracted;
+    anonymous, wired and compressed pages are not reclaimable without the
+    compressor and are deliberately excluded (`_available_mb_from_vm_stat`).
+    """
+    vm = _run(["vm_stat"])
+    if not vm:
+        return MemoryState(source="vm_stat unavailable")
+    available_mb = _available_mb_from_vm_stat(vm)
 
     total_mb = None
     memsize = _run(["sysctl", "-n", "hw.memsize"])
