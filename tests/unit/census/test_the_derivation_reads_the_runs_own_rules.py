@@ -45,3 +45,19 @@ def test_disagreeing_attention_operands_are_aligned_to_fp32():
     assert LK.sdpa_operand_dtypes(F16, F16, F16) == (F16, F16, F16, None)
     # a KV-cache rounding judges Q at the cache's dtype, and survives agreement
     assert LK.sdpa_operand_dtypes(F32, F16, F16, F16) == (F32, F16, F16, F16)
+
+
+def test_a_conv_row_over_the_band_budget_is_refused_not_recursed():
+    """`conv2d_band_rows` is the one band cut of `_conv2d_band_streamed` and of the derived
+    census: a single output row over the budget cannot be banded, and the per-band recursion
+    called itself on the same row until Python's stack ran out (the derivation on orpheus's codec
+    and on Sana-4K's contradicting annotation, the Mac and this rack, 2026-09-29). Now a named
+    refusal. Injection: the refusal removed -> the 1-row case returns 1 and the launch
+    recursion ends in RecursionError, RED."""
+    GiB = 1 << 30
+    assert LK.conv2d_band_rows(1, 256, 64, 1 << 16, 4, 4 * GiB) < 64      # rows split
+    with pytest.raises(LK.ConvRowOverBand, match="one row is"):
+        LK.conv2d_band_rows(1, 256, 1, 1 << 25, 2, 4 * GiB)
+    with pytest.raises(LK.ConvRowOverBand):
+        LK.conv2d_launches(1, 256, 1, 1 << 25, 256, 1, 7, 1, 1, 0, 3, 1, 1, 1,
+                           F16, F16, F16, 4 * GiB)

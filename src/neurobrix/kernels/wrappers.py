@@ -4255,11 +4255,7 @@ def _conv2d_band_streamed(
     """
     # Choose tile_factor so each band's output bytes <= half the threshold;
     # the headroom covers transient input slice + kernel intermediate.
-    band_target_bytes = max(1, _NBX_CONV2D_BAND_BYTES // 2)
-    row_bytes = N * out_c * out_w * out_dtype_bytes
-    rows_per_band = max(1, band_target_bytes // max(1, row_bytes))
-    tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
-    band_oh = (out_h + tile_factor - 1) // tile_factor
+    band_oh = _lk.conv2d_band_rows(N, out_c, out_h, out_w, out_dtype_bytes, _NBX_CONV2D_BAND_BYTES)
 
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x_c.device, dtype=out_dtype)
 

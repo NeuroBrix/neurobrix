@@ -331,6 +331,28 @@ def conv2d_route(N: int, in_c: int, out_c: int, out_h: int, out_w: int, dh: int,
     return "plain"
 
 
+class ConvRowOverBand(ValueError):
+    """A convolution whose single output row is over the band budget: band streaming cannot split
+    it, and the per-band recursion would call itself on the same row without end."""
+
+
+def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int, band_bytes: int) -> int:
+    """The output rows of one band of `conv2d_wrapper`'s band streaming (`_conv2d_band_streamed`):
+    bands of about half the budget, evenly cut. A band that cannot be smaller than the output —
+    one row already over the budget — is refused by name: the recursion it would start calls the
+    same row forever (a 1-row codec conv, found by the derived census 2026-09-29)."""
+    band_target = max(1, band_bytes // 2)
+    row_bytes = N * out_c * out_w * out_bytes
+    rows_per_band = max(1, band_target // max(1, row_bytes))
+    tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
+    band_oh = (out_h + tile_factor - 1) // tile_factor
+    if band_oh >= out_h:
+        raise ConvRowOverBand(
+            f"conv2d output [{N}, {out_c}, {out_h}, {out_w}]: one row is {row_bytes} bytes, over "
+            f"the band budget {band_bytes}; band streaming cannot split it")
+    return band_oh
+
+
 def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int, kw: int,
                     sh: int, sw: int, ph: int, pw: int, dh: int, dw: int, groups: int,
                     x: NBXDtype, w: NBXDtype, compute: Optional[NBXDtype], band_bytes: int,
@@ -354,10 +376,7 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
                              tag(x), tag(w), tag(out)))]
     xb = dtype_size(x)
     if route == "band":
-        band_target = max(1, band_bytes // 2)
-        rows_per_band = max(1, band_target // max(1, N * out_c * out_w * xb))
-        tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
-        band_oh = (out_h + tile_factor - 1) // tile_factor
+        band_oh = conv2d_band_rows(N, out_c, out_h, out_w, xb, band_bytes)
         out_launches: List[Launch] = []
         for oh0 in range(0, out_h, band_oh):
             oh1 = min(oh0 + band_oh, out_h)

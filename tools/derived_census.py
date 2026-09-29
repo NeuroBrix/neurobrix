@@ -33,7 +33,11 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tools"))
 
-CACHE = Path.home() / ".neurobrix" / ("ca" "che")
+# The engine's own answer (NEUROBRIX_CACHE, then the configured home, then the default) — the
+# catalogue the run reads is the catalogue the derivation reads (the Mac's NAS catalogue, 03:52).
+from neurobrix.core.paths import cache_dir as _cache_dir  # noqa: E402
+
+CACHE = _cache_dir()
 MODE_FLAGS = {"triton": "--triton", "triton-sequential": "--triton-sequential"}
 
 
@@ -95,13 +99,27 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     def shape(tid):
         ss = T[tid].get("symbolic_shape")
         if isinstance(ss, dict) and ss.get("dims"):
+            conc = ss.get("concrete") or T[tid].get("shape") or []
+            for i, d in enumerate(ss["dims"]):
+                # An expression whose own recorded trace value is not the tensor's extent at the
+                # trace contradicts itself (a symbol on a broadcast dim, a product chain that
+                # multiplied a dim into itself): nothing correct can be derived from it.
+                if isinstance(d, dict) and "trace" in d and i < len(conc) and d["trace"] != conc[i]:
+                    raise AnnotationContradiction(f"{comp}: {tid} dim {i} ({d.get('type')}) records "
+                                                  f"trace {d['trace']} for an extent of {conc[i]}")
             return [res.resolve(d) for d in ss["dims"]]
         return list(T[tid]["shape"])
 
     contract = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
-    rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-                           tiling=tiling, shape_of=shape)
+    try:
+        rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
+                               tiling=tiling, shape_of=shape)
+    except AnnotationContradiction as e:
+        # The width pass reads the shapes too (the matmul store rule reads M): a component whose
+        # annotation contradicts itself is not derivable as a whole — named, never guessed.
+        unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
+        return []
     dt0 = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
     from neurobrix.kernels import wrappers as _W
     conv_band_bytes = _W._NBX_CONV2D_BAND_BYTES
@@ -115,6 +133,32 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         # operand to fp32 before the wrapper — weights included — whatever the op's class.
         dt = (lambda tid: NBXDtype.float32 if dt0(tid).name in ("float16", "bfloat16") else dt0(tid)) \
             if (half and uid in contract.fp32_op_uids) else dt0
+        try:
+            launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
+                                    sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
+                                    unhandled)
+        except AnnotationContradiction as e:
+            unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
+            continue
+        except LK.ConvRowOverBand as e:
+            unhandled[f"conv row over the band budget — {e}"] += 1
+            continue
+        if launches is None:
+            continue
+        for q_, key in launches:
+            out.append((uid, q_, key))
+    return out
+
+
+class AnnotationContradiction(ValueError):
+    """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
+
+
+def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
+                 sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled):
+    """The launches of one op; None when the op launches no autotuned kernel."""
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
         if kind in ("aten::mm",):
             (M, K), (_, N) = shape(ins[0]), shape(ins[1])
             launches = LK.mm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
@@ -209,10 +253,8 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             unhandled[f"{kind} (not yet derived)"] += 1
             launches = []
         else:
-            continue
-        for q_, key in launches:
-            out.append((uid, q_, key))
-    return out
+            return None
+        return launches
 
 
 def walked_pairs(walked: Path, model: str, mode: str, rung):
