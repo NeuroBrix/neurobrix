@@ -1642,6 +1642,14 @@ class PrismSolver:
             # estimator's zero_uids relies on). When chains are detected
             # we keep going to build the plan; otherwise the legacy
             # short-circuit applies.
+            # conv3d chunking is a PLAN decision (decision 2, 2026-09-29): a rank-5 convolution whose
+            # one-shot peak (`conv3d_chunk.conv3d_need`) exceeds the op budget — 0.85 of the card
+            # minus the component's resident weights, the budget above — streams its temporal
+            # output in chunks, registered as its op interceptor.
+            _c3_resident = (int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
+                            if not isinstance(alloc, tuple) else 0)
+            _c3_uids = self._conv3d_chunk_uids(comp, profiler, input_config, dtype_bytes,
+                                               int(0.85 * comp_vram) - _c3_resident)
             has_chains = bool(
                 self._identify_residual_chain_specs(comp.graph)
             )
@@ -1659,10 +1667,12 @@ class PrismSolver:
                 # assumed are installed with the plan: no band streaming, no fusion, only
                 # the add written into the buffer of its dead input (numerically the add).
                 _priced_in_place = self._identify_inplace_add_candidates_static(comp.graph)
-                if _priced_in_place:
+                if _priced_in_place or _c3_uids:
                     _iplan = OpLevelTilingPlan(comp.name)
                     for _uid, _reuse in _priced_in_place:
                         _iplan.add_inplace_add(_uid, _reuse)
+                    for _uid in _c3_uids:
+                        _iplan.add_conv3d_chunk(_uid)
                     result[comp.name] = _iplan
                 continue
 
@@ -1898,10 +1908,41 @@ class PrismSolver:
                 spec_with_tf["tile_factor"] = pow2
                 plan.add_residual_chain(spec_with_tf)
 
+            for _uid in _c3_uids:
+                plan.add_conv3d_chunk(_uid)
             if not plan.is_empty():
                 result[comp.name] = plan
 
         return result
+
+    def _conv3d_chunk_uids(self, comp, profiler, input_config, dtype_bytes: int,
+                           budget_bytes: int) -> List[str]:
+        """The component's rank-5 convolutions whose ONE-SHOT peak at this request exceeds the op
+        budget — the ones that stream their temporal output in chunks (`conv3d_chunk`)."""
+        from neurobrix.core.prism import conv3d_chunk as _c3
+        g = comp.graph or {}
+        ops, tensors = g.get("ops", {}), g.get("tensors", {})
+        symbols = profiler.build_symbol_map(input_config)
+        out: List[str] = []
+        for uid in g.get("execution_order", []):
+            op = ops.get(uid, {})
+            if "convolution" not in op.get("op_type", ""):
+                continue
+            ins = op.get("input_tensor_ids") or []
+            if len(ins) < 2 or ins[0] not in tensors or ins[1] not in tensors:
+                continue
+            x = profiler._resolve_shape(tensors[ins[0]], symbols)
+            w = profiler._resolve_shape(tensors[ins[1]], symbols)
+            if len(w) != 5 or len(x) != 5:
+                continue
+            at = op.get("attributes") or {}
+            if at.get("transposed"):
+                continue
+            need, _frame = _c3.conv3d_need(x, w, at.get("stride", 1), at.get("padding", 0),
+                                           at.get("dilation", 1), dtype_bytes, dtype_bytes)
+            if need and need > budget_bytes:
+                out.append(uid)
+        return out
 
     def _identify_residual_chain_specs(self, graph: Dict):
         """Return raw residual-chain specs from a DAG dict. Wrapper around
@@ -6271,6 +6312,9 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
+           "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
+                             for c, p in (plan.runtime_op_tiling or {}).items()
+                             if getattr(p, "conv3d_chunks", None)},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
                                 for k, v in (plan.component_tiling or {}).items()}}
     if plan.kv_cache_plan is not None:
