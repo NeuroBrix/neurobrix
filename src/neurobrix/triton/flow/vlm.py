@@ -93,6 +93,44 @@ def _read_small_float(t: Any) -> float:
     return float(np.asarray(t).reshape(-1)[0])
 
 
+def tokenize_around_span(tokenizer, prompt: str, span_token_id: int,
+                         content_type: str) -> Tuple[List[int], List[int]]:
+    """The chat-templated prompt around ONE contiguous modality placeholder span: (the ids
+    before it, the ids after it). The flow splices the modality embeddings between them; the
+    derived census keys the LM context from the same lengths."""
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": content_type},
+            {"type": "text", "text": prompt},
+        ],
+    }]
+    try:
+        ids = tokenizer.apply_chat_template(
+            messages, tokenize=True, add_generation_prompt=True)
+    except Exception as e:
+        raise RuntimeError(
+            "ZERO FALLBACK: the embedded tokenizer could not apply its "
+            f"chat template to a {content_type}+text message; the vlm "
+            "flow requires a multimodal chat template.") from e
+    if hasattr(ids, "input_ids"):
+        ids = ids.input_ids
+    ids = list(ids[0] if ids and isinstance(ids[0], (list, tuple))
+               else ids)
+    positions = [i for i, tid in enumerate(ids) if tid == span_token_id]
+    if not positions:
+        raise RuntimeError(
+            f"ZERO FALLBACK: chat template produced no {content_type} "
+            f"placeholder (token id {span_token_id}) — cannot merge "
+            f"modality embeddings.")
+    first, last = positions[0], positions[-1]
+    if positions != list(range(first, last + 1)):
+        raise RuntimeError(
+            f"ZERO FALLBACK: {content_type} placeholder span is not "
+            "contiguous — concat-merge equivalence does not hold.")
+    return ids[:first], ids[last + 1:]
+
+
 class TritonVLMEngine:
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
@@ -1686,37 +1724,7 @@ class TritonVLMEngine:
         if tokenizer is None:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires the embedded tokenizer.")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": content_type},
-                {"type": "text", "text": prompt},
-            ],
-        }]
-        try:
-            ids = tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True)
-        except Exception as e:
-            raise RuntimeError(
-                "ZERO FALLBACK: the embedded tokenizer could not apply its "
-                f"chat template to a {content_type}+text message; the vlm "
-                "flow requires a multimodal chat template.") from e
-        if hasattr(ids, "input_ids"):
-            ids = ids.input_ids
-        ids = list(ids[0] if ids and isinstance(ids[0], (list, tuple))
-                   else ids)
-        positions = [i for i, tid in enumerate(ids) if tid == span_token_id]
-        if not positions:
-            raise RuntimeError(
-                f"ZERO FALLBACK: chat template produced no {content_type} "
-                f"placeholder (token id {span_token_id}) — cannot merge "
-                f"modality embeddings.")
-        first, last = positions[0], positions[-1]
-        if positions != list(range(first, last + 1)):
-            raise RuntimeError(
-                f"ZERO FALLBACK: {content_type} placeholder span is not "
-                "contiguous — concat-merge equivalence does not hold.")
-        return ids[:first], ids[last + 1:]
+        return tokenize_around_span(tokenizer, prompt, span_token_id, content_type)
 
     def _tokenize_text_only(self, prompt: str) -> List[int]:
         """Chat-template a PLAIN-TEXT prompt (no modality span) — the

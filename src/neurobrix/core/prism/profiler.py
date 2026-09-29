@@ -48,6 +48,11 @@ class InputConfig:
     # defaults.json (`temporal_compression_ratio`), data-driven.
     num_frames: Optional[int] = None
     temporal_compression: Optional[int] = None
+    # The request's flow (`core.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
+    # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
+    # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
+    # packed inputs. None: the name-driven map alone.
+    flow: Optional[Any] = None
 
     def positional_symbol_map(self) -> Dict[str, int]:
         """The POSITIONAL base, which GUESSES what each symbol id means.
@@ -319,9 +324,13 @@ def is_downscale_graph(dag: Dict) -> bool:
     shapes_out = [tensors.get(str(o), {}).get("shape", []) for o in dag.get("output_tensor_ids", [])]
     s_in = next((s for s in shapes_in if isinstance(s, list) and len(s) == 5), None)
     s_out = next((s for s in shapes_out if isinstance(s, list) and len(s) == 5), None)
-    if not s_in or not s_out or s_out[-2] >= s_in[-2]:
-        return False
-    return temporal_causal_downscale_ratio(dag) is not None
+    # A rank-5 graph whose output is spatially smaller than its input reads PIXELS, whatever its
+    # temporal map — this docstring's own rule. Requiring a temporal class here left an encoder
+    # whose time axis is a concrete 1 (CogVideoX-5b-I2V's image encoder: [1, 3, 1, 112, 176]) and
+    # encoders whose time map neither class recognises (Allegro-TI2V, Wan2.1-I2V) bound
+    # latent-side: priced 8 x 8 too small per frame, and derived at the latent grid (the census
+    # walk encoded 160 x 352 pixels, 2026-09-29).
+    return bool(s_in and s_out and s_out[-2] < s_in[-2] and s_out[-1] < s_in[-1])
 
 
 @dataclass
@@ -468,7 +477,7 @@ class ActivationProfiler:
         return last_use
 
     def build_symbol_map(self, input_config: InputConfig,
-                         placement_floor: bool = False) -> Dict[str, int]:
+                         placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
         """Symbol map for THIS graph: positional base + name-driven overrides.
 
         `placement_floor=True` (PLACEMENT estimates only — never the
@@ -604,6 +613,14 @@ class ActivationProfiler:
                     and isinstance(symbol_map[sid], int)
                     and symbol_map[sid] < trace):
                 symbol_map[sid] = trace
+        # The request's FLOW binds what no name says (`flow_bindings.FlowBindings.overrides`) — then
+        # the placement floor, as for every named symbol. `flow=False` is the rules' own recursion
+        # (a rule binding another component by name alone).
+        if flow and getattr(input_config, "flow", None) is not None:
+            for sid, v in input_config.flow.overrides(self.dag, input_config).items():
+                trace = (syms.get(sid) or {}).get("trace_value") if isinstance(syms.get(sid), dict) else None
+                symbol_map[sid] = (max(int(v), trace) if (placement_floor and isinstance(trace, int))
+                                   else int(v))
         return symbol_map
 
     def trace_symbol_map(self) -> Dict[str, int]:

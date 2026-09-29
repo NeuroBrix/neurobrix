@@ -43,16 +43,52 @@ def test_an_absent_voice_gates_nothing_and_an_unknown_letter_still_refuses():
     assert language_of("f") == "French" and language_of("") is None
 
 
-def test_both_engines_ask_the_gate_before_phonemising():
+def test_both_engines_ask_the_gate_before_phonemising(monkeypatch):
     """R30: the gate exists on the compiled path AND on the Triton mirror. It
     was written on the compiled path alone, and the vitrine's Triton run walked
     past it (2026-09-16 17:47, `[Phonemizer·np]`) — a gate in one mode is no
-    gate. Read from the sources, which is what a mode asymmetry hides in."""
+    gate. Both engines now phonemise through ONE function, `phoneme_ids`, and
+    that function refuses before it phonemises: the sources are read for the
+    one call, the function is run with a g2p that fails if reached."""
     from pathlib import Path
+    from neurobrix.core.module.audio import g2p as G
     root = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
     for rel in ("core/flow/stages/kokoro.py", "triton/audio_frontend.py"):
         src = (root / rel).read_text()
-        i_gate = src.find("refusal_for_language(")
-        i_g2p = src.find("g2p_phonemes(prompt")
-        assert i_gate > 0, f"{rel} does not ask the language gate"
-        assert i_gate < i_g2p, f"{rel} phonemises before asking the gate"
+        assert "phoneme_ids(" in src, f"{rel} does not phonemise through phoneme_ids"
+        assert "g2p_phonemes(" not in src, f"{rel} phonemises around the gate"
+
+    def reached(*_a, **_k):
+        raise AssertionError("phonemised before the language gate")
+    monkeypatch.setattr(G, "g2p_phonemes", reached)
+    with pytest.raises(RuntimeError, match="ff_siwis"):
+        G.phoneme_ids("Bonjour", "/nowhere", {"b": 1}, "a", "ff_siwis")
+
+
+def test_the_ids_are_framed_and_keep_only_known_phonemes(monkeypatch):
+    from neurobrix.core.module.audio import g2p as G
+    monkeypatch.setattr(G, "g2p_phonemes", lambda *a, **k: "h?ə")
+    phonemes, ids = G.phoneme_ids("x", "/nowhere", {"h": 5, "ə": 7}, "a", "af_heart")
+    assert phonemes == "h?ə" and ids == [0, 5, 7, 0]
+
+
+def test_the_plan_binds_a_phonemizer_request_at_its_phoneme_count(monkeypatch, tmp_path):
+    """The one InputConfig a run plans with (`run.request_input_config`) carries the
+    phonemizer request's length — len(phoneme_ids) — so every `seq_len` symbol of the text
+    components binds to the length the flow will run, not the trace's. Measured 2026-09-28:
+    Kokoro planned 23 phonemes and ran 94, and the derived census, binding from this same
+    config, derived the trace's keys. Injection: the seq_len line removed -> None, RED."""
+    import json
+    from neurobrix.cli import create_parser
+    from neurobrix.cli.commands.run import request_input_config
+    from neurobrix.core.module.audio import g2p as G
+    monkeypatch.setattr(G, "g2p_phonemes", lambda *a, **k: "abcab")
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "defaults.json").write_text(json.dumps(
+        {"phoneme_vocab": {"a": 1, "b": 2, "c": 3}, "phoneme_lang": "a", "dtype": "float32"}))
+    manifest = {"family": "tts", "dtype": "float32", "modules": {"g2p": {}, "voices": {}}}
+    args = create_parser().parse_args(["run", "--model", "x", "--prompt", "hello"])
+    ic = request_input_config(args, manifest, "tts", tmp_path)
+    assert ic.seq_len == 7                          # [0] + 5 phonemes + [0]
+    manifest["modules"]["tokenizer"] = {}           # a tokenizer container: not this path
+    assert request_input_config(args, manifest, "tts", tmp_path).seq_len is None

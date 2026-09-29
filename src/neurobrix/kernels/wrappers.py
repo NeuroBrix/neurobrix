@@ -14,6 +14,7 @@ import triton
 # The bucket of a request-dependent key dimension (kernels/autotune_bucket.py): the key
 # carries the bucket's top, the kernel runs the true size (the owner's decision, 2026-09-21).
 from neurobrix.kernels.autotune_bucket import bucket_of as _bucket_of
+from neurobrix.kernels import launch_keys as _lk
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
@@ -1867,26 +1868,9 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     FlagGems / similar — see Phase 1.5 follow-up.
     """
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
-    is_fp16 = (dt == NBXDtype.float16)
-    is_bf16 = (dt == NBXDtype.bfloat16)
-    is_half = is_fp16 or is_bf16
-
-    # NBX_FORCE_FP32_ACCUM diagnostic: always store fp32 for any half
-    # input. Pairs with the input upcast in mm/bmm/addmm wrappers so
-    # the entire matmul chain operates in fp32 - isolates the dtype
-    # variable from the P-SANA-4KPX-RUNTIME bug hunt.
-    if NBX_FORCE_FP32_ACCUM and is_half:
-        return NBXDtype.float32
-
-    # (1) Hardware gate: fp16 on hardware without native bf16 gets fp32.
-    if is_fp16 and not _NBX_HAS_NATIVE_BF16:
-        return NBXDtype.float32
-
-    # (2) + (3) legacy M gate + force_fp32 escape hatch.
-    if is_half and (M <= 4 or force_fp32):
-        return NBXDtype.float32
-
-    return dt
+    # The decision is `launch_keys.matmul_out_dtype` — the one the derived census computes keys
+    # with (NBX_FORCE_FP32_ACCUM first, then the hardware gate, then the M / force_fp32 gate).
+    return _lk.matmul_out_dtype(dt, M, force_fp32, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
 
 
 def _apply_matmul_epilogue(c, epilogue_code: int):
@@ -2189,28 +2173,22 @@ def mm(a, b, _epilogue: int = 0) :
     # kernel; cuBLAS reaches 0.295 ms via dedicated HMMA path we cannot
     # match by flag-flipping). Real speedup needs a HMMA-tuned Triton
     # kernel or FlagGems adoption — see Phase 1.5 follow-up.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic: upcast BOTH inputs to fp32 on any
-    # hardware when the env var is set. Sacrifices VRAM/perf to isolate
-    # the dtype-intermediate hypothesis in P-SANA-4KPX-RUNTIME. The
-    # existing fp16-only Volta gate below missed bf16 inputs, which on
-    # Volta have no native HMMA support and may degrade through Triton's
-    # tl.dot lowering.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
+    # The operand decisions are `launch_keys.mm_dtypes` — the function the derived census keys
+    # with; the wrapper only performs the casts it names. NBX_FORCE_FP32_ACCUM (a diagnostic)
+    # widens both half inputs first.
+    #
     # The fp16 activation is NOT materialised as fp32 any more: the kernels widen it in
     # registers — matmul_kernel through PROMOTE_A, the GEMV kernels on every load — the same
     # numbers the copy produced (an exact widening), without the copy per matmul. The store
     # dtype is decided by _matmul_out_dtype from the hardware gate, as before (fp32 here).
-    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
-    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
+    a_to, b_to, promote_a, promote_b = _lk.mm_dtypes(a.nbx_dtype, b.nbx_dtype,
+                                                     _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
 
-    # Dtype alignment. Three situations:
+    # Dtype alignment (decided in `launch_keys.mm_dtypes`). Three situations:
     #   1. Same dtype  → no-op.
     #   2. fp32 act × fp16 weight on pre-Ampere → this is the common case
     #      (the activation widened in-kernel). Keep the weight fp16 in memory; the kernel
@@ -2239,18 +2217,6 @@ def mm(a, b, _epilogue: int = 0) :
     # bf16 -> fp32 is lossless, so promoting per tile yields the same fp32
     # values the materialised cast did; the outputs are expected to be
     # bit-identical and that is checked, not assumed.
-    promote_b = (a_eff == NBXDtype.float32
-                 and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16))
-    if a_eff != b_nbx and not promote_b:
-        if promote_a:                       # widened for real when the pair needs the widest
-            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
-
     M, K = a.shape
     K2, N = b.shape
     assert K == K2, f"Incompatible dimensions: {K} vs {K2}"
@@ -2376,34 +2342,16 @@ def bmm(a, b, allow_strided_b: bool = False) :
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
-    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-
-    # Dtype alignment — see mm() for the full rationale. Fast path: when
-    # activation is fp32 (after step 2) and weight is fp16 on pre-Ampere,
-    # leave the weight fp16 and let the kernel promote its tile via
-    # PROMOTE_B. All other mismatches fall back to the widening path, so
-    # the batched kernel always sees matched dtypes or PROMOTE_B=True.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_nbx == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
-    if a_nbx != b_nbx and not promote_b:
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
+    # The operand decisions are `launch_keys.bmm_dtypes` — the function the derived census keys
+    # with (NBX_FORCE_FP32_ACCUM first; an fp16 activation widened in memory on hardware without
+    # native bf16 — bmm has no PROMOTE_A; an fp16 weight under fp32 widened in the kernel there;
+    # any other mismatch widened to the widest). The wrapper only casts.
+    a_to, b_to, promote_b = _lk.bmm_dtypes(a.nbx_dtype, b.nbx_dtype,
+                                           _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
 
     B, M, K = a.shape
     B2, K2, N = b.shape
@@ -2464,13 +2412,14 @@ def matmul_wrapper(a, b):
     - 2D × 1D → mv
     - ND × 2D → reshape to batched mm
     """
-    if a.ndim == 2 and b.ndim == 2:
+    route = _lk.matmul_route(a.ndim, b.ndim)      # the route the derived census keys with
+    if route == "mm":
         return mm(a, b)
-    if a.ndim == 3 and b.ndim == 3:
+    if route == "bmm":
         return bmm(a, b)
-    if a.ndim == 2 and b.ndim == 1:
+    if route == "mv":
         return mv_wrapper(a, b)
-    if a.ndim >= 3 and b.ndim == 2:
+    if route == "batched":
         # Batched: reshape a to (batch, M, K), mm each, reshape back
         orig_shape = a.shape
         M, K = orig_shape[-2], orig_shape[-1]
@@ -2478,7 +2427,7 @@ def matmul_wrapper(a, b):
         a_3d = a.contiguous().view(batch, M, K)
         result = bmm(a_3d, b.unsqueeze(0).expand(batch, K, b.shape[1]))
         return result.view(*orig_shape[:-1], b.shape[1])
-    if a.ndim >= 3 and b.ndim >= 3:
+    if route == "general":
         # General batched matmul. bmm is strictly 3D, so collapse the leading
         # batch dims into one, bmm, then restore the batch shape. Passing raw 4-D
         # tensors straight to bmm unpacked a 3-tuple → "too many values".
@@ -2605,53 +2554,19 @@ def addmm(bias, a, b,
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
-    a_nbx = a.nbx_dtype
-    b_nbx = b.nbx_dtype
-    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
-    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
-    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
-        b = b.to(NBXDtype.float32)
-        b_nbx = NBXDtype.float32
-    # The fp16 activation is widened in the kernel's registers (PROMOTE_A, as mm), not
-    # materialised as fp32 per call: PixArt's DiT took a copy of every (8192, 1152)
-    # activation, a copy of every transposed weight and a cast of every bias per linear
-    # (the copy census of 2026-09-07).
-    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
-    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
+    # The operand decisions are `launch_keys.addmm_dtypes` — the function the derived census
+    # keys with (NBX_FORCE_FP32_ACCUM first; PROMOTE_A / PROMOTE_B in-kernel widenings on hardware
+    # without native bf16; any other mismatch widened to the widest; the bias widened in-kernel
+    # under an fp32 activation, else cast to the activation's dtype). The wrapper only casts.
+    a_to, b_to, bias_to, promote_a, promote_b, promote_bias = _lk.addmm_dtypes(
+        a.nbx_dtype, b.nbx_dtype, bias.nbx_dtype, _NBX_HAS_NATIVE_BF16, NBX_FORCE_FP32_ACCUM)
+    if a.nbx_dtype != a_to:
+        a = a.to(a_to)
+    if b.nbx_dtype != b_to:
+        b = b.to(b_to)
+    if bias.nbx_dtype != bias_to:
+        bias = bias.to(bias_to)
 
-    # Dtype alignment (see mm() for rationale). Same two branches:
-    # promote_b keeps fp16 weight fp16 + kernel casts tile inline;
-    # otherwise fall back to full widening.
-    promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_eff == NBXDtype.float32
-                 and b_nbx == NBXDtype.float16)
-    if a_eff != b_nbx and not promote_b:
-        if promote_a:                       # widened for real when the pair needs the widest
-            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
-        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a_nbx, b_nbx))
-        if a_nbx != widest:
-            a = a.to(widest)
-        if b_nbx != widest:
-            b = b.to(widest)
-        a_eff = a.nbx_dtype
-    # Bias tracks the accumulator dtype — it is added inside the kernel after
-    # tl.dot. A bias narrower than an fp32 accumulator is widened on load
-    # (PROMOTE_BIAS, exact); a bias that would have to be NARROWED to the
-    # activation dtype keeps its cast copy (a rounding the kernel's epilogue
-    # would otherwise apply in another order).
-    promote_bias = (bias.nbx_dtype != a_eff and a_eff == NBXDtype.float32
-                    and bias.nbx_dtype in (NBXDtype.float16, NBXDtype.bfloat16))
-    if bias.nbx_dtype != a_eff and not promote_bias:
-        bias = bias.to(a_eff)
-
-    # N-D activation: addmm is strictly 2-D. Flatten the leading dims of `a`
-    # ([..., M, K] @ [K, N]), addmm in 2-D, restore the leading shape. Mirror
-    # of the matmul() ND×2D path; raw N-D `a` unpacked a 2-tuple → "too many
-    # values to unpack" (Flex DiT feeds a 3-D activation to addmm). Bias is the
-    # Linear bias ([N] or [1, N]) and broadcasts over the flattened rows.
     if a.ndim > 2:
         orig_lead = a.shape[:-1]
         K_ = a.shape[-1]
@@ -3803,20 +3718,7 @@ def _conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w):
     the convolution's own arithmetic so a certifier synthesising at the top forms the same
     key. A 2-D convolution keeps its exact extents (bounded by resolutions and tile edges;
     the ladder measured 37–40 % loss where the conv optimum flips)."""
-    if int(in_h) == 1 and int(out_h) == 1:
-        top = int(_bucket_of("W", int(in_w)))
-        return top, (top + 2 * int(pad_w) - int(dil_w) * (int(kw) - 1) - 1) // int(stride_w) + 1
-    return int(in_w), int(out_w)
-
-
-def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
-    """Return True when the conv2d output alone would exceed the spatial
-    band-streaming threshold. Output is the dominant transient because the
-    @triton.jit kernel accumulates in fp32 internally but writes the final
-    output at compute_dtype. Weights are residence-cost (already in arena),
-    not per-launch transients."""
-    out_bytes = N * out_c * out_h * out_w * dtype_bytes
-    return out_bytes > _NBX_CONV2D_BAND_BYTES
+    return _lk.conv_width_key(in_h, out_h, in_w, out_w, kw, stride_w, pad_w, dil_w)
 
 
 def conv_transpose_wrapper(
@@ -4170,13 +4072,13 @@ def conv2d_wrapper(
     # Step 2: dtype alignment NARROWING (opposite of mm widening)
     x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
     w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
-    if x_nbx != w_nbx:
-        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
-        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
-        if x_nbx != narrowest:
-            x = x.to(narrowest)
-        if w_nbx != narrowest:
-            weight = weight.to(narrowest)
+    # `launch_keys.conv_dtypes`: the pair narrowed to the narrowest when they differ — the
+    # function the derived census keys with.
+    x_to, w_to = _lk.conv_dtypes(x_nbx, w_nbx)
+    if x_nbx != x_to:
+        x = x.to(x_to)
+    if w_nbx != w_to:
+        weight = weight.to(w_to)
 
     x_c = x.contiguous()
     w_c = weight.contiguous()
@@ -4205,7 +4107,10 @@ def conv2d_wrapper(
     # depthwise pattern (groups == in_c == out_c, weight (C,1,kh,kw)) on
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
     # ~1800x gap. Route to the dedicated stencil kernel instead.
-    if (os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1") and groups == in_c and groups == out_c and dil_h == 1 and dil_w == 1:
+    _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
+                              _NBX_CONV2D_BAND_BYTES,
+                              depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
+    if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
         return _depthwise_conv2d_dispatch(
@@ -4215,7 +4120,7 @@ def conv2d_wrapper(
             out_dtype,
         )
 
-    if _conv2d_should_band_stream(N, out_c, out_h, out_w, out_dtype_bytes):
+    if _route == "band":
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] BAND-STREAM triggered (out > {_NBX_CONV2D_BAND_BYTES/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
@@ -4324,11 +4229,7 @@ def _conv2d_band_streamed(
     """
     # Choose tile_factor so each band's output bytes <= half the threshold;
     # the headroom covers transient input slice + kernel intermediate.
-    band_target_bytes = max(1, _NBX_CONV2D_BAND_BYTES // 2)
-    row_bytes = N * out_c * out_w * out_dtype_bytes
-    rows_per_band = max(1, band_target_bytes // max(1, row_bytes))
-    tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
-    band_oh = (out_h + tile_factor - 1) // tile_factor
+    band_oh = _lk.conv2d_band_rows(N, out_c, out_h, out_w, out_dtype_bytes, _NBX_CONV2D_BAND_BYTES)
 
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x_c.device, dtype=out_dtype)
 
@@ -8056,14 +7957,10 @@ def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                     batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Route guard for the vector decode kernel: returns the output or
     None when the shape/mask is outside the kernel's contract."""
-    if headdim != v.shape[3]:
+    if not _lk.decode_vec_takes(headdim, v.shape[3],
+                                None if attn_mask is None else attn_mask.numel(), seqlen_k):
         return None
-    bias = None
-    if attn_mask is not None:
-        if attn_mask.numel() == seqlen_k:
-            bias = attn_mask.reshape(seqlen_k)
-        else:
-            return None
+    bias = attn_mask.reshape(seqlen_k) if attn_mask is not None else None
     return _decode_attn_vec(q, k, v, bias, softmax_scale,
                             batch, nheads, nheads_k, seqlen_k, headdim, q_round=q_round)
 
@@ -8452,9 +8349,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
     # to fp32. For the common LLM case where all three match, this is a
     # no-op — zero overhead.
-    if not ((k.dtype if q_round is not None else q.dtype) == k.dtype == v.dtype):
-        q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
-        q_round = None
+    _qd, _kd, _vd, q_round = _lk.sdpa_operand_dtypes(q._dtype, k._dtype, v._dtype, q_round)
+    if _qd != q._dtype or _kd != k._dtype or _vd != v._dtype:
+        q, k, v = q.to(_qd), k.to(_kd), v.to(_vd)
 
     # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
     # Hocine scope decision = option B: hardware + memory-budget, ZERO
@@ -8505,74 +8402,17 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # path regardless of hardware/headdim.
     import os as _os_fma
     _use_math_forced = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
-    _use_math = _use_math_forced
-    # Asymmetric head_dim (MLA class — e.g. DeepSeek-V2 qk 192 / v 128):
-    # the flash kernel is structurally single-headdim — one BLOCK_HEADDIM
-    # constexpr shared by both tl.dot operands, V strides read with the K
-    # tile geometry, output allocated q-shaped (empty_like(q)) — so it
-    # CANNOT compute p @ V when v head_dim != qk head_dim. Route to the
-    # math composition unconditionally: it carries D_v independently
-    # end-to-end. Pure shape signal, no model/family knowledge (R34).
-    # A Dv-aware flash tile is the named perf follow-up if MLA
-    # long-context prefill ever needs it (P-TRITON-MLA).
     headdim_v = v.shape[3]
-    if not _use_math and headdim_v != headdim:
-        _use_math = True
-    if not _use_math:
-        _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
-        # NBXTensor._device is the bare device TYPE ("cuda"); the index
-        # lives in _device_idx (engraved trap: .device returns SELF).
-        _q_dev_idx = getattr(q, "_device_idx", None)
-        if not _is_power_of_2(headdim):
-            # Non-pow2 head_dim: math WHILE the fp32 scores tensor fits a
-            # sane memory bound; FLASH beyond it. The flash kernel fully
-            # supports non-pow2 head dims (BLOCK_HEADDIM = next_power_of_2 +
-            # masked d-axis loads `offs_d < headdim, other=0.0` — the Dao
-            # EVEN_HEADDIM pattern), so the old UNCONDITIONAL math guard was
-            # conservatism, and at video-native scale it is fatal: Allegro
-            # 720p×88f = 79200 tokens, hd=96 → math scores [2,24,79200²]
-            # fp32 = 1.204 TB (guaranteed OOM — no behavior existed to
-            # regress on that branch). Bound = the per-arch vendor-yml
-            # budget where defined (Volta 128 MB), else a universal 2 GiB
-            # sanity floor — PixArt hd=72 / Sana hd=112 image-scale scores
-            # stay ≤ the floor on every arch → their math path is
-            # byte-unchanged (R23).
-            _bound = _sdpa_math_scores_budget_bytes_for(_q_dev_idx) or (2 << 30)
-            _use_math = _scores_bytes <= _bound
-            if not _use_math and _bound:
-                # Same chunked ladder as the pow2 branch: an over-cap
-                # image-scale shape (PixArt hd=72 / Sana hd=112 on a
-                # 16G card) chunks deterministically instead of
-                # silently landing on the Volta flash band-risk path;
-                # video-scale shapes exceed the chunk ceiling and keep
-                # their existing flash path unchanged.
-                _chunk_rows = _sdpa_chunked_rows_within(
-                    _bound, batch, nheads, seqlen_q, seqlen_k)
-                if _chunk_rows:
-                    _use_math = "chunked"
-        else:
-            # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
-            # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
-            # true memory cost, independent of q's dtype. Budget is 0
-            # on non-Volta (no yml key) → this never fires there.
-            _budget = _sdpa_math_scores_budget_bytes_for(_q_dev_idx)
-            _use_math = _scores_bytes <= _budget
-            if not _use_math and _budget:
-                # P-NONDET-LONG-ROW (2026-08-23): over-budget pow2
-                # shapes routed to flash, whose Volta masked-load
-                # specialisation (the D>=128 detour's landing path) is
-                # NON-DETERMINISTIC — the canonical long row's prefill
-                # was fp-different on every run. CHUNKED math keeps
-                # every chunk's scores inside the budget and is
-                # deterministic by construction. Bounded by the
-                # per-arch chunk ceiling: LLM-class prefills chunk 2-16
-                # times; video-scale shapes (30-500+ chunks) keep their
-                # existing path and are REGISTERED as the residual
-                # non-deterministic class on this hardware.
-                _chunk_rows = _sdpa_chunked_rows_within(
-                    _budget, batch, nheads, seqlen_q, seqlen_k)
-                if _chunk_rows:
-                    _use_math = "chunked"
+    # The route is `launch_keys.sdpa_route` — the function the derived census keys with: math
+    # when forced or when the value head dim differs; else by the fp32 scores' size against this
+    # device's budget (a non-power-of-two head dim falls back to 2 GiB when the arch declares no
+    # budget); over it, chunked when the rows fit the arch's ceiling; otherwise flash.
+    _q_dev_idx = getattr(q, "_device_idx", None)
+    _route, _chunk_rows = _lk.sdpa_route(
+        batch, nheads, seqlen_q, seqlen_k, headdim, headdim_v,
+        _sdpa_math_scores_budget_bytes_for(_q_dev_idx), _sdpa_math_min_chunk_rows(),
+        _sdpa_math_max_chunks(), force_math=_use_math_forced)
+    _use_math = {"math": True, "chunked": "chunked", "flash": False}[_route]
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1":
         # Print once PER DISTINCT EXECUTING DEVICE, not once per process:
         # on heterogeneous rigs the budget is per-device, so a single line

@@ -66,6 +66,18 @@ if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
 
 
+
+def guidance_embedding_component(topology: dict):
+    """The first loop component that takes a `guidance` input (a guidance-embedding model,
+    Flux-style): classifier-free guidance then runs NO batch-2 pass — the scale is embedded. None
+    when no loop component declares one. The CFG engine and the derived census both ask it."""
+    loop_components = topology.get("flow", {}).get("loop", {}).get("components", [])
+    components_data = topology.get("components", {})
+    for comp_name in loop_components:
+        if "guidance" in components_data.get(comp_name, {}).get("interface", {}).get("inputs", []):
+            return comp_name
+    return None
+
 class CFGMode(Enum):
     """CFG execution mode."""
     DISABLED = auto()     # No CFG (scale <= threshold)
@@ -156,12 +168,11 @@ class TritonCFGEngine:
 
         do_cfg = guidance_scale > cfg_threshold
 
-        # Detect guidance-embedding models (Flux-style)
+        # Detect guidance-embedding models (Flux-style) — `guidance_embedding_component`
         if do_cfg:
-            loop_info = ctx.pkg.topology.get("flow", {}).get("loop", {})
-            loop_components = loop_info.get("components", [])
             components_data = ctx.pkg.topology.get("components", {})
-            for comp_name in loop_components:
+            _g = guidance_embedding_component(ctx.pkg.topology)
+            for comp_name in ([_g] if _g else []):
                 comp_inputs = components_data.get(comp_name, {}).get("interface", {}).get("inputs", [])
                 if "guidance" in comp_inputs:
                     # Model uses guidance embedding — inject as NBXTensor, skip batch-2 CFG

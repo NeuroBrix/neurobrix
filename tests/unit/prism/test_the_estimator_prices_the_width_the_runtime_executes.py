@@ -500,3 +500,51 @@ def test_the_mirrors_answer_what_the_engines_execute():
             want = _w(_one(op_type, graph=graph), "triton", c=c, bf16=c == "bfloat16",
                       contract=k)["y"]
             assert got == want, (op_type, c, k)
+
+
+def _norm_tuple(graph="float32"):
+    """native_layer_norm returns (out, mean, rstd): its traced outputs are three."""
+    T = {"input::x": _t([2, 8], is_input=True), "param::g": _t([8]), "param::b": _t([8]),
+         "y": _t([2, 8]), "mu": _t([2, 1]), "rs": _t([2, 1])}
+    return _dag(T, [_op("ln::0", "aten::native_layer_norm", ["input::x", "param::g", "param::b"],
+                        ["y", "mu", "rs"])], ["input::x"], ["y"], graph=graph)
+
+
+def test_under_fp16_a_tuple_norm_output_keeps_the_fp32_its_kernel_wrote():
+    """triton/dtype.py `cast_back`: under fp16 the cast back to C is the single-tensor one — a
+    TUPLE result (native_layer_norm, native_group_norm) keeps the fp32 its kernel wrote from the
+    fp32 inputs, narrow set, safe flag or neither (the fp16 contract held byte-identical by
+    decision 2026-09-28). Measured by the census walk 2026-09-29: Kokoro's albert projections
+    and PixArt's VAE attention read the norm's output in fp32 while this pass said fp16.
+    Under bf16 on a bf16 graph every float of the tuple comes back to C. Injection: the tuple
+    clause removed from `amp_fp32_out` -> 'float16' under the narrow set, RED."""
+    narrow = PrecisionContract(True, frozenset(), frozenset({"ln::0"}))
+    for eng in ("triton", "triton_sequential"):
+        for k in (NONE, narrow, PrecisionContract(True, frozenset(), frozenset())):
+            assert _w(_norm_tuple(), eng, contract=k)["y"] == "float32", (eng, k)
+        assert _w(_norm_tuple("bfloat16"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
+    # the single-tensor norm still narrows under the contract
+    assert _w(_block(), contract=narrow.__class__(True, frozenset(), frozenset({"rms::0"})))[
+        "r0"] == "float16"
+
+
+def test_an_attention_over_disagreeing_operands_writes_fp32():
+    """`scaled_dot_product_attention_wrapper` casts q, k, v that disagree to fp32 before any
+    route (`launch_keys.sdpa_operand_dtypes`), so its output is fp32 — measured on Wan's
+    cross-attention (fp16 q/k, fp32 v), whose out-projection read fp32 in the census walk while
+    this pass said fp16. Agreeing operands keep q's dtype. Injection: the disagreement clause
+    removed -> 'float16', RED."""
+    def dag(island):
+        T = {"input::q": _t([1, 2, 8, 4], is_input=True), "input::k": _t([1, 2, 8, 4], is_input=True),
+             "input::x": _t([1, 2, 8, 4], is_input=True), "v": _t([1, 2, 8, 4]), "o": _t([1, 2, 8, 4])}
+        ops = [_op("exp::0", "aten::exp", ["input::x"], ["v"]),
+               _op("sdpa::0", "aten::scaled_dot_product_attention", ["input::q", "input::k", "v"], ["o"])]
+        k = PrecisionContract(True, frozenset({"exp::0"} if island else ()), frozenset())
+        return _dag(T, ops, ["input::q", "input::k", "input::x"], ["o"]), k
+    for eng in ("triton", "triton_sequential"):
+        d, k = dag(True)                              # v from an fp32 island
+        w = _w(d, eng, contract=k)
+        assert (w["input::q"], w["input::k"], w["v"]) == ("float16", "float16", "float32")
+        assert w["o"] == "float32", eng
+        d, k = dag(False)                             # all three fp16
+        assert _w(d, eng, contract=k)["o"] == "float16", eng

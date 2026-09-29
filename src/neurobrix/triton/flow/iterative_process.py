@@ -1342,7 +1342,13 @@ class TritonIterativeProcessHandler:
         The dict contains: {'channels': C, 'height': H, 'width': W}
         where C, H, W are the original 4D spatial dimensions.
         """
-        components_data = self.ctx.pkg.topology.get("components", {})
+        return self.declared_packing(self.ctx.pkg.topology, loop_components)
+
+    @staticmethod
+    def declared_packing(topology: dict, loop_components) -> Optional[list]:
+        """The loop denoiser's declared 3-D `hidden_states` shape when the topology packs the latent
+        FLUX-style (the flow packs a 4-D state to it), else None — `_detect_packing`'s rule."""
+        components_data = topology.get("components", {})
         for comp_name in loop_components:
             comp_shapes = components_data.get(comp_name, {}).get("shapes", {})
             hs_shape = comp_shapes.get("hidden_states", [])
@@ -1350,6 +1356,12 @@ class TritonIterativeProcessHandler:
             if len(hs_shape) == 3:
                 return hs_shape
         return None
+
+    @staticmethod
+    def packed_4d_shape(shape) -> list:
+        """[B, C, H, W] -> [B, (H/2)*(W/2), C*4] — the shape `_pack_latents` produces."""
+        b, c, h, w = (int(d) for d in shape)
+        return [b, (h // 2) * (w // 2), c * 4]
 
     @staticmethod
     def _pack_latents(latents: NBXTensor) -> NBXTensor:
@@ -1380,6 +1392,13 @@ class TritonIterativeProcessHandler:
         latents = latents.permute(0, 3, 1, 4, 2, 5)
         latents = latents.reshape(batch_size, channels, height, width)
         return latents
+
+    @staticmethod
+    def packed_5d_shape(shape) -> list:
+        """[B, C, T, H, W] -> [B, T*(H/2)*(W/2), C*4] — the shape `_pack_latents_5d` produces (the
+        derived census binds the denoiser's `img` with it)."""
+        b, c, t, h, w = (int(d) for d in shape)
+        return [b, t * (h // 2) * (w // 2), c * 4]
 
     @staticmethod
     def _pack_latents_5d(latents: NBXTensor) -> NBXTensor:

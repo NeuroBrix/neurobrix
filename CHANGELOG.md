@@ -14,6 +14,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the card's free memory, so the same request could run differently from one moment to the
   next; the placement plan now decides it from the budget it gives the component, before the run.
 
+- `neurobrix run --explain-plan --json` reports the KV cache's layers, KV heads and head dimensions, and
+  each component's op-level tiling (which ops are cut, and by how much).
+
+- **Diffusion plans size each component at the batch and length it actually runs.** The
+  denoiser under classifier-free guidance runs two prompts at once; a text encoder runs at the length
+  its prompt is padded to; a FLUX-style denoiser runs on the packed latent — the memory plan now uses
+  those, not the sizes the model was traced at.
+
+- **Models that snap the request to a trained resolution are planned at that resolution.** A
+  model trained on a table of sizes (the Sana pipelines) runs at the nearest entry of its table,
+  not at the size asked for; its memory plan was sized at the size asked for (320 x 512 planned,
+  768 x 1280 run). The plan is now sized where the model runs.
+
+- **An image-to-video model's plan sizes its conditioning encoder in pixels.** The encoder that
+  reads the conditioning image or clip was sized at the latent grid when its time axis was a
+  single frame or matched no known pattern, 64 times too small per frame. Wan2.1-I2V at 16 GB is now
+  planned with CPU streaming (its encoder does not fit) instead of a plan that could not run.
+
+- **Tiled convolutions with a stride of 2 or more produce correct output.** When a large
+  convolution is split into bands to fit the card (or fused with the upsample before it), every band
+  after the first was shifted by half an output row whenever the convolution's stride was above 1.
+  Stride-1 convolutions — the common case — are unchanged, byte for byte.
+
+- **A text-to-speech plan is sized for the text it is given.** A phonemizer model (Kokoro) was
+  planned at its trace length (23 phonemes) whatever the prompt; the plan now binds the length the
+  run will phonemize, from the same function the run uses. Plans under fp16 also price a layer or
+  group normalisation's output, and an attention whose inputs mix precisions, at the width the
+  engine actually stores (fp32). A text encoder whose configuration asks its embeddings to be
+  padded or trimmed but names no length is now refused by name instead of assuming 300.
+
 - **Models that stream their layers run faster.** When a model is larger than the card and its
   layers are loaded one segment at a time, releasing each segment no longer pauses for a full
   garbage collection. On a V100 16 GB, MiniCPM-o 4.5 streamed at a 12 GB budget completes a

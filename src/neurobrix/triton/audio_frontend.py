@@ -193,32 +193,14 @@ def _load_voicepack_np(engine, phoneme_count: int) -> None:
 def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> None:
     """Zero-torch g2p: text → IPA → phoneme IDs, bound as NBXTensor. Mirror of
     core/flow/stages/kokoro.preprocess_phonemizer_input (which uses torch)."""
-    _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
-    lang = _lang_map.get(klang, "en-us")
-    from neurobrix.core.module.audio.g2p import g2p_phonemes, refusal_for_language
-    # R30 mirror of the compiled path's language gate (stages/kokoro.py): the
-    # voice and the embedded lexicon must speak one language, or the model says
-    # other words, fluently. Landed on the compiled path first and measured NOT
-    # to fire here (vitrine 2026-09-16, 17:47: the French request went straight
-    # through this mirror) — a gate in one mode only is no gate.
-    _voice = None
-    for _key in ("global.speaker", "speaker", "global.voice", "voice"):
-        _v = engine.ctx.variable_resolver.resolved.get(_key)
-        if isinstance(_v, str) and _v:
-            _voice = _v
-            break
-    if _voice is None:
-        _voice = engine.ctx.pkg.defaults.get("voice")
-    _refusal = refusal_for_language(_voice, klang)
-    if _refusal:
-        raise RuntimeError(_refusal)
-    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str, lang, klang)
-    ids = [0]
-    for ch in phonemes:
-        if ch in phoneme_vocab:
-            ids.append(phoneme_vocab[ch])
-    ids.append(0)
+    from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+    # R30 mirror of the compiled path (stages/kokoro.py): ONE text-to-ids function, whose
+    # language gate refuses a voice the embedded lexicon does not speak — measured NOT to
+    # fire here once when it lived only in the compiled path (vitrine 2026-09-16, 17:47).
+    phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,
+                                request_voice(engine.ctx.variable_resolver.resolved,
+                                              engine.ctx.pkg.defaults))
     actual_len = len(ids)
     _set_device_for(engine.ctx)
     input_ids = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
@@ -252,6 +234,35 @@ def postprocess_text_output_np(ctx) -> None:
     print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
+def resolve_preprocessing(preprocessing: str, input_shape) -> str:
+    """The feature extractor the first stage's graph shape asks for (mirror of the torch path):
+    a raw-waveform declaration on a graph that takes [B, mels, frames] is a mel spectrogram, one on
+    [B, frames, feats] a conformer front end."""
+    if input_shape and len(input_shape) >= 3 and preprocessing == "raw_waveform":
+        d1, d2 = input_shape[1], input_shape[2]
+        if d1 in (40, 64, 80, 128) and d2 > d1:
+            return "mel_spectrogram"
+        if d2 in (40, 64, 80, 128, 160, 256) and d1 > d2:
+            return "conformer"
+    return preprocessing
+
+
+def fit_features(feats: np.ndarray, input_shape) -> np.ndarray:
+    """Features padded / truncated to the first stage's trace dims (mirror of the torch path) —
+    the extent the encoder then runs at, which the derived census binds from."""
+    if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
+        for d in range(1, len(input_shape)):
+            trace, actual = input_shape[d], feats.shape[d]
+            if actual > trace:
+                sl = [slice(None)] * feats.ndim
+                sl[d] = slice(None, trace)
+                feats = feats[tuple(sl)]
+            elif actual < trace:
+                ps = list(feats.shape); ps[d] = trace - actual
+                feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
+    return np.ascontiguousarray(feats.astype(np.float32))
+
+
 def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> None:
     """Load audio + extract features in numpy, bind as NBXTensor (no torch)."""
     get_component_input_shape = _component_input_shape
@@ -269,30 +280,12 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
 
     first_comp = stages[0]["component"] if stages else None
     input_shape = get_component_input_shape(ctx, first_comp)
-    # Auto-correct preprocessing from graph shape (mirror of the torch path).
-    if input_shape and len(input_shape) >= 3:
-        d1, d2 = input_shape[1], input_shape[2]
-        if preprocessing == "raw_waveform":
-            if d1 in (40, 64, 80, 128) and d2 > d1:
-                preprocessing = "mel_spectrogram"
-            elif d2 in (40, 64, 80, 128, 160, 256) and d1 > d2:
-                preprocessing = "conformer"
+    preprocessing = resolve_preprocessing(preprocessing, input_shape)
 
     print(f"   [Audio·np] Loading: {audio_path}")
 
     def _fit(feats):
-        # Pad/truncate to trace-time dims (mirror of the torch path).
-        if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
-            for d in range(1, len(input_shape)):
-                trace, actual = input_shape[d], feats.shape[d]
-                if actual > trace:
-                    sl = [slice(None)] * feats.ndim
-                    sl[d] = slice(None, trace)
-                    feats = feats[tuple(sl)]
-                elif actual < trace:
-                    ps = list(feats.shape); ps[d] = trace - actual
-                    feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
-        return np.ascontiguousarray(feats.astype(np.float32))
+        return fit_features(feats, input_shape)
 
     # Long-form (D-STT-LONGFORM-CHUNKING, R30 mirror of the torch
     # path): audio longer than the whisper-class window runs the

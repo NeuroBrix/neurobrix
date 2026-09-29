@@ -69,6 +69,62 @@ def _require_default(defaults: Dict[str, Any], key: str) -> Any:
     return val
 
 
+# The LM's speech control tokens, as its tokenizer spells them.
+SPEECH_START_TOKEN = "<|vision_start|>"
+SPEECH_END_TOKEN = "<|vision_end|>"
+SPEECH_DIFFUSION_TOKEN = "<|vision_pad|>"
+
+
+def encode_nopad(tok, text: str, add_special: bool = False) -> List[int]:
+    """The tokenizer's ids for `text`, unpadded, whichever encode signature it offers."""
+    ids = None
+    try:
+        ids = tok.encode(text, add_special_tokens=add_special, padding=False)
+    except TypeError:
+        try:
+            ids = tok.encode(text, add_special_tokens=add_special)
+        except TypeError:
+            ids = tok.encode(text)
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    if ids and isinstance(ids[0], list):
+        ids = ids[0]
+    return [int(x) for x in ids]
+
+
+def special_token_id(tok, name: str) -> Optional[int]:
+    """A special token's id from the tokenizer (its own lookup, else a one-id encode); None when
+    the tokenizer does not know it as one token."""
+    for obj in (tok, getattr(tok, "_tokenizer", None)):
+        if obj is None:
+            continue
+        for fn in ("convert_tokens_to_ids", "token_to_id"):
+            f = getattr(obj, fn, None)
+            if f is not None:
+                try:
+                    v = f(name)
+                    if v is not None and int(v) >= 0:
+                        return int(v)
+                except Exception:
+                    pass
+    ids = encode_nopad(tok, name, add_special=False)
+    return int(ids[0]) if ids and len(ids) == 1 else None
+
+
+def speaker_prompt_ids(tok, prompt: str, speech_start_id: int) -> List[int]:
+    """The LM's prompt context: the speaker instruction around `prompt`, closed by the speech
+    start token. The flow prefills it; the derived census keys its length from here."""
+    system_prompt = (" Transform the text provided by various speakers into speech output, "
+                     "utilizing the distinct voice of each respective speaker.\n")
+    ids: List[int] = []
+    ids += encode_nopad(tok, system_prompt, add_special=True)
+    ids += encode_nopad(tok, " Text input:\n", add_special=False)
+    ids += encode_nopad(tok, f" Speaker 0: {prompt}\n", add_special=False)
+    ids += encode_nopad(tok, " Speech output:\n", add_special=False)
+    ids += [int(speech_start_id)]
+    return ids
+
+
 class TritonNextTokenDiffusionEngine:
     """Triton-mode VibeVoice next-token-diffusion TTS (NBXTensor end-to-end)."""
 
@@ -113,29 +169,16 @@ class TritonNextTokenDiffusionEngine:
 
         # ── special token ids (no hardcode: resolved from tokenizer/defaults) ──
         def tid(name: str) -> Optional[int]:
-            for obj in (tok, getattr(tok, "_tokenizer", None)):
-                if obj is None:
-                    continue
-                for fn in ("convert_tokens_to_ids", "token_to_id"):
-                    f = getattr(obj, fn, None)
-                    if f is not None:
-                        try:
-                            v = f(name)
-                            if v is not None and int(v) >= 0:
-                                return int(v)
-                        except Exception:
-                            pass
-            ids = self._encode_nopad(tok, name, add_special=False)
-            return int(ids[0]) if ids and len(ids) == 1 else None
+            return special_token_id(tok, name)
 
         def _require(nm: str, val: Optional[int]) -> int:
             if val is None:
                 raise RuntimeError(f"ZERO FALLBACK: could not resolve {nm} token id from tokenizer/defaults.")
             return int(val)
 
-        speech_start_id = _require("speech_start", tid("<|vision_start|>"))
-        speech_end_id = _require("speech_end", tid("<|vision_end|>"))
-        speech_diffusion_id = _require("speech_diffusion", tid("<|vision_pad|>"))
+        speech_start_id = _require("speech_start", tid(SPEECH_START_TOKEN))
+        speech_end_id = _require("speech_end", tid(SPEECH_END_TOKEN))
+        speech_diffusion_id = _require("speech_diffusion", tid(SPEECH_DIFFUSION_TOKEN))
         _eos = defaults.get("eos_token_id")
         if _eos is None:
             _eos = tid("<|endoftext|>")
@@ -164,17 +207,7 @@ class TritonNextTokenDiffusionEngine:
         if prompt is None or prompt == "":
             raise RuntimeError("ZERO FALLBACK: next_token_diffusion requires --prompt text.")
 
-        def enc(text: str, add_special: bool = False) -> List[int]:
-            return self._encode_nopad(tok, text, add_special=add_special)
-
-        system_prompt = (" Transform the text provided by various speakers into speech output, "
-                         "utilizing the distinct voice of each respective speaker.\n")
-        prompt_ids: List[int] = []
-        prompt_ids += enc(system_prompt, add_special=True)
-        prompt_ids += enc(" Text input:\n", add_special=False)
-        prompt_ids += enc(f" Speaker 0: {prompt}\n", add_special=False)
-        prompt_ids += enc(" Speech output:\n", add_special=False)
-        prompt_ids += [speech_start_id]
+        prompt_ids = speaker_prompt_ids(tok, prompt, speech_start_id)
         print(f"   [{self.LM}] prompt tokens ({len(prompt_ids)}): ...{prompt_ids[-12:]}")
 
         for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
@@ -540,22 +573,6 @@ class TritonNextTokenDiffusionEngine:
                     return v
             return None
         return out
-
-    @staticmethod
-    def _encode_nopad(tok, text: str, add_special: bool = False) -> List[int]:
-        ids = None
-        try:
-            ids = tok.encode(text, add_special_tokens=add_special, padding=False)
-        except TypeError:
-            try:
-                ids = tok.encode(text, add_special_tokens=add_special)
-            except TypeError:
-                ids = tok.encode(text)
-        if hasattr(ids, "tolist"):
-            ids = ids.tolist()
-        if ids and isinstance(ids[0], list):
-            ids = ids[0]
-        return [int(x) for x in ids]
 
     def _embed_weight_np(self, comp_name: str) -> Optional[np.ndarray]:
         executor = self.ctx.executors.get(comp_name)

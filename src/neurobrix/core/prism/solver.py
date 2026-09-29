@@ -6315,11 +6315,21 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
                              for c, p in (plan.runtime_op_tiling or {}).items()
                              if getattr(p, "conv3d_chunks", None)},
+           # Which ops each component's op-level tiling cuts — the plan's own decision, which the
+           # executor wires as interceptors and the widths pass reads (`TilingView`).
+           "op_level_tiling_ops": {
+               cn: {"fusion_pairs": sorted([str(u), str(c), int(tf)] for u, c, tf in getattr(tp, "fusion_pairs", []) or []),
+                    "tiled_ops": sorted([str(u), int(tf)] for u, _t, tf in getattr(tp, "tiled_ops", []) or [])}
+               for cn, tp in (plan.runtime_op_tiling or {}).items()},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
                                 for k, v in (plan.component_tiling or {}).items()}}
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
-        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype}
+        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype,
+                           "num_layers": getattr(kv, "num_layers", None),
+                           "num_kv_heads": getattr(kv, "num_kv_heads", None),
+                           "k_head_dim": getattr(kv, "k_head_dim", None),
+                           "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     return rec

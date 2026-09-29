@@ -161,6 +161,177 @@ def run_entry(args):
         return cmd_run(args)
 
 
+def request_input_config(args, manifest: dict, family, cache_path):
+    """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
+    the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
+    container's defaults, the family's, the container's own output size and VAE scale, the
+    manifest's dtype — in that order (`_rt`). One implementation: `cmd_run` plans with it, and the
+    derived census (tools/derived_census.py) binds a component's symbols from it without running
+    anything."""
+    from neurobrix.core.prism import InputConfig
+    defaults_path = cache_path / "runtime" / "defaults.json"
+    if defaults_path.exists():
+        with open(defaults_path) as f:
+            cached_defaults = json.load(f)
+    else:
+        cached_defaults = {}
+
+    # Resolution for the Prism activation estimate MUST match the resolution the
+    # executor actually generates at — otherwise Prism over/under-estimates the VAE
+    # activation and mis-decides tiling/placement. The executor's merged_defaults
+    # fall back to the FAMILY config (config/families/<family>.yml), not just the
+    # per-model defaults.json. run.py read only defaults.json + a hardcoded 1024
+    # fallback, so for video (family default 512x512) Prism estimated the VAE at
+    # 1024x1024 (8x the real activation) and force-tiled a VAE that fits natively
+    # — producing tile seams. Mirror the executor's fallback chain: args ->
+    # defaults.json -> family config -> 1024.
+    from neurobrix.core.config import get_family_defaults as _get_family_defaults
+    _fam_defaults = _get_family_defaults(family) if family else {}
+    # An image request's size is the IMAGE's size. Without this the cascade
+    # fell through to a cached or family default and Prism planned the SAME
+    # memory whatever was asked of it — measured 2026-09-17 on hat-s-x4:
+    #     --input-image apple_448.png      planned 278 MB
+    #     --input-image apple_160x112.png  planned 278 MB
+    # a 22.4x difference in pixels and not one byte of difference in the plan.
+    # The consequence is not academic: the per-cell memory gate is fed that
+    # number, so it could not refuse a cell that went on to hold 8408 MB live
+    # and take the machine to 127 MB before the OS killed it.
+    # An image request's size is the IMAGE's size. If the file cannot be read,
+    # REFUSE: planning on a declared default for a request whose real size is
+    # unknown is how the same 278 MB plan came out for 448x448 and 160x112.
+    _img_hw = None
+    _img_path = getattr(args, 'input_image', None)
+    if _img_path and not getattr(args, 'height', None) and not getattr(args, 'width', None):
+        from PIL import Image as _PILImage
+        try:
+            with _PILImage.open(_img_path) as _im:
+                _img_hw = (_im.size[1], _im.size[0])       # PIL gives (W, H)
+        except Exception as _e:                            # noqa: BLE001
+            raise MissingRuntimeValue(
+                f"the request names an input image the engine cannot read "
+                f"({_img_path!r}: {type(_e).__name__}: {_e}), so its height and "
+                f"width are unknown. Planning on a declared default for a "
+                f"request of unknown size is what this refusal exists to "
+                f"prevent — pass --height/--width, or give a readable image."
+            ) from _e
+
+    # OPTIONAL: a speech model, a TTS or an LLM has no spatial extent. Requiring
+    # height/width of every model refused whisper, Kokoro and TinyLlama outright
+    # — the same over-reach as demanding a VAE scale from a model with no VAE.
+    # Where a spatial request exists the image supplies them, so they are never
+    # silently absent for the models that need them.
+    # The container's own output size — the SAME authority the executor renders at when
+    # the request names none (`resolution.container_size`, 2026-09-21): a plan budgeted
+    # at the VAE's trace extent while the flow decoded 81 frames at 480x832 asked 24.8 GB
+    # at one conv against a 19.7 GB plan. A request-side fact still outranks it.
+    from neurobrix.core.runtime.resolution.container_size import container_output_size
+    # The topology as the executor reads it: the cache path's own file (the container
+    # object answers an empty topology for an extracted directory).
+    _topo_path = cache_path / "topology.json"
+    _topo_components = (json.load(open(_topo_path)).get("components") or {}) if _topo_path.exists() else {}
+    _cos = container_output_size(manifest, cached_defaults, _topo_components)
+    height = _rt("height", args, cached_defaults, _fam_defaults,
+                 extra=[("the input image's height", _img_hw[0] if _img_hw else None),
+                        ("the container's own output height", _cos[0] if _cos else None)],
+                 default=None)
+    width = _rt("width", args, cached_defaults, _fam_defaults,
+                extra=[("the input image's width", _img_hw[1] if _img_hw else None),
+                       ("the container's own output width", _cos[1] if _cos else None)],
+                default=None)
+    # Resolution binning (the vendor's `use_resolution_binning`, recorded under
+    # `flow.resolution_binning`): the executor classifies the request to its trained bin before
+    # anything is sized (`executor._build_merged_defaults` -> `bin_request`), so the whole pipeline
+    # runs at the bin. The plan is sized at the same bin, by the same function — Sana-1024 was
+    # planned at 320 x 512 and ran at 768 x 1280 (the census walk, 2026-09-29).
+    if height is not None and width is not None and _topo_path.exists():
+        from neurobrix.core.runtime.resolution.resolution_binning import bin_request
+        _hw = {"height": height, "width": width}
+        bin_request(json.load(open(_topo_path)), _hw, None)
+        height, width = _hw["height"], _hw["width"]
+
+    # OPTIONAL by nature: a model without a VAE has no scale factor, a model
+    # without a temporal axis has no compression. Absent is a legitimate answer
+    # for these two, and only for these two.
+    # The VAE scale in the container's own spellings (manifest, defaults, trace), the
+    # same brick the executor reads: without it the plan's spatial symbols bind to nothing.
+    from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
+    vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
+                    extra=[("the container's own VAE scale", _vsf(manifest, cached_defaults, _topo_components))],
+                    default=None)
+    num_frames = _rt("num_frames", args, cached_defaults, _fam_defaults, default=None)
+    temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
+                               _fam_defaults, default=None)
+
+    # The batch the flow will ACTUALLY run. `batch_size=2` stood here for every
+    # model with the comment "CFG effectively doubles batch" — applied to
+    # upscalers and speech models, which run no classifier-free guidance, and
+    # overriding the batch_size: 1 that diffusion containers themselves declare.
+    # CFG doubles the batch only where guidance is in force, and the engine
+    # already treats `guidance_scale` as the declaration of that
+    # (core/flow/autoregressive.py refuses without it).
+    # A request carrying ONE image or ONE prompt is a batch of one. That is
+    # read off the request, not assumed: it is consulted after the request's own
+    # explicit --batch-size and after nothing else, so a container that declares
+    # a different batch still wins over the derivation only when the request
+    # names no single item.
+    _single = 1 if (getattr(args, 'input_image', None)
+                    or getattr(args, 'audio', None)
+                    or getattr(args, 'prompt', None)) else None
+    batch_size = _rt("batch_size", args, cached_defaults, _fam_defaults,
+                     extra=[("the request's single input item", _single)],
+                     why="It is the batch Prism plans for.")
+    _guidance = _rt("guidance_scale", args, cached_defaults, _fam_defaults, default=None)
+    if _guidance is not None and float(_guidance) > 1.0:
+        batch_size *= 2
+
+    # The dtype execution will resolve, not a literal. Every container on this
+    # rack declares one (float32 for swin2SR, bfloat16 for TinyLlama, float16
+    # for whisper), and "float16" stood here for all of them.
+    # The manifest is container-declared data as much as runtime/defaults.json,
+    # and three upscalers on this rack declare their dtype ONLY there.
+    dtype = _rt("dtype", args, cached_defaults, _fam_defaults,
+                extra=[("the container manifest's dtype", manifest.get("dtype"))],
+                why="It sizes every tensor in the plan.")
+
+    # The text's length where the flow's own preprocessing makes it without a tokenizer:
+    # a phonemizer container (the audio flow's condition — `phoneme_vocab` declared, no
+    # tokenizer module) runs its text components at len(phoneme ids), computed by the SAME
+    # function the flow calls (`g2p.phoneme_ids`). Without it every `seq_len` symbol bound to
+    # its trace extent: Kokoro planned 23 phonemes and ran 94 (census 2026-09-28).
+    seq_len = None
+    _vocab = cached_defaults.get("phoneme_vocab")
+    _prompt = getattr(args, 'prompt', None)
+    if _vocab and _prompt is not None and "tokenizer" not in (manifest.get("modules") or {}):
+        from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
+        _tpl = cached_defaults.get("tts_prompt_template")
+        _text = _tpl.format(text=_prompt) if _tpl and "{text}" in _tpl else _prompt
+        seq_len = len(phoneme_ids(_text, str(cache_path), _vocab,
+                                  cached_defaults.get("phoneme_lang", "a"),
+                                  request_voice({"speaker": getattr(args, 'speaker', None)},
+                                                cached_defaults))[1])
+
+    # The flow's per-component bindings (CFG batch, a diffusion encoder's length, the denoiser's
+    # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan
+    # and the derived census.
+    from neurobrix.core.prism.flow_bindings import FlowBindings
+    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
+             if _topo_path.exists() else None)
+
+    input_config = InputConfig(
+        batch_size=batch_size,
+        height=height,
+        width=width,
+        seq_len=seq_len,
+        flow=_flow,
+        dtype=dtype,
+        vae_scale=vae_scale,
+        num_frames=num_frames,
+        temporal_compression=temporal_compression,
+    )
+
+    return input_config
+
+
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
     from neurobrix.nbx import NBXContainer
@@ -398,127 +569,10 @@ def cmd_run(args):
     cache_path = container._cache_path
     assert cache_path is not None, "Container cache path must be set"
     defaults_path = cache_path / "runtime" / "defaults.json"
-    if defaults_path.exists():
-        with open(defaults_path) as f:
-            cached_defaults = json.load(f)
-    else:
-        cached_defaults = {}
-
-    # Resolution for the Prism activation estimate MUST match the resolution the
-    # executor actually generates at — otherwise Prism over/under-estimates the VAE
-    # activation and mis-decides tiling/placement. The executor's merged_defaults
-    # fall back to the FAMILY config (config/families/<family>.yml), not just the
-    # per-model defaults.json. run.py read only defaults.json + a hardcoded 1024
-    # fallback, so for video (family default 512x512) Prism estimated the VAE at
-    # 1024x1024 (8x the real activation) and force-tiled a VAE that fits natively
-    # — producing tile seams. Mirror the executor's fallback chain: args ->
-    # defaults.json -> family config -> 1024.
-    from neurobrix.core.config import get_family_defaults as _get_family_defaults
-    _fam_defaults = _get_family_defaults(family) if family else {}
-    # An image request's size is the IMAGE's size. Without this the cascade
-    # fell through to a cached or family default and Prism planned the SAME
-    # memory whatever was asked of it — measured 2026-09-17 on hat-s-x4:
-    #     --input-image apple_448.png      planned 278 MB
-    #     --input-image apple_160x112.png  planned 278 MB
-    # a 22.4x difference in pixels and not one byte of difference in the plan.
-    # The consequence is not academic: the per-cell memory gate is fed that
-    # number, so it could not refuse a cell that went on to hold 8408 MB live
-    # and take the machine to 127 MB before the OS killed it.
-    # An image request's size is the IMAGE's size. If the file cannot be read,
-    # REFUSE: planning on a declared default for a request whose real size is
-    # unknown is how the same 278 MB plan came out for 448x448 and 160x112.
-    _img_hw = None
-    _img_path = getattr(args, 'input_image', None)
-    if _img_path and not getattr(args, 'height', None) and not getattr(args, 'width', None):
-        from PIL import Image as _PILImage
-        try:
-            with _PILImage.open(_img_path) as _im:
-                _img_hw = (_im.size[1], _im.size[0])       # PIL gives (W, H)
-        except Exception as _e:                            # noqa: BLE001
-            raise MissingRuntimeValue(
-                f"the request names an input image the engine cannot read "
-                f"({_img_path!r}: {type(_e).__name__}: {_e}), so its height and "
-                f"width are unknown. Planning on a declared default for a "
-                f"request of unknown size is what this refusal exists to "
-                f"prevent — pass --height/--width, or give a readable image."
-            ) from _e
-
-    # OPTIONAL: a speech model, a TTS or an LLM has no spatial extent. Requiring
-    # height/width of every model refused whisper, Kokoro and TinyLlama outright
-    # — the same over-reach as demanding a VAE scale from a model with no VAE.
-    # Where a spatial request exists the image supplies them, so they are never
-    # silently absent for the models that need them.
-    # The container's own output size — the SAME authority the executor renders at when
-    # the request names none (`resolution.container_size`, 2026-09-21): a plan budgeted
-    # at the VAE's trace extent while the flow decoded 81 frames at 480x832 asked 24.8 GB
-    # at one conv against a 19.7 GB plan. A request-side fact still outranks it.
-    from neurobrix.core.runtime.resolution.container_size import container_output_size
-    # The topology as the executor reads it: the cache path's own file (the container
-    # object answers an empty topology for an extracted directory).
-    _topo_path = cache_path / "topology.json"
-    _topo_components = (json.load(open(_topo_path)).get("components") or {}) if _topo_path.exists() else {}
-    _cos = container_output_size(manifest, cached_defaults, _topo_components)
-    height = _rt("height", args, cached_defaults, _fam_defaults,
-                 extra=[("the input image's height", _img_hw[0] if _img_hw else None),
-                        ("the container's own output height", _cos[0] if _cos else None)],
-                 default=None)
-    width = _rt("width", args, cached_defaults, _fam_defaults,
-                extra=[("the input image's width", _img_hw[1] if _img_hw else None),
-                       ("the container's own output width", _cos[1] if _cos else None)],
-                default=None)
-    # OPTIONAL by nature: a model without a VAE has no scale factor, a model
-    # without a temporal axis has no compression. Absent is a legitimate answer
-    # for these two, and only for these two.
-    # The VAE scale in the container's own spellings (manifest, defaults, trace), the
-    # same brick the executor reads: without it the plan's spatial symbols bind to nothing.
-    from neurobrix.core.runtime.resolution.container_size import vae_scale_factor as _vsf
-    vae_scale = _rt("vae_scale_factor", args, cached_defaults, _fam_defaults,
-                    extra=[("the container's own VAE scale", _vsf(manifest, cached_defaults, _topo_components))],
-                    default=None)
-    num_frames = _rt("num_frames", args, cached_defaults, _fam_defaults, default=None)
-    temporal_compression = _rt("temporal_compression_ratio", args, cached_defaults,
-                               _fam_defaults, default=None)
-
-    # The batch the flow will ACTUALLY run. `batch_size=2` stood here for every
-    # model with the comment "CFG effectively doubles batch" — applied to
-    # upscalers and speech models, which run no classifier-free guidance, and
-    # overriding the batch_size: 1 that diffusion containers themselves declare.
-    # CFG doubles the batch only where guidance is in force, and the engine
-    # already treats `guidance_scale` as the declaration of that
-    # (core/flow/autoregressive.py refuses without it).
-    # A request carrying ONE image or ONE prompt is a batch of one. That is
-    # read off the request, not assumed: it is consulted after the request's own
-    # explicit --batch-size and after nothing else, so a container that declares
-    # a different batch still wins over the derivation only when the request
-    # names no single item.
-    _single = 1 if (getattr(args, 'input_image', None)
-                    or getattr(args, 'audio', None)
-                    or getattr(args, 'prompt', None)) else None
-    batch_size = _rt("batch_size", args, cached_defaults, _fam_defaults,
-                     extra=[("the request's single input item", _single)],
-                     why="It is the batch Prism plans for.")
-    _guidance = _rt("guidance_scale", args, cached_defaults, _fam_defaults, default=None)
-    if _guidance is not None and float(_guidance) > 1.0:
-        batch_size *= 2
-
-    # The dtype execution will resolve, not a literal. Every container on this
-    # rack declares one (float32 for swin2SR, bfloat16 for TinyLlama, float16
-    # for whisper), and "float16" stood here for all of them.
-    # The manifest is container-declared data as much as runtime/defaults.json,
-    # and three upscalers on this rack declare their dtype ONLY there.
-    dtype = _rt("dtype", args, cached_defaults, _fam_defaults,
-                extra=[("the container manifest's dtype", manifest.get("dtype"))],
-                why="It sizes every tensor in the plan.")
-
-    input_config = InputConfig(
-        batch_size=batch_size,
-        height=height,
-        width=width,
-        dtype=dtype,
-        vae_scale=vae_scale,
-        num_frames=num_frames,
-        temporal_compression=temporal_compression,
-    )
+    cached_defaults = json.load(open(defaults_path)) if defaults_path.exists() else {}
+    input_config = request_input_config(args, manifest, family, cache_path)
+    # The resolved request the inputs below are built from — the same values Prism plans with.
+    height, width, num_frames = input_config.height, input_config.width, input_config.num_frames
 
     solver = PrismSolver()
     # The mode reaches Prism: `layer_streaming` cuts the graph the EXECUTOR will run, and
