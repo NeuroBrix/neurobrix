@@ -97,17 +97,19 @@ class _P:
     cpu = _Cpu()
 
 
-class _Dev:
+class _HostDev:
+    """A device as `_host_budget_mb` reads it — only whether its memory is unified. Its own name:
+    a second `_Dev` shadowed the zero3 cases' stub (the Mac, 03:09: AttributeError capacity_mb)."""
     def __init__(self, unified: bool):
         self.has_unified_memory = unified
 
 
 class _PU(_P):
-    devices = [_Dev(True)]
+    devices = [_HostDev(True)]
 
 
 class _PD(_P):
-    devices = [_Dev(False)]
+    devices = [_HostDev(False)]
 
 
 def test_the_host_budget_honours_the_prism_budget_door_on_unified_memory(monkeypatch):
