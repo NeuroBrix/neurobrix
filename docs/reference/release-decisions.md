@@ -101,3 +101,47 @@ encoder → transformer step 0 → decoder), the first over-bound op classified 
 
 **Release consequence.** 0.5.5 does not ship a Sana-MultiLing container as correct; the hub entry
 is marked or unlisted until then (see the session record of 2026-09-21 for what the hub offers).
+
+## 2026-09-28 20:06 — RED LINES: census once, certify once, run only to confirm (the owner, via the supervisor)
+
+**The measurement that raised it.** On the Mac the same day: a census walk of chatterbox's generation recorded 4 232
+keys in 21 minutes and was still going (the rack: 46 minutes, 4 131); the two Triton gates of the `adbf6e84` bump, read
+as "served", took 545 of their 1 400 key uses from the runtime replay cache (sweeps made by an earlier sweeping gate,
+keyed by architecture without the code generator) and 27 from runtime sweeps; the working report ran to 336 lines.
+
+**The decision, binding both machines from 20:06.** The slowness of a run is the autotune; we autotune without running
+models. (1) One census table per hardware profile, committed in this repository (model, mode, op, kernel key, shape class,
+dtype, the census tool revision and the container sha), produced by one tool over every catalogue container, regenerated
+only for the containers that changed or for all when a key definition changes — never by walking a model's generation
+step by step; a census that takes an hour is a broken census. (2) One certified directory per profile, the only one runs
+read, committed, never discarded, certified from that table and nothing else, re-certified only where a best configuration
+can move or a shape class changed. (3) Confirmation runs are certified-only: a key missing from the directory is an ERROR
+naming the key and the census row that should have held it, never a runtime sweep; the runner always passes the flag; a
+miss is a census defect. (4) Confirmation requests are the smallest that still judge the model, chosen per family from
+data; full-quality renders once, for the release notes. (5) Findings go once into canonical records; the report is a
+current state under 150 lines; history in dated archives; one watcher for inbox and peer, one per running campaign.
+
+**Release consequence.** No new full-model run on either machine until (3) exists in the engine with its test; the
+release candidate's gate runs once, on both machines, after every model × dtype × mode is certified from (1) and verified
+at zero miss under (3). The manifesto (`CLAUDE.md`, untracked by this repository's own rule) carries the same text at its
+top on each machine.
+
+## 2026-09-29 01:37 — old certificates are re-proven, not re-swept; the census comes from one shared derivation (the owner, via the supervisor)
+
+**The measurement that raised it.** On the Mac, 2026-09-28/29: 1 068 keys re-swept under the served generator from
+census files in four hours (one to twelve keys a minute; one key in five refused for witness drift, four in five of
+those passing a retry), and the table's 1 335 keys begun the same way — because the runtime does not serve a proof made
+under another compiler (the generator door) and the certifier's `--reprove-generator` re-ranked every such key by a full
+sweep.
+
+**The decision.** 'Certified' means correct and pinned, not the fastest. For every key of the table with an entry under
+the retired generator, the certifier RE-PROVES that stored configuration under the served generator — the fp64 oracle and
+one timing under the witness, one configuration, seconds — and serves it, recorded as re-proven; a full sweep only where
+the stored configuration fails the oracle under the new generator, or where there is no entry at all. Re-ranking for
+speed belongs to the kernel-optimisation chantier at the end of the roadmap, not to the release. One implementation for
+both machines. The census: the same `.nbx` serves both machines, so one derivation from the graphs (no shadow execution)
+produces the profile-independent part once, committed, projected through each profile; the walks of 2026-09-28 were the
+last, and their tables are that derivation's test data.
+
+**Release consequence.** A pass reports how many keys were re-proven, swept, and why; no key is certified on a drifting
+witness and none is left uncertified without its retry.
