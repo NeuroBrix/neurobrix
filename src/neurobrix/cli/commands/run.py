@@ -238,6 +238,17 @@ def request_input_config(args, manifest: dict, family, cache_path):
                 extra=[("the input image's width", _img_hw[1] if _img_hw else None),
                        ("the container's own output width", _cos[1] if _cos else None)],
                 default=None)
+    # Resolution binning (the vendor's `use_resolution_binning`, recorded under
+    # `flow.resolution_binning`): the executor classifies the request to its trained bin before
+    # anything is sized (`executor._build_merged_defaults` -> `bin_request`), so the whole pipeline
+    # runs at the bin. The plan is sized at the same bin, by the same function — Sana-1024 was
+    # planned at 320 x 512 and ran at 768 x 1280 (the census walk, 2026-09-29).
+    if height is not None and width is not None and _topo_path.exists():
+        from neurobrix.core.runtime.resolution.resolution_binning import bin_request
+        _hw = {"height": height, "width": width}
+        bin_request(json.load(open(_topo_path)), _hw, None)
+        height, width = _hw["height"], _hw["width"]
+
     # OPTIONAL by nature: a model without a VAE has no scale factor, a model
     # without a temporal axis has no compression. Absent is a legitimate answer
     # for these two, and only for these two.

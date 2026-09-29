@@ -23,6 +23,18 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; this brick serves both eng
     import torch
 
 
+def diffusion_max_length(topology: dict, encoder_name: str, tokenizer_vals: dict):
+    """The length a text prompt is tokenized to for `encoder_name` (TextProcessor's cascade): the
+    encoder's declared `shapes.input_ids` in the topology, then the tokenizer's
+    `max_sequence_length`; None when neither is declared (the caller refuses). The derived census
+    binds the encoder with it."""
+    shapes = (topology.get("components", {}).get(encoder_name, {}).get("shapes", {}))
+    if "input_ids" in shapes:
+        return int(shapes["input_ids"][1])
+    n = (tokenizer_vals or {}).get("max_sequence_length")
+    return int(n) if n is not None else None
+
+
 class TextProcessor:
     """
     Unified tokenization brick for all NeuroBrix flow types.
@@ -94,19 +106,9 @@ class TextProcessor:
         Returns:
             Max sequence length
         """
-        # Priority 1: Graph shape (trace-time stimulus length)
-        text_encoder_shapes = (
-            self._topology.get("components", {})
-            .get(encoder_name, {})
-            .get("shapes", {})
-        )
-        if "input_ids" in text_encoder_shapes:
-            return int(text_encoder_shapes["input_ids"][1])
-
-        # Priority 2: max_sequence_length from tokenizer config
-        max_length = self._tokenizer_vals.get("max_sequence_length")
-        if max_length is not None:
-            return int(max_length)
+        n = diffusion_max_length(self._topology, encoder_name, self._tokenizer_vals)
+        if n is not None:
+            return n
 
         raise RuntimeError(
             f"ZERO FALLBACK: Cannot determine max_sequence_length for tokenization. "

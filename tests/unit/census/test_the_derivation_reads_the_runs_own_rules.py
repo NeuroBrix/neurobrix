@@ -178,3 +178,57 @@ def test_a_spatial_downscaler_reads_pixels_whatever_its_time_map():
     up = {"tensors": {"input::x": {"shape": [1, 16, 1, 14, 22]}, "o": {"shape": [1, 3, 1, 112, 176]}},
           "input_tensor_ids": ["input::x"], "output_tensor_ids": ["o"]}
     assert not is_downscale_graph(up)             # a decoder upsamples
+
+
+def test_the_denoisers_packed_inputs_are_the_flows_own_shapes():
+    """The FLUX packing and conditioning the Triton flow builds — the derived census binds the
+    denoiser with the same functions: Open-Sora's [1, 16, 13, 4, 8] latent packs to 104 tokens of 64
+    (the walk's 208 = 2 x 104 rows under CFG), its ids and cond follow; Flex's [1, 16, 48, 64] packs to
+    768 tokens. Injection: a pack that forgets the /2 of either side -> RED."""
+    from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler as H
+    from neurobrix.triton import flux_video_conditioning as FV
+    assert H.packed_5d_shape([1, 16, 13, 4, 8]) == [1, 104, 64]
+    assert H.packed_4d_shape([1, 16, 48, 64]) == [1, 768, 64]
+    cs = FV.conditioning_shapes(1, 104, 64, 16, 13, 4, 8, 512)
+    assert (cs["img_ids"], cs["txt_ids"], cs["cond"], cs["p"]) == ([1, 104, 3], [1, 512, 3], [1, 104, 68], 2)
+
+
+def test_a_diffusion_prompt_is_tokenized_to_the_encoders_declared_length():
+    """`diffusion_max_length` (TextProcessor's cascade): the encoder's declared input shape, then the
+    tokenizer's max — Open-Sora's T5 runs at 512 where its graph was traced at 31."""
+    from neurobrix.core.module.text.processor import diffusion_max_length
+    topo = {"components": {"text_encoder": {"shapes": {"input_ids": [1, 512]}}, "t2": {}}}
+    assert diffusion_max_length(topo, "text_encoder", {}) == 512
+    assert diffusion_max_length(topo, "t2", {"max_sequence_length": 77}) == 77
+    assert diffusion_max_length(topo, "t2", {}) is None
+
+
+def test_a_guidance_embedding_denoiser_runs_no_cfg_batch():
+    """`guidance_embedding_component` (the CFG engine's rule): a loop denoiser that takes `guidance`
+    embeds the scale — no batch-2 pass (Flex's walk: 512 text rows, not 1024)."""
+    from neurobrix.triton.cfg.engine import guidance_embedding_component
+    topo = {"flow": {"loop": {"components": ["transformer"]}},
+            "components": {"transformer": {"interface": {"inputs": ["hidden_states", "guidance"]}}}}
+    assert guidance_embedding_component(topo) == "transformer"
+    topo["components"]["transformer"]["interface"]["inputs"] = ["hidden_states"]
+    assert guidance_embedding_component(topo) is None
+
+
+def test_the_plan_is_sized_at_the_resolution_bin_the_run_uses(tmp_path):
+    """`run.request_input_config` bins the request as the executor does (`bin_request`): Sana-1024
+    at 320 x 512 runs — and is now planned — at its 768 x 1280 bin. Injection: the binning removed
+    from request_input_config -> 320 x 512, RED."""
+    import json
+    from neurobrix.cli import create_parser
+    from neurobrix.cli.commands.run import request_input_config
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "defaults.json").write_text(json.dumps({"dtype": "float16"}))
+    (tmp_path / "topology.json").write_text(json.dumps({"components": {}, "flow": {"resolution_binning": {
+        "source": "test", "default": True, "classify": "nearest_ratio",
+        "restore": "cover_resize_center_crop",
+        "interpolate": {"mode": "bilinear", "align_corners": False},
+        "bins": {"0.6": [768, 1280], "1.0": [1024, 1024]}}}}))
+    args = create_parser().parse_args(["run", "--model", "x", "--prompt", "p", "--height", "320",
+                                       "--width", "512"])
+    ic = request_input_config(args, {"family": "image", "dtype": "float16"}, "image", tmp_path)
+    assert (ic.height, ic.width) == (768, 1280)

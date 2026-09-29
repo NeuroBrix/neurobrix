@@ -63,6 +63,17 @@ def _resolve_txt(ctx: Any) -> Optional[NBXTensor]:
     return None
 
 
+def conditioning_shapes(b: int, num_tokens: int, packed_dim: int, channels: int, frames: int,
+                        height: int, width: int, txt_seq: int) -> dict:
+    """The shapes `prepare` synthesizes, from the packed state and its packing: the patch side
+    p = sqrt(packed_dim / C); img_ids [b, t*(h/p)*(w/p), 3]; txt_ids [b, txt_seq, 3]; cond
+    [b, num_tokens, (C+1)*p^2]. `prepare` builds with them; the derived census binds with them."""
+    p = int(round((packed_dim / channels) ** 0.5)) or 1
+    lh, lw = height // p, width // p
+    return {"img_ids": [b, frames * lh * lw, 3], "txt_ids": [b, txt_seq, 3],
+            "cond": [b, num_tokens, (channels + 1) * p * p], "p": p, "lh": lh, "lw": lw}
+
+
 def prepare(ctx: Any, packed_state: NBXTensor, packing_info: dict) -> None:
     """Synthesize img_ids / txt_ids / cond into the variable resolver (T2V).
 
@@ -75,10 +86,12 @@ def prepare(ctx: Any, packed_state: NBXTensor, packing_info: dict) -> None:
     b, num_tokens, packed_dim = packed_state.shape
     c = int(packing_info["channels"])
     t = int(packing_info["frames"])
-    # patch side from the packing (C*p^2 = packed_dim -> p = sqrt(packed_dim/C))
-    p = int(round((packed_dim / c) ** 0.5)) or 1
-    lh = int(packing_info["height"]) // p
-    lw = int(packing_info["width"]) // p
+    txt = _resolve_txt(ctx)
+    txt_seq = int(txt.shape[1]) if txt is not None else 0
+    # patch side from the packing (C*p^2 = packed_dim -> p = sqrt(packed_dim/C)) — the one shape rule
+    shp = conditioning_shapes(b, num_tokens, packed_dim, c, t, int(packing_info["height"]),
+                              int(packing_info["width"]), txt_seq)
+    p, lh, lw = shp["p"], shp["lh"], shp["lw"]
 
     # img_ids: FLUX 3-axis grid (frame, row, col) over (t, lh, lw). Built in
     # float32 then cast to the packed dtype — bit-mirror of the compiled path.
@@ -91,13 +104,10 @@ def prepare(ctx: Any, packed_state: NBXTensor, packing_info: dict) -> None:
     img_ids = _nbx_on(ids, dev_idx).to(dtype)
 
     # txt_ids: zeros [B, txt_seq, 3] — txt_seq from the T5 embedding.
-    txt = _resolve_txt(ctx)
-    txt_seq = int(txt.shape[1]) if txt is not None else 0
-    txt_ids = NBXTensor.zeros((b, txt_seq, 3), dtype, f"cuda:{dev_idx}")
+    txt_ids = NBXTensor.zeros(tuple(shp["txt_ids"]), dtype, f"cuda:{dev_idx}")
 
     # cond: zeros [B, num_tokens, (C+1)*p^2] — T2V mask + masked-ref both empty.
-    cond_dim = (c + 1) * (p * p)
-    cond = NBXTensor.zeros((b, num_tokens, cond_dim), dtype, f"cuda:{dev_idx}")
+    cond = NBXTensor.zeros(tuple(shp["cond"]), dtype, f"cuda:{dev_idx}")
 
     vr = ctx.variable_resolver
     for name, val in ((IMG_IDS_VAR, img_ids), (TXT_IDS_VAR, txt_ids), (COND_VAR, cond)):
