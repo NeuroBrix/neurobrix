@@ -1060,6 +1060,10 @@ class PrismSolver:
         # executor to instantiate a TilingEngine. _input_config is stashed so
         # the tile sizer can read the runtime spatial extent.
         self._component_tiling = {}
+        # The host rungs' own device sizing under the Triton engine (`_size_host_placement_on_device`),
+        # per rung: {rung: {component: tiling}} and {rung: (card, usable MB, {component: live MB})}.
+        self._host_device_tilings = {}
+        self._host_device_overflow = {}
         self._input_config = input_config
 
         # Step 2: Compute memory requirements (tiling-aware via profile)
@@ -1506,6 +1510,12 @@ class PrismSolver:
                 if cn in plan.components
                 and not str(plan.components[cn].device).startswith("cpu")
             }
+        # A host rung under the Triton engine computes its cpu-placed components on the card: the
+        # tilings that rung sized there are the plan's (`_size_host_placement_on_device`).
+        _host_t = (getattr(self, "_host_device_tilings", {}) or {}).get(chosen_strategy) or {}
+        if _host_t:
+            plan.component_tiling = dict(plan.component_tiling or {})
+            plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
         # intermediate tensor would OOM the assigned GPU. Decision happens
@@ -4798,7 +4808,21 @@ class PrismSolver:
             parts.append("ahead of " + ", ".join(runners_up))
         else:
             parts.append("the only viable strategy")
-        if chosen == "cpu_streaming":
+        from neurobrix.core.prism.host_footprint import engine_of
+        on_card = engine_of(self._mode) == "triton" and chosen in ("cpu_streaming", "cpu_execution")
+        if on_card:
+            # Under the Triton engine a host rung keeps the WEIGHTS on the host and computes on the
+            # card (`_size_host_placement_on_device`): say so, and say which component the card
+            # cannot hold even tiled — that run fails there, and saying "WILL run" hid it.
+            parts.append("— no GPU strategy fitted: weights stay on the host and stream to the "
+                         "card component by component, which computes them (slow)")
+            over = (getattr(self, "_host_device_overflow", {}) or {}).get(chosen)
+            if over:
+                card, usable, comps = over
+                parts.append("; the card cannot hold " + ", ".join(
+                    f"{c}'s activations ({mb:,.0f} MB; no tiling fits)" for c, mb in comps.items())
+                    + f" within its {usable:,.0f} MB on {card}: this run fails there")
+        elif chosen == "cpu_streaming":
             parts.append(
                 "— no GPU strategy fitted, so components stream from disk one "
                 "at a time: this WILL run, and it will be slow (expect minutes "
@@ -5071,13 +5095,12 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """CPU-only execution — Doctrine R35 last-resort cascade.
 
-        Place EVERY component (weights + activations) on CPU. Compute
-        routed to PyTorch ATen native CPU dispatcher (branch A) — sequential
-        and compiled modes work out of the box because `sequential_dispatcher`
-        and CompiledSequence are device-aware. Triton modes fall back to
-        PyTorch CPU when no Triton-CPU runtime is integrated (TODO
-        documented in `triton_cpu_coverage_gaps.md` once the branch B
-        Triton-CPU integration lands).
+        Place EVERY component on `cpu`. The compiled engine computes it on the host (the
+        ATen CPU dispatcher; `sequential_dispatcher` and CompiledSequence are device-aware).
+        The Triton engine never falls back to PyTorch: with a card, a `cpu`-placed component
+        keeps its weights on the host and computes on the card (sized there by
+        `_size_host_placement_on_device`); without one, it needs the upstream `triton-cpu`
+        (`triton/cpu_backend.py`), and refuses by name when that is absent.
 
         Activation budget: `sum(component peaks) <= _host_budget_mb(profile)` — the host's
         free reading rounded down onto the commercial ladder, which is where the headroom
@@ -5112,12 +5135,49 @@ class PrismSolver:
         for comp_name, _mem in sorted_comps:
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = ("cpu", shard_map)
+        self._size_host_placement_on_device("cpu_execution", sorted_comps, devices, container)
 
         # CPU-only "fresh devices" list. Used downstream by the executor
         # factory for context; an empty list is the historical signal
         # for "no GPU used". We preserve that signal.
         fresh = self._fresh_devices(devices)
         return allocations, fresh
+
+    def _size_host_placement_on_device(self, strategy: str, sorted_comps, devices, container) -> None:
+        """Under the Triton engine a component placed on `cpu` keeps its WEIGHTS on the host and
+        COMPUTES on the card (the weight loader's zero3 convention for an all-`cpu` shard map);
+        the compiled engine computes it on the host. So under Triton the host rungs are sized on
+        the card for their activations: a component whose live activations exceed the largest
+        card's usable figure is tiled there (`_spatial_component_tiling`, at that card's rung, as
+        Strategy 3.5 does), and one no tiling fits is recorded by name for the plan's reason.
+
+        The tilings are kept per rung, never in `_component_tiling`, which a rejected attempt
+        leaves behind. Before this, the plan dropped every tiling of a cpu-placed component and
+        said `cpu_streaming` "WILL run": Wan2.1-VACE at 720x1280 on a 16 GB card ran its encoder
+        untiled on cuda:0 and died on a 57 GB convolution (2026-09-29)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        self._host_device_tilings.pop(strategy, None)
+        self._host_device_overflow.pop(strategy, None)
+        cards = [d for d in devices if not str(d.device_string).startswith("cpu")]
+        if engine_of(self._mode) != "triton" or not cards:
+            return
+        largest = max(cards, key=lambda d: d.capacity_mb)
+        usable = self._usable_mb(largest)
+        tilings: Dict[str, Dict[str, Any]] = {}
+        overflow: Dict[str, float] = {}
+        for comp_name, mem in sorted_comps:
+            live = self._live_activation_mb(mem)
+            if live <= usable:
+                continue
+            tiling = self._spatial_component_tiling(
+                container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
+            if tiling is not None and tiling["tiled_activation_bytes"] / (1024 * 1024) <= usable:
+                tilings[comp_name] = tiling
+            else:
+                overflow[comp_name] = live
+        self._host_device_tilings[strategy] = tilings
+        if overflow:
+            self._host_device_overflow[strategy] = (largest.device_string, usable, overflow)
 
     def _try_op_level_tiling(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
@@ -5698,6 +5758,7 @@ class PrismSolver:
         for comp_name, _mem in sorted_comps:
             shard_map = {sh: "cpu" for sh in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = ("cpu", shard_map)
+        self._size_host_placement_on_device("cpu_streaming", sorted_comps, devices, container)
 
         return allocations, self._fresh_devices(devices)
 
