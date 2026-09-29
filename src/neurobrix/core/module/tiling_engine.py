@@ -782,6 +782,44 @@ class TilingEngine:
 # ============================================================================
 
 
+def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilation=1,
+                   transposed=False, output_padding=0, groups=1, *args, **kwargs):
+    """A rank-5 convolution Prism planned to chunk (`OpLevelTilingPlan.conv3d_chunks`), in either
+    engine: NBXTensor -> `wrappers.conv3d_chunked_wrapper` (the kt-conv2d chunked path); a torch
+    tensor -> F.conv3d over the same temporal output chunks, each chunk's input the frames its
+    receptive field reads. Chunks of `conv3d_chunk.chunk_frames(frame bytes)` output frames."""
+    try:
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        if isinstance(input_tensor, NBXTensor):
+            from neurobrix.kernels import wrappers as _w
+            return _w.conv3d_chunked_wrapper(input_tensor, weight, bias, stride, padding, dilation,
+                                             transposed, output_padding, groups)
+    except ImportError:
+        pass
+    import torch
+    import torch.nn.functional as F
+    from neurobrix.core.prism import conv3d_chunk as _c3
+
+    def _t(v):
+        return tuple(v) if isinstance(v, (list, tuple)) else (v, v, v)
+    st, sh, sw = _t(stride)
+    pt, ph, pw = _t(padding)
+    dt, dh, dw = _t(dilation)
+    kt = weight.shape[2]
+    es = input_tensor.element_size()
+    _need, frame = _c3.conv3d_need(tuple(input_tensor.shape), tuple(weight.shape), (st, sh, sw),
+                                   (pt, ph, pw), (dt, dh, dw), es, es)
+    tc = _c3.chunk_frames(frame)
+    x = F.pad(input_tensor, (0, 0, 0, 0, pt, pt)) if pt > 0 else input_tensor
+    t_out = (x.shape[2] - dt * (kt - 1) - 1) // st + 1
+    outs = []
+    for t0 in range(0, t_out, tc):
+        n = min(tc, t_out - t0)
+        xs = x[:, :, t0 * st: (t0 + n - 1) * st + dt * (kt - 1) + 1]
+        outs.append(F.conv3d(xs, weight, bias, (st, sh, sw), (0, ph, pw), (dt, dh, dw), groups))
+    return torch.cat(outs, dim=2)
+
+
 class OpLevelTilingPlan:
     """Compact spec emitted by Prism describing which ops in which
     component must be intercepted with what tiling strategy.
@@ -793,7 +831,7 @@ class OpLevelTilingPlan:
     """
 
     __slots__ = ("component_name", "fusion_pairs", "tiled_ops",
-                 "inplace_adds", "inplace_unary", "residual_chains")
+                 "inplace_adds", "inplace_unary", "residual_chains", "conv3d_chunks")
 
     def __init__(self, component_name: str):
         self.component_name = component_name
@@ -823,6 +861,10 @@ class OpLevelTilingPlan:
         # Detected at register-time from the DAG by
         # `_detect_inplace_unary_candidates`.
         self.inplace_unary: List[Tuple[str, str]] = []
+        # Each entry: a rank-5 convolution's op_uid whose one-shot peak exceeds the op's planned
+        # budget (`core/prism/conv3d_chunk.py`): it streams its temporal output in chunks. A PLAN
+        # decision — it read the driver's free bytes inside the wrapper (decision 2, 2026-09-29).
+        self.conv3d_chunks: List[str] = []
 
     def add_upsample_conv_fusion(self, upsample_uid: str, conv_uid: str,
                                   tile_factor: int) -> None:
@@ -842,10 +884,14 @@ class OpLevelTilingPlan:
         slot docstring for the expected dict shape."""
         self.residual_chains.append(dict(spec))
 
+    def add_conv3d_chunk(self, op_uid: str) -> None:
+        if op_uid not in self.conv3d_chunks:
+            self.conv3d_chunks.append(op_uid)
+
     def is_empty(self) -> bool:
         return (not self.fusion_pairs and not self.tiled_ops
                 and not self.inplace_adds and not self.inplace_unary
-                and not self.residual_chains)
+                and not self.residual_chains and not self.conv3d_chunks)
 
     def __repr__(self) -> str:
         return (
@@ -1598,6 +1644,8 @@ class OpLevelTilingEngine:
         # ≥3 web_search done with citations, ≥5 diagnostic
         # iterations, but the wrapper-correctness fix at smaller
         # spatial scales requires its own investigation budget.
+        for op_uid in getattr(self.plan, "conv3d_chunks", ()):
+            interceptors[op_uid] = conv3d_chunked
         for op_uid, op_type, tile_factor in self.plan.tiled_ops:
             cl = op_type.split("::")[-1]
             if cl in ("convolution", "conv2d", "_convolution"):
