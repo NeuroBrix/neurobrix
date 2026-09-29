@@ -123,6 +123,22 @@ def computed_array_to_container(t, device, dtype_name: str):
     return out.to(want) if out.nbx_dtype != want else out
 
 
+
+def _call_named(op_uid, fn, args, kwargs):
+    """An op the triton-sequential loop runs OUTSIDE the dispatcher — an op_uid or op_type
+    interceptor (Prism's tiled convs, the KV cache's attention) — is named for every key it forms
+    while keys are recorded, as `TritonSequentialDispatcher.dispatch` names its own, and no longer
+    once it returns. Those keys reached the census with no op (the 2026-09-28 walks: TinyLlama's
+    triton-sequential attention keys, `.ops` unpaired)."""
+    from neurobrix.kernels import census as _key_census
+    if not _key_census.recording():
+        return fn(*args, **kwargs)
+    _key_census.set_op(op_uid)
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        _key_census.set_op(None)
+
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -3240,7 +3256,7 @@ class GraphExecutor:
                     _fn = self._op_uid_interceptors[op_uid]
                     for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
                         resolved_kwargs.setdefault(_k, _v)
-                    result = _fn(*resolved_args, **resolved_kwargs)
+                    result = _call_named(op_uid, _fn, resolved_args, resolved_kwargs)
                 elif op_type in _type_interceptors:
                     # The op_type interceptors the compiled Triton sequence
                     # installs at compile (register_triton_interceptors): the
@@ -3253,7 +3269,7 @@ class GraphExecutor:
                     _fn = _type_interceptors[op_type]
                     for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
                         resolved_kwargs.setdefault(_k, _v)
-                    result = _fn(*resolved_args, **resolved_kwargs)
+                    result = _call_named(op_uid, _fn, resolved_args, resolved_kwargs)
                 else:
                     # Dispatch
                     result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid,

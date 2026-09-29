@@ -3071,7 +3071,17 @@ class PrismSolver:
         door = budget_mb(r)
         import os
         if os.environ.get("NBX_PRISM_BUDGET_MB"):
-            return float(door)
+            # The door models a smaller CARD. On a unified-memory profile the host IS the card's
+            # memory, and the door caps it (the Mac's 9675411a: the rungs where layer_streaming
+            # fires). On a discrete profile the host is the profile's own installed RAM — never
+            # the door and never a live reading the census cannot share: the door capped the host
+            # at the card's rung, so the census refused Allegro at the 16 GB top rung
+            # (cpu_streaming needs 89 148 MB of host for its VAE) where the live card plans
+            # cpu_streaming as its last resort (2026-09-29, the supervisor's decision 3).
+            devices = list(getattr(profile, "devices", None) or [])
+            if installed <= 0 or any(d.has_unified_memory for d in devices):
+                return float(door)
+            return float(rung_down_mb(installed))
         figure = min(r.free_mb, installed) if (r.measured and installed > 0) else (r.free_mb if r.measured else installed)
         return float(rung_down_mb(figure))
 
