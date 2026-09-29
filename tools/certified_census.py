@@ -234,12 +234,28 @@ def _graph_sha(model: str) -> str:
     return h.hexdigest()[:16]
 
 
-def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
-    """The family's request large enough to TILE (its YAML `census.tiling_probe`, Hocine's tiling
-    standard, 2026-09-21): an upscaler's input image resized to `image_px` a side, an image or
-    video request at `height` x `width`. None for a family that declares none."""
+def tiling_probe_spec(model: str, fam: str):
+    """(spec, origin): the tiling probe the CONTAINER carries (topology.json
+    extracted_values["_global"]["tiling_probe"] — the largest request the vendor documents, declared
+    per model in the build's registry with its source and written by the build or the in-place
+    pass; the owner's method, 2026-09-29 13:45), else the family profile's `census.tiling_probe`
+    (Hocine's tiling standard, 2026-09-21), else ({}, None). No size lives in this tool's code."""
+    topo = CACHE / model / "topology.json"
+    if topo.exists():
+        g = (json.loads(topo.read_text()).get("extracted_values") or {}).get("_global") or {}
+        carried = g.get("tiling_probe")
+        if carried:
+            return dict(carried), "container"
     from neurobrix.core.runtime.output_dispatch import get_family_config
     spec = ((get_family_config(fam) or {}).get("census") or {}).get("tiling_probe") or {}
+    return (dict(spec), "family") if spec else ({}, None)
+
+
+def _tiling_probe(model: str, fam: str, request: list, log_dir: Path):
+    """The request large enough to TILE (`tiling_probe_spec`: the container's, else the family's):
+    an upscaler's input image resized to `image_px` a side, an image or video request at `height` x
+    `width`. None when neither declares one."""
+    spec, _origin = tiling_probe_spec(model, fam)
     if not spec:
         return None
     req = list(request)
@@ -326,6 +342,7 @@ def census_model(model: str, hardware: str, modes: list, extra: list, requests: 
     probe = _tiling_probe(model, fam, reqs[0], log_dir)
     if probe is not None:
         reqs = list(reqs) + [probe]
+        row["probe_origin"] = tiling_probe_spec(model, fam)[1]
     row["requests"] = [" ".join(r) for r in reqs]
     keys = set()
     for mode in modes:
