@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   garbage collection. On a V100 16 GB, MiniCPM-o 4.5 streamed at a 12 GB budget completes a
   32-token answer in 357 s instead of 417 s, with byte-identical output and the same memory use.
 
+- `neurobrix autotune certify --reprove-generator` re-PROVES a certificate made under a retired code generator instead of re-sweeping it: the stored configuration alone, judged by the fp64 oracle and timed once under the witness, served and recorded as `reproven_from` the earlier generator; a full sweep only where that configuration fails the oracle under the running generator, or where the class holds no entry; the summary counts `reproven` and `swept` with each sweep's reason (the owner, 2026-09-29 01:37: 'certified' means correct and pinned, not the fastest; re-ranking is the kernel-optimisation chantier after the release). `certify()` takes a `bench` so a test can count launches. Tests: `test_an_old_certificate_is_re_proven_not_re_swept.py` (red under the old behaviour: the whole space benched again, no `reproven_from`; the oracle-failure case swept and counted).
 - **Every run's plan now states the host memory it expects to hold.** Beside the cards it plans, a run
   prints `Host:` (and `--explain-plan` a `host memory` line and a JSON field): the runtime's own base,
   measured on the machine when its hardware profile is generated, plus what the chosen plan keeps in
