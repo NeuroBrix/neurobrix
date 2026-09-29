@@ -66,7 +66,7 @@ def _certify_once(root, monkeypatch, stored_proof_backend):
     if cls is None:
         cls = C.proof_memory_class(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
-    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
+    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
     monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the witness held still: this case is not the drift case
     benches = []
@@ -110,7 +110,7 @@ def test_a_stored_configuration_that_fails_the_oracle_is_swept_and_the_reason_co
     tuner.cache.pop(key, None); C.reset()
     cls = C.proof_memory_class(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
-    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
+    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
     monkeypatch.setattr(Z, "_witness_time_ms", lambda proto: 3.0)        # the witness held still
     benches = []
@@ -145,7 +145,7 @@ def test_a_drift_on_the_single_re_prove_timing_is_a_refusal_for_the_retry_never_
     tuner.cache.pop(key, None); C.reset()
     cls = C.proof_memory_class(first["proof"])
     monkeypatch.setattr(T, "ROOT", root / "table")
-    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "op": None,
+    T.write(T.table_path(vendor, profile, cls), [{"model": "t", "container": "s", "mode": "triton", "rungs_mb": None, "ops": [None],
                                                   "kernel": qual, "key": C.key_repr(key), "dtype": T.dtypes_of(C.key_repr(key)), "tool": "t"}])
     kind, _ = Z._regime()
     if kind != "witness":
