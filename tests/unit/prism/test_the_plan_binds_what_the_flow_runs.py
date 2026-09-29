@@ -67,3 +67,25 @@ def test_without_a_flow_the_map_is_the_name_driven_one(tmp_path):
     ic = InputConfig(batch_size=2, seq_len=None, dtype="float16")
     assert ActivationProfiler(te).build_symbol_map(ic)["s1"] == 31
     assert ActivationProfiler(tr).build_symbol_map(ic)["s0"] == 1
+
+
+def test_the_vace_control_encoder_runs_the_pair(monkeypatch):
+    """Under the loop component's `vace_control_conditioning` flag the CLI feeds the component the
+    image input reaches the (inactive, reactive) pair — batch 2, `image_dsp.VACE_CONTROL_CLIPS` —
+    and the plan was sized at 1 (the retraced VACE's encoder at 162 = 2 x 81 frames in its walk).
+    No flag, no pair. Injection: the rule removed from `overrides` -> RED."""
+    import neurobrix.core.runtime.registry_flags as RF
+    flags = {("transformer", "vace_control_conditioning"): True}
+    monkeypatch.setattr(RF, "get_component_flag",
+                        lambda m, c, f, default=None, env_override=None: flags.get((c, f), default))
+    topo = {"flow": {"type": "iterative_process", "pre_loop": ["text_encoder", "vae_encoder"],
+                     "loop": {"components": ["transformer"]}, "post_loop": ["vae"]},
+            "connections": [{"from": "global.image", "to": "vae_encoder.args"}]}
+    fb = FlowBindings(topo, None, "m")
+    enc = _graph("vae_encoder", {"s0": {"name": "batch", "source": "input::args::dim_0"},
+                                 "s1": {"name": "time", "source": "input::args::dim_2"}})
+    ic = InputConfig(batch_size=1)
+    assert fb.overrides(enc, ic) == {"s0": 2}
+    assert fb.vace_control_batch("vae") is None
+    flags.clear()
+    assert fb.overrides(enc, ic) == {}

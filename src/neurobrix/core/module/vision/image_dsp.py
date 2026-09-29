@@ -421,6 +421,12 @@ def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
     }
 
 
+#: The clips the VACE control encoder encodes in one pass, stacked on its batch axis in this order
+#: (vendor WanVACEPipeline.prepare_video_latents): the part kept, the part to generate. The plan
+#: sizes the encoder at this batch (core/prism/flow_bindings).
+VACE_CONTROL_CLIPS = ("inactive", "reactive")
+
+
 def vace_control_pair_np(clip: Optional[np.ndarray], keep_frames: int, num_frames: int,
                          height: int, width: int):
     """The VACE control encoder's input and its pixel mask (vendor WanVACEPipeline).
@@ -446,7 +452,8 @@ def vace_control_pair_np(clip: Optional[np.ndarray], keep_frames: int, num_frame
         raise ValueError(f"VACE control: {keep_frames} kept frames in a {t}-frame clip")
     m = np.ones((1, 1) + tuple(v.shape[2:]), dtype=np.float32)
     m[:, :, :keep_frames] = 0.0
-    pair = np.concatenate([v * (1.0 - m), v * m], axis=0)
+    clips = {"inactive": v * (1.0 - m), "reactive": v * m}
+    pair = np.concatenate([clips[name] for name in VACE_CONTROL_CLIPS], axis=0)
     return np.ascontiguousarray(pair), m
 
 

@@ -13,6 +13,9 @@
 * **A FLUX denoiser's packed inputs** — the flow packs the latent (`packed_4d_shape` /
   `packed_5d_shape`) and synthesizes its positional ids and cond (`conditioning_shapes`); its image
   tokens are that packing, not the trace's.
+* **A VACE control encoder's pair** — under the loop component's `vace_control_conditioning`
+  flag the run feeds the component `global.image` reaches the (inactive, reactive) clips stacked on
+  its batch (`image_dsp.VACE_CONTROL_CLIPS`, the CLI's `vace_control_pair_np`).
 
 Prism prices each component with these (the plan), and the derived census keys with the same map:
 one binding for both. Each rule CALLS the function the flow itself runs.
@@ -163,6 +166,20 @@ class FlowBindings:
                 out[name] = [1, *sp["shape"][1:]] if sp.get("shape") else [1]
         return out
 
+    def vace_control_batch(self, comp: str) -> Optional[int]:
+        """The batch the run feeds `comp` when it is the VACE control encoder: the component the
+        image input reaches, under a loop component carrying `vace_control_conditioning` (the flag
+        the CLI builds the pair on). None for any other component."""
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        from neurobrix.core.module.vision.image_dsp import VACE_CONTROL_CLIPS
+        loop = (self.flow.get("loop") or {}).get("components") or []
+        if not any(get_component_flag(self.model_name, c, "vace_control_conditioning", default=None)
+                   for c in loop):
+            return None
+        fed = {conn.get("to", "").partition(".")[0] for conn in self.topology.get("connections") or []
+               if conn.get("from") == "global.image"}
+        return len(VACE_CONTROL_CLIPS) if comp in fed else None
+
     def overrides(self, dag: Dict[str, Any], input_config) -> Dict[str, int]:
         """{symbol id: value} this component's flow imposes on top of the name-driven map."""
         comp = dag.get("component_name")
@@ -170,6 +187,11 @@ class FlowBindings:
             return {}
         table = (dag.get("symbolic_context") or {}).get("symbols") or {}
         out: Dict[str, int] = {}
+        pair = self.vace_control_batch(comp)
+        if pair:
+            for sid, info in table.items():
+                if info.get("name") == "batch":
+                    out[sid] = pair
         enc_len = self.encoder_lengths()
         if comp in enc_len:
             for sid, info in table.items():
