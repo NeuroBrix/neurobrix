@@ -184,6 +184,22 @@ def run(cmd, env, logfile: Path, timeout: int, cwd=None) -> int:
         return rc
 
 
+def failure_cause(log_path, lines: int = 3) -> str:
+    """Why a Forge step failed, read from its own log: the last line naming an error (ERROR,
+    Traceback's final line, an exception), else the last non-empty lines. A step recorded as
+    "failed" with no cause sent the reader into the log by hand (E2, 2026-09-29: the trace failed
+    in 4 s on a missing libunified_pool.so and the summary said only "failed")."""
+    try:
+        text = Path(log_path).read_text(errors="replace").splitlines()
+    except OSError as exc:
+        return f"(its log {log_path} could not be read: {exc})"
+    body = [l.strip() for l in text if l.strip()]
+    for l in reversed(body):
+        if l.startswith("ERROR") or "Error:" in l or "Exception:" in l or l.startswith("RuntimeError") or "refused" in l.lower():
+            return l[:400]
+    return " | ".join(body[-lines:])[:400] if body else "(its log is empty)"
+
+
 def _trace_value(v):
     """The trace value a shape argument claims: an integer, or a symbol's trace."""
     if isinstance(v, bool):
@@ -1381,8 +1397,13 @@ class Model:
         t0 = time.time()
         cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
-        self.mark("trace", rc == 0, rc=rc, seconds=round(time.time() - t0, 1))
-        return rc == 0
+        if rc != 0:
+            why = failure_cause(self.dir / "trace.log")
+            self.mark("trace", False, rc=rc, seconds=round(time.time() - t0, 1), error=why)
+            log(f"{self.name}: trace FAILED (rc {rc}) — {why}")
+            return False
+        self.mark("trace", True, rc=rc, seconds=round(time.time() - t0, 1))
+        return True
 
     def step_build(self):
         if self.done("build"): return True
@@ -1409,8 +1430,12 @@ class Model:
             if found:
                 break
         ok = rc == 0 and found is not None
+        why = None if ok else (failure_cause(self.dir / "build.log") if rc != 0
+                               else f"the build exited 0 and wrote no model.nbx under {root}")
         self.mark("build", ok, rc=rc, nbx=str(found) if found else None, seconds=round(time.time() - t0, 1),
-                  gb=round(found.stat().st_size / 2**30, 2) if found else None)
+                  gb=round(found.stat().st_size / 2**30, 2) if found else None, **({"error": why} if why else {}))
+        if not ok:
+            log(f"{self.name}: build FAILED (rc {rc}) — {why}")
         return ok
 
     def step_backup(self):
