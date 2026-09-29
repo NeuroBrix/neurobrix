@@ -97,16 +97,44 @@ class _P:
     cpu = _Cpu()
 
 
-def test_the_host_budget_honours_the_prism_budget_door(monkeypatch):
+class _HostDev:
+    """A device as `_host_budget_mb` reads it — only whether its memory is unified. Its own name:
+    a second `_Dev` shadowed the zero3 cases' stub (the Mac, 03:09: AttributeError capacity_mb)."""
+    def __init__(self, unified: bool):
+        self.has_unified_memory = unified
+
+
+class _PU(_P):
+    devices = [_HostDev(True)]
+
+
+class _PD(_P):
+    devices = [_HostDev(False)]
+
+
+def test_the_host_budget_honours_the_prism_budget_door_on_unified_memory(monkeypatch):
+    """On a unified profile the host IS the card's memory: the door caps it (9675411a)."""
     s = _Solver()
-    undoored = s._host_budget_mb(_P())
+    undoored = s._host_budget_mb(_PU())
     monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "8192")
-    doored = s._host_budget_mb(_P())
+    doored = s._host_budget_mb(_PU())
     assert doored == 8192.0, f"the door was ignored: host budget stayed {doored}"
     assert undoored != doored, (
         "the cell cannot fail: the undoored budget already equals the door's value on this "
         f"machine ({undoored}). Pick a rung this host does not land on."
     )
+
+
+def test_the_door_models_a_smaller_card_not_a_smaller_host_on_discrete_memory(monkeypatch):
+    """On a discrete profile the door caps the CARD; the host is the profile's installed RAM on
+    the ladder — never the door, never a live reading. The door capped it (2026-09-29): the census
+    refused Allegro at the 16 GB top rung, where cpu_streaming needs 89 148 MB of host and the live
+    card plans it. (Red with the door returned for every profile.)"""
+    from neurobrix.core.prism.solver import rung_down_mb
+    monkeypatch.setenv("NBX_PRISM_BUDGET_MB", "8192")
+    got = _Solver()._host_budget_mb(_PD())
+    assert got == float(rung_down_mb(_P.cpu.ram_mb)), got
+    assert got > 8192.0
 
 
 def test_without_the_door_the_host_budget_is_still_a_rung(monkeypatch):
