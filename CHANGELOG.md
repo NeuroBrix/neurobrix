@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A video model's large 3-D convolutions are split by the plan, not by the memory free at that
+  instant.** Whether a temporal convolution runs whole or in frame chunks was decided while running
+  from the card's free memory, so the same request could run differently from one moment to the
+  next; the placement plan now decides it from the budget it gives the component, before the run.
+
 - **Models that stream their layers run faster.** When a model is larger than the card and its
   layers are loaded one segment at a time, releasing each segment no longer pauses for a full
   garbage collection. On a V100 16 GB, MiniCPM-o 4.5 streamed at a 12 GB budget completes a
