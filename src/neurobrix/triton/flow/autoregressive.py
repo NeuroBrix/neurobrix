@@ -169,6 +169,35 @@ def prompt_token_ids(tokenizer, prompt: str, defaults: dict, is_image_ar: bool, 
     return _flatten_tokenizer_output(token_ids)
 
 
+def image_cfg_weight(resolved: Dict, defaults: Dict) -> float:
+    """An image-AR request's guidance weight: the CLI's, else the package's. Above 1 the flow
+    runs the LM on [cond, uncond] (batch 2) and the head once per branch."""
+    cli_cfg = (resolved or {}).get("global.guidance_scale")
+    cfg_weight = float(cli_cfg) if cli_cfg is not None else defaults.get("guidance_scale")
+    if cfg_weight is None:
+        raise RuntimeError(
+            "guidance_scale missing from defaults.json for "
+            "autoregressive_image. Set in the model registry at import.")
+    return float(cfg_weight)
+
+
+def image_token_count(defaults: Dict) -> int:
+    """The VQ image's token count — the image-AR generator's fixed length: (image / patch)^2."""
+    num_patches = defaults["image_size"] // defaults["patch_size"]
+    return num_patches * num_patches
+
+
+def session_lm_name(gen_info: Dict, component_names) -> str:
+    """The component the decode session runs as the LM: the generation's `lm_component` when it
+    is a component, else the first component that is neither the text head nor a codec."""
+    lm_name = gen_info.get("lm_component", "language_model")
+    if lm_name not in component_names:
+        for name in component_names:
+            if name not in ("lm_head", "codec.decoder"):
+                return name
+    return lm_name
+
+
 def session_lm_config(defaults: Dict, topology: Dict, lm_name: str) -> Dict[str, Any]:
     """The LM facts the decode session sizes its KV cache from: the package's `lm_config`, else
     the LM component's extracted values. The derived census reads the same."""
@@ -549,15 +578,7 @@ class TritonAutoregressiveHandler:
         # prefill MUST run at batch=2 for shapes to bind correctly.
         use_cfg = False
         if is_image_ar:
-            cli_cfg = self.ctx.variable_resolver.resolved.get(
-                "global.guidance_scale")
-            cfg_weight = (float(cli_cfg) if cli_cfg is not None
-                          else defaults.get("guidance_scale"))
-            if cfg_weight is None:
-                raise RuntimeError(
-                    "guidance_scale missing from defaults.json for "
-                    "autoregressive_image. Set in the model registry at import.")
-            use_cfg = float(cfg_weight) > 1.0
+            use_cfg = image_cfg_weight(self.ctx.variable_resolver.resolved, defaults) > 1.0
 
         if use_cfg:
             token_ids_un = tokenizer.format_generation_prompt(
@@ -625,7 +646,6 @@ class TritonAutoregressiveHandler:
         """Create TritonLMSession with executor and KV cache."""
         from neurobrix.triton.sequence import TritonSequence
 
-        lm_name = gen_info.get("lm_component", "language_model")
         # Resolve the LM component name against the live executor map, NOT
         # `pkg.components`. `pkg.components` is populated only from component
         # dirs that ship a `runtime.json` (loader.py:72-77) — a build-side
@@ -641,11 +661,7 @@ class TritonAutoregressiveHandler:
         # it is robust regardless of which components carry a runtime.json.
         # Mirrors the native path (core/flow/autoregressive.py), which never
         # consults pkg.components for this. (R30: triton + triton_sequential.)
-        if lm_name not in self.ctx.executors:
-            for name in self.ctx.executors:
-                if name not in ("lm_head", "codec.decoder"):
-                    lm_name = name
-                    break
+        lm_name = session_lm_name(gen_info, self.ctx.executors)
 
         device_idx = parse_device_idx(self.ctx.primary_device)
 
@@ -879,15 +895,7 @@ class TritonAutoregressiveHandler:
                 raise RuntimeError(
                     f"autoregressive_image requires executors: missing {missing}")
 
-            cli_cfg = self.ctx.variable_resolver.resolved.get(
-                "global.guidance_scale")
-            cfg_weight = (float(cli_cfg) if cli_cfg is not None
-                          else defaults.get("guidance_scale"))
-            if cfg_weight is None:
-                raise RuntimeError(
-                    "guidance_scale missing from defaults.json for "
-                    "autoregressive_image.")
-            cfg_weight = float(cfg_weight)
+            cfg_weight = image_cfg_weight(self.ctx.variable_resolver.resolved, defaults)
 
             lm_vocab_size = defaults.get("lm_vocab_size")
             codebook_size = defaults.get("codebook_size")
@@ -1075,10 +1083,7 @@ class TritonImageStrategy:
 
     def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
         """VQ image generator: fixed max_tokens = num_patches², no EOS."""
-        image_size = defaults["image_size"]
-        patch_size = defaults["patch_size"]
-        num_patches = image_size // patch_size
-        max_tokens = num_patches * num_patches
+        max_tokens = image_token_count(defaults)
         config = {
             "max_tokens": max_tokens,
             "temperature": defaults["temperature"],

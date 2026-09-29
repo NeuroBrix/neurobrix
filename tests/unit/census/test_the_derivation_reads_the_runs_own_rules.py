@@ -294,3 +294,28 @@ def test_a_prefill_through_the_kv_interceptor_sees_no_mask():
             collections.Counter())
     assert D._op_launches(*args, None, None)                     # the graph's mask: the math route
     assert not D._op_launches(*args, None, {"prefill": True})    # through the interceptor: none
+
+
+def test_an_image_ar_generation_is_keyed_by_the_strategys_own_rules():
+    """The image strategy's facts the census keys Janus from (25/25 walked keys): its fixed token
+    count (image / patch)^2, the guidance weight (CLI over package; above 1 the LM runs at batch
+    2), the session's LM. Injections: the count as image // patch, the CLI weight ignored, the LM
+    rule returning the first component — each RED."""
+    import ast
+    import inspect
+    import textwrap
+    from neurobrix.triton.flow import autoregressive as AR
+    d = {"image_size": 384, "patch_size": 16, "guidance_scale": 5.0}
+    assert AR.image_token_count(d) == 576
+    assert AR.image_cfg_weight({}, d) == 5.0
+    assert AR.image_cfg_weight({"global.guidance_scale": 1.0}, d) == 1.0
+    assert AR.session_lm_name({"lm_component": "language_model"},
+                              ["vision_model", "language_model"]) == "language_model"
+    assert AR.session_lm_name({}, ["lm_head", "model"]) == "model"
+    for fn, name in ((AR.TritonAutoregressiveHandler._create_session, "session_lm_name"),
+                     (AR.TritonAutoregressiveHandler._create_strategy, "image_cfg_weight"),
+                     (AR.TritonAutoregressiveHandler._tokenize, "image_cfg_weight"),
+                     (AR.TritonImageStrategy.create_generator, "image_token_count")):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        assert name in {n.func.id for n in ast.walk(tree)
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}, fn.__name__
