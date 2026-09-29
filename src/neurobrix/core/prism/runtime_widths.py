@@ -700,8 +700,12 @@ class _TritonRules(_Rules):
             # dropped (triton/sequential.py `_cat_inputs_or_refuse`).
             return self.first_dimensioned(fl) or self.default(op, fl)
         if name in _SDPA:
-            # The flash path allocates `empty_like(q)` (wrappers.py:8781), the math path
-            # casts its result to q's dtype (:7967-7968).
+            # The flash path allocates `empty_like(q)`, the math path casts its result to q's
+            # dtype — q AFTER the wrapper's operand alignment (`launch_keys.sdpa_operand_dtypes`:
+            # q, k, v that disagree are all cast to fp32 before any route), so an fp32 V makes
+            # an fp32 output (measured: Wan's cross-attention, fp16 q/k and fp32 v, 2026-09-29).
+            if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
+                return "float32"
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)

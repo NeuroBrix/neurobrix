@@ -552,6 +552,8 @@ def cmd_run(args):
     defaults_path = cache_path / "runtime" / "defaults.json"
     cached_defaults = json.load(open(defaults_path)) if defaults_path.exists() else {}
     input_config = request_input_config(args, manifest, family, cache_path)
+    # The resolved request the inputs below are built from — the same values Prism plans with.
+    height, width, num_frames = input_config.height, input_config.width, input_config.num_frames
 
     solver = PrismSolver()
     # The mode reaches Prism: `layer_streaming` cuts the graph the EXECUTOR will run, and

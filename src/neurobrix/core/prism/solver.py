@@ -6271,6 +6271,12 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
+           # Which ops each component's op-level tiling cuts — the plan's own decision, which the
+           # executor wires as interceptors and the widths pass reads (`TilingView`).
+           "op_level_tiling_ops": {
+               cn: {"fusion_pairs": sorted([str(u), str(c)] for u, c, _tf in getattr(tp, "fusion_pairs", []) or []),
+                    "tiled_ops": sorted(str(u) for u, _t, _tf in getattr(tp, "tiled_ops", []) or [])}
+               for cn, tp in (plan.runtime_op_tiling or {}).items()},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
                                 for k, v in (plan.component_tiling or {}).items()}}
     if plan.kv_cache_plan is not None:

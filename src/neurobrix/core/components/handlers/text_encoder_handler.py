@@ -36,6 +36,33 @@ def _cat(tensors, dim):
     return torch.cat(tensors, dim=dim)
 
 
+def finalized_text_length(tokenizer_config: Optional[Dict[str, Any]], encoded: int) -> int:
+    """The sequence length `finalize_embeddings` hands the denoiser for an encoder output of
+    `encoded` positions — the ONE rule, which the handler asserts and the derived census binds
+    the denoiser's text axis with: a complex-human-instruction prefix is sliced down to
+    `max_sequence_length` (Sana), `zero_pad_embeddings` pads up to it (Wan); otherwise the
+    encoder's length. A flag without the length it needs is refused by name."""
+    if not tokenizer_config:
+        return encoded
+    chi = tokenizer_config.get("complex_human_instruction")
+    pad = tokenizer_config.get("zero_pad_embeddings")
+    if not (chi or pad):
+        return encoded
+    msl = tokenizer_config.get("max_sequence_length")
+    if msl is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: the tokenizer config declares "
+            + ("complex_human_instruction" if chi else "zero_pad_embeddings")
+            + " but no max_sequence_length, the length that flag finalizes the text "
+            "embeddings to. Model data incomplete: re-import the container.")
+    msl = int(msl)
+    if chi and encoded > msl:
+        encoded = msl
+    if pad and encoded < msl:
+        encoded = msl
+    return encoded
+
+
 @register_handler("text_encoder")
 class TextEncoderComponentHandler(ComponentHandler):
     """
@@ -218,7 +245,9 @@ class TextEncoderComponentHandler(ComponentHandler):
             return result
 
         complex_human_instruction = tokenizer_config.get("complex_human_instruction")
-        max_sequence_length = tokenizer_config.get("max_sequence_length", 300)
+        # The length this finalization produces — the pure rule, read by the derived census too.
+        target_len = finalized_text_length(tokenizer_config, hidden_state.shape[1])
+        max_sequence_length = tokenizer_config.get("max_sequence_length")
 
         # Check if slicing is needed (Sana-style CHI handling)
         if complex_human_instruction and hidden_state.shape[1] > max_sequence_length:
@@ -283,6 +312,10 @@ class TextEncoderComponentHandler(ComponentHandler):
                 attention_mask = _cat(
                     [attention_mask, attention_mask.new_zeros((b, pad_len))], dim=1)
 
+        if hidden_state.shape[1] != target_len:
+            raise RuntimeError(
+                f"finalize_embeddings produced {hidden_state.shape[1]} positions where "
+                f"finalized_text_length says {target_len}: the rule and the handler disagree")
         result["hidden_state"] = hidden_state
         if attention_mask is not None:
             result["attention_mask"] = attention_mask

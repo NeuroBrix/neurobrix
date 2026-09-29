@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A text-to-speech plan is sized for the text it is given.** A phonemizer model (Kokoro) was
   planned at its trace length (23 phonemes) whatever the prompt; the plan now binds the length the
   run will phonemize, from the same function the run uses. Plans under fp16 also price a layer or
-  group normalisation's output at the width the engine actually stores (fp32).
+  group normalisation's output, and an attention whose inputs mix precisions, at the width the
+  engine actually stores (fp32). A text encoder whose configuration asks its embeddings to be
+  padded or trimmed but names no length is now refused by name instead of assuming 300.
 
 - **Models that stream their layers run faster.** When a model is larger than the card and its
   layers are loaded one segment at a time, releasing each segment no longer pauses for a full
