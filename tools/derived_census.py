@@ -84,15 +84,14 @@ def prompt_tokens(model: str, prompt: str) -> int:
 def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dict,
                      has_native_bf16: bool, sdpa_budget_bytes: int, sdpa_min_rows: int,
                      sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
-                     tiled_tf=None):
+                     tiled_tf=None, decode_kv=None):
     """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
     the plan's `TilingView` for the component (its op-level tiling, empty when it has none)."""
     from neurobrix.core.prism import runtime_widths as RW
     from neurobrix.kernels import launch_keys as LK
     from neurobrix.kernels.nbx_tensor import NBXDtype
     from neurobrix.triton.symbols import SymbolResolver
-    g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
-    _mark_attention_layouts(g)
+    g = runtime_graph(model, comp)
     res = SymbolResolver(g.get("symbolic_context") or {})
     for sid, v in symbols.items():
         res._bind(sid, int(v))
@@ -153,7 +152,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         try:
             launches = _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                                     sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes,
-                                    unhandled, (tiled_tf or {}).get(uid))
+                                    unhandled, (tiled_tf or {}).get(uid), decode_kv)
         except AnnotationContradiction as e:
             unhandled[f"annotation contradicts its trace — {str(e).split(' dim ')[0]}"] += 1
             continue
@@ -194,14 +193,28 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
     return k_weight
 
 
-def _mark_attention_layouts(g: dict) -> None:
-    """The executor's own K/V layout pass (`GraphExecutor._mark_sdpa_k_layout`) on this graph:
-    it records `nbx_k_pre_transposed` / `nbx_v_pre_transposed` on every attention op from the
-    graph's transpose chain, as a run does at load."""
-    from neurobrix.core.runtime.graph_executor import GraphExecutor
-    stub = _Stub(_dag=g, _SDPA_LAYOUT_PASSTHROUGH=GraphExecutor._SDPA_LAYOUT_PASSTHROUGH,
-                 _SDPA_OP_TYPES=GraphExecutor._SDPA_OP_TYPES)
-    GraphExecutor._mark_sdpa_k_layout(stub)
+_RUNTIME_GRAPHS = {}
+
+
+def runtime_graph(model: str, comp: str) -> dict:
+    """The component's graph as the executor RUNS it — its own load-time passes, in its order
+    (GraphExecutor.__init__): the SDPA scaling normalised, the K/V layout marked, the MoE experts
+    fused (`detect_and_fuse_moe`, every mode; declared for a MoE LM packaged under another family,
+    `set_moe_config`). The calibration record is signed on this graph (DeepSeek-Coder's record
+    matches it and not the raw one), and a fused expert launches no autotuned matmul."""
+    key = (model, comp)
+    if key not in _RUNTIME_GRAPHS:
+        from neurobrix.core.runtime.graph_executor import GraphExecutor
+        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+        g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+        stub = _Stub(_dag=g, _SDPA_LAYOUT_PASSTHROUGH=GraphExecutor._SDPA_LAYOUT_PASSTHROUGH,
+                     _SDPA_OP_TYPES=GraphExecutor._SDPA_OP_TYPES)
+        GraphExecutor._normalize_sdpa_scaling(stub)
+        GraphExecutor._mark_sdpa_k_layout(stub)
+        manifest = json.loads((CACHE / model / "manifest.json").read_text())
+        g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True)
+        _RUNTIME_GRAPHS[key] = g
+    return _RUNTIME_GRAPHS[key]
 
 
 class AnnotationContradiction(ValueError):
@@ -210,7 +223,7 @@ class AnnotationContradiction(ValueError):
 
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                  sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled,
-                 tile_factor=None):
+                 tile_factor=None, decode_kv=None):
     """The launches of one op; None when the op launches no autotuned kernel."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
@@ -239,14 +252,28 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             if at_.get("nbx_v_pre_transposed"):
                 v = [v[0], v[1], v[3], v[2]]
             Hk, Tk, Dv = k[1], k[2], v[3]
+            qd, kd, vd = dt(ins[0]), dt(ins[1]), dt(ins[2])
+            mask_n = _mask_numel(o, shape)
+            q_round = None
+            if decode_kv is not None:
+                # A decode step through the KV interceptor (triton/kv_cache.py `intercept`): K and V
+                # are the cache's — `len` positions, its KV heads (GQA un-expanded), its dtype; Q is
+                # read in the cache's dtype (`q_dtype_of_kv`); a mask of the prefill length is
+                # dropped as stale.
+                Tk, kd, vd = int(decode_kv["len"]), decode_kv["dtype"], decode_kv["dtype"]
+                Hk = int(decode_kv.get("heads") or Hk)
+                q_round = kd if qd != kd else None
+                mask_n = mask_n if mask_n == Tk else None
             route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks)
-            qd, kd, vd, _qr = LK.sdpa_operand_dtypes(dt(ins[0]), dt(ins[1]), dt(ins[2]))
+            qd, kd, vd, _qr = LK.sdpa_operand_dtypes(qd, kd, vd, q_round)
+            if _qr is not None:
+                qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
             if route == "flash":
                 launches = []
             elif route == "chunked":
                 launches = LK.chunked_math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd,
                                                              has_native_bf16, rows)
-            elif Tq == 1 and LK.decode_vec_takes(D, Dv, _mask_numel(o, shape), Tk):
+            elif Tq == 1 and LK.decode_vec_takes(D, Dv, mask_n, Tk):
                 launches = []                     # the vector decode kernel: no autotuned key
             else:
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
@@ -523,6 +550,22 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
                 return []
             return [("codec.decoder", {f"c{i}": [1, len(codes[i])] for i in range(3)})]
         sites.append(("codec.decoder audio tokens", 1, int(mt), chain))
+    # autoregressive text (triton/flow/autoregressive.py): after the prefill, each decode step runs
+    # the LM at ONE position against the KV cache — its length P + 1 .. P + max_tokens, K/V the
+    # cache's (the plan's kv_cache: dtype, KV heads), through the interceptor's attention call.
+    if flow.get("type") == "autoregressive_generation" and plan.get("kv_cache") and prompt:
+        from neurobrix.core.runtime.decode_bound import decode_bound as _db
+        gen = flow.get("generation") or {}
+        head = gen.get("head_component", "lm_head")
+        lms = [c for c in comps if c != head]
+        P = prompt_tokens(model, prompt)
+        mt = _db(max_tokens_req if max_tokens_req is not None else require_max_tokens(defaults))
+        kv = plan["kv_cache"]
+
+        def decode(n, lms=lms, kv=kv):
+            return [(c, {"__decode__": {"len": n, "dtype": kv.get("dtype"),
+                                        "heads": kv.get("num_kv_heads")}}) for c in lms]
+        sites.append(("decode KV length", P + 1, P + int(mt), decode))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
     # (the frontend's own preprocessing choice and fit), their embeddings between the declared
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
@@ -625,6 +668,19 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                 outs = None
                 for comp, feed in chain(n):
                     view, tiled_tf = plan_tiling(plan, comp)
+                    if isinstance(feed, dict) and "__decode__" in feed:
+                        # one position: every batch / sequence symbol at 1, the cache's K and V
+                        from neurobrix.kernels.nbx_tensor import NBXDtype
+                        g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                        syms = {sid: 1 for sid, i in ((g.get("symbolic_context") or {})
+                                                      .get("symbols") or {}).items()}
+                        d = dict(feed["__decode__"])
+                        d["dtype"] = NBXDtype[str(d["dtype"]).replace("torch.", "")]
+                        launches = derive_component(model, comp, dtypes[comp], mode, syms,
+                                                    has_native_bf16, *sdpa, unhandled, tiling=view,
+                                                    tiled_tf=tiled_tf, decode_kv=d)
+                        keys |= set(launches)
+                        continue
                     inputs = feed(outs) if callable(feed) else feed
                     launches, outs = run_at_inputs(model, comp, dtypes[comp], mode, inputs,
                                                    has_native_bf16, sdpa, unhandled, tiling=view,
@@ -692,7 +748,8 @@ def compare(a) -> int:
     _mt_req = args.max_tokens if getattr(args, "max_tokens", None) is not None else None
     covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt,
                                                            _audio, _mt_req)
-               for comp, _f in chain(lo)}
+               for comp, _f in chain(lo)
+               if not (isinstance(_f, dict) and "__decode__" in _f)}   # decode ADDS to the prefill
     for c in plan["components"]:
         comp = c["name"]
         if comp in covered:

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `neurobrix run --explain-plan --json` reports the KV cache's layers, KV heads and head dimensions, and
+  each component's op-level tiling (which ops are cut, and by how much).
+
 - **Diffusion plans size each component at the batch and length it actually runs.** The
   denoiser under classifier-free guidance runs two prompts at once; a text encoder runs at the length
   its prompt is padded to; a FLUX-style denoiser runs on the packed latent — the memory plan now uses

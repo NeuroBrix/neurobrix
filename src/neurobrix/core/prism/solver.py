@@ -6281,7 +6281,11 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                                 for k, v in (plan.component_tiling or {}).items()}}
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
-        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype}
+        rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype,
+                           "num_layers": getattr(kv, "num_layers", None),
+                           "num_kv_heads": getattr(kv, "num_kv_heads", None),
+                           "k_head_dim": getattr(kv, "k_head_dim", None),
+                           "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     return rec
