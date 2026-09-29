@@ -180,38 +180,29 @@ def image_token_count(defaults: Dict) -> int:
 
 
 def session_kv_params(lm_config: Dict, kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
-    """`TritonKVCache`'s parameters: the Prism plan's cache when it planned one, else sized from
-    the LM config (see docs/reference/red-cells.md: the second branch's constants). The derived
-    census keys the decode from the same choice."""
-    if kv_plan is not None:
-        # Prism path — uses precomputed budget
-        return dict(
-            num_layers=kv_plan.num_layers,
-            num_kv_heads=kv_plan.num_kv_heads,
-            k_head_dim=kv_plan.k_head_dim,
-            v_head_dim=kv_plan.v_head_dim,
-            max_cache_len=kv_plan.max_cache_len,
-            dtype=parse_dtype(kv_plan.dtype),
-            window_ceiling=window,
-            decode_budget=decode_budget,
-            # Serve plans carry a small initial size (the compiled
-            # cache honours it; the triton cache now does too —
-            # the serve prefill lever, 2026-09-03).
-            initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
-        )
-    # Legacy fallback from lm_config
-    hidden_dim = lm_config.get("hidden_size", 2048)
-    num_heads = lm_config.get("num_heads") or 32
-    head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
+    """`TritonKVCache`'s parameters: the Prism plan's cache. The derived census keys the decode
+    from the same. A plan without a cache for a decoding flow is refused by name: Prism prices
+    every cache a flow opens (`core.runtime.lm_facts`), so a missing one is a plan that did not
+    see this flow — the constant-sized cache that stood here (22 layers, 32 heads, float16) ran
+    VibeVoice's decoder unplanned (2026-09-29)."""
+    if kv_plan is None:
+        raise RuntimeError(
+            "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans the "
+            "cache of every flow that decodes (core/runtime/lm_facts.decode_lm_component); a plan "
+            "without one did not see this flow — re-plan, never size the cache from constants.")
     return dict(
-        num_layers=lm_config.get("num_layers") or 22,
-        num_kv_heads=lm_config.get("num_kv_heads") or num_heads,
-        k_head_dim=head_dim,
-        v_head_dim=head_dim,
-        max_cache_len=decode_budget + 128,
-        dtype=NBXDtype.float16,
+        num_layers=kv_plan.num_layers,
+        num_kv_heads=kv_plan.num_kv_heads,
+        k_head_dim=kv_plan.k_head_dim,
+        v_head_dim=kv_plan.v_head_dim,
+        max_cache_len=kv_plan.max_cache_len,
+        dtype=parse_dtype(kv_plan.dtype),
         window_ceiling=window,
         decode_budget=decode_budget,
+        # Serve plans carry a small initial size (the compiled
+        # cache honours it; the triton cache now does too —
+        # the serve prefill lever, 2026-09-03).
+        initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
     )
 
 

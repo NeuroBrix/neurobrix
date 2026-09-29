@@ -16,7 +16,6 @@ import torch
 from typing import Any, Dict, TYPE_CHECKING
 
 # The rule and its history live in core.runtime_values.
-from neurobrix.core.runtime_values import require_max_tokens
 
 
 if TYPE_CHECKING:
@@ -28,8 +27,8 @@ class StateCacheFactory:
     """
     Factory for creating KV cache wrappers from runtime data.
 
-    Prism-first: Uses KVCachePlan when available (optimal allocation).
-    Legacy fallback: Derives from defaults.json lm_config.
+    From the Prism plan's KVCachePlan, and nothing else: a decoding flow's plan always carries
+    one (core/runtime/lm_facts), and a plan without it is refused by name.
     """
 
     @staticmethod
@@ -42,9 +41,7 @@ class StateCacheFactory:
         """
         Create KV cache wrapper using optimal path.
 
-        Priority:
-        1. Prism KVCachePlan (precomputed budget trade-offs)
-        2. Legacy defaults.json lm_config
+        From the Prism KVCachePlan (precomputed budget trade-offs); refused without one.
 
         Args:
             ctx: FlowContext with plan and package data
@@ -58,7 +55,7 @@ class StateCacheFactory:
         ZERO FALLBACK: Missing critical data raises explicit error.
         """
         from neurobrix.core.runtime.graph.kv_cache_wrapper import (
-            KVCacheConfig, KVCacheAttentionWrapper, create_kv_wrapper_from_config
+            KVCacheConfig, KVCacheAttentionWrapper
         )
 
         # Validate required keys
@@ -104,24 +101,11 @@ class StateCacheFactory:
             wrapper = KVCacheAttentionWrapper(config)
             return wrapper
 
-        # Path 2: no Prism KV plan (a flow that drives an LM outside the
-        # autoregressive plan — VibeVoice's next-token diffusion). A
-        # container that declares no context window is sized from the
-        # request, exactly as the Triton session does (R30:
-        # triton/flow/autoregressive.py — `max_tokens + 128` with the decode
-        # budget of the resolver cascade); the buffers grow on demand
-        # toward that ceiling.
-        if lm_config.get("max_position_embeddings") is None:
-            from neurobrix.core.runtime.decode_bound import decode_bound
-            resolved = getattr(getattr(ctx, "variable_resolver", None), "resolved", {}) or {}
-            mt = resolved.get("global.max_tokens")
-            if mt is None:
-                mt = resolved.get("max_tokens")
-            if mt is None:
-                mt = require_max_tokens(ctx.pkg.defaults)
-            budget = int(decode_bound(int(mt)))
-            lm_config = {**lm_config, "max_position_embeddings": budget + 128}
-            print(f"   [KV cache] no context window declared by the container — sized from the request: "
-                  f"{budget} decode tokens + 128 (grows on demand)", flush=True)
-        wrapper = create_kv_wrapper_from_config(lm_config, device, dtype)
-        return wrapper
+        # No Prism KV plan: refused by name. Prism prices the cache of every flow that decodes
+        # (core/runtime/lm_facts.decode_lm_component); the request-sized cache that stood here ran
+        # VibeVoice's next-token diffusion unplanned (2026-09-29). R30: the Triton session refuses
+        # the same way (triton/flow/autoregressive.session_kv_params).
+        raise RuntimeError(
+            "ZERO FALLBACK: the plan carries no KV cache for this decode session. Prism plans the "
+            "cache of every flow that decodes (core/runtime/lm_facts.decode_lm_component); a plan "
+            "without one did not see this flow — re-plan, never size the cache from the request.")

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Speech and image generators that decode with a cache are planned with that cache.** VibeVoice
+  keeps two decoding contexts (the prompt and the guidance context) and its memory plan counted
+  none of them (about 0.7 GB unplanned); Janus's image generation decodes two sequences under
+  guidance and was planned for one. Both are now in the plan, and a run whose plan carries no cache
+  for a decoding model is refused by name instead of sizing one from fixed constants.
+
 - **A video model's large 3-D convolutions are split by the plan, not by the memory free at that
   instant.** Whether a temporal convolution runs whole or in frame chunks was decided while running
   from the card's free memory, so the same request could run differently from one moment to the

@@ -101,3 +101,19 @@ def test_both_sessions_read_the_one_brick():
     calls = {n.func.id for n in ast.walk(ast.parse(src))
              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
     assert "lm_config_of" in calls
+
+
+def test_both_sessions_refuse_a_plan_without_the_cache():
+    """The constant-sized cache both sessions fell back on (22 layers, 32 heads, float16 in the
+    Triton session; the request's budget in the compiled one) ran VibeVoice unplanned; a plan
+    without a cache is refused by name in both engines now."""
+    import pytest
+    from types import SimpleNamespace
+    from neurobrix.core.module.cache.factory import StateCacheFactory
+    from neurobrix.triton.flow.autoregressive import session_kv_params
+    lmc = {"num_layers": 2, "num_heads": 2, "hidden_size": 16}
+    with pytest.raises(RuntimeError, match="no KV cache"):
+        session_kv_params(lmc, None, 0, 64)
+    ctx = SimpleNamespace(plan=SimpleNamespace(kv_cache_plan=None))
+    with pytest.raises(RuntimeError, match="no KV cache"):
+        StateCacheFactory.create(ctx, lmc, "cuda", "float16")
