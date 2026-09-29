@@ -1,5 +1,5 @@
-"""The census table's `op` column: every key a shadow forms is recorded with the graph op whose
-dispatch formed it, and a key formed outside any op (a flow's own call) with none.
+"""The census table's `ops` column: every key a shadow forms is recorded with the graph ops whose
+dispatch formed it, and a key formed outside any op (a flow's own call) with None.
 
 The owner's census table (2026-09-28) names the op of every key. The dispatch loops name the op they
 run (`census.set_op`, only while keys are recorded), the recorder writes `<record>.ops` pairs beside
@@ -8,7 +8,7 @@ the unchanged `<record>` key lines, and the census tool turns them into rows.
 What each test would do if the code were wrong: without the dispatcher's `set_op` the shadow writes
 no `.ops` pair and the first test fails; an op left set after its dispatch returns would charge the
 next direct call's key to it and the second assertion of the first test fails; `table_rows` dropping
-op-less keys or merging two ops into one row fails the last test. (Seen red: `set_op` removed from
+op-less keys or splitting one key into a row per op fails the last test. (Seen red: `set_op` removed from
 TritonSequentialDispatcher.dispatch.)
 """
 from __future__ import annotations
@@ -56,5 +56,5 @@ def test_table_rows_carry_the_op_and_keep_the_op_less_key():
     k2 = "neurobrix.kernels.ops.matmul.matmul_kernel::(23, 2048, 2048, True, True, 'fp16', 'fp16', 'fp16')"
     rows = CC.table_rows("M", "sha", "triton", 16384, [k1, k2],
                          [("aten.mm::7", k1), ("aten.mm::9", k1)])
-    got = sorted((r["key"][:4], r["op"], tuple(r["rungs_mb"])) for r in rows)
-    assert got == [("(19,", "aten.mm::7", (16384,)), ("(19,", "aten.mm::9", (16384,)), ("(23,", None, (16384,))]
+    got = sorted((r["key"][:4], tuple(r["ops"]), tuple(r["rungs_mb"])) for r in rows)
+    assert got == [("(19,", ("aten.mm::7", "aten.mm::9"), (16384,)), ("(23,", (None,), (16384,))]

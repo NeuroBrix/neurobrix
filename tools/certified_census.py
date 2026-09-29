@@ -387,8 +387,8 @@ def tool_revision() -> str:
 
 
 def table_rows(model: str, container: str, mode: str, rung: int, keys: list, op_keys: list) -> list:
-    """The census table's rows for one shadow run: one per (op, key) the shadow recorded, and one with
-    op None for a key it formed outside any graph op (a flow's own call)."""
+    """The census table's rows for one shadow run: one per key, with the graph ops the shadow recorded
+    forming it — None for a key it formed outside any graph op (a flow's own call)."""
     from neurobrix.kernels import census_table as T
     ops_of = {}
     for op, line in op_keys:
@@ -396,10 +396,9 @@ def table_rows(model: str, container: str, mode: str, rung: int, keys: list, op_
     rows = []
     for line in keys:
         kernel, _, key = line.partition("::")
-        for op in sorted(ops_of.get(line) or [None], key=lambda o: o or ""):
-            rows.append({"model": model, "container": container, "mode": mode,
-                         "rungs_mb": [int(rung)] if rung else None, "op": op, "kernel": kernel, "key": key,
-                         "dtype": T.dtypes_of(key), "tool": TOOL_REV})
+        rows.append({"model": model, "container": container, "mode": mode,
+                     "rungs_mb": [int(rung)] if rung else None, "ops": sorted(ops_of.get(line) or [None], key=lambda o: o or ""),
+                     "kernel": kernel, "key": key, "dtype": T.dtypes_of(key), "tool": TOOL_REV})
     return rows
 
 

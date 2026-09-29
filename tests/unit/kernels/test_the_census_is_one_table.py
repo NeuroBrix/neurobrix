@@ -4,7 +4,11 @@ de-duplicated, a model's rows replaced — never added to — when its container
 What each test would do if the code were wrong: a writer that appended would keep a retraced model's
 old rows (the replace test fails); a reader that accepted a row without a column would let a table
 lose the container sha or the mode unnoticed (the refusal test fails); two tables written for two
-classes in one file would answer a 16 GB question with a 32 GB row (the path test fails).
+classes in one file would answer a 16 GB question with a 32 GB row (the path test fails); a writer
+keeping one row per (op, key) would grow a transformer's table by its layer count (the ops test
+fails); a reader accepting the old schema would let an unconverted table pass for a converted one, and
+a migration that dropped an op or a rung would lose what the census measured (the migration tests fail).
+(Seen red: the write identity with the op put back.)
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from neurobrix.kernels import census_table as T
 
 
 def _row(model, key, container="aaaa", mode="triton", rung=16384):
-    return {"model": model, "container": container, "mode": mode, "rungs_mb": [rung], "op": None,
+    return {"model": model, "container": container, "mode": mode, "rungs_mb": [rung], "ops": [None],
             "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel", "key": key,
             "dtype": T.dtypes_of(key), "tool": "t"}
 
@@ -93,3 +97,44 @@ def test_many_writers_lose_no_model(tmp_path):
     with mp.Pool(8) as pool:
         pool.map(_replace_many, [(str(p), m) for m in models])
     assert sorted({r["model"] for r in T.read(p)}) == models
+
+
+def test_one_row_per_key_with_every_op_that_formed_it(tmp_path):
+    p = tmp_path / "t.jsonl"
+    a, b, c = _row("A", K1), _row("A", K1, rung=8192), _row("A", K1)
+    a["ops"], b["ops"], c["ops"] = ["aten.mm::9"], ["aten.mm::7"], [None]
+    assert T.write(p, [a, b, c]) == 1
+    (row,) = T.read(p)
+    assert row["ops"] == [None, "aten.mm::7", "aten.mm::9"]
+    assert row["rungs_mb"] == [8192, 16384]
+    with pytest.raises(ValueError, match="ops must be a list"):
+        T.write(p, [dict(a, ops="aten.mm::9")])
+
+
+def _old_row(model, key, op, rung):
+    r = _row(model, key, rung=rung)
+    del r["ops"]
+    r["op"] = op
+    return r
+
+
+def test_an_old_schema_table_is_refused_by_name_and_migrated_once(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+    p = tmp_path / "16g.jsonl"
+    old = [_old_row("A", K1, "aten.mm::7", 16384), _old_row("A", K1, "aten.mm::9", 8192),
+           _old_row("A", K2, None, 16384), _old_row("B", K1, "aten.mm::7", 16384)]
+    p.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in old))
+    with pytest.raises(ValueError, match="census_table.py migrate"):
+        T.read(p)
+    tool = Path(__file__).resolve().parents[3] / "tools" / "census_table.py"
+    for _ in range(2):                                   # the second run finds nothing to convert
+        r = subprocess.run([sys.executable, str(tool), "migrate", str(p)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    rows = T.read(p)
+    got = [(r["model"], r["key"][:4], r["ops"], r["rungs_mb"]) for r in rows]
+    assert got == [("A", "(19,", ["aten.mm::7", "aten.mm::9"], [8192, 16384]),
+                   ("A", "(64,", [None], [16384]),
+                   ("B", "(19,", ["aten.mm::7"], [16384])]

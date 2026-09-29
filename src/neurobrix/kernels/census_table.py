@@ -6,7 +6,7 @@ certified directory alone. This module is the one reader and writer of the list:
 
     config/census/<vendor>/<profile>/<memory class>g.jsonl
 
-one JSON object per line, one line per (model, mode, op, kernel, key), sorted, with these columns:
+one JSON object per line, one line per (model, mode, kernel, key), sorted, with these columns:
 
     model      the container's name
     container  the sha the census computed over the container's graph.json files — a retrace changes
@@ -15,8 +15,10 @@ one JSON object per line, one line per (model, mode, op, kernel, key), sorted, w
     rungs_mb   the memory budgets the shadow planned under when it formed the key, ascending (a key
                formed only at small rungs is a tiled plan's shape class; its reason to exist); None
                for the profile's own budget
-    op         the graph op that formed it (op uid), None for rows consolidated from censuses taken
-               before the shadow recorded it
+    ops        the graph ops that formed it (op uids), sorted; a None among them for a key formed
+               outside any graph op (a flow's own call) or consolidated from a census taken before the
+               shadow recorded ops. One row per key with the LIST, never one row per (op, key): a
+               transformer forms one key in every layer, and a row per op made a class table ~15 MB
     kernel     the kernel's qualified name
     key        the key tuple as the certifier reads it (`key_repr`) — the bucketed shape class
     dtype      the dtypes the key names, in order
@@ -34,7 +36,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-COLUMNS = ("model", "container", "mode", "rungs_mb", "op", "kernel", "key", "dtype", "tool")
+COLUMNS = ("model", "container", "mode", "rungs_mb", "ops", "kernel", "key", "dtype", "tool")
 
 #: The table's root inside the engine package, beside the certified directory. Tests redirect it.
 ROOT = Path(__file__).resolve().parents[1] / "config" / "census"
@@ -71,6 +73,9 @@ def read(path: Path) -> List[Dict]:
             row = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path}:{n}: not a table row ({exc})") from exc
+        if "op" in row and "ops" not in row:
+            raise ValueError(f"{path}:{n}: a row of the one-row-per-op schema — convert the table once with "
+                             f"`python tools/census_table.py migrate {path}`")
         missing = [c for c in COLUMNS if c not in row]
         if missing:
             raise ValueError(f"{path}:{n}: a row without {missing}")
@@ -79,20 +84,30 @@ def read(path: Path) -> List[Dict]:
 
 
 def _sort_key(row: Dict) -> Tuple:
-    return (row["model"], row["mode"], row["kernel"], row["key"], row["op"] or "")
+    return (row["model"], row["mode"], row["kernel"], row["key"])
+
+
+def _ops(ops: Iterable[Optional[str]]) -> List[Optional[str]]:
+    """The ops column's canonical form: distinct, None first, then by uid."""
+    return sorted(set(ops), key=lambda o: (o is not None, o or ""))
 
 
 def write(path: Path, rows: Iterable[Dict]) -> int:
-    """Write the table, sorted, one row per (model, mode, op, kernel, key) — the rungs of duplicate
-    rows merged into one ascending list — atomically, readable by all. Returns the row count."""
+    """Write the table, sorted, one row per (model, mode, kernel, key) — the ops and the rungs of
+    duplicate rows merged into one list each — atomically, readable by all. Returns the row count."""
     merged: Dict[Tuple, Dict] = {}
     for r in rows:
         row = {c: r.get(c) for c in COLUMNS}
-        ident = (row["model"], row["mode"], row["op"], row["kernel"], row["key"])
+        if row["ops"] is None or isinstance(row["ops"], str):
+            raise ValueError(f"a row's ops must be a list of op uids (None for no op): {row['ops']!r}")
+        row["ops"] = _ops(row["ops"])
+        ident = (row["model"], row["mode"], row["kernel"], row["key"])
         prev = merged.get(ident)
         if prev is None:
             merged[ident] = row
-        elif prev["rungs_mb"] is not None and row["rungs_mb"] is not None:
+            continue
+        prev["ops"] = _ops(prev["ops"] + row["ops"])
+        if prev["rungs_mb"] is not None and row["rungs_mb"] is not None:
             prev["rungs_mb"] = sorted(set(prev["rungs_mb"]) | set(row["rungs_mb"]))
         else:
             prev["rungs_mb"] = None     # formed under the profile's own budget too: no rung is its reason
