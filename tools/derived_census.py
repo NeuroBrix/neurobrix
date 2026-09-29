@@ -92,6 +92,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     from neurobrix.kernels.nbx_tensor import NBXDtype
     from neurobrix.triton.symbols import SymbolResolver
     g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    _mark_attention_layouts(g)
     res = SymbolResolver(g.get("symbolic_context") or {})
     for sid, v in symbols.items():
         res._bind(sid, int(v))
@@ -169,6 +170,29 @@ def _mask_numel(o: dict, shape):
     return n
 
 
+def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
+    """A matmul's contraction length: the activation's last dim must equal the weight's first —
+    the op cannot run otherwise. When the two annotations disagree at the request, the weight's
+    (a parameter's stored extent, never moved by a request) is the op's contract, and the
+    activation's annotation collided with a trace value (mochi's 3072 features annotated as a
+    spatial expression that gives 3168): derived from the contract, the collision named."""
+    if k_act == k_weight:
+        return k_act
+    unhandled[f"NOTE matmul contraction from the weight ({k_weight}), the activation's annotation "
+              f"says {k_act} — an extent collision in the container"] += 1
+    return k_weight
+
+
+def _mark_attention_layouts(g: dict) -> None:
+    """The executor's own K/V layout pass (`GraphExecutor._mark_sdpa_k_layout`) on this graph:
+    it records `nbx_k_pre_transposed` / `nbx_v_pre_transposed` on every attention op from the
+    graph's transpose chain, as a run does at load."""
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    stub = _Stub(_dag=g, _SDPA_LAYOUT_PASSTHROUGH=GraphExecutor._SDPA_LAYOUT_PASSTHROUGH,
+                 _SDPA_OP_TYPES=GraphExecutor._SDPA_OP_TYPES)
+    GraphExecutor._mark_sdpa_k_layout(stub)
+
+
 class AnnotationContradiction(ValueError):
     """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
 
@@ -180,7 +204,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
     from neurobrix.kernels.nbx_tensor import NBXDtype
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
         if kind in ("aten::mm",):
-            (M, K), (_, N) = shape(ins[0]), shape(ins[1])
+            (M, K), (Kb, N) = shape(ins[0]), shape(ins[1])
+            K = _contraction(K, Kb, ins, o, uid, unhandled)
             launches = LK.mm_launches(M, K, N, dt(ins[0]), dt(ins[1]), has_native_bf16)
         elif kind == "aten::bmm":
             (_, M, K), (_, _, N) = shape(ins[0]), shape(ins[1])
@@ -193,8 +218,15 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             # first (dispatch.py: the fused-backend spellings through `_meta_sdpa_efficient`)
             q, k, v = (shape(t) for t in ins[:3])
             B, H, Tq, D = q
-            if k[2] == D and k[3] == Tq and k[2] != Tq:        # the wrapper reads a pre-transposed K by its shape
+            at_ = o.get("attributes") or {}
+            # K's and V's layout is the graph's own answer (`GraphExecutor._mark_sdpa_k_layout`,
+            # run on this graph by derive_component), never read from shapes; the head dims are
+            # Q's and V's feature axes (a pre-transposed K's head axis may carry a colliding
+            # annotation: mochi's K^T annotates its 128 as a spatial expression).
+            if at_.get("nbx_k_pre_transposed"):
                 k = [k[0], k[1], k[3], k[2]]
+            if at_.get("nbx_v_pre_transposed"):
+                v = [v[0], v[1], v[3], v[2]]
             Hk, Tk, Dv = k[1], k[2], v[3]
             route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks)
             qd, kd, vd, _qr = LK.sdpa_operand_dtypes(dt(ins[0]), dt(ins[1]), dt(ins[2]))
@@ -209,7 +241,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 launches = LK.math_attention_launches(B, H, Hk, Tq, Tk, D, Dv, qd, kd, vd, has_native_bf16)
         elif kind == "aten::addmm":
             bias_s, a_s, b_s = shape(ins[0]), shape(ins[1]), shape(ins[2])
-            K = a_s[-1]
+            K = _contraction(a_s[-1], b_s[0], ins[1:], o, uid, unhandled)
             M = 1
             for d in a_s[:-1]:
                 M *= d

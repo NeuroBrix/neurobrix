@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An image-to-video model's plan sizes its conditioning encoder in pixels.** The encoder that
+  reads the conditioning image or clip was sized at the latent grid when its time axis was a
+  single frame or matched no known pattern, 64 times too small per frame. Wan2.1-I2V at 16 GB is now
+  planned with CPU streaming (its encoder does not fit) instead of a plan that could not run.
+
 - **Tiled convolutions with a stride of 2 or more produce correct output.** When a large
   convolution is split into bands to fit the card (or fused with the upsample before it), every band
   after the first was shifted by half an output row whenever the convolution's stride was above 1.

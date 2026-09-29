@@ -319,9 +319,13 @@ def is_downscale_graph(dag: Dict) -> bool:
     shapes_out = [tensors.get(str(o), {}).get("shape", []) for o in dag.get("output_tensor_ids", [])]
     s_in = next((s for s in shapes_in if isinstance(s, list) and len(s) == 5), None)
     s_out = next((s for s in shapes_out if isinstance(s, list) and len(s) == 5), None)
-    if not s_in or not s_out or s_out[-2] >= s_in[-2]:
-        return False
-    return temporal_causal_downscale_ratio(dag) is not None
+    # A rank-5 graph whose output is spatially smaller than its input reads PIXELS, whatever its
+    # temporal map — this docstring's own rule. Requiring a temporal class here left an encoder
+    # whose time axis is a concrete 1 (CogVideoX-5b-I2V's image encoder: [1, 3, 1, 112, 176]) and
+    # encoders whose time map neither class recognises (Allegro-TI2V, Wan2.1-I2V) bound
+    # latent-side: priced 8 x 8 too small per frame, and derived at the latent grid (the census
+    # walk encoded 160 x 352 pixels, 2026-09-29).
+    return bool(s_in and s_out and s_out[-2] < s_in[-2] and s_out[-1] < s_in[-1])
 
 
 @dataclass
