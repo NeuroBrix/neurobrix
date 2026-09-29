@@ -34,7 +34,7 @@ def bit_reverse_rows_kernel(
     2026-09-28: every sample inside that per-row loop).
     """
     pid = tl.program_id(0).to(tl.int64)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit: rows * n passes 2^31 on a long speech
+    offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)   # 64-bit: rows * n passes 2^31 on a long speech
     m = offs < total
     row = offs // n
     idx = offs % n
@@ -70,7 +70,7 @@ def fft_stage_rows_kernel(
     """
     PI = math.pi
     pid = tl.program_id(0).to(tl.int64)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     half_n = n // 2
     row = offs // half_n
     tid = offs % half_n
