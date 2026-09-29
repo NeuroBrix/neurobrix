@@ -272,10 +272,10 @@ def test_the_decode_cache_is_the_sessions_own_choice():
     assert (lmc["num_layers"], lmc["num_heads"], lmc["num_kv_heads"]) == (28, 12, None)
     plan = SimpleNamespace(num_layers=28, num_kv_heads=2, k_head_dim=128, v_head_dim=128,
                            max_cache_len=4096, dtype="bfloat16")
-    p = session_kv_params(lmc, plan, 0, 2048)
+    p = session_kv_params(plan, 0, 2048)
     assert (p["num_kv_heads"], p["dtype"], p["max_cache_len"]) == (2, NBXDtype.bfloat16, 4096)
     with pytest.raises(RuntimeError, match="no KV cache"):
-        session_kv_params(lmc, None, 0, 2048)
+        session_kv_params(None, 0, 2048)
     assert session_lm_config({"lm_config": {"num_layers": 3}}, {}, "lm") == {"num_layers": 3}
 
 

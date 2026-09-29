@@ -20,6 +20,14 @@ def lm_config_of(defaults: Optional[Mapping[str, Any]], topology: Optional[Mappi
     if lm_config:
         return lm_config
     extracted = (((topology or {}).get("extracted_values") or {}).get(lm_name) or {}) if lm_name else {}
+    missing = [k for k, alts in (("num_layers", ("num_hidden_layers", "num_layers")),
+                                 ("num_heads", ("num_attention_heads", "num_heads")),
+                                 ("hidden_size", ("hidden_size",)))
+               if not any(extracted.get(a) for a in alts)]
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the decoder '{lm_name}' has no lm_config and its extracted values lack "
+            f"{', '.join(missing)} — its decode cache cannot be sized; the build must record them.")
     return {
         "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
         "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
