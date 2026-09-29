@@ -260,21 +260,22 @@ def test_the_speech_prompt_is_the_flows_own_context():
 
 
 def test_the_decode_cache_is_the_sessions_own_choice():
-    """`session_kv_params`: the plan's cache when Prism planned one, else sized from the LM config
-    (`session_lm_config`, extracted values when the package has no `lm_config`) — VibeVoice's
-    session caches 12 heads in float16 because its plan carries no cache. Injection: the plan
-    branch ignored -> the first case RED."""
+    """`session_kv_params`: the plan's cache, and nothing else — a decoding flow's plan always
+    carries one (`core.runtime.lm_facts`); the LM facts from `session_lm_config` (extracted values
+    when the package has no `lm_config`). The derived census keys the decode from the same.
+    Injection: the plan branch ignored -> RED; a plan without a cache accepted -> RED."""
+    import pytest
     from types import SimpleNamespace
     from neurobrix.triton.flow.autoregressive import session_kv_params, session_lm_config
     lmc = session_lm_config({}, {"extracted_values": {"lm": {"num_layers": 28, "num_heads": 12,
                                                              "hidden_size": 1536}}}, "lm")
+    assert (lmc["num_layers"], lmc["num_heads"], lmc["num_kv_heads"]) == (28, 12, None)
     plan = SimpleNamespace(num_layers=28, num_kv_heads=2, k_head_dim=128, v_head_dim=128,
                            max_cache_len=4096, dtype="bfloat16")
     p = session_kv_params(lmc, plan, 0, 2048)
     assert (p["num_kv_heads"], p["dtype"], p["max_cache_len"]) == (2, NBXDtype.bfloat16, 4096)
-    f = session_kv_params(lmc, None, 0, 2048)
-    assert (f["num_layers"], f["num_kv_heads"], f["k_head_dim"], f["dtype"], f["max_cache_len"]) == \
-        (28, 12, 128, F16, 2176)
+    with pytest.raises(RuntimeError, match="no KV cache"):
+        session_kv_params(lmc, None, 0, 2048)
     assert session_lm_config({"lm_config": {"num_layers": 3}}, {}, "lm") == {"num_layers": 3}
 
 
