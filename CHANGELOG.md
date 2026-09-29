@@ -11,8 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
-  are in the other plans, and the plan says which component the card cannot hold, instead of
-  promising that the run will complete and failing on an out-of-memory allocation.
+  are in the other plans; and a request whose component the card cannot hold even tiled is refused
+  before loading, naming the component, the memory it needs against the card's, and `--compiled`
+  (which computes it on the host), instead of promising that the run will complete and failing on
+  an out-of-memory allocation. An image encoder fed through the model's own image processor (the
+  CLIP view of image-to-video models) is planned at that view's size, not the requested video's.
 
 - **A request is planned at its own size.** The memory plan priced every frame count, height and
   width at least at the size the model was prepared with, one axis at a time: a video asked in
