@@ -91,16 +91,24 @@ def format_for(entries: Dict[str, Dict]) -> str:
 
 def restamp(path: Path) -> Optional[str]:
     """Repair a file's format claim to what its entries satisfy, entries
-    untouched. Returns the new format when it changed, None otherwise."""
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    want = format_for(doc.get("entries") or {})
-    if doc.get("format") == want:
-        return None
-    doc["format"] = want
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
-    os.replace(tmp, path)
-    return want
+    untouched. Returns the new format when it changed, None otherwise. Under the certifier's own
+    lock (`<file>.json.lock`): a restamp beside a running certifier rewrote the file it had read
+    before, dropping what the certifier filed meanwhile (the tools audit, 2026-09-29)."""
+    import fcntl
+    with open(path.with_suffix(".json.lock"), "a+") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            want = format_for(doc.get("entries") or {})
+            if doc.get("format") == want:
+                return None
+            doc["format"] = want
+            tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+            os.replace(tmp, path)
+            return want
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
 
 
 _LOADED: Dict[Tuple[str, str, str, str], Optional[Dict[str, Dict]]] = {}   # (vendor, profile, kernel, dtype) -> entries

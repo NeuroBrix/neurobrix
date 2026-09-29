@@ -118,7 +118,13 @@ def cmd_autotune(args) -> int:
             print(refusal)
             return 3
         from neurobrix.kernels.autotune_certify import certify
-        kernels = [k for k in (args.kernels or "").split(",") if k] or None
+        kernels = None
+        if args.kernels is not None:
+            kernels = [k for k in args.kernels.split(",") if k.strip()]
+            if not kernels:
+                print(f"ERROR: --kernels {args.kernels!r} names no kernel (leave it out to certify every kernel "
+                      f"of the census table).")
+                return 2
         print("=" * 70)
         print(f"NeuroBrix autotune certify — profile {args.vendor + '/' if args.vendor else ''}{args.profile}")
         print("=" * 70)
@@ -128,6 +134,8 @@ def cmd_autotune(args) -> int:
                               reprove_unclocked=getattr(args, "reprove_unclocked", False),
                               reprove_generator=getattr(args, "reprove_generator", False),
                               working_set_mb=getattr(args, "working_set_mb", None),
+                              shard=getattr(args, "shard", None),
+                              reprove_class=getattr(args, "reprove_class", None),
                               allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
         except RuntimeError as exc:
             print(f"ERROR: {exc}")

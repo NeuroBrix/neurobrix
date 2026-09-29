@@ -19,6 +19,7 @@ proof or whose proof does not re-read.
 from __future__ import annotations
 
 import datetime as _dt
+import contextlib
 import json
 import os
 import warnings
@@ -81,14 +82,26 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
                            f"else — take the census for {vendor}/{profile} {memory_class} GB first")
     out: Dict[str, List[tuple]] = {}
     seen = set()
-    for row in T.read(path):
+    unparsed = []
+    rows = T.read(path)
+    if not rows:
+        # the tools' contract (docs/reference/tool-contracts.md): an input that names nothing is
+        # refused by name — an empty table certified nothing and exited 0
+        raise RuntimeError(f"the census table {path} holds no row: nothing to certify — take the census first")
+    for row in rows:
         ident = T.key_line(row["kernel"], row["key"])
         if ident in seen:
             continue
         seen.add(ident)
         key = C.parse_key(row["key"])
-        if key is not None:
-            out.setdefault(row["kernel"], []).append(key)
+        if key is None:
+            unparsed.append(ident)
+            continue
+        out.setdefault(row["kernel"], []).append(key)
+    if unparsed:
+        # a row the certifier cannot read was dropped in silence: a key never certified, never said
+        raise RuntimeError(f"the census table {path}: {len(unparsed)} key(s) do not parse, e.g. {unparsed[0]!r} — "
+                           f"refused, never skipped")
     return out
 
 
@@ -1668,14 +1681,24 @@ def _file_entries(cache: Dict[str, Dict[str, Dict]], dtype: str, path: Path) -> 
     return entries
 
 
+class UnreadableCertifiedFile(RuntimeError):
+    """A certified file that exists and cannot be read: refused, never taken as empty."""
+
+
 def _read_file(path: Path) -> Dict[str, Dict]:
+    """The file's entries; {} only when it does not exist. A file that exists and does not parse was
+    read as {} and the next writer, under the lock, wrote its fresh entries over it — every proof in
+    it gone in silence (the tools audit, 2026-09-29). Refused by name."""
     if not path.exists():
         return {}
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return dict(doc.get("entries") or {}) if isinstance(doc, dict) else {}
+    except (OSError, ValueError) as e:
+        raise UnreadableCertifiedFile(f"{path}: {type(e).__name__}: {e} — refused, never overwritten; "
+                                      f"restore it from git") from e
+    if not isinstance(doc, dict):
+        raise UnreadableCertifiedFile(f"{path}: not a certified file (a {type(doc).__name__})")
+    return dict(doc.get("entries") or {})
 
 
 _STICKY_MARKS = ("error 700", "rc=700", "illegal memory access", "STICKY")
@@ -1824,11 +1847,31 @@ def after_key_failure(exc: BaseException, summary: Dict[str, Any], key_text: str
     return False
 
 
+def shard_spec(text: str) -> Tuple[int, int]:
+    """'K/N' -> (K, N), 0 <= K < N; refused otherwise."""
+    try:
+        k, n = (int(x) for x in str(text).split("/"))
+    except ValueError:
+        raise RuntimeError(f"--shard {text!r}: expected K/N") from None
+    if not 0 <= k < n:
+        raise RuntimeError(f"--shard {text!r}: K must be in [0, N)")
+    return k, n
+
+
+def shard_of(qual: str, key: tuple, n: int) -> int:
+    """The shard of a (kernel, key) among `n`: a stable hash of the kernel and the key's text, so
+    the cards of one memory class certify one kernel's keys disjointly and between them wholly —
+    and a key stays in its shard across passes and processes."""
+    import hashlib
+    return int(hashlib.sha256(f"{qual}::{C.key_repr(key)}".encode()).hexdigest(), 16) % n
+
+
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None, bench=None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            shard: Optional[str] = None, reprove_class: Optional[int] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
@@ -1880,9 +1923,11 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     shapes = census(vendor, profile, certifying_class)
     log(f"[certify] census table {vendor}/{profile} {certifying_class} GB: "
         f"{sum(len(v) for v in shapes.values())} distinct key(s) over {len(shapes)} kernel(s)")
-    if kernels:
-        want = set(kernels)
-        shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+    shapes = select_kernels(shapes, kernels)
+    if shard:
+        k_, n_ = shard_spec(shard)
+        shapes = {q: [key for key in ks if shard_of(q, key, n_) == k_] for q, ks in shapes.items()}
+        log(f"[certify] shard {k_}/{n_}: {sum(len(v) for v in shapes.values())} key(s) of those kernels")
     rng = np.random.default_rng(seed)
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
@@ -1892,12 +1937,60 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # Certifications reach their file at a BOUNDED SHARE of the pass (`_BoundedWriter`); every
     # pending one is written before this function returns, on every path.
     writer = _BoundedWriter(vendor, profile)
+    with sigterm_ends_through_finally():
+        return _certify_pass(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                             reprove_generator, certifying_device, certifying_class, budget_bytes,
+                             floor_bytes, rng, summary, log, writer, bench, reprove_class)
+
+
+def _certify_pass(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
+                  reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes, rng,
+                  summary, log, writer, bench, reprove_class):
+    """The loop, and every pending proof written on EVERY exit (`writer.flush_all`)."""
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, reprove_class=reprove_class)
     finally:
         writer.flush_all()
+
+
+def select_kernels(shapes: Dict[str, List[tuple]], kernels: Optional[List[str]]) -> Dict[str, List[tuple]]:
+    """The census table's kernels this pass certifies: all when `kernels` is None; else those named
+    (qualname or short name). A list that names nothing, or a name the table does not hold, is
+    refused by name — `--kernels ""` used to mean every kernel, an unknown name certified 0 and
+    exited 0 (the tools audit, 2026-09-29)."""
+    if kernels is None:
+        return shapes
+    want = set(kernels)
+    if not want:
+        raise RuntimeError("--kernels names no kernel: refused (leave it out for every kernel)")
+    unknown = sorted(k for k in want if not any(q == k or C.kernel_short(q) == k for q in shapes))
+    if unknown:
+        raise RuntimeError(f"--kernels {', '.join(unknown)}: no such kernel in the census table "
+                           f"(it holds {', '.join(sorted(C.kernel_short(q) for q in shapes))})")
+    return {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+
+
+@contextlib.contextmanager
+def sigterm_ends_through_finally():
+    """SIGTERM (a watchdog, a working-set guard, `kill`) ends the pass as an exception, so every
+    `finally` inside runs — the bounded writer's pending proofs reach their files instead of dying
+    with the process (the tools audit, 2026-09-29: no handler existed). The main thread only;
+    the previous handler restored."""
+    import signal as _signal
+    import threading as _threading
+    if _threading.current_thread() is not _threading.main_thread():
+        yield
+        return
+
+    def _on_term(signum, frame):
+        raise SystemExit(128 + signum)
+    prev = _signal.signal(_signal.SIGTERM, _on_term)
+    try:
+        yield
+    finally:
+        _signal.signal(_signal.SIGTERM, prev)
 
 
 _WRITE_SHARE = 0.10     # a certified file's rewrites may cost at most a tenth of the certifier's time
@@ -1942,7 +2035,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, reprove_class: Optional[int] = None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -1973,6 +2066,17 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             stored_label = C.proof_backend(stored.get("proof")) if stored else None
             reprove = bool(stored and stored.get("config") and stored_label
                            and stored_label != C.proof_backend({"backend": _backend()}))
+            # ACROSS MEMORY CLASSES (the owner's 01:37 ruling, the supervisor's 2026-09-29 11:33): a key
+            # this class has no certificate for, where another class of the same SKU family holds one,
+            # keeps that configuration — proven again on THIS card by the oracle and one timing, and
+            # filed under this card's class (the proof names this card). The two V100 SKUs share SMs
+            # and HBM bandwidth and differ in capacity; the per-class rule stands: the proof is made here.
+            from_class = None
+            if not reprove and reprove_class is not None and reprove_class != certifying_class:
+                other = C.entry_for_memory_class(entries.get(ktext), int(reprove_class))
+                if other and other.get("config"):
+                    stored, reprove, from_class = other, True, int(reprove_class)
+                    stored_label = f"memory class {int(reprove_class)} GB"
             attempts += 1
             t0 = time.time()
             try:
@@ -1990,16 +2094,19 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                         raise                         # a drift is a refusal for the retry pass, never a sweep
                     except Exception as exc:          # the stored configuration fails the oracle under
                         log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: the stored "
-                            f"configuration does not re-prove under the running generator ({exc}); swept")
+                            f"configuration does not re-prove "
+                            f"{'on this card (' + stored_label + ')' if from_class else 'under the running generator'} "
+                            f"({exc}); swept")
                         entry = certify_key(qual, tuner, key, tol, rng, **common)
                         summary["swept"] = summary.get("swept", 0) + 1
                         summary.setdefault("swept_why", {}).setdefault("stored configuration failed the oracle", 0)
                         summary["swept_why"]["stored configuration failed the oracle"] += 1
                 else:
                     entry = certify_key(qual, tuner, key, tol, rng, **common)
-                    if reprove_generator:
+                    if reprove_generator or reprove_class is not None:
                         summary["swept"] = summary.get("swept", 0) + 1
-                        why = "no entry for this class" if not stored else "no configuration in the stored entry"
+                        why = ("no entry for this class" if not stored else "no configuration in the stored entry") \
+                            if reprove_generator else f"no entry for memory class {int(reprove_class)} GB"
                         summary.setdefault("swept_why", {})[why] = summary.get("swept_why", {}).get(why, 0) + 1
             except UnreachableCensusKey as exc:
                 # Known debt, not a break: no run will ever present this key
