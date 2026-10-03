@@ -728,6 +728,21 @@ class SynonymRegistry:
         "_mel_filters": "mel_filters",
         "fb": "mel_filters",
         "window": "window",
+        # Module buffers the trace lifts into a graph as constants (no shard holds them; the graph
+        # names them by the module's path, so the parser names them too).
+        "mean": "mean",                      # an image normaliser's mean (SwinIR / HAT)
+        "rotary_pos_emb": "pos_rotary",      # a vision tower's 2-D rotary table (not `rotary_embed`:
+                                             # the RoPE re-extension finds `rotary_embed.inv_freq` by name)
+        "pos_enc": "pos_encoding",           # a conformer's sinusoidal relative positional encoding
+        "pe": "pos_table",                   # ... and its table
+        "token_type_ids": "type_ids",
+        "relative_coords_table": "rel_coords_table",
+        "att_cache_buffer": "attn_cache",
+        "cnn_cache_buffer": "conv_cache",
+        "code_offset": "codec_offset",
+        "trim_fade": "fade_window",
+        "fast_freqs_cis": "fast_freqs_cis",
+        "fast": "fast_net",                  # a dual-AR model's fast transformer
     }
 
     # Patterns that should NEVER be modified
