@@ -633,6 +633,23 @@ def warps_configs() -> List[triton.Config]:
     return [triton.Config({}, num_warps=2**i) for i in range(6)]
 
 
+#: The widest feature tile one program of a row reduction holds at once. A reduction that sized its
+#: tile to the whole row (`next_power_of_2(feat_dim)`) kept every element in registers: at 4 warps a
+#: 224 640-element row is 2 048 fp32 values per thread, which spill to local memory — and the driver
+#: reserves local memory for EVERY thread the card can hold, outside any allocator: +2 062 MB on a
+#: V100 for one such sum (op-level probe, 2026-10-03), +4.3 GB at Wan2.1-I2V's CFG batch, the memory
+#: its 480x832 run lacked at SDPA::0. 4 096 elements is 32 fp32 values per thread at 4 warps — inside
+#: the register file on every NVIDIA and AMD part — and the cap `batch_norm`'s spatial tile already
+#: uses. A row wider than one tile is walked in tiles; a row that fits one tile is reduced exactly as
+#: before (one tile, no added term), so its bytes do not move.
+REDUCTION_FEAT_TILE = 4096
+
+
+def reduction_feat_tile(args: Dict) -> int:
+    """The feature tile of a looped row reduction: the row, rounded up, at most one tile."""
+    return min(next_power_of_2(args['feat_dim']), REDUCTION_FEAT_TILE)
+
+
 def batch_block_heuristic(args: Dict) -> int:
     """Heuristic for batch block size in softmax/norm kernels.
 
