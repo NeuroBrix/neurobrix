@@ -173,6 +173,7 @@ def main(argv=None):
     ap.add_argument("--records", type=Path, required=True,
                     help="confirmations, oracle comparisons, judgments, hub artefacts, retraces — read from the campaign records")
     ap.add_argument("--census-log", type=Path, action="append", default=[], help="a census run's log (the movers' verdicts)")
+    ap.add_argument("--neurotax", type=Path, help="the parser's own check per container (neurotax_check.jsonl)")
     ap.add_argument("--notes", type=Path, default=REPO / "docs/reference/model-status-notes.json",
                     help="measured causes no record field carries, one per container, each with its source")
     ap.add_argument("--out", type=Path, required=True)
@@ -286,6 +287,20 @@ def main(argv=None):
         L += ["", "## Causes measured (docs/reference/model-status-notes.json)", ""]
         for n, why in sorted(notes.items()):
             L.append(f"- **`{n}`** — {why}")
+    if a.neurotax and a.neurotax.exists():
+        nt = {json.loads(l)["container"]: json.loads(l) for l in a.neurotax.read_text().splitlines() if l.strip()}
+        L += ["", "## NeuroTax 5.0 weight keys — the parser's own check (normalize_strict(key) == key)", "",
+              f"Read-only, `{a.neurotax}`. Canonical: the parser returns the key unchanged. Raw: it renames the key or "
+              "refuses one of its tokens (a vendor token the synonym registry does not hold).", "",
+              "| container | keys | raw | raw by component | first raw keys |", "|---|---:|---:|---|---|"]
+        for c in rows:
+            r_ = nt.get(c["name"])
+            if r_ is None:
+                L.append(f"| `{c['name']}` | no record | | | |")
+                continue
+            L.append(f"| `{c['name']}` | {r_['keys']} | {r_['raw'] or 'fully canonical'} | "
+                     f"{', '.join(f'{k} {v}' for k, v in r_['raw_by_component'].items()) or '—'} | "
+                     f"{'; '.join(r_['samples'][:3]) or '—'} |")
     rt = rec.get("_retraces") or []
     if rt:
         L += ["", "## Retraces of the last month, and whether the oracle ladder preceded them", "",
