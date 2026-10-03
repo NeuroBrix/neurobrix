@@ -84,7 +84,9 @@ def test_the_tiled_conv_band_cut_rebuilds_the_whole_conv(IH, kh, sh, dh, ph, tf)
         cb = F.conv2d(band, w, stride=(sh, 1), padding=0, dilation=(dh, 1))
         n = min(o1 - o0, cb.shape[2] - skip)
         out[:, :, o0:o0 + n] = cb[:, :, skip:skip + n]
-    assert torch.equal(out, full)
+    # float64, 1e-12: a band's sums may be ordered differently from the whole conv's by the CPU
+    # library (last-bit differences on the Mac, 2026-09-29) — a shifted row is O(1) off
+    torch.testing.assert_close(out, full, rtol=0, atol=1e-12)
 
 
 @pytest.mark.parametrize("sh,kh", [(1, 3), (2, 3), (2, 5), (3, 3)])
@@ -100,7 +102,7 @@ def test_the_torch_tiled_conv_equals_the_whole_conv_at_any_stride(sh, kh):
     w = torch.randn(4, 3, kh, 3, generator=g, dtype=torch.float64)
     full = torch.nn.functional.conv2d(x, w, stride=(sh, 1), padding=(kh // 2, 1))
     got = _tiled_conv2d_spatial_torch(x, w, None, sh, 1, kh // 2, 1, 1, 1, 1, 4)
-    assert torch.equal(got, full)
+    torch.testing.assert_close(got, full, rtol=0, atol=1e-12)   # float64; a shifted row is O(1) off
 
 
 @pytest.mark.parametrize("sh,kh", [(1, 3), (2, 3), (1, 5)])
@@ -118,7 +120,7 @@ def test_the_torch_fused_upsample_conv_equals_upsample_then_conv(sh, kh):
     full = torch.nn.functional.conv2d(up, w, stride=(sh, 1), padding=(kh // 2, 1))
     proxy = FusionUpsampleProxy(x, 2.0, 2.0, list(up.shape))
     got = _fused_upsample_conv2d_torch(proxy, w, None, (sh, 1), (kh // 2, 1), (1, 1), False, (0, 0), 1, 4)
-    assert torch.equal(got, full)
+    torch.testing.assert_close(got, full, rtol=0, atol=1e-12)   # float64; a shifted row is O(1) off
 
 
 def test_an_embedded_constant_is_bound_by_the_loaders_rule():
