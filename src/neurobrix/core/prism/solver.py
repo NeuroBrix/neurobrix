@@ -424,6 +424,8 @@ class ExecutionPlan:
     # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
     # it, a measured peak judges it.
     host_footprint: Dict = field(default_factory=dict)
+    # On a device that draws on host memory: [(rung MB, strategy, host side MB)] per rung solve() tried.
+    unified_rungs_tried: List = field(default_factory=list)
 
     @property
     def primary_device(self) -> str:
@@ -920,6 +922,87 @@ class PrismSolver:
     # =========================================================================
 
     def solve(
+        self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+        serve_mode: bool = False, mode: str = "compiled",
+    ) -> ExecutionPlan:
+        """The plan at the rung the free reading gives — and, on a device that draws on host memory, at
+        the highest rung whose WHOLE host side fits that reading.
+
+        On unified memory the device plan and the run's host side (the engine's base, the weights a
+        streamed or lazy plan holds and loads, the output boundary) come out of ONE pool. The rung is
+        read from the free memory alone, so more free memory gave a larger window whose host side no
+        longer fit: Janus-Pro-7B on the Mac planned a 7 531 MB window (host 12 760 MB) at 11 638 MB free
+        and a 10 362 MB window (host 15 592 MB) at 12 652 MB free (the Mac, 2026-10-03 23:48) — every
+        streamed model oscillated between fitting and not with the minute's reading. The plan's host
+        side is priced (Step 7.9, host_footprint.py); when it exceeds the reading, the rung steps DOWN
+        the ladder and the plan is solved again. The lowest rung that still overshoots is kept, said
+        (the engine never refuses — the owner, 2026-10-03 22:35); a lower rung no strategy fits keeps
+        the rung above, said. Behind the census door the rung is imposed and this is not done.
+        """
+        from neurobrix.core.prism.memory_budget import memory_ladder_mb
+        self._unified_rung_cap_mb = None
+        host = memory_state()
+        unified = [d for d in profile.devices if d.has_unified_memory]
+        descends = bool(unified and host.measured and not _census_shadow_active()
+                        and not os.environ.get("NBX_PRISM_BUDGET_MB"))
+        log = logging.getLogger(__name__)
+        tried = []
+        try:
+            plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        except RuntimeError as refusal:
+            # A rung no strategy fits is not the machine's last word on a pool whose rung is read from
+            # the free memory: the rungs below are tried, highest first (Flex.1-alpha on the Mac at
+            # 12.6 GB free was refused at 11 264 and planned at 8 192 — the Mac, 2026-10-03 23:48).
+            if not descends:
+                raise
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            plan = None
+            for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
+                tried.append((int(rung), "refused", None))
+                self._unified_rung_cap_mb = float(lower)
+                try:
+                    plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                    log.warning("unified memory: no strategy fits rung %s (%s) — rung %s", int(rung),
+                                str(refusal).splitlines()[0], lower)
+                    break
+                except RuntimeError:
+                    rung = lower
+            if plan is None:
+                self._unified_rung_cap_mb = None
+                raise refusal
+        if not descends or not plan.host_footprint:
+            return plan
+        while True:
+            fp = plan.host_footprint
+            # What the plan adds to the pool: the process's resident memory is already out of the reading.
+            need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            tried.append((int(rung), plan.strategy, int(need_mb)))
+            if need_mb <= float(host.available_mb):
+                break
+            lower = [r for r in memory_ladder_mb() if r < rung]
+            if not lower:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free even at "
+                            "the lowest rung (%s) — kept, the system may page; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), tried)
+                break
+            self._unified_rung_cap_mb = float(lower[-1])
+            try:
+                below = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            except RuntimeError as e:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free at rung "
+                            "%s, and no strategy fits rung %s (%s) — the rung above is kept; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), lower[-1], str(e).splitlines()[0], tried)
+                self._unified_rung_cap_mb = float(rung)
+                plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                break
+            log.info("unified memory: rung %s planned a host side of %.0f MB over %.0f MB free — rung %s",
+                     int(rung), need_mb, host.available_mb, lower[-1])
+            plan = below
+        plan.unified_rungs_tried = tried
+        return plan
+
+    def _solve_at_rung(
         self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
         serve_mode: bool = False, mode: str = "compiled",
     ) -> ExecutionPlan:
@@ -3236,6 +3319,9 @@ class PrismSolver:
                 _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
                          if profile.cpu and getattr(self, "_mode", None) else None) or 0
                 capacity = min(recommended, max(0.0, float(host.available_mb) - float(_base)))
+                # A lower rung imposed by solve() when the plan's host side did not fit the reading.
+                if getattr(self, "_unified_rung_cap_mb", None):
+                    capacity = min(capacity, float(self._unified_rung_cap_mb))
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
                         "%s: unified memory — planning against %.0f MB actually "
@@ -6513,6 +6599,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
+    if plan.unified_rungs_tried:
+        rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
     return rec
 
 
