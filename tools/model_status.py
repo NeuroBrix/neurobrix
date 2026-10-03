@@ -237,6 +237,16 @@ def _short(x, n=110):
     return x if len(x) <= n else x[:n - 1] + "…"
 
 
+def _public(text: str) -> str:
+    """The table is a PUBLIC document: it says what the build did, never names the private build toolchain
+    (rules/docs-and-language.md, two spheres). Campaign records and the registry path carry its name; the
+    rendered text replaces a path through its tree by the file's own name and the word by "the build"."""
+    import re
+    text = re.sub(r"(?:/[\w.-]+)*/forge/((?:[\w.-]+/)*)([\w.-]+)", r"the build's \2", text)
+    text = re.sub(r"\bForge\b", "the build", text)
+    return re.sub(r"\bforge\b", "the build", text)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--cache", type=Path, required=True)
@@ -409,7 +419,7 @@ def main(argv=None):
     L += ["", "## The queue, in the owner's order", ""]
     for step in ("derivation", "certification", "oracle ladder", "Triton compiled confirmation", "validated tonight"):
         L.append(f"- **{step}** ({len(queue[step])}): " + (", ".join(f"`{x}`" for x in queue[step]) or "none"))
-    a.out.write_text("\n".join(L) + "\n")
+    a.out.write_text(_public("\n".join(L)) + "\n")
     print(f"model_status: {len(rows)} containers -> {a.out}")
 
 

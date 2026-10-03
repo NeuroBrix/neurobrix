@@ -92,3 +92,11 @@ def test_a_foreign_or_refused_scan_is_refused(tmp_path):
         MS.main(_world(tmp_path) + _scan(tmp_path, [{"container": "Z", "verdict": "CLEAN"}]))
     with pytest.raises(SystemExit, match="is a refusal"):
         MS.main(_world(tmp_path / "x") + _scan(tmp_path, [{"refused": "no cache at /nowhere"}]))
+
+
+def test_the_public_table_never_names_the_private_build_toolchain():
+    """Two spheres: a campaign record or a registry path naming the toolchain is rendered as the build."""
+    import model_status as MS
+    out = MS._public("registry `/home/x/retrace_fmq1/forge/config/model_registry.yml`; Forge 1872c13 fixed; forge fixed")
+    assert "forge" not in out.lower(), out
+    assert "model_registry.yml" in out and "1872c13" in out, out
