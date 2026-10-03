@@ -50,3 +50,11 @@ them on mochi's VAE the first time this was measured).
 `tools/frozen_dim_report.py <model> [component]` reads the arguments, never the shapes, and prints
 per shape-op whether its size argument is symbolic, literal, or not-applicable. Use it before
 filing, restating or acting on a frozen-dimension debt, and quote it.
+
+`tools/frozen_dim_scan.py` is the catalogue-wide scan (2026-10-04). It reads each tensor's symbolic
+annotation (`symbolic_shape.dims`) — the field the derivation and the placement read — and never
+`output_shapes`, and for every hit it reads the producer's arguments too and says which field holds
+the literal: *in the arguments* (the runtime evaluates it, the claim above) or *annotation only*
+(the arguments are symbolic or `-1`, and what is frozen is the annotation the derivation keys
+from — Qwen3-VL's expert view `[128, -1, 2048]` annotated `[128, 230, 2048]`). Both are defects of
+the trace; the field named tells the retrace which one it fixes.
