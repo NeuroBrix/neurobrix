@@ -173,6 +173,8 @@ def main(argv=None):
     ap.add_argument("--records", type=Path, required=True,
                     help="confirmations, oracle comparisons, judgments, hub artefacts, retraces — read from the campaign records")
     ap.add_argument("--census-log", type=Path, action="append", default=[], help="a census run's log (the movers' verdicts)")
+    ap.add_argument("--judged", type=Path, action="append", default=[],
+                    help="a JUDGED.md of certified-only confirmations judged from outside (| date | container | class | mode | how | verdict |)")
     ap.add_argument("--neurotax", type=Path, help="the parser's own check per container (neurotax_check.jsonl)")
     ap.add_argument("--notes", type=Path, default=REPO / "docs/reference/model-status-notes.json",
                     help="measured causes no record field carries, one per container, each with its source")
@@ -181,6 +183,17 @@ def main(argv=None):
     rows = containers(a.cache)
     der = derivation(a.derivation)
     rec = json.loads(a.records.read_text())
+    judged = {}
+    for jf in a.judged:
+        for line in jf.read_text().splitlines():
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) < 6 or not re.match(r"\d{4}-\d{2}-\d{2}", cells[0]):
+                continue
+            for name in re.split(r"\s*/\s*", cells[1]):
+                name = name.split(" (")[0].split(" — ")[0].strip()
+                if name:
+                    judged[name] = {"date": cells[0], "class": cells[2], "mode": cells[3], "how": cells[4],
+                                    "verdict": cells[5], "file": jf.name}
     notes = {k: v for k, v in json.loads(a.notes.read_text()).items() if not k.startswith("_")} if a.notes.exists() else {}
     unknown = sorted(set(notes) - {c["name"] for c in rows})
     if unknown:
@@ -206,8 +219,9 @@ def main(argv=None):
         "*no record* means none exists on this rack.",
         "",
         "| container · repo · format/NeuroTax · traced · Forge | census | certified 16 GB | certified 32 GB | vendor oracle "
-        "| sequential oracle | Triton compiled (certified-only) | judged from outside | hub artefact | status |",
-        "|---|---|---:|---:|---|---|---|---|---|---|",
+        "| sequential oracle | Triton compiled (certified-only) | judged from outside | validated tonight (compiled Triton, "
+        "certified-only, judged) | hub artefact | status |",
+        "|---|---|---:|---:|---|---|---|---|---|---|---|",
     ]
     queue = collections.defaultdict(list)
     seen_repo = collections.defaultdict(list)
@@ -248,7 +262,11 @@ def main(argv=None):
         cert = {cls: (f"{h}/{t}" if t else "no rows") for cls, (h, t) in cov.items()}
         what = " · ".join(str(x) for x in (repo or "repo not in the registry", f"{c['nbx']}/{c['neurotax']}", c["traced"],
                                              c["forge"] or "Forge sha not recorded in the container"))
-        L.append(f"| `{n}` · {what} | {dv} | {cert[16]} | {cert[32]} | {vo_t} | {so_t} | {cm_t} | {jd_t} | {hub} | {status} |")
+        jn = judged.get(n)
+        jn_t = f"{jn['date']} {jn['class']}: {_short(jn['verdict'], 90)}" if jn else "not yet"
+        L.append(f"| `{n}` · {what} | {dv} | {cert[16]} | {cert[32]} | {vo_t} | {so_t} | {cm_t} | {jd_t} | {jn_t} | {hub} | {status} |")
+        if not jn or not jn["verdict"].upper().startswith(("PASS", "MATCHES")):
+            queue["validated tonight"].append(n)
         if dv != "exact":
             queue["derivation"].append(n)
         if any(h < t or t == 0 for h, t in cov.values()):
@@ -309,7 +327,7 @@ def main(argv=None):
             L.append(f"| `{x.get('model')}` | {x.get('date')} | {_short(x.get('outcome'), 70)} | {_short(x.get('reason') or 'no reason on record', 80)} "
                      f"| {_short(x.get('ladder_on_record'), 90)} |")
     L += ["", "## The queue, in the owner's order", ""]
-    for step in ("derivation", "certification", "oracle ladder", "Triton compiled confirmation"):
+    for step in ("derivation", "certification", "oracle ladder", "Triton compiled confirmation", "validated tonight"):
         L.append(f"- **{step}** ({len(queue[step])}): " + (", ".join(f"`{x}`" for x in queue[step]) or "none"))
     a.out.write_text("\n".join(L) + "\n")
     print(f"model_status: {len(rows)} containers -> {a.out}")
