@@ -64594,12 +64594,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T16:12:24+00:00",
+    "date": "2026-10-03T19:52:02+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "msl-v0.1-b1c6226e82836d20"
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
     },
     "shape": [
      1,
@@ -64623,12 +64623,16 @@
      "bf16",
      "bf16"
     ],
-    "deviation": 0.0027589753512885576,
+    "launches": 1,
+    "launch_deviations": [
+     0.0033576331444419775
+    ],
+    "deviation": 0.0033576331444419775,
     "tolerance": 0.04,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
     "machine": {
      "hostname": "MacBook-Pro.local",
-     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
@@ -64637,25 +64641,26 @@
       "ordinal": 0,
       "visible_devices": null,
       "name": "Apple M4 Pro",
-      "memory_mb": 18186
+      "memory_mb": 18186,
+      "unified": true
      },
      "clocks_mhz": null
     },
-    "best_ms": 0.3644137477452776,
-    "second_ms": 0.5196944487591585,
-    "candidates": 18,
-    "accepted": 18,
-    "benched": 6,
+    "best_ms": 0.3482854036139507,
+    "second_ms": null,
+    "candidates": 1,
+    "accepted": 1,
+    "benched": 1,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
-     "runs": 9.349,
-     "bench": 1.106
+     "runs": 0.006,
+     "bench": 0.484
     },
     "stability_witness": {
-     "open_ms": 4.7889,
-     "close_ms": 4.5301,
-     "drift": 0.054,
+     "open_ms": 3.5288,
+     "close_ms": 3.4291,
+     "drift": 0.0283,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -64664,6 +64669,7 @@
       2048
      ]
     },
+    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
