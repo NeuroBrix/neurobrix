@@ -5,12 +5,13 @@ one row per container in the catalogue, every cell read from a record, never typ
     python tools/model_status.py --cache <catalogue> --rc <release-candidate tree> \
         --derivation <derived_census RESULTS.txt> [--records <records.json>] --out docs/reference/model-status.md
 
-Per container: what the container is (format, NeuroTax version, trace date, the Forge revision when
+Per container: what the container is (format, NeuroTax version, trace date, the build revision when
 the container records one); the census (the committed table's rows per memory class, and whether
 the DERIVATION reproduces the walked keys exactly in both modes); the keys of that table certified
 for each memory class over the keys it holds (the certifier's own coverage question,
 `autotune_certified.entry_covers`); the last certified-only confirmation, whether its output was
-judged from outside, its cold-run time; the hub artifact; the status. A cell with no record says
+judged from outside, its cold-run time; the hub artifact; the dimensions the trace left at its own
+value (`tools/frozen_dim_scan.py`, a static read of every graph); the status. A cell with no record says
 so — a blank and a zero read the same, and only one of them is honest. The second table is the
 derivation per family. What either table shows as missing is the queue: derivation,
 certification, confirmation, cold-run time.
@@ -159,6 +160,78 @@ def _last(entries):
     return entries[-1] if isinstance(entries, list) else entries
 
 
+def frozen_scan(path: Path, names: set) -> dict:
+    """{container: record} from `tools/frozen_dim_scan.py`'s JSONL. A refused scan, or a record naming
+    no container of the catalogue, is refused here — a stale or foreign scan is not a column."""
+    out = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if r.get("refused") and not r.get("container"):
+            raise SystemExit(f"model_status: the frozen scan {path} is a refusal ({r['refused']}) — refused")
+        out[r["container"]] = r
+    foreign = sorted(set(out) - names)
+    if foreign:
+        raise SystemExit(f"model_status: the frozen scan names no container of the catalogue: {foreign} — refused")
+    return out
+
+
+def _pattern(p) -> str:
+    notes = ["in the arguments" if p.get("in_args") else "annotation only"]
+    if p.get("dropped"):
+        notes.append("the symbol dropped at this op")
+    if not p.get("live"):
+        notes.append("unused output")
+    if p.get("origins", 1) > 1:
+        notes.append(f"x{p['origins']}")
+    return f"{p['component']}/`{p['first']}` dim {p['position']} = {p['value']} ~ `{p['matches']}` ({', '.join(notes)})"
+
+
+def frozen_cell(r) -> str:
+    if r is None:
+        return "no record"
+    if r.get("refused"):
+        return f"refused: {_short(r['refused'], 60)}"
+    c = r.get("counts") or {}
+    if r.get("verdict") == "UNREADABLE":
+        return f"UNREADABLE ({c.get('unreadable')} graph(s))"
+    if r.get("patterns"):
+        p = r["patterns"][0]
+        return (f"FROZEN: {c.get('FROZEN_patterns')} pattern(s), {c.get('FROZEN_patterns_live')} live — first "
+                f"{p['component']}/{p['first']} = {p['value']} ({_short(p['matches'], 40)})")
+    if r.get("verdict") == "AMBIGUOUS":
+        return f"clean of FROZEN; {c.get('AMBIGUOUS')} ambiguous"
+    return "clean"
+
+
+def frozen_section(path: Path, rows, frozen: dict) -> list:
+    L = ["", "## Frozen dimensions — the static scan (`tools/frozen_dim_scan.py`)", "",
+         f"Read from `{path}`; nothing executed. The field read is each tensor's symbolic annotation "
+         "(`symbolic_shape.dims`), never the trace record (`output_shapes`); for each hit the producer's arguments are "
+         "read too. A dimension is **FROZEN** when it is a plain integer where the same graph carries that number as a "
+         "symbol or a symbolic expression (a product, sum or floordiv of symbols the model computes), and the number is "
+         "not an extent of a weight nor an integer of the model's configuration. **Ambiguous**: the number is also a "
+         "weight extent or a configuration integer, or the match runs only through a symbol traced at 0, 1 or 2 (R39) "
+         "or through a trace extent of an input axis the graph keeps literal — read one by one, never counted. "
+         "A **pattern** is one freeze repeated per block (component, op type, position, value); **live** means a "
+         "tensor carrying it is consumed; *the symbol dropped at this op*: the op consumes a tensor carrying the value "
+         "symbolically and writes it back literal, the strongest witness a static read gives. *in the arguments*: the runtime evaluates the literal; *annotation only*: the "
+         "arguments are symbolic or inferred (`-1`) and the annotation the derivation reads is literal.", "",
+         "| container | verdict | FROZEN patterns (live) | ambiguous groups | the patterns |", "|---|---|---:|---:|---|"]
+    for c in rows:
+        r = frozen.get(c["name"])
+        if r is None:
+            L.append(f"| `{c['name']}` | no record | | | |")
+            continue
+        k = r.get("counts") or {}
+        pats = "; ".join(_pattern(p) for p in (r.get("patterns") or [])[:4])
+        more = len(r.get("patterns") or []) - 4
+        L.append(f"| `{c['name']}` | {r.get('verdict')} | {k.get('FROZEN_patterns', 0)} ({k.get('FROZEN_patterns_live', 0)}) | "
+                 f"{k.get('AMBIGUOUS', 0)} | {pats or '—'}{f'; and {more} more' if more > 0 else ''} |")
+    return L
+
+
 def _short(x, n=110):
     x = " ".join(str(x).split())
     return x if len(x) <= n else x[:n - 1] + "…"
@@ -176,6 +249,8 @@ def main(argv=None):
     ap.add_argument("--judged", type=Path, action="append", default=[],
                     help="a JUDGED.md of certified-only confirmations judged from outside (| date | container | class | mode | how | verdict |)")
     ap.add_argument("--neurotax", type=Path, help="the parser's own check per container (neurotax_check.jsonl)")
+    ap.add_argument("--frozen-scan", type=Path,
+                    help="tools/frozen_dim_scan.py's JSONL, one record per container (dims the trace left at its value)")
     ap.add_argument("--notes", type=Path, default=REPO / "docs/reference/model-status-notes.json",
                     help="measured causes no record field carries, one per container, each with its source")
     ap.add_argument("--out", type=Path, required=True)
@@ -198,6 +273,7 @@ def main(argv=None):
     unknown = sorted(set(notes) - {c["name"] for c in rows})
     if unknown:
         raise SystemExit(f"model_status: notes name no container of the catalogue: {unknown} — refused")
+    frozen = frozen_scan(a.frozen_scan, {c["name"] for c in rows}) if a.frozen_scan else None
     repos = registry_repos(a.registry)
     keys = {c: table_keys(a.rc, c) for c in CLASSES}
     ent = certified_entries(a.rc)
@@ -218,10 +294,10 @@ def main(argv=None):
         "A certified-only run at zero misses is itself the proof that no autotune cost is left at runtime. "
         "*no record* means none exists on this rack.",
         "",
-        "| container · repo · format/NeuroTax · traced · Forge | census | certified 16 GB | certified 32 GB | vendor oracle "
+        "| container · repo · format/NeuroTax · traced · build | census | certified 16 GB | certified 32 GB | vendor oracle "
         "| sequential oracle | Triton compiled (certified-only) | judged from outside | validated tonight (compiled Triton, "
-        "certified-only, judged) | hub artefact | status |",
-        "|---|---|---:|---:|---|---|---|---|---|---|---|",
+        "certified-only, judged) | hub artefact |" + (" frozen dims (static scan) |" if frozen is not None else "") + " status |",
+        "|---|---|---:|---:|---|---|---|---|---|---|" + ("---|" if frozen is not None else "") + "---|",
     ]
     queue = collections.defaultdict(list)
     seen_repo = collections.defaultdict(list)
@@ -261,10 +337,11 @@ def main(argv=None):
             status = "not confirmed"
         cert = {cls: (f"{h}/{t}" if t else "no rows") for cls, (h, t) in cov.items()}
         what = " · ".join(str(x) for x in (repo or "repo not in the registry", f"{c['nbx']}/{c['neurotax']}", c["traced"],
-                                             c["forge"] or "Forge sha not recorded in the container"))
+                                             c["forge"] or "build sha not recorded in the container"))
         jn = judged.get(n)
         jn_t = f"{jn['date']} {jn['class']}: {_short(jn['verdict'], 90)}" if jn else "not yet"
-        L.append(f"| `{n}` · {what} | {dv} | {cert[16]} | {cert[32]} | {vo_t} | {so_t} | {cm_t} | {jd_t} | {jn_t} | {hub} | {status} |")
+        fz = (f" {frozen_cell(frozen.get(n))} |" if frozen is not None else "")
+        L.append(f"| `{n}` · {what} | {dv} | {cert[16]} | {cert[32]} | {vo_t} | {so_t} | {cm_t} | {jd_t} | {jn_t} | {hub} |{fz} {status} |")
         if not jn or not jn["verdict"].upper().startswith(("PASS", "MATCHES")):
             queue["validated tonight"].append(n)
         if dv != "exact":
@@ -320,6 +397,8 @@ def main(argv=None):
             L.append(f"| `{c['name']}` | {r_['keys']} | {(str(r_['raw']) + ' — rename owed after validation') if r_['raw'] else 'fully canonical'} | "
                      f"{', '.join(f'{k} {v}' for k, v in r_['raw_by_component'].items()) or '—'} | "
                      f"{'; '.join(r_['samples'][:3]) or '—'} |")
+    if frozen is not None:
+        L += frozen_section(a.frozen_scan, rows, frozen)
     rt = rec.get("_retraces") or []
     if rt:
         L += ["", "## Retraces of the last month, and whether the oracle ladder preceded them", "",

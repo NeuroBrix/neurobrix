@@ -61,3 +61,34 @@ def test_an_empty_catalogue_or_a_stray_note_is_refused(tmp_path):
         MS.main(_world(tmp_path, names=()))
     with pytest.raises(SystemExit, match="name no container"):
         MS.main(_world(tmp_path / "x", notes={"Z": "cause"}))
+
+
+def _scan(tmp_path, recs):
+    p = tmp_path / "frozen_scan.jsonl"
+    p.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    return ["--frozen-scan", str(p)]
+
+
+PAT = {"component": "transformer", "first": "aten.view::17", "op_type": "aten::view", "position": 0, "value": 4050,
+       "matches": "(s1*s2)", "in_args": True, "live": True, "origins": 1}
+
+
+def test_the_frozen_scan_is_a_column_and_a_section(tmp_path):
+    """A container with a FROZEN pattern names it; a clean one says clean; one the scan did not read says so."""
+    recs = [{"container": "A", "verdict": "FROZEN", "patterns": [PAT],
+             "counts": {"FROZEN_patterns": 1, "FROZEN_patterns_live": 1, "AMBIGUOUS": 2}},
+            {"container": "B", "verdict": "CLEAN", "patterns": [], "counts": {"FROZEN_patterns": 0, "AMBIGUOUS": 0}}]
+    MS.main(_world(tmp_path) + _scan(tmp_path, recs))
+    out = (tmp_path / "out.md").read_text()
+    rows = {l.split("`")[1]: l for l in out.splitlines() if l.startswith("| `") and " · o/" in l}
+    assert "FROZEN: 1 pattern(s), 1 live — first transformer/aten.view::17 = 4050" in rows["A"]
+    assert "| clean |" in rows["B"] and "| no record |" in rows["C"]
+    assert "## Frozen dimensions — the static scan" in out
+    assert "transformer/`aten.view::17` dim 0 = 4050 ~ `(s1*s2)` (in the arguments)" in out
+
+
+def test_a_foreign_or_refused_scan_is_refused(tmp_path):
+    with pytest.raises(SystemExit, match="frozen scan names no container"):
+        MS.main(_world(tmp_path) + _scan(tmp_path, [{"container": "Z", "verdict": "CLEAN"}]))
+    with pytest.raises(SystemExit, match="is a refusal"):
+        MS.main(_world(tmp_path / "x") + _scan(tmp_path, [{"refused": "no cache at /nowhere"}]))
