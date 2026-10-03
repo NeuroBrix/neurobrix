@@ -87,6 +87,15 @@ block_sizes:
 # entries will drift the LLM logits → drift greedy argmax → break
 # golden match. Keep the legacy values until a future calibration
 # campaign re-validates.
+# The flash kernel at a power-of-two head dim >= 128, MEASURED on this arch and stack: the zero-pad
+# detour (launch_keys.flash_headdim_detour) was built for wrong answers at D 128/256 on an older Triton
+# (headdim 128 -> 4.2e-01 against float64). On Triton 3.8 the 33-case attention correctness oracle
+# (tests/unit/kernels/test_numeric_correctness_oracle.py) passes with NBX_D128_DETOUR=0 on a V100, and
+# the chunked kernel at D 128 matches float64 as the detour does (1.46e-05) at 65 ms instead of 2 196
+# (2026-10-03). Absent on an arch = the detour stays.
+flash:
+  pow2_head_dim_correct: true
+
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
   - seqlen_q_le: 16
