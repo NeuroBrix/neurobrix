@@ -90,3 +90,16 @@ def test_baddbmm_is_keyed_as_its_wrapper_launches():
           for k in n.keywords if k.arg in ("IEEE_PRECISION", "PROMOTE_B", "HAS_BIAS")
           and isinstance(k.value, ast.Constant)}
     assert kw == {"IEEE_PRECISION": True, "PROMOTE_B": False, "HAS_BIAS": True}
+
+
+def test_a_vlm_leg_the_sites_do_not_derive_is_counted_by_name():
+    """The sites derive the image+text request only; an audio recording, the image or speech leg
+    (`global.mode`), or a request without an image is named, never derived as the text request.
+    Injection: `vlm_legs_not_derived` returning [] -> RED."""
+    from types import SimpleNamespace as N
+    img = ["--input-image", "x.png"]
+    assert D.vlm_legs_not_derived(img, N(mode="text", input_image="x.png")) == []
+    assert D.vlm_legs_not_derived(img + ["--audio", "a.wav"], N(mode="text", input_image="x.png")) \
+        == ["an audio recording"]
+    assert D.vlm_legs_not_derived(img, N(mode="image", input_image="x.png")) == ["the 'image' leg"]
+    assert D.vlm_legs_not_derived([], N(mode="text", input_image=None)) == ["a request with no image"]

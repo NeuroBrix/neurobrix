@@ -765,6 +765,20 @@ def vlm_runs(model: str, topo: dict) -> set:
     return runs
 
 
+def vlm_legs_not_derived(request: list, args) -> list:
+    """The legs of a vlm request the sites do not derive (`TritonVLMEngine.execute`'s branches
+    other than image+text): an audio recording, the image-generation / speech leg selected by
+    `global.mode`, a request with no image. Each is counted by name by `derive_keys`."""
+    legs = []
+    if "--audio" in request:
+        legs.append("an audio recording")
+    if getattr(args, "mode", None) in ("image", "audio"):
+        legs.append(f"the '{args.mode}' leg")
+    if not getattr(args, "input_image", None):
+        legs.append("a request with no image")
+    return legs
+
+
 def _vlm_flow_stub(model: str):
     """The attributes the vlm flow's id builders read (`ctx.modules["tokenizer"]`, the request's
     resolved variables): the container's tokenizer, no request override of the template."""
@@ -1112,6 +1126,11 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
                 if st.get("execution", "forward") == "forward"}
     if flow.get("type") == "vlm" and vlm_contract(a.model, topo) is not None:
         runs = vlm_runs(a.model, topo)
+        # The sites derive the image+text request; every other leg the flow takes is counted by
+        # name, never derived as if it were that request (`execute`: an audio recording, the
+        # image-generation and speech legs on `global.mode`, a request with no image).
+        for leg in vlm_legs_not_derived(request, args):
+            unhandled[f"vlm {vlm_contract(a.model, topo)} contract: {leg} (not yet derived)"] += 1
     tilings = plan.get("component_tiling") or {}
     _prompt = args.prompt or ""                              # the parser's answer: the LAST --prompt
     _defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
