@@ -55,6 +55,7 @@ def flash_attention_forward_kernel(
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     GQA_GROUPS: tl.constexpr,
+    QK_CHUNK: tl.constexpr = 0,
 ):
     start_m = tl.program_id(0).to(tl.int64)
     off_hb = tl.program_id(1).to(tl.int64)
@@ -105,27 +106,35 @@ def flash_attention_forward_kernel(
     m_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
     acc_o = tl.zeros([BLOCK_M, BLOCK_HEADDIM], dtype=tl.float32)
 
-    # Load Q — stays in SRAM throughout
-    if EVEN_M & EVEN_N:
-        if EVEN_HEADDIM:
-            q = tl.load(q_ptrs)
+    # QK_CHUNK 0 (the default) or >= BLOCK_HEADDIM: Q is loaded once and held for the whole loop (every backend whose dot
+    # lowers to matrix instructions). QK_CHUNK < BLOCK_HEADDIM: the contraction over the head dim is
+    # done in chunks of QK_CHUNK, Q and K re-read per chunk — the form for a backend whose dot lowers
+    # to scalar FMA (Triton >= 3.3 below sm_80: triton-lang/triton#5066), where holding a BLOCK_M x
+    # BLOCK_HEADDIM Q tile and its K partner in registers ran the kernel at 0.18 TFLOP/s on a V100
+    # and the chunked form at 2.4-3.6 (2026-10-03, nbx/campaigns/2026_10_03_resume/flash_variant*.txt).
+    # The arch profile says which (its sdpa_thresholds rows' qk_chunk).
+    if QK_CHUNK == 0 or QK_CHUNK >= BLOCK_HEADDIM:
+        # Load Q — stays in SRAM throughout
+        if EVEN_M & EVEN_N:
+            if EVEN_HEADDIM:
+                q = tl.load(q_ptrs)
+            else:
+                q = tl.load(q_ptrs, mask=offs_d[None, :] < headdim, other=0.0)
         else:
-            q = tl.load(q_ptrs, mask=offs_d[None, :] < headdim, other=0.0)
-    else:
-        if EVEN_HEADDIM:
-            q = tl.load(q_ptrs, mask=offs_m[:, None] < seqlen_q, other=0.0)
-        else:
-            q = tl.load(q_ptrs, mask=(offs_m[:, None] < seqlen_q) & (offs_d[None, :] < headdim), other=0.0)
+            if EVEN_HEADDIM:
+                q = tl.load(q_ptrs, mask=offs_m[:, None] < seqlen_q, other=0.0)
+            else:
+                q = tl.load(q_ptrs, mask=(offs_m[:, None] < seqlen_q) & (offs_d[None, :] < headdim), other=0.0)
 
-    # Scale Q BEFORE the dot, not its result.
-    #
-    # Mathematically the same product; not the same rounding, and not the
-    # same lowering. The Metal backend refuses an elementwise scale applied
-    # to a `tt.dot` RESULT inside the attention loop — it drops or
-    # mis-applies the fused op, so it declines rather than emit silently
-    # wrong scores — and names this form as the supported one. It is also
-    # what the reference FlashAttention does.
-    q = (q * softmax_scale).to(q.dtype)
+        # Scale Q BEFORE the dot, not its result.
+        #
+        # Mathematically the same product; not the same rounding, and not the
+        # same lowering. The Metal backend refuses an elementwise scale applied
+        # to a `tt.dot` RESULT inside the attention loop — it drops or
+        # mis-applies the fused op, so it declines rather than emit silently
+        # wrong scores — and names this form as the supported one. It is also
+        # what the reference FlashAttention does.
+        q = (q * softmax_scale).to(q.dtype)
 
     # Loop over K, V blocks. Causal masking is applied via the bias
     # tensor (memory-loaded), not via an internal IS_CAUSAL constexpr —
@@ -136,22 +145,36 @@ def flash_attention_forward_kernel(
     for start_n in range(0, end_n, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
-        # Load K
-        if EVEN_N & EVEN_M:
-            if EVEN_HEADDIM:
-                k = tl.load(k_ptrs + start_n * stride_kn)
+        if QK_CHUNK == 0 or QK_CHUNK >= BLOCK_HEADDIM:
+            # Load K
+            if EVEN_N & EVEN_M:
+                if EVEN_HEADDIM:
+                    k = tl.load(k_ptrs + start_n * stride_kn)
+                else:
+                    k = tl.load(k_ptrs + start_n * stride_kn, mask=offs_d[None, :] < headdim, other=0.0)
             else:
-                k = tl.load(k_ptrs + start_n * stride_kn, mask=offs_d[None, :] < headdim, other=0.0)
-        else:
-            if EVEN_HEADDIM:
-                k = tl.load(k_ptrs + start_n * stride_kn, mask=(start_n + offs_n)[:, None] < seqlen_k, other=0.0)
-            else:
-                k = tl.load(k_ptrs + start_n * stride_kn,
-                            mask=((start_n + offs_n)[:, None] < seqlen_k) & (offs_d[None, :] < headdim), other=0.0)
+                if EVEN_HEADDIM:
+                    k = tl.load(k_ptrs + start_n * stride_kn, mask=(start_n + offs_n)[:, None] < seqlen_k, other=0.0)
+                else:
+                    k = tl.load(k_ptrs + start_n * stride_kn,
+                                mask=((start_n + offs_n)[:, None] < seqlen_k) & (offs_d[None, :] < headdim), other=0.0)
 
-        # QK^T
-        qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-        qk += tl.dot(q, tl.trans(k))
+            # QK^T
+            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+            qk += tl.dot(q, tl.trans(k))
+        else:
+            qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+            for d0 in tl.static_range(0, BLOCK_HEADDIM, QK_CHUNK):
+                offs_dc = d0 + tl.arange(0, QK_CHUNK)
+                q_c = tl.load((Q + off_b * stride_qb + off_h * stride_qh + offs_m[:, None] * stride_qm)
+                              + offs_dc[None, :],
+                              mask=(offs_m[:, None] < seqlen_q) & (offs_dc[None, :] < headdim), other=0.0)
+                q_c = (q_c * softmax_scale).to(q_c.dtype)      # the same per-element scale as the held Q
+                k_c = tl.load((K + off_b * stride_kb + off_h_kv * stride_kh
+                               + (start_n + offs_n)[:, None] * stride_kn) + offs_dc[None, :],
+                              mask=((start_n + offs_n)[:, None] < seqlen_k) & (offs_dc[None, :] < headdim),
+                              other=0.0)
+                qk += tl.dot(q_c, tl.trans(k_c))
 
         if not EVEN_N:
             qk += tl.where((start_n + offs_n)[None, :] < seqlen_k, 0, float("-inf"))

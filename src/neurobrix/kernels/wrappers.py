@@ -23,6 +23,7 @@ from .nbx_tensor import reduce_tile_max as _reduce_tile_max
 from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_channel
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
+from .ops._configs import sdpa_launch_meta as _sdpa_launch_meta
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
 from . import launcher as _nbx_launcher
 
@@ -8690,6 +8691,12 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # softmax reduction (the BLOCK_M=32 wrongness probe). NBX_FLASH_NUM_WARPS
     # / NBX_FLASH_NUM_STAGES let us pin them for diagnosis / per-arch tuning.
     _flash_launch_meta = {}
+    # The arch profile's FMA-path row (Volta/Turing under Triton >= 3.3): its measured warps and the
+    # head-dim chunk the QK^T contraction is done in. Absent everywhere else: held Q, as before.
+    _fa_meta = _sdpa_launch_meta(seqlen_q, headdim)
+    QK_CHUNK = min(int(_fa_meta["qk_chunk"]), BLOCK_HEADDIM) if _fa_meta else 0
+    if _fa_meta:
+        _flash_launch_meta["num_warps"] = _fa_meta["num_warps"]
     _fnw = os.environ.get("NBX_FLASH_NUM_WARPS")
     if _fnw:
         _flash_launch_meta["num_warps"] = int(_fnw)
@@ -8731,7 +8738,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             seqlen_q // 32, seqlen_k // 32,
         )
         _probe_kw = dict(BIAS_TYPE=bias_type, BLOCK_HEADDIM=BLOCK_HEADDIM,
-                         GQA_GROUPS=gqa_groups, **_flash_launch_meta)
+                         GQA_GROUPS=gqa_groups, QK_CHUNK=QK_CHUNK, **_flash_launch_meta)
 
         # `prepare` binds a JITFunction; the kernel is wrapped in
         # @triton.heuristics, whose only job is to add constexprs. Unwrap to
@@ -8795,6 +8802,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         GQA_GROUPS=gqa_groups,
+        QK_CHUNK=QK_CHUNK,
         **_flash_launch_meta,
     )
     # Fully-masked-row guard at the SDPA-op level — parity with PyTorch's fused

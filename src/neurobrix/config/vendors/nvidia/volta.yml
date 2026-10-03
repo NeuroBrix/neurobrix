@@ -87,6 +87,15 @@ block_sizes:
 # entries will drift the LLM logits → drift greedy argmax → break
 # golden match. Keep the legacy values until a future calibration
 # campaign re-validates.
+# The flash kernel at a power-of-two head dim >= 128, MEASURED on this arch and stack: the zero-pad
+# detour (launch_keys.flash_headdim_detour) was built for wrong answers at D 128/256 on an older Triton
+# (headdim 128 -> 4.2e-01 against float64). On Triton 3.8 the 33-case attention correctness oracle
+# (tests/unit/kernels/test_numeric_correctness_oracle.py) passes with NBX_D128_DETOUR=0 on a V100, and
+# the chunked kernel at D 128 matches float64 as the detour does (1.46e-05) at 65 ms instead of 2 196
+# (2026-10-03). Absent on an arch = the detour stays.
+flash:
+  pow2_head_dim_correct: true
+
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
   - seqlen_q_le: 16
@@ -103,14 +112,23 @@ sdpa_thresholds:
     block_m: 32
     block_n: 32
     num_warps: 4
+  # Prefill below head_dim 256: the FMA-path tile. Triton >= 3.3 lowers tl.dot to scalar fp32 FMA
+  # below sm_80 (triton-lang/triton#5066; release/3.8.x AccelerateMatmul.cpp: "falls back to the FMA
+  # path"; the compiled flash PTX here: 0 mma.sync, 8 192 fma.rn.f32 per loop body). Holding a 64-row
+  # Q tile and a 64-column K tile in registers ran 0.18 TFLOP/s at D 64/96/128 and T 4 096-14 080;
+  # a 64x32 tile at 8 warps with the QK^T contraction in 32-wide head-dim chunks ran 2.4-3.6 TFLOP/s
+  # (T 4 096, D 64/96/128; nbx/campaigns/2026_10_03_resume/flash_variant*.txt, 2026-10-03). The
+  # vendor's tensor-core kernel stays ~4x ahead: no Triton route to Volta MMA exists on 3.8.
   - head_dim_ge: 128
     block_m: 64
-    block_n: 64
-    num_warps: 4
+    block_n: 32
+    num_warps: 8
+    qk_chunk: 32
   - head_dim_lt: 128
-    block_m: 128
-    block_n: 64
-    num_warps: 4
+    block_m: 64
+    block_n: 32
+    num_warps: 8
+    qk_chunk: 32
 
 # Memory constraints.
 #

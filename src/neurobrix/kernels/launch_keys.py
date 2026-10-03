@@ -291,7 +291,17 @@ def flash_headdim_detour(D: int, enabled: bool = True) -> int:
     (`scaled_dot_product_attention_wrapper`'s detour around the flash kernel's wrong answers at
     those dims), and the padded call re-enters the wrapper — routed afresh at D + 1 (and V's head
     dim + 1). `enabled` False is the wrapper's diagnostic `NBX_D128_DETOUR=0`."""
-    return D + 1 if (enabled and D >= 128 and (D & (D - 1)) == 0) else D
+    if not (enabled and D >= 128 and (D & (D - 1)) == 0):
+        return D
+    # An arch whose profile MEASURED the flash kernel correct at these dims on its stack runs them
+    # as they are: the defect was a code-generation one of an older Triton (P-FLASH-D128-CORRECTNESS,
+    # Volta; Dao-AILab names the class on A100), and on Triton 3.8 the 33-case attention oracle
+    # passes with the detour off on a V100 (2026-10-03). Every arch that has not measured it keeps
+    # the detour.
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    if ((active_vendor_profile().get("flash") or {}).get("pow2_head_dim_correct")) is True:
+        return D
+    return D + 1
 
 
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
