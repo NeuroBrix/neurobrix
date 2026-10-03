@@ -557,6 +557,25 @@ def sdpa_block_ceiling(seqlen_q: int, head_dim: int):
     return None, None
 
 
+def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
+    """The flash launch's `num_warps` and `qk_chunk` the hardware profile states for this shape — only
+    on a row that states `qk_chunk` (the row of an arch whose dot lowers to scalar FMA, where the tile
+    and its warps were measured together); `{}` anywhere else, so every other arch launches exactly
+    as before. Same row order and match rule as `sdpa_block_ceiling`."""
+    profile = active_vendor_profile()
+    for row in profile.get("sdpa_thresholds") or []:
+        if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
+            continue
+        if "head_dim_ge" in row and head_dim < row["head_dim_ge"]:
+            continue
+        if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
+            continue
+        if "qk_chunk" not in row:
+            return {}
+        return {"num_warps": int(row["num_warps"]), "qk_chunk": int(row["qk_chunk"])}
+    return {}
+
+
 def largest_tile_within_smem(candidates, cost, budget: Optional[int]):
     """The first candidate the hardware can hold, or the smallest if none fits.
 

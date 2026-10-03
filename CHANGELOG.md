@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
+  tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
+  uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention
+  runs in 28-65 ms instead of 0.4-2.1 s. The vendor's tensor-core kernel (used by `--compiled`)
+  remains about 4x faster on these GPUs.
+
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.
