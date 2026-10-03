@@ -308,12 +308,12 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-22T17:47:04+00:00",
+    "date": "2026-10-03T19:32:31+00:00",
     "engine_version": "0.5.4",
     "backend": {
      "triton": "3.8.0+git4a15f415",
      "name": "mps",
-     "backend_hash": "msl-v0.1-b1c6226e82836d20"
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
     },
     "shape": [
      1,
@@ -337,12 +337,16 @@
      "fp32",
      "fp32"
     ],
-    "deviation": 2.7708511921975966e-07,
+    "launches": 1,
+    "launch_deviations": [
+     3.5382485519264987e-07
+    ],
+    "deviation": 3.5382485519264987e-07,
     "tolerance": 0.0001,
     "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-89 cols 0-89; batch 0 rows 67-156 cols 67-156; batch 0 rows 135-224 cols 135-224) of 1x224x224",
     "machine": {
      "hostname": "MacBook-Pro.local",
-     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
      "python": "3.12.0",
      "hardware_profile": "auto-apple-m4-pro-18g",
      "has_native_bf16": true,
@@ -351,25 +355,26 @@
       "ordinal": 0,
       "visible_devices": null,
       "name": "Apple M4 Pro",
-      "memory_mb": 18186
+      "memory_mb": 18186,
+      "unified": true
      },
      "clocks_mhz": null
     },
-    "best_ms": 4.029828601413303,
-    "second_ms": 4.428972085316976,
-    "candidates": 18,
-    "accepted": 18,
-    "benched": 12,
+    "best_ms": 3.8214375257492064,
+    "second_ms": null,
+    "candidates": 1,
+    "accepted": 1,
+    "benched": 1,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.053,
-     "runs": 0.34,
-     "bench": 1.278
+     "oracle": 0.052,
+     "runs": 0.041,
+     "bench": 0.308
     },
     "stability_witness": {
-     "open_ms": 4.4022,
-     "close_ms": 4.3489,
-     "drift": 0.0121,
+     "open_ms": 3.4617,
+     "close_ms": 3.371,
+     "drift": 0.0262,
      "tolerance": 0.08,
      "kernel": "matmul",
      "shape": [
@@ -378,6 +383,7 @@
       2048
      ]
     },
+    "reproven_from": "triton 3.8.0+git4a15f415 mps msl-v0.1-b1c",
     "built": {
      "gpu": true,
      "how": "no backend compilation fallback was raised during the certifying run",
