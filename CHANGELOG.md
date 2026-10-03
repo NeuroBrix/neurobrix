@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.
 
+- **Sums, means and maxima over very long rows no longer reserve gigabytes of GPU memory under
+  `--triton`.** A reduction held a whole row in registers; past a few thousand elements the values
+  spilled, and the driver reserved spill memory for every thread the card can run (4.3 GB for one
+  sum in a Wan2.1 image-to-video run at 480x832, enough to make a 16 GB card run out of memory).
+  Long rows are now reduced in tiles; rows of up to 4 096 elements give the same bytes as before.
+
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
   are in the other plans; and a request whose component the card cannot hold even tiled is refused
