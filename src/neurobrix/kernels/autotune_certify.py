@@ -1863,11 +1863,12 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     # The working-set budget (`--working-set-mb`): what this run may hold, the figure its guard
     # kills at; None = no price door (the operand bound alone). The floor is the process now.
     budget_bytes = int(working_set_mb) * 2**20 if working_set_mb else None
-    import resource as _res
-    floor_bytes = int(_res.getrusage(_res.RUSAGE_SELF).ru_maxrss) if working_set_mb else 0
+    from neurobrix.core.prism.host_footprint import process_footprint_now
+    floor_bytes = process_footprint_now() if working_set_mb else 0
     if budget_bytes is not None:
         log(f"[certify] working-set budget {budget_bytes / 2**20:.0f} MiB; the process's floor now "
-            f"{floor_bytes / 2**20:.0f} MiB; every key is priced by its phases before any draw")
+            f"{floor_bytes / 2**20:.0f} MiB, read again before every key; every key is priced by its "
+            f"phases before any draw")
     if certifying_class is None:
         raise RuntimeError("the certifying card is not described by the hardware profile in force "
                            f"(device {certifying_device}): refused — a proof must say which card's memory it was made on")
@@ -1975,6 +1976,10 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
                            and stored_label != C.proof_backend({"backend": _backend()}))
             attempts += 1
             t0 = time.time()
+            if budget_bytes is not None:
+                # the floor is the process NOW, before this key — never the one read at the start
+                from neurobrix.core.prism.host_footprint import process_footprint_now
+                floor_bytes = process_footprint_now()
             try:
                 tol = _tolerance(vendor, profile, dtype)
                 common = dict(card_bytes=int(certifying_device["memory_mb"]) * 2**20,
