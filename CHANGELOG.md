@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runs in 28-65 ms instead of 0.4-2.1 s. The vendor's tensor-core kernel (used by `--compiled`)
   remains about 4x faster on these GPUs.
 
+- **Attention with a 128- or 256-wide head under `--triton` on Volta no longer takes a padded
+  detour.** The detour worked around wrong answers in an older Triton; on the current one the
+  kernel is correct at these sizes (checked against a float64 reference), so a 128-wide head now
+  runs about 30x faster on a V100. Other GPUs keep the detour until it is measured there.
+
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.
