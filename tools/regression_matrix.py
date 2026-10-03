@@ -56,6 +56,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
@@ -446,7 +447,19 @@ def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     return int(total), "plan"
 
 
-def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
+def _waiting_line(out: Path, model: str, mode: str, gpu: str, waited: float, need: int) -> str:
+    """One durable line while a cell waits for the host: what it needs, what is free, the headroom kept."""
+    avail = _mem_available()
+    rec = {"date": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "model": model, "mode": mode, "gpu": gpu,
+           "waited_s": round(waited), "need_gib": round(need / 2**30, 2), "available_gib": round(avail / 2**30, 2),
+           "headroom_gib": round(HOST_HEADROOM / 2**30, 2)}
+    append_jsonl(out / "waiting.jsonl", rec)
+    return (f"[matrix] {model} {mode}: WAITING {rec['waited_s']} s for the host — needs {rec['need_gib']} GiB "
+            f"+ {rec['headroom_gib']} GiB headroom, {rec['available_gib']} GiB available")
+
+
+def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True,
+             say_every: float = 300, max_wait: Optional[float] = None):
     """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
     runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
     gate runs — nothing runs beside a gate) holds every new cell.
@@ -468,6 +481,10 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             if got:
                 planned = (got[0], f"plan@{ptree.name}")
     need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
+    # A cell that waits SAYS so (the Mac, 2026-10-03 22:40: Voxtral's cell waited in this loop with nothing
+    # written but host_waiting.json — the silent-night class): every `say_every` seconds a line on stdout and in
+    # <out>/waiting.jsonl, and with `max_wait` the cell is refused by name, as a row, instead of waiting for ever.
+    t0 = last_said = time.time()
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
@@ -475,6 +492,18 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             break
         if not wait:
             return None
+        waited = time.time() - t0
+        if time.time() - last_said >= say_every:
+            print(_waiting_line(out, model, mode, gpu, waited, need), flush=True)
+            last_said = time.time()
+        if max_wait is not None and waited >= max_wait:
+            line = _waiting_line(out, model, mode, gpu, waited, need)
+            print(line, flush=True)
+            return {"model": model, "family": Z.family_of(model), "mode": mode, "gpu": gpu, "rc": None,
+                    "wall_s": 0.0, "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "error": f"REFUSED: the host did not admit the cell in {round(waited)} s (--max-wait) — "
+                             + line.split(": WAITING ", 1)[1],
+                    "host_reserved": need, "host_reserved_from": need_from}
         time.sleep(30)
     try:
         print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved ({need_from})", flush=True)
@@ -642,7 +671,8 @@ def cmd_run(a) -> int:
         for i, (model, mode) in enumerate(todo):
             # A cell the host budget cannot take now is deferred while this pass has cells left;
             # the pass's last cell waits for the budget (and the deferred ones come next pass).
-            row = run_cell(model, mode, a.gpu, out, a.timeout, src, wait=i == len(todo) - 1)
+            row = run_cell(model, mode, a.gpu, out, a.timeout, src, wait=i == len(todo) - 1,
+                           say_every=a.say_every, max_wait=a.max_wait)
             if row is None:
                 deferred.append((model, mode))
                 continue
@@ -830,6 +860,11 @@ def main() -> int:
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
+    r.add_argument("--say-every", type=float, default=300,
+                   help="seconds between the lines a cell waiting for the host writes (stdout and <out>/waiting.jsonl)")
+    r.add_argument("--max-wait", type=float, default=None,
+                   help="refuse a cell the host has not admitted after this many seconds, as a row naming why "
+                        "(default: wait, saying so every --say-every)")
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
     r.add_argument("--allow-certified-dir-override", action="store_true",
                    help=f"run although {CERTIFIED_DIR_ENV} relocates the certified directory (never a gate: "
