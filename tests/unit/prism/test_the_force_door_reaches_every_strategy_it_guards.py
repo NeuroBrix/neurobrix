@@ -39,7 +39,9 @@ from neurobrix.core.strategies import STRATEGY_REGISTRY
 
 def test_the_door_does_not_carry_its_own_copy_of_the_strategy_names():
     """A door with a hand-written list of what it guards drifts from what it guards."""
-    src = inspect.getsource(_solver.PrismSolver.solve)
+    # solve() descends the ladder on unified memory and solves each rung through _solve_at_rung,
+    # which holds the door (a-streamed-plan-states-its-window, 7fa53618).
+    src = inspect.getsource(_solver.PrismSolver._solve_at_rung)
     i = src.find("NBX_FORCE_STRATEGY")
     assert i > -1, "the force door moved — re-read this gate"
     window = src[i:i + 2500]
