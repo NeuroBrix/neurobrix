@@ -955,6 +955,9 @@ class PrismSolver:
             # 12.6 GB free was refused at 11 264 and planned at 8 192 — the Mac, 2026-10-03 23:48).
             if not descends:
                 raise
+            # The refusal's own record (what it rejected and why streaming declined) is the one said if
+            # no lower rung fits either: each lower solve resets it.
+            _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             plan = None
             for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
@@ -969,6 +972,7 @@ class PrismSolver:
                     rung = lower
             if plan is None:
                 self._unified_rung_cap_mb = None
+                self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
                 raise refusal
         if not descends or not plan.host_footprint:
             return plan
