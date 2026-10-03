@@ -541,7 +541,6 @@ class SynonymRegistry:
         "logit_scale": "logit_scale",
 
         # --- feed-forward -----------------------------------------------------------------------
-        "feed_forward": "ffn",               # stem of feed_forward1/2 (listed above as a module)
         "intermediate": "ffn",               # HF BERT-style intermediate.dense
         "intermediate_query": "query_ffn",   # Q-Former query-token FFN
         "output_query": "query_ffn_out",
@@ -560,13 +559,11 @@ class SynonymRegistry:
         "linear_fc1": "up",
         "linear_fc2": "down",
         "ffn_output": "ffn_out",
-        "ff": "ffn",
 
         # --- norms ------------------------------------------------------------------------------
         "batchnorm": "bnorm",
         "batch_norm": "bnorm",
         "bn": "bnorm",
-        "layer_norm": "norm",
         "norms": "norm",
         "conv_norm_out": "norm_out",         # diffusers VAE GroupNorm before conv_out
         "self_attn_layer_norm": "pre_attn_norm",
