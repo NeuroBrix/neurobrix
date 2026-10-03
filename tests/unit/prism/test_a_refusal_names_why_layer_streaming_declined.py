@@ -73,13 +73,32 @@ def test_the_cascade_refusal_names_every_strategy_it_tried_and_why_streaming_dec
     assert "layer_streaming declined:" in text, text[-800:]
 
 
-def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
-    """MiniCPM on the Mac: every candidate is rejected by the KV check (its LM and head alone are
-    over the rung, register 104). That refusal said only 'No strategy can fit' — the rejections it
-    had just recorded were printed by a different refusal that is never reached after scoring."""
+def test_minicpm_on_the_idle_mac_is_streamed_not_refused(monkeypatch):
+    """Every whole-component candidate is rejected by the KV check (the LM and head alone are over
+    the rung, register 104), and every component fits the rung ALONE: the streaming rung used to be
+    offered nothing ("the streamed []") and the solve refused. The owner's rule — the engine never
+    refuses — holds since a-streamed-plan-states-its-window: the largest component is streamed."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
+    plan = PrismSolver().solve_smart(NBXContainer.load(str(container_root("MiniCPM-o-4_5"))), profile(APPLE_M4_PRO),
+                                     InputConfig(batch_size=1), mode="triton")
+    assert plan.strategy == "layer_streaming", plan.strategy
+    assert plan.device_window_mb is not None and plan.device_window_mb < plan.total_memory_mb
+
+
+def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
+    """The same machine, the streaming rung made to decline (a model it cannot cut): the refusal that
+    follows the KV check must name every rejection it recorded and the decline — it once said only 'No
+    strategy can fit', its rejections printed by a different refusal never reached after scoring."""
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
+
+    def declines(self, *a, **k):
+        self._layer_streaming_declined = "stand-in: no cut of this model fits the rung"
+        return None
+    monkeypatch.setattr(PrismSolver, "_try_layer_streaming", declines)
     s = PrismSolver()
     with pytest.raises(RuntimeError) as err:
         s.solve_smart(NBXContainer.load(str(container_root("MiniCPM-o-4_5"))), profile(APPLE_M4_PRO),
@@ -89,7 +108,6 @@ def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
     assert len(s._rejected) >= 2, ("precondition: several candidates were rejected", s._rejected)
     for name, _score, _why in s._rejected:
         assert f"{name} rejected:" in text, (name, text[:1200])
-    assert s._layer_streaming_declined, "precondition: streaming declined MiniCPM on the Mac"
     assert f"layer_streaming declined: {s._layer_streaming_declined}" in text, text[:1200]
 
 
