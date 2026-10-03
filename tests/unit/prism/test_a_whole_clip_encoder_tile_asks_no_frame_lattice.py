@@ -115,6 +115,7 @@ def test_the_refusal_says_why_the_encoder_got_no_tile(tmp_path):
     s, _ = _decide(container, 88, 32768)
     s._strategies_tried, s._layer_streaming_declined = ["cpu_streaming"], None
     s._host_device_overflow = {"cpu_streaming": ("cuda:0", 28_639.0, {"enc": 415_350.0})}
+    s._snapshot_tiling_declines("cpu_streaming", {"enc": 415_350.0})     # as the rung records it
     comp = SimpleNamespace(weight_mb=244.0, activation_mb=319_500.0, total_mb=319_744.0,
                            weight_bytes=244 * MB, activation_bytes=ACTIVATION, overhead_bytes=0)
     card = SimpleNamespace(device_string="cuda:0", capacity_mb=31_130.0, recommended_mb=None,
@@ -124,3 +125,17 @@ def test_the_refusal_says_why_the_encoder_got_no_tile(tmp_path):
     msg = str(exc.value)
     assert "no tiling fits" not in msg, msg
     assert "enc's activations (415,350 MB untiled; no tile: no axis of its output z" in msg, msg
+
+
+def test_a_refusal_prints_each_rungs_own_tiling_reason():
+    """The doctrine review of 2ba2c40e: the per-component reason is overwritten by the next rung's
+    attempt, so a refusal printed one rung's overflow beside another rung's reason. Each overflowing
+    rung keeps the reasons standing when it recorded."""
+    from neurobrix.core.prism.solver import PrismSolver
+    s = PrismSolver()
+    s._tiling_decline("vae", "rung A's reason")
+    s._snapshot_tiling_declines("rung A", {"vae": 100.0})
+    s._tiling_decline("vae", "rung B's reason")
+    s._snapshot_tiling_declines("rung B", {"vae": 100.0})
+    assert s._tiling_declined_by_rung["rung A"] == {"vae": "rung A's reason"}
+    assert s._tiling_declined_by_rung["rung B"] == {"vae": "rung B's reason"}

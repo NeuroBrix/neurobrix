@@ -1067,6 +1067,7 @@ class PrismSolver:
         self._host_device_card = {}
         # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
         self._tiling_declined = {}
+        self._tiling_declined_by_rung = {}
         self._input_config = input_config
 
         # Step 2: Compute memory requirements (tiling-aware via profile)
@@ -3981,6 +3982,15 @@ class PrismSolver:
         self.__dict__.setdefault("_tiling_declined", {})[comp_name] = why
         return None
 
+    def _snapshot_tiling_declines(self, rung: str, comps) -> None:
+        """Keep, for the rung that records an overflow, the tiling reasons of ITS components as they
+        stand now — the per-component record is overwritten by the next rung's attempt (sized at
+        another card or rung), and the refusal printed one rung's overflow beside another's reason
+        (the doctrine review of 2ba2c40e, 2026-10-04)."""
+        now = getattr(self, "_tiling_declined", {}) or {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {})[rung] = {
+            c: now[c] for c in comps if c in now}
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, tile_rung_mb: int,
@@ -4649,6 +4659,7 @@ class PrismSolver:
             comps = dict(prev[2]) if prev else {}
             comps[comp_name] = self._live_activation_mb(mem)
             store["a component's host placement"] = (largest.device_string, usable, comps)
+            self._snapshot_tiling_declines("a component's host placement", comps)
             return None
         #
         # When `profile.cpu` is missing (some older or hand-written
@@ -5234,6 +5245,7 @@ class PrismSolver:
         tilings_by_rung[strategy] = tilings
         if overflow:
             overflow_by_rung[strategy] = (largest.device_string, usable, overflow)
+            self._snapshot_tiling_declines(strategy, overflow)
             return False
         return True
 
@@ -6354,8 +6366,9 @@ class PrismSolver:
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
-        _why_untiled = getattr(self, "_tiling_declined", {}) or {}
+        _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
         for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
+            _why_untiled = _why_by_rung.get(_rung, {})
             tried_str += (f"\n  {_rung} declined: under the Triton engine a host-placed component computes on "
                           f"the card, and {_card} cannot hold " + ", ".join(
                               f"{c}'s activations ({mb:,.0f} MB untiled; "
