@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel is correct at these sizes (checked against a float64 reference), so a 128-wide head now
   runs about 30x faster on a V100. Other GPUs keep the detour until it is measured there.
 
+- **A video encoder too large for the GPU is tiled at any frame count under `--triton`.** An encoder
+  that is cut into spatial tiles, each carrying the whole clip, was refused when the frame count was
+  not of the form 4k+1 (88 frames, for example), although no tile depends on it. When the plan still
+  gives a component no tile, the refusal now says why instead of "no tiling fits".
+
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.

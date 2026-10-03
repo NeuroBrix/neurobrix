@@ -85,9 +85,16 @@ def test_a_causal_encoder_over_its_budget_is_tiled_in_space_with_the_whole_clip(
     assert spec["tile_size"] % 8 == 0 and spec["tile_size"] < 832, spec
 
 
-def test_a_causal_encoder_off_its_frame_lattice_or_within_budget_is_left_alone(causal_encoder):
-    assert _decide(causal_encoder, 88, 80 * GB) is None      # (88 - 1) % 4 != 0
+def test_a_causal_encoder_within_budget_is_left_alone(causal_encoder):
     assert _decide(causal_encoder, 81, 1 * GB) is None       # fits untiled
+
+
+def test_a_causal_encoder_off_its_frame_lattice_is_still_tiled_in_space(causal_encoder):
+    """Its time is never tiled, so no tile depends on where the frame count sits on the 4k+1
+    lattice: the whole clip, 88 frames, is in every tile, as it is untiled. `(88 - 1) % 4 != 0`
+    declined it until 2026-10-04."""
+    spec = _decide(causal_encoder, 88, 80 * GB)
+    assert spec is not None and "t_tile" not in spec, spec
 
 
 def test_a_causal_encoder_is_sized_at_the_requests_pixels_not_its_latent():
