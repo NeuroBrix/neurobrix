@@ -43,3 +43,11 @@ output:
 calibration:
   prompt: "The quick brown fox jumps over the lazy dog, and the census follows every token."
   seed: 42
+
+# Confirmation request (tools/trace_request.derived_request -> the matrix's cell and the census that covers it).
+# The smallest request that still judges a speech model through an STT (the owner's method, 2026-09-28): one
+# short sentence. The calibration sentence above made an autoregressive TTS decode up to ~1 300 audio tokens —
+# orpheus on the Mac's Metal path (~1.6 s per token) ran past the gate's 2 400 s with every key served
+# (the Mac, 2026-10-04 01:09).
+confirmation:
+  prompt: "The quick brown fox jumps over the lazy dog."
