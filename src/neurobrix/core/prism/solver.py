@@ -137,7 +137,9 @@ def unified_device_bytes(plan, profile) -> int:
     unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
     ledger reserves what a unified run really takes (the Mac, 2026-10-03)."""
     if any(d.has_unified_memory for d in profile.devices):
-        return int(plan.total_memory_mb * 2**20)
+        # a streamed plan holds its window, not every component at once
+        window = getattr(plan, "device_window_mb", None)
+        return int((window if window is not None else plan.total_memory_mb) * 2**20)
     return 0
 
 
@@ -402,6 +404,13 @@ class ExecutionPlan:
     #: so the plan states its margin rather than leaving a reader to discover it.
     margin_mb: Optional[int] = None
     margin_reason: Optional[str] = None
+    #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
+    #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
+    #: segment's weights and the activations alive while it runs. None for a plan that holds its
+    #: components as `total_memory_mb` says. `total_memory_mb` of a streamed plan is the components'
+    #: sum at full residency (granite-speech 18 085 MB where the window is a fraction of it, the Mac
+    #: 2026-10-03), which no reservation should take for what the run holds.
+    device_window_mb: Optional[float] = None
     # Component-level spatial tiling — per-component plan emitted when a
     # spatial component (4D/5D input + scale config) would NOT fit a GPU
     # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
@@ -1504,6 +1513,7 @@ class PrismSolver:
                 for name, part in _parts.items()}
             plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
             plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
+            plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
             # The components this rung kept resident by tiling them: their tiling is the plan's.
             for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
                 self._component_tiling[_cn] = _spec
@@ -5649,6 +5659,8 @@ class PrismSolver:
         # Resident beside the pieces and outside any component's figure: the graph constants and
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
+        self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
+                                              + max(p_.peak_resident_bytes for p_ in partitions.values()))
         return allocations, devices
 
     def _output_bytes(self, container) -> int:
@@ -6446,6 +6458,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
+           "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
            "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
                              for c, p in (plan.runtime_op_tiling or {}).items()
