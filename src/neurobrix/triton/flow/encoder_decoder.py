@@ -194,9 +194,12 @@ class TritonEncoderDecoderEngine:
         interceptor = getattr(executor, "_decoder_kv_interceptor", None)
         if interceptor is None:
             dtype = parse_dtype(str(getattr(executor, "dtype", None) or "float16"))
-            cache = TritonKVCache(num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
-                                  k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
-                                  max_cache_len=int(max_tokens), dtype=dtype)
+            from neurobrix.core.runtime.lm_facts import decoder_cache_facts, encoder_decoder_cache_from_plan
+            kv = encoder_decoder_cache_from_plan(getattr(self.ctx.plan, "kv_cache_plan", None),
+                                                 decoder_cache_facts(dag), max_tokens, dec_name)
+            cache = TritonKVCache(num_layers=kv.num_layers, num_kv_heads=kv.num_kv_heads,
+                                  k_head_dim=kv.k_head_dim, v_head_dim=kv.v_head_dim,
+                                  max_cache_len=int(kv.max_cache_len), dtype=dtype)
             interceptor = TritonAttentionInterceptor(cache=cache, num_heads=plan["num_heads"])
             variant = {
                 "aten::_scaled_dot_product_efficient_attention": interceptor.intercept_efficient,

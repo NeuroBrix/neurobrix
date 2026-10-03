@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
+  cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
+  plan, and a run whose plan carries none, or one of another shape, is refused by name.
+
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
   are in the other plans; and a request whose component the card cannot hold even tiled is refused
