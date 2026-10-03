@@ -3331,19 +3331,19 @@ class NBXTensor:
     def empty_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
         dev = device if device else f"cuda:{other._device_idx}"
         return NBXTensor.empty(other._shape,
-                               dtype if dtype else other._dtype,
+                               dtype if dtype is not None else other._dtype,
                                dev)
 
     @staticmethod
     def zeros_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
         return NBXTensor.zeros(other._shape,
-                               dtype if dtype else other._dtype,
+                               dtype if dtype is not None else other._dtype,
                                device if device else other._device)
 
     @staticmethod
     def ones_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
         return NBXTensor.ones(other._shape,
-                              dtype if dtype else other._dtype,
+                              dtype if dtype is not None else other._dtype,
                               device if device else other._device)
 
     @staticmethod

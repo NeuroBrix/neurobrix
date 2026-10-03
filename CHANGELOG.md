@@ -166,6 +166,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
+  On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
+  kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a
+  boolean); the requested type is now honoured, as `--compiled` always did.
+
 - **An image model streamed layer by layer computes its positional embedding at the requested size.**
   When a diffusion transformer too large for its memory budget was run a few layers at a time, the pieces
   never received the request's resolution, so a positional embedding computed at load time (Sana's)
