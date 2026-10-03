@@ -217,6 +217,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # another graph") and every piece ran the conservative contract: GLM-4.1V streamed,
             # same tokens, logits off from whole. A piece's op uids index the whole's sets.
             seg_exec._contract_from = base
+            # And it loads under its COMPONENT's runtime state — the request's resolution and the
+            # component handler, which the runtime and the factory give the base only — read at
+            # each load (`GraphExecutor._component_from`): a computable buffer is computed from it.
+            seg_exec._component_from = base
             seg_exec._flow_reads_weights = False
             seg_exec._borrow_from = base
             seg_exec.load_graph_from_dict(sub)

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
+  cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
+  plan, and a run whose plan carries none, or one of another shape, is refused by name.
+
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
   are in the other plans; and a request whose component the card cannot hold even tiled is refused
@@ -153,6 +157,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting, instead of running it differently from everyone else.
 
 ### Fixed
+
+- **An image model streamed layer by layer computes its positional embedding at the requested size.**
+  When a diffusion transformer too large for its memory budget was run a few layers at a time, the pieces
+  never received the request's resolution, so a positional embedding computed at load time (Sana's)
+  was never built and the run failed on its first addition; each piece now loads under its model's
+  resolution, read again at every request.
 
 - **A plan performs the in-place additions it was priced with.** When a decoder's large residual
   additions were counted as done in place but no single operation overflowed the card, the plan left
