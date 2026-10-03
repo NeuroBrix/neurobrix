@@ -19,6 +19,7 @@ ZERO SEMANTIC: No knowledge of specific models.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
+from neurobrix.nbx.neurotax import SynonymRegistry
 from neurobrix.core.memory.manager import release_flow_memory
 import time
 import numpy as np
@@ -40,6 +41,12 @@ from neurobrix.core.runtime_values import require_max_tokens
 # stochastic TTS (chatterbox t3 temperature sampling) is otherwise non-
 # reproducible and the four modes can't be cross-validated.
 _TTS_LLM_SEED = 1234
+
+
+# The vocoder's token table, found by its canonical token (the neurotaxe's rule 8): the vendors spell it
+# `input_embedding`, `embed_tokens`, `wte`, `shared` ...; the parser names every one `token_embed`.
+# It was `"embedding" in weight_name`, which NeuroTax 5.1 (`input_embedding` -> `token_embed`) would miss.
+_TOKEN_EMBED = SynonymRegistry.resolve("embed_tokens")
 
 
 def _dump_t3_logits(path: str, step: int, cond, uncond, comb) -> None:
@@ -488,7 +495,7 @@ class TTSLLMEngine(FlowHandler):
                 if voc_dag:
                     for _tid, tspec in voc_dag.get("tensors", {}).items():
                         wname = tspec.get("weight_name", "")
-                        if "embedding" in wname and tspec.get("shape"):
+                        if _TOKEN_EMBED in wname.split(".") and tspec.get("shape"):
                             vocoder_vocab_size = tspec["shape"][0]
                             break
 

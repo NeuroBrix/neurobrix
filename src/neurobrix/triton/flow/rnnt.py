@@ -25,6 +25,21 @@ from typing import Any, Callable, Dict, List, Optional
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.device_transfer import parse_device_idx
+from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+
+# R30 mirror of core/flow/rnnt.py: the joint's linears as NeMo names them, keyed by the parser.
+_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
+    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
+    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
+    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
+
+
+def joint_role(key: str) -> Optional[str]:
+    """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
+    for canon, role in _JOINT_KEYS.items():
+        if key == canon or key.endswith("." + canon):
+            return role
+    return None
 
 
 class TritonRNNTEngine:
@@ -425,8 +440,6 @@ class TritonRNNTEngine:
         executor = self.ctx.executors["joint"]
         w = executor._weights
 
-        _WANTED = ("enc.weight", "enc.bias", "pred.weight", "pred.bias",
-                   "joint.2.weight", "joint.2.bias")
         result = {}
         for key, tensor in w.items():
             if tensor is None:
@@ -435,21 +448,10 @@ class TritonRNNTEngine:
             # from the KEY, convert only what is wanted. This map also holds
             # non-tensor entries, and converting them first is what required a
             # coercion that could not fail.
-            if not key.endswith(_WANTED):
+            role = joint_role(key)
+            if role is None:
                 continue
-            arr = _to_numpy_f32(tensor)
-            if key.endswith("enc.weight"):
-                result["enc_weight"] = arr
-            elif key.endswith("enc.bias"):
-                result["enc_bias"] = arr
-            elif key.endswith("pred.weight"):
-                result["dec_weight"] = arr
-            elif key.endswith("pred.bias"):
-                result["dec_bias"] = arr
-            elif key.endswith("joint.2.weight"):
-                result["out_weight"] = arr
-            elif key.endswith("joint.2.bias"):
-                result["out_bias"] = arr
+            result[role] = _to_numpy_f32(tensor)
 
         required = ["enc_weight", "enc_bias", "dec_weight", "dec_bias", "out_weight", "out_bias"]
         missing = [k for k in required if k not in result]
