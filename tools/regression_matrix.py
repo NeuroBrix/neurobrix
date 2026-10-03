@@ -258,8 +258,10 @@ HOST_PER_WEIGHT_BYTE = 1.7
 #: harness and the kernel. Three concurrent cells at 180 GB of 251 drove memory pressure to 33 %
 #: "full" and the gate's cells to their timeouts (2026-09-26).
 HOST_SHARE = 0.8
-#: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness).
-HOST_HEADROOM = 16 << 30
+#: Kept free beyond every running cell's owed growth (the kernel, the census, the gate harness), as a
+#: share of the host: 16 GiB on the rack's 256 GB, 1.5 GiB on a 24 GB Mac. A constant 16 GiB is more
+#: than a 24 GB host ever has available, so no cell was ever admitted there (the Mac, 2026-10-03).
+HOST_HEADROOM_SHARE = 1 / 16
 #: How often a running cell's host footprint is sampled for its peak.
 PEAK_SAMPLE_S = 1.0
 
@@ -378,7 +380,7 @@ def reserve_host(out: Path, need: int) -> bool:
         # owed growth, and a headroom. Reservations alone held three cards idle at 22:57 with
         # 201 GB available (2026-09-26); measurement alone let three 30B loads OOM the host at 18:40.
         owed = sum(max(0, n - _rss_tree(int(p))) for p, n in led.items())
-        if _mem_available() < need + owed + HOST_HEADROOM:
+        if _mem_available() < need + owed + int(_host_bytes() * HOST_HEADROOM_SHARE):
             return False
         led[str(os.getpid())] = need
         return True
