@@ -3221,7 +3221,21 @@ class PrismSolver:
             # logged 8 659 MB in one shadow and 7 604 MB in the next, minutes apart
             # (Apple M4 Pro, 2026-09-22). A census that is not reproducible is not a census.
             if dev.has_unified_memory and host.measured and not _census_shadow_active():
-                capacity = min(recommended, host.available_mb * self.safety_margin)
+                # The reading is the machine's free memory itself: the memory law rounds it DOWN onto the
+                # ladder (memory_budget.budget_mb), and that rounding is the margin — the owner's rule, 13 GB
+                # free gives the 12 GB rung, never all of it. A safety factor taken BEFORE the rounding
+                # (dd9acdc1, 2026-09-10, written before the ladder law of 2026-09-20 and never removed when it
+                # came) reduced twice: 11 581 MB free became 11 002 and rounded to the 8 192 rung instead of
+                # 11 264 (the Mac, 2026-10-03 — granite, Janus, Flex cut against 7.5 GB windows).
+                # On a unified device the run's own host side lives in the same pool. What this process holds
+                # NOW is already out of the reading (it is taken inside the process); what the engine's device
+                # work adds once it starts — its modules, context, the libraries the first ops load: the
+                # profile's MEASURED cpu.runtime_base_mb for this engine — is not, and is taken off first. Read,
+                # not a factor (the Mac, 23:00: the 11 264 rung on 11 581 free left ~300 MB for it).
+                from neurobrix.core.prism.host_footprint import engine_of
+                _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
+                         if profile.cpu and getattr(self, "_mode", None) else None) or 0
+                capacity = min(recommended, max(0.0, float(host.available_mb) - float(_base)))
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
                         "%s: unified memory — planning against %.0f MB actually "
@@ -5468,6 +5482,25 @@ class PrismSolver:
         streamed = {name for name, mem in sorted_comps
                     if name not in tiled
                     and self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
+        _lm_kv = None
+        if getattr(self, "_needs_kv_cache", False):
+            # The cache's owner as the flow names it (core/runtime/lm_facts — the same reading that decided a
+            # cache is needed), the solver's own LM name otherwise.
+            from neurobrix.core.runtime.lm_facts import decode_lm_component, session_lm_name
+            _topo = self._flow_topology(container)
+            _gen = (_topo.get("flow") or {}).get("generation") or {}
+            _lm_kv = (decode_lm_component(_topo, list(graphs))
+                      or (session_lm_name(_gen, list(graphs)) if _gen.get("lm_component") in graphs else None)
+                      or self._lm_component_name)
+        if not streamed and _lm_kv in graphs and _lm_kv not in tiled:
+            # Every component fits the rung ALONE, yet this rung is being asked: the whole-component
+            # strategies were refused because the language model's KV cache does not fit beside it whole.
+            # The language model — the cache's owner — streams its layers inside the rung; the others stay
+            # whole. Before, nothing was offered ("the streamed []") and the solve refused: orpheus on a 24 GB
+            # Mac with 10.4 GB usable (the Mac, 2026-10-03 22:00), MiniCPM-o on the idle Mac. Only the KV
+            # owner: a component that fits whole is never the one streamed otherwise
+            # (test_no_component_falls_between_placing_whole_and_streaming).
+            streamed = {_lm_kv}
         # But only what is live AT THE SAME TIME as the streamed component's segments.
         # A whole component's WEIGHTS stay loaded beside it (a plan may load eagerly, a
         # serve session never unloads); its ACTIVATIONS are live only while it runs, and

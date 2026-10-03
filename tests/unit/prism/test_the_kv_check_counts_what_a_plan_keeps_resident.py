@@ -134,11 +134,15 @@ def test_the_LM_and_its_head_together_exceed_the_Macs_rung(monkeypatch):
     assert persistent and together > rung, (sorted(persistent), together, rung)
 
 
-def test_and_the_plan_says_so_rather_than_accepting_it(monkeypatch):
-    """Refused by the KV check's arithmetic — the specific refusal, not any error on the way."""
-    p, refusal, *_ = _plan_mac(monkeypatch)
-    assert p is None and refusal and "No strategy can fit model + KV cache" in refusal, (
-        getattr(p, "strategy", None), (refusal or "")[:200])
+def test_and_the_whole_strategies_are_refused_on_it_while_the_lm_streams(monkeypatch):
+    """The KV check's arithmetic still refuses every strategy that keeps the LM whole — and the plan no
+    longer stops there: the owner's rule (restated 2026-10-03 22:35: the engine never refuses; the LM
+    streams its layers inside the rung) — the LM, owner of the cache, is streamed. Until
+    a-streamed-plan-states-its-window this cell asserted the refusal 'No strategy can fit model + KV cache'."""
+    p, refusal, s, _seen, c = _plan_mac(monkeypatch)
+    assert refusal is None and p.strategy == "layer_streaming", (getattr(p, "strategy", None), (refusal or "")[:200])
+    lm = ((s._flow_topology(c).get("flow") or {}).get("generation") or {}).get("lm_component")
+    assert lm and list(p.layer_stream_plan) == [lm], (lm, sorted(p.layer_stream_plan))   # the flow's LM, alone
 
 
 # ───────────────────── a host strategy is judged against the host ─────────────────────
