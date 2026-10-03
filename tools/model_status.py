@@ -309,14 +309,15 @@ def main(argv=None):
         nt = {json.loads(l)["container"]: json.loads(l) for l in a.neurotax.read_text().splitlines() if l.strip()}
         L += ["", "## NeuroTax 5.0 weight keys — the parser's own check (normalize_strict(key) == key)", "",
               f"Read-only, `{a.neurotax}`. Canonical: the parser returns the key unchanged. Raw: it renames the key or "
-              "refuses one of its tokens (a vendor token the synonym registry does not hold).", "",
+              "refuses one of its tokens (a vendor token the synonym registry does not hold)."
+              + (f" {json.loads(a.notes.read_text()).get('_neurotax_decision', '')}" if a.notes.exists() else ""), "",
               "| container | keys | raw | raw by component | first raw keys |", "|---|---:|---:|---|---|"]
         for c in rows:
             r_ = nt.get(c["name"])
             if r_ is None:
                 L.append(f"| `{c['name']}` | no record | | | |")
                 continue
-            L.append(f"| `{c['name']}` | {r_['keys']} | {r_['raw'] or 'fully canonical'} | "
+            L.append(f"| `{c['name']}` | {r_['keys']} | {(str(r_['raw']) + ' — rename owed after validation') if r_['raw'] else 'fully canonical'} | "
                      f"{', '.join(f'{k} {v}' for k, v in r_['raw_by_component'].items()) or '—'} | "
                      f"{'; '.join(r_['samples'][:3]) or '—'} |")
     rt = rec.get("_retraces") or []
