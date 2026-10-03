@@ -54,11 +54,18 @@ def session_lm_name(gen_info: Mapping[str, Any], component_names: Iterable[str])
 def decode_lm_component(topology: Mapping[str, Any], component_names: Iterable[str]) -> Optional[str]:
     """The component a flow runs as a KV-cached decoder, or None when its flow opens no decode
     session: the autoregressive flow's session LM; the next-token-diffusion LM — the component
-    its diffusion stage is conditioned from."""
+    its diffusion stage is conditioned from; the encoder-decoder flow's autoregressive stage (the
+    decoder conditioned on the encoder's states, `cross_attention_from`)."""
     flow = topology.get("flow") or {}
     kind = flow.get("type")
     if kind == "autoregressive_generation":
         return session_lm_name(flow.get("generation") or {}, component_names)
+    if kind == "encoder_decoder":
+        stages = flow.get("stages") or (flow.get("audio") or {}).get("stages") or []
+        for st in stages:
+            if st.get("execution") == "autoregressive" and st.get("cross_attention_from"):
+                return st.get("component")
+        return None
     if kind == "next_token_diffusion":
         stages = flow.get("stages") or (flow.get("audio") or {}).get("stages") or []
         for st in stages:
@@ -98,3 +105,42 @@ def decode_sequences(topology: Mapping[str, Any], defaults: Mapping[str, Any],
                                "next_token_diffusion refuses to invent a value.")
         return 2 if float(scale) != 1.0 else 1
     return 1
+
+
+def decoder_cache_facts(dag: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """An encoder-decoder decoder's KV cache geometry, read from its graph by the flow's own reader
+    (`core.flow.decoder_kv.decoder_self_attention_plan`): {num_layers, num_heads, head_dim}, or None
+    when that flow builds no cache — a graph without self-attention, or one with no positional
+    mechanism (arange or positional-table slice) the cache could offset (it decodes by recompute).
+    One reader for the plan and for both engines' flows: before it, the flows sized the cache from
+    the graph and max_tokens, and the plan priced none (2026-09-29)."""
+    if not dag:
+        return None
+    from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+    plan = decoder_self_attention_plan(dag)
+    if plan is None or (not plan["arange_uids"] and not plan.get("position_slice_uids")):
+        return None
+    return {"num_layers": int(plan["num_layers"]), "num_heads": int(plan["num_heads"]),
+            "head_dim": int(plan["head_dim"]), "plan": plan}
+
+
+def encoder_decoder_cache_from_plan(kv_plan, facts: Mapping[str, Any], max_tokens: int, decoder: str):
+    """The plan's cache for an encoder-decoder decoder, checked against the graph's geometry: refused
+    by name when the plan carries none, when its geometry is not the graph's, or when it is shorter
+    than the window the flow decodes — never sized in the flow."""
+    if kv_plan is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the plan carries no KV cache for the decoder '{decoder}'. Prism prices the "
+            f"cache of every decoding flow (core/runtime/lm_facts.decode_lm_component, the encoder-decoder "
+            f"stage included); a plan without one did not see this flow — re-plan, never size it here.")
+    got = (int(kv_plan.num_layers), int(kv_plan.num_kv_heads), int(kv_plan.k_head_dim), int(kv_plan.v_head_dim))
+    want = (facts["num_layers"], facts["num_heads"], facts["head_dim"], facts["head_dim"])
+    if got != want:
+        raise RuntimeError(
+            f"ZERO FALLBACK: the plan's KV cache for '{decoder}' is {got} (layers, heads, k, v head dim) "
+            f"and the decoder graph's self-attention is {want} — the plan priced another decoder.")
+    if int(kv_plan.max_cache_len) < int(max_tokens):
+        raise RuntimeError(
+            f"ZERO FALLBACK: the plan's KV cache for '{decoder}' holds {kv_plan.max_cache_len} positions "
+            f"and the flow decodes up to {max_tokens} — re-plan at this request.")
+    return kv_plan

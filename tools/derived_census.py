@@ -296,6 +296,14 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 q_round = kd if qd != kd else None
                 mask_n = mask_n if mask_n == Tk else None
             route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks)
+            if route == "flash" and LK.flash_headdim_detour(D) != D:
+                # The wrapper's zero-pad detour: a power-of-two head dim >= 128 is padded by one
+                # (Q, K and V) and the call re-enters the wrapper, routed afresh at the padded dims
+                # — on an arch with no scores budget, a non-power-of-two dim takes the math route
+                # under its 2 GiB bound (PixArt's VAE attention at 512 -> 513 on Apple, 2026-09-29).
+                D, Dv = LK.flash_headdim_detour(D), Dv + (LK.flash_headdim_detour(D) - D)
+                route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows,
+                                            sdpa_max_chunks)
             qd, kd, vd, _qr = LK.sdpa_operand_dtypes(qd, kd, vd, q_round)
             if _qr is not None:
                 qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
