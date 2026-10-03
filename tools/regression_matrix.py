@@ -264,6 +264,10 @@ HOST_SHARE = 0.8
 HOST_HEADROOM_SHARE = 1 / 16
 #: How often a running cell's host footprint is sampled for its peak.
 PEAK_SAMPLE_S = 1.0
+#: How often a cell the host cannot admit yet says so (at its first refusal, then every WAIT_SAY_S): a wait
+#: that writes nothing holds the card with no trace (the Mac, 2026-10-03 22:34-22:36, Voxtral).
+WAIT_SAY_S = 300.0
+GIB = float(1 << 30)
 
 
 def _host_bytes() -> int:
@@ -470,6 +474,7 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             if got:
                 planned = (got[0], f"plan@{ptree.name}")
     need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
+    said_at, waiting_since = None, time.time()
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
@@ -477,6 +482,13 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             break
         if not wait:
             return None
+        if said_at is None or time.time() - said_at >= WAIT_SAY_S:
+            said_at = time.time()
+            print(f"[matrix] {model} {mode}: waits for host admission since "
+                  f"{time.strftime('%H:%M:%S', time.localtime(waiting_since))} — need {need / GIB:.1f} GiB "
+                  f"({need_from}), available {_mem_available() / GIB:.1f} GiB, headroom "
+                  f"{_host_bytes() * HOST_HEADROOM_SHARE / GIB:.1f} GiB; every {WAIT_SAY_S:.0f} s until admitted",
+                  flush=True)
         time.sleep(30)
     try:
         print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved ({need_from})", flush=True)
