@@ -160,6 +160,53 @@ def _refuse_unbound(resolver, symbol_id, trace_value) -> None:
         f"witnessed extent, not a value. Bound: {bound}.")
 
 
+
+def _watermark_sample(path: str, op_idx: int, op, arena, deferred_bytes) -> None:
+    """One line of the memory ledger (NBX_LIVE_WATERMARK_TRACE=path.jsonl, every
+    NBX_LIVE_WATERMARK_EVERY ops), the SAME in both hot loops: what the allocator tracks live, what
+    its pool caches, what the driver says is used, the untracked gap between them, what the arena's
+    slots hold on this device (weights apart from inputs and intermediates), and, in the multi-device
+    loop, the bytes its deferred-free list still holds. Before 2026-10-03 only the single-device loop
+    sampled, so a streamed component (Wan2.1-I2V's transformer at 480x832, where it runs out of
+    memory) ran unseen."""
+    try:
+        import ctypes as _ct
+        import json as _json
+        from neurobrix.kernels.nbx_tensor import (
+            DeviceAllocator as _DA, _gpu_runtime as _rt_fn, _active_backend as _bk_fn)
+        rt, bk = _rt_fn(), _bk_fn()
+        dev = _DA.get_device()
+        live = _DA._cuda_live_bytes.get(dev, 0)
+        pool = sum(sz * len(ptrs) for sz, ptrs in _DA._pool_free.get(dev, {}).items())
+        free_b, total_b = _ct.c_size_t(), _ct.c_size_t()
+        mgi = bk.get("mem_get_info", "cudaMemGetInfo")
+        if hasattr(rt, mgi):
+            getattr(rt, mgi)(_ct.byref(free_b), _ct.byref(total_b))
+        drv_free, drv_total = free_b.value, total_b.value
+        seen, held = set(), [0, 0]
+        for i, t in enumerate(arena._slots):
+            if t is None or not hasattr(t, "data_ptr") or getattr(t, "_device_idx", dev) != dev:
+                continue
+            ptr = t.data_ptr()
+            if ptr and ptr not in seen:
+                seen.add(ptr)
+                held[i >= arena._num_weights] += getattr(t, "_nbytes", 0)
+        mb = 1 << 20
+        rec = {"op_idx": op_idx, "op_uid": op.op_uid, "op_type": getattr(op, "op_type", ""),
+               "nbx_live_mb": live / mb, "nbx_pool_cached_mb": pool / mb,
+               "arena_weights_mb": held[0] / mb, "arena_intermediates_mb": held[1] / mb,
+               "deferred_mb": None if deferred_bytes is None else deferred_bytes / mb,
+               "driver_free_mb": drv_free / mb, "driver_used_mb": (drv_total - drv_free) / mb,
+               "driver_total_mb": drv_total / mb,
+               # the allocator counts its pooled blocks as live (malloc_cuda: "pool blocks stay
+               # counted as live"), so what no allocator holds is used minus live — subtracting the
+               # pool again read 6-7 GB below zero in Wan2.1-I2V's tiled encoder (2026-10-03)
+               "untracked_mb": (drv_total - drv_free - live) / mb}
+        with open(path, "a") as f:
+            f.write(_json.dumps(rec) + "\n")
+    except Exception as e:                                   # said, never silent
+        print(f"[LIVE_WATERMARK_TRACE error] {e}", flush=True)
+
 @dataclass(frozen=True)
 
 class TensorSlot:
@@ -3487,6 +3534,7 @@ class TritonSequence:
         _live_dump_env = os.environ.get("NBX_LIVE_DUMP_EVERY", "0")
         _live_dump_n = int(_live_dump_env) if _live_dump_env != "0" else 0
         _wm_path = os.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
+        _wm_every = int(os.environ.get("NBX_LIVE_WATERMARK_EVERY", "50"))
         _trace_nan_on = os.environ.get("NBX_TRITON_TRACE_NAN") == "1"
         _fp_path = os.environ.get("NBX_OP_FINGERPRINT", "")
         from neurobrix.core.dtype import calibration as _cal_census
@@ -3585,59 +3633,8 @@ class TritonSequence:
                 # triton where conv::64 OOMs at driver_free=208MB while
                 # nbx_live=12898MB on a 16151MB GPU.
                 # _wm_path hoisted to run start (C1).
-                if _wm_path:
-                    _wm_every = int(os.environ.get(
-                        "NBX_LIVE_WATERMARK_EVERY", "50"))
-                    if _wm_every > 0 and op_idx % _wm_every == 0:
-                        try:
-                            import ctypes as _ct_wm
-                            import json as _json_wm
-                            from neurobrix.kernels.nbx_tensor import (
-                                DeviceAllocator as _DA_wm,
-                                _gpu_runtime as _gpu_rt_wm,
-                                _active_backend as _bk_fn_wm,
-                            )
-                            _rt_wm = _gpu_rt_wm()
-                            _bk_wm = _bk_fn_wm()
-                            _dev_wm = _DA_wm.get_device()
-                            _nbx_live = _DA_wm._cuda_live_bytes.get(_dev_wm, 0)
-                            _per_dev_wm = _DA_wm._pool_free.get(_dev_wm, {})
-                            _pool_cached = 0
-                            for _sz_wm, _ptrs_wm in _per_dev_wm.items():
-                                _pool_cached += _sz_wm * len(_ptrs_wm)
-                            _free_b_wm = _ct_wm.c_size_t()
-                            _total_b_wm = _ct_wm.c_size_t()
-                            _mgi_name = _bk_wm.get(
-                                "mem_get_info", "cudaMemGetInfo")
-                            if hasattr(_rt_wm, _mgi_name):
-                                getattr(_rt_wm, _mgi_name)(
-                                    _ct_wm.byref(_free_b_wm),
-                                    _ct_wm.byref(_total_b_wm))
-                                _drv_free = _free_b_wm.value
-                                _drv_total = _total_b_wm.value
-                            else:
-                                _drv_free = _drv_total = 0
-                            _drv_used = _drv_total - _drv_free
-                            _untracked = (
-                                _drv_used - _nbx_live - _pool_cached)
-                            _rec = {
-                                "op_idx": op_idx,
-                                "op_uid": op.op_uid,
-                                "op_type": getattr(op, "op_type", ""),
-                                "nbx_live_mb": _nbx_live / 1024 / 1024,
-                                "nbx_pool_cached_mb":
-                                    _pool_cached / 1024 / 1024,
-                                "driver_free_mb": _drv_free / 1024 / 1024,
-                                "driver_used_mb": _drv_used / 1024 / 1024,
-                                "driver_total_mb":
-                                    _drv_total / 1024 / 1024,
-                                "untracked_mb": _untracked / 1024 / 1024,
-                            }
-                            with open(_wm_path, "a") as _wm_f:
-                                _wm_f.write(_json_wm.dumps(_rec) + "\n")
-                        except Exception as _wm_e:
-                            print(f"[LIVE_WATERMARK_TRACE error] {_wm_e}",
-                                  flush=True)
+                if _wm_path and _wm_every > 0 and op_idx % _wm_every == 0:
+                    _watermark_sample(_wm_path, op_idx, op, arena, None)
                 if _vdump >= 2:
                     # The inputs AS THE OP CONSUMES THEM. An output that differs
                     # while every earlier output hashes the same can only mean
@@ -4297,6 +4294,8 @@ class TritonSequence:
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
+        _wm_path = os.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
+        _wm_every = int(os.environ.get("NBX_LIVE_WATERMARK_EVERY", "50"))
         # Diagnostic: NBX_ARENA_WATCH=<slot> logs every op that changes the
         # identity of arena[<slot>] (same env-gated class as NBX_FORCE_GC).
         # Out-of-range slot disarms the watch (never IndexError mid-run).
@@ -4335,6 +4334,8 @@ class TritonSequence:
                 _watch_ref = _new
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
+            if _wm_path and _wm_every > 0 and op_idx % _wm_every == 0:
+                _watermark_sample(_wm_path, op_idx, op, arena, _deferred_bytes)
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
