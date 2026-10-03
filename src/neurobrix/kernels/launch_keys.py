@@ -152,6 +152,14 @@ def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: 
                        ieee, promote_b, False, tag(a), tag(b), tag(out), tag(out)))]
 
 
+def baddbmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype) -> List[Launch]:
+    """`baddbmm_wrapper`: one batched launch at the operands' own dtypes (no promotion, no
+    widened store: the output is batch1's dtype), IEEE_PRECISION and HAS_BIAS set, PROMOTE_B
+    off, every dim bucketed; the bias pointer keyed at its own dtype."""
+    return [(BADDBMM, (bucket_of("M", M), bucket_of("N", N), bucket_of("K", K),
+                       True, False, True, tag(a), tag(b), tag(a), tag(bias)))]
+
+
 def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
     """The dtype `mm` stores for these operands (its launch or its per-row GEMV alike)."""
     a, b, promote_a, _ = mm_dtypes(a, b, native_bf16, force_accum)
