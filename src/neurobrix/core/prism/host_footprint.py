@@ -153,6 +153,39 @@ def resident_bytes_now() -> int:
     return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
 
 
+def process_footprint_now() -> int:
+    """This process's memory NOW, as the host's memory guard counts it — the floor a price door adds a
+    key's priced peak to. Linux: VmRSS (/proc/self/status). macOS: the physical footprint
+    (`proc_pid_rusage`, `ri_phys_footprint` — what `footprint -f` reports and what a unified-memory
+    guard kills on), never `ru_maxrss`, a high-water mark: the certifier read it ONCE at its start
+    (425 MiB on the Mac, 2026-10-03) while the process sat at 1.1-1.7 GB between keys, so the door
+    admitted up to ~1 GB more than its budget. Anywhere else: refused by name (ZERO FALLBACK)."""
+    import os
+    import sys
+    if sys.platform.startswith("linux"):
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) << 10
+        raise RuntimeError("ZERO FALLBACK: /proc/self/status carries no VmRSS")
+    if sys.platform == "darwin":
+        import ctypes
+
+        class _RusageInfoV0(ctypes.Structure):                      # <sys/resource.h>, RUSAGE_INFO_V0
+            _fields_ = [("ri_uuid", ctypes.c_uint8 * 16), ("ri_user_time", ctypes.c_uint64),
+                        ("ri_system_time", ctypes.c_uint64), ("ri_pkg_idle_wkups", ctypes.c_uint64),
+                        ("ri_interrupt_wkups", ctypes.c_uint64), ("ri_pageins", ctypes.c_uint64),
+                        ("ri_wired_size", ctypes.c_uint64), ("ri_resident_size", ctypes.c_uint64),
+                        ("ri_phys_footprint", ctypes.c_uint64), ("ri_proc_start_abstime", ctypes.c_uint64),
+                        ("ri_proc_exit_abstime", ctypes.c_uint64)]
+        info = _RusageInfoV0()
+        rc = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage(os.getpid(), 0, ctypes.byref(info))
+        if rc != 0:
+            raise RuntimeError(f"ZERO FALLBACK: proc_pid_rusage returned {rc}")
+        return int(info.ri_phys_footprint)
+    raise RuntimeError(f"ZERO FALLBACK: no reader of a process's footprint on {sys.platform}")
+
+
 def summary(hf: Mapping) -> str:
     """The one line a run and `--explain-plan` print for the plan's host figure — the line the regression
     matrix reads into a cell's row as the estimate its measured peak judges."""
