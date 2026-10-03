@@ -103,14 +103,23 @@ sdpa_thresholds:
     block_m: 32
     block_n: 32
     num_warps: 4
+  # Prefill below head_dim 256: the FMA-path tile. Triton >= 3.3 lowers tl.dot to scalar fp32 FMA
+  # below sm_80 (triton-lang/triton#5066; release/3.8.x AccelerateMatmul.cpp: "falls back to the FMA
+  # path"; the compiled flash PTX here: 0 mma.sync, 8 192 fma.rn.f32 per loop body). Holding a 64-row
+  # Q tile and a 64-column K tile in registers ran 0.18 TFLOP/s at D 64/96/128 and T 4 096-14 080;
+  # a 64x32 tile at 8 warps with the QK^T contraction in 32-wide head-dim chunks ran 2.4-3.6 TFLOP/s
+  # (T 4 096, D 64/96/128; nbx/campaigns/2026_10_03_resume/flash_variant*.txt, 2026-10-03). The
+  # vendor's tensor-core kernel stays ~4x ahead: no Triton route to Volta MMA exists on 3.8.
   - head_dim_ge: 128
     block_m: 64
-    block_n: 64
-    num_warps: 4
+    block_n: 32
+    num_warps: 8
+    qk_chunk: 32
   - head_dim_lt: 128
-    block_m: 128
-    block_n: 64
-    num_warps: 4
+    block_m: 64
+    block_n: 32
+    num_warps: 8
+    qk_chunk: 32
 
 # Memory constraints.
 #
