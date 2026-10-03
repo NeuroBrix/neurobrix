@@ -98,3 +98,26 @@ def test_an_unknown_engine_is_refused():
     with pytest.raises(ValueError, match="no host rules"):
         H.host_footprint(_plan(), {}, {}, "metal-magic", None, DT, _block)
     assert H.engine_of("triton_sequential") == "triton" and H.engine_of("compiled") == "compiled"
+
+
+def test_a_unified_device_s_plan_is_held_on_the_host():
+    """The Mac, 2026-10-03: on a unified device the plan's device bytes are host bytes, so the host
+    figure a ledger reserves carries them; on a discrete card it carries nothing more.
+    Injection: `device_bytes` left out of `total_bytes` -> the unified total equals the discrete one, RED."""
+    plan = _plan(lm=("mps", "float16", {}, 0, 0, 0))
+    discrete = H.host_footprint(plan, {"lm": {"w": 10 * MB}}, {"lm": {"s0": 10 * MB}}, "triton", None, DT, _block)
+    unified = H.host_footprint(plan, {"lm": {"w": 10 * MB}}, {"lm": {"s0": 10 * MB}}, "triton", None, DT, _block,
+                               device_bytes=18085 * MB)
+    assert discrete["device_bytes"] == 0
+    assert unified["total_bytes"] == discrete["total_bytes"] + 18085 * MB
+    assert "device plan 18085 MB (unified)" in H.summary(unified)
+    assert "device plan" not in H.summary(discrete)
+
+
+def test_the_solver_counts_the_device_plan_only_for_a_unified_profile():
+    """Injection: `unified_device_bytes` returning the plan on a discrete card, or 0 on a unified
+    one -> RED."""
+    from neurobrix.core.prism.solver import unified_device_bytes
+    plan = NS(total_memory_mb=18085.0)
+    assert unified_device_bytes(plan, NS(devices=[NS(has_unified_memory=True)])) == 18085 * MB
+    assert unified_device_bytes(plan, NS(devices=[NS(has_unified_memory=False)] * 4)) == 0
