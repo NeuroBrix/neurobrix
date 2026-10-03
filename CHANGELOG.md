@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On a unified-memory device (Apple silicon), the plan's host figure now counts the device plan.**
+  Device memory there is host memory, so `--explain-plan` states the planned device bytes inside the
+  host footprint, and a scheduler reserving that figure no longer admits a run the machine cannot hold.
+
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
   are in the other plans; and a request whose component the card cannot hold even tiled is refused
