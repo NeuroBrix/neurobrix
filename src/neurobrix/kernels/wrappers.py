@@ -8507,16 +8507,17 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # 64-wide flash calls produce softmaxes of half dot products at the
     # wrong scale, which no later operation can recombine. Splitting only
     # works if the scores are materialised first, which is the math path.
-    _hd_broken = (headdim >= 128
-                  and (headdim & (headdim - 1)) == 0
-                  and _os_fd.environ.get("NBX_D128_DETOUR", "1") != "0")
+    # The condition is `launch_keys.flash_headdim_detour` — the function the derived census
+    # re-routes the padded call with, so the keys it derives are this detour's.
+    _hd_broken = _lk.flash_headdim_detour(
+        headdim, _os_fd.environ.get("NBX_D128_DETOUR", "1") != "0") != headdim
     # NBX_D128_DETOUR=0 disables the zero-pad detour — DIAGNOSTIC ONLY:
     # it re-exposes the wrong kernel. Exists to measure the detour's true
     # cost (TTFT at long prefill) and for the day the upstream codegen
     # defect is fixed, when the correctness oracle's _KNOWN_BROKEN
     # mechanism will demand this whole block be removed.
     if _hd_broken:
-        _pad = 1
+        _pad = _lk.flash_headdim_detour(headdim) - headdim
         def _pad_hd(t):
             z = NBXTensor.zeros(tuple(t.shape[:-1]) + (_pad,),
                                 dtype=t._dtype, device=f"cuda:{t._device_idx}")

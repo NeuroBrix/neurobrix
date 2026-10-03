@@ -286,6 +286,14 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
     return 0
 
 
+def flash_headdim_detour(D: int, enabled: bool = True) -> int:
+    """The head dim the flash route runs at: a power of two >= 128 is zero-padded by one
+    (`scaled_dot_product_attention_wrapper`'s detour around the flash kernel's wrong answers at
+    those dims), and the padded call re-enters the wrapper — routed afresh at D + 1 (and V's head
+    dim + 1). `enabled` False is the wrapper's diagnostic `NBX_D128_DETOUR=0`."""
+    return D + 1 if (enabled and D >= 128 and (D & (D - 1)) == 0) else D
+
+
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
                min_chunk_rows: int, max_chunks: int, force_math: bool = False) -> Tuple[str, int]:
     """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
