@@ -132,6 +132,15 @@ _DTYPE_WIDTH = {
 }
 
 
+def unified_device_bytes(plan, profile) -> int:
+    """The plan's device bytes that are host bytes: all of them when the profile declares its device
+    unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03)."""
+    if any(d.has_unified_memory for d in profile.devices):
+        return int(plan.total_memory_mb * 2**20)
+    return 0
+
+
 def _device_is_unified(device_string: str, profile) -> bool:
     """Does this allocation target share ONE memory pool with the host?
 
@@ -1587,7 +1596,8 @@ class PrismSolver:
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
-            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container))
+            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container),
+            device_bytes=unified_device_bytes(plan, profile))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
