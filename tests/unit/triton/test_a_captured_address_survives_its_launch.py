@@ -140,3 +140,32 @@ def test_an_empty_scope_refuses():
     drv = _metal_or_skip()
     with pytest.raises(RuntimeError, match="nothing to pin"):
         drv.pinned_addresses()
+
+
+def test_the_pin_reads_its_address_from_the_served_build():
+    """The pinned wrap's address is the served triton-ext API's (`MetalBuffer.gpu_address()`), not a
+    function of a retired commit. Until 2026-10-04 the scope called `metal_native.retain_resident`, which
+    the served build never had: every mixture-of-experts model died at its first band on Apple
+    (granite-3.1-1b-a400m: "module 'triton_apple_backend.metal_native' has no attribute 'retain_resident'")."""
+    drv = _metal_or_skip()
+    src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
+    with drv.pinned_addresses(src):
+        (base, (wrap, count, gpu_va)), = drv._RESIDENT_WRAPS.items()
+        assert count == 1 and gpu_va == wrap.gpu_address()
+        assert drv.pinned_gpu_address(src.data_ptr()) == gpu_va + (src.data_ptr() - base)
+    assert not drv._RESIDENT_WRAPS, "the scope exited and still holds a whole-allocation wrap"
+
+
+def test_the_address_flags_of_a_compilation_reach_its_kernel_call():
+    """triton-ext's compiler records whether a kernel exposes addresses (stores a pointer's bits) or reads
+    through them, and its own launcher passes both flags to every call: Metal keeps resident only the buffers
+    the encoder names. Our launch passed neither. They travel with the compilation's trailing object."""
+    _metal_or_skip()
+    from neurobrix.kernels.launcher import prepare
+    src = NBXTensor.from_numpy(np.arange(1, N + 1, dtype=np.float32))
+    tab = NBXTensor.from_numpy(np.zeros(1, dtype=np.int64))
+    out = NBXTensor.from_numpy(np.zeros(N, dtype=np.float32))
+    capture, _ = prepare(_capture, (src, tab, 0), {})
+    read, _ = prepare(_read_through, (tab, out, N), {"BLOCK": BLOCK})
+    assert capture.trailing is not None and capture.trailing.exposes_addresses, capture.trailing
+    assert read.trailing is not None and read.trailing.reads_addresses, read.trailing
