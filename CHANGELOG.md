@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — granite-speech transcribes on a 16 GB card in the PyTorch engine
+
+- **Speech models whose language model is placed in host memory no longer stop at their first
+  generated token.** On a card too small to hold the language model, granite-speech-3.3-8b failed
+  with a device mismatch as soon as it generated a token; every token lookup and the final
+  projection now run where the token table lives.
+
 ### Added
 
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor
