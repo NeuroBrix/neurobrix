@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 
 from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
-from neurobrix.core.runtime.graph_executor import GraphExecutor
+from neurobrix.core.runtime.graph_executor import GraphExecutor, output_key
 from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
 
 COMPONENT = "transformer"
@@ -127,7 +127,11 @@ def _instrument(strategy, seen):
                 for tid in sub["ops"][op_uid]["input_tensor_ids"]:
                     if (sub["tensors"].get(tid) or {}).get("is_parameter"):
                         seen[(sub["segment_index"], tid)] = _p._weights.get(tid[len("param::"):])
-            return {t: np.zeros(1) for t in sub["output_tensor_ids"]}
+            # Keyed as every engine keys a run's outputs (`output_key`): the component's own
+            # output by its name. Keyed by tid, the stand-in answered a contract no engine has,
+            # and the strategy's whole-run answer could not find 'out' (merge-queue-17).
+            return {output_key(sub["tensors"].get(t), t): np.zeros(1)
+                    for t in sub["output_tensor_ids"]}
 
         piece._load_weights_native = read_shards
         piece.run = run
