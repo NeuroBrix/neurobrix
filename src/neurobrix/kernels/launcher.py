@@ -180,6 +180,12 @@ class Driver:
     #: has no such slots says so rather than receiving two stray zeros.
     wants_scratch_params = True
 
+    #: A driver that binds a pointer by WRAPPING memory (Metal: a no-copy buffer per launch) needs to know how far
+    #: the tensor behind it reaches; it says so and receives `extents=` — the byte extent each pointer's tensor can
+    #: address, aligned with `params`, None where it is not a tensor. A driver that binds a raw address (CUDA) does
+    #: not ask and its launch is unchanged.
+    wants_extents = False
+
     def load(self, binary: bytes, name: str, shared: int):  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -915,9 +921,32 @@ def launch(kernel, grid, *args, **kwargs):
     # that packs its scalars into one buffer computes the field offsets from
     # these; our `(kind, value)` pairs have already lost the distinction between
     # an i16 and a bf16, and packing to the wrong offset is silent.
+    extra = {}
+    if getattr(drv, "wants_extents", False):
+        # One extent per runtime parameter (the scratch slots, if any, after them have none).
+        extents = [_addressable_extent(bound_args[name]) if str(ty).startswith("*") else None
+                   for name, ty in runtime]
+        extra["extents"] = extents + [None] * (len(params) - len(extents))
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
                names=names, types=[ty for _name, ty in runtime],
-               trailing=prep.trailing)
+               trailing=prep.trailing, **extra)
+
+
+def _addressable_extent(value) -> Optional[int]:
+    """The bytes a kernel can address from a tensor argument's data pointer: the last element its shape and strides
+    reach, plus one, times the element size. None for a value that is not a tensor (a raw address, a scalar). A
+    negative stride reaches below the pointer and is not described by a forward extent: None, so the driver keeps
+    its whole-allocation binding. A zero-element tensor addresses nothing: 0."""
+    if not (hasattr(value, "data_ptr") and hasattr(value, "stride") and hasattr(value, "element_size")):
+        return None
+    shape = tuple(int(d) for d in value.shape)
+    if any(d == 0 for d in shape):
+        return 0
+    strides = tuple(int(s) for s in value.stride())
+    if any(s < 0 for s in strides):
+        return None
+    last = sum((d - 1) * s for d, s in zip(shape, strides))
+    return (last + 1) * int(value.element_size())
 
 
 def _stream() -> int:
