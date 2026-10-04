@@ -6521,6 +6521,16 @@ class PrismSolver:
                                  else "the tiling engine returned no tile") + ")"
                               for c, mb in _comps.items())
                           + f" within its {_usable:,.0f} MB usable — `--compiled` computes it on the host")
+        # A tiling decline no rung line above carries. Those lines exist only where a host placement
+        # is sized on the card (Triton); under the compiled engine a component the tiling engine
+        # declined went to the host and the refusal said nothing of the tile it did not get —
+        # Allegro-TI2V's re-propagated encoder at 720x1280, whose time map still folds the batch,
+        # was refused compiled with no word of it (2026-10-04). Its last attempt's reason.
+        _printed = {c for (_, _, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).values()
+                    for c in _comps}
+        for _c, _why in (getattr(self, "_tiling_declined", {}) or {}).items():
+            if _c not in _printed and any(_c == n for n, _ in sorted_comps):
+                tried_str += f"\n  {_c} got no component tile: {_why}"
         # Reaching here now means REAL impossibility, not a gap in the
         # cascade. The ladder ends in `cpu_streaming`, which needs only the
         # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
