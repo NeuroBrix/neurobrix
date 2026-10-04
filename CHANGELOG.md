@@ -176,8 +176,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Under `--compiled`, an attention mask shorter than the sequence is no longer silently replaced.**
-  A mask fixed at the length a model was converted at, used on a longer input, was always turned
-  into causal attention. It now is only when the mask itself is causal; any other mask stops the
+  A mask fixed at the length a model was converted at, used on a longer input (or, in language
+  models, on a growing key-value cache), was always turned into causal attention. It now is only when the mask itself is causal; any other mask stops the
   run with a message naming the operation, instead of attending to the wrong positions.
 
 - **Video models whose decoder works on a normalised latent decode it in the right range.** For
