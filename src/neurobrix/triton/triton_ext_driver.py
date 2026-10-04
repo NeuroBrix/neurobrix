@@ -322,26 +322,27 @@ class TritonExtDriver(Driver):
         # the fp64 screen refused all 18 candidates. A host round trip inserted
         # before the launch made the same run clean, which is what identified
         # the ordering rather than the arithmetic.
-        if _SYNC_TIMING:
-            import time as _t
-            _a = _t.perf_counter(); _nbx_queue_drain()
-            _b = _t.perf_counter()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
-            _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
-            _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
-            _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
-            _kn = getattr(function, "name", None) or type(function).__name__
-            _row = _SYNC_PER_KERNEL.get(_kn)
-            if _row is None:
-                _SYNC_PER_KERNEL[_kn] = [1, _d - _c]
+        with _launch_pool(addr_flags):
+            if _SYNC_TIMING:
+                import time as _t
+                _a = _t.perf_counter(); _nbx_queue_drain()
+                _b = _t.perf_counter()
+                function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
+                _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
+                _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
+                _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
+                _kn = getattr(function, "name", None) or type(function).__name__
+                _row = _SYNC_PER_KERNEL.get(_kn)
+                if _row is None:
+                    _SYNC_PER_KERNEL[_kn] = [1, _d - _c]
+                else:
+                    _row[0] += 1; _row[1] += _d - _c
             else:
-                _row[0] += 1; _row[1] += _d - _c
-        else:
-            _nbx_queue_drain()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
-            # And the other direction: the host (and NeuroBrix's own blits) must
-            # see what this kernel wrote.
-            _native().synchronize()
+                _nbx_queue_drain()
+                function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
+                # And the other direction: the host (and NeuroBrix's own blits) must
+                # see what this kernel wrote.
+                _native().synchronize()
 
         # Read what the kernel recorded. Prints first, so anything it printed is
         # already out when a failed assert raises.
@@ -354,6 +355,23 @@ class TritonExtDriver(Driver):
             from triton_apple_backend.device_assert import check as _check_asserts
             rt = D._runtime()
             _check_asserts(trailing.assert_layout, rt.as_u32(assert_buf))
+
+
+def _launch_pool(addr_flags):
+    """The scope a kernel call and its drain run in: an autorelease pool when the kernel reads addresses.
+
+    Such a kernel is launched with the exposed buffers named to Metal: triton-ext builds that list as
+    `[exposedBuffers() allObjects]`, an AUTORELEASED array, and a Python thread has no pool around the call, so
+    it is never released and it holds every exposed buffer. Ours is the pinned scope's wrap of a whole
+    allocation: one such launch kept the arena in the process for good (2 116 MB of a freed 2 GiB arena; with
+    the launch inside a pool, 69-78 MB; deepseek-moe streamed went 11 -> 20 GB of footprint with one segment in
+    the allocator's books, 2026-10-04). Every other launch keeps the path it had.
+    """
+    if addr_flags.get("reads_addresses"):
+        import objc
+        return objc.autorelease_pool()
+    import contextlib
+    return contextlib.nullcontext()
 
 
 class _Trailing(NamedTuple):
