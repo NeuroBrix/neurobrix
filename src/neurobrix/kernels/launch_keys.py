@@ -152,6 +152,14 @@ def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: 
                        ieee, promote_b, False, tag(a), tag(b), tag(out), tag(out)))]
 
 
+def baddbmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype) -> List[Launch]:
+    """`baddbmm_wrapper`: one batched launch at the operands' own dtypes (no promotion, no
+    widened store: the output is batch1's dtype), IEEE_PRECISION and HAS_BIAS set, PROMOTE_B
+    off, every dim bucketed; the bias pointer keyed at its own dtype."""
+    return [(BADDBMM, (bucket_of("M", M), bucket_of("N", N), bucket_of("K", K),
+                       True, False, True, tag(a), tag(b), tag(a), tag(bias)))]
+
+
 def mm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = False) -> NBXDtype:
     """The dtype `mm` stores for these operands (its launch or its per-row GEMV alike)."""
     a, b, promote_a, _ = mm_dtypes(a, b, native_bf16, force_accum)
@@ -244,6 +252,28 @@ def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool) -> List[Launc
     """`fft_c2r_wrapper` -> `_dft_c2r`, any length: the complex64 spectrum's real and imaginary
     parts [M, bins] times the fp32 inverse matrices [bins, N] (two `mm`, one key)."""
     return mm_launches(M, bins, N, F32, F32, native_bf16)
+
+
+def stft_launches(lead: int, length: int, n_fft: int, hop_length: Optional[int],
+                  win_length: Optional[int], onesided: Optional[bool],
+                  native_bf16: bool) -> List[Launch]:
+    """`stft_wrapper` on a signal of `lead` rows x `length` samples: frames of win_length every
+    hop_length (`unfold`, defaults n_fft // 4 and n_fft as the wrapper's), each zero-padded to
+    n_fft, then `fft_r2c_wrapper` over [lead x frames, n_fft] — `dft_r2c_launches`'s rule (a
+    power-of-two n_fft runs the butterfly: no autotuned key)."""
+    hop = (n_fft // 4) if hop_length in (None, 0) else int(hop_length)
+    win = n_fft if win_length in (None, 0) else int(win_length)
+    frames = (int(length) - win) // hop + 1
+    return dft_r2c_launches(int(lead) * frames, int(n_fft),
+                            True if onesided is None else bool(onesided), native_bf16)
+
+
+def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
+                   native_bf16: bool) -> List[Launch]:
+    """`istft_wrapper` on a [batch, bins, frames] spectrum: `fft_c2r_wrapper` over the frames
+    [batch x frames, bins] to n_fft samples each (`dft_c2r_launches`); the overlap-add and the
+    window envelope launch no autotuned kernel."""
+    return dft_c2r_launches(int(batch) * int(frames), int(bins), int(n_fft), native_bf16)
 
 
 # ---------------------------------------------------------------------------------------------

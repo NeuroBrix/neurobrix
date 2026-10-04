@@ -132,6 +132,17 @@ _DTYPE_WIDTH = {
 }
 
 
+def unified_device_bytes(plan, profile) -> int:
+    """The plan's device bytes that are host bytes: all of them when the profile declares its device
+    unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03)."""
+    if any(d.has_unified_memory for d in profile.devices):
+        # a streamed plan holds its window, not every component at once
+        window = getattr(plan, "device_window_mb", None)
+        return int((window if window is not None else plan.total_memory_mb) * 2**20)
+    return 0
+
+
 def _device_is_unified(device_string: str, profile) -> bool:
     """Does this allocation target share ONE memory pool with the host?
 
@@ -393,6 +404,13 @@ class ExecutionPlan:
     #: so the plan states its margin rather than leaving a reader to discover it.
     margin_mb: Optional[int] = None
     margin_reason: Optional[str] = None
+    #: A streamed plan's device bytes at its worst moment — what stays resident beside the segments
+    #: (whole components, graph constants, flow-read weights, the KV reserve) plus the largest
+    #: segment's weights and the activations alive while it runs. None for a plan that holds its
+    #: components as `total_memory_mb` says. `total_memory_mb` of a streamed plan is the components'
+    #: sum at full residency (granite-speech 18 085 MB where the window is a fraction of it, the Mac
+    #: 2026-10-03), which no reservation should take for what the run holds.
+    device_window_mb: Optional[float] = None
     # Component-level spatial tiling — per-component plan emitted when a
     # spatial component (4D/5D input + scale config) would NOT fit a GPU
     # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
@@ -406,6 +424,8 @@ class ExecutionPlan:
     # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
     # it, a measured peak judges it.
     host_footprint: Dict = field(default_factory=dict)
+    # On a device that draws on host memory: [(rung MB, strategy, host side MB)] per rung solve() tried.
+    unified_rungs_tried: List = field(default_factory=list)
 
     @property
     def primary_device(self) -> str:
@@ -905,6 +925,91 @@ class PrismSolver:
         self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
         serve_mode: bool = False, mode: str = "compiled",
     ) -> ExecutionPlan:
+        """The plan at the rung the free reading gives — and, on a device that draws on host memory, at
+        the highest rung whose WHOLE host side fits that reading.
+
+        On unified memory the device plan and the run's host side (the engine's base, the weights a
+        streamed or lazy plan holds and loads, the output boundary) come out of ONE pool. The rung is
+        read from the free memory alone, so more free memory gave a larger window whose host side no
+        longer fit: Janus-Pro-7B on the Mac planned a 7 531 MB window (host 12 760 MB) at 11 638 MB free
+        and a 10 362 MB window (host 15 592 MB) at 12 652 MB free (the Mac, 2026-10-03 23:48) — every
+        streamed model oscillated between fitting and not with the minute's reading. The plan's host
+        side is priced (Step 7.9, host_footprint.py); when it exceeds the reading, the rung steps DOWN
+        the ladder and the plan is solved again. The lowest rung that still overshoots is kept, said
+        (the engine never refuses — the owner, 2026-10-03 22:35); a lower rung no strategy fits keeps
+        the rung above, said. Behind the census door the rung is imposed and this is not done.
+        """
+        from neurobrix.core.prism.memory_budget import memory_ladder_mb
+        self._unified_rung_cap_mb = None
+        host = memory_state()
+        unified = [d for d in profile.devices if d.has_unified_memory]
+        descends = bool(unified and host.measured and not _census_shadow_active()
+                        and not os.environ.get("NBX_PRISM_BUDGET_MB"))
+        log = logging.getLogger(__name__)
+        tried = []
+        try:
+            plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        except RuntimeError as refusal:
+            # A rung no strategy fits is not the machine's last word on a pool whose rung is read from
+            # the free memory: the rungs below are tried, highest first (Flex.1-alpha on the Mac at
+            # 12.6 GB free was refused at 11 264 and planned at 8 192 — the Mac, 2026-10-03 23:48).
+            if not descends:
+                raise
+            # The refusal's own record (what it rejected and why streaming declined) is the one said if
+            # no lower rung fits either: each lower solve resets it.
+            _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            plan = None
+            for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
+                tried.append((int(rung), "refused", None))
+                self._unified_rung_cap_mb = float(lower)
+                try:
+                    plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                    log.warning("unified memory: no strategy fits rung %s (%s) — rung %s", int(rung),
+                                str(refusal).splitlines()[0], lower)
+                    break
+                except RuntimeError:
+                    rung = lower
+            if plan is None:
+                self._unified_rung_cap_mb = None
+                self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
+                raise refusal
+        if not descends or not plan.host_footprint:
+            return plan
+        while True:
+            fp = plan.host_footprint
+            # What the plan adds to the pool: the process's resident memory is already out of the reading.
+            need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
+            rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
+            tried.append((int(rung), plan.strategy, int(need_mb)))
+            if need_mb <= float(host.available_mb):
+                break
+            lower = [r for r in memory_ladder_mb() if r < rung]
+            if not lower:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free even at "
+                            "the lowest rung (%s) — kept, the system may page; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), tried)
+                break
+            self._unified_rung_cap_mb = float(lower[-1])
+            try:
+                below = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+            except RuntimeError as e:
+                log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free at rung "
+                            "%s, and no strategy fits rung %s (%s) — the rung above is kept; rungs tried %s",
+                            need_mb, host.available_mb, int(rung), lower[-1], str(e).splitlines()[0], tried)
+                self._unified_rung_cap_mb = float(rung)
+                plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                break
+            log.info("unified memory: rung %s planned a host side of %.0f MB over %.0f MB free — rung %s",
+                     int(rung), need_mb, host.available_mb, lower[-1])
+            plan = below
+        plan.unified_rungs_tried = tried
+        return plan
+
+    def _solve_at_rung(
+        self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
+        serve_mode: bool = False, mode: str = "compiled",
+    ) -> ExecutionPlan:
         """
         Solve optimal allocation with Best-Fit-Decreasing.
 
@@ -1065,6 +1170,11 @@ class PrismSolver:
         self._host_device_tilings = {}
         self._host_device_overflow = {}
         self._host_device_card = {}
+        # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
+        self._tiling_declined = {}
+        self._tiling_declined_by_rung = {}
+        # {rung: (card, usable MB)}: the figure a rung's tiling reasons were held to (`_record_rung_tiling_decline`).
+        self._tiling_rung_figure = {}
         self._input_config = input_config
 
         # Step 2: Compute memory requirements (tiling-aware via profile)
@@ -1495,6 +1605,7 @@ class PrismSolver:
                 for name, part in _parts.items()}
             plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
             plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
+            plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
             # The components this rung kept resident by tiling them: their tiling is the plan's.
             for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
                 self._component_tiling[_cn] = _spec
@@ -1587,7 +1698,8 @@ class PrismSolver:
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
-            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container))
+            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container),
+            device_bytes=unified_device_bytes(plan, profile))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -3201,7 +3313,24 @@ class PrismSolver:
             # logged 8 659 MB in one shadow and 7 604 MB in the next, minutes apart
             # (Apple M4 Pro, 2026-09-22). A census that is not reproducible is not a census.
             if dev.has_unified_memory and host.measured and not _census_shadow_active():
-                capacity = min(recommended, host.available_mb * self.safety_margin)
+                # The reading is the machine's free memory itself: the memory law rounds it DOWN onto the
+                # ladder (memory_budget.budget_mb), and that rounding is the margin — the owner's rule, 13 GB
+                # free gives the 12 GB rung, never all of it. A safety factor taken BEFORE the rounding
+                # (dd9acdc1, 2026-09-10, written before the ladder law of 2026-09-20 and never removed when it
+                # came) reduced twice: 11 581 MB free became 11 002 and rounded to the 8 192 rung instead of
+                # 11 264 (the Mac, 2026-10-03 — granite, Janus, Flex cut against 7.5 GB windows).
+                # On a unified device the run's own host side lives in the same pool. What this process holds
+                # NOW is already out of the reading (it is taken inside the process); what the engine's device
+                # work adds once it starts — its modules, context, the libraries the first ops load: the
+                # profile's MEASURED cpu.runtime_base_mb for this engine — is not, and is taken off first. Read,
+                # not a factor (the Mac, 23:00: the 11 264 rung on 11 581 free left ~300 MB for it).
+                from neurobrix.core.prism.host_footprint import engine_of
+                _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
+                         if profile.cpu and getattr(self, "_mode", None) else None) or 0
+                capacity = min(recommended, max(0.0, float(host.available_mb) - float(_base)))
+                # A lower rung imposed by solve() when the plan's host side did not fit the reading.
+                if getattr(self, "_unified_rung_cap_mb", None):
+                    capacity = min(capacity, float(self._unified_rung_cap_mb))
                 if capacity < recommended:
                     logging.getLogger(__name__).warning(
                         "%s: unified memory — planning against %.0f MB actually "
@@ -3971,6 +4100,35 @@ class PrismSolver:
         except Exception:
             return 0
 
+    def _tiling_decline(self, comp_name: str, why: str) -> None:
+        """Record WHY the tiling engine gave `comp_name` no tile, and return None. Read by the refusal
+        (`_fail_error`), which said "no tiling fits" whatever the reason: Allegro-TI2V's encoder was
+        refused with that line while the tiling arithmetic beside it said 39 tiles fit, because its
+        time map was never read (2026-10-04). Kept per component, the last attempt's reason."""
+        self.__dict__.setdefault("_tiling_declined", {})[comp_name] = why
+        return None
+
+    def _snapshot_tiling_declines(self, rung: str, comps) -> None:
+        """Keep, for the rung that records an overflow, the tiling reasons of ITS components as they
+        stand now — the per-component record is overwritten by the next rung's attempt (sized at
+        another card or rung), and the refusal printed one rung's overflow beside another's reason
+        (the doctrine review of 2ba2c40e, 2026-10-04)."""
+        now = getattr(self, "_tiling_declined", {}) or {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {})[rung] = {
+            c: now[c] for c in comps if c in now}
+
+    def _record_rung_tiling_decline(self, rung: str, card: str, usable_mb: float, comp_name: str) -> None:
+        """A rung that does not size host placements on the card (the compiled engine's component placement,
+        layer streaming under either engine) keeps ITS components' tiling reasons as they stand when it gives
+        up on the tile, beside the figure they were held to — as the Triton host-sizing rungs do
+        (`_snapshot_tiling_declines`). The compiled refusal read the last-written reason, which the next
+        rung's attempt overwrites (the doctrine review of 64c24b13, 2026-10-04)."""
+        why = (getattr(self, "_tiling_declined", {}) or {}).get(comp_name)
+        if why is None:
+            return
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
+        self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, tile_rung_mb: int,
@@ -3990,12 +4148,13 @@ class PrismSolver:
         import json, math
         cache_path = getattr(container, "_cache_path", None)
         ic = getattr(self, "_input_config", None)
+        self.__dict__.setdefault("_tiling_declined", {}).pop(comp_name, None)
         if cache_path is None or ic is None:
-            return None
+            return self._tiling_decline(comp_name, "the plan holds no container path or no request")
         gpath = cache_path / "components" / comp_name / "graph.json"
         ppath = cache_path / "components" / comp_name / "profile.json"
         if not gpath.exists() or not ppath.exists():
-            return None
+            return self._tiling_decline(comp_name, "its graph.json or profile.json is absent")
         try:
             with open(gpath) as _gf:
                 graph = json.load(_gf)
@@ -4022,7 +4181,7 @@ class PrismSolver:
                 in_spatial_w = shape[-1]
                 break
         if not trace_size:
-            return None
+            return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
 
         # Downsampler guard (data-driven, no name/family match): a component
         # whose OUTPUT spatial extent is smaller than its INPUT (a VAE *encoder*:
@@ -4066,7 +4225,7 @@ class PrismSolver:
             # and causal maps cannot be tiled mid-clip (identical doctrine
             # to the decode-side AFFINE decline).
             return self._encode_component_tiling(
-                graph, profile_j, mem, budget_bytes, rung_mb,
+                comp_name, graph, profile_j, mem, budget_bytes, rung_mb,
                 trace_size, out_spatial)
 
         # Scale factor: what the graph MEASURES first — its traced input and output extents —
@@ -4114,7 +4273,7 @@ class PrismSolver:
             if db:
                 scale_factor = 2 ** (len(db) - 1)
         if not scale_factor:
-            return None
+            return self._tiling_decline(comp_name, "neither its graph nor its profile states a spatial scale")
 
         full_act = mem.activation_bytes
         # The rung sizes the tile (`rung_mb`, `budget_bytes`, derived above); the LIVE reading
@@ -4267,10 +4426,14 @@ class PrismSolver:
         if tiled_act <= budget_bytes:
             return spec
 
-        return None  # spatial-only insufficient; causal/4D class — no temporal axis
+        # spatial-only insufficient; causal/4D class — no temporal axis
+        return self._tiling_decline(
+            comp_name, f"its smallest spatial tile ({tile_size} wide) still holds "
+                       f"{tiled_act / 2 ** 20:,.0f} MB over its {budget_bytes / 2 ** 20:,.0f} MB tile "
+                       f"budget, and no temporal tile was taken")
 
     def _encode_component_tiling(
-        self, graph: Dict, profile_j: Dict, mem: ComponentMemory,
+        self, comp_name: str, graph: Dict, profile_j: Dict, mem: ComponentMemory,
         budget_bytes: int, rung_mb: int, trace_size: int, out_spatial: int,
     ) -> Optional[Dict[str, Any]]:
         """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
@@ -4300,16 +4463,17 @@ class PrismSolver:
         - spatial ratio from the profile's block channel list
           (2^(len-1), the same law as decode) and verified against the
           graph traces (trace_in / trace_out must equal it exactly).
-        - runtime extents must sit on the ratio lattices (an input that
-          violates the compression divisibility is invalid for the untiled
-          encoder too).
+        - runtime extents must sit on the lattices the tiles are placed on:
+          the spatial ratio always, the frame ratio only for the linear
+          class (the causal class carries the whole clip in every tile).
         """
         import math
-        from neurobrix.core.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
+        from neurobrix.core.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
+                                                   temporal_map_unread)
 
         ic = getattr(self, "_input_config", None)
         if ic is None:
-            return None
+            return self._tiling_decline(comp_name, "no request is bound")
 
         full_act = mem.activation_bytes
         if full_act <= budget_bytes or full_act <= 0:
@@ -4324,7 +4488,7 @@ class PrismSolver:
             # the first activation alone is 8.5 GiB, and the plan declined, so the run died.
             tmap = temporal_causal_downscale_ratio(graph)
             if tmap is None:
-                return None  # 4D / unreadable temporal map — declined
+                return self._tiling_decline(comp_name, temporal_map_unread(graph))
             causal = True
         t_ratio, t_axis_out = tmap
 
@@ -4341,21 +4505,36 @@ class PrismSolver:
             # this graph, which the check below would have held the config to anyway.
             sp_ratio = trace_size // out_spatial
         else:
-            return None
+            return self._tiling_decline(
+                comp_name, f"no block list in its profile, and its traced extents {trace_size} -> "
+                           f"{out_spatial} do not divide")
         # Trace coherence: the graph's own in/out spatial traces must agree
         # with the config-derived ratio, else decline (never guess geometry).
         if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
                 or trace_size // sp_ratio != out_spatial:
-            return None
+            return self._tiling_decline(
+                comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its traced extents "
+                           f"{trace_size} -> {out_spatial}")
 
         height = getattr(ic, "height", None)
         width = getattr(ic, "width", None)
         num_frames = getattr(ic, "num_frames", None)
         if not height or not width or not num_frames:
-            return None
-        if height % sp_ratio or width % sp_ratio or (
-                (num_frames - 1) % t_ratio if causal else num_frames % t_ratio):
-            return None  # off-lattice runtime extents — invalid untiled too
+            return self._tiling_decline(
+                comp_name, f"the request binds height={height!r} width={width!r} frames={num_frames!r}")
+        # The spatial lattice binds every tile: each one's latent lands at its pixel position / ratio.
+        # The FRAME lattice binds only a tile taken in time — the linear class, whose temporal tiles
+        # land at frame / ratio. The causal class never tiles time: every tile carries the whole clip
+        # and holds the latent frames the graph computes for that clip, whatever its count, exactly
+        # as the untiled encoder does. `(num_frames - 1) % t_ratio` stood here and asked that class a
+        # question no tile of it depends on. The integer map 1 + (t-1)//r is also ceil(t/r): it is
+        # what a stride-2 slice `[::2]` records (Allegro-TI2V's encoder, `((t+1)//2+1)//2`, read
+        # here as causal r=4), and the gate refused that encoder at its own 88 frames — the
+        # request the vendor encodes — so the plan had no tile for it (2026-10-04).
+        if height % sp_ratio or width % sp_ratio or (not causal and num_frames % t_ratio):
+            return self._tiling_decline(
+                comp_name, f"the request {num_frames}x{height}x{width} is off the lattice its tiles are "
+                           f"placed on ({sp_ratio} pixels" + ("" if causal else f", {t_ratio} frames") + ")")
 
         window_alignment = config.get("window_size", 1) or 1
         # Spatial tile lattice: multiples of the compression ratio (latent
@@ -4397,7 +4576,9 @@ class PrismSolver:
             t_tile -= t_ratio
         tiled_act = _tiled_act(sp_tile, t_tile)
         if tiled_act > budget_bytes:
-            return None  # even the minimum lattice tile overflows
+            return self._tiling_decline(
+                comp_name, f"its smallest lattice tile still holds {tiled_act / 2 ** 20:,.0f} MB over its "
+                           f"{budget_bytes / 2 ** 20:,.0f} MB tile budget")
 
         # Input-space halos on the ratio lattices (stride = tile - overlap
         # stays lattice-exact so every position maps to an integral latent
@@ -4577,6 +4758,13 @@ class PrismSolver:
                 shard_map = {s: largest.device_string
                              for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
+            self._tiling_decline(comp_name, f"its tile and weights still need {tiled_total_mb:,.0f} MB")
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            # The Triton branch below records this placement's overflow and its reasons per rung; the
+            # compiled one goes to the host, and its refusal must still say why the card got no tile.
+            self._record_rung_tiling_decline("a component's placement", largest.device_string, usable,
+                                             comp_name)
 
         # Strategy 4: cpu — both weights AND compute on CPU.
         # Last-resort placement for a single component whose activations
@@ -4615,6 +4803,7 @@ class PrismSolver:
             comps = dict(prev[2]) if prev else {}
             comps[comp_name] = self._live_activation_mb(mem)
             store["a component's host placement"] = (largest.device_string, usable, comps)
+            self._snapshot_tiling_declines("a component's host placement", comps)
             return None
         #
         # When `profile.cpu` is missing (some older or hand-written
@@ -5188,15 +5377,19 @@ class PrismSolver:
                 continue
             tiling = self._spatial_component_tiling(
                 container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
-            if tiling is not None and self._tiled_component_mb(
-                    container, comp_name, mem, largest, tiling) <= usable:
+            tiled_mb = (self._tiled_component_mb(container, comp_name, mem, largest, tiling)
+                        if tiling is not None else None)
+            if tiled_mb is not None and tiled_mb <= usable:
                 tilings[comp_name] = tiling
             else:
+                if tiled_mb is not None:
+                    self._tiling_decline(comp_name, f"its tile and weights still need {tiled_mb:,.0f} MB")
                 overflow[comp_name] = whole
         card_by_rung[strategy] = largest.device_string
         tilings_by_rung[strategy] = tilings
         if overflow:
             overflow_by_rung[strategy] = (largest.device_string, usable, overflow)
+            self._snapshot_tiling_declines(strategy, overflow)
             return False
         return True
 
@@ -5431,6 +5624,7 @@ class PrismSolver:
         # component tiling only if this rung wins.
         tiled: Dict[str, Dict[str, Any]] = {}
         cost: Dict[str, int] = {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).pop("layer_streaming", None)
         for name, mem in sorted_comps:
             whole = self._whole_component_mb(container, name, mem, target) * 1024 * 1024
             cost[name] = int(mem.total_bytes)
@@ -5444,10 +5638,36 @@ class PrismSolver:
                 if _tiled_bytes <= budget_bytes:
                     tiled[name] = _t
                     cost[name] = _tiled_bytes
+                else:
+                    # A tile exists and its weights take it over the rung: said, as the placement rungs say it.
+                    # Nothing was recorded here, and the refusal was silent exactly where it should speak.
+                    self._tiling_decline(name, f"its tile and weights still need {_tiled_bytes / 2 ** 20:,.0f} MB")
+            if name not in tiled:
+                self._record_rung_tiling_decline("layer_streaming", target.device_string,
+                                                 budget_bytes / 2 ** 20, name)
         self._layer_stream_tilings = tiled
         streamed = {name for name, mem in sorted_comps
                     if name not in tiled
                     and self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
+        _lm_kv = None
+        if getattr(self, "_needs_kv_cache", False):
+            # The cache's owner as the flow names it (core/runtime/lm_facts — the same reading that decided a
+            # cache is needed), the solver's own LM name otherwise.
+            from neurobrix.core.runtime.lm_facts import decode_lm_component, session_lm_name
+            _topo = self._flow_topology(container)
+            _gen = (_topo.get("flow") or {}).get("generation") or {}
+            _lm_kv = (decode_lm_component(_topo, list(graphs))
+                      or (session_lm_name(_gen, list(graphs)) if _gen.get("lm_component") in graphs else None)
+                      or self._lm_component_name)
+        if not streamed and _lm_kv in graphs and _lm_kv not in tiled:
+            # Every component fits the rung ALONE, yet this rung is being asked: the whole-component
+            # strategies were refused because the language model's KV cache does not fit beside it whole.
+            # The language model — the cache's owner — streams its layers inside the rung; the others stay
+            # whole. Before, nothing was offered ("the streamed []") and the solve refused: orpheus on a 24 GB
+            # Mac with 10.4 GB usable (the Mac, 2026-10-03 22:00), MiniCPM-o on the idle Mac. Only the KV
+            # owner: a component that fits whole is never the one streamed otherwise
+            # (test_no_component_falls_between_placing_whole_and_streaming).
+            streamed = {_lm_kv}
         # But only what is live AT THE SAME TIME as the streamed component's segments.
         # A whole component's WEIGHTS stay loaded beside it (a plan may load eagerly, a
         # serve session never unloads); its ACTIVATIONS are live only while it runs, and
@@ -5639,6 +5859,8 @@ class PrismSolver:
         # Resident beside the pieces and outside any component's figure: the graph constants and
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
+        self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
+                                              + max(p_.peak_resident_bytes for p_ in partitions.values()))
         return allocations, devices
 
     def _output_bytes(self, container) -> int:
@@ -6317,11 +6539,29 @@ class PrismSolver:
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
         for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
+            _why_untiled = _why_by_rung.get(_rung, {})
             tried_str += (f"\n  {_rung} declined: under the Triton engine a host-placed component computes on "
                           f"the card, and {_card} cannot hold " + ", ".join(
-                              f"{c}'s activations ({mb:,.0f} MB; no tiling fits)" for c, mb in _comps.items())
+                              f"{c}'s activations ({mb:,.0f} MB untiled; "
+                              + (f"no tile: {_why_untiled[c]}" if c in _why_untiled
+                                 else "the tiling engine returned no tile") + ")"
+                              for c, mb in _comps.items())
                           + f" within its {_usable:,.0f} MB usable — `--compiled` computes it on the host")
+        # The rungs no Triton host line above carries: their components' tiling reasons, each rung's own,
+        # beside the figure it held them to. Those lines exist only where a host placement is sized on
+        # the card; under the compiled engine a component the tiling engine declined went to the host
+        # and the refusal said nothing of the tile it did not get — Allegro-TI2V's re-propagated encoder
+        # at 720x1280, whose time map still folds the batch, was refused with no word of it (2026-10-04).
+        _host_rungs = set(getattr(self, "_host_device_overflow", {}) or {})
+        _figure = getattr(self, "_tiling_rung_figure", {}) or {}
+        for _rung, _whys in _why_by_rung.items():
+            if _rung in _host_rungs or not _whys or _rung not in _figure:
+                continue
+            _card, _usable = _figure[_rung]
+            tried_str += (f"\n  {_rung}: no component tile on {_card} ({_usable:,.0f} MB usable) — "
+                          + "; ".join(f"{c}: {why}" for c, why in _whys.items()))
         # Reaching here now means REAL impossibility, not a gap in the
         # cascade. The ladder ends in `cpu_streaming`, which needs only the
         # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
@@ -6436,6 +6676,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "candidates": [{"strategy": n, "score": float(sc)} for n, sc in (plan.candidates or [])],
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
+           "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
            "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
                              for c, p in (plan.runtime_op_tiling or {}).items()
@@ -6457,6 +6698,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
+    if plan.unified_rungs_tried:
+        rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
     return rec
 
 

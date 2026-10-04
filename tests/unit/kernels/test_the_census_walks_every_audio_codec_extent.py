@@ -69,6 +69,8 @@ def test_the_census_tool_walks_the_extents_without_being_asked(monkeypatch, tmp_
     monkeypatch.setattr(m, "frozen_dims", lambda model: [])
     monkeypatch.setattr(m, "_device_count", lambda hw: 1)
     monkeypatch.setattr(m, "_tiling_probe", lambda *a, **k: ["--probe"])
+    # `M` has no container: the derivation reads a container's own confirmation values (2026-10-04)
+    monkeypatch.setattr(m._trace, "container_topology", lambda model: {})
     m.census_model("M", "hw", ["triton", "triton-sequential"], [], [["--prompt", "x"]], 60, tmp_path,
                    rungs=[4096, 8192])
     walking = [c for c in calls if c[3]]

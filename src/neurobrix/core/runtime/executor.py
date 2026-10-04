@@ -903,6 +903,17 @@ class RuntimeExecutor:
             config = mod_data.get("config", {})
 
             if mod_type == "scheduler":
+                # The PIPELINE's sigma schedule, when the container declares one
+                # (a value the build emits on the scheduler component — e.g.
+                # MochiPipeline's linear_quadratic schedule, which lives in the
+                # pipeline's code, not in scheduler_config.json). Carried into
+                # the scheduler's config for both engines; absent = the
+                # scheduler's own schedule.
+                from neurobrix.core.runtime.registry_flags import get_component_flag
+                _ss = get_component_flag(self.pkg.manifest.get("model_name"), mod_name,
+                                         "sigma_schedule", default=None)
+                if _ss is not None:
+                    config = dict(config, sigma_schedule=_ss)
                 # Two totally separate scheduler implementations; the orchestrator
                 # (this shared entry point) picks by mode. Triton gets the
                 # zero-torch NBXTensor scheduler; PyTorch gets the torch one.

@@ -21,13 +21,21 @@ class _Executor:
         self.registered.update(interceptors)
 
 
-def _handler(executor):
+def _handler(executor, with_plan=True, max_cache_len=448):
     h = ED.EncoderDecoderHandler.__new__(ED.EncoderDecoderHandler) \
         if hasattr(ED, "EncoderDecoderHandler") else None
     if h is None:
         cls = next(c for c in vars(ED).values() if isinstance(c, type) and hasattr(c, "_decoder_kv_wrapper"))
         h = cls.__new__(cls)
-    h.ctx = types.SimpleNamespace(executors={"dec": executor})
+    # The flow takes the decoder's cache from the PLAN and checks it against the graph (lm_facts.
+    # encoder_decoder_cache_from_plan, 2026-09-29: Prism prices the cache of every decoding flow): the
+    # stand-in context carries the plan Prism would hand it, its geometry read by the flow's own reader.
+    from neurobrix.core.runtime.lm_facts import decoder_cache_facts
+    facts = decoder_cache_facts(executor._dag)
+    kv_plan = None if not with_plan or facts is None else types.SimpleNamespace(
+        num_layers=facts["num_layers"], num_kv_heads=facts["num_heads"], k_head_dim=facts["head_dim"],
+        v_head_dim=facts["head_dim"], max_cache_len=max_cache_len)
+    h.ctx = types.SimpleNamespace(executors={"dec": executor}, plan=types.SimpleNamespace(kv_cache_plan=kv_plan))
     return h
 
 
@@ -72,3 +80,14 @@ def test_a_decoder_with_no_positional_mechanism_refuses_the_cache(monkeypatch, c
     assert _handler(ex)._decoder_kv_wrapper("dec", max_tokens=64) is None
     assert ex.registered == {}
     assert "KV cache REFUSED" in capsys.readouterr().err
+
+
+def test_a_plan_without_the_decoders_cache_is_refused_by_name(monkeypatch):
+    """The flow never sizes the cache itself: a plan that carries none, or one shorter than the window
+    it decodes, is refused naming the decoder."""
+    import pytest
+    monkeypatch.delenv("NBX_KV_RECOMPUTE", raising=False)
+    with pytest.raises(RuntimeError, match="the plan carries no KV cache for the decoder 'dec'"):
+        _handler(_Executor(), with_plan=False)._decoder_kv_wrapper("dec", max_tokens=64)
+    with pytest.raises(RuntimeError, match="holds 8 positions"):
+        _handler(_Executor(), max_cache_len=8)._decoder_kv_wrapper("dec", max_tokens=64)

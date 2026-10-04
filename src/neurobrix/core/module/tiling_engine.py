@@ -601,11 +601,10 @@ class TilingEngine:
                 pooled = sum(_DA._pool_cached_bytes.values())
             except Exception:
                 live = pooled = -1
-            try:
-                import psutil
-                avail = psutil.virtual_memory().available
-            except Exception:
-                avail = -1
+            # the host through the engine's one reader (core.host_memory): no undeclared import here
+            from neurobrix.core.host_memory import memory_state
+            _st = memory_state()
+            avail = (_st.available_mb << 20) if _st.available_mb is not None else -1
             print(f"[TileCensus] tile={n} phase={phase} live_mb={live // (1 << 20)} "
                   f"pool_mb={pooled // (1 << 20)} avail_mb={avail // (1 << 20)}",
                   file=sys.stderr, flush=True)
