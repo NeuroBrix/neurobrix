@@ -86,7 +86,8 @@ def test_a_component_no_tiling_fits_declines_the_rung_and_the_refusal_names_it()
     with pytest.raises(RuntimeError) as exc:
         s._fail_error(comps, [card])
     msg = str(exc.value)
-    assert "transformer's activations (32,000 MB; no tiling fits)" in msg and "--compiled" in msg, msg
+    assert ("transformer's activations (32,000 MB untiled; the tiling engine returned no tile)" in msg
+            and "--compiled" in msg), msg
 
 
 def test_the_compiled_engine_is_not_sized_on_the_card():
