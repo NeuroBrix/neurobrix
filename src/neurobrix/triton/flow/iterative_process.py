@@ -485,6 +485,11 @@ class TritonIterativeProcessHandler:
                 tokenizer_config=tokenizer_vals
             )
             neg_hidden_state = finalized["hidden_state"]
+            # The mask goes with the embedding it masks: a finalization that changes the
+            # sequence's length returns the mask cut or padded the same way
+            # (`resolution.negative_text_mask`, R30 mirror of core/flow).
+            from neurobrix.core.runtime.resolution.negative_text_mask import finalized_mask
+            neg_attention_mask = finalized_mask(neg_attention_mask, finalized)
         # -----------------------------------------------------
 
         # Store negative embedding AND its attention mask (for CFG executor)

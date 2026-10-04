@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
+from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
 from neurobrix.triton import i2v_conditioning as _i2v
 from neurobrix.triton import vace_control_conditioning as _vace
 
@@ -293,8 +294,10 @@ class TritonCFGEngine:
         # Batch mask
         batched_mask = None
         if pos_mask is not None and pos_mask.shape[-1] == pos_hidden.shape[1]:
-            neg_mask = _ensure_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None))
-            if neg_mask is None or neg_mask.shape[-1] != neg_hidden.shape[1]:
+            neg_mask = _negative_mask_for(
+                _ensure_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)),
+                neg_hidden, encoder_comp)
+            if neg_mask is None:
                 # Create ones tensor via NBXTensor
                 ones_shape = (neg_hidden.shape[0], neg_hidden.shape[1])
                 neg_mask = _create_ones_tensor(ones_shape, pos_mask._dtype, pos_mask._device)
@@ -473,8 +476,10 @@ class TritonCFGEngine:
             )
 
         pos_mask = _ensure_nbx(self._ctx.variable_resolver.get("global.attention_mask"))
-        neg_mask = _ensure_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None))
-        if neg_mask is None or neg_mask.shape[-1] != neg_hidden.shape[1]:
+        neg_mask = _negative_mask_for(
+            _ensure_nbx(self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)),
+            neg_hidden, encoder_comp)
+        if neg_mask is None:
             ones_shape = (neg_hidden.shape[0], neg_hidden.shape[1])
             neg_mask = _create_ones_tensor(ones_shape, pos_mask._dtype, pos_mask._device)
         elif neg_mask._dtype != pos_mask._dtype:
