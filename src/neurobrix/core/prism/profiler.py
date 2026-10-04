@@ -54,6 +54,10 @@ class InputConfig:
     # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
     # packed inputs. None: the name-driven map alone.
     flow: Optional[Any] = None
+    # The request's output mode (`output_dispatch.resolve_mode`: "text", "audio", ...), which decides
+    # the legs a flow runs (`core.flow.base.unloaded_by_request`: a VLM's speech components load only
+    # for a speech request). None: not known — every leg the flow declares is priced.
+    mode: Optional[str] = None
 
     def positional_symbol_map(self) -> Dict[str, int]:
         """The POSITIONAL base, which GUESSES what each symbol id means.

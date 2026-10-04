@@ -222,7 +222,8 @@ def _vlm_phases(flow: Dict[str, Any], engine: Optional[str] = None, served: bool
     # what the decode holds). The generative-speech leg loads its talker groups beside the
     # still-loaded model (the CFM leg unloads the model after it) or right after releasing it (the
     # deepstack leg): one phase holds the model, its head and every speech component — the bound for
-    # both legs and for a request that runs no leg. NEITHER ENGINE EVER UNLOADS THE HEAD OR A SPEECH
+    # both legs. A request that runs no leg never loads a speech component (`_vlm_unloaded`), and
+    # Prism prices none of them for it. NEITHER ENGINE EVER UNLOADS THE HEAD OR A SPEECH
     # COMPONENT: `_compute_logits` loads the head and nothing releases it, and the speech legs
     # (speech.py, speech_cfm.py, both engines) unload only the model. A single run ends there; a
     # SERVED session that loads on demand is not persistent, so from its second request every tower
@@ -240,6 +241,45 @@ def _vlm_phases(flow: Dict[str, Any], engine: Optional[str] = None, served: bool
     decode = {lm} | ({head} if head else set()) | speech
     left = (decode - {lm}) if served else set()   # what a request leaves loaded for the next
     return [{t} | left for t in towers if t and t not in decode] + [decode]
+
+
+#: The request mode whose output is speech (the multimodal family's `modes.supported`): the only mode
+#: on which the VLM handlers of both engines run their generative-speech leg — `requests_speech`, read
+#: by the handlers' gates and by Prism alike, one statement of the rule.
+SPEECH_MODE = "audio"
+
+
+def requests_speech(mode: Optional[str]) -> bool:
+    """True when a request of output `mode` runs a declared generative-speech leg."""
+    return str(mode or "") == SPEECH_MODE
+
+
+def _vlm_unloaded(flow: Dict[str, Any], mode: Optional[str], served: bool) -> set:
+    # The speech components (`flow.speech.components`) are loaded by the speech legs alone
+    # (core/flow/speech.py, speech_cfm.py and their triton mirrors), and both engines' VLM handlers
+    # run a leg only on a request that `requests_speech`; weights load on demand, when a component is
+    # run (`ensure_weights_fn`). A single request of another mode never loads them. A SERVED session
+    # may take a speech request later, and a request whose mode is not known may be one: both hold
+    # the leg (the bound of `_vlm_phases`).
+    if served or mode is None or requests_speech(mode):
+        return set()
+    return {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
+
+
+#: flow type -> the components a request of a given mode NEVER loads, for a single request or a
+#: served session. Prism prices none of them — not in a phase, not beside a streamed component, not in
+#: a sum. A flow type not here declares nothing: every component may be loaded.
+UNLOADED_BY_REQUEST = {
+    "vlm": _vlm_unloaded,
+}
+
+
+def unloaded_by_request(topology: Dict[str, Any], mode: Optional[str] = None, served: bool = False) -> set:
+    """The components a request of output `mode` never loads (`UNLOADED_BY_REQUEST`); empty when
+    its flow type declares none, when the mode is not known, or for a served session."""
+    flow = (topology or {}).get("flow") or {}
+    rule = UNLOADED_BY_REQUEST.get(flow.get("type"))
+    return set(rule(flow, mode, served)) if rule else set()
 
 
 #: flow type -> the sets of components its handlers hold loaded AT THE SAME TIME, from the topology's
