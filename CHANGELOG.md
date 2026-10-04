@@ -188,6 +188,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A random draw inside a model now comes from the run's own seeded generator in the PyTorch
+  modes.** Under `--compiled` and sequential with a seed, a model that samples inside its graph (an
+  image encoder drawing from its latent distribution) drew from a second stream seeded alike, which
+  repeated the initial noise of the same run. It now draws from the same generator as the initial
+  and scheduler noise, in the order the reference pipelines consume it, as the Triton modes already did.
+
 - **CogVideoX image-to-video follows its input image as the reference pipeline does.** The encoded
   image was scaled by the VAE's latent factor twice, so the model was conditioned on an image
   latent at 0.7x its intended magnitude, and the video drifted away from the picture it was given.
