@@ -204,6 +204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A video model whose pipeline bins the request renders at its bin and is restored to the requested
+  size.** The restore after a binned render (`flow.resolution_binning`, PixArt and Sana) handled an
+  image and refused a video: a container of SANA-Video carrying the field would have stopped after the
+  decode with "produced no 4-D output". Both `--compiled` and `--triton` now resize and crop every
+  frame as the vendor's `VideoProcessor.resize_and_crop_tensor` does.
+
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty
   negative prompt instead of ignoring it, which pulled every step away from the prompt. On
