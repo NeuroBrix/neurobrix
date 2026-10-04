@@ -610,6 +610,11 @@ class TritonIterativeProcessHandler:
             if current_state.dim() == 3:
                 # Packed 3D: [B, seq_len, D] — seq_len is the image sequence length
                 kwargs["image_seq_len"] = current_state.shape[1]
+            # The latent frame count, when the scheduler's declared dynamic-shift
+            # length reads one (dynamic_shift_length per_frame_sqrt_frames).
+            _frames_ptr = getattr(driver, "shift_frames_pointer", None)
+            if _frames_ptr is not None:
+                kwargs["frames"] = self.ctx.variable_resolver.resolve_pointer(_frames_ptr)
             driver.set_timesteps(num_steps, **kwargs)
 
         # Scale initial noise

@@ -33,6 +33,7 @@ RUNTIME_COMPONENT_FLAGS = (
     "requires_fp32_compute",
     "fp16_conv_cascade_safe",
     "sigma_schedule",          # the pipeline's sigma schedule (scheduler component)
+    "dynamic_shift_length",    # the length the pipeline's dynamic shift reads (scheduler component)
 )
 
 _ABSENT = object()
