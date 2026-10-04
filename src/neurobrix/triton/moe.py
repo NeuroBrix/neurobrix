@@ -179,6 +179,23 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
                 raise RuntimeError(
                     f"ZERO FALLBACK: mixed dense/quantized experts in "
                     f"'{proj_name}' projection — re-build the variant.")
+    else:
+        # The kernel takes ONE (stride_bk, stride_bn) pair per projection, read
+        # from the first expert: every expert of a projection must share it. A
+        # stacked slab's views do by construction (one slab, one geometry); a
+        # list mixing layouts would be read through the wrong strides in
+        # silence — refuse it by name.
+        for proj_name, ws in (("gate", gate_weights), ("up", up_weights),
+                              ("down", down_weights)):
+            s0 = (tuple(ws[0].shape), ws[0].stride(0), ws[0].stride(1))
+            for eid in range(1, num_experts):
+                se = (tuple(ws[eid].shape), ws[eid].stride(0), ws[eid].stride(1))
+                if se != s0:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: MoE '{proj_name}' expert {eid} has "
+                        f"(shape, strides) {se}, expert 0 {s0} — the grouped "
+                        "GEMM reads every expert through one stride pair.")
+
     by_device = defaultdict(list)
     for i in range(num_experts):
         by_device[gate_weights[i]._device_idx].append(i)

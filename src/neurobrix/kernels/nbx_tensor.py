@@ -3140,6 +3140,20 @@ class NBXTensor:
         return any(st == 0 and sh > 1
                    for sh, st in zip(self._shape, self._strides))
 
+    def spans_densely(self) -> bool:
+        """True when the view's elements tile exactly one dense span of
+        `nbytes` starting at data_ptr() — contiguous, or a permutation of a
+        contiguous layout (a transpose). False for an expand view (stride 0
+        on a broadcast axis) and for a narrow on an inner axis (gaps between
+        rows): a single memcpy of nbytes copies the wrong bytes from those."""
+        expected = 1
+        for sh, st in sorted(((sh, st) for sh, st in zip(self._shape, self._strides)
+                              if sh != 1), key=lambda p: p[1]):
+            if st != expected:
+                return False
+            expected *= sh
+        return True
+
     @property
     def is_cuda(self) -> bool:
         return self._device == 'cuda'
@@ -3496,12 +3510,15 @@ class NBXTensor:
 
         Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
         tensor is already on the requested CUDA device, returns self.
-        Expand views (stride == 0 on a broadcast axis) are materialised
-        first so the memcpy does not over-read the backing storage.
+        A view whose elements do not tile one dense span (an expand view's
+        stride-0 axis, or a narrow on an inner axis — a stacked expert
+        slab's gate half) is materialised first: the copy is ONE memcpy of
+        nbytes from data_ptr, which is the view's bytes only when they are
+        dense.
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
-        src = self.contiguous() if self.is_expanded() else self
+        src = self if self.spans_densely() else self.contiguous()
         DeviceAllocator.set_device(device_idx)
         ptr = DeviceAllocator.malloc_cuda(src._nbytes)
         if src._nbytes > 0:
@@ -3529,7 +3546,7 @@ class NBXTensor:
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
-        src = self.contiguous() if self.is_expanded() else self
+        src = self if self.spans_densely() else self.contiguous()
         DeviceAllocator.set_device(device_idx)
         ptr = DeviceAllocator.malloc_cuda(src._nbytes)
         if src._nbytes > 0:

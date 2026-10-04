@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
+  every one of their 128 experts for every token and multiplied the unused ones by zero: correct
+  output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
+  All 48 layers now run the same routed MoE kernel as the other MoE models, in both engines.
+
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
   uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention
