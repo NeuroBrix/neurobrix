@@ -416,20 +416,54 @@ def _xfer(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     return transfer_tensor(tensor, target_dev)
 
 
-def promote_stacked_slabs(fetch, device_idx: int):
+class StackedSlabPromotion:
     """A `fetch` for `expert_weight_lists` that brings a host-resident stacked
     expert slab to the activation's device ONCE and WHOLE — one dense H2D per
     slab — before the per-expert views are cut from it. Promoting the views
     instead (execute_moe_fused's per-weight promotion) would copy each expert's
     non-dense half on its own: 2E host-side strided copies and 3E transfers per
-    call. The promoted slab lives as long as the views that reference it (this
-    call), exactly like the per-weight promotion it replaces for slabs."""
-    def _fetch(tid):
-        t = fetch(tid)
+    call.
+
+    `per_call` turns True when a slab was promoted: the views then point into
+    memory that lives for THIS call only, and the dispatcher hands that to
+    `execute_moe_fused(weights_per_call=...)` so its own zero3 rules stay in
+    charge (no pointer-table cache entry for per-call addresses, the promoted
+    lists released in the call's frame) — a reused address must never meet a
+    stale table."""
+
+    def __init__(self, fetch, device_idx: int):
+        self._fetch = fetch
+        self._device_idx = device_idx
+        self.per_call = False
+
+    def __call__(self, tid):
+        t = self._fetch(tid)
         if t is not None and getattr(t, "_device", "cuda") == "cpu":
-            return t.to_cuda(device_idx)
+            self.per_call = True
+            return t.to_cuda(self._device_idx)
         return t
-    return _fetch
+
+
+def _tables_for_call(gate_weights, up_weights, down_weights, num_experts: int,
+                     per_call: bool, act_dev: int):
+    """The pointer tables of one call. Weights that live for this call only
+    (promoted from the host here or by the dispatcher) get a fresh table that
+    never enters the cache — their addresses are freed when the call returns,
+    and a later allocation reusing them would meet a stale entry. Resident
+    weights go through the fingerprinted LRU cache."""
+    if per_call:
+        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+        return tables
+    fp = _ptr_cache_fingerprint(gate_weights, up_weights, down_weights, num_experts)
+    tables = _ptr_cache_get(fp)
+    if tables is None:
+        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        _ptr_cache_put(fp, tables)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+    return tables
 
 
 # ============================================================================
@@ -446,6 +480,7 @@ def execute_moe_fused(
     cache_key: str = "",
     topk_indices=None,
     topk_weights=None,
+    weights_per_call: bool = False,
 ):
     """Execute MoE via fused grouped GEMM — zero torch, zero extra memory.
 
@@ -465,6 +500,10 @@ def execute_moe_fused(
             when topk_indices/topk_weights are supplied — that routing is
             already normalized per gate inside the graph.
         cache_key: Stable key for offset table caching (component + op_uid)
+        weights_per_call: the expert weights were promoted to the device for
+            THIS call by the caller (a stacked slab, `StackedSlabPromotion`):
+            treated exactly like weights promoted here — no cached table, the
+            lists released before return.
         topk_indices: Pre-computed expert indices [batch*seq, top_k], int.
             Multi-gate MoE (e.g. BailingMoe text/image/audio routers) blends
             several gates' topk results by per-token modality masks IN THE
@@ -550,6 +589,9 @@ def execute_moe_fused(
         getattr(w, '_device', 'cuda') == 'cpu'
         for lst in (gate_weights, up_weights, down_weights)
         for w in lst)
+    # Weights whose device memory lives for this call only: promoted below, or
+    # promoted by the caller (a stacked slab). The two are one regime.
+    per_call = weights_per_call or any_cpu_weight
     import os as _os_z3
     _Z3_DIAG = _os_z3.environ.get("NBX_Z3_TRITON_DIAG") == "1"
     if _Z3_DIAG and any_cpu_weight:
@@ -660,7 +702,7 @@ def execute_moe_fused(
     # ================================================================
     # STEP 2: Build pointer tables (cached — zero-copy)
     # ================================================================
-    # Under zero3 (any_cpu_weight=True above), we skip the cache: the
+    # Under zero3 (per_call: any_cpu_weight, or weights_per_call), we skip the cache: the
     # promoted GPU tensors are freshly allocated per call, so cached
     # pointers would dangle after this call returns. See comment at
     # STEP 0 for the zero3/pipelining interaction.
@@ -669,20 +711,8 @@ def execute_moe_fused(
     # between blocks), the cache key is a fingerprint of EVERY expert
     # data_ptr so a swapped buffer invalidates the cache. LRU-bounded
     # to _PTR_CACHE_MAXSIZE entries.
-    if any_cpu_weight:
-        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
-        DeviceAllocator.set_device(act_dev)
-        DeviceAllocator.ensure_triton_device(act_dev)
-    else:
-        fp = _ptr_cache_fingerprint(
-            gate_weights, up_weights, down_weights, num_experts)
-        tables = _ptr_cache_get(fp)
-        if tables is None:
-            tables = _build_ptr_tables(
-                gate_weights, up_weights, down_weights)
-            _ptr_cache_put(fp, tables)
-            DeviceAllocator.set_device(act_dev)
-            DeviceAllocator.ensure_triton_device(act_dev)
+    tables = _tables_for_call(gate_weights, up_weights, down_weights,
+                              num_experts, per_call, act_dev)
 
     # ================================================================
     # STEP 2b: SIMT decode band — M == 1, int4-g128 experts (the
@@ -797,7 +827,7 @@ def execute_moe_fused(
     # CPython may keep the function frame alive one extra tick on the
     # caller's stack, holding ~800 MB per MoE op and OOMing after 7-8
     # blocks on a 16 GB V100.
-    if any_cpu_weight:
+    if per_call:
         # The explicit del releases them: NBXTensor frees its device buffer at refcount zero.
         # A full gc.collect() stood here on every call — once per MoE layer per decoded token.
         # Without it deepseek-moe triton-sequential (32 GB V100, KV cache on) completes in 586 s,

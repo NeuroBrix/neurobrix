@@ -3145,7 +3145,10 @@ class NBXTensor:
         `nbytes` starting at data_ptr() — contiguous, or a permutation of a
         contiguous layout (a transpose). False for an expand view (stride 0
         on a broadcast axis) and for a narrow on an inner axis (gaps between
-        rows): a single memcpy of nbytes copies the wrong bytes from those."""
+        rows): a single memcpy of nbytes copies the wrong bytes from those.
+        The one definition: `triton.device_transfer.transfer_tensor` asks it too."""
+        if self._numel == 0:
+            return True
         expected = 1
         for sh, st in sorted(((sh, st) for sh, st in zip(self._shape, self._strides)
                               if sh != 1), key=lambda p: p[1]):
