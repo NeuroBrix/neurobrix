@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set, Any, Tuple
 from enum import Enum
 
+from neurobrix.nbx.weight_presence import absent_weights, read_safetensors_header_from
+
 
 class ValidationLevel(Enum):
     """Validation depth levels."""
@@ -388,13 +390,39 @@ class NBXValidator:
                 ))
 
         if self.level.value in ["coherence", "deep"]:
-            # Check all referenced shards exist
             shards_in_index = set(wi.get("shards", {}).keys())
             weights_prefix = f"components/{comp_name}/weights/"
 
-            for shard_name in shards_in_index:
-                shard_path = f"{weights_prefix}{shard_name}"
-                if shard_path not in all_files:
+            # Every tensor the index lists is in the shard it names, and that shard is in the
+            # container: the rule both engines' loaders refuse a run by
+            # (`neurobrix.nbx.weight_presence.absent_weights`), one rule in one place — this
+            # check used to test only that a shard named in the `shards` table existed.
+            def _header_of(shard_name):
+                member = f"{weights_prefix}{shard_name}"
+                if member not in all_files:
+                    return None
+                if not member.endswith(".safetensors"):
+                    return True        # no header to read before loading
+                with zf.open(member) as f:
+                    return read_safetensors_header_from(f)[0]
+
+            tensors = wi.get("tensors") or {}
+            by_shard: Dict[Tuple[Optional[str], str], List[str]] = {}
+            for key, shard, reason in absent_weights(tensors, tensors.keys(), _header_of):
+                by_shard.setdefault((shard, reason), []).append(key)
+            for (shard, reason), keys in sorted(by_shard.items(), key=lambda kv: str(kv[0])):
+                shown = ", ".join(keys[:5]) + (f" and {len(keys) - 5} more" if len(keys) > 5 else "")
+                errors.append(ValidationError(
+                    level=ValidationLevel.COHERENCE,
+                    component=comp_name,
+                    file=f"weights/{shard}" if shard else "weights_index.json",
+                    message=f"{len(keys)} weight(s) absent — {reason}: {shown}"
+                ))
+
+            # A shard the `shards` table lists that no tensor names, missing from the container.
+            referenced = {(t or {}).get("shard") for t in tensors.values() if isinstance(t, dict)}
+            for shard_name in sorted(shards_in_index - referenced):
+                if f"{weights_prefix}{shard_name}" not in all_files:
                     errors.append(ValidationError(
                         level=ValidationLevel.COHERENCE,
                         component=comp_name,

@@ -104,6 +104,9 @@ def test_the_arena_loader_rounds_to_nearest_even(tmp_path):
     header = {"w": {"dtype": "F32", "shape": [x.size], "data_offsets": [0, x.nbytes]}}
     hb = json.dumps(header).encode(); hb += b" " * (-len(hb) % 8)
     (wdir / "shard_000.safetensors").write_bytes(struct.pack("<Q", len(hb)) + hb + x.tobytes())
+    # A container states what it holds: the loader refuses shards without an index.
+    (wdir.parent / "weights_index.json").write_text(
+        json.dumps({"tensors": {"w": {"shard": "shard_000.safetensors"}}}))
     weights = load_component_weights(str(tmp_path), "c", 0, compute_dtype=NBXDtype.bfloat16)
     t = weights["w"]
     assert t.nbx_dtype == NBXDtype.bfloat16
