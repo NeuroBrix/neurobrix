@@ -82,6 +82,45 @@ def _mask_axis_short(mask_extent: int, seq: int) -> bool:
     return 1 < mask_extent < seq
 
 
+def _require_causal_frozen_mask(mask, seq_q: int, seq_k: int, op_name: str) -> None:
+    """A mask SHORTER than the sequence it must cover froze at the trace length.
+
+    The only reading that extends it without guessing is the causal one, and
+    only when the mask's own content proves it: every leading slice is the
+    lower-triangular pattern at the mask's extent (bool: True on and below the
+    diagonal; additive: exactly 0 there and -inf / the dtype's minimum above),
+    and the query and key lengths agree (torch's `is_causal` aligns them
+    top-left). Anything else — a padding row, a block-diagonal or windowed
+    mask, an additive bias — has no defined value beyond its extent, and the
+    old branch silently replaced it by causal attention. Refused by name.
+    """
+    import torch as _t
+    mq, mk = int(mask.shape[-2]), int(mask.shape[-1])
+    why = None
+    if mq != mk:
+        why = f"its last two axes differ ({mq} x {mk}), so it is not a square causal pattern"
+    elif seq_q != seq_k:
+        why = (f"query and key lengths differ ({seq_q} vs {seq_k}), where `is_causal` "
+               f"would align them top-left")
+    else:
+        tri = _t.ones(mq, mk, dtype=_t.bool, device=mask.device).tril()
+        if mask.dtype == _t.bool:
+            ok = bool((mask == tri).all())
+        else:
+            m = mask.float()
+            blocked = _t.isneginf(m) | (m <= _t.finfo(mask.dtype).min)
+            ok = bool(((~blocked) == tri).all()) and bool((m[..., tri] == 0).all()) \
+                if m.dim() >= 2 else False
+        if not ok:
+            why = "its content is not the causal (lower-triangular) pattern"
+    if why is not None:
+        raise RuntimeError(
+            f"{op_name}: the attention mask {tuple(mask.shape)} is shorter than the "
+            f"sequence it must cover (query {seq_q}, key {seq_k}) — its extent froze at "
+            f"the trace length, a symbolic-coverage defect of the container — and "
+            f"{why}. Refusing to extend it: re-propagate the mask symbolically in Forge.")
+
+
 def _align_qkv_dtypes(q, k, v):
     """Align Q/K/V dtypes for SDPA. Required when upstream AMP ops produce mixed dtypes.
 
@@ -250,14 +289,15 @@ class CompiledOpResolver:
             return self.dtype_engine.compile_op(f"aten::{op_name}", None, attrs)
 
         # Resolve the raw function via special handlers or standard lookup
-        func = self._resolve_op_func(op_name, attrs)
+        func = self._resolve_op_func(op_name, attrs, op_uid=op_uid)
 
         # DtypeEngine wraps with AMP casting at compile time
         # Custom ops already have their prefix; only add aten:: for standard ops
         dtype_op_type = op_name if "::" in op_name else f"aten::{op_name}"
         return self.dtype_engine.compile_op(dtype_op_type, func, attrs, op_uid=op_uid)
 
-    def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
+    def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any],
+                         op_uid: Optional[str] = None) -> Callable:
         """Resolve raw op function (before DtypeEngine wrapping).
 
         Native/compiled mode only. Triton mode uses triton/ package.
@@ -311,7 +351,7 @@ class CompiledOpResolver:
         if op_name == "custom::rms_norm" or op_name == "rms_norm":
             return self._make_rms_norm(attrs)
         if "scaled_dot_product" in op_name and "attention" in op_name:
-            return self._make_attention(op_name, attrs)
+            return self._make_attention(op_name, attrs, op_uid=op_uid)
         if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
                        "upsample_nearest1d", "upsample_linear1d",
                        "_upsample_nearest_exact2d", "_upsample_nearest_exact1d"):
@@ -584,7 +624,8 @@ class CompiledOpResolver:
 
         return _rms_norm_fn
 
-    def _make_attention(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
+    def _make_attention(self, op_name: str, attrs: Dict[str, Any],
+                        op_uid: Optional[str] = None) -> Callable:
         """
         Create scaled_dot_product_attention function with variant handling.
 
@@ -693,9 +734,12 @@ class CompiledOpResolver:
                     attn_mask = attn_mask[..., :seq_q, :seq_k].contiguous()
                 elif (_mask_axis_short(attn_mask.shape[-2], seq_q)
                         or _mask_axis_short(attn_mask.shape[-1], seq_k)):
-                    # Mask smaller than Q/K: trace-time constant mask that doesn't
-                    # cover runtime seq_len. If it's a causal mask (lower-triangular
-                    # with -inf above diagonal), use is_causal=True instead.
+                    # A mask whose extent froze at the trace length (a Forge
+                    # symbolic-coverage defect). Its CONTENT decides: an exact
+                    # causal mask is the trace's spelling of `is_causal`, which
+                    # extends to any length; anything else is refused by name.
+                    _require_causal_frozen_mask(attn_mask, seq_q, seq_k,
+                                                op_uid or op_name)
                     is_causal = True
                     attn_mask = None
 

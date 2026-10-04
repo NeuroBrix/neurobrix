@@ -175,6 +175,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Under `--compiled`, an attention mask shorter than the sequence is no longer silently replaced.**
+  A mask fixed at the length a model was converted at, used on a longer input, was always turned
+  into causal attention. It now is only when the mask itself is causal; any other mask stops the
+  run with a message naming the operation, instead of attending to the wrong positions.
+
 - **Video models whose decoder works on a normalised latent decode it in the right range.** For
   models whose decoder declares per-channel latent statistics (mochi-1-preview, the Wan 2.1 / 2.2
   models, SANA-Video), the latent was mapped back into the decoder's range twice instead of once,
