@@ -24,19 +24,24 @@ graph's own symbol table:
 Both engines (R30): every flow cell runs on the ATen flow and on its Triton mirror. CPU only: the
 Triton cells stand a numpy carrier in for NBXTensor (no card), which is the flows' shape logic.
 
-Injections — each applied to the committed tree 13b35a81, seen RED, then restored GREEN (57 passed,
-no file differing), 2026-10-04 07:54-08:01 CEST:
+Injections — each applied to the committed tree 7c2d964e, seen RED, then restored GREEN (70 passed,
+no file differing), 2026-10-04 14:30-14:42 CEST:
 
     the pad to the trace extent restored in both rnnt flows                 12 failed
     the trace fit restored in both generic front ends                        7 failed
-    `admit` no longer refuses a literal input axis fed another extent        3 failed
-    `admit` no longer scans downstream of a symbolic input                   7 failed
+    `admit` no longer refuses a literal input axis fed another extent        3 failed (second form: 3)
+    `admit` no longer scans downstream of a symbolic input                   8 failed (second form: 8)
     the decode bound back on ceil(length / 8), both flows                    4 failed
-    the long-form window back on the trace extent (3 000)                    1 failed
+    the long-form window back on the trace extent, not the profile's value   2 failed
+    the audio rule removed from `FlowBindings.overrides`                     2 failed
+    the dither drawn at inference again (extractor and compiled rnnt flow)   2 failed
+    a served plan binds no audio extent                                      1 failed
+    a recording beyond the served extent runs anyway                         1 failed
+    the census keys the encoder at one point, not its declared range         1 failed
+    a duration's shape computed by an arithmetic dropping the centre frame   6 failed
     the seam overlap measured per window again, both flows                   8 failed
     the audio flows chunk the admitted first stage again                     2 failed
     an op the resolver cannot evaluate waved through                         1 failed
-    the audio rule removed from `FlowBindings.overrides`                     1 failed
     the feeds read the modality stricter than the flows                      1 failed
 
 Run: python -m pytest tests/unit/flow/test_a_flow_feeds_the_real_length_never_the_traces.py
