@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On Apple machines under `--triton`, no weight block is planned larger than the GPU can allocate
+  at once.** A Metal device refuses any single buffer above its maximum buffer length, however much
+  memory is free; on an 18 GB M4 Pro, deepseek-moe-16b-chat at 17 GB free failed at load asking for
+  one 14.7 GB block. The planner now cuts every streamed piece below that limit, streams a component
+  whose weights alone exceed it instead of holding it whole, and names the component when nothing
+  else fits. On unified memory the planner also counts the previous piece's block, which the
+  allocator keeps cached, while the next piece loads. NVIDIA cards and `--compiled` plans are
+  unchanged.
+
 - **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
   counted the transposed copy of every linear layer's weight as working memory, although the Triton
   engine reads the weight in place; for a speech or language model with a large vocabulary that was

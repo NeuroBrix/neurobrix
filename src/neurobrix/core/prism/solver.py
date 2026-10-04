@@ -859,8 +859,110 @@ class PrismSolver:
         0.92 x rung to place whole, the rung itself to stream — and a component between the two
         was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
         the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
-        accelerator, on a device that holds it."""
+        accelerator, on a device that holds it.
+        """
         return self._effective_capacity_mb(dev) * self.whole_component_fraction
+
+    def _max_allocation_mb(self, dev: "DeviceState") -> Optional[int]:
+        """THE LARGEST SINGLE ALLOCATION `dev` GRANTS, in MB — `DeviceSpec.max_allocation_mb`, the
+        profile's fact (Metal's `MTLDevice.maxBufferLength`: 13 639 MB on an M4 Pro whose working set
+        is 18 186 MB) — or None: the profile says nothing and the card grants its whole memory.
+
+        What it bounds is an ARENA: the weights the Triton engine loads for one component, or for one
+        streamed piece, or for a streamed component's base, are ONE buffer per device
+        (`triton/weight_loader.py`: `ComponentArena(total, dev)`, one `malloc_cuda(total)`). The
+        activations are separate allocations and are not in it. At 17.1 GB free Prism cut
+        deepseek-moe-16b-chat in 3 segments against the usable 15 073 MB; the first piece's arena asked
+        14 661 558 272 bytes in one allocation and the device refused it by SIZE with 17 785 MB free
+        ("GPU malloc failed (error 1)", the Mac, 2026-10-04).
+
+        The ARENA is the Triton engine's: the compiled engine loads each weight as its own tensor,
+        so a component is never one allocation there and this bound does not apply (None)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        cap = getattr(getattr(dev, "spec", None), "max_allocation_mb", None)
+        return int(cap) if cap else None
+
+    def _arena_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState") -> float:
+        """The arena `comp_name` asks held whole on `dev`: its weights at the device's cost for the
+        component's dtype — the weight part of `_whole_component_mb`, and nothing else."""
+        return mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+
+    def _arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
+                               dev: "DeviceState") -> Optional[str]:
+        """Why `comp_name` cannot be held whole on `dev` as ONE arena, or None when it can."""
+        cap = self._max_allocation_mb(dev)
+        if cap is None:
+            return None
+        arena = self._arena_mb(container, comp_name, mem, dev)
+        if arena <= cap:
+            return None
+        why = (f"'{comp_name}' held whole is one arena of {arena:,.0f} MB of weights, over the "
+               f"{cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
+               f"max_allocation_mb)")
+        # Said by the refusal (`_fail_error`): a rung that keeps components whole declines it.
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
+
+    def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
+        """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB,
+        or None where a parked block never sits beside one.
+
+        A freed block stays allocated in the pool when it is at most the cap
+        (`DeviceAllocator.free`): `memory.alloc_pool_parked_cap_fraction` of the arch yml times the
+        device's memory, unbounded (`math.inf`) where the fraction is 0 or absent — the allocator's
+        own reading of the same key. It sits beside the next allocation only where nothing flushes it
+        first: a discrete card's driver refuses what it cannot serve and the pool is flushed and the
+        request retried (`malloc_cuda`), while a UNIFIED device serves the request beside it. So None
+        on a discrete device, under the compiled engine (no arena, no such pool), and with the pool
+        off (`NBX_ALLOC_POOL=0`, the allocator's own door)."""
+        import math
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
+            return None
+        if not _device_is_unified(dev.device_string, profile):
+            return None
+        from neurobrix.core.config.loader import get_vendor_config
+        spec = dev.spec
+        brand = getattr(spec, "brand", None)
+        frac = float((get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                      .get("memory", {}) or {}).get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
+        return frac * float(spec.memory_mb) if frac > 0 else math.inf
+
+    def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
+        """Why the plan `strat_name` proposes asks some device for one arena over its largest
+        allocation, or None. A component counts when it is held WHOLE on one accelerator: allocated
+        to a device of the plan whose shards all sit there, and not cut by `layer_streaming` (its
+        pieces are bounded by the partitioner). Host-held weights (`zero3:`, `cpu`) are no arena of
+        the device."""
+        if not allocs:
+            return None
+        by_name = {d.device_string: d for d in (devices or [])}
+        streamed = (set(getattr(self, "_layer_stream_partitions", {}) or {})
+                    if strat_name == "layer_streaming" else set())
+        for comp_name, alloc in sorted(allocs.items()):
+            if comp_name in streamed or comp_name not in component_memory:
+                continue
+            dev_str, shard_map = (alloc if isinstance(alloc, tuple) else (alloc, {}))
+            dev = by_name.get(dev_str)
+            if dev is None or any(v != dev_str for v in (shard_map or {}).values()):
+                continue
+            why = self._arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+            if why is not None:
+                return why
+        return None
+
+    def _holds_whole(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                     usable_mb: Optional[float] = None) -> bool:
+        """ONE answer to "is `comp_name` held whole on `dev`": its whole cost within the usable part
+        of the rung (`_usable_mb`, or the budget the caller cuts against) AND its arena within the
+        device's largest allocation."""
+        usable = self._usable_mb(dev) if usable_mb is None else usable_mb
+        return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
+                and self._arena_over_allocation(container, comp_name, mem, dev) is None)
 
     def _live_activation_mb(self, mem: "ComponentMemory") -> float:
         """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
@@ -1233,6 +1335,9 @@ class PrismSolver:
         # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
         self._tiling_declined = {}
         self._tiling_declined_by_rung = {}
+        # Why a component was not held whole: its arena over the device's largest allocation
+        # ({component: reason}, `_arena_over_allocation`).
+        self._arena_declined = {}
         # {rung: (card, usable MB)}: the figure a rung's tiling reasons were held to (`_record_rung_tiling_decline`).
         self._tiling_rung_figure = {}
         self._input_config = input_config
@@ -1473,6 +1578,16 @@ class PrismSolver:
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
 
+            # THE ARENA DOOR, one for every strategy: a component held whole on one accelerator
+            # loads its weights as ONE allocation there (`ComponentArena`), and a device grants a
+            # single allocation only up to its largest (`max_allocation_mb`). The rungs that hold
+            # components whole decline it themselves; this door makes a rung that forgot unable to
+            # win — the plan names the component instead of the device refusing it at load.
+            _over = self._arena_door(container, strat_name, strat_allocs, strat_devices, component_memory)
+            if _over is not None:
+                self._rejected.append((strat_name, float(score), _over))
+                continue
+
             if self._needs_kv_cache:
                 # KV cache is already included in LM activation_bytes — subtract to avoid double-counting
                 kv_already_counted = self._estimate_kv_cache_bytes(container, target_dtype_str)
@@ -1631,6 +1746,8 @@ class PrismSolver:
                            for n, _s, w in self._rejected)
             if self._layer_streaming_declined:
                 _why += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+            for _c, _w in (getattr(self, "_arena_declined", {}) or {}).items():
+                _why += f"\n  not held whole: {_w}"
             raise RuntimeError(
                 "ZERO FALLBACK: No strategy can fit model + KV cache on "
                 "available hardware." + _why + "\n" + self._memory_verdict(devices)
@@ -3537,6 +3654,10 @@ class PrismSolver:
         effective_capacity = self._effective_capacity_mb(largest)
         if total_required > effective_capacity:
             return None
+        # Every component is held whole here, each its own arena: one over the device's largest
+        # allocation is a plan the device refuses at its first load.
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
+            return None
 
         allocations = {}
         fresh = self._fresh_devices(devices)
@@ -3662,6 +3783,8 @@ class PrismSolver:
         # solve time, as designed.
         effective_capacity = self._effective_capacity_mb(largest)
         if peak > effective_capacity:
+            return None
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
             return None
 
         allocations = {}
@@ -4777,8 +4900,9 @@ class PrismSolver:
         # Strategy 1: single_gpu — the component fits whole on the largest GPU: its whole cost
         # against the usable part of the rung (`_usable_mb`, the whole-component fraction of
         # PRISM_DEFAULTS). No flat `oom_reserve_mb` is subtracted here — this comment said so
-        # until 2026-09-24 and the code never did; the fraction is the only headroom.
-        if required <= usable:
+        # until 2026-09-24 and the code never did; the fraction is the only headroom. And its
+        # weights are ONE arena, within the device's largest allocation (`_arena_over_allocation`).
+        if required <= usable and self._arena_over_allocation(container, comp_name, mem, largest) is None:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
 
@@ -5294,7 +5418,8 @@ class PrismSolver:
                 required = self._whole_component_mb(container, comp_name, mem, fresh[i])
                 new_peak = max(bin_peaks[i], required)
                 capacity = self._usable_mb(fresh[i])
-                if new_peak <= capacity:
+                if new_peak <= capacity and self._arena_over_allocation(
+                        container, comp_name, mem, fresh[i]) is None:
                     headroom = capacity - new_peak
                     if headroom < best_headroom:
                         best_gpu = i
@@ -5517,6 +5642,11 @@ class PrismSolver:
         total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
         if total_weights_mb >= effective_mb:
             return None                      # weights alone do not fit: another rung
+        arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
+                                     for n, m in sorted_comps) if r]
+        if arena_refused:
+            self._op_tiling_declined = arena_refused[0]
+            return None                      # every component is held whole: one arena each
         room_mb = effective_mb - total_weights_mb
 
         blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_mb]
@@ -5701,13 +5831,19 @@ class PrismSolver:
         tiled: Dict[str, Dict[str, Any]] = {}
         cost: Dict[str, int] = {}
         self.__dict__.setdefault("_tiling_declined_by_rung", {}).pop("layer_streaming", None)
+        # A component whose weights are ONE arena over the device's largest allocation is not held
+        # whole however much the rung holds, and tiling does not shrink its arena: it is streamed,
+        # its pieces cut below that allocation (`max_arena_bytes`, below).
+        _usable_whole_mb = budget_bytes / (1024 * 1024)
+        held_whole = {name for name, mem in sorted_comps
+                      if self._holds_whole(container, name, mem, target, usable_mb=_usable_whole_mb)}
         for name, mem in sorted_comps:
-            whole = self._whole_component_mb(container, name, mem, target) * 1024 * 1024
             cost[name] = int(mem.total_bytes)
-            if whole <= budget_bytes:
+            if name in held_whole:
                 continue
-            _t = self._spatial_component_tiling(
+            _t = (self._spatial_component_tiling(
                 container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb))
+                if self._arena_over_allocation(container, name, mem, target) is None else None)
             if _t is not None:
                 _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
                 _tiled_bytes = int(_w * 1024 * 1024) + int(_t["tiled_activation_bytes"])
@@ -5722,9 +5858,7 @@ class PrismSolver:
                 self._record_rung_tiling_decline("layer_streaming", target.device_string,
                                                  budget_bytes / 2 ** 20, name)
         self._layer_stream_tilings = tiled
-        streamed = {name for name, mem in sorted_comps
-                    if name not in tiled
-                    and self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
+        streamed = {name for name, _ in sorted_comps if name not in tiled and name not in held_whole}
         _lm_kv = None
         if getattr(self, "_needs_kv_cache", False):
             # The cache's owner as the flow names it (core/runtime/lm_facts — the same reading that decided a
@@ -5769,6 +5903,8 @@ class PrismSolver:
         # Inert where the cut fits: nothing is promoted and the plan is the one it was.
         _mb = 1024 * 1024
         _normalized: Dict[str, Any] = {}
+        _cap_mb = self._max_allocation_mb(target)
+        _parked_mb = self._parked_cap_mb(target, profile)
 
         def _no(reason: str, crowded: bool = False, comp: Optional[str] = None):
             return None, reason, (crowded, comp)
@@ -5813,6 +5949,18 @@ class PrismSolver:
             flow_read_bytes = sum(int(size) for name in _read
                                   for key, size in sizes_by_comp[name].items()
                                   if not is_block_key(key))
+            # The base's flow-read weights are themselves ONE arena per streamed component, held
+            # beside every piece: over the device's largest allocation, no cut of the blocks helps.
+            if _cap_mb is not None:
+                for name in _read:
+                    _base_mb = (sum(int(size) for key, size in sizes_by_comp[name].items()
+                                    if not is_block_key(key)) / _mb
+                                * target.get_cost_multiplier(self._get_component_dtype(container, name)))
+                    if _base_mb > _cap_mb:
+                        return _no(f"'{name}' streamed holds the weights its flow reads by name as one "
+                                   f"arena of {_base_mb:,.0f} MB beside its pieces, over the {_cap_mb:,} MB "
+                                   f"{target.device_string} grants in a single allocation (the profile's "
+                                   f"max_allocation_mb)", comp=name)
             # And the KV CACHE, for the same reason and with the same blind spot. It is
             # inside the streamed component's `total_bytes` — which is why that component
             # is correctly classified as streamed — but the PARTITIONER sizes segments from
@@ -5910,7 +6058,15 @@ class PrismSolver:
                         f"is not this one")
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2])
-                part = _cutter.partition(segment_budget)
+                # One piece's weights are one arena: bounded by the device's largest allocation, in
+                # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
+                # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
+                # incoming one (`_parked_cap_mb`, a unified device under the Triton engine).
+                _mult = target.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
+                _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
+                part = _cutter.partition(segment_budget, max_arena_bytes=_arena_cap,
+                                         parked_cap_bytes=_parked_cap)
                 if part.fits and len(part.segments) < 2 and comp_name not in promoted:
                     # ONE piece. A component is streamed because the whole rungs cannot hold it
                     # (`_whole_component_mb` over the usable rung — the arena's activation figure);
@@ -5925,7 +6081,8 @@ class PrismSolver:
                     # the halves alone to the factor made the cut a function of which path reached
                     # it, and a bigger rung refused what a smaller one planned (Ming-Lite-Omni-1.5's
                     # vision tower on the Mac's profile: 12 288 refused, 11 264 planned).
-                    _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2))
+                    _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2),
+                                                max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap)
                     if not (_halves.fits and len(_halves.segments) >= 2):
                         return _no(f"'{comp_name}' fits in ONE segment of {segment_budget / _mb:.0f} MB and "
                                    f"cannot be cut in two (" + (_halves.refusal or "one piece") + ")",
@@ -6735,6 +6892,8 @@ class PrismSolver:
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():
+            tried_str += f"\n  not held whole: {_why}"
         _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
         for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
             _why_untiled = _why_by_rung.get(_rung, {})
