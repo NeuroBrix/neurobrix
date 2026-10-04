@@ -35,6 +35,9 @@ def rig(monkeypatch, tmp_path):
     tuner = _Tuner()
     monkeypatch.setattr(atc, "_autotuners", lambda: iter([("neurobrix.kernels.ops.fake.fake_kernel", tuner)]))
     monkeypatch.setattr(atc, "_arch_fingerprint", lambda: "cuda-70")
+    # the generator too, as the arch: on a host with no visible device it cannot be named, and an
+    # unnamed generator has no artifact (91672434) — the rig would then test nothing but that refusal
+    monkeypatch.setattr(atc, "_running_generator", lambda: "triton 3.8.0 cuda-70")
     monkeypatch.setattr(atc, "_DIR", str(tmp_path / "replay"))     # never the real machine cache
     atc._TIMINGS.clear()
     return tuner, tmp_path
