@@ -218,13 +218,73 @@ class LayerPartitioner:
 
     # -- the partition ----------------------------------------------------
 
-    def partition(self, budget_bytes: int) -> Partition:
+    def partition(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                  parked_cap_bytes: Optional[float] = None) -> Partition:
+        """The cut `_greedy` takes, held to `budget_bytes` at every piece CHANGE as well when the
+        allocator parks a freed arena (`parked_cap_bytes`; None: it parks nothing the next load
+        cannot take back, the plan is the greedy one).
+
+        A piece's arena freed into the Triton allocator's pool stays allocated, parked, when it is
+        at most the pool's cap (`DeviceAllocator.free`, `memory.alloc_pool_parked_cap_fraction` of
+        the device; `math.inf` where the cap is unbounded), and the next piece's arena takes it back
+        only when it lies in [w, 2w] of that request (`_pool_take`). A discrete card's driver
+        refuses an allocation it cannot serve and the pool is flushed and the request retried; a
+        unified device serves it beside the parked block. So at each change — the step's
+        wrap-around included, the last piece to the first — the device holds the incoming arena,
+        the outgoing one when it parks and is not taken back, and the activations live across the
+        cut. Measured on the Mac (deepseek-moe-16b-chat, 2026-10-04): the last piece's 4.5 GB
+        parked while the first one's arena allocated, 13.5 GB live against an 11.3 GB plan.
+
+        Cut again at the budget less the overshoot until every change fits, or the cut refuses."""
+        part = self._greedy(budget_bytes, max_arena_bytes)
+        if parked_cap_bytes is None or not part.fits:
+            return part
+        cut_at = budget_bytes
+        while True:
+            change = self._change_peak(part.segments, parked_cap_bytes)
+            over = change - budget_bytes
+            if over <= 0:
+                part.peak_resident_bytes = max(part.peak_resident_bytes, change)
+                return part
+            cut_at -= over
+            again = self._greedy(cut_at, max_arena_bytes)
+            if not again.fits:
+                again.refusal = (
+                    f"the piece changes peak at {change / (1024*1024):.1f} MB against the "
+                    f"{budget_bytes / (1024*1024):.1f} MB budget once the outgoing arena stays "
+                    f"parked in the allocator's pool beside the incoming one, and cutting smaller "
+                    f"to make room refuses: " + again.refusal)
+                return again
+            part = again
+
+    @staticmethod
+    def _change_peak(segments: List[Segment], parked_cap_bytes: float) -> int:
+        """The most a piece change holds: the incoming arena, the outgoing one when the pool parks
+        it (at most `parked_cap_bytes`) and the incoming request does not take it back (it lies in
+        [w, 2w] of that request), and the activations live across the cut — every consecutive
+        pair, the last piece to the first included. One piece: no change."""
+        if len(segments) < 2:
+            return 0
+        peak = 0
+        for i, out in enumerate(segments):
+            inc = segments[(i + 1) % len(segments)]
+            taken_back = inc.weight_bytes <= out.weight_bytes <= 2 * inc.weight_bytes
+            parked = out.weight_bytes if (out.weight_bytes <= parked_cap_bytes and not taken_back) else 0
+            peak = max(peak, inc.weight_bytes + parked + out.live_bytes_at_exit)
+        return peak
+
+    def _greedy(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
         """Greedy left-to-right: extend while the segment's weights fit.
 
         Greedy is right here because the order is fixed — the engine replays
         it — so the only freedom is where to cut, and taking as much as fits
         before each cut minimises the number of loads. It is not an
         optimisation problem with a better answer hiding in it.
+
+        `max_arena_bytes` bounds one segment's weights on their own: they are
+        ONE allocation when the piece loads (its arena), and a device grants a
+        single allocation only up to its largest one (the profile's
+        `max_allocation_mb`). None: the device grants its whole memory in one.
         """
         curve = self.live_activation_curve()
         peak_live = max(curve) if curve else 0
@@ -236,6 +296,11 @@ class LayerPartitioner:
         # this method. The number this returns is the number the strategy
         # promises, so it has to be the one that is actually held.
         weight_budget = budget_bytes - peak_live
+        arena_bound = ""
+        if max_arena_bytes is not None and max_arena_bytes < weight_budget:
+            weight_budget = int(max_arena_bytes)
+            arena_bound = (f" (one segment's weights are one allocation, bounded by the "
+                           f"device's largest: {max_arena_bytes / (1024*1024):.1f} MB)")
         if weight_budget <= 0:
             return Partition(
                 segments=[], total_weight_bytes=0, peak_resident_bytes=0,
@@ -271,7 +336,7 @@ class LayerPartitioner:
                         f"{weight_budget / (1024*1024):.1f} MB left for "
                         f"weights once activations are reserved "
                         f"({peak_live / (1024*1024):.1f} MB of a "
-                        f"{budget_bytes / (1024*1024):.1f} MB budget). "
+                        f"{budget_bytes / (1024*1024):.1f} MB budget){arena_bound}. "
                         f"A cut cannot "
                         f"run half an op, so no partition of this graph "
                         f"fits. Serving it needs the op's own weights "
