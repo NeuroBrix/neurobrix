@@ -2201,8 +2201,7 @@ sound.
 It was not sound. The census's own merged report named the casualties an hour later: six
 models — `whisper-large-v3-turbo`, `orpheus-3b-0.1-ft-snac`, `real-esrgan-x2/x4/x8`,
 `TinyLlama-1.1B-Chat-v1.0` — every one of them `SyntaxError: invalid syntax` at
-`census.py:397`, `<<<<<<< HEAD`, all stamped 02:45. A seventh of the catalogue, silently
-missing from a census that was about to feed certification on four cards.
+`census.py:397`, `missing from a census that was about to feed certification on four cards.
 
 **What would it have done if the code were wrong?** Printed nothing, exactly as it did when
 the code WAS wrong — the check could not distinguish "no damage" from "no files read".
@@ -3719,6 +3718,7 @@ beside it unread. The fix states the runtime's rule and the `NBX_AUTOTUNE_ANY_GE
 override in the help; the RED LINES of 2026-09-28 20:06 (release-decisions) make the runtime's
 door the only truth: a confirmation run is certified-only, and a miss is an error, never a sweep.
 
+<<<<<<< HEAD
 ### 119 — a cell pinned the estimator's figure as "the measurement", and the figure held a phantom
 
 `test_the_LM_and_its_head_together_exceed_the_Macs_rung` (register 104's repair) asserted that
@@ -3742,3 +3742,24 @@ flow declares none, so it is re-read the day it does.
 
 **The lesson, in one line.** A figure the planner computed is the planner's claim; a cell that
 calls it a measurement must hold a byte someone read off the device.
+### 120 — a test replaced the flag reader, so it could not see that the census never registered the flags
+
+(119 is taken on `a-component-over-the-rung-streams-inside-itself`.)
+
+**Gate**: `tests/unit/prism/test_the_plan_binds_what_the_flow_runs.py::test_the_vace_control_encoder_runs_the_pair`.
+It monkeypatches `registry_flags.get_component_flag` to answer `vace_control_conditioning = True`.
+
+**What the gate said about the defect**: green. The real reader answers from `nbx.component_flags`, a
+table filled only when a container is opened. The run opens the container; the derived census builds
+`FlowBindings` without opening it, so every flag read through the bindings answered its default.
+Wan2.1-VACE's control encoder was keyed at batch 1, while the run feeds it the (inactive, reactive)
+pair at batch 2. The miss was measured by the Mac's zero-miss gate (2026-10-04 19:19,
+`aten.convolution::0`, conv2d_forward (2, 3, 162, 162, ...)). `zero_pad_embeddings` in `text_axes` was
+read the same way.
+
+**Repair.** `FlowBindings` registers the flags of the topology it is built from.
+`test_the_flow_bindings_read_their_containers_flags.py` keeps the real reader and an empty table. It
+goes red when the registration is removed.
+
+**The lesson, in one line.** A test that replaces the reader proves the rule, not that the rule
+reaches its data; keep the real reader and starve its table.
