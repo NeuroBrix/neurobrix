@@ -81,11 +81,11 @@ class VAEComponentHandler(ComponentHandler):
         if not _is_tensor(latent):
             return inputs
 
-        # Seam diagnostic (NBX_DEBUG): confirm latent denormalization actually
-        # fires for this VAE and moves the per-channel std toward config
-        # latents_std (a coherent video needs the loop output un-normalized
-        # before decode; a silently-skipped denorm decodes mis-scaled latents
-        # into texture).
+        # Seam diagnostic (NBX_DEBUG): the latent as it enters and leaves this
+        # handler. It arrives already in the decoder's space when the VAE
+        # declares statistics (the flow's affine); here only scaling_factor
+        # may change it, so "in" and "out" differ only by that factor — a
+        # difference beyond it means a second owner of the affine is back.
         import os as _os
         _dbg = _os.environ.get("NBX_DEBUG") == "1"
         if _dbg and is_torch_tensor(latent):
@@ -114,11 +114,9 @@ class VAEComponentHandler(ComponentHandler):
             latent = latent / scaling_factor
 
         if _dbg and is_torch_tensor(latent):
-            _ls = self.config.get("latents_std")
             print(f"[VAE-SEAM] out  shape={list(latent.shape)} "
                   f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
-                  f"(config latents_std[0:3]={_ls[:3] if isinstance(_ls, list) else _ls}, "
-                  f"scaling_factor={self.config.scaling_factor})")
+                  f"(scaling_factor={self.config.scaling_factor})")
 
         inputs[latent_key] = latent
         return inputs
