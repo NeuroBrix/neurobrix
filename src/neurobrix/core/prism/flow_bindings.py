@@ -58,6 +58,14 @@ class FlowBindings:
         # the name the container registers its flags under: its MANIFEST model_name, never the
         # name the request used (a path, an alias)
         self.container_name = container_name
+        # The flags this flow reads (`vace_control_conditioning`, `zero_pad_embeddings`) are the
+        # CONTAINER's, registered in `nbx.component_flags` when a container is opened: the bindings
+        # register them from the topology they are built from, so a reader that never opens the
+        # container (the derived census) binds what the run binds — unregistered, every flag read
+        # here answered its default and the census priced VACE's control encoder at batch 1.
+        if container_name:
+            from neurobrix.nbx import component_flags
+            component_flags.register(container_name, self.topology.get("extracted_values"))
         self.tp_components = set(tp_components or ())
         self.flow = self.topology.get("flow") or {}
         self._graphs: Dict[str, Dict[str, Any]] = {}
