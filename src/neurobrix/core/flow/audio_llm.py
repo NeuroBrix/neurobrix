@@ -20,6 +20,21 @@ from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
 
+# A token table and the context it feeds may live on different devices: under a
+# host placement of the language model (granite-speech on a 16 GB card) the
+# table is on the CPU while the context is on the GPU, and torch refuses an op
+# across devices — the prompt's lookup (calibration campaign, 2026-09-05), the
+# join (Voxtral-Mini-3B on mps, 2026-09-21), then the decode step's lookup
+# (granite-speech compiled on 16 GB, 2026-10-04). So every table op runs where
+# the table lives and its result joins where the context lives; each `.to` is a
+# no-op when the devices agree, and the table itself never moves.
+def project_on_table(hidden: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
+    """``hidden @ table.T`` in ``hidden``'s dtype, computed on the table's device,
+    returned on ``hidden``'s."""
+    w = table.to(dtype=hidden.dtype)
+    return torch.matmul(hidden.to(device=w.device), w.T).to(device=hidden.device)
+
+
 @register_flow("audio_llm")
 class AudioLLMEngine(FlowHandler):
     """
@@ -314,13 +329,11 @@ class AudioLLMEngine(FlowHandler):
             executor = self.ctx.executors["lm_head"]
             for key, tensor in executor._weights.items():
                 if tensor is not None and tensor.ndim == 2:
-                    w = tensor.to(dtype=last_hidden.dtype)
-                    return torch.matmul(last_hidden, w.T)
+                    return project_on_table(last_hidden, tensor)
             return last_hidden
 
         if logits_source == "embed_weight_tied" and embed_weight is not None:
-            w = embed_weight.to(dtype=last_hidden.dtype)
-            return torch.matmul(last_hidden, w.T)
+            return project_on_table(last_hidden, embed_weight)
 
         return last_hidden
 

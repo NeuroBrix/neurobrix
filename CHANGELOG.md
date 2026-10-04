@@ -199,6 +199,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
   written their own value. An unconfigured count stops with a message naming both places.
 
+### Fixed — granite-speech transcribes on a 16 GB card in the PyTorch engine
+
+- **Speech models whose language model is placed in host memory no longer stop at their first
+  generated token.** On a card too small to hold the language model, granite-speech-3.3-8b failed
+  with a device mismatch as soon as it generated a token; every token lookup and the final
+  projection now run where the token table lives.
+
 ### Added
 
 - The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
