@@ -244,6 +244,8 @@ def load_profile(hardware_id: str) -> PrismProfile:
             # None when the profile is silent, so DeviceSpec falls back to
             # the architecture mapping rather than assuming "discrete".
             unified_memory=d_data.get("unified_memory"),
+            # None when the profile is silent: no single-allocation limit below the device's memory.
+            max_allocation_mb=d_data.get("max_allocation_mb"),
         ))
 
     # Parse Interconnect Topology
