@@ -476,6 +476,16 @@ def test_the_rnnt_window_is_the_family_profiles_value():
             rnnt_feed_plan(1101, {k: v for k, v in lf.items() if k != missing}, SR, HOP)
 
 
+def test_a_declared_window_other_than_the_traces_is_the_one_run():
+    """The family value (30 s) lands on the encoder's trace extent (3 000 frames); a declared 20 s
+    window tells the profile's value from the trace's — a window read from the trace runs 3 000."""
+    from neurobrix.core.module.audio.stt_longform import rnnt_feed_plan, rnnt_window_frames
+    lf = {"rnnt_window_seconds": 20, "rnnt_overlap_seconds": 2}
+    assert rnnt_window_frames(lf, SR, HOP) == (2000, 200)
+    assert rnnt_feed_plan(2000, lf, SR, HOP) == ([(0, 2000)], 0)
+    assert rnnt_feed_plan(2500, lf, SR, HOP) == ([(0, 2000), (1800, 700)], 200)
+
+
 # ---------------------------------------------------------------------------------------------
 # the generic audio front ends (audio_llm / encoder_decoder / audio flows), both engines
 # ---------------------------------------------------------------------------------------------
