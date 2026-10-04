@@ -186,11 +186,13 @@ def test_the_engines_real_gate_is_wired_and_refuses_a_deviation_above_tolerance(
     assert "depthwise_conv2d_kernel.fp16.json" not in names   # the fixture's stand-in k.fp32.json is refused too, rightly
 
 
-def test_pushes_are_batched_to_one_per_window_and_the_final_one_waits_for_it(repo):
-    """Commits every interval, pushes at most once per `push_interval`; the final checkpoint waits for the window
-    to open rather than leave a commit only where it was written. Why: the owner's account was suspended twice for
-    automated pushes; on 2026-09-28 this tool pushed a working branch four times in an hour (supervisor 05:41).
-    Seen red on the tool that pushed at every checkpoint (the run ended in under 3 s, every commit pushed at once)."""
+def test_pushes_are_batched_to_one_per_window_and_the_final_one_does_not_wait(repo):
+    """Commits every interval, pushes at most once per `push_interval`; a final checkpoint inside the window
+    commits and returns at once, recorded as not pushed — the next run whose window is open carries it. Why: the
+    owner's account was suspended twice for automated pushes (supervisor 05:41, 2026-09-28: one push per 30 min
+    per repository); and a final checkpoint that slept out the window held a chain's GPU idle for the whole window
+    (13 minutes on 2026-09-28 09:31). Seen red on the tool that pushed at every checkpoint (every commit pushed at
+    once), and red again on the tool whose final checkpoint waited (this run took the whole window)."""
     import threading, time
     p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2.6)"])
     def writer():
@@ -200,15 +202,16 @@ def test_pushes_are_batched_to_one_per_window_and_the_final_one_waits_for_it(rep
     threading.Thread(target=writer, daemon=True).start()
     t0 = time.monotonic()
     rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [p.pid], interval=1.0, remotes=["origin", "gitlab"],
-                gate_cmd=repo["gate"], trailers=[], record=None, poll=0.2, say=lambda *_: None, push_interval=4.0)
+                gate_cmd=repo["gate"], trailers=[], record=None, poll=0.2, say=lambda *_: None, push_interval=30.0)
     elapsed = time.monotonic() - t0
     assert rc == 0
     commits = [l for l in _sh("git", "-C", repo["path"], "log", "--format=%h %s").splitlines() if "checkpoint" in l]
     assert len(commits) >= 2, commits
-    head = _head(repo["path"])
-    assert _remote_head(repo["tmp"], "origin") == head and _remote_head(repo["tmp"], "gitlab") == head, \
-        "the final commit did not reach every remote"
-    assert elapsed >= 4.0, f"the run ended in {elapsed:.1f} s: pushes were not held to one per 4 s window"
+    pushed = _remote_head(repo["tmp"], "origin")
+    assert pushed == _remote_head(repo["tmp"], "gitlab") and pushed in _sh("git", "-C", repo["path"], "log", "--format=%H"), \
+        "the first checkpoint's push did not reach every remote"
+    assert pushed != _head(repo["path"]), "a second push happened inside the 30 s window"
+    assert elapsed < 8.0, f"the run took {elapsed:.1f} s: the final checkpoint waited for the window"
 
 
 def test_the_push_window_is_the_repositorys_not_the_process_s(repo):
@@ -219,12 +222,54 @@ def test_the_push_window_is_the_repositorys_not_the_process_s(repo):
     CP.touch_push(repo["path"])                                  # a push of this repository, just now, by someone else
     _write(repo["dir"], "k.fp32.json", 3)
     before = _remote_head(repo["tmp"], "origin")
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    assert rc == 0
+    assert _head(repo["path"]) != before, "the entry was not committed"
+    assert _remote_head(repo["tmp"], "origin") == before, "the tool pushed inside the repository's window"
+    # a later run whose window is open carries it
+    CP.touch_push(repo["path"], when=time.time() - 60)
+    rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
+                gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
+                push_interval=30.0)
+    assert rc == 0 and _remote_head(repo["tmp"], "origin") == _head(repo["path"]) != before
+
+
+def test_a_final_checkpoint_with_nothing_to_push_does_not_wait_for_the_window(repo):
+    """With nothing to commit and nothing unpushed, the final checkpoint returns at once even inside
+    the push window. Seen red: it slept the whole window (13 minutes behind a certifier that certified
+    nothing on 2026-09-28, the GPU idle)."""
+    import time
+    CP.touch_push(repo["path"])                                  # the window is closed for 30 s
     t0 = time.monotonic()
     rc = CP.run(repo["path"], "src/neurobrix/config/autotune", [], interval=1.0, remotes=["origin", "gitlab"],
                 gate_cmd=repo["gate"], trailers=[], record=None, once=True, poll=0.2, say=lambda *_: None,
-                push_interval=3.0)
+                push_interval=30.0)
     elapsed = time.monotonic() - t0
     assert rc == 0
-    assert elapsed >= 2.5, f"the final checkpoint pushed after {elapsed:.1f} s: it did not wait for the repository's window"
-    assert _remote_head(repo["tmp"], "origin") == _head(repo["path"]) != before
-    assert CP.last_push_time(repo["path"]) >= t0 - 1
+    assert elapsed < 5.0, f"the final checkpoint waited {elapsed:.1f} s with nothing to push"
+
+
+def test_the_checkpoint_stamp_is_the_machines_local_clock_and_names_its_zone(repo):
+    """The checkpointer's log said `15:41:13` for a push made at 17:41:13 CEST (2026-09-28): the stamp
+    came from `time.gmtime()` and carried no zone. The fleet reads Madrid local time; UTC only where a
+    format demands it, and then labelled. Red under the old stamp: with TZ=Asia/Tokyo the stamp's hour
+    is UTC's (nine hours off the local clock) and no zone name is printed."""
+    import time
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Tokyo"; time.tzset()
+    try:
+        said = []
+        CP.checkpoint(repo["path"], "src/neurobrix/config/autotune", ["origin"], repo["gate"], [],
+                      say=lambda *a: said.append(" ".join(str(x) for x in a)))
+        line = next(s for s in said if s.startswith("== checkpoint"))
+        local_hour = time.strftime("%H", time.localtime())
+        assert f"checkpoint {local_hour}:" in line, line
+        assert "JST" in line, line
+    finally:
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()

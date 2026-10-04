@@ -145,3 +145,15 @@ last, and their tables are that derivation's test data.
 
 **Release consequence.** A pass reports how many keys were re-proven, swept, and why; no key is certified on a drifting
 witness and none is left uncertified without its retry.
+
+## 2026-09-29 13:45 — the owner's method restated (the supervisor's inbox entry 69)
+
+ZERO hacks, ZERO hardcode, data-driven. Universality is ONE code that runs every model with the values carried by
+the data: the `.nbx` configs, the hardware profiles, the family profiles. Forge embeds them from the registries;
+the model registry (`forge/config/model_registry.yml`) may be extended with any value a model needs to execute,
+each with its source. No compute wasted, no errors, problems treated at the source. The tools that census,
+compute certificates and run the anti-regression are named as the origin of many problems: the Dell writes their
+contracts and tests, one implementation for both machines; the Mac reviews what arrives on the peer channel
+against Metal. Raised by the day's measurements: a settle step written around Prism's host reading (removed, the
+reading fixed at the source, `e8998f58`), a census walk whose dtype placement was the door's (Voxtral), and a
+zero-miss column read as a judged image (renamed; images judged from outside).
