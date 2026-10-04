@@ -63,7 +63,7 @@ def test_the_reserve_counts_nothing_of_other_phases_and_totals_of_its_own(monkey
     got = s._resident_beside_streamed(None, comps, {"transformer"})
     assert got == m["transformer_2"].total_bytes
     # a flow that declares no phases: every component concurrent, as before
-    monkeypatch.setattr(s, "_flow_topology", lambda c: {"flow": {"type": "vlm"}})
+    monkeypatch.setattr(s, "_flow_topology", lambda c: {"flow": {"type": "dual_ar"}})
     got = s._resident_beside_streamed(None, comps, {"text_encoder"})
     assert got == sum(mm.total_bytes for n, mm in comps if n != "text_encoder")
 

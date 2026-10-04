@@ -763,13 +763,14 @@ class PrismSolver:
         the triton engine releases its language model before its decoder loads, so a single run
         never holds the two together. The cache this check sizes is in no phase — its buffers
         outlive the language model (triton/kv_cache.py `clear`) — so it is held against the dearest
-        phase, whichever that is. A flow that declares no phases keeps the SUM of every component —
-        the bound that holds whatever it keeps: the VLM decode loop keeps the LM and its head
-        together with its towers (MiniCPM-o: 17 856 MB against the Mac's 16 384 rung — a MAX would
-        have accepted it, registers 104 and 119), the speech legs load their talker groups beside or
-        after the LM, and the triton dual_ar flow loads its quantizer with the model still resident
-        where the compiled one unloads first; each waits on its own handlers being read into a
-        phase function. A strategy that does not load on demand keeps the SUM: nothing unloads.
+        phase, whichever that is. The VLM flow runs each tower and projection alone and decodes with
+        the LM, its head and its speech leg together (MiniCPM-o: 16 247 MB of decode phase where
+        the SUM counted 18 119, its 1 872 MB of towers never beside the LM — a MAX over single
+        components would have accepted far less, registers 104 and 119). A flow that declares no
+        phases keeps the SUM of every component — the bound that holds whatever it keeps: the
+        triton dual_ar flow loads its quantizer with the model still resident where the compiled one
+        unloads first, and waits on its handlers being read into a phase function. A strategy that
+        does not load on demand keeps the SUM: nothing unloads.
 
         Combined only after every cost is known, so the result does not depend on the order the
         components are visited in — an in-loop `max(total, x)` beside `total += y` did.

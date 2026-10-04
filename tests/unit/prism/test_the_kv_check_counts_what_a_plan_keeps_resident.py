@@ -12,10 +12,10 @@ WHY SUM, EVEN FOR `lazy_sequential` AND `cpu_streaming`. They LOAD one component
 stays resident is the FLOW's decision. The VLM decode loop keeps the LM and its head together, the
 speech legs load their talker groups beside or after the LM, the triton dual_ar flow loads its
 quantizer with the model still resident. A MAX (the strategies' docstrings) over-accepted MiniCPM on
-the Mac — its LM, its head and the towers the flow keeps beside them are over the rung (registers
-104, 119). The SUM is the bound that holds for every flow that declares no phases; a flow whose
-handlers were read into `core/flow/base.py RESIDENT_PHASES` is held to what it keeps with the cache
-(`test_a_model_that_fits_whole_is_planned_whole.py`).
+the Mac (registers 104, 119). The SUM is the bound that holds for every flow that declares no
+phases; a flow whose handlers were read into `core/flow/base.py RESIDENT_PHASES` is held to what it
+keeps with the cache (`test_a_model_that_fits_whole_is_planned_whole.py`) — the vlm flow since
+2026-10-04: each tower and projection alone, then the LM, its head and the speech leg together.
 
 The machine is built (register 102): hand-built components where the answer is known exactly, a
 pinned Mac or a pinned V100 for the plan cells.
@@ -126,28 +126,38 @@ def _plan_mac(monkeypatch):
     return p, refusal, s, seen, c
 
 
-def test_the_LM_its_head_and_the_towers_beside_them_exceed_the_Macs_rung(monkeypatch):
+def test_the_decode_phase_holds_the_LM_its_head_and_the_speech_leg_and_no_tower(monkeypatch):
     """The measurement register 104 rests on, from the solver's own estimate and the flow's own
-    lifecycle — re-read 2026-10-04 (register 119). This cell pinned "MiniCPM's persistent pair alone
-    is over the rung" at 16 516.2 MB; 1 192 MB of that was the head's transposed weight priced as an
-    activation, which the Triton engine never allocates (profiler.weight_transposes_read_in_place).
-    The pair is 15 179 MB, UNDER
-    the 16 384 rung. What exceeds it is what the vlm flow keeps with the pair — the flow declares no
-    phases, so every component: 17 856 MB. The SUM still refuses the whole strategies; a MAX, or the
-    pair alone, would accept them."""
+    lifecycle — re-read 2026-10-04 (register 119), then again when the vlm flow declared its phases.
+    Both engines' handlers (core/flow/vlm.py, triton/flow/vlm.py, all three paths) run each tower and
+    each projection once and unload it before the next stage unless the session is persistent — an
+    EAGER served plan, which reads no phases — then decode with the LM and its head together, the
+    CFM speech leg loading its talker groups beside the still-loaded LM. So the towers are never
+    beside the LM: the SUM of every component (18 119 MB here) counted 1 872 MB no moment holds. The
+    decode phase — the LM, its head, every speech component — is what the check holds, and the pair
+    alone (the first form of this cell, 16 516 MB with a phantom transposed head) is under it."""
     _, _, s, seen, c = _plan_mac(monkeypatch)
-    persistent, _ = s._classify_lifecycle(c)
-    together = sum(m.total_bytes for n, m in seen.items() if n in persistent) / MB
-    everything = sum(m.total_bytes for m in seen.values()) / MB
+    flow = s._flow_topology(c)["flow"]
+    vlm, speech = flow["vlm"], set(flow["speech"]["components"].values())
+    towers = {vlm[k] for k in ("vision_component", "vision_projection_component",
+                               "audio_component", "audio_projection_component")}
+    decode = {vlm["lm_component"], vlm["head_component"]} | speech
+    phases = s._flow_phases(c)
+    assert sorted(map(sorted, phases)) == sorted([[t] for t in towers] + [sorted(decode)]), phases
+    assert set(seen) == towers | decode, ("every component in a phase", sorted(set(seen) ^ (towers | decode)))
+    mb = lambda names: sum(seen[n].total_bytes for n in names) / MB
     rung = s._effective_capacity_mb(s._prepare_devices(profile(APPLE_M4_PRO))[0])
-    assert persistent and together < rung < everything, (sorted(persistent), together, rung, everything)
-    assert s._flow_phases(c) is None      # the day the vlm flow declares phases, this cell is re-read
+    pair = mb({vlm["lm_component"], vlm["head_component"]})
+    assert pair < mb(decode) < rung < mb(seen), (pair, mb(decode), rung, mb(seen))
+    peak = s._phase_peak(c, {n: m.total_bytes for n, m in seen.items()}) / MB
+    assert peak == mb(decode), (peak, mb(decode))
 
 
 def test_and_the_whole_strategies_are_refused_on_it_while_the_lm_streams(monkeypatch):
-    """The KV check's arithmetic still refuses every strategy that keeps the LM whole — and the plan no
-    longer stops there: the owner's rule (restated 2026-10-03 22:35: the engine never refuses; the LM
-    streams its layers inside the rung) — the LM, owner of the cache, is streamed. Until
+    """The idle Mac does not hold MiniCPM whole: its decode phase passes the KV check at the 16 384
+    rung (2026-10-04, the vlm phases), but the plan's host side does not fit the memory free, and at
+    the rung below the LM, owner of the cache, is streamed — the owner's rule (restated 2026-10-03
+    22:35: the engine never refuses; the LM streams its layers inside the rung). Until
     a-streamed-plan-states-its-window this cell asserted the refusal 'No strategy can fit model + KV cache'."""
     p, refusal, s, _seen, c = _plan_mac(monkeypatch)
     assert refusal is None and p.strategy == "layer_streaming", (getattr(p, "strategy", None), (refusal or "")[:200])
@@ -163,7 +173,8 @@ def test_cpu_streaming_sizes_its_cache_against_the_host_it_runs_on(monkeypatch):
     on the Mac, where host rung and GPU rung are the same 16 384 MB, and passed with the defect
     injected (register 103) — a dedicated V100-16GB (rung 15 564.8) beside a host with 22 000 MB
     free (rung 20 480), in serve mode, where the cache grows to whatever budget it is judged by.
-    The held figure is every component (the SUM, as the check counts it) plus the cache."""
+    The held figure is what the check counts — cpu_streaming loads on demand, so the flow's dearest
+    phase (the vlm decode phase since 2026-10-04; the SUM of every component before) — plus the cache."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 257530, 22000, "a host with 22 000 MB free")
     pin_dedicated_card(monkeypatch, 16151, 306, "a dedicated V100-16GB")
@@ -175,7 +186,9 @@ def test_cpu_streaming_sizes_its_cache_against_the_host_it_runs_on(monkeypatch):
     host = s._host_budget_mb(profile(V100_16GB))
     gpu = s._effective_capacity_mb(s._prepare_devices(profile(V100_16GB))[0])
     lm, kv_est = s._lm_component_name, s._estimate_kv_cache_bytes(c, s._target_dtype_str)
-    held = sum(m.total_bytes - (kv_est if n == lm else 0) for n, m in p.component_memory.items()) / MB
+    assert s._loads_on_demand(p.strategy) and s._flow_phases(c), "precondition: the check reads the phases"
+    held = s._phase_peak(c, {n: m.total_bytes - (kv_est if n == lm else 0)
+                             for n, m in p.component_memory.items()}) / MB
     kv = p.kv_cache_plan.memory_bytes / MB
     assert host > gpu, ("precondition: the host budget must exceed the GPU rung", host, gpu)
     assert held + kv <= host + 1e-6, (held, kv, host)

@@ -92,10 +92,12 @@ def test_the_cascade_refusal_names_every_strategy_it_tried_and_why_streaming_dec
 
 
 def test_minicpm_on_the_idle_mac_is_streamed_not_refused(monkeypatch):
-    """Every whole-component candidate is rejected by the KV check (the LM and head alone are over
-    the rung, register 104), and every component fits the rung ALONE: the streaming rung used to be
-    offered nothing ("the streamed []") and the solve refused. The owner's rule — the engine never
-    refuses — holds since a-streamed-plan-states-its-window: the largest component is streamed."""
+    """Every component fits the rung ALONE, and no plan keeps the LM whole on this machine: the
+    streaming rung used to be offered nothing ("the streamed []") and the solve refused. The owner's
+    rule — the engine never refuses — holds since a-streamed-plan-states-its-window: the largest
+    component is streamed. (Since the vlm flow declared its phases, 2026-10-04, the whole plan passes
+    the KV check at 16 384 and is turned away by its host side, the memory free; the rung below
+    streams.)"""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
@@ -108,9 +110,13 @@ def test_minicpm_on_the_idle_mac_is_streamed_not_refused(monkeypatch):
 def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
     """The same machine, the streaming rung made to decline (a model it cannot cut): the refusal that
     follows the KV check must name every rejection it recorded and the decline — it once said only 'No
-    strategy can fit', its rejections printed by a different refusal never reached after scoring."""
+    strategy can fit', its rejections printed by a different refusal never reached after scoring.
+    The rung is imposed at 15 360: since the vlm flow declared its phases (2026-10-04) MiniCPM's
+    decode phase (16 247 MB with its cache estimate) passes the check at the idle Mac's 16 384, and
+    15 360 is the rung where every whole candidate is scored and then rejected by it (14 336 already
+    refuses them at scoring, before the check this cell reads)."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
-    monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
+    impose_rung(monkeypatch, 15360)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
 
     def declines(self, *a, **k):
