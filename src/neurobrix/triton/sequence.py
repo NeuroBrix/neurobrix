@@ -13,6 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.kernels.dispatch import dispatch
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
@@ -241,17 +242,10 @@ class SymbolArg:
 
 
 @dataclass(frozen=True)
-class ProductArg:
-    """Product of symbolic factors (e.g., s0 * s1 * 256)."""
-    factors: Tuple[Any, ...]
-    trace_value: int
-
-
-@dataclass(frozen=True)
 class ExprArg:
-    """Symbolic expression tree (floordiv, add, sub, mul, mod, neg)."""
+    """Symbolic expression tree of the shared vocabulary (core/runtime/symexpr.py)."""
     expr_dict: dict
-    trace_value: int
+    trace_value: Any            # int for an extent, float for a real bound
 
 
 # ============================================================================
@@ -2667,22 +2661,8 @@ class TritonSequence:
                 offset = arg.get("offset", 0)
                 return SymbolArg(symbol_id=symbol_id, trace_value=trace_value, offset=offset)
 
-            if arg_type == "product":
-                factors_raw = arg.get("factors", [])
-                trace_value = arg.get("trace_value", 0)
-                compiled_factors = []
-                for f in factors_raw:
-                    if isinstance(f, dict) and f.get("type") == "symbol":
-                        compiled_factors.append(f.get("symbol_id") or f.get("id") or f.get("name"))
-                    elif isinstance(f, dict):
-                        compiled_factors.append(f.get("value", f.get("trace_value", 0)))
-                    elif isinstance(f, str):
-                        compiled_factors.append(f)
-                    else:
-                        compiled_factors.append(f)
-                return ProductArg(factors=tuple(compiled_factors), trace_value=trace_value)
-
-            if arg_type in ("floordiv", "add", "sub", "mul", "mod", "neg"):
+            # An expression of the shared vocabulary (core/runtime/symexpr.py), integer or real
+            if _symexpr.is_expression(arg):
                 trace = arg.get("trace", arg.get("trace_value", 0))
                 return ExprArg(expr_dict=arg, trace_value=trace)
 
@@ -2776,8 +2756,10 @@ class TritonSequence:
         resolvers = tuple(self._make_single_resolver(v) for v in compiled_kwargs.values())
         return lambda arena: {k: r(arena) for k, r in zip(keys, resolvers)}
 
-    def _make_single_resolver(self, arg: Any) -> Callable:
-        """Create a resolver closure for a single compiled arg."""
+    def _make_single_resolver(self, arg: Any, slot: str = _symexpr.SCALAR) -> Callable:
+        """Create a resolver closure for a single compiled arg. `slot` is the slot an
+        expression is evaluated for: SCALAR for a top-level argument, SHAPE for a list
+        element (core/runtime/symexpr.py) — the mirror of compiled_sequence."""
         if isinstance(arg, TensorSlot):
             s = arg.slot
             return lambda arena, s=s: arena[s]
@@ -2789,10 +2771,8 @@ class TritonSequence:
             return lambda _arena, dt=dt: dt
         elif isinstance(arg, SymbolArg):
             return self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
-        elif isinstance(arg, ProductArg):
-            return self._make_product_resolver(arg.factors, arg.trace_value)
         elif isinstance(arg, ExprArg):
-            return self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+            return self._make_expr_resolver(arg.expr_dict, arg.trace_value, slot)
         elif isinstance(arg, ListArg):
             return self._make_list_resolver(arg.items)
         else:
@@ -2801,7 +2781,7 @@ class TritonSequence:
 
     def _make_list_resolver(self, items: Tuple[Any, ...]) -> Callable:
         """Generate resolver for list arguments (recursive)."""
-        item_resolvers = tuple(self._make_single_resolver(item) for item in items)
+        item_resolvers = tuple(self._make_single_resolver(item, _symexpr.SHAPE) for item in items)
         return lambda arena, rs=item_resolvers: [r(arena) for r in rs]
 
     # ========================================================================
@@ -2821,33 +2801,17 @@ class TritonSequence:
             _refuse_unbound(r, symbol_id, trace_value)
         return resolve
 
-    def _make_product_resolver(self, factors: Tuple[Any, ...],
-                               trace_value: int) -> Callable:
-        """Closure that computes product of symbolic factors at runtime."""
-        def resolve(_arena):
-            r = self._symbol_resolver
-            result = 1
-            for f in factors:
-                if isinstance(f, str):
-                    if r is None or not r.is_bound(f):
-                        _refuse_unbound(r, f, trace_value)
-                    result *= r.get(f)
-                elif isinstance(f, (int, float)):
-                    result *= int(f)
-                else:
-                    raise RuntimeError(
-                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
-                        f"resolved at runtime (trace value {trace_value})")
-            return result
-        return resolve
-
-    def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable:
-        """Closure that evaluates expression tree at runtime."""
+    def _make_expr_resolver(self, expr_dict: dict, trace_value: int,
+                            slot: str = _symexpr.SHAPE) -> Callable:
+        """Closure that evaluates an expression tree at runtime, through the ONE evaluator
+        (core/runtime/symexpr.py), in `slot`: SHAPE refuses a real by name, SCALAR takes it."""
         def resolve(_arena):
             r = self._symbol_resolver
             if r is None:
                 _refuse_unbound(None, str(expr_dict)[:80], trace_value)
-            return r.resolve(expr_dict)     # an unbound factor refuses by name inside
+            if slot == _symexpr.SCALAR:
+                return r.resolve_scalar(expr_dict)   # an unbound factor refuses by name inside
+            return r.resolve(expr_dict)
         return resolve
 
     # ========================================================================
