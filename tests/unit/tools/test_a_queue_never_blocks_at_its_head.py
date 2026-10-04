@@ -88,3 +88,24 @@ def test_without_defer_after_a_run_still_waits_for_its_cell(tmp_path, monkeypatc
     ran = _host(tmp_path, monkeypatch, frees_after=50)
     assert R.cmd_run(_args(tmp_path)) == 0
     assert sorted(ran) == ["A", "B", "C"]
+
+
+def test_a_waiting_cell_is_planned_again_against_the_memory_free_now(tmp_path, monkeypatch, capsys):
+    """Prism plans against the memory free when it is asked: DeepSeek-Coder-V2-Lite planned 17 137 MB at 19:30
+    (2026-10-04) with 17 144 MB available, memory then fell to 15 GiB, and the run waited 30 min on that one
+    figure until it was deferred. A plan asked again at 15 GiB is a lower rung's. Before this test: the need
+    is asked once, A never fits, the fake clock runs out."""
+    ran = _host(tmp_path, monkeypatch)
+    asked = []
+
+    def plan(model, mode, gpu, src):     # A's plan at the memory free now: its top rung needs 9, the next one 3
+        asked.append(model)
+        if model != "A":
+            return NEEDS[model], "plan-unified (test)"
+        return (9 * GB if len([m for m in asked if m == "A"]) <= 2 else 3 * GB), "plan-unified (test)"   # the first skip asks twice
+
+    monkeypatch.setattr(R, "plan_host_need", plan)
+    assert R.cmd_run(_args(tmp_path, models="A")) == 0
+    assert ran == ["A"]
+    said = capsys.readouterr().out
+    assert "A triton: planned again" in said and "9.0 GiB -> 3.0 GiB" in said, said

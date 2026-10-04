@@ -275,6 +275,9 @@ PEAK_SAMPLE_S = 1.0
 WAIT_SAY_S = 300.0
 WAIT_POLL_S = 30.0
 DEFERRED_RC = 75          # EX_TEMPFAIL: cells left without a row by --defer-after, named DEFERRED
+#: A waiting cell's plan is asked again this often: Prism plans against the memory free when asked, so a need
+#: planned when more was free is stale once it is not (DeepSeek-Coder-V2-Lite, 2026-10-04 19:30-20:00).
+REPLAN_S = 300.0
 GIB = float(1 << 30)
 
 
@@ -680,15 +683,26 @@ def cmd_run(a) -> int:
     # the cells that fit go first, smallest first; while none fits, every waiting cell is retried, smallest
     # first, each WAIT_POLL_S. With --defer-after, a cell still unadmitted after that long leaves the run
     # without a row, named DEFERRED, and the run ends DEFERRED_RC so its caller can come back to it; without
-    # it the run waits (a gate needs every row). Each skip and retry is written.
-    needs = {}
+    # it the run waits (a gate needs every row). Each skip and retry is written. A waiting cell's plan is asked
+    # again every REPLAN_S (Prism plans against the memory free now), and a changed need is written.
+    needs, planned_at = {}, {}
     deferred_named, skipped_at, said_at = [], {}, None
     defer_after = getattr(a, "defer_after", None)
 
     def need_of(cell):
         if cell not in needs:
-            needs[cell] = cell_need(cell[0], cell[1], a.gpu, out, src)
+            needs[cell], planned_at[cell] = cell_need(cell[0], cell[1], a.gpu, out, src), time.time()
         return needs[cell]
+
+    def plan_again(cell):
+        # a plan's need is asked again of the plan, never shrunk by the harness: an estimate does not move
+        if not needs[cell][1].startswith("plan") or time.time() - planned_at[cell] < REPLAN_S:
+            return
+        old = needs.pop(cell)[0]
+        need_of(cell)
+        if needs[cell][0] != old:
+            print(f"[matrix] {cell[0]} {cell[1]}: planned again at {_mem_available() / GIB:.1f} GiB available — need "
+                  f"{old / GIB:.1f} GiB -> {needs[cell][0] / GIB:.1f} GiB ({needs[cell][1]})", flush=True)
 
     def try_cell(cell):
         # the need is asked only once a cell has to be ranked or named: a cell that fits plans once, in run_cell
@@ -732,6 +746,8 @@ def cmd_run(a) -> int:
                 todo.remove(c)
             if not todo:
                 break
+        for c in todo:
+            plan_again(c)
         todo.sort(key=lambda c: need_of(c)[0])
         if said_at is None or time.time() - said_at >= WAIT_SAY_S:
             said_at = time.time()
