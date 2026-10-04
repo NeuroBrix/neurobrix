@@ -197,6 +197,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never received the request's resolution, so a positional embedding computed at load time (Sana's)
   was never built and the run failed on its first addition; each piece now loads under its model's
   resolution, read again at every request.
+- **A language model streamed layer by layer hands its flow the same hidden states as when it runs
+  whole.** When the memory plan streams a language model in pieces, the hidden states the
+  generation reads after each step are now kept by the piece that computes them; before, an image
+  generator such as Janus-Pro-7B under `--triton` fed its image head the text logits instead (and
+  under the PyTorch engines every streamed language model stopped with "could not extract
+  hidden_states"). A streamed model also returns all of its declared outputs, not only those of
+  its last piece.
 
 - **A plan performs the in-place additions it was priced with.** When a decoder's large residual
   additions were counted as done in place but no single operation overflowed the card, the plan left
