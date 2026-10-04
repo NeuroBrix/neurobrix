@@ -31,25 +31,67 @@ multi-GPU strategy asked for on a single-GPU profile.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 
 from neurobrix.core.prism import solver as _solver
 from neurobrix.core.strategies import STRATEGY_REGISTRY
 
 
+def _the_door() -> tuple[str, ast.FunctionDef, str]:
+    """The PrismSolver method that reads NBX_FORCE_STRATEGY, found BY NAME in the file as it is
+    on disk now — wherever the door lives, and never by a line number.
+
+    `inspect.getsource(method)` slices the file at the line the method had WHEN IMPORTED; an edit
+    of solver.py during a 42-minute suite shifted that slice 26 lines up and this gate read the
+    middle of `solve()` instead of `_solve_at_rung` (suite_final_0abfe804, 2026-10-04: the door had
+    not moved; the file under the running suite had). Parsing the file and locating the door by
+    what it reads cannot be shifted that way."""
+    path = inspect.getsourcefile(_solver)
+    text = open(path, encoding="utf-8").read()
+    tree = ast.parse(text)
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "PrismSolver")
+    doors = []
+    for fn in cls.body:
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        reads = [c for c in ast.walk(fn)
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                 and c.func.attr == "get" and c.args
+                 and isinstance(c.args[0], ast.Constant) and c.args[0].value == "NBX_FORCE_STRATEGY"]
+        if reads:
+            doors.append(fn)
+    assert len(doors) == 1, (
+        f"NBX_FORCE_STRATEGY is read by {[d.name for d in doors]} in PrismSolver — the door is "
+        "ONE place; none means it left the solver, two means a second copy of it")
+    door = doors[0]
+    return door.name, door, ast.get_source_segment(text, door)
+
+
 def test_the_door_does_not_carry_its_own_copy_of_the_strategy_names():
     """A door with a hand-written list of what it guards drifts from what it guards."""
-    # solve() descends the ladder on unified memory and solves each rung through _solve_at_rung,
-    # which holds the door (a-streamed-plan-states-its-window, 7fa53618).
-    src = inspect.getsource(_solver.PrismSolver._solve_at_rung)
+    name, fn, src = _the_door()
     i = src.find("NBX_FORCE_STRATEGY")
-    assert i > -1, "the force door moved — re-read this gate"
     window = src[i:i + 2500]
     assert "STRATEGY_REGISTRY" in window or "for n, _ in strategies" in window, (
-        "the valid set is not derived from the registry or the cascade — it is a copy, and "
-        "a copy is what let layer_streaming, op_level_tiling and cpu_streaming be rejected")
-    assert '"single_gpu", "single_gpu_lifecycle",' not in window, (
-        "the hardcoded literal is back")
+        f"{name}: the valid set is not derived from the registry or the cascade — it is a copy, "
+        "and a copy is what let layer_streaming, op_level_tiling and cpu_streaming be rejected")
+    # Any literal of strategy NAMES inside the door's block is a copy, whatever its formatting:
+    # a set, list or tuple whose elements are all strings and at least two of them registry
+    # names. The block is the window above, in file lines (the method's other literals — a
+    # membership test of the two host rungs further down — are not the door).
+    first = fn.lineno + src[:i].count("\n")
+    last = first + window.count("\n")
+    names = set(STRATEGY_REGISTRY.keys())
+    for node in ast.walk(fn):
+        if not first <= getattr(node, "lineno", 0) <= last:
+            continue
+        if isinstance(node, (ast.Set, ast.List, ast.Tuple)) and node.elts and all(
+                isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+            held = {e.value for e in node.elts} & names
+            assert len(held) < 2, (
+                f"{name} line {node.lineno}: a hand-written literal of strategy names "
+                f"{sorted(held)} — the hardcoded copy is back")
 
 
 def test_every_registry_strategy_is_an_accepted_name():

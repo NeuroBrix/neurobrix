@@ -25,6 +25,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message naming it and its components; install the container published for this release
   (`neurobrix remove <model> && neurobrix import <org>/<model>`). `--triton` never made the guess.
 
+- **A plan refusal under `--triton` names the component that does not fit.** When a model could not
+  be planned, the message could blame a component the planner had already split into tiles, or
+  suggest a tile count for a component that cannot be tiled. It now marks tiled components as not
+  the cause, says why an untileable one has no tiles, and on NVIDIA cards states the limit of the
+  last strategy that can help (streaming on the card) instead of asking for host memory that
+  `--triton` does not use. Example: SANA-Video 2B at 672x1344, 81 frames, on a 16 GB card, where one
+  transformer block needs 18.8 GB.
+
+- **On Apple machines under `--triton`, no weight block is planned larger than the GPU can allocate
+  at once.** A Metal device refuses any single buffer above its maximum buffer length, however much
+  memory is free; on an 18 GB M4 Pro, deepseek-moe-16b-chat at 17 GB free failed at load asking for
+  one 14.7 GB block. The planner now cuts every streamed piece below that limit, streams a component
+  whose weights alone exceed it instead of holding it whole, and names the component when nothing
+  else fits. On unified memory the planner also counts the previous piece's block, which the
+  allocator keeps cached, while the next piece loads; when that count forces smaller pieces, the
+  planner now tries every size down to the smallest that still holds the largest layer, so a model
+  such as Janus-Pro-7B under a 4 GB budget is planned instead of refused. NVIDIA cards and
+  `--compiled` plans are unchanged.
+
+- **A vision-language model's image and audio encoders are no longer counted beside its language
+  model.** Both engines run each encoder once, before the language model, and release it; the
+  planner counted them as loaded during the whole generation. For MiniCPM-o-4_5 that was 1.9 GB of
+  memory no moment holds, taken from the language model's streaming budget and its cache. The
+  speech output components, which are loaded beside the language model, are still counted, and
+  when the model is served, where its output head and speech components stay loaded from one
+  request to the next, they are counted beside each encoder too.
+
+- **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
+  counted the transposed copy of every linear layer's weight as working memory, although the Triton
+  engine reads the weight in place; for a speech or language model with a large vocabulary that was
+  close to a gigabyte that never exists. On a 24 GB Apple machine with 12 GB free, orpheus-3b was
+  streamed (every token re-reading the model from disk) and is now held whole. Janus-Pro-7B on the
+  same machine when idle is held whole too: the planner now knows that an image decode releases the
+  language model before the image decoder loads, and no longer prices the language model's logits
+  as the saved picture (3.4 GB of host memory for a 384x384 image).
+
+- **Large video and multimodal models stream on small unified-memory machines instead of being
+  refused.** On an 18 GB Apple machine, CogVideoX-5b-I2V, Wan2.2-I2V-A14B and Ming-Lite-Omni-1.5
+  were refused at their default request; they now run their largest components one piece at a time
+  on the GPU. The plan no longer reserves memory for components that are unloaded while the streamed
+  one runs, streams a component too when keeping it whole leaves no room for the pieces, and no longer
+  counts tensors nothing reads. A refusal on unified memory now names the streaming limit that bound
+  it rather than a host-memory figure no path uses.
+
 - **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
   every one of their 128 experts for every token and multiplied the unused ones by zero: correct
   output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
