@@ -33,7 +33,8 @@ def _expert_tid(prefix: str, expert_id: int, role: str) -> str:
 
 
 def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
-                        declared: bool = False) -> Dict[str, Any]:
+                        declared: bool = False,
+                        refusals: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
     Detect MoE patterns in DAG and replace with fused ops.
 
@@ -55,6 +56,10 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             DeepSeek: False (raw softmax scores). Qwen3/Mixtral: True (default).
         declared: The caller declared this component a MoE LM (lm_config
             num_experts > 1) — admits non-llm families to the pass.
+        refusals: When given, receives {topk op_uid: reason} for every router
+            the stacked-expert matcher declined (the per-expert matcher's
+            refusals are silent by design: most of them are "no per-expert
+            weights here", which the stacked matcher then answers).
 
     Returns:
         The DAG (same reference, possibly mutated)
@@ -111,12 +116,20 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             blend=blend,
         )
         if result is None and blend is None:
-            # The granite shape: softmax AFTER topk, sorted-index dispatch,
-            # stacked expert parameters. Structurally disjoint from the walk
-            # above, so it gets its own matcher (and its own refusals).
-            result = _fuse_one_granite_layer(
+            # Stacked expert parameters (two [E, ., .] slabs, no per-expert
+            # tensors): softmax after topk with a sorted dispatch, or softmax
+            # before topk with the dense all-experts combine. Structurally
+            # disjoint from the walk above, so it gets its own matcher — and
+            # its refusals carry their reason.
+            result = _fuse_one_stacked_layer(
                 dag, ops, execution_order, tensors,
                 consumer_map, producer_map, topk_uid)
+            if isinstance(result, Declined):
+                if refusals is not None:
+                    refusals[topk_uid] = result.reason
+                if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
+                    print(f"[MoE Fusion] {topk_uid}: not fused — {result.reason}")
+                result = None
         if result is not None:
             removed_count, fused_uid, fused_op, dead_outputs_count = result
             fused_count += 1
@@ -1223,49 +1236,86 @@ def _collect_input_tids(op_data: Dict[str, Any]) -> List[str]:
 
 
 # ============================================================================
-# GRANITE-STYLE MoE (sorted-index dispatch, stacked expert parameters)
+# STACKED-EXPERT MoE (both routing orders, both slab layouts)
 # ============================================================================
 #
-# granitemoe traces a DIFFERENT block than the qwen/deepseek family this
-# pass was built on (measured on granite-3.1-1b-a400m-instruct, 24 layers):
+# Some MoE blocks keep their experts as TWO stacked parameters instead of
+# E x 3 per-expert matrices: an input slab holding every expert's fused
+# gate|up projection and an output slab holding every expert's down
+# projection. Two traced forms of such a block are recognised by ONE matcher
+# (`_fuse_one_stacked_layer`), each element read from the graph:
 #
-#     topk(logits[T,E], k) -> softmax OVER THE TOP-K   (softmax AFTER topk)
+#   softmax AFTER topk, sorted-index dispatch (granitemoe, 24 layers):
+#     topk(logits[T,E], k) -> softmax OVER THE TOP-K
 #     view/sort/div/index  -> a sorted-assignment gather of hidden [T*k, H]
 #     split_with_sizes     -> per-expert pieces, sizes BAKED AT TRACE TIME
 #     E x (select(W_in[E,2F,H], e) -> t -> mm)          stacked input_linear
 #     cat -> split -> silu -> mul                       fused gate|up halves
 #     split_with_sizes -> E x (select(W_out[E,H,F], e) -> t -> mm) -> cat
 #     mul by sorted routing weights -> zeros -> index_add[T,H]
+#   The baked sizes are trace-time ROUTING — any other prompt routes
+#   differently and the graph refuses (split_with_sizes sums mismatch).
+#   granite's softmax(topk(logits)) equals softmax(logits) -> topk ->
+#   renormalize EXACTLY (exp(x_i)/sum_top exp is invariant to the
+#   full-softmax denominator), so the rewrite inserts one aten::_softmax on
+#   the logits and sets norm_topk_prob=True — no dispatcher learns new math.
 #
-# The baked sizes are trace-time ROUTING — any other prompt routes
-# differently and the graph refuses (split_with_sizes sums mismatch). The
-# fusion below replaces the whole block with custom::moe_fused, exactly as
-# the main pass does for the qwen shape, with two extensions:
+#   softmax BEFORE topk, dense all-experts combine (the inference form of
+#   transformers' Qwen3VLMoeTextExperts, 4.57; 48 layers of
+#   Qwen3-VL-30B-A3B-Thinking):
+#     softmax(logits[T,E]) -> topk -> [sum + div: renormalise] -> [cast]
+#     -> scatter into zeros[T,E]                        routing matrix
+#     hidden -> repeat(E, 1) -> view[E,T,H] -> bmm(W_in[E,H,2F])
+#     -> split(F, -1) -> silu(gate) * up -> bmm(W_out[E,F,H])
+#     -> view -> mul by the routing matrix -> sum over the expert axis
+#   Correct as traced — unrouted experts are multiplied by 0 — but every
+#   expert is READ and COMPUTED for every token (E/k x the routed FLOPs,
+#   9.94x the active bytes per decode token, measured 2026-10-04). Its
+#   routing is already the fused op's own (topk of the softmax scores, then
+#   the renormalisation if the graph divides by the top-k sum), so the
+#   rewrite binds the softmax output as `gate_scores` and inserts nothing.
 #
-#   * gate scores: granite's softmax(topk(logits)) equals
-#     softmax(logits) -> topk -> renormalize EXACTLY (exp(x_i)/sum_top exp
-#     is invariant to the full-softmax denominator), so the rewrite inserts
-#     one aten::_softmax on the logits and sets norm_topk_prob=True — no
-#     dispatcher learns new routing math.
-#   * stacked experts: per-expert weights do not exist as graph tensors, so
-#     the fused op carries a `stacked_experts` spec and every dispatcher
-#     resolves its weight lists through `expert_weight_lists` below —
-#     zero-copy select/narrow views into the two stacked parameters.
+# Either way the fused op carries a `stacked_experts` spec and every
+# dispatcher resolves its weight lists through `expert_weight_lists` below —
+# zero-copy select/narrow/transpose views into the two stacked parameters.
+# The spec names the slab GEOMETRY the graph read; the reader never assumes
+# one (transformers itself flipped Qwen3-VL's slab from [E, H, 2F] in 4.57
+# to [E, 2F, H] in 5.x).
+
+# The spec fields every stacked fused op carries (written by the matcher,
+# required by the reader — a spec without them is refused by name).
+_STACKED_SPEC_FIELDS = ("input_linear_tid", "output_linear_tid", "ffn_dim",
+                        "input_linear_in_axis", "gate_offset",
+                        "output_linear_in_axis")
 
 
 def expert_weight_lists(attrs: Dict[str, Any], fetch):
     """Resolve the fused op's per-expert (gate, up, down) weight lists.
 
     `fetch(tid)` returns the tensor for a tensor id (torch or NBXTensor —
-    both carry select/narrow views). Stacked layout (granite):
-    W_in[E, 2F, H] rows 0:F are the gate half, F:2F the up half (the traced
-    block splits the mm output at F on the last dim); W_out[E, H, F].
+    both carry select/narrow/t views). Every dispatcher consumes the
+    nn.Linear layout: gate and up [F, H], down [H, F] (out x in).
+
+    Stacked layout, from the spec the matcher read off the graph:
+      * W_in[E, a, b] — per expert a 2-D matrix whose `input_linear_in_axis`
+        (0 or 1) indexes the hidden (contraction) dim H; the other axis holds
+        the 2F projection, the gate half at `gate_offset` (0 or F), the up
+        half the other F;
+      * W_out[E, c, d] — per expert, `output_linear_in_axis` indexes F (the
+        down projection's contraction), the other axis H.
+    A per-expert matrix stored (in x out) is returned transposed — a view.
     """
     st = attrs.get("stacked_experts")
     if not st:
         return ([fetch(t) for t in attrs["expert_gate_weight_ids"]],
                 [fetch(t) for t in attrs["expert_up_weight_ids"]],
                 [fetch(t) for t in attrs["expert_down_weight_ids"]])
+    missing = [f for f in _STACKED_SPEC_FIELDS if f not in st]
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: stacked expert spec lacks {missing} — the slab "
+            "geometry is read from the graph by the matcher, never assumed "
+            "by the reader.")
     w_in = fetch(st["input_linear_tid"])
     w_out = fetch(st["output_linear_tid"])
     if w_in is None or w_out is None:
@@ -1276,38 +1326,183 @@ def expert_weight_lists(attrs: Dict[str, Any], fetch):
             "dropped them is a defect, not a fallback.")
     F = int(st["ffn_dim"])
     E = int(attrs["num_experts"])
-    gate = [w_in.select(0, e).narrow(0, 0, F) for e in range(E)]
-    up = [w_in.select(0, e).narrow(0, F, F) for e in range(E)]
-    down = [w_out.select(0, e) for e in range(E)]
+    in_axis = int(st["input_linear_in_axis"])
+    out_in_axis = int(st["output_linear_in_axis"])
+    g_off = int(st["gate_offset"])
+    if in_axis not in (0, 1) or out_in_axis not in (0, 1) or g_off not in (0, F):
+        raise RuntimeError(
+            f"ZERO FALLBACK: stacked expert spec out of range: in_axis="
+            f"{in_axis}, output_in_axis={out_in_axis}, gate_offset={g_off} "
+            f"(F={F}).")
+    u_off = F - g_off
+    proj_axis = 1 - in_axis
+
+    def _linear(m):
+        # (out x in) as stored when the contraction is axis 1; a view otherwise
+        return m if in_axis == 1 else m.t()
+
+    gate, up, down = [], [], []
+    for e in range(E):
+        m = w_in.select(0, e)
+        gate.append(_linear(m.narrow(proj_axis, g_off, F)))
+        up.append(_linear(m.narrow(proj_axis, u_off, F)))
+        d = w_out.select(0, e)
+        down.append(d if out_in_axis == 1 else d.t())
     return gate, up, down
 
 
-def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
+class Declined:
+    """A stacked-expert matcher's refusal, with its reason. Never a tuple, so
+    it can never be mistaken for a fusion result."""
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def __repr__(self) -> str:
+        return f"Declined({self.reason!r})"
+
+
+def _split_halves(ops, consumer_map, split_uid, tensors, F):
+    """Read the gate|up halves off the graph's own split of the projection:
+    returns (gate_offset, silu_uid, mul_uid) or a Declined. The gate half is
+    the piece `silu` consumes; the up half is the other piece, multiplied by
+    the silu output in one aten::mul."""
+    sp = ops.get(split_uid) or {}
+    if sp.get("op_type") != "aten::split":
+        return Declined(f"the gate|up projection is not split by one aten::split "
+                        f"(found {sp.get('op_type')!r})")
+    outs = sp.get("output_tensor_ids", [])
+    in_tid = _get_input_tensor_id(sp, 0)
+    ish = _tensor_shape(tensors, in_tid)
+    vals = [a.get("value") for a in sp.get("attributes", {}).get("args", [])
+            if a.get("type") == "scalar"]
+    size = vals[0] if vals else sp.get("attributes", {}).get("split_size")
+    dim = vals[1] if len(vals) > 1 else sp.get("attributes", {}).get("dim", 0)
+    if not ish or len(outs) != 2 or size != F or dim not in (-1, len(ish) - 1) \
+            or ish[-1] != 2 * F:
+        return Declined(f"the gate|up split is not two halves of F={F} on the "
+                        f"last dim (outs={len(outs)}, size={size}, dim={dim}, "
+                        f"input={ish})")
+    silu = [(i, cu) for i, t in enumerate(outs) for cu in consumer_map.get(t, [])
+            if ops.get(cu, {}).get("op_type") == "aten::silu"]
+    if len(silu) != 1:
+        return Declined(f"the gate|up halves feed {len(silu)} aten::silu (one "
+                        "SwiGLU gate expected)")
+    g_idx, silu_uid = silu[0]
+    up_tid = outs[1 - g_idx]
+    silu_out = ops[silu_uid]["output_tensor_ids"][0]
+    muls = [cu for cu in consumer_map.get(silu_out, [])
+            if ops.get(cu, {}).get("op_type") == "aten::mul"
+            and set(_collect_input_tids(ops[cu])) == {silu_out, up_tid}]
+    if len(muls) != 1 or len(consumer_map.get(silu_out, [])) != 1 \
+            or consumer_map.get(up_tid, []) != muls:
+        return Declined("silu(gate) and the up half do not meet in exactly one "
+                        "aten::mul (not a SwiGLU)")
+    return g_idx * F, silu_uid, muls[0]
+
+
+def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
+                      hidden_tid, gate_scores_tid, in_tid, out_tid, exit_tid,
+                      in_axis, gate_offset, out_in_axis, norm_topk_prob,
+                      extra_attrs):
+    """The ONE emission of a stacked-expert custom::moe_fused op, whichever
+    traced form the matcher recognised."""
+    sdt = tensors.get(in_tid, {}).get("dtype", "bfloat16")
+    syn = lambda half, e: f"{in_tid}::stacked::{half}::{e}"
+    syn_down = lambda e: f"{out_tid}::stacked::down::{e}"
+    gate_ids = [syn("gate", e) for e in range(num_experts)]
+    up_ids = [syn("up", e) for e in range(num_experts)]
+    down_ids = [syn_down(e) for e in range(num_experts)]
+    for e in range(num_experts):
+        tensors.setdefault(gate_ids[e], {
+            "tensor_id": gate_ids[e], "shape": [F, H], "dtype": sdt,
+            "is_parameter": True})
+        tensors.setdefault(up_ids[e], {
+            "tensor_id": up_ids[e], "shape": [F, H], "dtype": sdt,
+            "is_parameter": True})
+        tensors.setdefault(down_ids[e], {
+            "tensor_id": down_ids[e], "shape": [H, F], "dtype": sdt,
+            "is_parameter": True})
+    all_input_tids = [hidden_tid, gate_scores_tid, in_tid, out_tid]
+    attrs = {
+        "args": [{"type": "tensor", "tensor_id": t} for t in all_input_tids],
+        "kwargs": {},
+        "gate_scores_tid": gate_scores_tid,
+        "hidden_states_tid": hidden_tid,
+        "expert_gate_weight_ids": gate_ids,
+        "expert_up_weight_ids": up_ids,
+        "expert_down_weight_ids": down_ids,
+        "stacked_experts": {"input_linear_tid": in_tid,
+                            "output_linear_tid": out_tid,
+                            "ffn_dim": F,
+                            "input_linear_in_axis": in_axis,
+                            "gate_offset": gate_offset,
+                            "output_linear_in_axis": out_in_axis},
+        "top_k": top_k,
+        "num_experts": num_experts,
+        "norm_topk_prob": norm_topk_prob,
+    }
+    attrs.update(extra_attrs)
+    return {
+        "op_uid": fused_uid,
+        "op_type": "custom::moe_fused",
+        "output_tensor_ids": [exit_tid],
+        "input_tensor_ids": all_input_tids,
+        "output_shapes": [tensors.get(exit_tid, {}).get("shape", [])],
+        "attributes": attrs,
+    }
+
+
+def _fuse_one_stacked_layer(dag, ops, execution_order, tensors,
                             consumer_map, producer_map, topk_uid):
-    """Match and fuse one granite-style MoE layer. Returns like
-    `_fuse_one_moe_layer`, or None when this is not that block — every
-    check below REFUSES to fuse rather than guessing, and an unfused
-    granite graph then fails loudly at its baked split sizes."""
+    """Match and fuse one stacked-expert MoE layer, either routing order.
+    Returns like `_fuse_one_moe_layer`, or a `Declined` naming why this is
+    not such a block — every check REFUSES rather than guessing."""
+    topk_data = ops[topk_uid]
+    outs = topk_data.get("output_tensor_ids", [])
+    if len(outs) < 2:
+        return Declined("the top-k has no (scores, indices) pair")
+    # The routing order is read from the graph: a softmax that CONSUMES the
+    # top-k scores (softmax after topk), or a softmax the top-k READS.
+    sm = [u for u in consumer_map.get(outs[0], [])
+          if ops.get(u, {}).get("op_type") == "aten::_softmax"]
+    if len(sm) == 1:
+        return _fuse_softmax_after_topk_layer(
+            dag, ops, execution_order, tensors, consumer_map, producer_map,
+            topk_uid)
+    return _fuse_softmax_first_dense_layer(
+        dag, ops, execution_order, tensors, consumer_map, producer_map,
+        topk_uid)
+
+
+def _fuse_softmax_after_topk_layer(dag, ops, execution_order, tensors,
+                                   consumer_map, producer_map, topk_uid):
+    """Match and fuse one softmax-after-topk, sorted-dispatch stacked block
+    (granite). Returns like `_fuse_one_moe_layer`, or a `Declined` when this
+    is not that block — every check below REFUSES to fuse rather than
+    guessing, and an unfused granite graph then fails loudly at its baked
+    split sizes."""
+    D = Declined
     topk_data = ops[topk_uid]
     k = _extract_topk_k(topk_data)
     if k is None or k <= 1:
-        return None
+        return D("the top-k selects at most one expert")
     logits_tid = _get_input_tensor_id(topk_data, 0)
     lsh = _tensor_shape(tensors, logits_tid)
     if not lsh or len(lsh) != 2:
-        return None
+        return D(f"the top-k input is not a rank-2 [tokens, experts] tensor ({lsh})")
     num_experts = int(lsh[1])
     outs = topk_data.get("output_tensor_ids", [])
     if len(outs) < 2:
-        return None
+        return D("the top-k has no (scores, indices) pair")
     scores_tid, idx_tid = outs[0], outs[1]
 
-    # The granite marker: softmax CONSUMES the topk scores. (The qwen shape
-    # has softmax BEFORE topk and is the main pass's business.)
+    # The marker of this order: softmax CONSUMES the topk scores.
     sm = [u for u in consumer_map.get(scores_tid, [])
           if ops.get(u, {}).get("op_type") == "aten::_softmax"]
     if len(sm) != 1:
-        return None
+        return D("no single softmax consumes the top-k scores")
 
     # Forward walk from the routing outputs to the index_add join.
     interior = {topk_uid}
@@ -1324,19 +1519,19 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
                 continue
             cop = ops.get(cu)
             if cop is None:
-                return None
+                return D(f"the routing walk meets an op with no record ({cu})")
             interior.add(cu)
             if cop.get("op_type") == "aten::index_add":
                 if join_uid is not None and join_uid != cu:
-                    return None
+                    return D(f"two index_add joins ({join_uid}, {cu})")
                 join_uid = cu
                 continue
             for ot in cop.get("output_tensor_ids", []):
                 frontier.append(ot)
             if len(interior) > 4000:
-                return None
+                return D("the routing walk exceeds 4000 ops without a join")
     if join_uid is None:
-        return None
+        return D("the sorted dispatch reaches no aten::index_add join")
 
     # Backward absorption: producers of interior inputs that are pure
     # weight-side chains (select/t of a parameter) plus the zeros seed.
@@ -1371,15 +1566,15 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
             hidden_tid = cand
             break
     if hidden_tid is None:
-        return None
+        return D("no rank-2 gather brings the hidden states in")
 
     # Two stacked parameters: [E, 2F, H] (input_linear) and [E, H, F].
     if len(stacked_tids) != 2:
-        return None
+        return D(f"{len(stacked_tids)} stacked parameters selected (two expected)")
     sh = {t: _tensor_shape(tensors, t) for t in stacked_tids}
     if any(v is None or len(v) != 3 or v[0] != num_experts
            for v in sh.values()):
-        return None
+        return D(f"a stacked parameter is not [E={num_experts}, ., .]: {sh}")
     hsh = _tensor_shape(tensors, hidden_tid)
     H = int(hsh[1])
     in_tid = out_tid_p = None
@@ -1389,10 +1584,24 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
         elif v[1] == H:
             out_tid_p = t
     if in_tid is None or out_tid_p is None or in_tid == out_tid_p:
-        return None
+        return D(f"the stacked parameters do not resolve to an input and an "
+                 f"output slab against H={H}: {sh}")
     F = int(sh[out_tid_p][2])
     if int(sh[in_tid][1]) != 2 * F:
-        return None
+        return D(f"the input slab {sh[in_tid]} does not hold 2F={2 * F} rows")
+
+    # The gate|up halves, read from the graph's own split of the projection.
+    _splits = [u for u in interior
+               if ops[u].get("op_type") == "aten::split"
+               and (_tensor_shape(tensors, _get_input_tensor_id(ops[u], 0))
+                    or [None])[-1] == 2 * F]
+    if len(_splits) != 1:
+        return D(f"{len(_splits)} aten::split of the 2F={2 * F} projection "
+                 "(one expected)")
+    _halves = _split_halves(ops, consumer_map, _splits[0], tensors, F)
+    if isinstance(_halves, Declined):
+        return _halves
+    gate_offset = _halves[0]
 
     # Every remaining external input must be the hidden states or the
     # routing logits — anything else means this is not the block we know.
@@ -1404,9 +1613,9 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
             if tid in (hidden_tid, logits_tid, in_tid, out_tid_p):
                 continue
             if pu is None and tensors.get(tid, {}).get("is_parameter"):
-                return None      # an unexpected parameter — refuse
+                return D(f"an unexpected parameter {tid} enters the block")
             if pu is not None:
-                return None      # a live external activation — refuse
+                return D(f"a live external activation {tid} enters the block")
 
     join_out = ops[join_uid]["output_tensor_ids"][0]
 
@@ -1436,50 +1645,17 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
 
     # --- the fused op, stacked spec ---
     fused_uid = f"moe_fused::{topk_uid}"
-    syn = lambda half, e: f"{in_tid}::stacked::{half}::{e}"
-    syn_down = lambda e: f"{out_tid_p}::stacked::down::{e}"
-    gate_ids = [syn("gate", e) for e in range(num_experts)]
-    up_ids = [syn("up", e) for e in range(num_experts)]
-    down_ids = [syn_down(e) for e in range(num_experts)]
-    for e in range(num_experts):
-        tensors.setdefault(gate_ids[e], {
-            "tensor_id": gate_ids[e], "shape": [F, H], "dtype": ldt,
-            "is_parameter": True})
-        tensors.setdefault(up_ids[e], {
-            "tensor_id": up_ids[e], "shape": [F, H], "dtype": ldt,
-            "is_parameter": True})
-        tensors.setdefault(down_ids[e], {
-            "tensor_id": down_ids[e], "shape": [H, F], "dtype": ldt,
-            "is_parameter": True})
-
-    all_input_tids = [hidden_tid, sm_out, in_tid, out_tid_p]
-    fused_op = {
-        "op_uid": fused_uid,
-        "op_type": "custom::moe_fused",
-        "output_tensor_ids": [join_out],
-        "input_tensor_ids": all_input_tids,
-        "output_shapes": [tensors.get(join_out, {}).get("shape", [])],
-        "attributes": {
-            "args": [{"type": "tensor", "tensor_id": t}
-                     for t in all_input_tids],
-            "kwargs": {},
-            "gate_scores_tid": sm_out,
-            "hidden_states_tid": hidden_tid,
-            "expert_gate_weight_ids": gate_ids,
-            "expert_up_weight_ids": up_ids,
-            "expert_down_weight_ids": down_ids,
-            "stacked_experts": {"input_linear_tid": in_tid,
-                                "output_linear_tid": out_tid_p,
-                                "ffn_dim": F},
-            "top_k": k,
-            "num_experts": num_experts,
-            # The rewrite's own math: softmax(topk(x)) == renormalised topk(softmax(x)),
-            # so this op REQUIRES the renormalisation; it is owned by the rewrite, not
-            # by the registry's declaration, and the executor's patch loop leaves it.
-            "norm_topk_prob": True,
-            "routing_rewritten": "softmax_after_topk",
-        },
-    }
+    fused_op = _stacked_fused_op(
+        tensors, fused_uid, top_k=k, num_experts=num_experts, F=F, H=H,
+        hidden_tid=hidden_tid, gate_scores_tid=sm_out, in_tid=in_tid,
+        out_tid=out_tid_p, exit_tid=join_out,
+        # select(W_in, e) -> t -> mm: the per-expert matrix is (out x in)
+        in_axis=1, gate_offset=gate_offset, out_in_axis=1,
+        # The rewrite's own math: softmax(topk(x)) == renormalised topk(softmax(x)),
+        # so this op REQUIRES the renormalisation; it is owned by the rewrite, not
+        # by the registry's declaration, and the executor's patch loop leaves it.
+        norm_topk_prob=True,
+        extra_attrs={"routing_rewritten": "softmax_after_topk"})
     ops[fused_uid] = fused_op
 
     # --- rebuild order: softmax + fused op sit where the topk sat ---
@@ -1497,3 +1673,292 @@ def _fuse_one_granite_layer(dag, ops, execution_order, tensors,
         ops.pop(u, None)
     execution_order[:] = new_order
     return (len(removed), fused_uid, fused_op, 0)
+
+
+# Pure re-indexing ops a dense stacked block threads its tensors through.
+_VIEW_LIKE = {"aten::view", "aten::reshape", "aten::_unsafe_view",
+              "aten::unsqueeze", "aten::squeeze", "aten::transpose",
+              "aten::permute", "aten::expand"}
+_RESHAPE = {"aten::view", "aten::reshape", "aten::_unsafe_view"}
+
+
+def _scalar_args(op: Dict[str, Any]) -> List[Any]:
+    return [a.get("value") for a in op.get("attributes", {}).get("args", [])
+            if a.get("type") in ("scalar", "list")]
+
+
+def _is_param(tensors: Dict[str, Any], tid: str) -> bool:
+    return bool(tensors.get(tid, {}).get("is_parameter")) or tid.startswith("param::")
+
+
+def _same_shape(tensors: Dict[str, Any], a: str, b: str) -> bool:
+    ta, tb = tensors.get(a, {}), tensors.get(b, {})
+    if ta.get("shape") is None or ta.get("shape") != tb.get("shape"):
+        return False
+    sa, sb = ta.get("symbolic_shape"), tb.get("symbolic_shape")
+    return sa is None or sb is None or sa == sb
+
+
+def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
+                                    consumer_map, producer_map, topk_uid):
+    """Match and fuse one softmax-before-topk stacked block traced in its dense
+    all-experts form (see the section header). Returns like
+    `_fuse_one_moe_layer`, or a `Declined` naming the first structural
+    mismatch. The fused op's routing is the graph's own — topk of the softmax
+    scores, renormalised exactly when the graph divides by the top-k sum."""
+    D = Declined
+    topk = ops[topk_uid]
+    k = _extract_topk_k(topk)
+    if k is None or k <= 1:
+        return D("the top-k selects at most one expert")
+    gs_tid = _get_input_tensor_id(topk, 0)
+    gsh = _tensor_shape(tensors, gs_tid)
+    if not gsh or len(gsh) != 2:
+        return D(f"the top-k input is not a rank-2 [tokens, experts] tensor ({gsh})")
+    E = int(gsh[1])
+    tk_args = _scalar_args(topk)
+    if len(tk_args) > 1 and tk_args[1] not in (-1, 1):
+        return D(f"the top-k does not select over the expert axis (dim={tk_args[1]})")
+    sm_op = ops.get(producer_map.get(gs_tid), {})
+    if sm_op.get("op_type") != "aten::_softmax":
+        return D("the top-k neither feeds a softmax nor reads one: the routing "
+                 f"order is not recognised (its input comes from "
+                 f"{sm_op.get('op_type')!r})")
+    sm_args = _scalar_args(sm_op)
+    if not sm_args or sm_args[0] not in (-1, 1):
+        return D(f"the softmax before the top-k is not over the expert axis ({sm_args})")
+    scores_tid, idx_tid = topk["output_tensor_ids"][0], topk["output_tensor_ids"][1]
+    interior = {topk_uid}
+
+    def only_consumer(tid):
+        cs = consumer_map.get(tid, [])
+        return cs[0] if len(cs) == 1 else None
+
+    # --- routing weights: [sum + div] renormalisation, [cast] ------------
+    sc = consumer_map.get(scores_tid, [])
+    sc_types = sorted(ops.get(u, {}).get("op_type") for u in sc)
+    if sc_types == ["aten::div", "aten::sum"]:
+        sum_uid = next(u for u in sc if ops[u]["op_type"] == "aten::sum")
+        div_uid = next(u for u in sc if ops[u]["op_type"] == "aten::div")
+        sum_out = ops[sum_uid]["output_tensor_ids"][0]
+        sargs = _scalar_args(ops[sum_uid])
+        dims = sargs[0] if sargs else None
+        keep = sargs[1] if len(sargs) > 1 else False
+        if dims not in ([-1], [1], -1, 1) or keep is not True:
+            return D(f"the top-k scores are summed over {dims} keepdim={keep}, "
+                     "not renormalised over the top-k axis")
+        if _collect_input_tids(ops[div_uid])[:2] != [scores_tid, sum_out] \
+                or consumer_map.get(sum_out, []) != [div_uid]:
+            return D("the top-k scores are not divided by their own sum")
+        interior |= {sum_uid, div_uid}
+        renorm = True
+        w_tid = ops[div_uid]["output_tensor_ids"][0]
+    elif len(sc) == 1:
+        renorm = False
+        w_tid = scores_tid
+    else:
+        return D(f"the top-k scores feed {sc_types}: not a (renormalised) "
+                 "routing weight")
+    cu = only_consumer(w_tid)
+    if cu is not None and ops[cu].get("op_type") == "aten::_to_copy":
+        interior.add(cu)
+        w_tid = ops[cu]["output_tensor_ids"][0]
+        cu = only_consumer(w_tid)
+
+    # --- the routing matrix: scatter(zeros[T,E], 1, indices, weights) ------
+    if cu is None or ops[cu].get("op_type") != "aten::scatter":
+        return D("the routing weights are not scattered into a [tokens, experts] "
+                 f"matrix (they meet {ops.get(cu, {}).get('op_type')!r})")
+    sc_uid = cu
+    st_ins = [a for a in ops[sc_uid]["attributes"].get("args", [])]
+    st_t = [a.get("tensor_id") for a in st_ins if a.get("type") == "tensor"]
+    st_s = [a.get("value") for a in st_ins if a.get("type") == "scalar"]
+    if len(st_t) != 3 or st_t[1] != idx_tid or st_t[2] != w_tid \
+            or not st_s or st_s[0] not in (1, -1):
+        return D("the scatter is not (zeros, dim=1, top-k indices, routing weights)")
+    if consumer_map.get(idx_tid, []) != [sc_uid]:
+        return D("the top-k indices are read beyond the routing scatter "
+                 "(a dispatch, not the dense combine)")
+    base_uid = producer_map.get(st_t[0])
+    if ops.get(base_uid, {}).get("op_type") not in ("aten::zeros_like", "aten::zeros") \
+            or consumer_map.get(st_t[0], []) != [sc_uid]:
+        return D("the routing scatter does not start from a zeros tensor")
+    interior |= {sc_uid, base_uid}
+    shape_only_ins = set(_collect_input_tids(ops[base_uid]))
+
+    # --- the routing matrix reaches the weighted combine through views -----
+    t = ops[sc_uid]["output_tensor_ids"][0]
+    while True:
+        cu = only_consumer(t)
+        cop = ops.get(cu, {})
+        if cop.get("op_type") in _VIEW_LIKE:
+            interior.add(cu)
+            t = cop["output_tensor_ids"][0]
+            continue
+        break
+    if cop.get("op_type") != "aten::mul":
+        return D("the routing matrix meets "
+                 f"{cop.get('op_type')!r} before a weighted combine")
+    mul_uid = cu
+    route_tid = t
+    mins = _collect_input_tids(cop)
+    if len(mins) != 2 or route_tid not in mins:
+        return D("the weighted combine is not a binary aten::mul")
+    xo_tid = mins[0] if mins[1] == route_tid else mins[1]
+    mul_out = cop["output_tensor_ids"][0]
+    msh = _tensor_shape(tensors, mul_out)
+    rsh = _tensor_shape(tensors, route_tid)
+    if not msh or not rsh or msh[0] != E or rsh[0] != E:
+        return D(f"the weighted combine does not carry the expert axis first "
+                 f"(product {msh}, routing {rsh}, E={E})")
+    red = only_consumer(mul_out)
+    rop = ops.get(red, {})
+    rargs = _scalar_args(rop)
+    rdims = rargs[0] if rargs else None
+    rkeep = rargs[1] if len(rargs) > 1 else False
+    if rop.get("op_type") != "aten::sum" or rdims not in ([0], 0) or rkeep:
+        return D("the weighted expert outputs are not summed over the expert axis "
+                 f"({rop.get('op_type')!r} dims={rdims} keepdim={rkeep})")
+    exit_tid = rop["output_tensor_ids"][0]
+    interior |= {mul_uid, red}
+    esh = _tensor_shape(tensors, exit_tid)
+    if not esh or list(esh) != list(msh[1:]):
+        return D(f"the combine's output {esh} is not the product {msh} without "
+                 "its expert axis")
+    H = int(esh[-1])
+
+    # --- the expert chain, backwards: view <- bmm(act, W_out) --------------
+    t = xo_tid
+    while ops.get(producer_map.get(t), {}).get("op_type") in _RESHAPE \
+            and len(consumer_map.get(t, [])) == 1 \
+            and consumer_map[t][0] in interior:
+        pu = producer_map[t]
+        interior.add(pu)
+        t = _get_input_tensor_id(ops[pu], 0)
+    down_uid = producer_map.get(t)
+    dop = ops.get(down_uid, {})
+    if dop.get("op_type") != "aten::bmm":
+        return D(f"the expert outputs do not come from a batched matmul over the "
+                 f"experts ({dop.get('op_type')!r})")
+    act_tid, w_out = (_collect_input_tids(dop) + [None, None])[:2]
+    wsh_out = _tensor_shape(tensors, w_out)
+    if not _is_param(tensors, w_out) or not wsh_out or len(wsh_out) != 3 \
+            or wsh_out[0] != E or wsh_out[2] != H:
+        return D(f"the down projection does not read a stacked [E={E}, F, H={H}] "
+                 f"parameter ({w_out}: {wsh_out})")
+    F = int(wsh_out[1])
+    interior.add(down_uid)
+    act_pu = producer_map.get(act_tid)
+    if ops.get(act_pu, {}).get("op_type") != "aten::mul":
+        return D("the down projection's input is not silu(gate) * up")
+    silu_in = [ti for ti in _collect_input_tids(ops[act_pu])
+               if ops.get(producer_map.get(ti), {}).get("op_type") == "aten::silu"]
+    if len(silu_in) != 1:
+        return D("the down projection's input is not silu(gate) * up")
+    silu_uid = producer_map[silu_in[0]]
+    split_uid = producer_map.get(_get_input_tensor_id(ops[silu_uid], 0))
+    halves = _split_halves(ops, consumer_map, split_uid, tensors, F)
+    if isinstance(halves, Declined):
+        return halves
+    gate_offset, h_silu, h_mul = halves
+    if h_silu != silu_uid or h_mul != act_pu:
+        return D("the SwiGLU read off the split is not the down projection's input")
+    interior |= {act_pu, silu_uid, split_uid}
+
+    # --- the gate|up projection: bmm(repeat(hidden), W_in[E, H, 2F]) -------
+    up_uid = producer_map.get(_get_input_tensor_id(ops[split_uid], 0))
+    uop = ops.get(up_uid, {})
+    if uop.get("op_type") != "aten::bmm":
+        return D(f"the gate|up projection is not a batched matmul over the experts "
+                 f"({uop.get('op_type')!r})")
+    hrep_tid, w_in = (_collect_input_tids(uop) + [None, None])[:2]
+    wsh_in = _tensor_shape(tensors, w_in)
+    if not _is_param(tensors, w_in) or not wsh_in or len(wsh_in) != 3 \
+            or wsh_in[0] != E or wsh_in[1] != H or wsh_in[2] != 2 * F:
+        return D(f"the gate|up projection does not read a stacked "
+                 f"[E={E}, H={H}, 2F={2 * F}] parameter ({w_in}: {wsh_in})")
+    interior.add(up_uid)
+    t = hrep_tid
+    while ops.get(producer_map.get(t), {}).get("op_type") in _RESHAPE \
+            and len(consumer_map.get(t, [])) == 1:
+        pu = producer_map[t]
+        interior.add(pu)
+        t = _get_input_tensor_id(ops[pu], 0)
+    rep_uid = producer_map.get(t)
+    rp = ops.get(rep_uid, {})
+    reps = (_scalar_args(rp) or [None])[0]
+    if rp.get("op_type") != "aten::repeat" or not isinstance(reps, list) \
+            or not reps or reps[0] != E or any(r != 1 for r in reps[1:]) \
+            or len(consumer_map.get(t, [])) != 1:
+        return D("the experts do not read the hidden states repeated once per "
+                 f"expert ({rp.get('op_type')!r} {reps})")
+    interior.add(rep_uid)
+
+    # The hidden states: back from the repeat through views that feed only this
+    # chain, to the first tensor shaped like the block's output — the fused op
+    # returns its result in its input's shape, which the residual reads.
+    t = _get_input_tensor_id(rp, 0)
+    hidden_tid = None
+    while True:
+        if _same_shape(tensors, t, exit_tid):
+            hidden_tid = t
+            break
+        pu = producer_map.get(t)
+        if ops.get(pu, {}).get("op_type") not in _RESHAPE \
+                or len(consumer_map.get(t, [])) != 1:
+            break
+        interior.add(pu)
+        t = _get_input_tensor_id(ops[pu], 0)
+    if hidden_tid is None:
+        return D(f"no tensor on the hidden-state chain has the block output's "
+                 f"shape {esh}")
+
+    # --- closure: nothing escapes, nothing unexpected enters ---------------
+    allowed_in = {hidden_tid, gs_tid, w_in, w_out}
+    for uid in interior:
+        for tid in _collect_input_tids(ops[uid]):
+            if producer_map.get(tid) in interior or tid in allowed_in:
+                continue
+            if tid in shape_only_ins and uid == base_uid:
+                continue        # zeros_like reads only the shape
+            return D(f"{tid} enters the block at {uid} from outside it")
+        for ot in ops[uid].get("output_tensor_ids", []):
+            if ot == exit_tid:
+                continue
+            esc = [c for c in consumer_map.get(ot, []) if c not in interior]
+            if esc:
+                return D(f"{ot} escapes the block to {esc[0]}")
+
+    # --- the fused op -------------------------------------------------------
+    parent = topk.get("parent_module", "") or ""
+    bm = re.match(r"(block\.\d+)", parent)
+    fused_uid = f"moe_fused::{bm.group(1) if bm else topk_uid}"
+    if fused_uid in ops:
+        fused_uid = f"moe_fused::{topk_uid}"
+    fused_op = _stacked_fused_op(
+        tensors, fused_uid, top_k=k, num_experts=E, F=F, H=H,
+        hidden_tid=hidden_tid, gate_scores_tid=gs_tid, in_tid=w_in,
+        out_tid=w_out, exit_tid=exit_tid,
+        # bmm(x[E,T,H], W_in[E,H,2F]): per expert (in x out); the same for W_out
+        in_axis=0, gate_offset=gate_offset, out_in_axis=0,
+        norm_topk_prob=renorm,
+        # The renormalisation is what the GRAPH computes (sum + div present or
+        # not) — the traced vendor code, not the registry flag, decides it.
+        extra_attrs={"routing_from_graph": "softmax_before_topk"})
+
+    # --- placement: inside the dependence window ---------------------------
+    new_order = [u for u in execution_order if u not in interior]
+    pos = {u: i for i, u in enumerate(new_order)}
+    latest = max((pos[p] for p in (producer_map.get(hidden_tid),
+                                   producer_map.get(gs_tid)) if p in pos),
+                 default=-1)
+    earliest = min((pos[c] for c in consumer_map.get(exit_tid, []) if c in pos),
+                   default=len(new_order))
+    if latest + 1 > earliest:
+        return D("an input of the block is produced after its output is read")
+    new_order.insert(latest + 1, fused_uid)
+    ops[fused_uid] = fused_op
+    for u in interior:
+        ops.pop(u, None)
+    execution_order[:] = new_order
+    return (len(interior), fused_uid, fused_op, 0)

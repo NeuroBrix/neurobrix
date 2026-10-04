@@ -483,10 +483,13 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     _a = op.setdefault("attributes", {})
-                    if _a.get("routing_rewritten"):
+                    if _a.get("routing_rewritten") or _a.get("routing_from_graph"):
                         # A fused op whose rewrite moved the softmax past the top-k
                         # (softmax-after-topk block shape) OWNS its renormalisation:
-                        # the registry's flag would change the math it proved.
+                        # the registry's flag would change the math it proved. One
+                        # whose renormalisation was READ off the traced graph (the
+                        # dense stacked block: sum + div present or not) carries the
+                        # vendor code's own answer, which the flag cannot overrule.
                         continue
                     _a["norm_topk_prob"] = norm_topk_prob
 
