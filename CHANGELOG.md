@@ -188,6 +188,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model whose container is missing a weight is refused by name before it runs.** A weight
+  file the container lists but that is gone from disk, a weight missing from the file the
+  container says holds it, or a weight the model needs that the container does not list at all
+  used to load as nothing; the run then failed later inside an operation with
+  `'NoneType' object has no attribute 'ndim'`. Both `--triton` (compiled and sequential) and
+  `--compiled` now stop before the first operation runs — a missing file or entry when the weights
+  load, a weight the container does not list when they are bound — naming the component, each
+  missing weight and the file it was expected in. Under `--compiled`, a missing normalisation
+  weight is no longer replaced by ones and zeros. A container holding weight files without its
+  `weights_index.json` is refused the same way.
+
+- **`neurobrix validate` checks every weight a container lists, by the same rule a run applies.**
+  At the default `coherence` level it now reports each weight whose file is missing from the
+  container, or missing from the file the container says holds it, naming the weights; it used to
+  check only that the listed files existed.
+
 - **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
   On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
   kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a

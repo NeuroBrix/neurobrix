@@ -15,10 +15,8 @@ CompiledSequence.get_op_blocks uses, so the partitioning is consistent
 across native and triton modes.
 """
 
-import json
 import math
 import re
-import struct
 from pathlib import Path
 from typing import Dict, Optional, Set
 
@@ -29,6 +27,12 @@ from neurobrix.kernels.nbx_tensor import (
     _set_device, float32_to_bf16_bits,
 )
 from .memory_pool import ComponentArena
+# The absent-weight rule lives beside the container format it guards (torch-free), one rule for
+# both engines' loaders and binds and for the validator.
+from neurobrix.nbx.weight_presence import (   # noqa: F401 — re-exported for this engine's callers
+    AbsentWeightError, read_weights_index, absent_weights, refuse_absent_weights,
+    loader_weight_consumers, refuse_unbound_weights, read_safetensors_header,
+)
 
 
 # Same pattern as core/runtime/graph/compiled_sequence.py _BLOCK_RE.
@@ -143,8 +147,32 @@ def load_component_weights(
     comp_dir = Path(cache_path) / "components" / component
     weights_dir = comp_dir / "weights"
 
-    if not weights_dir.exists():
+    # The index is the container's statement of what it holds. Read it first: a component that
+    # stores no weights has neither index nor shard; one whose `weights/` directory is missing
+    # while its index lists tensors is refused below by name, never returned as `{}`.
+    index_tensors = read_weights_index(component, comp_dir)
+    if index_tensors is None:
         return {}
+
+    # Phase 0: every shard header, read once — the pre-flight below and the sizing and loading
+    # phases all walk these same headers, in this same (sorted) order.
+    shard_files = sorted(weights_dir.glob("*.safetensors")) if weights_dir.is_dir() else []
+    shard_headers = []
+    for shard_path in shard_files:
+        header, data_offset = _read_header(str(shard_path))
+        shard_headers.append((str(shard_path), header, data_offset))
+
+    # Pre-flight, before any device is touched: every weight this load is asked for (`only`,
+    # else every key the index lists) is in the shard the index places it in, and that shard
+    # is among the files this load reads. A key outside both is a None waiting for its first
+    # reader. Judged on the very headers the load walks below, so what passes is what loads.
+    by_name = {Path(p).name: h for p, h, _ in shard_headers}
+    refuse_absent_weights(
+        component, str(weights_dir), str(comp_dir / "weights_index.json"),
+        absent_weights(index_tensors, index_tensors.keys() if only is None else only,
+                       by_name.get))
+    if not weights_dir.is_dir():
+        return {}           # no shard directory, and the index lists nothing this load wants
 
     DeviceAllocator.set_device(device_idx)
     DeviceAllocator.ensure_triton_device(device_idx)
@@ -198,14 +226,10 @@ def load_component_weights(
     # Phase 1: Scan all shards to compute per-device bytes for both the
     # regular (fp16/bf16-targeted) path and the hypothetical fp32 upcast
     # path. We then decide globally whether to upcast.
-    shard_files = sorted(weights_dir.glob("*.safetensors"))
     dev_bytes_regular: Dict[int, int] = {}
     dev_bytes_upcast: Dict[int, int] = {}
-    shard_headers = []
 
-    for shard_path in shard_files:
-        header, data_offset = _read_header(str(shard_path))
-        shard_headers.append((str(shard_path), header, data_offset))
+    for shard_path, header, _ in shard_headers:
         # All weights in a shard FILE share the file's target device under
         # weight_sharding (shard-path-keyed map); FGP weight-name keys override
         # per weight inside _weight_target_dev.
@@ -297,13 +321,8 @@ def load_component_weights(
     return weights
 
 
-def _read_header(path: str):
-    """Read safetensors header without loading data."""
-    with open(path, 'rb') as f:
-        header_size = struct.unpack('<Q', f.read(8))[0]
-        header = json.loads(f.read(header_size))
-        data_offset = 8 + header_size
-    return header, data_offset
+# The safetensors header reader is the container layer's, one reader for every engine.
+_read_header = read_safetensors_header
 
 
 def _target_nbytes(info: dict, compute_dtype: NBXDtype,
