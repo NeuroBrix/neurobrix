@@ -3006,6 +3006,9 @@ class GraphExecutor:
             sym_resolver.bind_from_inputs(input_map,
                                           self._dag.get("input_tensor_ids", []),
                                           tensors)
+        # The dispatcher resolves keyword attributes itself: a symbolic one evaluates through
+        # this resolver (a scalar slot), never dropped as an unknown attribute.
+        dispatcher.symbol_resolver = sym_resolver
 
         # Tensor store: maps tensor_id → NBXTensor
         store: Dict[str, Any] = {}
@@ -3599,8 +3602,12 @@ class GraphExecutor:
 
         return outputs, num_ops
 
-    def _resolve_sequential_arg(self, arg, store, sym_resolver, dispatcher):
-        """Resolve a single arg for sequential mode."""
+    def _resolve_sequential_arg(self, arg, store, sym_resolver, dispatcher, slot=None):
+        """Resolve a single arg for sequential mode. `slot` is the slot an expression is
+        evaluated for (core/runtime/symexpr.py): a top-level argument is SCALAR, a list
+        element is a SHAPE — the mirror of both compiled sequences."""
+        from neurobrix.core.runtime import symexpr as _symexpr
+        slot = _symexpr.SCALAR if slot is None else slot
         if isinstance(arg, dict):
             atype = arg.get("type")
             if atype in ("tensor", "tensor_ref"):
@@ -3629,31 +3636,32 @@ class GraphExecutor:
                         f"ran) — refused rather than passing a shorter list")
                 return items
             if atype == "symbol":
-                # Delegate to the resolver's own symbol semantics
-                # (bindings + offset, trace fallback + offset) — the
-                # mirror of triton/symbols.py _eval_expr. The previous
-                # inline form dropped the ref offset on the unbound
-                # fallback and conflated a bound value of 0 with unbound
-                # (get() defaults to 0).
+                # Delegate to the resolver's own symbol semantics (bindings +
+                # offset; an unbound symbol refuses by name) — the one evaluator
+                # of core/runtime/symexpr.py. A bound value of 0 is bound.
                 if sym_resolver:
                     return sym_resolver.resolve(arg)       # unbound: refuses by name inside
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic argument {arg.get('id')} met with no symbol "
                     f"resolver; its trace value {arg.get('trace_value', arg.get('trace'))} "
                     "is a witnessed extent, not a value")
-            if atype in ("mul", "add", "sub", "floordiv", "mod", "neg", "product"):
-                if sym_resolver:
-                    return sym_resolver.resolve(arg)       # an unbound factor refuses inside
+            if _symexpr.is_expression(arg):
+                if sym_resolver:                           # an unbound factor refuses inside
+                    if slot == _symexpr.SCALAR:
+                        return sym_resolver.resolve_scalar(arg)
+                    return sym_resolver.resolve(arg)
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic expression of type {atype!r} met with no symbol "
                     "resolver; its trace value is a witnessed extent, not a value")
             if atype == "list":
                 items = arg.get("value", [])
-                return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+                return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher,
+                                                     _symexpr.SHAPE)
                         for item in items]
             return dispatcher.resolve_attr(arg)
         if isinstance(arg, (list, tuple)):
-            return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+            return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher,
+                                                 _symexpr.SHAPE)
                     for item in arg]
         return arg
 

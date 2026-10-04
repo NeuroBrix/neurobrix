@@ -26,6 +26,7 @@ import re
 import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
+from neurobrix.core.runtime import symexpr as _symexpr
 from .compiled_ops import CompiledOpResolver
 # R30: the same "what would have fit" sentence as the triton sequence. It fires on
 # a DeviceOOMError, which this path raises wherever an NBXTensor allocation sits in
@@ -214,39 +215,26 @@ class SymbolArg:
 
 
 @dataclass(frozen=True)
-class ProductArg:
-    """
-    Reference to a symbolic product expression (e.g., s0 * s1).
-
-    Factors can be symbol IDs (strings) or concrete integers.
-    Resolution multiplies all resolved factor values.
-
-    Fields:
-        factors: Tuple of factor references (symbol_ids or ints)
-        trace_value: Product value at trace time (fallback)
-    """
-    factors: Tuple[Any, ...]
-    trace_value: int
-
-
-@dataclass(frozen=True)
 class ExprArg:
     """
     Symbolic expression that resolves at runtime via SymbolicShapeResolver.
 
-    Handles arbitrary expression trees from SymInt.to_json():
+    Handles any tree of the shared vocabulary (core/runtime/symexpr.py):
     - floordiv: (s1 + pad) // stride + 1
     - add/sub/mul/mod/neg: nested expressions
+    - truediv/sqrt: real values at a scalar slot (a rotary linspace's bounds)
 
     Used for spatial dimensions in view/reshape ops that are derived from
-    input spatial dims through conv chains.
+    input spatial dims through conv chains, and for scalar arguments that
+    follow the request. The slot (shape or scalar) is chosen where its
+    resolver is built: a list element is a shape, a top-level argument a scalar.
 
     Fields:
         expr_dict: Raw expression dict from graph.json (evaluated recursively)
-        trace_value: Value at trace time (fallback when symbols not bound)
+        trace_value: Value at trace time (named in a refusal, never answered)
     """
     expr_dict: dict
-    trace_value: int
+    trace_value: Any            # int for an extent, float for a real bound
 
 
 # ============================================================================
@@ -2042,6 +2030,8 @@ class CompiledSequence:
                 if not isinstance(dim, dict):
                     continue
                 dim_type = dim.get("type", "")
+                # Integer extents only: truediv/sqrt (symexpr.REAL_TYPES) are scalar-slot
+                # values, never an extent — deliberately not matched here.
                 if dim_type not in ("floordiv", "add", "sub", "mul", "mod", "neg", "symbol"):
                     continue
                 # Skip bare symbols — those are handled by _promote_seq_len_scalars
@@ -2175,7 +2165,8 @@ class CompiledSequence:
                     if not isinstance(old_shape, list):
                         continue
 
-                    # Skip if already fully symbolized
+                    # Skip if already fully symbolized (a size list holds integer
+                    # expressions only; a real there refuses at resolution, symexpr.SHAPE)
                     has_expr = any(isinstance(s, dict) and s.get("type") in
                                   ("floordiv", "add", "sub", "mul", "mod", "neg")
                                   for s in old_shape)
@@ -2679,13 +2670,10 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
                 resolvers.append(sym_resolver)
-            elif isinstance(arg, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
-                resolvers.append(prod_resolver)
             elif isinstance(arg, ExprArg):
-                # Dynamic expression resolution (spatial dims from conv chains)
-                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                # A top-level argument is a SCALAR slot (a linspace bound may be real)
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value,
+                                                         _symexpr.SCALAR)
                 resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 # Recursively create resolver for list items
@@ -2726,12 +2714,9 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
                 resolvers.append(sym_resolver)
-            elif isinstance(arg, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
-                resolvers.append(prod_resolver)
             elif isinstance(arg, ExprArg):
-                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value,
+                                                         _symexpr.SCALAR)
                 resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 item_resolver = self._make_list_resolver(arg.items)
@@ -2761,12 +2746,10 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(item.symbol_id, item.trace_value, item.offset)
                 item_resolvers.append(sym_resolver)
-            elif isinstance(item, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(item.factors, item.trace_value)
-                item_resolvers.append(prod_resolver)
             elif isinstance(item, ExprArg):
-                expr_resolver = self._make_expr_resolver(item.expr_dict, item.trace_value)
+                # A list element is a SHAPE slot (a size): a real there refuses by name
+                expr_resolver = self._make_expr_resolver(item.expr_dict, item.trace_value,
+                                                         _symexpr.SHAPE)
                 item_resolvers.append(expr_resolver)
             elif isinstance(item, ListArg):
                 # Nested list - recursive
@@ -2805,59 +2788,33 @@ class CompiledSequence:
             _refuse_unbound(r, symbol_id, trace_value)
         return resolve_symbol
 
-    def _make_product_resolver(self, factors: Tuple[Any, ...], trace_value: int) -> Callable[[TensorArena], int]:
-        """
-        Generate closure for dynamic product resolution.
-
-        Handles expressions like s0 * s1 * 256 by multiplying all factors.
-
-        Args:
-            factors: Tuple of factor references (symbol_ids or ints)
-            trace_value: Fallback value if symbols cannot be resolved
-
-        Returns:
-            Closure that computes product at runtime
-        """
-        def resolve_product(_arena: TensorArena) -> int:
-            r = self._shape_resolver
-            runtime_vals = r.get_bound_symbols() if r is not None else {}
-            result = 1
-            for f in factors:
-                if isinstance(f, str):
-                    if f not in runtime_vals:
-                        _refuse_unbound(r, f, trace_value)
-                    result *= runtime_vals[f]
-                elif isinstance(f, int):
-                    result *= f
-                else:
-                    raise RuntimeError(
-                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
-                        f"resolved at runtime (trace value {trace_value})")
-            return result
-        return resolve_product
-
-    def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable[[TensorArena], int]:
+    def _make_expr_resolver(self, expr_dict: dict, trace_value: int,
+                            slot: str = _symexpr.SHAPE) -> Callable[[TensorArena], Any]:
         """
         Generate closure for dynamic expression resolution.
 
-        Handles arbitrary SymInt expression trees (floordiv, add, sub, mul, etc.)
-        by delegating to SymbolicShapeResolver._resolve_symint_dict() at runtime.
+        Evaluates any tree of the shared vocabulary (core/runtime/symexpr.py) through
+        SymbolicShapeResolver._resolve_symint_dict() at runtime, in `slot`: SHAPE for a size
+        (an int, a real refused by name), SCALAR for an op's scalar argument (int or float).
 
         Used for spatial dimensions derived from conv chains:
-        e.g., (s1 + 2*pad - dilation*(k-1) - 1) // stride + 1
+        e.g., (s1 + 2*pad - dilation*(k-1) - 1) // stride + 1, and for real bounds
+        such as a rotary linspace's +-(h * sqrt(area / (h * w))) / 2.
 
         Args:
-            expr_dict: Expression dict from SymInt.to_json()
-            trace_value: Fallback value if symbols cannot be resolved
+            expr_dict: Expression dict from graph.json
+            trace_value: the witnessed trace value, named in a refusal (never answered)
+            slot: symexpr.SHAPE or symexpr.SCALAR
 
         Returns:
             Closure that evaluates expression at runtime
         """
-        def resolve_expr(_arena: TensorArena) -> int:
+        def resolve_expr(_arena: TensorArena) -> Any:
             r = self._shape_resolver
             if r is None:
                 _refuse_unbound(None, str(expr_dict)[:80], trace_value)
-            return r._resolve_symint_dict(expr_dict)   # an unbound symbol refuses by name inside
+            # the ONE evaluator (core/runtime/symexpr.py); an unbound symbol refuses by name inside
+            return r._resolve_symint_dict(expr_dict, slot)
         return resolve_expr
 
     # ========================================================================
@@ -2926,29 +2883,10 @@ class CompiledSequence:
                 offset = arg.get("offset", 0)
                 return SymbolArg(symbol_id=symbol_id, trace_value=trace_value, offset=offset)
 
-            if arg_type == "product":
-                # Dynamic resolution: return ProductArg for runtime resolution
-                # Format: {'type': 'product', 'factors': ['s1', 's2'], 'trace_value': 16384}
-                factors_raw = arg.get("factors", [])
-                trace_value = arg.get("trace_value", 0)
-                compiled_factors = []
-                for f in factors_raw:
-                    if isinstance(f, dict) and f.get("type") == "symbol":
-                        # Extract symbol id from nested symbol
-                        compiled_factors.append(f.get("symbol_id") or f.get("id") or f.get("name"))
-                    elif isinstance(f, dict):
-                        # Concrete value wrapped in dict
-                        compiled_factors.append(f.get("value", f.get("trace_value", 0)))
-                    elif isinstance(f, str):
-                        # Direct symbol reference (e.g., "s0")
-                        compiled_factors.append(f)
-                    else:
-                        # Concrete integer
-                        compiled_factors.append(f)
-                return ProductArg(factors=tuple(compiled_factors), trace_value=trace_value)
-
-            # Expression types from SymInt.to_json() — spatial dim expressions
-            if arg_type in ("floordiv", "add", "sub", "mul", "mod", "neg"):
+            # An expression of the shared vocabulary (core/runtime/symexpr.py): integer
+            # extents from SymInt.to_json(), and the real bounds Forge's extent provenance
+            # records (truediv, sqrt). Evaluated at run time in the slot it is resolved for.
+            if _symexpr.is_expression(arg):
                 trace = arg.get("trace", arg.get("trace_value", 0))
                 return ExprArg(expr_dict=arg, trace_value=trace)
 

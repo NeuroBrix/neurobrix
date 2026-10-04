@@ -1,11 +1,13 @@
 """Triton Symbolic Shape Resolution — pure Python math.
 
 Resolves symbolic dimensions (s0=batch, s1=seq_len) from input tensor shapes.
-Evaluates expression trees (floordiv, add, mul) for derived dimensions.
-Zero torch dependency.
+Evaluates expression trees through the ONE vocabulary shared with the ATen resolver
+(neurobrix.core.runtime.symexpr). Zero torch dependency.
 """
 
 from typing import Dict
+
+from neurobrix.core.runtime import symexpr as _symexpr
 
 
 class UnboundSymbolError(RuntimeError):
@@ -150,89 +152,33 @@ class SymbolResolver:
                         self._bind(sym_id, tensor.shape[dim])
 
     def resolve(self, val) -> int:
-        """Resolve a value that may be symbolic.
+        """Resolve a value in a SHAPE slot (an extent, a size-list element).
 
-        Handles: int, SymDimRef-like dict, expression tree dict.
+        Handles: int, a symbol id string, an expression tree dict of the shared vocabulary
+        (core/runtime/symexpr.py). A real (true division, sqrt) refuses by name: an extent is
+        an integer. A bare float literal keeps its integer reading, as before.
         """
         if isinstance(val, int):
             return val
         if isinstance(val, float):
             return int(val)
-        if isinstance(val, dict):
-            return self._eval_expr(val)
+        if isinstance(val, (dict, str)):
+            return _symexpr.evaluate(val, self._symbol_value, _symexpr.SHAPE)
         return int(val)
 
-    def _eval_expr(self, expr: dict) -> int:
-        """Evaluate an expression tree recursively.
+    def resolve_scalar(self, val):
+        """Resolve an op's SCALAR argument: a symbol or an expression evaluates in the scalar
+        slot (a `linspace` bound may be real); a dict outside the vocabulary refuses by name;
+        a plain number is returned as it stands."""
+        if isinstance(val, (dict, str)):
+            return _symexpr.evaluate(val, self._symbol_value, _symexpr.SCALAR)
+        return val
 
-        Graph.json format uses:
-        - {"type": "symbol", "id": "s0", "trace": 1}
-        - {"type": "mul", "left": {...}, "right": {...}, "trace": 23}
-        - {"type": "neg", "operand": {...}}
-        - {"type": "product", "factors": [...], "trace_value": N}
-        - {"type": "const", "value": N} or {"value": N}
-
-        Ported from shape_resolver._resolve_symint_dict.
-        """
-        type_str = expr.get("type", "")
-
-        # Constant value
-        if type_str == "const" or (type_str == "" and "value" in expr):
-            return expr.get("value", expr.get("trace", 0))
-
-        # Symbol reference
-        if type_str == "symbol":
-            sym_id = expr.get("id") or expr.get("symbol_id")
-            if sym_id and sym_id in self._bindings:
-                return self._bindings[sym_id] + expr.get("offset", 0)
-            self._refuse(sym_id, expr)
-
-        # Unary: neg
-        if type_str == "neg":
-            operand = expr.get("operand", expr.get("args", [None])[0])
-            if operand is not None:
-                return -self._eval_expr(operand) if isinstance(operand, dict) else -int(operand)
-            return 0
-
-        # Binary operations: left/right format
-        if type_str in ("add", "sub", "mul", "floordiv", "mod"):
-            left = self._resolve_val(expr.get("left"))
-            right = self._resolve_val(expr.get("right"))
-            if type_str == "add":
-                return left + right
-            elif type_str == "sub":
-                return left - right
-            elif type_str == "mul":
-                return left * right
-            elif type_str == "floordiv":
-                return left // right if right != 0 else 0
-            elif type_str == "mod":
-                return left % right if right != 0 else 0
-
-        # Product: multiply factors
-        if type_str == "product":
-            factors = expr.get("factors", [])
-            if not factors:
-                raise UnboundSymbolError("ZERO FALLBACK: a product expression with no factors")
-            result = 1
-            for f in factors:
-                result *= self._resolve_val(f)
-            return result
-
-        raise UnboundSymbolError(
-            f"ZERO FALLBACK: expression of type {type_str!r} cannot be evaluated at runtime")
-
-    def _resolve_val(self, val) -> int:
-        """Resolve a single value — int, str symbol ref, or dict expression."""
-        if isinstance(val, (int, float)):
-            return int(val)
-        if isinstance(val, str):
-            if val in self._bindings:
-                return self._bindings[val]
-            self._refuse(val, None)
-        if isinstance(val, dict):
-            return self._eval_expr(val)
-        raise UnboundSymbolError(f"ZERO FALLBACK: cannot resolve {val!r} as a dimension")
+    def _symbol_value(self, sym_id: str, node) -> int:
+        """The bound value of a symbol, or a refusal naming it (the shared evaluator's callback)."""
+        if sym_id in self._bindings:
+            return self._bindings[sym_id]
+        self._refuse(sym_id, node)
 
     def is_bound(self, sym_id: str) -> bool:
         return sym_id in self._bindings
