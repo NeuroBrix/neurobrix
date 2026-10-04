@@ -416,11 +416,22 @@ class RuntimeExecutor:
             # certified autotune directory (an engine component) serves every
             # shape it holds for the profile in force; a shape it lacks sweeps
             # at runtime, announced, and lands in the local replay cache.
+        else:
+            # The ATen branch's mirror: the graph's own random ops (a traced
+            # posterior sample, a vocoder's phase) draw from the run's
+            # sampling generator — the one the initial and scheduler noise
+            # come from — never from a second stream on the same seed
+            # (graph/run_generator).
+            from neurobrix.core.runtime.graph import run_generator
+            run_generator.arm(self.variable_resolver.sampling_generator)
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         try:
             return handler.execute()
         finally:
+            if self.mode not in ("triton", "triton_sequential"):
+                from neurobrix.core.runtime.graph import run_generator
+                run_generator.arm(None)
             if self.mode in ("triton", "triton_sequential"):
                 from neurobrix.kernels import autotune_certified as _cert
                 _served = _cert.served()

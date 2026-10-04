@@ -71,20 +71,6 @@ def condition_channel_dim(ctx: Any, loop_comp: str) -> int:
     return int(spec.get("channel_dim", 1)) if spec else 1
 
 
-def _vae_scaling(ctx: Any) -> tuple:
-    """Read (scaling_factor, invert_scale_latents) from the vae profile.
-
-    Scalar latent scaling for VAEs without per-channel mean/std (CogVideoX).
-    Config read (data-driven), not compute.
-    """
-    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
-    prof = json.loads(prof_path.read_text())
-    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
-    sf = cfg.get("scaling_factor") or prof.get("scaling_factor")
-    invert = bool(cfg.get("invert_scale_latents") or prof.get("invert_scale_latents"))
-    return (float(sf) if sf else None), invert
-
-
 def _vae_temporal_ratio(ctx: Any) -> Optional[int]:
     """Read the VAE temporal compression ratio (pixel frames per latent frame).
 
@@ -216,7 +202,7 @@ def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
 def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXTensor]:
     """Build the per-step-invariant condition for the active style (R30 mirror
     of the compiled brick). "wan" (frame-mask + mean/std, channels-first),
-    "cogvideox" (scalar-scaled, temporally-padded image latent, no mask,
+    "cogvideox" (the encoded, already scaled image latent, temporally padded, no mask,
     frames-first) or "state_video_mask" (Allegro-TI2V: VAE-encoded masked
     video + temporally-folded pixel mask, channels-first). Returns None if the
     vae_encoder output is not yet resolved.
@@ -229,7 +215,8 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXTensor
 
 
 def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[NBXTensor]:
-    """CogVideoX-I2V conditioning (NBXTensor): scalar-scaled VAE image latent,
+    """CogVideoX-I2V conditioning (NBXTensor): the encoded image latent (the
+    vae_encoder graph already applies scaling_factor; never scaled again here),
     temporally padded (frame 0 = image, rest zeros) to the denoiser's latent
     frame count, NO mask, frames-first [B, T, C, H, W]. R33-pure mirror of the
     compiled _build_condition_cogvideox.
@@ -245,11 +232,6 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[NBXTensor]:
     img = _to_channels_first(img, latent_channels).float()  # [B, C, F, H, W]
     dev_idx = img._device_idx
     b, c, f, h, w = img.shape
-    sf, invert = _vae_scaling(ctx)
-    if sf:
-        factor = (1.0 / sf) if invert else sf
-        scale_full = np.full((b, c, f, h, w), np.float32(factor), dtype=np.float32)
-        img = img * _nbx_on(scale_full, dev_idx)
     t_target = _target_latent_frames(ctx)
     if t_target and t_target > f:
         pad = _nbx_on(np.zeros((b, c, t_target - f, h, w), dtype=np.float32), dev_idx)
