@@ -6924,6 +6924,31 @@ class PrismSolver:
         # a refusal to try (P-PRISM-NEVER-REFUSE, closed 2026-09-03).
         peak_mb = max((m.total_mb for _, m in sorted_comps), default=0.0)
         biggest = max(sorted_comps, key=lambda item: item[1].total_mb)[0] if sorted_comps else "?"
+        # What the solve's tiling engine DID tile, and what it declined and why: a tiled component's
+        # untiled figure is not what binds, and a declined one has no tile count to offer
+        # (`plan_advice.what_would_have_fit`). SANA-Video_2B_720p at 672x1344x81 under Triton on the
+        # 16 GB V100 class was refused naming its vae twice — "largest component: vae at 303099MB" and
+        # "its weights and overhead alone are 16,449 MB" — a vae the same solve had tiled to 5 200 MB per
+        # tile, while the transformer that bound (one block's activations at 155 232 tokens, 18 774 MB
+        # against a 15 072 MB segment) was offered "15 tiles" the tiling engine had declined
+        # (2026-10-04).
+        _tiled_said = {
+            _c: (f"the plan's tiling engine tiles it (tile extent {_t.get('tile_size')}, "
+                 f"{int(_t.get('tiled_activation_bytes') or 0) / (1024 * 1024):,.0f} MB of activations per tile)")
+            for _c, _t in (getattr(self, "_layer_stream_tilings", None) or {}).items()}
+        _untileable: Dict[str, str] = {}
+        for _whys in list(_why_by_rung.values()) + [getattr(self, "_tiling_declined", {}) or {}]:
+            for _c, _why in _whys.items():
+                if _c not in _tiled_said:
+                    # a reason a rung line above already prints is pointed at, not printed twice
+                    _untileable.setdefault(_c, "the tiling engine's reason is stated above" if _why in tried_str
+                                           else _why)
+        _untiled = [(n, m) for n, m in sorted_comps if n not in _tiled_said]
+        if _untiled:
+            biggest, _big = max(_untiled, key=lambda item: item[1].total_mb)
+            _biggest_mb = _big.total_mb
+        else:
+            _biggest_mb = peak_mb
 
         # "A smaller input" is the remedy this refusal already names and does not
         # take. It is now COMPUTED: for every component whose ACTIVATIONS are what
@@ -6945,7 +6970,8 @@ class PrismSolver:
                 for _n, _m in sorted_comps
                 if _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes)
             ]
-            _lines = _pa.what_would_have_fit(_verdicts, spatial=True)
+            _lines = _pa.what_would_have_fit(_verdicts, spatial=True, tiled=_tiled_said,
+                                             untileable=_untileable)
             if _lines:
                 _reshape_block = ("\n\nWhat tiling would do, computed rather than named:\n"
                                   + "\n".join(_lines))
@@ -6960,11 +6986,19 @@ class PrismSolver:
         # "the largest component whole in host RAM", which no rung there asks for. The headline said
         # the latter on the Mac's five refusals of 2026-10-04 while the line above it named the
         # streaming decline that actually bound each one.
+        # Under the TRITON engine a host-placed component computes on the card as well (the host rung's
+        # own decline above says so), so on a discrete card too the last rung that can help is layer
+        # streaming, and ITS decline is the bound — "the largest single component in host RAM" is a
+        # rung the Triton engine does not offer (SANA-Video 672x1344x81 on the 16 GB V100, 2026-10-04).
+        from neurobrix.core.prism.host_footprint import engine_of
         _unified = any(getattr(getattr(d, "spec", None), "has_unified_memory", False) for d in devices)
-        if _unified:
-            _bound = (f"On unified memory the last rung streams a component one segment at a time on "
+        _triton = engine_of(getattr(self, "_mode", None) or "compiled") == "triton"
+        if _unified or _triton:
+            _where = ("On unified memory" if _unified else
+                      "Under the Triton engine every rung computes on the card, the host rungs included, so")
+            _bound = (f"{_where} the last rung streams a component one segment at a time on "
                       f"the device, and it declined:\n  {self._layer_streaming_declined or 'no reason recorded'}\n"
-                      f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n")
+                      f"  largest component the plan did not tile: {biggest} at {_biggest_mb:.0f}MB\n\n")
         else:
             _bound = (f"The last rung needs only the largest single component to fit in "
                       f"memory, and it does not:\n"
@@ -6979,7 +7013,7 @@ class PrismSolver:
             f"GPUs:\n{dev_info}\n\n"
             f"Total GPU available: {total_avail:.0f}MB\n\n"
             f"What would make it run:\n"
-            + (f"  1. More memory — the streaming path above says what it lacked\n" if _unified else
+            + (f"  1. More memory — the streaming path above says what it lacked\n" if (_unified or _triton) else
                f"  1. More host RAM — the streaming path needs {peak_mb:.0f}MB for that one component\n") +
             f"  2. A GPU with more memory\n"
             f"  3. A smaller input (resolution, batch, context)\n"
