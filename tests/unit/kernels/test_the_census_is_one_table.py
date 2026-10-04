@@ -138,3 +138,23 @@ def test_an_old_schema_table_is_refused_by_name_and_migrated_once(tmp_path):
     assert got == [("A", "(19,", ["aten.mm::7", "aten.mm::9"], [8192, 16384]),
                    ("A", "(64,", [None], [16384]),
                    ("B", "(19,", ["aten.mm::7"], [16384])]
+
+
+def test_a_renamed_container_retires_its_old_rows(tmp_path):
+    # A retrace under a new name replaces, never adds: the old name's rows leave with its container.
+    # Wrong code (no retirement) keeps "old" and this fails; seen red with the filter inverted.
+    p = tmp_path / "t.jsonl"
+    T.write(p, [_row("old", K1), _row("old", K2), _row("new", K1), _row("B", K2)])
+    gone = T.retire_absent(p, {"new", "B"})
+    assert gone == {"old": 2}
+    assert {(r["model"], r["key"]) for r in T.read(p)} == {("new", K1), ("B", K2)}
+    assert T.retire_absent(p, {"new", "B"}) == {}          # idempotent: nothing left to retire
+
+
+def test_an_empty_listing_is_refused_and_the_table_kept(tmp_path):
+    # A mis-pointed cache lists nothing; read as "every container is gone" it would empty the table.
+    p = tmp_path / "t.jsonl"
+    T.write(p, [_row("A", K1)])
+    with pytest.raises(T.EmptyCensus, match="no container is present"):
+        T.retire_absent(p, set())
+    assert [r["model"] for r in T.read(p)] == ["A"]

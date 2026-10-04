@@ -188,6 +188,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The shipped census table no longer lists models that were renamed.** When a model was rebuilt
+  under a new name, its rows stayed under the old name too, so `neurobrix autotune certify` counted
+  shapes for models that no longer exist. A model's rows now leave the table with its container.
+
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty
   negative prompt instead of ignoring it, which pulled every step away from the prompt. On

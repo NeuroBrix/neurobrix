@@ -169,6 +169,30 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, in
     return len(old) - len(kept), len(rows)
 
 
+def retire_absent(path: Path, present: Iterable[str]) -> Dict[str, int]:
+    """The rows of every model whose container is no longer present removed, every other row kept.
+    Returns {retired model: rows removed}.
+
+    A retrace under a new name (the derived name replacing a hand-written one, 2026-10-04) is a
+    retrace: it replaces, never adds. `replace_model` replaces by NAME, so the old name's rows
+    outlived its container and the table claimed seven models that no longer existed. `present` is
+    the set of containers that exist (the cache's listing); an empty one is refused, never read as
+    "every container is gone" — a mis-pointed cache would otherwise empty the table."""
+    present = set(present)
+    if not present:
+        raise EmptyCensus(f"retire_absent({path.name}): no container is present — an empty or "
+                          f"mis-pointed listing is not the knowledge that every model is gone")
+    with locked(path):
+        old = read(path)
+        gone: Dict[str, int] = {}
+        for r in old:
+            if r["model"] not in present:
+                gone[r["model"]] = gone.get(r["model"], 0) + 1
+        if gone:
+            write(path, [r for r in old if r["model"] in present])
+    return gone
+
+
 class EmptyCensus(ValueError):
     """A model's rows would be replaced by none."""
 

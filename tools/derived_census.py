@@ -1860,8 +1860,28 @@ def main(argv=None) -> int:
     t.add_argument("--modes", default="triton,triton-sequential")
     t.add_argument("--rungs", default="ladder", help="'ladder' (the class's rungs) or a comma-separated list of MB")
     t.add_argument("--logs", required=True, help="where a tiling probe's resized input lands")
+    r = sub.add_parser("retire-absent", help="remove the table rows of models whose container is gone")
+    r.add_argument("--table", required=True, help="<vendor>/<profile> of THE census tables")
     a = ap.parse_args(argv)
+    if a.cmd == "retire-absent":
+        return retire_absent(a)
     return table(a) if a.cmd == "table" else compare(a)
+
+
+def retire_absent(a) -> int:
+    """Every class table of the profile, without the rows of models whose container left the cache
+    (a rename retires the old name). The cache's listing is the only source of what is present."""
+    from neurobrix.kernels import census_table as T
+    present = {p.parent.name for p in CACHE.glob("*/manifest.json")}
+    vendor, profile = a.table.split("/", 1)
+    tables = sorted(T.table_path(vendor, profile, 0).parent.glob("*g.jsonl"))
+    if not tables:
+        raise SystemExit(f"--table {a.table!r}: no class table under {T.table_path(vendor, profile, 0).parent}")
+    for path in tables:
+        gone = T.retire_absent(path, present)
+        print(f"[retire-absent] {path.name}: " + (", ".join(f"{m} ({n} rows)" for m, n in sorted(gone.items()))
+                                                    or "nothing absent") + f" — {len(present)} containers present")
+    return 0
 
 
 if __name__ == "__main__":
