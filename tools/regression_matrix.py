@@ -90,8 +90,28 @@ def off_trace_size(model: str, family: str):
     return (h2, w) if h2 != h else (max(step, h - step), w)
 
 
+_REFUSAL = "This model cannot run on this machine."
+
+
+def prism_refusal(text: str) -> str:
+    """A placement refusal, whole: every strategy's decline and the device and host figures it read.
+
+    The planner's refusal is a multi-line block ending in its generic advice ("4. A smaller model"); a row that kept
+    only a last line could not tell a plan defect from a busy host (the Mac, MiniCPM-o-4_5, 2026-10-04 15:36). The
+    block is kept from its first line up to the advice, one line per non-empty line, joined by ' | '."""
+    i = text.rfind(_REFUSAL)
+    if i < 0:
+        return ""
+    block = text[i:].split("What would make it run:")[0]
+    lines = [re.sub(r"^E(\s+|$)", "", l.strip()).strip() for l in block.splitlines()]
+    return " | ".join(l for l in lines if l)
+
+
 def first_error(log: Path) -> str:
     text = log.read_text(errors="replace") if log.exists() else ""
+    refusal = prism_refusal(text)
+    if refusal and not re.search(r"KILLED by SIGKILL|TIMEOUT after", text):
+        return refusal
     for pat in (r"(KILLED by SIGKILL[^\n]*)", r"(TIMEOUT after[^\n]*)", r"(ZERO FALLBACK[^\n]*)",
                 r"((?:Runtime|Value|Shape\w*|OutOfMemory|Key|Index)Error[^\n]*)", r"(Traceback[^\n]*)"):
         m = re.findall(pat, text)
