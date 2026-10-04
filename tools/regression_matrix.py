@@ -242,13 +242,17 @@ def mechanical(path: Path, family: str, expect_hw=None) -> dict:
     if not path.exists():
         return {"missing": True}
     suffix = path.suffix.lower()
-    if suffix == ".png":
-        return image_degeneracy(path, expect_shape=expect_hw)
-    if suffix == ".txt":
-        return text_degeneracy(path)
-    if suffix == ".mp4":
-        return video_degeneracy(path, expect_shape=expect_hw)
-    return {"path": str(path), "bytes": path.stat().st_size}
+    judge = {".png": lambda: image_degeneracy(path, expect_shape=expect_hw),
+             ".txt": lambda: text_degeneracy(path),
+             ".mp4": lambda: video_degeneracy(path, expect_shape=expect_hw)}.get(suffix)
+    if judge is None:
+        return {"path": str(path), "bytes": path.stat().st_size}
+    try:
+        return judge()
+    except Exception as exc:  # noqa: BLE001 — a judge that cannot judge names its row, never ends the run
+        # mochi-1-preview, 2026-10-04: imageio absent, the raise left run_cell with no row and killed the run.
+        # Not judged is neither degenerate nor clean: `degenerate` None, the error named in the table.
+        return {"judge_error": f"{type(exc).__name__}: {exc}", "degenerate": None}
 
 
 @functools.lru_cache(maxsize=None)
@@ -769,20 +773,27 @@ def cmd_table(a) -> int:
         lp = (proofs.get(model) or {}).get("last_proof") or {}
         cells = []
         for mode in MODES:
-            r = by[model].get(mode)
-            if r is None:
-                cells.append("not run")
-            elif r["rc"] != 0:
-                cells.append(f"rc {r['rc']}: {r.get('error', '')[:80]}")
-            else:
-                mech = r.get("mechanical") or {}
-                cells.append(("DEGENERATE " + "; ".join(mech.get("reasons", []))[:80]) if mech.get("degenerate")
-                             else f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}")
+            cells.append(table_cell(by[model].get(mode)))
         lines.append(f"| {model} | {by[model][next(iter(by[model]))]['family']} | "
                      f"{lp.get('date') or '—'} {lp.get('verdict') or ''} | " + " | ".join(cells) + " |")
     write_atomic(out / "table.md", "\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
+
+
+def table_cell(r) -> str:
+    """One mode's cell of table.md: not run, the rc and its error, the judge's error, a degenerate
+    artefact, or the run and its verdict."""
+    if r is None:
+        return "not run"
+    if r["rc"] != 0:
+        return f"rc {r['rc']}: {r.get('error', '')[:80]}"
+    mech = r.get("mechanical") or {}
+    if mech.get("judge_error"):
+        return f"JUDGE ERROR {mech['judge_error'][:80]}"
+    if mech.get("degenerate"):
+        return "DEGENERATE " + "; ".join(mech.get("reasons", []))[:80]
+    return f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}"
 
 
 def catalogue_repo_ids(path: Path) -> dict:
