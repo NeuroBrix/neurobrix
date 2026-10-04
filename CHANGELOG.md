@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SANA-Video 2B 720p now runs on a 16 GB GPU with guidance on.** Guidance runs the model on the
+  conditional and unconditional inputs together, and at 720p that doubled batch needed more memory
+  than the card has, so the run was refused. When the doubled batch does not fit, the engine now runs
+  the two halves one after the other. The result is the same, it needs half the working memory, and
+  the plan says when it does this. Both engines, PyTorch and Triton, follow the same plan.
+
 - **Wan2.1-VACE plans its control encoder for the two clips it really encodes.** The memory plan and the
   certified kernel set priced the VACE control encoder at one clip, while a run encodes the inactive and
   reactive pair together. Its plan and its kernel keys now match what the run does.

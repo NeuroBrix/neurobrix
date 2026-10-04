@@ -1642,6 +1642,11 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     args = create_parser().parse_args(["run", "--model", a.model, *request, MODE_FLAGS[a.mode],
                                        "--hardware", a.hardware])
     ic = request_input_config(args, manifest, manifest.get("family"), CACHE / a.model)
+    if plan.get("cfg_split_components"):
+        # The plan runs these components' guidance branches one pass each (`ExecutionPlan.
+        # cfg_split_components`): their launches are at one branch's batch, as the plan priced them.
+        import dataclasses as _dc
+        ic = _dc.replace(ic, flow=ic.flow.split_guidance(plan["cfg_split_components"]))
     loop_comps = set((flow.get("loop") or {}).get("components") or [])
     if flow.get("type") == "rnnt":
         # the rnnt flow executes its forward stages' graphs; the greedy decoder and the joint run

@@ -23,13 +23,14 @@ machine pinned, the rung imposed through the door. Three causes, each a rule of 
    component whose reserve weighs most is streamed too, until the segments fit; the KV check then
    prices the cut's own window, not every streamed peak summed.
 
-EXCLUDED BY NAME, with the evidence asserted below: Wan2.1-I2V-14B-480P-Diffusers and Allegro-TI2V
-refuse because their `vae_encoder` graphs FROZE the time axis — Wan2.1's output is
+RETRACED (2026-10-05): Wan2.1-I2V-14B-480P-Diffusers and Allegro-TI2V were excluded by name: they
+refused because their `vae_encoder` graphs FROZE the time axis — Wan2.1's output is
 `[1, 3, 16, h', w']` (batch and latent time concrete; Wan2.2's is `[s0, f(s1), 16, h', w']`) and
 Allegro's `[1, (s0*s1 ...), 4, h', w']` (batch fused into time, the known batch freeze). No tile maps
 the time symbol, and the graph cannot run the request's frames anyway: a Forge re-trace (principle 1),
 not a Prism rule. With that encoder's activations brought under the rung, both plan layer_streaming
-(probe, 2026-10-04) — it is their only cause.
+(probe, 2026-10-04) — it is their only cause. Forge re-traced both encoders (2026-10-04); they are
+now in STREAMED, and the door that named them asserts their time axis stays one symbol.
 
 SEEN RED on e5f03258 (2026-10-04): every plan cell refused (the five texts above), the dead-output
 cell kept 1 000 000 bytes alive, the reserve cell counted another phase's weights, the lazy cell
@@ -62,8 +63,13 @@ import trace_request as TR  # noqa: E402
 
 MB = 1024 * 1024
 MODES = ["triton", "triton_sequential", "compiled"]
-STREAMED = ["CogVideoX-5b-I2V", "Ming-Lite-Omni-1.5", "Wan2.2-I2V-A14B-Diffusers"]
-FROZEN_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
+#: Wan2.1-I2V-14B-480P and Allegro-TI2V joined on 2026-10-05: Forge re-traced their `vae_encoder`
+#: with a symbolic time axis (topologies of 2026-10-04 23:31 and 23:18), the frozen-encoder door
+#: below turned red as it was written to, and both now plan layer_streaming at the top rung.
+STREAMED = ["CogVideoX-5b-I2V", "Ming-Lite-Omni-1.5", "Wan2.2-I2V-A14B-Diffusers",
+            "Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
+#: The encoders the door named, now re-traced: their time axis is ONE symbol (asserted below).
+RETRACED_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
 
 
 def _input_config(model: str, mode: str):
@@ -113,21 +119,28 @@ def test_on_the_busy_mac_the_plan_streams_at_the_rung_its_reading_gives(monkeypa
     assert p.strategy == "layer_streaming", f"{model} planned {p.strategy!r}"
 
 
-@pytest.mark.parametrize("model", FROZEN_ENCODER)
-def test_a_frozen_encoder_time_axis_is_named_not_planned_around(monkeypatch, model):
-    """The door that turns red when Forge re-traces these encoders with a symbolic time axis: then
-    they belong in STREAMED. Until then the refusal names the streaming bound (unified memory) and
-    the encoder's tiling reason is its frozen time map."""
-    pin_host(monkeypatch, 24576, 18186, "the Mac's idle reading")
-    impose_rung(monkeypatch, 16384)
-    c, ic = _input_config(model, "triton")
-    s = PrismSolver()
-    with pytest.raises(RuntimeError) as e:
-        s.solve_smart(c, profile(APPLE_M4_PRO), ic, mode="triton")
-    assert "On unified memory the last rung streams a component one segment at a time" in str(e.value)
-    assert "'vae_encoder'" in (s._layer_streaming_declined or "")
-    why = (getattr(s, "_tiling_declined", {}) or {}).get("vae_encoder", "")
-    assert "is a linear (t/r) or causal (1 + (t-1)//r) map of its time symbol s1 alone" in why, why
+@pytest.mark.parametrize("model", RETRACED_ENCODER)
+def test_a_retraced_encoder_maps_time_through_one_symbol(model):
+    """The door that replaced `a_frozen_encoder_time_axis_is_named_not_planned_around`: those
+    encoders froze their time axis (Wan2.1: `[1, 3, 16, h', w']`; Allegro: batch folded into time).
+    Re-traced, the latent time dim of their output is an expression of the frame symbol alone —
+    the property the tile planner reads — and the top-rung plan above streams them."""
+    import json
+    g = json.loads((container_root(model) / "components" / "vae_encoder" / "graph.json").read_text())
+    out = g["tensors"][g["output_tensor_ids"][0]]["symbolic_shape"]["dims"]
+
+    def symbols(d):
+        if isinstance(d, dict):
+            if d.get("type") == "symbol":
+                return {d["id"]}
+            return set().union(*(symbols(v) for v in d.values() if isinstance(v, (dict, list))))
+        if isinstance(d, list):
+            return set().union(*(symbols(v) for v in d)) if d else set()
+        return set()
+    time_dims = [d for d in out[1:3] if symbols(d)]
+    assert time_dims, f"{model}: the encoder's latent time is concrete again: {out[1:3]}"
+    assert all(len(symbols(d)) == 1 for d in time_dims), (
+        f"{model}: the latent time folds several symbols (a batch freeze): {time_dims}")
 
 
 # ───────────────── the rules, on graphs and figures built here ─────────────────
