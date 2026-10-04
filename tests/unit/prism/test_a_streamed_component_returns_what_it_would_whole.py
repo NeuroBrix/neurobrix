@@ -265,3 +265,16 @@ def test_a_protected_tid_a_piece_produced_and_did_not_keep_is_refused_by_name(mo
     base.enable_hidden_states_capture()
     with pytest.raises(RuntimeError, match=r"did not keep"):
         base.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+
+
+@pytest.mark.parametrize("mode", ["sequential", "compiled"])
+def test_a_run_keys_its_outputs_by_the_one_rule_the_strategy_and_stand_ins_use(mode):
+    """The engine side of `output_key`: a real run returns the declared output under its
+    `output_name`. A stand-in for a piece's run (tests/unit/strategies) keys by the same function,
+    so a stand-in keyed otherwise is a contract no engine has."""
+    from neurobrix.core.runtime.graph_executor import output_key
+    whole = _executor(mode)
+    whole.load_weights(None, COMPONENT)
+    out = whole.run({"inputs_embeds": torch.randn(B, T_TRACE, D)})
+    tid = "aten._unsafe_view::0::out_0"
+    assert list(out) == ["logits"] == [output_key(whole._dag["tensors"][tid], tid)]
