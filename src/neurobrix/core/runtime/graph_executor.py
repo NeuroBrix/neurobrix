@@ -55,6 +55,16 @@ from .graph.memory_pool import MemoryPool
 from neurobrix.core.memory import MemoryManager
 
 
+def output_key(meta: Optional[dict], tid: str) -> str:
+    """The key a run returns the tensor `tid` under: its `output_name`, else the tid. ONE rule for
+    every engine's gather (torch and triton), for a `layer_streaming` component answering as a
+    whole run (`LayerStreamingStrategy._run_pieces`), and for anything standing in for a run. A
+    null name is an ABSENT name: `.get("output_name", tid)` returned None for a present-but-null
+    key and collapsed every such output onto the key None (measured 2026-09-09 building segment
+    graphs: four seam outputs declared, `{None: ...}` returned). Pure Python (R33)."""
+    return (meta or {}).get("output_name") or tid
+
+
 def _primary_output_tids(dag: dict) -> list:
     """Declared-contract-first ordering of a DAG's output tensor ids.
 
@@ -2848,9 +2858,8 @@ class GraphExecutor:
             # `{None: NBXTensor(shape=(1, 21, 2048))}`.
             #
             # A null name is an ABSENT name. `or` says that; `get`'s default
-            # does not.
-            name = info.get("output_name") or tid
-            outputs[name] = tensor
+            # does not. One rule for every engine: `output_key`.
+            outputs[output_key(info, tid)] = tensor
 
         elapsed = (_time.perf_counter() - start) * 1000
         self._last_stats = ExecutionStats(
@@ -5280,10 +5289,7 @@ class GraphExecutor:
             try:
                 tensor = self._resolver.resolve(tid)
                 # Use output_name as key if available, otherwise tensor_id
-                tensor_info = tensors_info.get(tid, {})
-                output_name = tensor_info.get("output_name")
-                key = output_name if output_name else tid
-                outputs[key] = tensor
+                outputs[output_key(tensors_info.get(tid), tid)] = tensor
             except RuntimeError as e:
                 raise RuntimeError(f"Failed to gather output '{tid}': {e}")
 

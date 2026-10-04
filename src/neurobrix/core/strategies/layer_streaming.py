@@ -23,6 +23,7 @@ import os
 
 from typing import Any, Dict, List, Optional
 
+from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
@@ -372,7 +373,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # produced and, in the triton engine, the protected tids beside them.
         result: Dict[str, Any] = {}
         for tid in declared:
-            key = (tensors.get(tid) or {}).get("output_name") or tid
+            key = output_key(tensors.get(tid), tid)
             if key not in values:
                 raise RuntimeError(
                     f"layer_streaming: '{component_name}' declares output {key!r} and no "
