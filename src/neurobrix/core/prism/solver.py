@@ -1145,7 +1145,8 @@ class PrismSolver:
             return plan
         while True:
             fp = plan.host_footprint
-            # What the plan adds to the pool: the process's resident memory is already out of the reading.
+            # What the plan adds to the pool: the process's resident memory — what it holds NOW, read by
+            # host_footprint.process_footprint_now, never a high-water mark — is already out of the reading.
             need_mb = (int(fp.get("total_bytes", 0)) - int(fp.get("resident_bytes", 0))) / (1 << 20)
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             tried.append((int(rung), plan.strategy, int(need_mb)))
@@ -1881,14 +1882,14 @@ class PrismSolver:
         # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
         # included) + what the engine adds, this machine's measured value carried by the hardware profile
         # (or absent and said to be) + what the plan holds and loads.
-        from neurobrix.core.prism.host_footprint import host_footprint, engine_of, resident_bytes_now
+        from neurobrix.core.prism.host_footprint import host_footprint, engine_of, process_footprint_now
         from neurobrix.triton.weight_loader import is_block_key   # torch-free
         _engine = engine_of(self._mode)
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
-            resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container),
+            resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
             device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
 
         # Step 8: Summary

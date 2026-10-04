@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **On Apple silicon, the planner counts the memory the process holds now, not the most it ever held.**
+  A plan's host figure included the process's peak memory instead of its current memory, so a plan the
+  planner accepted could carry a total no memory check before the run would admit:
+  DeepSeek-Coder-V2-Lite-Instruct at 15.5 GB free was planned with a 17.1 GB total. The figure and the
+  planner's own check now read the same, current number.
+
 - **A plan refusal under `--triton` names the component that does not fit.** When a model could not
   be planned, the message could blame a component the planner had already split into tiles, or
   suggest a tile count for a component that cannot be tiled. It now marks tiled components as not
