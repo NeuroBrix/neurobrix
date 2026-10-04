@@ -152,6 +152,23 @@ def classify(height: int, width: int, contract: BinningContract) -> Tuple[int, i
     return best[1], best[2]
 
 
+def restore_fold(shape: Tuple[int, ...], binned: Tuple[int, int]) -> Optional[Tuple[int, int, int, int]]:
+    """How a decoder output at the bin is handed to the 2-D restore, or None when it is not one.
+
+    The restore acts on the last two axes alone, plane by plane; every earlier axis only names a plane.
+    An image [N, C, H, W] is its own fold; a video — [N, C, T, H, W] as diffusers' VideoProcessor returns
+    it, or any other order of its leading axes — folds those axes into [planes, last leading axis, H, W]
+    without moving a value, which is the vendor's `VideoProcessor.resize_and_crop_tensor` (permute to
+    [N*T, C, H, W], the same resize and crop, permute back) frame for frame. An output of fewer than four
+    axes, or whose last two extents are not the bin, is not a decoded picture at the bin."""
+    if len(shape) < 4 or (int(shape[-2]), int(shape[-1])) != (int(binned[0]), int(binned[1])):
+        return None
+    planes = 1
+    for d in shape[:-3]:
+        planes *= int(d)
+    return (planes, int(shape[-3]), int(shape[-2]), int(shape[-1]))
+
+
 def restore_plan(orig_h: int, orig_w: int, new_h: int, new_w: int,
                  contract: BinningContract) -> Optional[RestorePlan]:
     """The vendor's `resize_and_crop_tensor`, as a plan. None when the decoded size already is the request."""
