@@ -778,7 +778,11 @@ class PrismSolver:
         partitions = (getattr(self, "_layer_stream_partitions", {}) or {}) \
             if strat_name == "layer_streaming" else {}
         costs = {}
+        # A component the request never loads (`_unloaded_by_request`) holds nothing, eager or lazy.
+        unloaded = self._unloaded_by_request(container) if container is not None else set()
         for name, m in component_memory.items():
+            if name in unloaded:
+                continue
             alloc = strat_allocs.get(name)
             dev = alloc[0] if isinstance(alloc, tuple) else alloc
             part = partitions.get(name)
@@ -825,12 +829,27 @@ class PrismSolver:
         return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
                                  served=bool(getattr(self, "_serve_requested", False)))
 
+    def _unloaded_by_request(self, container) -> set:
+        """The components the REQUEST never loads (`core/flow/base.py unloaded_by_request`): its
+        output mode (`InputConfig.mode`) decides the legs the flow runs, and a leg that does not run
+        loads nothing. A text request to an omni VLM never loads its speech components; they were
+        priced beside its streamed language model all the same, and Qwen3-Omni-30B-A3B-Instruct
+        (the Mac, 2026-10-04, --mode text) was refused: 11 607 MB of whole components — talker.model
+        6 345 MB, code2wav, the talker pieces — filled the 11 305 MB usable beside the thinker's
+        segments. Empty for a served session, and where the mode is not known: every leg is priced."""
+        from neurobrix.core.flow.base import unloaded_by_request
+        return unloaded_by_request(self._flow_topology(container),
+                                   getattr(getattr(self, "_input_config", None), "mode", None),
+                                   served=bool(getattr(self, "_serve_requested", False)))
+
     def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
         """The most a plan that loads on demand holds at one moment, from a cost per component: the
         dearest of the flow's phases, each with every component no phase names (nothing says it is
         unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
         in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
         does not hold `owner`."""
+        unloaded = self._unloaded_by_request(container)
+        costs = {n: c for n, c in costs.items() if n not in unloaded}
         phases = self._flow_phases(container)
         if not phases:
             return sum(costs.values())
@@ -5840,8 +5859,11 @@ class PrismSolver:
         # whole however much the rung holds, and tiling does not shrink its arena: it is streamed,
         # its pieces cut below that allocation (`max_arena_bytes`, below).
         _usable_whole_mb = budget_bytes / (1024 * 1024)
+        # A component the request never loads (`_unloaded_by_request`) is neither tiled nor streamed:
+        # it stays whole, never loaded, and is priced nowhere.
         held_whole = {name for name, mem in sorted_comps
-                      if self._holds_whole(container, name, mem, target, usable_mb=_usable_whole_mb)}
+                      if self._holds_whole(container, name, mem, target, usable_mb=_usable_whole_mb)
+                      } | self._unloaded_by_request(container)
         for name, mem in sorted_comps:
             cost[name] = int(mem.total_bytes)
             if name in held_whole:
@@ -6253,7 +6275,10 @@ class PrismSolver:
         encoder whole and reserved it beside the transformer's segments (3 088 MB left), while at
         8 192 the encoder was itself streamed and the plan held (the Mac, 2026-10-04)."""
         phases = self._flow_phases(container)
-        whole = [(n, m) for n, m in sorted_comps if n not in streamed]
+        # A component the request never loads is beside nothing (`_unloaded_by_request`).
+        unloaded = self._unloaded_by_request(container)
+        whole = [(n, m) for n, m in sorted_comps if n not in streamed and n not in unloaded]
+        streamed = {s for s in streamed if s not in unloaded}
 
         def _total(n, m) -> int:
             # a component kept resident because spatial tiling fits it costs its TILED figure
