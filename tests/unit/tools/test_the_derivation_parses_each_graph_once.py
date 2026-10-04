@@ -25,3 +25,20 @@ def test_a_graph_is_read_from_disk_once(tmp_path, monkeypatch):
     for _ in range(50):
         assert D.raw_graph("M", "c") is first
     assert reads.count("graph.json") == 1, reads
+
+
+def test_the_precision_contract_is_computed_once_per_component(monkeypatch):
+    """The plan-time precision contract reads the calibration record and the graph, never the request's
+    extents; an extent probe recomputed it over the whole graph each time (openaudio: 490 s with it
+    computed once, against a 2 400 s timeout before)."""
+    calls = []
+    from neurobrix.core.prism import runtime_widths as RW
+    monkeypatch.setattr(RW, "plan_time_contract", lambda *a, **k: calls.append(a) or object())
+    monkeypatch.setattr(D, "_CONTRACTS", {})
+    g = {}
+    first = D._contract("M", "c", g, "float16")
+    for _ in range(20):
+        assert D._contract("M", "c", g, "float16") is first
+    assert len(calls) == 1, calls
+    D._contract("M", "c", g, "bfloat16")          # another compute dtype is another contract
+    assert len(calls) == 2, calls

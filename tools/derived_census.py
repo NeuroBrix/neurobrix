@@ -128,7 +128,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             return [res.resolve(d) for d in ss["dims"]]
         return list(T[tid]["shape"])
 
-    contract = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    contract = _contract(model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
@@ -197,6 +197,19 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
 
 _RUNTIME_GRAPHS = {}
 _RAW_GRAPHS = {}
+_CONTRACTS = {}
+
+
+def _contract(model: str, comp: str, g: dict, cdtype: str):
+    """The component's plan-time precision contract, computed once per (model, component, compute
+    dtype): it reads the calibration record and the runtime graph, never the request's extents, and an
+    extent probe recomputed it over the whole graph each time (openaudio's LM, hundreds of probes per
+    extent). The widths that DO read the request (the matmul store rule's M) stay per probe."""
+    from neurobrix.core.prism import runtime_widths as RW
+    key = (model, comp, str(cdtype))
+    if key not in _CONTRACTS:
+        _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    return _CONTRACTS[key]
 
 
 def raw_graph(model: str, comp: str) -> dict:
