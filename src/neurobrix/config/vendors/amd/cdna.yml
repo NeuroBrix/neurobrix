@@ -274,3 +274,9 @@ autotune:
       - {up_to: 262144, step: 32768}
       - {up_to: 524288, step: 65536}
       - {up_to: null, step: 131072}
+
+# The flash kernel at a power-of-two head dim >= 128 is NOT measured on this architecture: the zero-pad
+# detour stays (launch_keys.flash_headdim_detour). Declared, never left absent: true only where the
+# correctness oracle was run with the detour off on this arch and stack (Volta, Triton 3.8, 2026-10-03).
+flash:
+  pow2_head_dim_correct: false

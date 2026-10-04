@@ -65,6 +65,26 @@ def _cast_attn_mask(mask, query):
     return prepared.expand(full_shape) if tuple(prepared.shape) != full_shape else prepared
 
 
+from neurobrix.core.runtime.graph.attention_mask import require_causal_frozen_mask as _require_causal_frozen_mask
+
+
+def _mask_axis_short(mask_extent: int, seq: int) -> bool:
+    """Is an attention-mask axis SHORTER than the sequence it must cover?
+
+    An axis of extent 1 is not short: it broadcasts over the whole sequence,
+    which is how every key-padding mask reaches attention — [B, 1, 1, Sk],
+    the shape `_cast_attn_mask` above is written around. Reading it as short
+    took the "trace-time constant causal mask" branch and replaced a padding
+    mask by `is_causal=True`: mochi-1-preview's joint video/text attention
+    (mask [2, 1, 1, 4306]) ran causally over the raster-ordered video tokens
+    in all 48 blocks — query 0 returned V row 0 exactly — and the compiled
+    engine rendered a mosaic (measured 2026-10-04 against the vendor's own
+    block-0 inputs: ours to_out head -26.3584, causal reproduction -26.3618,
+    masked vendor-equivalent 0.0720).
+    """
+    return 1 < mask_extent < seq
+
+
 def _align_qkv_dtypes(q, k, v):
     """Align Q/K/V dtypes for SDPA. Required when upstream AMP ops produce mixed dtypes.
 
@@ -233,14 +253,15 @@ class CompiledOpResolver:
             return self.dtype_engine.compile_op(f"aten::{op_name}", None, attrs)
 
         # Resolve the raw function via special handlers or standard lookup
-        func = self._resolve_op_func(op_name, attrs)
+        func = self._resolve_op_func(op_name, attrs, op_uid=op_uid)
 
         # DtypeEngine wraps with AMP casting at compile time
         # Custom ops already have their prefix; only add aten:: for standard ops
         dtype_op_type = op_name if "::" in op_name else f"aten::{op_name}"
         return self.dtype_engine.compile_op(dtype_op_type, func, attrs, op_uid=op_uid)
 
-    def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
+    def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any],
+                         op_uid: Optional[str] = None) -> Callable:
         """Resolve raw op function (before DtypeEngine wrapping).
 
         Native/compiled mode only. Triton mode uses triton/ package.
@@ -294,7 +315,7 @@ class CompiledOpResolver:
         if op_name == "custom::rms_norm" or op_name == "rms_norm":
             return self._make_rms_norm(attrs)
         if "scaled_dot_product" in op_name and "attention" in op_name:
-            return self._make_attention(op_name, attrs)
+            return self._make_attention(op_name, attrs, op_uid=op_uid)
         if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
                        "upsample_nearest1d", "upsample_linear1d",
                        "_upsample_nearest_exact2d", "_upsample_nearest_exact1d"):
@@ -567,7 +588,8 @@ class CompiledOpResolver:
 
         return _rms_norm_fn
 
-    def _make_attention(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
+    def _make_attention(self, op_name: str, attrs: Dict[str, Any],
+                        op_uid: Optional[str] = None) -> Callable:
         """
         Create scaled_dot_product_attention function with variant handling.
 
@@ -674,10 +696,14 @@ class CompiledOpResolver:
                 if attn_mask.shape[-2] > seq_q or attn_mask.shape[-1] > seq_k:
                     # Mask larger than Q/K: trim to match
                     attn_mask = attn_mask[..., :seq_q, :seq_k].contiguous()
-                elif attn_mask.shape[-2] < seq_q or attn_mask.shape[-1] < seq_k:
-                    # Mask smaller than Q/K: trace-time constant mask that doesn't
-                    # cover runtime seq_len. If it's a causal mask (lower-triangular
-                    # with -inf above diagonal), use is_causal=True instead.
+                elif (_mask_axis_short(attn_mask.shape[-2], seq_q)
+                        or _mask_axis_short(attn_mask.shape[-1], seq_k)):
+                    # A mask whose extent froze at the trace length (a Forge
+                    # symbolic-coverage defect). Its CONTENT decides: an exact
+                    # causal mask is the trace's spelling of `is_causal`, which
+                    # extends to any length; anything else is refused by name.
+                    _require_causal_frozen_mask(attn_mask, seq_q, seq_k,
+                                                op_uid or op_name)
                     is_causal = True
                     attn_mask = None
 

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.runtime_values import MissingRuntimeValue
+from neurobrix.core.runtime import symexpr as _symexpr
 
 
 @dataclass
@@ -156,35 +157,26 @@ def _symbolic_dims(tensors: Dict, tid) -> List:
             .get("symbolic_shape", {}).get("dims", []) or [])
 
 
+class _Declined(Exception):
+    """A tree that references a symbol other than the one probed."""
+
+
 def _eval_symbolic_expr(node, sym_id: str, value: int) -> Optional[int]:
     """Evaluate a symbolic dim expression tree at `sym_id = value`.
 
-    Returns None when the tree references any OTHER symbol or an unknown
-    node type — multi-symbol / exotic trees are declined, mirroring the
-    decode-side `_affine` reader's conservatism.
+    Returns None when the tree references any OTHER symbol, a node outside the vocabulary, a
+    division by zero or a real (a dim is an integer) — multi-symbol / exotic trees are declined,
+    mirroring the decode-side `_affine` reader's conservatism. The arithmetic is the ONE
+    evaluator every resolver uses (core/runtime/symexpr.py).
     """
-    if isinstance(node, (int, float)):
-        return int(node)
-    if not isinstance(node, dict):
+    def symbol(sid, _node):
+        if sid == sym_id:
+            return value
+        raise _Declined(sid)
+    try:
+        return _symexpr.evaluate(node, symbol, _symexpr.SHAPE)
+    except (_Declined, _symexpr.ExpressionError, ZeroDivisionError):
         return None
-    ntype = node.get("type")
-    if ntype == "symbol":
-        return value if node.get("id") == sym_id else None
-    left = _eval_symbolic_expr(node.get("left"), sym_id, value)
-    right = _eval_symbolic_expr(node.get("right"), sym_id, value)
-    if left is None or right is None:
-        return None
-    if ntype == "add":
-        return left + right
-    if ntype == "sub":
-        return left - right
-    if ntype == "mul":
-        return left * right
-    if ntype == "floordiv":
-        return left // right if right != 0 else None
-    if ntype == "mod":
-        return left % right if right != 0 else None
-    return None
 
 
 def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
@@ -281,6 +273,39 @@ def temporal_causal_downscale_ratio(dag: Dict) -> Optional[tuple]:
                 if all(_eval_symbolic_expr(expr, t_symbol, k * r + 1) == k + 1 for k in (1, 2, 5, 20, 64)):
                     return (r, axis)
     return None
+
+
+def render_symbolic_expr(node) -> str:
+    """A symbolic dim expression tree as text — `((s1+1)//2)` — for a refusal that must name it."""
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            return str(node.get("id"))
+        sign = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%"}.get(node.get("type"))
+        if sign is None:
+            return f"<{node.get('type')}>"
+        return f"({render_symbolic_expr(node.get('left'))}{sign}{render_symbolic_expr(node.get('right'))})"
+    return str(node)
+
+
+def temporal_map_unread(dag: Dict) -> str:
+    """Why neither temporal class reads this encoder graph — its time symbol and its rank-5 output's
+    dims, rendered — so a decline names what it could not read rather than saying "no tiling fits".
+    Called only after both `temporal_downscale_ratio` and `temporal_causal_downscale_ratio` gave
+    None."""
+    tensors = dag.get("tensors", {})
+    t_symbol = next((dims[2].get("id") for dims in (_symbolic_dims(tensors, i)
+                                                    for i in dag.get("input_tensor_ids", []))
+                     if len(dims) == 5 and isinstance(dims[2], dict)
+                     and dims[2].get("type") == "symbol"), None)
+    if t_symbol is None:
+        return "its graph has no rank-5 input whose time axis (dim 2) is a symbol"
+    out = next(((o, dims) for o, dims in ((o, _symbolic_dims(tensors, o))
+                                          for o in dag.get("output_tensor_ids", []))
+                if len(dims) == 5), None)
+    if out is None:
+        return "its graph has no rank-5 output"
+    return (f"no axis of its output {out[0]} [{', '.join(render_symbolic_expr(d) for d in out[1])}] is "
+            f"a linear (t/r) or causal (1 + (t-1)//r) map of its time symbol {t_symbol} alone")
 
 
 def is_linear_downscale_graph(dag: Dict) -> bool:
@@ -1160,48 +1185,28 @@ class ActivationProfiler:
         return resolved
 
     def _eval_dim_expr(self, node: Any, symbol_map: Dict[str, int]) -> int:
-        """Evaluate one `symbolic_shape.dims` expression node.
+        """Evaluate one `symbolic_shape.dims` expression node, through the ONE evaluator every
+        runtime resolver uses (core/runtime/symexpr.py), in the shape slot (a real refuses).
 
-        Node grammar (same set the runtime symbol resolvers handle):
-        int — literal; {"type":"symbol","id":sN,"trace":v} — runtime symbol;
-        {"type": mul|add|sub|floordiv|mod, "left":node, "right":node} —
-        arithmetic; {"type":"neg","left":node}. Unknown nodes fall back to
-        their recorded trace value.
+        A symbol absent from `symbol_map` answers its recorded trace value, and a node outside
+        the vocabulary its own trace value — profiling estimation only, as before.
         """
-        if isinstance(node, int):
-            return node
-        if isinstance(node, str):
-            if node in symbol_map:
-                return symbol_map[node]
-            return self._infer_symbol(node, symbol_map)
-        if isinstance(node, dict):
-            ntype = node.get("type")
-            if ntype == "symbol":
-                sid = node.get("id") or node.get("symbol_id")
-                if sid in symbol_map:
-                    return int(symbol_map[sid])
-                tv = node.get("trace", node.get("trace_value"))
-                if isinstance(tv, int):
-                    return tv
-                raise ValueError(f"unbound symbol {sid}")
-            if ntype in ("mul", "add", "sub", "floordiv", "mod"):
-                left = self._eval_dim_expr(node.get("left"), symbol_map)
-                right = self._eval_dim_expr(node.get("right"), symbol_map)
-                if ntype == "mul":
-                    return left * right
-                if ntype == "add":
-                    return left + right
-                if ntype == "sub":
-                    return left - right
-                if ntype == "floordiv":
-                    return left // right
-                return left % right
-            if ntype == "neg":
-                return -self._eval_dim_expr(node.get("left"), symbol_map)
-            tv = node.get("trace", node.get("trace_value"))
+        def symbol(sid, n):
+            if sid in symbol_map:
+                return int(symbol_map[sid])
+            if n is None:                       # a bare string leaf
+                return self._infer_symbol(sid, symbol_map)
+            tv = n.get("trace", n.get("trace_value"))
             if isinstance(tv, int):
                 return tv
-        raise ValueError(f"unsupported dim expression node: {node!r}")
+            raise ValueError(f"unbound symbol {sid}")
+        try:
+            return _symexpr.evaluate(node, symbol, _symexpr.SHAPE)
+        except _symexpr.UnknownExpression:
+            tv = node.get("trace", node.get("trace_value")) if isinstance(node, dict) else None
+            if isinstance(tv, int):
+                return tv
+            raise ValueError(f"unsupported dim expression node: {node!r}")
 
     def _infer_symbol(self, symbol: str, symbol_map: Dict[str, int]) -> int:
         """

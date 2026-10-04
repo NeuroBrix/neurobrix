@@ -70,7 +70,13 @@ from trace_request import derived_request, off_trace_size  # noqa: E402
 from container_renames import by_current_name, current_name  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
+#: Where the containers are: the ENGINE's own door (`NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`, then the
+#: default), because the cells this harness launches read that door. A literal default stood here, so a
+#: container the engine finds elsewhere (a NAS mount, for one that does not fit the local disk) was refused as
+#: absent before its cell could run (the Mac, 2026-10-04: Qwen3-Coder-30B in place from the mount).
+from neurobrix.core import paths as _engine_paths  # noqa: E402
+
+CACHE = _engine_paths.cache_dir()
 #: The certified reference a cell reads, under the `--src` tree: the directory and the census tables.
 #: A gate compares against the COMMITTED reference — a row says whether the working copy differed.
 CERTIFIED_REFERENCE = ("neurobrix/config/autotune", "neurobrix/config/census")
@@ -370,8 +376,14 @@ def _ledger(out: Path, change):
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
-def reserve_host(out: Path, need: int) -> bool:
+def reserve_host(out: Path, need: int, headroom: Optional[int] = None) -> bool:
+    """`headroom`: what the host must keep free beyond the cell and the owed growth; the host's
+    HOST_HEADROOM_SHARE by default. 0 for a cell priced by a plan that already drew its device memory
+    from this host's free reading (unified memory: Prism's ladder rounding IS the margin, the owner's
+    rule) — one margin, not two (the Mac, 2026-10-03 23:59)."""
     budget = int(_host_bytes() * HOST_SHARE)
+    if headroom is None:
+        headroom = int(_host_bytes() * HOST_HEADROOM_SHARE)
 
     def take(led):
         if need > budget:
@@ -384,7 +396,7 @@ def reserve_host(out: Path, need: int) -> bool:
         # owed growth, and a headroom. Reservations alone held three cards idle at 22:57 with
         # 201 GB available (2026-09-26); measurement alone let three 30B loads OOM the host at 18:40.
         owed = sum(max(0, n - _rss_tree(int(p))) for p, n in led.items())
-        if _mem_available() < need + owed + int(_host_bytes() * HOST_HEADROOM_SHARE):
+        if _mem_available() < need + owed + headroom:
             return False
         led[str(os.getpid())] = need
         return True
@@ -449,7 +461,9 @@ def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     total = hf.get("total_bytes")
     if not (isinstance(total, int) and total > 0):
         return _none("the tree states no host_footprint")
-    return int(total), "plan"
+    # A plan whose device memory comes out of the host (unified) was sized against this host's free
+    # reading, its margin already taken by the ladder: the harness keeps no second one.
+    return int(total), ("plan-unified" if int(hf.get("device_bytes") or 0) > 0 else "plan")
 
 
 def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
@@ -472,13 +486,14 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             ptree = Path(pf.read_text().strip())
             got = plan_host_need(model, mode, gpu, ptree / "src")
             if got:
-                planned = (got[0], f"plan@{ptree.name}")
+                planned = (got[0], f"{got[1]}@{ptree.name}")
     need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
     said_at, waiting_since = None, time.time()
     while True:
         while (out / "PAUSE").exists():
             time.sleep(30)
-        if reserve_host(out, need):
+        if (reserve_host(out, need, headroom=0) if need_from.startswith("plan-unified")
+                else reserve_host(out, need)):
             break
         if not wait:
             return None

@@ -100,6 +100,23 @@ def _ptr_cache_put(fp: int, tables):
         evicted.release_pins()
 
 
+def release_pinned_tables() -> int:
+    """Drop every cached table that PINS (Metal), releasing its pins; returns how many. Called at the unload
+    boundary (`MemoryManager.unload_weights`), after the devices were synchronised.
+
+    A pinning table holds its expert tensors and one whole-allocation wrap per arena for as long as it lives,
+    and it lived until LRU eviction, 256 tables later: an unloaded component stayed pinned, its tensors not
+    freed and its arena still mapped. Under `layer_streaming` each unloaded segment stayed beside the next
+    (deepseek-moe-16b-chat on the Mac, 2026-10-04: swap 3.4 -> 10.2 GB in 30 s while the second of four
+    segments loaded, the guard killed the run). All of them go, not only the unloading component's: a table is
+    three small host arrays, rebuilt at the next call that misses, and a table that outlives ANY weight it
+    pins is the defect. A table that pins nothing (CUDA: integers only) is left where it is."""
+    pinned = [fp for fp, tables in _ptr_cache.items() if tables.pins]
+    for fp in pinned:
+        _ptr_cache.pop(fp).release_pins()
+    return len(pinned)
+
+
 class PtrTables:
     """Per-projection absolute pointer tables for zero-copy expert access.
 
@@ -179,6 +196,23 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
                 raise RuntimeError(
                     f"ZERO FALLBACK: mixed dense/quantized experts in "
                     f"'{proj_name}' projection — re-build the variant.")
+    else:
+        # The kernel takes ONE (stride_bk, stride_bn) pair per projection, read
+        # from the first expert: every expert of a projection must share it. A
+        # stacked slab's views do by construction (one slab, one geometry); a
+        # list mixing layouts would be read through the wrong strides in
+        # silence — refuse it by name.
+        for proj_name, ws in (("gate", gate_weights), ("up", up_weights),
+                              ("down", down_weights)):
+            s0 = (tuple(ws[0].shape), ws[0].stride(0), ws[0].stride(1))
+            for eid in range(1, num_experts):
+                se = (tuple(ws[eid].shape), ws[eid].stride(0), ws[eid].stride(1))
+                if se != s0:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: MoE '{proj_name}' expert {eid} has "
+                        f"(shape, strides) {se}, expert 0 {s0} — the grouped "
+                        "GEMM reads every expert through one stride pair.")
+
     by_device = defaultdict(list)
     for i in range(num_experts):
         by_device[gate_weights[i]._device_idx].append(i)
@@ -399,6 +433,56 @@ def _xfer(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     return transfer_tensor(tensor, target_dev)
 
 
+class StackedSlabPromotion:
+    """A `fetch` for `expert_weight_lists` that brings a host-resident stacked
+    expert slab to the activation's device ONCE and WHOLE — one dense H2D per
+    slab — before the per-expert views are cut from it. Promoting the views
+    instead (execute_moe_fused's per-weight promotion) would copy each expert's
+    non-dense half on its own: 2E host-side strided copies and 3E transfers per
+    call.
+
+    `per_call` turns True when a slab was promoted: the views then point into
+    memory that lives for THIS call only, and the dispatcher hands that to
+    `execute_moe_fused(weights_per_call=...)` so its own zero3 rules stay in
+    charge (no pointer-table cache entry for per-call addresses, the promoted
+    lists released in the call's frame) — a reused address must never meet a
+    stale table."""
+
+    def __init__(self, fetch, device_idx: int):
+        self._fetch = fetch
+        self._device_idx = device_idx
+        self.per_call = False
+
+    def __call__(self, tid):
+        t = self._fetch(tid)
+        if t is not None and getattr(t, "_device", "cuda") == "cpu":
+            self.per_call = True
+            return t.to_cuda(self._device_idx)
+        return t
+
+
+def _tables_for_call(gate_weights, up_weights, down_weights, num_experts: int,
+                     per_call: bool, act_dev: int):
+    """The pointer tables of one call. Weights that live for this call only
+    (promoted from the host here or by the dispatcher) get a fresh table that
+    never enters the cache — their addresses are freed when the call returns,
+    and a later allocation reusing them would meet a stale entry. Resident
+    weights go through the fingerprinted LRU cache."""
+    if per_call:
+        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+        return tables
+    fp = _ptr_cache_fingerprint(gate_weights, up_weights, down_weights, num_experts)
+    tables = _ptr_cache_get(fp)
+    if tables is None:
+        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
+        _ptr_cache_put(fp, tables)
+        DeviceAllocator.set_device(act_dev)
+        DeviceAllocator.ensure_triton_device(act_dev)
+    return tables
+
+
 # ============================================================================
 # MAIN ENTRY POINT — FUSED EXECUTION
 # ============================================================================
@@ -413,6 +497,7 @@ def execute_moe_fused(
     cache_key: str = "",
     topk_indices=None,
     topk_weights=None,
+    weights_per_call: bool = False,
 ):
     """Execute MoE via fused grouped GEMM — zero torch, zero extra memory.
 
@@ -432,6 +517,10 @@ def execute_moe_fused(
             when topk_indices/topk_weights are supplied — that routing is
             already normalized per gate inside the graph.
         cache_key: Stable key for offset table caching (component + op_uid)
+        weights_per_call: the expert weights were promoted to the device for
+            THIS call by the caller (a stacked slab, `StackedSlabPromotion`):
+            treated exactly like weights promoted here — no cached table, the
+            lists released before return.
         topk_indices: Pre-computed expert indices [batch*seq, top_k], int.
             Multi-gate MoE (e.g. BailingMoe text/image/audio routers) blends
             several gates' topk results by per-token modality masks IN THE
@@ -517,6 +606,9 @@ def execute_moe_fused(
         getattr(w, '_device', 'cuda') == 'cpu'
         for lst in (gate_weights, up_weights, down_weights)
         for w in lst)
+    # Weights whose device memory lives for this call only: promoted below, or
+    # promoted by the caller (a stacked slab). The two are one regime.
+    per_call = weights_per_call or any_cpu_weight
     import os as _os_z3
     _Z3_DIAG = _os_z3.environ.get("NBX_Z3_TRITON_DIAG") == "1"
     if _Z3_DIAG and any_cpu_weight:
@@ -627,7 +719,7 @@ def execute_moe_fused(
     # ================================================================
     # STEP 2: Build pointer tables (cached — zero-copy)
     # ================================================================
-    # Under zero3 (any_cpu_weight=True above), we skip the cache: the
+    # Under zero3 (per_call: any_cpu_weight, or weights_per_call), we skip the cache: the
     # promoted GPU tensors are freshly allocated per call, so cached
     # pointers would dangle after this call returns. See comment at
     # STEP 0 for the zero3/pipelining interaction.
@@ -636,20 +728,8 @@ def execute_moe_fused(
     # between blocks), the cache key is a fingerprint of EVERY expert
     # data_ptr so a swapped buffer invalidates the cache. LRU-bounded
     # to _PTR_CACHE_MAXSIZE entries.
-    if any_cpu_weight:
-        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
-        DeviceAllocator.set_device(act_dev)
-        DeviceAllocator.ensure_triton_device(act_dev)
-    else:
-        fp = _ptr_cache_fingerprint(
-            gate_weights, up_weights, down_weights, num_experts)
-        tables = _ptr_cache_get(fp)
-        if tables is None:
-            tables = _build_ptr_tables(
-                gate_weights, up_weights, down_weights)
-            _ptr_cache_put(fp, tables)
-            DeviceAllocator.set_device(act_dev)
-            DeviceAllocator.ensure_triton_device(act_dev)
+    tables = _tables_for_call(gate_weights, up_weights, down_weights,
+                              num_experts, per_call, act_dev)
 
     # ================================================================
     # STEP 2b: SIMT decode band — M == 1, int4-g128 experts (the
@@ -764,13 +844,17 @@ def execute_moe_fused(
     # CPython may keep the function frame alive one extra tick on the
     # caller's stack, holding ~800 MB per MoE op and OOMing after 7-8
     # blocks on a 16 GB V100.
-    if any_cpu_weight:
+    if per_call:
         # The explicit del releases them: NBXTensor frees its device buffer at refcount zero.
         # A full gc.collect() stood here on every call — once per MoE layer per decoded token.
         # Without it deepseek-moe triton-sequential (32 GB V100, KV cache on) completes in 586 s,
         # byte-identical to its triton output; with it the same request timed out at 900 s
         # (2026-09-27, two runs in different windows of host load — a controlled timing of the
         # collection itself is the proof still owed).
+        # A per-call table's pins (Metal) end with the call too: dropping the table does not exit them, and
+        # the driver then keeps the wrap of every allocation promoted for this call (24 kept after one call
+        # of the 8-expert probe, 2026-10-04). Every launch of this call has synchronised.
+        tables.release_pins()
         del gate_weights, up_weights, down_weights
         del tables
 

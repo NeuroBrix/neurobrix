@@ -13,6 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.kernels.dispatch import dispatch
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
@@ -241,17 +242,10 @@ class SymbolArg:
 
 
 @dataclass(frozen=True)
-class ProductArg:
-    """Product of symbolic factors (e.g., s0 * s1 * 256)."""
-    factors: Tuple[Any, ...]
-    trace_value: int
-
-
-@dataclass(frozen=True)
 class ExprArg:
-    """Symbolic expression tree (floordiv, add, sub, mul, mod, neg)."""
+    """Symbolic expression tree of the shared vocabulary (core/runtime/symexpr.py)."""
     expr_dict: dict
-    trace_value: int
+    trace_value: Any            # int for an extent, float for a real bound
 
 
 # ============================================================================
@@ -376,6 +370,9 @@ class TritonSequence:
         # Mappings (built during compile)
         self._tid_to_slot: Dict[str, int] = {}
         self._weight_ids: List[str] = []
+        # Container weights an op reads → its first reader (`loader_weight_consumers`),
+        # taken at compile before the elimination passes; checked at every weight bind.
+        self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_ids: List[str] = []
         self._output_ids: List[str] = []
 
@@ -509,6 +506,8 @@ class TritonSequence:
 
     def compile(self):
         """Compile graph.json into op list + arena."""
+        from neurobrix.nbx.weight_presence import loader_weight_consumers
+        self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_raw = self.dag.get("ops", {})
         exec_order = self.dag.get("execution_order", [])
@@ -2129,11 +2128,18 @@ class TritonSequence:
                 _st = _stacked_attrs["stacked_experts"]
                 _lut = {_st["input_linear_tid"]: arena[_in_slot_c],
                         _st["output_linear_tid"]: arena[_out_slot_c]}
-                _g, _u, _d = _ewl(_stacked_attrs, _lut.get)
+                _hs = arena[_hs_slot]
+                if _hs is None:
+                    raise RuntimeError(f"MoE fused: hidden_states is None ({op_uid})")
+                from .moe import StackedSlabPromotion as _Promote
+                _promo = _Promote(_lut.get, _hs._device_idx)
+                _g, _u, _d = _ewl(_stacked_attrs, _promo)
+                _per_call = _promo.per_call
             else:
                 _g = [arena[s] for s in _gw]
                 _u = [arena[s] for s in _uw]
                 _d = [arena[s] for s in _dw]
+                _per_call = False
             return _moe_exec(
                 gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
@@ -2144,6 +2150,7 @@ class TritonSequence:
                 cache_key=_cache_key,
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
                 topk_weights=None if _tw_slot is None else arena[_tw_slot],
+                weights_per_call=_per_call,
             )
 
         # Output slots
@@ -2654,22 +2661,8 @@ class TritonSequence:
                 offset = arg.get("offset", 0)
                 return SymbolArg(symbol_id=symbol_id, trace_value=trace_value, offset=offset)
 
-            if arg_type == "product":
-                factors_raw = arg.get("factors", [])
-                trace_value = arg.get("trace_value", 0)
-                compiled_factors = []
-                for f in factors_raw:
-                    if isinstance(f, dict) and f.get("type") == "symbol":
-                        compiled_factors.append(f.get("symbol_id") or f.get("id") or f.get("name"))
-                    elif isinstance(f, dict):
-                        compiled_factors.append(f.get("value", f.get("trace_value", 0)))
-                    elif isinstance(f, str):
-                        compiled_factors.append(f)
-                    else:
-                        compiled_factors.append(f)
-                return ProductArg(factors=tuple(compiled_factors), trace_value=trace_value)
-
-            if arg_type in ("floordiv", "add", "sub", "mul", "mod", "neg"):
+            # An expression of the shared vocabulary (core/runtime/symexpr.py), integer or real
+            if _symexpr.is_expression(arg):
                 trace = arg.get("trace", arg.get("trace_value", 0))
                 return ExprArg(expr_dict=arg, trace_value=trace)
 
@@ -2763,8 +2756,10 @@ class TritonSequence:
         resolvers = tuple(self._make_single_resolver(v) for v in compiled_kwargs.values())
         return lambda arena: {k: r(arena) for k, r in zip(keys, resolvers)}
 
-    def _make_single_resolver(self, arg: Any) -> Callable:
-        """Create a resolver closure for a single compiled arg."""
+    def _make_single_resolver(self, arg: Any, slot: str = _symexpr.SCALAR) -> Callable:
+        """Create a resolver closure for a single compiled arg. `slot` is the slot an
+        expression is evaluated for: SCALAR for a top-level argument, SHAPE for a list
+        element (core/runtime/symexpr.py) — the mirror of compiled_sequence."""
         if isinstance(arg, TensorSlot):
             s = arg.slot
             return lambda arena, s=s: arena[s]
@@ -2776,10 +2771,8 @@ class TritonSequence:
             return lambda _arena, dt=dt: dt
         elif isinstance(arg, SymbolArg):
             return self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
-        elif isinstance(arg, ProductArg):
-            return self._make_product_resolver(arg.factors, arg.trace_value)
         elif isinstance(arg, ExprArg):
-            return self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+            return self._make_expr_resolver(arg.expr_dict, arg.trace_value, slot)
         elif isinstance(arg, ListArg):
             return self._make_list_resolver(arg.items)
         else:
@@ -2788,7 +2781,7 @@ class TritonSequence:
 
     def _make_list_resolver(self, items: Tuple[Any, ...]) -> Callable:
         """Generate resolver for list arguments (recursive)."""
-        item_resolvers = tuple(self._make_single_resolver(item) for item in items)
+        item_resolvers = tuple(self._make_single_resolver(item, _symexpr.SHAPE) for item in items)
         return lambda arena, rs=item_resolvers: [r(arena) for r in rs]
 
     # ========================================================================
@@ -2808,33 +2801,17 @@ class TritonSequence:
             _refuse_unbound(r, symbol_id, trace_value)
         return resolve
 
-    def _make_product_resolver(self, factors: Tuple[Any, ...],
-                               trace_value: int) -> Callable:
-        """Closure that computes product of symbolic factors at runtime."""
-        def resolve(_arena):
-            r = self._symbol_resolver
-            result = 1
-            for f in factors:
-                if isinstance(f, str):
-                    if r is None or not r.is_bound(f):
-                        _refuse_unbound(r, f, trace_value)
-                    result *= r.get(f)
-                elif isinstance(f, (int, float)):
-                    result *= int(f)
-                else:
-                    raise RuntimeError(
-                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
-                        f"resolved at runtime (trace value {trace_value})")
-            return result
-        return resolve
-
-    def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable:
-        """Closure that evaluates expression tree at runtime."""
+    def _make_expr_resolver(self, expr_dict: dict, trace_value: int,
+                            slot: str = _symexpr.SHAPE) -> Callable:
+        """Closure that evaluates an expression tree at runtime, through the ONE evaluator
+        (core/runtime/symexpr.py), in `slot`: SHAPE refuses a real by name, SCALAR takes it."""
         def resolve(_arena):
             r = self._symbol_resolver
             if r is None:
                 _refuse_unbound(None, str(expr_dict)[:80], trace_value)
-            return r.resolve(expr_dict)     # an unbound factor refuses by name inside
+            if slot == _symexpr.SCALAR:
+                return r.resolve_scalar(expr_dict)   # an unbound factor refuses by name inside
+            return r.resolve(expr_dict)
         return resolve
 
     # ========================================================================
@@ -2923,6 +2900,11 @@ class TritonSequence:
         # weights do not"). Re-narrowing from a stale original reads freed
         # arena memory. Mirror of the compiled bind_weights (R30).
         self._seq_constant_originals.clear()
+        consumers = self._loader_consumers
+        if consumers is None:
+            from neurobrix.nbx.weight_presence import loader_weight_consumers
+            consumers = self._loader_consumers = loader_weight_consumers(self.dag)
+        unbound = []
         for tid in self._weight_ids:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")
@@ -2950,6 +2932,15 @@ class TritonSequence:
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
                     tensor = tensor.t()
                 self._arena[self._tid_to_slot[tid]] = tensor
+            elif tid in consumers:
+                unbound.append((tid, consumers[tid]))
+        # A container weight an op reads and the weights do not hold is refused here, by
+        # name, before any op runs — never left None for its first reader (Allegro,
+        # 2026-10-04: `aten.convolution::0` met None for `post_quant_conv.weight`).
+        if unbound:
+            from neurobrix.nbx.weight_presence import refuse_unbound_weights
+            refuse_unbound_weights(self.dag.get("component_name") or "?", unbound,
+                                   self.dag.get("tensors", {}))
         # const_fold partition (optim Phase 2): compute the frontier
         # constants once with this bind's weights — fills the
         # folded_const weight slots, before device classification.

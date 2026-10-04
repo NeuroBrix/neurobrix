@@ -687,7 +687,7 @@ def _create_linspace(start, end, steps, *, dtype=None, layout=None,
     steps = int(steps)
     start = float(start)
     end = float(end)
-    out = NBXTensor.empty((steps,), dtype=dtype or NBXDtype.float32,
+    out = NBXTensor.empty((steps,), dtype=dtype if dtype is not None else NBXDtype.float32,
                           device=device or 'cuda')
     if steps <= 0:
         return out

@@ -326,14 +326,16 @@ class TritonLMSession:
     def _extract_hidden(self, outputs: dict) -> Optional[NBXTensor]:
         """Extract hidden states from run outputs.
 
-        The graph output with last dim == hidden_dim is the hidden states.
+        The graph output with last dim == hidden_dim is the hidden states, and nothing else
+        is: no output of that width is None, which the callers refuse — as the compiled
+        session refuses (R30). The "first output" this used to return instead was the
+        text-vocab logits of an image-AR language model whose base had captured nothing (a
+        streamed Janus-Pro-7B): handed to gen_head as the hidden, it was viewed as
+        (102400 / 4096, 4096) and surfaced as a certified-key miss at M = 25, three
+        components away from the cause.
         """
         for name, tensor in outputs.items():
             if hasattr(tensor, 'shape') and tensor.shape[-1] == self.hidden_dim:
-                return tensor
-        # Fallback: return the first output
-        for tensor in outputs.values():
-            if hasattr(tensor, 'shape'):
                 return tensor
         return None
 

@@ -21,6 +21,12 @@ So the derivation lives here and both tools import it:
 * `derived_request(model, family)` — the family's judged request (`precision_zoo_campaign.
   request_args`: its calibration section, its media, its bound) with the family's `confirmation:`
   values (the owner's method, 2026-09-28: the smallest request that still judges), at that size.
+* `model_confirmation(family, topology)` — those values for ONE model: the family's, with the
+  container's own (`extracted_values["_global"]["confirmation"]`, written by the build from the
+  registry with its source) over them. The supervisor, 2026-10-04 00:33: a model is judged at the
+  smallest request where the vendor's own pipeline gives a correct output — Allegro's vendor is
+  blank at the video family's 4 steps and recognisable at 10. The model carries its value; no
+  model is named here.
 * `requested_size(request)` — the (height, width) a request asks for, as the CLI reads it.
 
 The container is read through `core.paths.cache_dir()` at call time — the same door the engine
@@ -60,6 +66,42 @@ def confirmation(family: str) -> dict:
     return dict(get_family_config(family).get("confirmation") or {})
 
 
+#: The key of a carried value that is its citation, never a request value.
+SOURCE = "source"
+
+
+def container_topology(model: str) -> dict:
+    """The container's topology.json, through the one door the run reads (`core.paths.cache_dir()`)."""
+    from neurobrix.core.paths import cache_dir
+    path = cache_dir() / model / "topology.json"
+    if not path.exists():
+        raise FileNotFoundError(f"{model}: no container at {path.parent} — a request is derived from the "
+                                f"container the run will read")
+    return json.loads(path.read_text())
+
+
+def model_confirmation(family: str, topology: dict) -> dict:
+    """The confirmation values of ONE model: the family's section, with the container's own values
+    (extracted_values["_global"]["confirmation"]) over them — the model carries its value, the
+    family's is kept for every key the container does not declare, and for a container that
+    declares none. A container key the family's section does not name is refused by name: a request
+    value is first named in the family's YAML (a typo here would otherwise reach the run as a flag)."""
+    fam = confirmation(family)
+    own = ((topology.get("extracted_values") or {}).get("_global") or {}).get("confirmation")
+    if own is None:
+        return fam
+    if not isinstance(own, dict):
+        raise ValueError(f"the container's _global.confirmation is {type(own).__name__} {own!r}, not a "
+                         f"mapping of the {family} family's confirmation values")
+    values = {k: v for k, v in own.items() if k != SOURCE}
+    unknown = sorted(set(values) - set(fam))
+    if unknown:
+        raise ValueError(f"the container's _global.confirmation names {unknown}: the {family} family's "
+                         f"confirmation section knows {sorted(fam)} (config/families/{family}.yml) — a "
+                         f"request value is named there first")
+    return {**fam, **values}
+
+
 def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
     """(height, width) for an image or video request: the container's own size scaled by the
     family's `confirmation.size_fraction`, then the height at three quarters, both on the family's
@@ -69,13 +111,13 @@ def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:
     container states no size (said in the row)."""
     if family not in LATTICE:
         return None
-    frac = confirmation(family).get("size_fraction")
-    if frac is None:
+    if confirmation(family).get("size_fraction") is None:
         raise ValueError(f"family {family!r} has a lattice but its YAML names no confirmation.size_fraction")
     from neurobrix.core.paths import cache_dir
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.resolution.container_size import container_output_size
     pkg = NBXRuntimeLoader().load(str(cache_dir() / model))
+    frac = model_confirmation(family, pkg.topology)["size_fraction"]
     size = container_output_size(pkg.manifest, pkg.defaults,
                                  pkg.topology.get("components", {}) or {}, pkg.components)
     if size is None:
@@ -126,11 +168,13 @@ def _with_flags(req: list, flags: dict) -> list:
 
 def derived_request(model: str, family: Optional[str] = None) -> list:
     """The request a model is run at — the matrix's confirmation cell and the census that must cover
-    it: the family's own judged request with its `confirmation:` values, at the confirmation size
-    (no size flag for a family that has none)."""
+    it: the family's own judged request with the model's confirmation values (the family's
+    `confirmation:` section, the container's own over it — `model_confirmation`), at the
+    confirmation size (no size flag for a family that has none)."""
     family = family or Z.family_of(model)
+    values = model_confirmation(family, container_topology(model))
     req = _with_flags(Z.request_args(model, family, []),
-                      {k: v for k, v in confirmation(family).items() if k != "size_fraction"})
+                      {k: v for k, v in values.items() if k != "size_fraction"})
     size = off_trace_size(model, family)
     if size is not None:
         req = req + ["--height", str(size[0]), "--width", str(size[1])]

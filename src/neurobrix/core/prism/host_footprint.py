@@ -33,7 +33,12 @@ where the rule lives, so a change there is a change to price here:
     integer image for png/mp4, the waveform twice and PCM_16 for wav, nothing for text);
   base — what the engine's device work adds on top (its modules, device context, the compute libraries
     a run's first ops load): a MEASURED value of this machine, carried by the hardware profile per
-    engine (`cpu.runtime_base_mb`); a profile without it prices no base and says so.
+    engine (`cpu.runtime_base_mb`); a profile without it prices no base and says so;
+  device — on a UNIFIED device (the profile's `has_unified_memory`), the device plan itself: its bytes
+    ARE host memory, so the plan's planned device memory is held on the host too. On a discrete card
+    the pools are disjoint and this term is 0. The Mac, 2026-10-03: granite-speech triton planned
+    18 085 MB on the device and 1 019 MB of host footprint from one 24 GB pool; a ledger reserving
+    the 1 019 MB alone admits it beside a VM holding most of the machine, and the run swaps.
 
 Under lazy loading one component is resident at a time, so steady is the largest component's; eager
 loading holds them all. The compiled load is priced the same way, as a bound: the loader synchronises once
@@ -71,7 +76,7 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
-                   resident_bytes: int = 0, output_bytes: int = 0) -> Dict:
+                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -81,6 +86,7 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
     base_mb      what this engine's device work adds on this machine, or None (not measured)
     resident_bytes what the planning process holds when it prices (the caller measures it)
     output_bytes   what the output boundary holds (the largest graph output x the family's save cost)
+    device_bytes   the device plan's bytes when the device draws on host memory (unified), 0 otherwise
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -122,8 +128,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
         transient = TRITON_COPIES_PER_TENSOR * max(
             (n for ks in key_sizes.values() for n in ks.values()), default=0)
     base = int(base_mb) << 20 if base_mb is not None else 0
-    return {"engine": engine, "total_bytes": int(resident_bytes) + base + steady_bytes + transient + int(output_bytes),
-            "resident_bytes": int(resident_bytes), "output_bytes": int(output_bytes), "base_bytes": base, "base_measured": base_mb is not None,
+    return {"engine": engine,
+            "total_bytes": int(resident_bytes) + base + steady_bytes + transient + int(output_bytes) + int(device_bytes),
+            "resident_bytes": int(resident_bytes), "output_bytes": int(output_bytes), "device_bytes": int(device_bytes),
+            "base_bytes": base, "base_measured": base_mb is not None,
             "steady_bytes": steady_bytes, "steady": steady, "transient_bytes": transient,
             "loading": plan.loading_mode}
 
@@ -187,4 +195,5 @@ def summary(hf: Mapping) -> str:
             f"{hf.get('resident_bytes', 0) / 2**20:.0f} MB + engine {base}"
             f" + held {hf['steady_bytes'] / 2**20:.0f} MB ({hf['loading']})"
             f" + loading {hf['transient_bytes'] / 2**20:.0f} MB + output {hf.get('output_bytes', 0) / 2**20:.0f} MB"
+            + (f" + device plan {hf['device_bytes'] / 2**20:.0f} MB (unified)" if hf.get("device_bytes") else "")
             + (f"  [held: {held}]" if held else ""))

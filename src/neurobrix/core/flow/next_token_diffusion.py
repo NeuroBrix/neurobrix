@@ -45,6 +45,7 @@ import torch
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
 # The rule and its history live in core.runtime_values.
@@ -265,12 +266,14 @@ class NextTokenDiffusionEngine(FlowHandler):
         embed_weight = self._embed_weight(self.LM)
         if embed_weight is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
+        # This reference path contracts the hidden state against the WHOLE
+        # table below (the tied head), so it moves the table to the compute
+        # device — bytes a host placement of the table never priced. The
+        # default KV path below reads rows only and moves nothing.
         embed_weight = embed_weight.to(device)
 
         # Prefill embeddings: embed_tokens(prompt_ids)
-        prompt_t = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-        with torch.no_grad():
-            inputs_embeds = torch.nn.functional.embedding(prompt_t, embed_weight).to(dtype=dtype)
+        inputs_embeds = gather_rows(embed_weight, [prompt_ids], device=device, dtype=dtype)
 
         # CFG: parallel negative LM context, seeded with ONLY speech_start_id
         # (it never sees the text prompt). It grows with the SAME per-step
@@ -278,9 +281,8 @@ class NextTokenDiffusionEngine(FlowHandler):
         # diffusion steps (the only place neg_cond is consumed). cfg_scale=1.0
         # makes it irrelevant; cfg_scale>1 amplifies the text conditioning.
         use_cfg = cfg_scale != 1.0
-        neg_start_t = torch.tensor([[speech_start_id]], dtype=torch.long, device=device)
-        with torch.no_grad():
-            neg_inputs_embeds = torch.nn.functional.embedding(neg_start_t, embed_weight).to(dtype=dtype)  # [1,1,1536]
+        neg_inputs_embeds = gather_rows(
+            embed_weight, [[speech_start_id]], device=device, dtype=dtype)  # [1,1,1536]
 
         print(f"   [{self.LM}] next-token-diffusion generation "
               f"(max_steps={max_steps}, ddpm_steps={ddpm_steps}, cfg={cfg_scale})...")
@@ -332,9 +334,8 @@ class NextTokenDiffusionEngine(FlowHandler):
                 break
 
             # default next embedding = embed_tokens(next_token)
-            tok_t = torch.tensor([[next_token]], dtype=torch.long, device=device)
-            with torch.no_grad():
-                next_embed = torch.nn.functional.embedding(tok_t, embed_weight).to(dtype=dtype)  # [1,1,1536]
+            next_embed = gather_rows(
+                embed_weight, [[next_token]], device=device, dtype=dtype)  # [1,1,1536]
 
             if next_token == speech_diffusion_id:
                 n_diffusion += 1
@@ -439,10 +440,12 @@ class NextTokenDiffusionEngine(FlowHandler):
         embed_weight = executor.get_embed_tokens()
         if embed_weight is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
-        embed_weight = embed_weight.to(device)
-        valid_t = torch.tensor(valid_token_ids, dtype=torch.long, device=device)
+        # The table stays where its plan placed it: this path reads ROWS of it
+        # only (the valid tokens' rows for the logits, one row per step), each
+        # gathered where the table lives and delivered on the compute device.
         with torch.no_grad():
-            valid_rows_t = embed_weight[valid_t].float().T.contiguous()                        # [H, n_valid]
+            valid_rows_t = gather_rows(
+                embed_weight, valid_token_ids, device=device).float().T.contiguous()           # [H, n_valid]
         use_cfg = cfg_scale != 1.0
         pos_branch = session.branch_state()
         neg_branch = session.new_branch() if use_cfg else None
@@ -485,8 +488,8 @@ class NextTokenDiffusionEngine(FlowHandler):
                       f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
             if next_token == eos_token_id:
                 break
-            with torch.no_grad():
-                next_embed = torch.nn.functional.embedding(ids([next_token]), embed_weight).to(dtype=dtype)  # [1,1,H]
+            next_embed = gather_rows(
+                embed_weight, [[next_token]], device=device, dtype=dtype)  # [1,1,H]
             if next_token == speech_diffusion_id:
                 n_diffusion += 1
                 pos_cond = last_hidden

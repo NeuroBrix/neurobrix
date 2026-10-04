@@ -26,6 +26,7 @@ import re
 import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
+from neurobrix.core.runtime import symexpr as _symexpr
 from .compiled_ops import CompiledOpResolver
 # R30: the same "what would have fit" sentence as the triton sequence. It fires on
 # a DeviceOOMError, which this path raises wherever an NBXTensor allocation sits in
@@ -214,39 +215,26 @@ class SymbolArg:
 
 
 @dataclass(frozen=True)
-class ProductArg:
-    """
-    Reference to a symbolic product expression (e.g., s0 * s1).
-
-    Factors can be symbol IDs (strings) or concrete integers.
-    Resolution multiplies all resolved factor values.
-
-    Fields:
-        factors: Tuple of factor references (symbol_ids or ints)
-        trace_value: Product value at trace time (fallback)
-    """
-    factors: Tuple[Any, ...]
-    trace_value: int
-
-
-@dataclass(frozen=True)
 class ExprArg:
     """
     Symbolic expression that resolves at runtime via SymbolicShapeResolver.
 
-    Handles arbitrary expression trees from SymInt.to_json():
+    Handles any tree of the shared vocabulary (core/runtime/symexpr.py):
     - floordiv: (s1 + pad) // stride + 1
     - add/sub/mul/mod/neg: nested expressions
+    - truediv/sqrt: real values at a scalar slot (a rotary linspace's bounds)
 
     Used for spatial dimensions in view/reshape ops that are derived from
-    input spatial dims through conv chains.
+    input spatial dims through conv chains, and for scalar arguments that
+    follow the request. The slot (shape or scalar) is chosen where its
+    resolver is built: a list element is a shape, a top-level argument a scalar.
 
     Fields:
         expr_dict: Raw expression dict from graph.json (evaluated recursively)
-        trace_value: Value at trace time (fallback when symbols not bound)
+        trace_value: Value at trace time (named in a refusal, never answered)
     """
     expr_dict: dict
-    trace_value: int
+    trace_value: Any            # int for an extent, float for a real bound
 
 
 # ============================================================================
@@ -372,6 +360,7 @@ class CompiledSequence:
         '_op_blocks_cache',  # Cache for get_op_blocks() — immutable post-compile
         '_const_fold_plan',  # dag["_optim_const_fold"] partition, executed once at bind (Phase 2)
         '_const_fold_sig',  # identity signature of the partition's external inputs at last fold
+        '_loader_consumers',  # container weights an op reads -> first reader, checked at every bind
     )
 
     def __init__(
@@ -432,6 +421,10 @@ class CompiledSequence:
 
         # Tensor categories
         self._weight_tensor_ids: List[str] = []
+        # Container weights an op reads → its first reader (`loader_weight_consumers`, the
+        # container layer's rule both sequences apply, R30), taken at compile before the elimination
+        # passes; checked at every weight bind.
+        self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_tensor_ids: List[str] = []
         self._output_tensor_ids: List[str] = []
 
@@ -580,6 +573,8 @@ class CompiledSequence:
         if self._compiled:
             return
 
+        from neurobrix.nbx.weight_presence import loader_weight_consumers
+        self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_metadata = self.dag.get("ops", {})
         execution_order = self.dag.get("execution_order", [])
@@ -608,14 +603,15 @@ class CompiledSequence:
         # Phase -0.25: (retired) Windowing symbolization — pad→view num_blocks
         # = ceil(seq/W) — is now emitted at trace/build time, so the graph
         # arrives with symbolic windowing dims and no runtime pre-compilation
-        # pass is needed. The cross-branch propagation below still consumes the
-        # trace-emitted symbolic expressions.
+        # pass is needed.
 
-        # Phase -0.1: Propagate symbolic expressions across branches
-        # Handles expand broadcast dims and view/reshape dims that depend on
-        # symbolic values from a different data-flow branch (e.g., CFormer
-        # windowed attention where Q branch expands to match KV window count).
-        self._propagate_cross_branch_expressions(tensors, ops_metadata)
+        # Phase -0.1: (deleted 2026-10-04) the cross-branch compensation, which
+        # re-keyed an expand/view/reshape literal equal to the trace value of
+        # the only expression of that value. Every graph the engine accepts is
+        # at the build's re-propagation fixed point (the loader's door,
+        # `nbx.fixed_point`), which carries each cross-branch dimension itself;
+        # on such graphs the pass could only corrupt literals (Ming's GQA heads,
+        # Sana-4K's VAE channels). The Triton branch never had it (R30).
 
         # Phase 0: Promote trace-time seq_len constants to symbolic references
         # UNIVERSAL: Works for all LLMs, safe for diffusion models, collision-checked
@@ -1962,373 +1958,6 @@ class CompiledSequence:
         )
 
     # ========================================================================
-    # CROSS-BRANCH SYMBOLIC EXPRESSION PROPAGATION
-    # ========================================================================
-
-    def _propagate_cross_branch_expressions(
-        self,
-        tensors: Dict[str, Any],
-        ops: Dict[str, Any],
-    ) -> None:
-        """
-        Pre-compilation pass: inject symbolic expressions into ops that have
-        hardcoded dims derived from a different data-flow branch.
-
-        Problem: In windowed attention (CFormer), Q and K/V flow through
-        separate branches. The K/V branch goes through a view that creates
-        [num_windows, window_size, D] with symbolic num_windows. The Q branch
-        uses expand([num_windows, ...]) to broadcast — but the tracer captures
-        num_windows as a concrete int since it comes from Python code, not from
-        the Q tensor's shape.
-
-        Fix: Collect all symbolic expressions from tensor symbolic_shape fields.
-        For expand broadcast dims and view/reshape dims that match a known
-        expression's trace_value, inject the expression dict so ExprArg handles
-        it at runtime.
-
-        Safety: Only injects when trace_value maps to exactly ONE expression
-        (avoids ambiguity). Only targets expand broadcast dims (input_dim=1)
-        and view/reshape dims that merge/split symbolic dimensions.
-        """
-        # Diagnostic kill (retained-diag-env class, §8): adjudicates
-        # "is a cross-branch injection corrupting this model" in one
-        # A/B run — the pass is a compensation layer for old builds,
-        # so a correctly-traced graph must behave identically with it
-        # off (2026-09-02, D-SANAVIDEO-COMPILED-VALUES instrument).
-        import os as _os_cbx
-        if _os_cbx.environ.get("NBX_DISABLE_CROSS_BRANCH") == "1":
-            return
-        _cbx_diag = _os_cbx.environ.get("NBX_CROSS_BRANCH_DIAG") == "1"
-        def _cbx_log(uid, kind, old, new):
-            if _cbx_diag:
-                print(f"[CBX] {uid} {kind}: {old} -> {str(new)[:120]}",
-                      flush=True)
-
-        # Step 1: Collect symbolic expressions from tensor symbolic_shapes
-        # Build map: trace_value → expression_dict (only unique values)
-        expr_map: Dict[int, Any] = {}  # trace_value → expression dict
-        ambiguous: set = set()  # trace_values with multiple expressions
-
-        # Architectural-constant dims from WEIGHT/parameter shapes (mirror of the build toolchain's
-        # windowing.py). Used by the collision guard below — kept concrete only when
-        # a value is BOTH a weight dim AND fully explained by concrete input dims.
-        weight_dims: set = set()
-        for _tid, tdata in tensors.items():
-            if tdata.get("is_parameter") or tdata.get("weight_name"):
-                for d in (tdata.get("shape") or []):
-                    if isinstance(d, int) and d > 1:
-                        weight_dims.add(d)
-        # Architectural config constants (num_attention_heads, head_dim,
-        # patch_size, …) are protected OUTRIGHT: the build toolchain's
-        # de-collision keeps every variable trace dim away from them, so a
-        # literal equal to one in a shape list is the constant itself.
-        # (2026-09-02: the head count 24 = text_len 23 + 1 became
-        # `text_len + 1` and the cross-attention mask expanded to
-        # [B, 78, 1, 77].) Weight dims keep their narrower conjunction
-        # guards below.
-        _config_constants = set(getattr(self, "_config_constants", ()) or ())
-
-        for _tid, tdata in tensors.items():
-            sym_shape = tdata.get("symbolic_shape", {})
-            dims = sym_shape.get("dims", []) if isinstance(sym_shape, dict) else []
-            for dim in dims:
-                if not isinstance(dim, dict):
-                    continue
-                dim_type = dim.get("type", "")
-                if dim_type not in ("floordiv", "add", "sub", "mul", "mod", "neg", "symbol"):
-                    continue
-                # Skip bare symbols — those are handled by _promote_seq_len_scalars
-                if dim_type == "symbol":
-                    continue
-                trace_val = dim.get("trace", dim.get("trace_value"))
-                if not isinstance(trace_val, int) or trace_val <= 1:
-                    continue
-                if trace_val in ambiguous:
-                    continue
-                if trace_val in expr_map:
-                    # Check if it's the same expression (same dict structure)
-                    if expr_map[trace_val] != dim:
-                        ambiguous.add(trace_val)
-                        del expr_map[trace_val]
-                else:
-                    expr_map[trace_val] = dim
-
-        if not expr_map:
-            return
-
-        injected = 0
-
-        # Step 2: Inject into expand/view/reshape/creation ops.
-        #
-        # Fixpoint loop: the dim-merge branch synthesizes product expressions
-        # (e.g. num_windows * num_queries) for a flatten whose merged dim the
-        # trace baked concrete. A LATER flatten in the same chain
-        # (view → view → view) re-uses that same merged value, but the trace
-        # bakes it concrete at every step AND it appears in that op's recorded
-        # input_shape — so the dim-merge passthrough-safety skips it and only a
-        # DIRECT match (which has no passthrough-safety) can fix it. Persisting
-        # each synthesized product back into expr_map and re-running lets the
-        # whole chain propagate a windowed dim consistently. Without it, the
-        # head of the chain symbolizes but the tail keeps the trace value
-        # (granite Q-Former: projector output [7,6,4096] instead of [1,42,4096]).
-        for _fixpoint_iter in range(8):  # bounded: each pass injects strictly more
-            injected_before = injected
-            new_products: Dict[int, Any] = {}  # trace_val → synthesized product expr
-
-            for _op_uid, op_data in ops.items():
-                op_type = op_data.get("op_type", "")
-                attrs = op_data.get("attributes", {})
-                args = attrs.get("args", [])
-
-                if op_type == "aten::arange" and len(args) >= 1:
-                    # aten::arange(end) whose OWN output dim carries a
-                    # symbolic EXPRESSION (a product/sum of grid symbols,
-                    # not a bare symbol — those are handled by
-                    # _promote_seq_len_scalars): the trace baked `end`
-                    # concrete while the tensor node knows the algebra.
-                    # Inject the op's own output expression so ExprArg
-                    # resolves it at runtime (Ming vision: arange(2755)
-                    # = gh·gw·gt, frozen at the trace grid while every
-                    # consumer view was symbolic).
-                    _end = args[0]
-                    _end_val = (_end.get("value")
-                                if isinstance(_end, dict) else _end)
-                    if isinstance(_end_val, int) and _end_val > 1:
-                        _otids = op_data.get("output_tensor_ids") or []
-                        _odims = []
-                        if _otids:
-                            _oss = tensors.get(_otids[0], {}).get(
-                                "symbolic_shape", {})
-                            if isinstance(_oss, dict):
-                                _odims = _oss.get("dims", [])
-                        if len(_odims) == 1 and isinstance(_odims[0], dict):
-                            _d = _odims[0]
-                            if (_d.get("type") in ("mul", "add", "sub",
-                                                   "floordiv", "mod")
-                                    and _d.get("trace",
-                                               _d.get("trace_value")) == _end_val):
-                                args[0] = _d
-                                injected += 1
-                    continue
-
-                if op_type == "aten::expand" and len(args) >= 2:
-                    # Expand: check broadcast dims (input_dim=1 → target_dim=N)
-                    size_arg = args[1]
-                    if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
-                        continue
-                    size_list = size_arg.get("value", [])
-                    input_shapes = op_data.get("input_shapes", [[]])
-                    if not input_shapes:
-                        continue
-                    input_shape = input_shapes[0]
-                    # Foreign-symbol guard, expand parity (2026-09-02 review):
-                    # a broadcast target that is a DIRECT weight dim must not
-                    # absorb an expression whose symbols are foreign to this
-                    # op's input — the same runtime re-injection class the
-                    # view branch guards against.
-                    _e_tids = op_data.get("input_tensor_ids", [])
-                    _e_sym_dims = []
-                    if _e_tids:
-                        _ess = tensors.get(_e_tids[0], {}).get("symbolic_shape", {})
-                        if isinstance(_ess, dict):
-                            _e_sym_dims = _ess.get("dims", [])
-
-                    changed = False
-                    new_size = list(size_list)
-                    for i, (target, actual) in enumerate(zip(size_list, input_shape)):
-                        if (isinstance(target, int) and actual == 1
-                                and target > 1 and target in expr_map):
-                            if target in _config_constants:
-                                continue
-                            if (target in weight_dims
-                                    and not _expr_symbols_in_input(
-                                        expr_map[target], _e_sym_dims)):
-                                continue
-                            _cbx_log(_op_uid, f"expand[{i}]", target,
-                                     expr_map[target])
-                            new_size[i] = expr_map[target]
-                            changed = True
-                            injected += 1
-
-                    if changed:
-                        new_args = list(args)
-                        new_args[1] = {"type": "list", "value": new_size}
-                        new_attrs = dict(attrs)
-                        new_attrs["args"] = new_args
-                        if "size" in new_attrs:
-                            new_attrs["size"] = new_size
-                        op_data["attributes"] = new_attrs
-
-                elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view"):
-                    # View/reshape: check for hardcoded dims matching expressions
-                    shape_key = "shape" if "shape" in attrs else "size" if "size" in attrs else None
-                    if shape_key is None:
-                        continue
-                    old_shape = attrs[shape_key]
-                    if not isinstance(old_shape, list):
-                        continue
-
-                    # Skip if already fully symbolized
-                    has_expr = any(isinstance(s, dict) and s.get("type") in
-                                  ("floordiv", "add", "sub", "mul", "mod", "neg")
-                                  for s in old_shape)
-                    if has_expr:
-                        continue
-
-                    # Get input shape for dim-merge product detection
-                    input_shapes = op_data.get("input_shapes", [[]])
-                    input_shape = input_shapes[0] if input_shapes else []
-                    in_tids = op_data.get("input_tensor_ids", [])
-                    in_sym_dims = []
-                    if in_tids:
-                        _iss = tensors.get(in_tids[0], {}).get("symbolic_shape", {})
-                        if isinstance(_iss, dict):
-                            in_sym_dims = _iss.get("dims", [])
-
-                    changed = False
-                    new_shape = list(old_shape)
-                    for i, dim_val in enumerate(old_shape):
-                        if not isinstance(dim_val, int) or dim_val <= 1:
-                            continue
-                        if dim_val in _config_constants:
-                            continue
-                        if dim_val in expr_map:
-                            # Trace-value collision guard (mirror of the build toolchain's
-                            # windowing.py): keep the dim CONCRETE only when it is BOTH
-                            # a weight/architectural constant AND fully explained by
-                            # concrete input dims. Both required: weight-dim alone
-                            # over-fires on a spatial dim equal to a hidden size (Sana
-                            # VAE s1*2==64); concrete-product alone over-fires on a
-                            # baked windowed dim (granite view::65 num_blocks==6==1*6).
-                            # The conjunction isolates the channel-collision case
-                            # (openaudio decoder 192 == (s1-1)*8+16 at s1=23).
-                            if (dim_val in weight_dims
-                                    and _concrete_product_match(dim_val, in_sym_dims)):
-                                continue
-                            # Foreign-symbol collision guard (mirror): an
-                            # architectural constant split from a CONCRETE input
-                            # (invisible to the concrete-product test) stays
-                            # concrete when the candidate expression references
-                            # symbols ABSENT from this op's input — the product
-                            # belongs to another branch and merely shares the
-                            # trace value (SANA-Video AdaLN 6 vs foreign s5*s6;
-                            # the engine-side twin of the tracer's 2026-06-19
-                            # guard, ported 2026-09-02).
-                            # ENGINE-SIDE SCOPE (same day, swin2sr gate): the
-                            # tracer's broader architectural-FACTOR rule
-                            # over-fires here — a WINDOW COUNT that happens to
-                            # divide the embed dim (10 | 180) would be classed
-                            # architectural and lose the legitimate
-                            # cross-branch injection old builds depend on
-                            # (view::24 crash at 448x448). Runtime records are
-                            # sparser than trace-time ones, so the engine
-                            # guard fires on DIRECT weight dims only; the
-                            # factor class (head_dim) is guarded at trace by
-                            # the build toolchain's 2026-06 factor guard and
-                            # rides re-traced builds.
-                            if (dim_val in weight_dims
-                                    and not _expr_symbols_in_input(
-                                        expr_map[dim_val], in_sym_dims)):
-                                continue
-                            # Direct match (no passthrough-safety — an exact known
-                            # windowed value is always the windowed value)
-                            _cbx_log(_op_uid, f"view-direct[{i}]", dim_val,
-                                     expr_map[dim_val])
-                            new_shape[i] = expr_map[dim_val]
-                            changed = True
-                            injected += 1
-                        elif input_shape and dim_val not in input_shape:
-                            # Dim-merge detection: dim_val = expr_val * constant
-                            # E.g., 15 = 5 * 3 where 5 is symbolic and 3 is from input
-                            # Safety: skip if dim_val appears in input_shape (passthrough,
-                            # not a merge — e.g., window_size=15 passing through unchanged)
-                            for expr_val, expr_dict in expr_map.items():
-                                if dim_val % expr_val == 0:
-                                    quotient = dim_val // expr_val
-                                    if quotient > 1 and quotient in input_shape:
-                                        # Architectural-factor guard (mirror),
-                                        # engine-scoped to DIRECT weight dims
-                                        # like the direct-match guard above:
-                                        # never fold a FOREIGN symbol into a
-                                        # weight constant via a merge.
-                                        if (dim_val in weight_dims
-                                                and not _expr_symbols_in_input(
-                                                    expr_dict, in_sym_dims)):
-                                            continue
-                                        # Create product expression
-                                        product_expr = {
-                                            "type": "mul",
-                                            "left": expr_dict,
-                                            "right": quotient,
-                                            "trace": dim_val,
-                                        }
-                                        _cbx_log(_op_uid,
-                                                 f"view-merge[{i}]", dim_val,
-                                                 product_expr)
-                                        new_shape[i] = product_expr
-                                        changed = True
-                                        injected += 1
-                                        # Persist so later flattens DIRECT-match it.
-                                        if dim_val not in new_products:
-                                            new_products[dim_val] = product_expr
-                                        break
-
-                    if changed:
-                        new_attrs = dict(attrs)
-                        new_attrs[shape_key] = new_shape
-                        # Also update args list
-                        new_args = list(new_attrs.get("args", []))
-                        for ai, arg in enumerate(new_args):
-                            if isinstance(arg, dict) and arg.get("type") == "list":
-                                orig = arg.get("value", [])
-                                if len(orig) == len(new_shape):
-                                    new_args[ai] = {"type": "list", "value": new_shape}
-                                    break
-                        new_attrs["args"] = new_args
-                        op_data["attributes"] = new_attrs
-
-                elif op_type in ("aten::ones", "aten::zeros", "aten::full",
-                                 "aten::empty", "aten::ones_like", "aten::zeros_like"):
-                    # Creation ops: size list may contain hardcoded symbolic values
-                    # E.g., ones([5, 15]) for windowed attention mask
-                    if not args:
-                        continue
-                    size_arg = args[0]
-                    if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
-                        continue
-                    size_list = size_arg.get("value", [])
-
-                    changed = False
-                    new_size = list(size_list)
-                    for i, dim_val in enumerate(size_list):
-                        if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
-                            new_size[i] = expr_map[dim_val]
-                            changed = True
-                            injected += 1
-
-                    if changed:
-                        new_args = list(args)
-                        new_args[0] = {"type": "list", "value": new_size}
-                        new_attrs = dict(attrs)
-                        new_attrs["args"] = new_args
-                        if "size" in new_attrs:
-                            new_attrs["size"] = new_size
-                        op_data["attributes"] = new_attrs
-
-            # Merge synthesized products into expr_map so the next pass can
-            # DIRECT-match later flattens. Skip values that are ambiguous or
-            # already mapped (don't override a tensor-derived expression).
-            grew = False
-            for _v, _e in new_products.items():
-                if _v in ambiguous or _v in expr_map:
-                    continue
-                expr_map[_v] = _e
-                grew = True
-
-            if injected == injected_before and not grew:
-                break
-
-    # ========================================================================
     # FUSED MoE COMPILATION
     # ========================================================================
 
@@ -2672,13 +2301,10 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
                 resolvers.append(sym_resolver)
-            elif isinstance(arg, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
-                resolvers.append(prod_resolver)
             elif isinstance(arg, ExprArg):
-                # Dynamic expression resolution (spatial dims from conv chains)
-                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                # A top-level argument is a SCALAR slot (a linspace bound may be real)
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value,
+                                                         _symexpr.SCALAR)
                 resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 # Recursively create resolver for list items
@@ -2719,12 +2345,9 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(arg.symbol_id, arg.trace_value, arg.offset)
                 resolvers.append(sym_resolver)
-            elif isinstance(arg, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
-                resolvers.append(prod_resolver)
             elif isinstance(arg, ExprArg):
-                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value,
+                                                         _symexpr.SCALAR)
                 resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 item_resolver = self._make_list_resolver(arg.items)
@@ -2754,12 +2377,10 @@ class CompiledSequence:
                 # Dynamic symbol resolution
                 sym_resolver = self._make_symbol_resolver(item.symbol_id, item.trace_value, item.offset)
                 item_resolvers.append(sym_resolver)
-            elif isinstance(item, ProductArg):
-                # Dynamic product resolution
-                prod_resolver = self._make_product_resolver(item.factors, item.trace_value)
-                item_resolvers.append(prod_resolver)
             elif isinstance(item, ExprArg):
-                expr_resolver = self._make_expr_resolver(item.expr_dict, item.trace_value)
+                # A list element is a SHAPE slot (a size): a real there refuses by name
+                expr_resolver = self._make_expr_resolver(item.expr_dict, item.trace_value,
+                                                         _symexpr.SHAPE)
                 item_resolvers.append(expr_resolver)
             elif isinstance(item, ListArg):
                 # Nested list - recursive
@@ -2798,59 +2419,33 @@ class CompiledSequence:
             _refuse_unbound(r, symbol_id, trace_value)
         return resolve_symbol
 
-    def _make_product_resolver(self, factors: Tuple[Any, ...], trace_value: int) -> Callable[[TensorArena], int]:
-        """
-        Generate closure for dynamic product resolution.
-
-        Handles expressions like s0 * s1 * 256 by multiplying all factors.
-
-        Args:
-            factors: Tuple of factor references (symbol_ids or ints)
-            trace_value: Fallback value if symbols cannot be resolved
-
-        Returns:
-            Closure that computes product at runtime
-        """
-        def resolve_product(_arena: TensorArena) -> int:
-            r = self._shape_resolver
-            runtime_vals = r.get_bound_symbols() if r is not None else {}
-            result = 1
-            for f in factors:
-                if isinstance(f, str):
-                    if f not in runtime_vals:
-                        _refuse_unbound(r, f, trace_value)
-                    result *= runtime_vals[f]
-                elif isinstance(f, int):
-                    result *= f
-                else:
-                    raise RuntimeError(
-                        f"ZERO FALLBACK: a product factor of type {type(f).__name__} cannot be "
-                        f"resolved at runtime (trace value {trace_value})")
-            return result
-        return resolve_product
-
-    def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable[[TensorArena], int]:
+    def _make_expr_resolver(self, expr_dict: dict, trace_value: int,
+                            slot: str = _symexpr.SHAPE) -> Callable[[TensorArena], Any]:
         """
         Generate closure for dynamic expression resolution.
 
-        Handles arbitrary SymInt expression trees (floordiv, add, sub, mul, etc.)
-        by delegating to SymbolicShapeResolver._resolve_symint_dict() at runtime.
+        Evaluates any tree of the shared vocabulary (core/runtime/symexpr.py) through
+        SymbolicShapeResolver._resolve_symint_dict() at runtime, in `slot`: SHAPE for a size
+        (an int, a real refused by name), SCALAR for an op's scalar argument (int or float).
 
         Used for spatial dimensions derived from conv chains:
-        e.g., (s1 + 2*pad - dilation*(k-1) - 1) // stride + 1
+        e.g., (s1 + 2*pad - dilation*(k-1) - 1) // stride + 1, and for real bounds
+        such as a rotary linspace's +-(h * sqrt(area / (h * w))) / 2.
 
         Args:
-            expr_dict: Expression dict from SymInt.to_json()
-            trace_value: Fallback value if symbols cannot be resolved
+            expr_dict: Expression dict from graph.json
+            trace_value: the witnessed trace value, named in a refusal (never answered)
+            slot: symexpr.SHAPE or symexpr.SCALAR
 
         Returns:
             Closure that evaluates expression at runtime
         """
-        def resolve_expr(_arena: TensorArena) -> int:
+        def resolve_expr(_arena: TensorArena) -> Any:
             r = self._shape_resolver
             if r is None:
                 _refuse_unbound(None, str(expr_dict)[:80], trace_value)
-            return r._resolve_symint_dict(expr_dict)   # an unbound symbol refuses by name inside
+            # the ONE evaluator (core/runtime/symexpr.py); an unbound symbol refuses by name inside
+            return r._resolve_symint_dict(expr_dict, slot)
         return resolve_expr
 
     # ========================================================================
@@ -2919,29 +2514,10 @@ class CompiledSequence:
                 offset = arg.get("offset", 0)
                 return SymbolArg(symbol_id=symbol_id, trace_value=trace_value, offset=offset)
 
-            if arg_type == "product":
-                # Dynamic resolution: return ProductArg for runtime resolution
-                # Format: {'type': 'product', 'factors': ['s1', 's2'], 'trace_value': 16384}
-                factors_raw = arg.get("factors", [])
-                trace_value = arg.get("trace_value", 0)
-                compiled_factors = []
-                for f in factors_raw:
-                    if isinstance(f, dict) and f.get("type") == "symbol":
-                        # Extract symbol id from nested symbol
-                        compiled_factors.append(f.get("symbol_id") or f.get("id") or f.get("name"))
-                    elif isinstance(f, dict):
-                        # Concrete value wrapped in dict
-                        compiled_factors.append(f.get("value", f.get("trace_value", 0)))
-                    elif isinstance(f, str):
-                        # Direct symbol reference (e.g., "s0")
-                        compiled_factors.append(f)
-                    else:
-                        # Concrete integer
-                        compiled_factors.append(f)
-                return ProductArg(factors=tuple(compiled_factors), trace_value=trace_value)
-
-            # Expression types from SymInt.to_json() — spatial dim expressions
-            if arg_type in ("floordiv", "add", "sub", "mul", "mod", "neg"):
+            # An expression of the shared vocabulary (core/runtime/symexpr.py): integer
+            # extents from SymInt.to_json(), and the real bounds Forge's extent provenance
+            # records (truediv, sqrt). Evaluated at run time in the slot it is resolved for.
+            if _symexpr.is_expression(arg):
                 trace = arg.get("trace", arg.get("trace_value", 0))
                 return ExprArg(expr_dict=arg, trace_value=trace)
 
@@ -3058,7 +2634,21 @@ class CompiledSequence:
         # default). Only constant_*/shape-[0]/missing-norm slots are
         # touched — regular weight slots left unprovided by zero3
         # block-by-block streaming are intentionally NOT allocated.
+        # A container weight an op reads and the weights do not hold is refused here, by
+        # name, before any op runs — never left None for its first reader, and never filled
+        # in by the defaults below (R30 mirror of TritonSequence.bind_weights, which has no
+        # such defaults; Allegro, 2026-10-04). Checked BEFORE the defaults: a `.norm.` weight
+        # the container lacks would otherwise run as ones here and be refused under --triton.
         tensors_meta = self.dag.get("tensors", {})
+        from neurobrix.nbx.weight_presence import (
+            loader_weight_consumers, refuse_unbound_weights)
+        if self._loader_consumers is None:
+            self._loader_consumers = loader_weight_consumers(self.dag)
+        unbound = [(tid, uid) for tid, uid in self._loader_consumers.items()
+                   if tid in self._tensor_id_to_slot
+                   and self._arena[self._tensor_id_to_slot[tid]] is None]
+        refuse_unbound_weights(self.dag.get("component_name") or "?", unbound, tensors_meta)
+
         for tensor_id in self._weight_tensor_ids:
             slot = self._tensor_id_to_slot[tensor_id]
             if self._arena[slot] is not None:
