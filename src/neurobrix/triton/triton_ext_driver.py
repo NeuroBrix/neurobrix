@@ -202,9 +202,17 @@ class TritonExtDriver(Driver):
         from triton_apple_backend.device_print import parse_print_layout
         pl = parse_print_layout(getattr(metadata, "print_layout", None))
         al = parse_assert_layout(getattr(metadata, "assert_layout", None))
-        if pl is None and al is None:
+        # The two address flags triton-ext's compiler records (`compiler.py`:
+        # `metadata["exposes_addresses"]`, `metadata["reads_addresses"]`) and its
+        # own launcher passes to every call: a kernel that stores a pointer's
+        # bits exposes its buffers, and one that reads through such bits must
+        # name the exposed buffers to Metal, which keeps resident only what the
+        # encoder names. We passed neither until 2026-10-04.
+        exposes = bool(getattr(metadata, "exposes_addresses", False))
+        reads = bool(getattr(metadata, "reads_addresses", False))
+        if pl is None and al is None and not exposes and not reads:
             return None
-        return _Trailing(pl, al)
+        return _Trailing(pl, al, exposes, reads)
 
     def launch(self, function, grid, block, shared: int, stream: int,
                params: Sequence[Tuple[str, Any]], names=None, types=None,
@@ -275,6 +283,12 @@ class TritonExtDriver(Driver):
         # start zeroed: each block's head word is a running count the kernel
         # bumps.
         print_buf = assert_buf = None
+        addr_flags = {}
+        if trailing is not None:
+            if trailing.exposes_addresses:
+                addr_flags["exposes_addresses"] = True
+            if trailing.reads_addresses:
+                addr_flags["reads_addresses"] = True
         if trailing is not None:
             rt = D._runtime()      # D is the pinned torch-free runtime's module
             if trailing.print_layout is not None:
@@ -306,7 +320,7 @@ class TritonExtDriver(Driver):
             import time as _t
             _a = _t.perf_counter(); _nbx_queue_drain()
             _b = _t.perf_counter()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
             _c = _t.perf_counter(); _native().synchronize(); _d = _t.perf_counter()
             _SYNC_ACC[0] += _b - _a; _SYNC_ACC[1] += _c - _b
             _SYNC_ACC[2] += _d - _c; _SYNC_ACC[3] += 1
@@ -318,7 +332,7 @@ class TritonExtDriver(Driver):
                 _row[0] += 1; _row[1] += _d - _c
         else:
             _nbx_queue_drain()
-            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz])
+            function(*args, threads=[gx * lx, gy * ly, gz * lz], group_size=[lx, ly, lz], **addr_flags)
             # And the other direction: the host (and NeuroBrix's own blits) must
             # see what this kernel wrote.
             _native().synchronize()
@@ -346,6 +360,9 @@ class _Trailing(NamedTuple):
     """
     print_layout: Any
     assert_layout: Any
+    #: triton-ext's two address flags for this compilation, passed to the kernel call as its own launcher does.
+    exposes_addresses: bool = False
+    reads_addresses: bool = False
 
 
 #: Binding census, printed at exit under NBX_EXT_STATS=1. An interior binding
@@ -383,8 +400,9 @@ _PTR_NP = {
 _PINNED_WRAPS: dict = {}
 
 # Pinned wraps: ONE uint8 wrap of each WHOLE allocation containing a pinned
-# tensor, held by metal_native.retain_resident for the scope's lifetime. What
-# that buys is a PINNED LIFETIME: the wrap, and so its GPU virtual address,
+# tensor, held HERE for the scope's lifetime, its address read through the
+# served triton-ext API (`MetalBuffer.gpu_address()`). What that buys is a
+# PINNED LIFETIME: the wrap, and so its GPU virtual address,
 # outlives the launch that made it. A kernel that reads through a
 # pointer-table entry needs the covering wrap ALIVE, and this driver otherwise
 # makes a fresh wrap per launch. Once that wrap is dropped, its captured
@@ -393,8 +411,15 @@ _PINNED_WRAPS: dict = {}
 # address.gpu_address). It is not a residency fix. Re-measured 2026-09-24
 # against PR #126's head 8b45b9aa: an ALIVE wrap left unbound reads correctly
 # from a later command buffer at 1 KiB, at 64 MiB and after churn, with or
-# without the useResource that retain_resident also adds; a DROPPED wrap reads
-# 0/256 (docs/reference/owed-proofs.md, 2026-09-24). Measured 2026-09-21
+# without a useResource; a DROPPED wrap reads 0/256
+# (docs/reference/owed-proofs.md, 2026-09-24). Until 2026-10-04 this called
+# `metal_native.retain_resident`, a function of the retired residency commit
+# that the served build never had: every mixture-of-experts model failed at
+# its first band on Apple (granite-3.1-1b-a400m, "has no attribute
+# 'retain_resident'"). Upstream's contract is the one followed now:
+# `gpu_address()` records the buffer as exposed (weakly), and a kernel compiled
+# as reading addresses names the exposed buffers to Metal at its launch
+# (`reads_addresses`, carried by `_Trailing`). Measured 2026-09-21
 # (granite): per-expert kept wraps also worked but Metal declined the ~480th
 # GB-scale alias, so one wrap per allocation is the shape that scales.
 # base -> [wrap, refcount, gpu_va].
@@ -403,7 +428,7 @@ _RESIDENT_WRAPS: dict = {}
 
 def _resident_acquire(addr: int) -> int:
     """Pin one wrap of the whole allocation containing `addr` for the scope's
-    lifetime (retain_resident holds it); returns base."""
+    lifetime (`_RESIDENT_WRAPS` holds it); returns base."""
     import numpy as np
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
 
@@ -423,7 +448,7 @@ def _resident_acquire(addr: int) -> int:
     raw = (ctypes.c_byte * size).from_address(base)
     view = np.frombuffer(memoryview(raw), dtype=np.uint8)
     buf = _native().wrap(view)
-    gpu_va = int(_native().retain_resident(buf))
+    gpu_va = int(buf.gpu_address())                    # also records it as exposed, weakly
     _RESIDENT_WRAPS[base] = [buf, 1, gpu_va]
     return base
 
@@ -471,11 +496,7 @@ def _resident_release(base) -> None:
         return
     ent[1] -= 1
     if ent[1] <= 0:
-        try:
-            _native().release_resident(ent[0])
-        except Exception:                              # noqa: BLE001
-            pass
-        _RESIDENT_WRAPS.pop(base, None)
+        _RESIDENT_WRAPS.pop(base, None)                # the wrap dies here; the weak exposed table drops it
 #: How many open scopes pin each address. A wrap is dropped only when the last
 #: scope holding its address exits.
 _PIN_COUNTS: dict = {}
