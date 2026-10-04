@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A plan refusal under `--triton` names the component that does not fit.** When a model could not
+  be planned, the message could blame a component the planner had already split into tiles, or
+  suggest a tile count for a component that cannot be tiled. It now marks tiled components as not
+  the cause, says why an untileable one has no tiles, and on NVIDIA cards states the limit of the
+  last strategy that can help (streaming on the card) instead of asking for host memory that
+  `--triton` does not use. Example: SANA-Video 2B at 672x1344, 81 frames, on a 16 GB card, where one
+  transformer block needs 18.8 GB.
+
+- **On Apple machines under `--triton`, no weight block is planned larger than the GPU can allocate
+  at once.** A Metal device refuses any single buffer above its maximum buffer length, however much
+  memory is free; on an 18 GB M4 Pro, deepseek-moe-16b-chat at 17 GB free failed at load asking for
+  one 14.7 GB block. The planner now cuts every streamed piece below that limit, streams a component
+  whose weights alone exceed it instead of holding it whole, and names the component when nothing
+  else fits. On unified memory the planner also counts the previous piece's block, which the
+  allocator keeps cached, while the next piece loads. NVIDIA cards and `--compiled` plans are
+  unchanged.
+
+- **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
+  counted the transposed copy of every linear layer's weight as working memory, although the Triton
+  engine reads the weight in place; for a speech or language model with a large vocabulary that was
+  close to a gigabyte that never exists. On a 24 GB Apple machine with 12 GB free, orpheus-3b was
+  streamed (every token re-reading the model from disk) and is now held whole. Janus-Pro-7B on the
+  same machine when idle is held whole too: the planner now knows that an image decode releases the
+  language model before the image decoder loads, and no longer prices the language model's logits
+  as the saved picture (3.4 GB of host memory for a 384x384 image).
+
+- **Large video and multimodal models stream on small unified-memory machines instead of being
+  refused.** On an 18 GB Apple machine, CogVideoX-5b-I2V, Wan2.2-I2V-A14B and Ming-Lite-Omni-1.5
+  were refused at their default request; they now run their largest components one piece at a time
+  on the GPU. The plan no longer reserves memory for components that are unloaded while the streamed
+  one runs, streams a component too when keeping it whole leaves no room for the pieces, and no longer
+  counts tensors nothing reads. A refusal on unified memory now names the streaming limit that bound
+  it rather than a host-memory figure no path uses.
+
 - **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
   every one of their 128 experts for every token and multiplied the unused ones by zero: correct
   output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
@@ -199,6 +233,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting, instead of running it differently from everyone else.
 
 ### Fixed
+
+- **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
+  classifier-free guidance, the unconditional half of each step attended the padding of the empty
+  negative prompt instead of ignoring it, which pulled every step away from the prompt. On
+  SANA-Video (720p model, 4 steps) the result differed strongly from the vendor's pipeline on the
+  same noise (decoded frames at 17-21 dB PSNR); it now matches it (37-50 dB) in both `--compiled`
+  and `--triton`. On Sana 1600M 1024px (8 steps) the image goes from 17 dB to 48 dB against the
+  vendor's. Outputs of these models change for a given seed.
+
+- **`granite-speech-3.3-8b` transcribes under `--compiled` on a 16 GB GPU.** On a card too small
+  to hold its 8B language model, the model's weights stay in host memory and are streamed to the
+  GPU. The run then stopped after the first decoded token with `Expected all tensors to be on the
+  same device, but got index is on cuda:0, different from other tensors on cpu`. The token lookup
+  now runs where the embedding table is, and only the looked-up rows are sent to the GPU.
+  `--triton` was not affected.
 
 - **A model whose container is missing a weight is refused by name before it runs.** A weight
   file the container lists but that is gone from disk, a weight missing from the file the

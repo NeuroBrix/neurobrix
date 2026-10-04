@@ -416,6 +416,113 @@ class ActivationProfile:
         )
 
 
+#: Ops whose output is a STRIDE-0 broadcast view at runtime: they allocate nothing (see the
+#: simulation loop in `ActivationProfiler.estimate_peak_memory`). Shared with the layer partitioner,
+#: which sizes the same graph's activations and must not count what this one does not.
+ZERO_ALLOC_OP_TYPES = ("aten::expand", "aten::broadcast_to")
+
+#: The prefixes of a tensor id that names a stored weight (a parameter or a buffer of the container).
+WEIGHT_TENSOR_PREFIXES = ("param::", "buffer::")
+
+#: The contractions whose TRITON wrapper reads a transposed weight in place, by its strides:
+#: kernels/wrappers.py `mm` ("The weight is walked by its own strides ... a pre-transposed weight —
+#: the (K, N) stride view of a (N, K) row-major buffer — is read in place") and `addmm` ("A
+#: pre-transposed weight is walked by its strides (as mm)"). Every other consumer is held to copy it:
+#: `matmul`'s batched route expands the weight and `bmm` materialises it.
+IN_PLACE_WEIGHT_READERS = ("aten::mm", "aten::addmm")
+
+
+def weight_transposes_read_in_place(dag: Dict[str, Any]) -> set:
+    """The `aten::t` ops of `dag` whose output is no buffer on the TRITON engine: the transpose of
+    a WEIGHT (its input is a parameter or a buffer) that every consumer reads in place
+    (`IN_PLACE_WEIGHT_READERS`), and that the graph does not return.
+
+    The Triton sequence removes such an op when it binds the weights — the weight is transposed
+    once, a stride view of its own buffer (triton/sequence.py `_eliminate_weight_transpose_ops`);
+    triton_sequential runs it as the same view (`NBXTensor.t`). Counted as an allocation, a linear's
+    weight was priced twice while its contraction ran: orpheus-3b's `lm_head` (156 940 x 3 072,
+    920 MB in bf16) planned 927 MB of "activations" for 7 MB of logits, and the Mac's 24 GB machine
+    streamed a model whose 7 241 MB of weights it holds whole (196 s for 16 tokens, 2026-10-04). The
+    arena's own record agrees: Qwen3-Coder-30B's lm_head held 593.5 MB — its weight, once — at the
+    failure measured 2026-09-22.
+
+    NOT applied to the compiled engine, by measurement owed and not by symmetry: there the view is
+    free too, but on fp16 hardware a contraction outside an fp16-safe contract runs under
+    `DtypeEngine._make_fp32_wrapper` (core/dtype/engine.py), which copies EVERY float operand to
+    fp32 — the weight included, twice its fp16 bytes, per call. The transpose's bytes were the only
+    price near that copy, so the compiled estimate keeps them until the copy is measured and priced
+    as what it is.
+    """
+    ops = dag.get("ops") or {}
+    readers: Dict[str, List[str]] = {}
+    for op in ops.values():
+        for tid in op.get("input_tensor_ids") or []:
+            readers.setdefault(tid, []).append(op.get("op_type"))
+    returned = set(dag.get("output_tensor_ids") or [])
+    free = set()
+    for uid, op in ops.items():
+        if op.get("op_type") != "aten::t":
+            continue
+        ins = op.get("input_tensor_ids") or []
+        outs = op.get("output_tensor_ids") or []
+        if not ins or not outs or not str(ins[0]).startswith(WEIGHT_TENSOR_PREFIXES):
+            continue
+        if all(o not in returned and readers.get(o)
+               and all(r in IN_PLACE_WEIGHT_READERS for r in readers[o]) for o in outs):
+            free.add(uid)
+    return free
+
+
+def dag_last_uses(dag: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build map: tensor_id -> last_op_uid that uses it — THE liveness rule of a graph.
+
+    Liveness Analysis: Tensor can be freed after its last use.
+
+    CRITICAL FIX: Dead output tensors (outputs never consumed as inputs
+    to any downstream op) must be freed immediately at the producing op.
+    Without this, graphs with many detach ops (e.g., text_encoder with
+    ~1041 aten::detach) accumulate dead tensors, inflating peak memory
+    from ~2GB to 89GB.
+
+    One function for every place that walks a graph's liveness: the placement
+    estimate below and the layer partitioner (`layer_partition.py`). The
+    partitioner kept a second copy without the dead-output rule, and a Wan
+    transformer's never-read outputs (layer-norm statistics, attention
+    log-sum-exps, RoPE `copy_` results) stayed alive to the last op: 108 800 MB
+    of "activations alone" at 480x832x81 where this rule prices 7 737 (the Mac,
+    2026-10-04).
+    """
+    execution_order = dag.get("execution_order", [])
+    ops = dag.get("ops", {})
+    last_use = {}
+
+    # Step 1: Collect ALL tensors used as inputs anywhere
+    used_as_input = set()
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        used_as_input.update(op.get("input_tensor_ids", []))
+
+    # Step 2: Standard last-use tracking (input tensors)
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        for tid in op.get("input_tensor_ids", []):
+            # Overwrite = last use wins
+            last_use[tid] = op_uid
+
+    # Step 3: Dead outputs — free immediately after producing op
+    # Output tensors that are never consumed as inputs AND are not
+    # graph outputs would otherwise accumulate forever in live_tensors.
+    graph_outputs = set(dag.get("output_tensor_ids", []))
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        for out_tid in op.get("output_tensor_ids", []):
+            if out_tid not in used_as_input and out_tid not in graph_outputs:
+                last_use[out_tid] = op_uid  # Free immediately
+
+    return last_use
+
+
 class ActivationProfiler:
     """
     Symbolic Activation Memory Profiler.
@@ -463,43 +570,8 @@ class ActivationProfiler:
         return cls(dag)
 
     def _compute_last_uses(self) -> Dict[str, str]:
-        """
-        Build map: tensor_id -> last_op_uid that uses it.
-
-        Liveness Analysis: Tensor can be freed after its last use.
-
-        CRITICAL FIX: Dead output tensors (outputs never consumed as inputs
-        to any downstream op) must be freed immediately at the producing op.
-        Without this, graphs with many detach ops (e.g., text_encoder with
-        ~1041 aten::detach) accumulate dead tensors, inflating peak memory
-        from ~2GB to 89GB.
-        """
-        last_use = {}
-
-        # Step 1: Collect ALL tensors used as inputs anywhere
-        used_as_input = set()
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            used_as_input.update(op.get("input_tensor_ids", []))
-
-        # Step 2: Standard last-use tracking (input tensors)
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            for tid in op.get("input_tensor_ids", []):
-                # Overwrite = last use wins
-                last_use[tid] = op_uid
-
-        # Step 3: Dead outputs — free immediately after producing op
-        # Output tensors that are never consumed as inputs AND are not
-        # graph outputs would otherwise accumulate forever in live_tensors.
-        graph_outputs = set(self.dag.get("output_tensor_ids", []))
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            for out_tid in op.get("output_tensor_ids", []):
-                if out_tid not in used_as_input and out_tid not in graph_outputs:
-                    last_use[out_tid] = op_uid  # Free immediately
-
-        return last_use
+        """tensor_id -> the op after which it is dead (`dag_last_uses`, the one liveness rule)."""
+        return dag_last_uses(self.dag)
 
     def build_symbol_map(self, input_config: InputConfig,
                          placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
@@ -757,6 +829,7 @@ class ActivationProfiler:
         widths: Optional[Dict[str, int]] = None,
         source_holding_uids: Optional[set] = None,
         placement_floor: bool = False,
+        in_place_weight_reads: bool = False,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -836,6 +909,10 @@ class ActivationProfiler:
         # here mirrors the runtime exactly. See P-PRISM-ACTIVATION-ESTIMATOR-
         # TILING-AWARE audit for the gap quantification.
         zero_set = set(zero_alloc_uids) if zero_alloc_uids else set()
+        # The engine this estimate is for reads a transposed weight in place (the Triton engines:
+        # the caller says so): those transposes are no buffer (`weight_transposes_read_in_place`).
+        if in_place_weight_reads:
+            zero_set |= weight_transposes_read_in_place(self.dag)
 
         # In-place add aliasing: at runtime, in-place adds reuse one input
         # buffer as the output (no new allocation). Each in-place add's
@@ -965,8 +1042,7 @@ class ActivationProfiler:
             # the existing stride-0 proxy set. R34: branch on op semantics, not
             # model family.
             op_is_zero_alloc = (op_uid in zero_set or
-                                op.get("op_type") in ("aten::expand",
-                                                      "aten::broadcast_to"))
+                                op.get("op_type") in ZERO_ALLOC_OP_TYPES)
             for out_tid in output_tids:
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)

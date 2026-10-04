@@ -132,14 +132,24 @@ _DTYPE_WIDTH = {
 }
 
 
-def unified_device_bytes(plan, profile) -> int:
+def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
     """The plan's device bytes that are host bytes: all of them when the profile declares its device
     unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
-    ledger reserves what a unified run really takes (the Mac, 2026-10-03)."""
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03).
+
+    What a plan holds AT ONCE, not every component it ever loads: a streamed plan its window; a plan
+    that loads on demand (`loading_mode == "lazy"`) the dearest of its flow's phases, which the solver
+    passes as `peak_loaded_bytes` (`PrismSolver._peak_loaded_bytes`); an eager plan, or a caller with
+    no phases to give, the plan's total. Janus-Pro-7B on the Mac's idle reading planned
+    lazy_sequential whole at the 16 384 rung and was then sent down to a streamed 12 288 because its
+    host side summed the decoder the triton flow loads only after the language model is released."""
     if any(d.has_unified_memory for d in profile.devices):
-        # a streamed plan holds its window, not every component at once
         window = getattr(plan, "device_window_mb", None)
-        return int((window if window is not None else plan.total_memory_mb) * 2**20)
+        if window is not None:
+            return int(window * 2**20)
+        if peak_loaded_bytes is not None and plan.loading_mode == "lazy":
+            return int(peak_loaded_bytes)
+        return int(plan.total_memory_mb * 2**20)
     return 0
 
 
@@ -735,7 +745,7 @@ class PrismSolver:
 
     def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
                                      component_memory: Dict, profile,
-                                     kv_already_counted: int = 0) -> int:
+                                     kv_already_counted: int = 0, container=None) -> int:
         """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
 
         Each component costs what its allocation keeps resident: a `layer_streaming` segment's
@@ -746,14 +756,20 @@ class PrismSolver:
         "over capacity" on a 32 GB card, the KV check failed, the cascade fell to
         cpu_execution on a GPU node).
 
-        The costs are SUMMED, for every strategy. `lazy_sequential` and `cpu_streaming` LOAD one
-        component at a time, but what stays resident is the FLOW's decision, and Prism does not model
-        it yet: the VLM decode loop keeps the LM and its head together (MiniCPM-o's pair is
-        16 516.2 MB, over the Mac's 16 384 rung — a MAX would have accepted it, register 104), the
-        speech legs load their talker groups beside or after the LM, and the triton dual_ar flow
-        loads its quantizer with the model still resident where the compiled one unloads first.
-        The SUM is the bound that holds for every one of those; a one-at-a-time combination waits
-        on a lifecycle model that reads what each flow keeps.
+        The costs are combined by what the plan holds AT ONCE. Under a strategy that loads on
+        demand (`_loads_on_demand`) that is the FLOW's lifecycle, read from its own phases for the
+        engine and the kind of session the plan runs under (`core/flow/base.py resident_together`,
+        `_phase_peak`): the dearest phase, with every component no phase names. An image decode on
+        the triton engine releases its language model before its decoder loads, so a single run
+        never holds the two together. The cache this check sizes is in no phase — its buffers
+        outlive the language model (triton/kv_cache.py `clear`) — so it is held against the dearest
+        phase, whichever that is. A flow that declares no phases keeps the SUM of every component —
+        the bound that holds whatever it keeps: the VLM decode loop keeps the LM and its head
+        together with its towers (MiniCPM-o: 17 856 MB against the Mac's 16 384 rung — a MAX would
+        have accepted it, registers 104 and 119), the speech legs load their talker groups beside or
+        after the LM, and the triton dual_ar flow loads its quantizer with the model still resident
+        where the compiled one unloads first; each waits on its own handlers being read into a
+        phase function. A strategy that does not load on demand keeps the SUM: nothing unloads.
 
         Combined only after every cost is known, so the result does not depend on the order the
         components are visited in — an in-loop `max(total, x)` beside `total += y` did.
@@ -780,7 +796,51 @@ class PrismSolver:
             if name == self._lm_component_name:
                 cost = max(cost - int(kv_already_counted), 0)
             costs[name] = cost
+        if container is not None and self._loads_on_demand(strat_name):
+            return self._phase_peak(container, costs)
         return sum(costs.values())
+
+    def _loads_on_demand(self, strat_name: str) -> bool:
+        """True when a plan of `strat_name` loads a component when the flow reaches it and lets the
+        flow release it — `_build_plan`'s `loading_mode == "lazy"` for every strategy it decides by
+        NAME: one that is not eager, the two streaming rungs, a serve session degraded to cold. A
+        name that is no AllocationStrategy member (`op_level_tiling`) is decided there from the
+        plan's totals, which this check does not have: it is held to the SUM here, the bound that
+        holds either way. (An eager plan preloads nothing either — executors are built without
+        weights — but nothing it loads is released, so the SUM is what it ends up holding.)"""
+        if getattr(self, "_serve_cold_fallback", False) or strat_name in ("cpu_streaming", "layer_streaming"):
+            return True
+        return strat_name in {s.value for s in AllocationStrategy if not s.is_eager}
+
+    def _flow_phases(self, container):
+        """The flow's phases on the engine this plan runs on, for a single run or a served session
+        (`core/flow/base.py resident_together`), or None when it declares none."""
+        from neurobrix.core.flow.base import resident_together
+        from neurobrix.core.prism.host_footprint import engine_of
+        return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
+                                 served=bool(getattr(self, "_serve_mode", False)))
+
+    def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
+        """The most a plan that loads on demand holds at one moment, from a cost per component: the
+        dearest of the flow's phases, each with every component no phase names (nothing says it is
+        unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
+        in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
+        does not hold `owner`."""
+        phases = self._flow_phases(container)
+        if not phases:
+            return sum(costs.values())
+        named = set().union(*phases)
+        loose = sum(c for n, c in costs.items() if n not in named)
+        return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
+                           for ph in phases)
+
+    def _peak_loaded_bytes(self, container, plan) -> int:
+        """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
+        each component's total); the KV cache, priced inside its owner's total, stays allocated in
+        the phases that no longer hold the owner."""
+        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
+        return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
     @property
     def whole_component_fraction(self) -> float:
@@ -799,8 +859,110 @@ class PrismSolver:
         0.92 x rung to place whole, the rung itself to stream — and a component between the two
         was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
         the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
-        accelerator, on a device that holds it."""
+        accelerator, on a device that holds it.
+        """
         return self._effective_capacity_mb(dev) * self.whole_component_fraction
+
+    def _max_allocation_mb(self, dev: "DeviceState") -> Optional[int]:
+        """THE LARGEST SINGLE ALLOCATION `dev` GRANTS, in MB — `DeviceSpec.max_allocation_mb`, the
+        profile's fact (Metal's `MTLDevice.maxBufferLength`: 13 639 MB on an M4 Pro whose working set
+        is 18 186 MB) — or None: the profile says nothing and the card grants its whole memory.
+
+        What it bounds is an ARENA: the weights the Triton engine loads for one component, or for one
+        streamed piece, or for a streamed component's base, are ONE buffer per device
+        (`triton/weight_loader.py`: `ComponentArena(total, dev)`, one `malloc_cuda(total)`). The
+        activations are separate allocations and are not in it. At 17.1 GB free Prism cut
+        deepseek-moe-16b-chat in 3 segments against the usable 15 073 MB; the first piece's arena asked
+        14 661 558 272 bytes in one allocation and the device refused it by SIZE with 17 785 MB free
+        ("GPU malloc failed (error 1)", the Mac, 2026-10-04).
+
+        The ARENA is the Triton engine's: the compiled engine loads each weight as its own tensor,
+        so a component is never one allocation there and this bound does not apply (None)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        cap = getattr(getattr(dev, "spec", None), "max_allocation_mb", None)
+        return int(cap) if cap else None
+
+    def _arena_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState") -> float:
+        """The arena `comp_name` asks held whole on `dev`: its weights at the device's cost for the
+        component's dtype — the weight part of `_whole_component_mb`, and nothing else."""
+        return mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+
+    def _arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
+                               dev: "DeviceState") -> Optional[str]:
+        """Why `comp_name` cannot be held whole on `dev` as ONE arena, or None when it can."""
+        cap = self._max_allocation_mb(dev)
+        if cap is None:
+            return None
+        arena = self._arena_mb(container, comp_name, mem, dev)
+        if arena <= cap:
+            return None
+        why = (f"'{comp_name}' held whole is one arena of {arena:,.0f} MB of weights, over the "
+               f"{cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
+               f"max_allocation_mb)")
+        # Said by the refusal (`_fail_error`): a rung that keeps components whole declines it.
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
+
+    def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
+        """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB,
+        or None where a parked block never sits beside one.
+
+        A freed block stays allocated in the pool when it is at most the cap
+        (`DeviceAllocator.free`): `memory.alloc_pool_parked_cap_fraction` of the arch yml times the
+        device's memory, unbounded (`math.inf`) where the fraction is 0 or absent — the allocator's
+        own reading of the same key. It sits beside the next allocation only where nothing flushes it
+        first: a discrete card's driver refuses what it cannot serve and the pool is flushed and the
+        request retried (`malloc_cuda`), while a UNIFIED device serves the request beside it. So None
+        on a discrete device, under the compiled engine (no arena, no such pool), and with the pool
+        off (`NBX_ALLOC_POOL=0`, the allocator's own door)."""
+        import math
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if os.environ.get("NBX_ALLOC_POOL", "1") == "0":
+            return None
+        if not _device_is_unified(dev.device_string, profile):
+            return None
+        from neurobrix.core.config.loader import get_vendor_config
+        spec = dev.spec
+        brand = getattr(spec, "brand", None)
+        frac = float((get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                      .get("memory", {}) or {}).get("alloc_pool_parked_cap_fraction", 0.0) or 0.0)
+        return frac * float(spec.memory_mb) if frac > 0 else math.inf
+
+    def _arena_door(self, container, strat_name: str, allocs, devices, component_memory) -> Optional[str]:
+        """Why the plan `strat_name` proposes asks some device for one arena over its largest
+        allocation, or None. A component counts when it is held WHOLE on one accelerator: allocated
+        to a device of the plan whose shards all sit there, and not cut by `layer_streaming` (its
+        pieces are bounded by the partitioner). Host-held weights (`zero3:`, `cpu`) are no arena of
+        the device."""
+        if not allocs:
+            return None
+        by_name = {d.device_string: d for d in (devices or [])}
+        streamed = (set(getattr(self, "_layer_stream_partitions", {}) or {})
+                    if strat_name == "layer_streaming" else set())
+        for comp_name, alloc in sorted(allocs.items()):
+            if comp_name in streamed or comp_name not in component_memory:
+                continue
+            dev_str, shard_map = (alloc if isinstance(alloc, tuple) else (alloc, {}))
+            dev = by_name.get(dev_str)
+            if dev is None or any(v != dev_str for v in (shard_map or {}).values()):
+                continue
+            why = self._arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+            if why is not None:
+                return why
+        return None
+
+    def _holds_whole(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                     usable_mb: Optional[float] = None) -> bool:
+        """ONE answer to "is `comp_name` held whole on `dev`": its whole cost within the usable part
+        of the rung (`_usable_mb`, or the budget the caller cuts against) AND its arena within the
+        device's largest allocation."""
+        usable = self._usable_mb(dev) if usable_mb is None else usable_mb
+        return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
+                and self._arena_over_allocation(container, comp_name, mem, dev) is None)
 
     def _live_activation_mb(self, mem: "ComponentMemory") -> float:
         """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
@@ -1173,6 +1335,9 @@ class PrismSolver:
         # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
         self._tiling_declined = {}
         self._tiling_declined_by_rung = {}
+        # Why a component was not held whole: its arena over the device's largest allocation
+        # ({component: reason}, `_arena_over_allocation`).
+        self._arena_declined = {}
         # {rung: (card, usable MB)}: the figure a rung's tiling reasons were held to (`_record_rung_tiling_decline`).
         self._tiling_rung_figure = {}
         self._input_config = input_config
@@ -1413,6 +1578,16 @@ class PrismSolver:
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
 
+            # THE ARENA DOOR, one for every strategy: a component held whole on one accelerator
+            # loads its weights as ONE allocation there (`ComponentArena`), and a device grants a
+            # single allocation only up to its largest (`max_allocation_mb`). The rungs that hold
+            # components whole decline it themselves; this door makes a rung that forgot unable to
+            # win — the plan names the component instead of the device refusing it at load.
+            _over = self._arena_door(container, strat_name, strat_allocs, strat_devices, component_memory)
+            if _over is not None:
+                self._rejected.append((strat_name, float(score), _over))
+                continue
+
             if self._needs_kv_cache:
                 # KV cache is already included in LM activation_bytes — subtract to avoid double-counting
                 kv_already_counted = self._estimate_kv_cache_bytes(container, target_dtype_str)
@@ -1522,7 +1697,8 @@ class PrismSolver:
                     # KV check failed → the cascade fell through to
                     # cpu_execution on a GPU node).
                     total_allocated = self._resident_bytes_for_kv_check(
-                        strat_name, strat_allocs, component_memory, profile, kv_already_counted)
+                        strat_name, strat_allocs, component_memory, profile, kv_already_counted,
+                        container=container)
 
 
                 if strat_name in ("zero3", "single_gpu", "single_gpu_lifecycle"):
@@ -1535,9 +1711,16 @@ class PrismSolver:
                     if self._lm_component_name is not None:
                         total_allocated = max(total_allocated - kv_already_counted, 0)
                 elif strat_name == "layer_streaming":
-                    # The graph constants the segment budget reserved, resident beside every
-                    # segment (constants of the streamed components).
-                    total_allocated += int(self._layer_stream_constant_bytes)
+                    # What the cut itself holds beside the cache: its WINDOW — the whole components
+                    # live beside the segments (phase-exact, `_resident_beside_streamed`), the graph
+                    # constants and flow-read weights, one segment's peak — less the KV reserve the
+                    # segments were cut around, which is the cache this check sizes. The SUM above
+                    # counted every streamed component's segment peak at once and every whole
+                    # component of every phase, which no moment of the plan holds: Ming-Lite-Omni-1.5
+                    # on the Mac's profile, its vision tower and image denoiser streamed beside its
+                    # language model to make room, was then rejected for a 37 MB cache (2026-10-04).
+                    total_allocated = int(self._layer_stream_window_bytes
+                                          - self._layer_stream_kv_reserve_bytes)
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
                     # `target_dtype_str`, the dtype after the fp32 fallback if it fired — the
@@ -1563,6 +1746,8 @@ class PrismSolver:
                            for n, _s, w in self._rejected)
             if self._layer_streaming_declined:
                 _why += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+            for _c, _w in (getattr(self, "_arena_declined", {}) or {}).items():
+                _why += f"\n  not held whole: {_w}"
             raise RuntimeError(
                 "ZERO FALLBACK: No strategy can fit model + KV cache on "
                 "available hardware." + _why + "\n" + self._memory_verdict(devices)
@@ -1699,7 +1884,7 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile))
+            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -2472,6 +2657,10 @@ class PrismSolver:
                     # (core/prism/runtime_widths).
                     widths = self._activation_widths(
                         comp, container, profiler, input_config, comp_dtype_str, profile)
+                    # The Triton engines read a transposed weight in place; the compiled engine's
+                    # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why).
+                    from neurobrix.core.prism.host_footprint import engine_of as _engine_of
+                    _in_place = _engine_of(getattr(self, "_mode", "compiled")) == "triton"
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -2488,6 +2677,7 @@ class PrismSolver:
                         # 2026-08-10). Per-request paths keep the
                         # unfloored map.
                         placement_floor=True,
+                        in_place_weight_reads=_in_place,
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -2540,6 +2730,7 @@ class PrismSolver:
                                 # their consumer: its buffer lives until then.
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
+                                in_place_weight_reads=_in_place,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -2561,6 +2752,7 @@ class PrismSolver:
                                 dtype_bytes=dtype_bytes,
                                 inplace_adds=inplace_adds,
                                 widths=widths,
+                                in_place_weight_reads=_in_place,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -3462,6 +3654,10 @@ class PrismSolver:
         effective_capacity = self._effective_capacity_mb(largest)
         if total_required > effective_capacity:
             return None
+        # Every component is held whole here, each its own arena: one over the device's largest
+        # allocation is a plan the device refuses at its first load.
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
+            return None
 
         allocations = {}
         fresh = self._fresh_devices(devices)
@@ -3587,6 +3783,8 @@ class PrismSolver:
         # solve time, as designed.
         effective_capacity = self._effective_capacity_mb(largest)
         if peak > effective_capacity:
+            return None
+        if any(self._arena_over_allocation(container, n, m, largest) for n, m in sorted_comps):
             return None
 
         allocations = {}
@@ -4702,8 +4900,9 @@ class PrismSolver:
         # Strategy 1: single_gpu — the component fits whole on the largest GPU: its whole cost
         # against the usable part of the rung (`_usable_mb`, the whole-component fraction of
         # PRISM_DEFAULTS). No flat `oom_reserve_mb` is subtracted here — this comment said so
-        # until 2026-09-24 and the code never did; the fraction is the only headroom.
-        if required <= usable:
+        # until 2026-09-24 and the code never did; the fraction is the only headroom. And its
+        # weights are ONE arena, within the device's largest allocation (`_arena_over_allocation`).
+        if required <= usable and self._arena_over_allocation(container, comp_name, mem, largest) is None:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
 
@@ -5219,7 +5418,8 @@ class PrismSolver:
                 required = self._whole_component_mb(container, comp_name, mem, fresh[i])
                 new_peak = max(bin_peaks[i], required)
                 capacity = self._usable_mb(fresh[i])
-                if new_peak <= capacity:
+                if new_peak <= capacity and self._arena_over_allocation(
+                        container, comp_name, mem, fresh[i]) is None:
                     headroom = capacity - new_peak
                     if headroom < best_headroom:
                         best_gpu = i
@@ -5442,6 +5642,11 @@ class PrismSolver:
         total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
         if total_weights_mb >= effective_mb:
             return None                      # weights alone do not fit: another rung
+        arena_refused = [r for r in (self._arena_over_allocation(container, n, m, largest)
+                                     for n, m in sorted_comps) if r]
+        if arena_refused:
+            self._op_tiling_declined = arena_refused[0]
+            return None                      # every component is held whole: one arena each
         room_mb = effective_mb - total_weights_mb
 
         blocking = [(n, m) for n, m in sorted_comps if m.activation_mb > room_mb]
@@ -5519,9 +5724,10 @@ class PrismSolver:
         gated on a vendor, a device count or a memory size — it simply loses.
 
         Viable when every component either fits whole, or partitions into
-        segments that fit. When one does not, this returns None and the
-        cascade's refusal stands, with the partitioner's own arithmetic
-        available to say why.
+        segments that fit — a whole component that crowds the segments is
+        streamed too. When one does not, this returns None and the cascade's
+        refusal stands, with the partitioner's own arithmetic available to say
+        why.
         """
         from neurobrix.core.prism.layer_partition import LayerPartitioner
 
@@ -5625,13 +5831,19 @@ class PrismSolver:
         tiled: Dict[str, Dict[str, Any]] = {}
         cost: Dict[str, int] = {}
         self.__dict__.setdefault("_tiling_declined_by_rung", {}).pop("layer_streaming", None)
+        # A component whose weights are ONE arena over the device's largest allocation is not held
+        # whole however much the rung holds, and tiling does not shrink its arena: it is streamed,
+        # its pieces cut below that allocation (`max_arena_bytes`, below).
+        _usable_whole_mb = budget_bytes / (1024 * 1024)
+        held_whole = {name for name, mem in sorted_comps
+                      if self._holds_whole(container, name, mem, target, usable_mb=_usable_whole_mb)}
         for name, mem in sorted_comps:
-            whole = self._whole_component_mb(container, name, mem, target) * 1024 * 1024
             cost[name] = int(mem.total_bytes)
-            if whole <= budget_bytes:
+            if name in held_whole:
                 continue
-            _t = self._spatial_component_tiling(
+            _t = (self._spatial_component_tiling(
                 container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb))
+                if self._arena_over_allocation(container, name, mem, target) is None else None)
             if _t is not None:
                 _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
                 _tiled_bytes = int(_w * 1024 * 1024) + int(_t["tiled_activation_bytes"])
@@ -5646,9 +5858,7 @@ class PrismSolver:
                 self._record_rung_tiling_decline("layer_streaming", target.device_string,
                                                  budget_bytes / 2 ** 20, name)
         self._layer_stream_tilings = tiled
-        streamed = {name for name, mem in sorted_comps
-                    if name not in tiled
-                    and self._whole_component_mb(container, name, mem, target) * 1024 * 1024 > budget_bytes}
+        streamed = {name for name, _ in sorted_comps if name not in tiled and name not in held_whole}
         _lm_kv = None
         if getattr(self, "_needs_kv_cache", False):
             # The cache's owner as the flow names it (core/runtime/lm_facts — the same reading that decided a
@@ -5669,8 +5879,8 @@ class PrismSolver:
             # (test_no_component_falls_between_placing_whole_and_streaming).
             streamed = {_lm_kv}
         # But only what is live AT THE SAME TIME as the streamed component's segments.
-        # A whole component's WEIGHTS stay loaded beside it (a plan may load eagerly, a
-        # serve session never unloads); its ACTIVATIONS are live only while it runs, and
+        # A whole component of another phase holds nothing beside it (this plan is lazy:
+        # `_resident_beside_streamed`); its ACTIVATIONS are live only while it runs, and
         # the flow says which components run together: `core/flow/base.py
         # resident_together` (the iterative handlers of both engines unload each pre_loop
         # component after it runs and the loop's before post_loop). Reserving every
@@ -5680,165 +5890,257 @@ class PrismSolver:
         # streams on the Mac (2026-09-28). A flow that declares no phases keeps every
         # component concurrent — the TinyLlama case above, lm_head beside the model, is
         # one — and reserves exactly what it did.
-        resident_beside = self._resident_beside_streamed(container, sorted_comps, streamed, cost=cost)
-        # And the graph's CONSTANTS, which are resident beside every segment and
-        # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
-        # baked into graph.json is not a component, so it was invisible here while
-        # being the first thing the executor allocates.
         #
-        # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct on a 16 GB V100
-        # (`NBX_MALLOC_TRACE`, one run): 2160 MB live before the first segment
-        # loads, every byte of it from `_load_constant_triton` — 54 RoPE tables
-        # declared `[163840, 64]` bfloat16, `max_position_embeddings` materialised
-        # in full for a request of 8 tokens, and held twice. The partition cut
-        # against 15 539 MB while execution offered 13 680 MB; the segment asked
-        # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
-        # segments that fit, instead of a plan that cannot run.
-        constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
-                             for name in streamed)
-        # And the weights a FLOW reads by name outside the graph — every non-block weight of a
-        # streamed component (the token embedding, a head, the norms, `is_block_key`): its base
-        # executor holds them resident beside every piece
-        # (`LayerStreamingStrategy._ensure_flow_reads`), the way a whole executor holds them, and
-        # a piece that consumes one BORROWS it — one copy, reserved here once, and the pieces
-        # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
-        # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
-        # piece loaded all of them, in no budget.
-        # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
-        # `inputs_embeds`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
-        # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
-        # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
-        from neurobrix.core.prism.layer_partition import flow_embeds_into
-        from neurobrix.triton.weight_loader import is_block_key   # torch-free
-        _read = [name for name in streamed if flow_embeds_into(graphs.get(name))]
-        _unsized = [name for name in _read if not sizes_by_comp.get(name)]
-        if _unsized:
-            return _decline(
-                f"{_unsized} must be streamed and their weights index gives no sizes: the weights "
-                f"their flow reads by name, held beside the pieces, cannot be reserved")
-        flow_read_bytes = sum(int(size) for name in _read
-                              for key, size in sizes_by_comp[name].items()
-                              if not is_block_key(key))
-        # And the KV CACHE, for the same reason and with the same blind spot. It is
-        # inside the streamed component's `total_bytes` — which is why that component
-        # is correctly classified as streamed — but the PARTITIONER sizes segments from
-        # `_bytes_for` (weights) less the graph's own activation curve, and the cache is
-        # in neither: the session allocates it, outside the graph, before the first
-        # segment loads, and it stays resident for every one of them.
-        #
-        # Measured 2026-09-22, Qwen3-Coder-30B-A3B-Instruct on a 16 GB V100, one run of
-        # `NBX_MALLOC_TRACE` — every live block at the failure, by site:
-        #     593.5 MB  memory_pool ComponentArena   (lm_head — resident_beside DOES see this)
-        #     771.0 MB  triton/kv_cache.py __init__  (24 blocks — resident_beside does NOT)
-        # and the allocator's own figure at the OOM was `live_tracked=1365MB`, which is
-        # 593.5 + 771.0 to the megabyte. Segment 1 asked 14 855 MB against 14 086 MB of
-        # free memory and missed by 769 — the cache, within two megabytes.
-        #
-        # `_estimate_kv_cache_bytes` already exists and is already what the component
-        # estimate uses; this is the same number, reserved one level down where the
-        # segments are cut. A model with no cache estimates zero and nothing changes.
-        kv_bytes = 0
-        if getattr(self, "_needs_kv_cache", False):
-            # The dtype `solve` decided (`_target_dtype_str`), the one the post-scoring KV check
-            # sizes the cache with. It read `getattr(..., "float16")`: a dtype invented when the
-            # decision was absent, sizing the reserve at 2 bytes whatever the plan ran at.
-            if not hasattr(self, "_target_dtype_str"):
-                raise RuntimeError(
-                    "ZERO FALLBACK: layer_streaming must reserve the KV cache at the dtype the "
-                    "solver decided, and no dtype was decided (_target_dtype_str unset); refusing "
-                    "rather than sizing it at an invented one")
-            # At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve
-            # mode two turns, twice the run estimate. Reserving only the run estimate cut segments
-            # that left too little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's
-            # profile, serve, was then refused (or, judged against the summed capacity, planned
-            # at 20 361 MB on a 17 277 MB device).
-            _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
-            _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
-            # Reserved once. A WHOLE LM sits in `resident_beside` with the estimate already inside
-            # its total, so only what the plan's minimum needs beyond it is added; a streamed LM,
-            # or no named LM (the estimate is then in no component), reserves the whole need.
-            _lm = self._lm_component_name
-            kv_bytes = (max(0, _kv_need - _kv_est) if (_lm is not None and _lm not in streamed)
-                        else _kv_need)
-        segment_budget = budget_bytes - resident_beside - constant_bytes - flow_read_bytes - kv_bytes
-        if segment_budget <= 0:
-            _mb = 1024 * 1024
-            return _decline(
-                f"no room for a single segment: the usable {budget_bytes / _mb:.0f} MB of the "
-                f"rung is filled by what stays resident beside the streamed "
-                f"{sorted(streamed)} — whole components {resident_beside / _mb:.0f} MB, graph "
-                f"constants {constant_bytes / _mb:.0f} MB, flow-read weights "
-                f"{flow_read_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB")
+        # A COMPONENT THAT CROWDS THE SEGMENTS IS STREAMED TOO. The whole components concurrent with
+        # the streamed one can fill the rung by themselves — Ming-Lite-Omni-1.5's flow declares no
+        # phases, and 24 115 MB of components that each fit whole (its vision tower among them) were
+        # reserved beside its 62 GB language model against a 15 073 MB usable rung, so the plan
+        # refused on an 18 GB device that runs it one segment at a time (the Mac, 2026-10-04). The
+        # owner's rule is that the engine never refuses while streaming can run it: when the
+        # segments do not fit, the whole component whose reserve weighs most beside them is
+        # streamed as well — a streamed component holds nothing between its own runs — and the cut
+        # is taken again, until it fits or no whole component's streaming would free a byte.
+        # Inert where the cut fits: nothing is promoted and the plan is the one it was.
+        _mb = 1024 * 1024
+        _normalized: Dict[str, Any] = {}
+        _cap_mb = self._max_allocation_mb(target)
+        _parked_mb = self._parked_cap_mb(target, profile)
 
-        for comp_name, mem in sorted_comps:
-            if comp_name not in streamed:
-                allocations[comp_name] = (dev_str, {})
-                continue
-            graph = graphs.get(comp_name)
-            if graph is None:
-                return _decline(f"'{comp_name}' must be streamed and carries no graph to cut")
-            # Cut the graph the EXECUTOR will run, not the one the container holds. Each
-            # sequence rewrites the graph in place before running it, so a boundary chosen on
-            # the raw graph can name an op the fusions have already folded away — measured:
-            # the swiglu fusion takes `aten.silu::843` and `aten.silu::890`, the two boundary
-            # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
-            # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
-            # and both sides then speak about the same ops.
-            from neurobrix.core.optim.passes.normalize import (graph_fingerprint,
-                                                               normalize_for_branch)
-            # The family lives in the MANIFEST, not the topology — checked, because reading
-            # the wrong file returned "" and silently skipped the MoE fusion, which is the
-            # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
-            # that moves the boundaries most.
-            _family = ""
-            try:
-                _family = str(getattr(container, "family", "") or "")
-                for _attr in ("manifest", "_manifest"):
-                    if _family:
-                        break
-                    _man = getattr(container, _attr, None) or {}
-                    if isinstance(_man, dict):
-                        _family = str(_man.get("family") or "")
-                if not _family:
-                    _topo = getattr(container, "topology", None) or {}
-                    _family = str(_topo.get("family") or "")
-            except Exception:  # noqa: BLE001 — a container without a family still plans
+        def _no(reason: str, crowded: bool = False, comp: Optional[str] = None):
+            return None, reason, (crowded, comp)
+
+        def _cut(streamed, promoted):
+            resident_beside = self._resident_beside_streamed(container, sorted_comps, streamed, cost=cost)
+            # And the graph's CONSTANTS, which are resident beside every segment and
+            # were counted by nothing. `resident_beside` sums COMPONENTS; a constant
+            # baked into graph.json is not a component, so it was invisible here while
+            # being the first thing the executor allocates.
+            #
+            # Measured 2026-09-22, DeepSeek-Coder-V2-Lite-Instruct on a 16 GB V100
+            # (`NBX_MALLOC_TRACE`, one run): 2160 MB live before the first segment
+            # loads, every byte of it from `_load_constant_triton` — 54 RoPE tables
+            # declared `[163840, 64]` bfloat16, `max_position_embeddings` materialised
+            # in full for a request of 8 tokens, and held twice. The partition cut
+            # against 15 539 MB while execution offered 13 680 MB; the segment asked
+            # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
+            # segments that fit, instead of a plan that cannot run.
+            constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
+                                 for name in streamed)
+            # And the weights a FLOW reads by name outside the graph — every non-block weight of a
+            # streamed component (the token embedding, a head, the norms, `is_block_key`): its base
+            # executor holds them resident beside every piece
+            # (`LayerStreamingStrategy._ensure_flow_reads`), the way a whole executor holds them, and
+            # a piece that consumes one BORROWS it — one copy, reserved here once, and the pieces
+            # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
+            # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
+            # piece loaded all of them, in no budget.
+            # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
+            # `inputs_embeds`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
+            # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
+            # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
+            from neurobrix.core.prism.layer_partition import flow_embeds_into
+            from neurobrix.triton.weight_loader import is_block_key   # torch-free
+            _read = [name for name in streamed if flow_embeds_into(graphs.get(name))]
+            _unsized = [name for name in _read if not sizes_by_comp.get(name)]
+            if _unsized:
+                return _no(
+                    f"{_unsized} must be streamed and their weights index gives no sizes: the weights "
+                    f"their flow reads by name, held beside the pieces, cannot be reserved")
+            flow_read_bytes = sum(int(size) for name in _read
+                                  for key, size in sizes_by_comp[name].items()
+                                  if not is_block_key(key))
+            # The base's flow-read weights are themselves ONE arena per streamed component, held
+            # beside every piece: over the device's largest allocation, no cut of the blocks helps.
+            if _cap_mb is not None:
+                for name in _read:
+                    _base_mb = (sum(int(size) for key, size in sizes_by_comp[name].items()
+                                    if not is_block_key(key)) / _mb
+                                * target.get_cost_multiplier(self._get_component_dtype(container, name)))
+                    if _base_mb > _cap_mb:
+                        return _no(f"'{name}' streamed holds the weights its flow reads by name as one "
+                                   f"arena of {_base_mb:,.0f} MB beside its pieces, over the {_cap_mb:,} MB "
+                                   f"{target.device_string} grants in a single allocation (the profile's "
+                                   f"max_allocation_mb)", comp=name)
+            # And the KV CACHE, for the same reason and with the same blind spot. It is
+            # inside the streamed component's `total_bytes` — which is why that component
+            # is correctly classified as streamed — but the PARTITIONER sizes segments from
+            # `_bytes_for` (weights) less the graph's own activation curve, and the cache is
+            # in neither: the session allocates it, outside the graph, before the first
+            # segment loads, and it stays resident for every one of them.
+            #
+            # Measured 2026-09-22, Qwen3-Coder-30B-A3B-Instruct on a 16 GB V100, one run of
+            # `NBX_MALLOC_TRACE` — every live block at the failure, by site:
+            #     593.5 MB  memory_pool ComponentArena   (lm_head — resident_beside DOES see this)
+            #     771.0 MB  triton/kv_cache.py __init__  (24 blocks — resident_beside does NOT)
+            # and the allocator's own figure at the OOM was `live_tracked=1365MB`, which is
+            # 593.5 + 771.0 to the megabyte. Segment 1 asked 14 855 MB against 14 086 MB of
+            # free memory and missed by 769 — the cache, within two megabytes.
+            #
+            # `_estimate_kv_cache_bytes` already exists and is already what the component
+            # estimate uses; this is the same number, reserved one level down where the
+            # segments are cut. A model with no cache estimates zero and nothing changes.
+            kv_bytes = kv_in_window = 0
+            if getattr(self, "_needs_kv_cache", False):
+                # The dtype `solve` decided (`_target_dtype_str`), the one the post-scoring KV check
+                # sizes the cache with. It read `getattr(..., "float16")`: a dtype invented when the
+                # decision was absent, sizing the reserve at 2 bytes whatever the plan ran at.
+                if not hasattr(self, "_target_dtype_str"):
+                    raise RuntimeError(
+                        "ZERO FALLBACK: layer_streaming must reserve the KV cache at the dtype the "
+                        "solver decided, and no dtype was decided (_target_dtype_str unset); refusing "
+                        "rather than sizing it at an invented one")
+                kv_bytes, kv_in_window = self._kv_reserve_beside(container, sorted_comps, streamed,
+                                                                 resident_beside, cost)
+            segment_budget = budget_bytes - resident_beside - constant_bytes - flow_read_bytes - kv_bytes
+            if segment_budget <= 0:
+                return _no(
+                    f"no room for a single segment: the usable {budget_bytes / _mb:.0f} MB of the "
+                    f"rung is filled by what stays resident beside the streamed "
+                    f"{sorted(streamed)} — whole components {resident_beside / _mb:.0f} MB, graph "
+                    f"constants {constant_bytes / _mb:.0f} MB, flow-read weights "
+                    f"{flow_read_bytes / _mb:.0f} MB, KV reserve {kv_bytes / _mb:.0f} MB", crowded=True)
+            partitions, fingerprints, moe_declared = {}, {}, {}
+            for comp_name, mem in sorted_comps:
+                if comp_name not in streamed:
+                    continue
+                graph = graphs.get(comp_name)
+                if graph is None:
+                    return _no(f"'{comp_name}' must be streamed and carries no graph to cut")
+                # Cut the graph the EXECUTOR will run, not the one the container holds. Each
+                # sequence rewrites the graph in place before running it, so a boundary chosen on
+                # the raw graph can name an op the fusions have already folded away — measured:
+                # the swiglu fusion takes `aten.silu::843` and `aten.silu::890`, the two boundary
+                # ids the Mac saw for one model at two rungs. Re-partitioning at execution is
+                # design-rejected (the Plan dataclass), so the graph is normalized HERE instead
+                # and both sides then speak about the same ops.
+                from neurobrix.core.optim.passes.normalize import (graph_fingerprint,
+                                                                   normalize_for_branch)
+                # The family lives in the MANIFEST, not the topology — checked, because reading
+                # the wrong file returned "" and silently skipped the MoE fusion, which is the
+                # single largest rewrite (11 722 ops -> 2 678 on DeepSeek) and therefore the one
+                # that moves the boundaries most.
                 _family = ""
-            # A MoE LM packaged under another family is fused by the runtime once its flow
-            # declares it (`GraphExecutor.set_moe_config`); the plan must cut that fused graph —
-            # Qwen3-Omni's thinker, 12 132 ops -> 4 300. The same rule the weight sizing applies
-            # (`_declares_moe`), so a plan sizes and cuts one graph.
-            _moe = self._moe_declaration(graph, container)
-            if _moe is not None:
-                moe_declared[comp_name] = _moe
-            graph = normalize_for_branch(graph, getattr(self, "_mode", "compiled"), _family,
-                                         declared_moe=_moe)
-            # A piece borrows the non-block weights the base holds (reserved above), so it is
-            # sized over its block weights: a non-block weight counts 0 here, not its bytes a
-            # second time (and not the graph's own size for it, the partitioner's fallback).
-            _piece_sizes = ({k: (v if is_block_key(k) else 0)
-                             for k, v in sizes_by_comp[comp_name].items()}
-                            if comp_name in _read else sizes_by_comp.get(comp_name))
-            _sizing = self.__dict__.get("_request_sizing", {}).get(comp_name)
-            if _sizing is None:
-                return _decline(
-                    f"'{comp_name}' has no activation profile at this request (_compute_memory could "
-                    f"not profile it) — a partition cut at the trace's shapes would plan a run that "
-                    f"is not this one")
-            part = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
-                                    compute_dtype_bytes=_sizing[1],
-                                    widths=_sizing[2]).partition(segment_budget)
-            if not part.fits or len(part.segments) < 2:
-                # Either genuinely impossible, or one segment — in which case
-                # a rung above this one already serves it and this must not
-                # take the plan.
-                return _decline(
-                    f"'{comp_name}' cannot be cut into segments of "
-                    f"{segment_budget / (1024 * 1024):.0f} MB: "
-                    + (part.refusal if not part.fits else
-                       "it fits in ONE segment, which a whole-component rung serves"))
-            partitions[comp_name] = part
-            fingerprints[comp_name] = graph_fingerprint(graph)
+                try:
+                    _family = str(getattr(container, "family", "") or "")
+                    for _attr in ("manifest", "_manifest"):
+                        if _family:
+                            break
+                        _man = getattr(container, _attr, None) or {}
+                        if isinstance(_man, dict):
+                            _family = str(_man.get("family") or "")
+                    if not _family:
+                        _topo = getattr(container, "topology", None) or {}
+                        _family = str(_topo.get("family") or "")
+                except Exception:  # noqa: BLE001 — a container without a family still plans
+                    _family = ""
+                # A MoE LM packaged under another family is fused by the runtime once its flow
+                # declares it (`GraphExecutor.set_moe_config`); the plan must cut that fused graph —
+                # Qwen3-Omni's thinker, 12 132 ops -> 4 300. The same rule the weight sizing applies
+                # (`_declares_moe`), so a plan sizes and cuts one graph.
+                _moe = self._moe_declaration(graph, container)
+                if _moe is not None:
+                    moe_declared[comp_name] = _moe
+                if comp_name not in _normalized:
+                    _normalized[comp_name] = normalize_for_branch(
+                        graph, getattr(self, "_mode", "compiled"), _family, declared_moe=_moe)
+                graph = _normalized[comp_name]
+                # A piece borrows the non-block weights the base holds (reserved above), so it is
+                # sized over its block weights: a non-block weight counts 0 here, not its bytes a
+                # second time (and not the graph's own size for it, the partitioner's fallback).
+                _piece_sizes = ({k: (v if is_block_key(k) else 0)
+                                 for k, v in sizes_by_comp[comp_name].items()}
+                                if comp_name in _read else sizes_by_comp.get(comp_name))
+                _sizing = self.__dict__.get("_request_sizing", {}).get(comp_name)
+                if _sizing is None:
+                    return _no(
+                        f"'{comp_name}' has no activation profile at this request (_compute_memory could "
+                        f"not profile it) — a partition cut at the trace's shapes would plan a run that "
+                        f"is not this one")
+                _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
+                                           compute_dtype_bytes=_sizing[1], widths=_sizing[2])
+                # One piece's weights are one arena: bounded by the device's largest allocation, in
+                # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
+                # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
+                # incoming one (`_parked_cap_mb`, a unified device under the Triton engine).
+                _mult = target.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+                _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
+                _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
+                part = _cutter.partition(segment_budget, max_arena_bytes=_arena_cap,
+                                         parked_cap_bytes=_parked_cap)
+                if part.fits and len(part.segments) < 2 and comp_name not in promoted:
+                    # ONE piece. A component is streamed because the whole rungs cannot hold it
+                    # (`_whole_component_mb` over the usable rung — the arena's activation figure);
+                    # the partitioner prices the same activations by the dataflow, without the
+                    # arena, and found one piece that fits. "A whole-component rung serves it" was
+                    # this rung's answer, and those rungs had already refused it: CogVideoX-5b-I2V's
+                    # transformer on the Mac's profile at the 16 384 rung, 15 212 MB whole against
+                    # 15 073 usable. Cut it in two — each half's weights at most half of them plus
+                    # the largest op's — priced as every streamed cut is, by the partitioner's own
+                    # activation figure: the arena's factor is measured on WHOLE components only and
+                    # a streamed piece keeps the profiled figure (`_live_activation_mb`). Holding
+                    # the halves alone to the factor made the cut a function of which path reached
+                    # it, and a bigger rung refused what a smaller one planned (Ming-Lite-Omni-1.5's
+                    # vision tower on the Mac's profile: 12 288 refused, 11 264 planned).
+                    _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2),
+                                                max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap)
+                    if not (_halves.fits and len(_halves.segments) >= 2):
+                        return _no(f"'{comp_name}' fits in ONE segment of {segment_budget / _mb:.0f} MB and "
+                                   f"cannot be cut in two (" + (_halves.refusal or "one piece") + ")",
+                                   comp=comp_name)
+                    part = _halves
+                if not part.fits:
+                    # Crowded unless its own activations or one op's weights fill the whole usable
+                    # rung — then nothing streamed beside it can make room.
+                    return _no(
+                        f"'{comp_name}' cannot be cut into segments of {segment_budget / _mb:.0f} MB: "
+                        + part.refusal, crowded=part.peak_live_bytes < budget_bytes - constant_bytes,
+                        comp=comp_name)
+                partitions[comp_name] = part
+                fingerprints[comp_name] = graph_fingerprint(graph)
+            return (partitions, fingerprints, moe_declared, resident_beside, constant_bytes,
+                    flow_read_bytes, kv_bytes, kv_in_window), None, (False, None)
+
+        promoted: List[str] = []
+        unstreamable: set = set()      # promoted, then found unable to stream: kept whole again
+        _sized = self.__dict__.get("_request_sizing", {})
+        first_reason = None
+        while True:
+            got, reason, (crowded, failed) = _cut(streamed, set(promoted))
+            if got is not None:
+                break
+            first_reason = first_reason or reason
+            if failed in promoted and not crowded:
+                # A component streamed only to make room, which cannot itself be streamed: it goes
+                # back to whole and the next candidate is tried — promotion never backtracks into a
+                # refusal the plan did not need.
+                promoted.remove(failed)
+                unstreamable.add(failed)
+                streamed = streamed - {failed}
+                continue
+            if not crowded or not streamed:
+                # Nothing over the rung: no component streams inside itself, so none is streamed
+                # beside one — the whole-component rungs answer this plan.
+                return _decline(reason)
+            # The whole component whose streaming frees the most beside the segments.
+            _now = self._resident_beside_streamed(container, sorted_comps, streamed, cost=cost)
+            _gain = {n: _now - self._resident_beside_streamed(container, sorted_comps, streamed | {n},
+                                                               cost=cost)
+                     for n, _m in sorted_comps
+                     if n not in streamed and n not in tiled and n not in unstreamable
+                     and n in graphs and n in _sized}
+            _pick = max(_gain, key=lambda n: _gain[n], default=None)
+            if _pick is None or _gain[_pick] <= 0:
+                return _decline(first_reason + (f" (and with {promoted} streamed beside it: {reason})"
+                                                if promoted else ""))
+            promoted.append(_pick)
+            streamed = streamed | {_pick}
+        (partitions, fingerprints, moe_declared, resident_beside, constant_bytes, flow_read_bytes, kv_bytes,
+         kv_in_window) = got
+        if promoted:
+            logging.getLogger(__name__).warning(
+                "layer_streaming: %s streamed beside %s — kept whole they left no room for its segments",
+                promoted, sorted(set(streamed) - set(promoted)))
+        for comp_name, _mem in sorted_comps:
             # The device string stays a plain device. A `layer_stream:` prefix
             # was tried and is wrong: several places parse an allocation by
             # splitting on ":" and taking the index, so a three-part string
@@ -5859,18 +6161,29 @@ class PrismSolver:
         # Resident beside the pieces and outside any component's figure: the graph constants and
         # the flow-read weights the base holds.
         self._layer_stream_constant_bytes = constant_bytes + flow_read_bytes
+        # The cache's bytes inside the window below (the reserve the segments were cut around, and
+        # the estimate inside a whole LM's total beside them): the KV check sizes the cache itself.
+        self._layer_stream_kv_reserve_bytes = int(kv_in_window)
         self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
                                               + max(p_.peak_resident_bytes for p_ in partitions.values()))
         return allocations, devices
 
     def _output_bytes(self, container) -> int:
-        """What the run's output boundary holds on the host: the largest graph output among the plan's
-        components at the request, times what the family's save path holds per element
-        (output_dispatch.host_bytes_per_output_element). The largest, not a named component: which one is
-        final is the flow's business, and the largest bounds it."""
+        """What the run's output boundary holds on the host: the largest graph output among the
+        components the flow SAVES from, at the request, times what the family's save path holds per
+        element (output_dispatch.host_bytes_per_output_element). Which component is final is the
+        flow's business (`core/flow/base.py saved_output_components`); where the flow does not
+        declare it, the largest output of any component bounds it. Janus-Pro-7B's language model
+        returns its logits over the whole sequence (5 x 704 x 102 400 at the placement floor): priced
+        as the saved image, 3 437 MB of host for a 384x384 picture (2026-10-04)."""
+        from neurobrix.core.flow.base import saved_output_components
         from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
         family = (container.get_manifest() or {}).get("family")
-        elements = max(self.__dict__.get("_output_elements", {}).values(), default=0)
+        sized = self.__dict__.get("_output_elements", {})
+        saved = saved_output_components(self._flow_topology(container))
+        if saved and any(n in sized for n in saved):
+            sized = {n: e for n, e in sized.items() if n in saved}
+        elements = max(sized.values(), default=0)
         if not family or not elements:
             return 0
         return int(elements) * host_bytes_per_output_element(family)
@@ -5889,19 +6202,52 @@ class PrismSolver:
                                       if isinstance(v, dict) and str(v.get("dtype", "")).startswith(("float", "bfloat"))}
         return out
 
+    def _kv_reserve_beside(self, container, sorted_comps, streamed, resident_beside: int, cost=None):
+        """(bytes reserved for the KV cache beside the streamed segments, the cache's bytes inside the
+        window).
+
+        At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve mode
+        two turns, twice the run estimate. Reserving only the run estimate cut segments that left too
+        little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's profile, serve, was then
+        refused (or, judged against the summed capacity, planned at 20 361 MB on a 17 277 MB device).
+
+        Reserved once. A WHOLE language model whose total sits in `resident_beside` carries the
+        estimate inside it, so only what the plan's minimum needs beyond it is added. A streamed
+        one, no named one (the estimate is then in no component), or a whole one that is NOT beside
+        these segments — another phase of the flow: the cache's buffers outlive it — reserves the
+        whole need."""
+        _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+        _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
+        _lm = self._lm_component_name
+        _carried = 0
+        if _lm is not None and _lm not in streamed:
+            _lm_beside = resident_beside - self._resident_beside_streamed(
+                container, [(n, m) for n, m in sorted_comps if n != _lm], streamed, cost=cost)
+            _carried = min(int(_kv_est), max(0, int(_lm_beside)))
+        kv_bytes = max(0, int(_kv_need) - _carried)
+        return kv_bytes, kv_bytes + _carried
+
     def _resident_beside_streamed(self, container, sorted_comps, streamed, cost=None) -> int:
         """Bytes held beside a streamed component's segments by the components kept WHOLE.
 
         A whole component CONCURRENT with the streamed one (same flow phase, or a flow that
         declares no phases) counts its total — weights, activation peak, overhead. One that runs
-        in ANOTHER phase counts its weights and their share of the overhead only: its weights may
-        stay loaded, its activations are not live while the segments run. The phases are the
-        flow's own (`core/flow/base.py resident_together`, the rule the partition branch
-        introduced, 38751c12). With several streamed components the largest reserve is taken:
-        each is cut against the same budget. A streamed component no phase names keeps every
-        other component concurrent."""
-        from neurobrix.core.flow.base import resident_together
-        phases = resident_together(self._flow_topology(container))
+        in ANOTHER phase counts NOTHING: a layer_streaming plan is lazy (`_build_plan`), so its
+        serving session is never persistent (serving/engine.py keeps weights only for an eager
+        plan) and the iterative handlers of both engines force-unload each pre_loop component
+        after it runs and the loop's before post_loop, while a post_loop component is loaded when
+        it is reached (core/flow/iterative_process.py, triton/flow/iterative_process.py
+        `_unload_component`). The phases are the flow's own (`core/flow/base.py
+        resident_together`, 38751c12). With several streamed components the largest reserve is
+        taken: each is cut against the same budget. A component no phase names — streamed or
+        whole — is concurrent with every other: nothing says it is unloaded.
+
+        e4b1370a reserved another phase's WEIGHTS ("an eager load, a serve session never
+        unloads") — neither happens under this plan — and a bigger rung refused what a smaller one
+        planned: CogVideoX-5b-I2V on the Mac's profile at the 16 384 rung kept its 11 003 MB text
+        encoder whole and reserved it beside the transformer's segments (3 088 MB left), while at
+        8 192 the encoder was itself streamed and the plan held (the Mac, 2026-10-04)."""
+        phases = self._flow_phases(container)
         whole = [(n, m) for n, m in sorted_comps if n not in streamed]
 
         def _total(n, m) -> int:
@@ -5909,14 +6255,17 @@ class PrismSolver:
             # (`cost`, the partition rule: weights + the tiled activations), never its untiled peak
             return int(cost[n]) if cost and n in cost else int(m.total_bytes)
 
-        def _weights_only(m) -> int:
-            share = m.weight_bytes / max(m.weight_bytes + m.activation_bytes, 1)
-            return int(m.weight_bytes + m.overhead_bytes * share)
+        named = set().union(*phases) if phases else set()
 
         def _beside(s) -> int:
-            phase = next((ph for ph in phases if s in ph), None) if phases is not None else None
-            return sum(_total(n, m) if (phases is None or phase is None or n in phase)
-                       else _weights_only(m) for n, m in whole)
+            # A whole component no phase names is concurrent, as a streamed one no phase names is:
+            # nothing says it is unloaded. A streamed component in several phases (an image
+            # decode's head runs beside the language model, then beside the decoder) reserves
+            # the dearest of them.
+            mine = [ph for ph in (phases or []) if s in ph]
+            if not mine:
+                return sum(_total(n, m) for n, m in whole)
+            return max(sum(_total(n, m) for n, m in whole if n in ph or n not in named) for ph in mine)
 
         if not streamed:
             return sum(_total(n, m) for n, m in whole)
@@ -6472,10 +6821,14 @@ class PrismSolver:
             total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))
             loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
 
-        if strategy == "cpu_streaming":
-            # The whole point of this rung: one component resident at a time.
-            # Eager loading would restore the `sum(components)` requirement it
-            # exists to avoid.
+        if strategy in ("cpu_streaming", "layer_streaming"):
+            # The whole point of these rungs: one component (one segment) resident at a time.
+            # Eager loading would restore the `sum(components)` requirement they exist to avoid,
+            # and a serving session keeps every weight of an eager plan (serving/engine.py) —
+            # `_resident_beside_streamed` prices another phase at nothing BECAUSE this is lazy.
+            # layer_streaming is no AllocationStrategy member, so the rule above decided it from
+            # the summed totals of CUDA devices: lazy on a unified device, eager on a card whenever
+            # the door imposed a rung far enough below it.
             loading_mode = "lazy"
 
         # Determine primary dtype
@@ -6539,6 +6892,8 @@ class PrismSolver:
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        for _c, _why in (getattr(self, "_arena_declined", {}) or {}).items():
+            tried_str += f"\n  not held whole: {_why}"
         _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
         for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
             _why_untiled = _why_by_rung.get(_rung, {})
@@ -6569,6 +6924,31 @@ class PrismSolver:
         # a refusal to try (P-PRISM-NEVER-REFUSE, closed 2026-09-03).
         peak_mb = max((m.total_mb for _, m in sorted_comps), default=0.0)
         biggest = max(sorted_comps, key=lambda item: item[1].total_mb)[0] if sorted_comps else "?"
+        # What the solve's tiling engine DID tile, and what it declined and why: a tiled component's
+        # untiled figure is not what binds, and a declined one has no tile count to offer
+        # (`plan_advice.what_would_have_fit`). SANA-Video_2B_720p at 672x1344x81 under Triton on the
+        # 16 GB V100 class was refused naming its vae twice — "largest component: vae at 303099MB" and
+        # "its weights and overhead alone are 16,449 MB" — a vae the same solve had tiled to 5 200 MB per
+        # tile, while the transformer that bound (one block's activations at 155 232 tokens, 18 774 MB
+        # against a 15 072 MB segment) was offered "15 tiles" the tiling engine had declined
+        # (2026-10-04).
+        _tiled_said = {
+            _c: (f"the plan's tiling engine tiles it (tile extent {_t.get('tile_size')}, "
+                 f"{int(_t.get('tiled_activation_bytes') or 0) / (1024 * 1024):,.0f} MB of activations per tile)")
+            for _c, _t in (getattr(self, "_layer_stream_tilings", None) or {}).items()}
+        _untileable: Dict[str, str] = {}
+        for _whys in list(_why_by_rung.values()) + [getattr(self, "_tiling_declined", {}) or {}]:
+            for _c, _why in _whys.items():
+                if _c not in _tiled_said:
+                    # a reason a rung line above already prints is pointed at, not printed twice
+                    _untileable.setdefault(_c, "the tiling engine's reason is stated above" if _why in tried_str
+                                           else _why)
+        _untiled = [(n, m) for n, m in sorted_comps if n not in _tiled_said]
+        if _untiled:
+            biggest, _big = max(_untiled, key=lambda item: item[1].total_mb)
+            _biggest_mb = _big.total_mb
+        else:
+            _biggest_mb = peak_mb
 
         # "A smaller input" is the remedy this refusal already names and does not
         # take. It is now COMPUTED: for every component whose ACTIVATIONS are what
@@ -6590,7 +6970,8 @@ class PrismSolver:
                 for _n, _m in sorted_comps
                 if _pa.dominated_by_activations(_m.weight_bytes, _m.activation_bytes)
             ]
-            _lines = _pa.what_would_have_fit(_verdicts, spatial=True)
+            _lines = _pa.what_would_have_fit(_verdicts, spatial=True, tiled=_tiled_said,
+                                             untileable=_untileable)
             if _lines:
                 _reshape_block = ("\n\nWhat tiling would do, computed rather than named:\n"
                                   + "\n".join(_lines))
@@ -6599,20 +6980,41 @@ class PrismSolver:
             # is shaped unexpectedly still gets the refusal it came for, with the
             # reason the advice could not be computed said rather than swallowed.
             _reshape_block = f"\n\n(tiling advice unavailable: {_adv_e})"
+        # On a UNIFIED device the host IS the device's memory: no host rung frees a byte the device
+        # does not hold (test_prism_never_offloads_to_host_on_unified_memory), so the last rung is
+        # layer streaming — one segment at a time on the device — and the bound is ITS decline, not
+        # "the largest component whole in host RAM", which no rung there asks for. The headline said
+        # the latter on the Mac's five refusals of 2026-10-04 while the line above it named the
+        # streaming decline that actually bound each one.
+        # Under the TRITON engine a host-placed component computes on the card as well (the host rung's
+        # own decline above says so), so on a discrete card too the last rung that can help is layer
+        # streaming, and ITS decline is the bound — "the largest single component in host RAM" is a
+        # rung the Triton engine does not offer (SANA-Video 672x1344x81 on the 16 GB V100, 2026-10-04).
+        from neurobrix.core.prism.host_footprint import engine_of
+        _unified = any(getattr(getattr(d, "spec", None), "has_unified_memory", False) for d in devices)
+        _triton = engine_of(getattr(self, "_mode", None) or "compiled") == "triton"
+        if _unified or _triton:
+            _where = ("On unified memory" if _unified else
+                      "Under the Triton engine every rung computes on the card, the host rungs included, so")
+            _bound = (f"{_where} the last rung streams a component one segment at a time on "
+                      f"the device, and it declined:\n  {self._layer_streaming_declined or 'no reason recorded'}\n"
+                      f"  largest component the plan did not tile: {biggest} at {_biggest_mb:.0f}MB\n\n")
+        else:
+            _bound = (f"The last rung needs only the largest single component to fit in "
+                      f"memory, and it does not:\n"
+                      f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n")
         raise RuntimeError(
             f"This model cannot run on this machine.\n\n"
             f"Every strategy was tried, down to streaming one component at a "
             f"time from disk:\n  {tried_str}\n\n"
-            f"The last rung needs only the largest single component to fit in "
-            f"memory, and it does not:\n"
-            f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n"
+            f"{_bound}"
             f"Components:\n{comp_info}\n\n"
             f"Total required: {total_req:.0f}MB\n\n"
             f"GPUs:\n{dev_info}\n\n"
             f"Total GPU available: {total_avail:.0f}MB\n\n"
             f"What would make it run:\n"
-            f"  1. More host RAM — the streaming path needs "
-            f"{peak_mb:.0f}MB for that one component\n"
+            + (f"  1. More memory — the streaming path above says what it lacked\n" if (_unified or _triton) else
+               f"  1. More host RAM — the streaming path needs {peak_mb:.0f}MB for that one component\n") +
             f"  2. A GPU with more memory\n"
             f"  3. A smaller input (resolution, batch, context)\n"
             f"  4. A smaller model"

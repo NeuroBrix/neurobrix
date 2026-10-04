@@ -109,6 +109,7 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None):
+        self._dag = graph
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
         # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
@@ -150,38 +151,57 @@ class LayerPartitioner:
     # -- dataflow ---------------------------------------------------------
 
     def _last_use(self) -> Dict[str, int]:
-        last: Dict[str, int] = {}
-        for i, op_uid in enumerate(self.order):
-            for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
-                last[tid] = i
-        return last
+        """tensor id -> index of the op after which it is dead: the PROFILER's liveness
+        (`profiler.dag_last_uses`), one rule for both walks of the same graph. This copy recorded
+        consumers only, so an output no op reads (a layer norm's statistics, an attention's
+        log-sum-exp, a RoPE `copy_` result) was never freed and the curve climbed to the last op:
+        Wan2.2-I2V-A14B's transformer at 480x832x81, 108 800 MB of "activations alone" (the Mac's
+        refusal, 2026-10-04); this rule prices 7 737 MB."""
+        from neurobrix.core.prism.profiler import dag_last_uses
+        index = {uid: i for i, uid in enumerate(self.order)}
+        return {tid: index[uid] for tid, uid in dag_last_uses(self._dag).items() if uid in index}
 
     def live_activation_curve(self) -> List[int]:
         """Bytes of activation alive after each op in the order.
 
         This is the cost of cutting THERE, and its minima are where the
-        graph comes apart.
+        graph comes apart. The liveness is the profiler's (`dag_last_uses`): a graph output is
+        never freed, and a stride-0 broadcast view allocates nothing (`ZERO_ALLOC_OP_TYPES`).
+
+        The transpose of a WEIGHT keeps its bytes on this curve, though the placement estimate
+        prices it at zero on the Triton engines (`profiler.weight_transposes_read_in_place`: the
+        contraction reads the view in place). Here the figure is the cost of a CUT: between the
+        transpose and the contraction that reads it, a seam would carry the weight out of the
+        piece that loaded it. Its bytes on the curve are what keeps that seam from looking free.
         """
+        if getattr(self, "_curve_memo", None) is not None:
+            return list(self._curve_memo)
+        from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
         last = self._last_use()
+        outputs = set(self._dag.get("output_tensor_ids") or [])
         curve, live = [], 0
         # Only what has been ADDED can be freed. Subtracting every input at
         # its last use freed the graph's own inputs too — tensors no op
         # produced — and drove the curve negative, reporting a peak of 0 on a
         # graph whose activations were 64 MB. A live set, not a running total.
-        alive: Set[str] = set()
+        alive: Dict[str, int] = {}
         for i, op_uid in enumerate(self.order):
             op = self.ops.get(op_uid) or {}
+            zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
             for tid in op.get("output_tensor_ids") or []:
                 t = self.tensors.get(tid)
                 if t is not None and not t.get("is_parameter") and tid not in alive:
-                    alive.add(tid)
-                    live += self._activation_bytes(tid, t)
-            for tid in op.get("input_tensor_ids") or []:
-                if tid in alive and last.get(tid) == i:
-                    t = self.tensors.get(tid)
-                    alive.discard(tid)
-                    live -= self._activation_bytes(tid, t)
+                    alive[tid] = 0 if zero else self._activation_bytes(tid, t)
+                    live += alive[tid]
+            # Every tensor dead after this op: its inputs at their last use and its own outputs
+            # no op reads.
+            for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
+                if tid in alive and last.get(tid) == i and tid not in outputs:
+                    live -= alive.pop(tid)
             curve.append(live)
+        # the graph, the request and the widths are fixed at construction, and the parked-change
+        # search (`partition`) cuts again many times over the same curve
+        self._curve_memo = list(curve)
         return curve
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
@@ -203,13 +223,78 @@ class LayerPartitioner:
 
     # -- the partition ----------------------------------------------------
 
-    def partition(self, budget_bytes: int) -> Partition:
+    def partition(self, budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                  parked_cap_bytes: Optional[float] = None) -> Partition:
+        """The cut `_greedy` takes, held to `budget_bytes` at every piece CHANGE as well when the
+        allocator parks a freed arena (`parked_cap_bytes`; None: it parks nothing the next load
+        cannot take back, the plan is the greedy one).
+
+        A piece's arena freed into the Triton allocator's pool stays allocated, parked, when it is
+        at most the pool's cap (`DeviceAllocator.free`, `memory.alloc_pool_parked_cap_fraction` of
+        the device; `math.inf` where the cap is unbounded), and the next piece's arena takes it back
+        only when it lies in [w, 2w] of that request (`_pool_take`). A discrete card's driver
+        refuses an allocation it cannot serve and the pool is flushed and the request retried; a
+        unified device serves it beside the parked block. So at each change — the step's
+        wrap-around included, the last piece to the first — the device holds the incoming arena,
+        the outgoing one when it parks and is not taken back, and the activations live across the
+        cut. Measured on the Mac (deepseek-moe-16b-chat, 2026-10-04): the last piece's 4.5 GB
+        parked while the first one's arena allocated, 13.5 GB live against an 11.3 GB plan.
+
+        Cut again lower until every change fits, or the cut refuses. Lower by the overshoot, but by
+        at most a tenth of the cut at a time: the change peak is not monotonic in the cut (a change
+        whose incoming arena takes the parked one back costs nothing), and one jump by the whole
+        overshoot went from 3 768 MB to 486 MB on PixArt-XL-2-1024-MS's T5 at the Mac's 4096 rung —
+        under its 502 MB embedding, a refusal — where pieces of about half the budget fit every
+        change."""
+        part = self._greedy(budget_bytes, max_arena_bytes)
+        if parked_cap_bytes is None or not part.fits:
+            return part
+        cut_at = budget_bytes
+        while True:
+            change = self._change_peak(part.segments, parked_cap_bytes)
+            over = change - budget_bytes
+            if over <= 0:
+                part.peak_resident_bytes = max(part.peak_resident_bytes, change)
+                return part
+            cut_at -= max(min(over, cut_at // 10), 1024 * 1024)
+            again = self._greedy(cut_at, max_arena_bytes)
+            if not again.fits:
+                again.refusal = (
+                    f"the piece changes peak at {change / (1024*1024):.1f} MB against the "
+                    f"{budget_bytes / (1024*1024):.1f} MB budget once the outgoing arena stays "
+                    f"parked in the allocator's pool beside the incoming one, and cutting smaller "
+                    f"to make room refuses: " + again.refusal)
+                return again
+            part = again
+
+    @staticmethod
+    def _change_peak(segments: List[Segment], parked_cap_bytes: float) -> int:
+        """The most a piece change holds: the incoming arena, the outgoing one when the pool parks
+        it (at most `parked_cap_bytes`) and the incoming request does not take it back (it lies in
+        [w, 2w] of that request), and the activations live across the cut — every consecutive
+        pair, the last piece to the first included. One piece: no change."""
+        if len(segments) < 2:
+            return 0
+        peak = 0
+        for i, out in enumerate(segments):
+            inc = segments[(i + 1) % len(segments)]
+            taken_back = inc.weight_bytes <= out.weight_bytes <= 2 * inc.weight_bytes
+            parked = out.weight_bytes if (out.weight_bytes <= parked_cap_bytes and not taken_back) else 0
+            peak = max(peak, inc.weight_bytes + parked + out.live_bytes_at_exit)
+        return peak
+
+    def _greedy(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
         """Greedy left-to-right: extend while the segment's weights fit.
 
         Greedy is right here because the order is fixed — the engine replays
         it — so the only freedom is where to cut, and taking as much as fits
         before each cut minimises the number of loads. It is not an
         optimisation problem with a better answer hiding in it.
+
+        `max_arena_bytes` bounds one segment's weights on their own: they are
+        ONE allocation when the piece loads (its arena), and a device grants a
+        single allocation only up to its largest one (the profile's
+        `max_allocation_mb`). None: the device grants its whole memory in one.
         """
         curve = self.live_activation_curve()
         peak_live = max(curve) if curve else 0
@@ -221,6 +306,11 @@ class LayerPartitioner:
         # this method. The number this returns is the number the strategy
         # promises, so it has to be the one that is actually held.
         weight_budget = budget_bytes - peak_live
+        arena_bound = ""
+        if max_arena_bytes is not None and max_arena_bytes < weight_budget:
+            weight_budget = int(max_arena_bytes)
+            arena_bound = (f" (one segment's weights are one allocation, bounded by the "
+                           f"device's largest: {max_arena_bytes / (1024*1024):.1f} MB)")
         if weight_budget <= 0:
             return Partition(
                 segments=[], total_weight_bytes=0, peak_resident_bytes=0,
@@ -256,7 +346,7 @@ class LayerPartitioner:
                         f"{weight_budget / (1024*1024):.1f} MB left for "
                         f"weights once activations are reserved "
                         f"({peak_live / (1024*1024):.1f} MB of a "
-                        f"{budget_bytes / (1024*1024):.1f} MB budget). "
+                        f"{budget_bytes / (1024*1024):.1f} MB budget){arena_bound}. "
                         f"A cut cannot "
                         f"run half an op, so no partition of this graph "
                         f"fits. Serving it needs the op's own weights "

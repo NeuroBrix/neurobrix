@@ -4,8 +4,8 @@
 included — beside the streamed component's segments. The flow runs components one after another:
 the iterative handlers of both engines unload each pre_loop component after it runs and the
 loop's before post_loop (`core/flow/base.py resident_together`, from 38751c12). A whole component
-of ANOTHER phase keeps at most its weights beside the segments; its activation peak is never live
-at the same time. Once Prism priced the fp32 activations the engines execute
+of ANOTHER phase holds nothing beside the segments (since 2026-10-04; its weights before); its
+activation peak is never live at the same time. Once Prism priced the fp32 activations the engines execute
 (runtime_widths.py), PixArt-XL-2-1024-MS's VAE decode at 1024x2048 grew to 5 120 MB and, reserved
 beside the TEXT ENCODER's segments, refused a plan that streams on the Mac (18 prism cells,
 2026-09-28).
@@ -13,7 +13,7 @@ beside the TEXT ENCODER's segments, refused a plan that streams on the Mac (18 p
 SEEN RED on 86aa0d87 (the width commit, before the co-residency reserve), 2026-09-28:
   * test_another_phase_s_activation_peak_does_not_shrink_the_segments — PixArt refused
     (layer_streaming declined: the text encoder's segments had no room for aten.embedding::0);
-  * test_the_reserve_counts_weights_of_other_phases_and_totals_of_its_own — AttributeError,
+  * test_the_reserve_counts_weights_of_other_phases_and_totals_of_its_own (now ..._nothing_...) — AttributeError,
     the reserve did not exist as a rule.
 And with the rule's `n in phase` test replaced by True (every component concurrent again) on the
 fix, both are red.
@@ -38,7 +38,13 @@ def _mem(name, w, a):
     return ComponentMemory(name, w * MB, a * MB, int((w + a) * MB * 0.05))
 
 
-def test_the_reserve_counts_weights_of_other_phases_and_totals_of_its_own(monkeypatch):
+def test_the_reserve_counts_nothing_of_other_phases_and_totals_of_its_own(monkeypatch):
+    """Another phase holds NOTHING beside the segments (2026-10-04): a layer_streaming plan is lazy,
+    its serving session never persistent (serving/engine.py keeps weights only for an eager plan),
+    and both engines' iterative handlers force-unload a pre_loop component after it runs and the
+    loop's before post_loop. This cell first priced another phase's WEIGHTS (e4b1370a), and a bigger
+    rung then refused what a smaller one planned (CogVideoX-5b-I2V on the Mac's profile,
+    test_a_component_over_the_rung_streams_inside_itself)."""
     s = PrismSolver()
     comps = [("text_encoder", _mem("text_encoder", 9000, 100)),
              ("transformer", _mem("transformer", 1000, 400)),
@@ -50,17 +56,12 @@ def test_the_reserve_counts_weights_of_other_phases_and_totals_of_its_own(monkey
     monkeypatch.setattr(s, "_flow_topology", lambda c: flow)
     m = dict(comps)
 
-    def weights(n):
-        mm = m[n]
-        return int(mm.weight_bytes + mm.overhead_bytes * mm.weight_bytes
-                   / (mm.weight_bytes + mm.activation_bytes))
-
-    # the text encoder runs alone: every other component beside it is weights only
+    # the text encoder runs alone: nothing of another phase is beside it
     got = s._resident_beside_streamed(None, comps, {"text_encoder"})
-    assert got == weights("transformer") + weights("transformer_2") + weights("vae")
-    # a loop component: its loop partner whole, the others weights only
+    assert got == 0
+    # a loop component: its loop partner whole, the others nothing
     got = s._resident_beside_streamed(None, comps, {"transformer"})
-    assert got == m["transformer_2"].total_bytes + weights("text_encoder") + weights("vae")
+    assert got == m["transformer_2"].total_bytes
     # a flow that declares no phases: every component concurrent, as before
     monkeypatch.setattr(s, "_flow_topology", lambda c: {"flow": {"type": "vlm"}})
     got = s._resident_beside_streamed(None, comps, {"text_encoder"})

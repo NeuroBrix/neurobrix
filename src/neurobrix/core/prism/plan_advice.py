@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Mapping, Optional, Sequence
 
 #: The measured swing in Prism's own reading of available memory on an idle
 #: machine (12598 -> 15248 MB, 2026-09-18, Apple). Budgets are taken against the
@@ -140,25 +140,48 @@ def side_scale_for(bands: int) -> float:
 
 
 def what_would_have_fit(verdicts: Sequence[TilingVerdict],
-                        spatial: bool = False) -> List[str]:
+                        spatial: bool = False,
+                        tiled: Optional[Mapping[str, str]] = None,
+                        untileable: Optional[Mapping[str, str]] = None) -> List[str]:
     """The lines to put in a plan-stage refusal, one per binding component.
+
+    `tiled`: {component: what the plan's tiling engine gave it} for the components the solve DID
+    tile — their untiled figures are not what binds, and an arithmetic about their whole
+    activations or their "overhead" sends the reader to the wrong component. `untileable`:
+    {component: why the tiling engine gave it no tile} — a tile count for such a component offers a
+    remedy no engine executes, so its line says why there is none and keeps only the input-side
+    reduction. Measured: SANA-Video_2B_720p at 672x1344x81 under Triton on the 16 GB V100 class
+    (2026-10-04) was refused with "vae: its weights and overhead alone are 16,449 MB … no number of
+    bands reaches it" — the vae the same solve had tiled (tile extent 16, 5 200 MB of activations per
+    tile) — and "transformer: … it fits in 15 tiles", a transformer the tiling engine had declined ("neither its
+    graph nor its profile states a spatial scale"). What bound was the transformer's own block.
 
     Returns an empty list when there is nothing concrete to say — silence beats a
     sentence built on a figure that was not computed.
     """
+    tiled = tiled or {}
+    untileable = untileable or {}
     lines: List[str] = []
     for v in verdicts:
+        if v.component in tiled:
+            lines.append(f"  {v.component}: {tiled[v.component]} — not what binds")
+            continue
         if v.refusal_reason:
             lines.append(f"  {v.component}: {v.refusal_reason}")
             continue
         if not v.reshapable:
             continue
         piece = v.per_band_bytes or 0
-        line = (f"  {v.component}: {_mb(v.activation_bytes)} of activations against "
-                f"{_mb(v.weight_bytes)} of weights — it fits in {v.bands} tiles of "
-                f"about {_mb(piece)} each, inside a {_mb(v.budget_bytes)} budget "
-                f"(a floor: a real tiling's halo costs more, and the same case took "
-                f"four tiles by hand on Apple where this arithmetic says two)")
+        if v.component in untileable:
+            line = (f"  {v.component}: {_mb(v.activation_bytes)} of activations against "
+                    f"{_mb(v.weight_bytes)} of weights, and no tile exists for it "
+                    f"({untileable[v.component]})")
+        else:
+            line = (f"  {v.component}: {_mb(v.activation_bytes)} of activations against "
+                    f"{_mb(v.weight_bytes)} of weights — it fits in {v.bands} tiles of "
+                    f"about {_mb(piece)} each, inside a {_mb(v.budget_bytes)} budget "
+                    f"(a floor: a real tiling's halo costs more, and the same case took "
+                    f"four tiles by hand on Apple where this arithmetic says two)")
         if spatial and v.bands:
             f = side_scale_for(v.bands)
             line += (f"; the same reduction from the input side is each spatial "

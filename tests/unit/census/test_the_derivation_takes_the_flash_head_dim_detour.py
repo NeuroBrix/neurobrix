@@ -21,13 +21,39 @@ from neurobrix.kernels import launch_keys as LK  # noqa: E402
 from neurobrix.kernels import census as _census  # noqa: E402
 from neurobrix.kernels.nbx_tensor import NBXDtype  # noqa: E402
 
+import pytest  # noqa: E402
+
 F32 = NBXDtype.float32
 
 
-def test_the_detour_is_the_power_of_two_head_dims_from_128():
+def _arch(monkeypatch, correct: bool):
+    """The arch profile's own declaration decides the detour (flash.pow2_head_dim_correct, every profile
+    declares it): these cells state which arch they speak of. They ran on whatever profile the process had
+    bound — on a V100 rack, Volta, which declares true since 2026-10-03 — and two of them went red there."""
+    from neurobrix.kernels.ops import _configs
+    real = _configs.active_vendor_profile
+    # the bound profile as it is (its ladders, its thresholds), with this one declaration stated
+    monkeypatch.setattr(_configs, "active_vendor_profile",
+                        lambda: {**(real() or {}), "flash": {"pow2_head_dim_correct": correct}})
+
+
+@pytest.fixture
+def unmeasured_arch(monkeypatch):
+    _arch(monkeypatch, False)
+
+
+def test_the_detour_is_the_power_of_two_head_dims_from_128(unmeasured_arch):
     assert [LK.flash_headdim_detour(d) for d in (64, 72, 127, 128, 129, 256, 512)] == \
         [64, 72, 127, 129, 129, 257, 513]
     assert LK.flash_headdim_detour(512, enabled=False) == 512
+
+
+def test_an_arch_that_measured_the_kernel_correct_takes_no_detour(monkeypatch):
+    _arch(monkeypatch, True)
+    assert [LK.flash_headdim_detour(d) for d in (64, 127, 128, 256, 512)] == [64, 127, 128, 256, 512]
+    # and the derivation then stays on the flash route at the true head dim: no launch, nothing unhandled
+    launches, unhandled = _sdpa_launches(512, 0)
+    assert launches == [] and not unhandled
 
 
 def _sdpa_launches(D_, budget):
@@ -42,7 +68,7 @@ def _sdpa_launches(D_, budget):
     return out or [], unhandled
 
 
-def test_no_scores_budget_routes_the_padded_call_to_math():
+def test_no_scores_budget_routes_the_padded_call_to_math(unmeasured_arch):
     launches, unhandled = _sdpa_launches(512, 0)
     keys = [k for _, k in launches]
     assert len(keys) == 2, keys
