@@ -128,7 +128,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             return [res.resolve(d) for d in ss["dims"]]
         return list(T[tid]["shape"])
 
-    contract = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    contract = _contract(model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
@@ -196,6 +196,32 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
 
 
 _RUNTIME_GRAPHS = {}
+_RAW_GRAPHS = {}
+_CONTRACTS = {}
+
+
+def _contract(model: str, comp: str, g: dict, cdtype: str):
+    """The component's plan-time precision contract, computed once per (model, component, compute
+    dtype): it reads the calibration record and the runtime graph, never the request's extents, and an
+    extent probe recomputed it over the whole graph each time (openaudio's LM, hundreds of probes per
+    extent). The widths that DO read the request (the matmul store rule's M) stay per probe."""
+    from neurobrix.core.prism import runtime_widths as RW
+    key = (model, comp, str(cdtype))
+    if key not in _CONTRACTS:
+        _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    return _CONTRACTS[key]
+
+
+def raw_graph(model: str, comp: str) -> dict:
+    """The component's graph.json as stored, parsed ONCE per derivation process and shared READ-ONLY by
+    every probe. Each extent probe re-read and re-parsed it: openaudio's LM graph is 189 MB and its
+    decode extents ask hundreds of derivations each, so one model's table ran past an hour (2026-10-04,
+    the tts table timed out at 3 600 s after two models) — the red line: a census takes minutes per model.
+    Callers never mutate it; `runtime_graph` keeps its own parse, which its load-time passes rewrite."""
+    key = (model, comp)
+    if key not in _RAW_GRAPHS:
+        _RAW_GRAPHS[key] = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    return _RAW_GRAPHS[key]
 
 
 def runtime_graph(model: str, comp: str) -> dict:
@@ -214,12 +240,18 @@ def runtime_graph(model: str, comp: str) -> dict:
         GraphExecutor._normalize_sdpa_scaling(stub)
         GraphExecutor._mark_sdpa_k_layout(stub)
         manifest = json.loads((CACHE / model / "manifest.json").read_text())
+        from neurobrix.core.runtime.graph.moe_fusion import unfused_routers
         g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True)
-        if comp == declared_moe_lm(model):
-            # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): fused, declared
-            g = detect_and_fuse_moe(g, manifest.get("family"), norm_topk_prob=True, declared=True) \
-                if not any(o.get("op_type") == "custom::moe_fused"
-                           for o in (g.get("ops") or {}).values()) else g
+        if comp == declared_moe_lm(model) and unfused_routers(g):
+            # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): the declared pass
+            # over every router still unfused, with the registry's norm_topk_prob — as it runs
+            dp = CACHE / model / "runtime" / "defaults.json"
+            lmc = (json.loads(dp.read_text()) if dp.exists() else {}).get("lm_config") or {}
+            if lmc.get("norm_topk_prob") is None:
+                raise SystemExit(f"{model}: lm_config declares a MoE without norm_topk_prob — "
+                                 "the flows refuse it, so the derivation does")
+            g = detect_and_fuse_moe(g, manifest.get("family"),
+                                    norm_topk_prob=bool(lmc["norm_topk_prob"]), declared=True)
         _RUNTIME_GRAPHS[key] = g
     return _RUNTIME_GRAPHS[key]
 
@@ -544,7 +576,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
     from neurobrix.triton.symbols import SymbolResolver
-    g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    g = raw_graph(model, comp)
     res = SymbolResolver(g.get("symbolic_context") or {})
     feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
@@ -579,7 +611,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # through codec.quantizer, whose features feed every later codec stage; n in 1..max_tokens.
     if flow.get("type") == "dual_ar" and "codec.quantizer" in comps:
         mt = decode_bound(require_max_tokens(defaults))
-        gq = json.loads((CACHE / model / "components" / "codec.quantizer" / "graph.json").read_text())
+        gq = raw_graph(model, "codec.quantizer")
         cb = gq["tensors"]["input::indices"]["shape"][1]
         later = [st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])[1:]
                  if st.get("component") in comps]
@@ -648,7 +680,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         if image_ar:
             def one(comp, lead):
                 """The component's single input at its trace shape, the leading dim `lead`."""
-                g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                g = raw_graph(model, comp)
                 sp = next(t for t in g["tensors"].values() if t.get("input_name"))
                 return {sp["input_name"]: [lead, *sp["shape"][1:]]}
             steps = [(gen["head_component"], one(gen["head_component"], 1)),
@@ -735,9 +767,9 @@ def _encoder_decoder_sites(model, topo, defaults, plan):
     kvp = decoder_self_attention_plan(runtime_graph(model, dec))
     if kvp is None or not (kvp["arange_uids"] or kvp.get("position_slice_uids")):
         return []                 # the flow's recompute path: the whole sequence every step
-    ge = json.loads((CACHE / model / "components" / enc / "graph.json").read_text())
+    ge = raw_graph(model, enc)
     frames = ge["tensors"][ge["output_tensor_ids"][0]]["shape"]      # the window's encoder frames
-    gd = json.loads((CACHE / model / "components" / dec / "graph.json").read_text())["tensors"]
+    gd = raw_graph(model, dec)["tensors"]
     ids_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and "ids" in k)
     enc_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and k != f"input::{ids_in}")
     dtype = {c["name"]: c["dtype"] for c in plan["components"]}[dec]
@@ -759,7 +791,7 @@ def vlm_contract(model: str, topo: dict):
     path); None when the topology names no vision or LM component."""
     v = (topo.get("flow") or {}).get("vlm") or {}
     vis, lm = v.get("vision_component"), v.get("lm_component")
-    g = lambda c: json.loads((CACHE / model / "components" / c / "graph.json").read_text())
+    g = lambda c: raw_graph(model, c)
     if vis and "input::all_pixel_values" in g(vis)["tensors"]:
         return "staged"
     if lm and "input::image_pos_masks" in g(lm)["tensors"]:
@@ -832,7 +864,7 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
                          f"{t}x{h}x{w_} / {merge} names {t * (h // merge) * (w_ // merge)}")
     pre, suf = tokenize_around_span(container_tokenizer(model), prompt, v["image_token_id"], "image")
     L0 = len(pre) + n_modal + len(suf)
-    gl = json.loads((CACHE / model / "components" / lm / "graph.json").read_text())["tensors"]
+    gl = raw_graph(model, lm)["tensors"]
     H = gl["input::inputs_embeds"]["shape"][-1]
     ds = sorted((k[len("input::"):] for k in gl if k.startswith("input::deepstack_visual_embeds.")),
                 key=lambda n: int(n.rsplit(".", 1)[1]))
@@ -899,7 +931,7 @@ def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_token
     L0 = len(ids)
     base, _next = E._build_mrope_positions_np(
         E._mrope_segments(L0, img_span, aud_span, (t, h // merge, w_ // merge)))
-    gl = json.loads((CACHE / model / "components" / lm / "graph.json").read_text())["tensors"]
+    gl = raw_graph(model, lm)["tensors"]
     H = gl["input::inputs_embeds"]["shape"][-1]
     mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
 
@@ -947,7 +979,7 @@ def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_token
         (pre.get("image_start_token_id"), pre.get("image_end_token_id")), pre.get("unk_token_id"),
         n_modal)
     L0 = len(ids)
-    gl = json.loads((CACHE / model / "components" / lm / "graph.json").read_text())["tensors"]
+    gl = raw_graph(model, lm)["tensors"]
     H = gl["input::inputs_embeds"]["shape"][-1]
     mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
 
@@ -1049,7 +1081,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if isinstance(feed, dict) and "__decode__" in feed:
                         # one position: every batch / sequence symbol at 1, the cache's K and V
                         from neurobrix.kernels.nbx_tensor import NBXDtype
-                        g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                        g = raw_graph(model, comp)
                         d = dict(feed["__decode__"])
                         syms = {sid: (int(d.get("batch") or 1) if i.get("name") == "batch" else 1)
                                 for sid, i in ((g.get("symbolic_context") or {})

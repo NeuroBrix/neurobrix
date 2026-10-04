@@ -179,7 +179,8 @@ def test_the_resolver_slices_stacked_experts_by_the_traced_law():
     w_out = NBXTensor.from_numpy(
         np.arange(E * H * F, dtype=np.float32).reshape(E, H, F) * -1.0)
     attrs = {"stacked_experts": {"input_linear_tid": "in", "output_linear_tid": "out",
-                                 "ffn_dim": F},
+                                 "ffn_dim": F, "input_linear_in_axis": 1,
+                                 "gate_offset": 0, "output_linear_in_axis": 1},
              "num_experts": E,
              "expert_gate_weight_ids": [], "expert_up_weight_ids": [],
              "expert_down_weight_ids": []}

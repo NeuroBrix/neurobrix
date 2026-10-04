@@ -68,26 +68,6 @@ def parse_device_idx(device) -> int:
         return 0
 
 
-def is_dense_window(t: NBXTensor) -> bool:
-    """True iff the view's strided address span equals its logical numel —
-    i.e. the flat ``[data_ptr, data_ptr + nbytes)`` window contains ALL of
-    the view's elements and addresses NOTHING outside it. Only such views
-    may be transferred by a flat ``memcpy(nbytes)`` with their strides
-    carried over.
-
-    Dense: contiguous tensors, full-tensor permute/transpose views (the
-    zero3 pre-transposed weight ``.t()``), dim-0 narrows.
-    NOT dense: interior narrows / slices (offset window, span > numel),
-    step>1 slices (de-interleave views, span > numel), broadcast/expand
-    views (stride-0 axes, span < numel).
-    """
-    if t._numel == 0:
-        return True
-    span = 1 + sum((d - 1) * s
-                   for d, s in zip(t._shape, t._strides) if d > 0)
-    return span == t._numel
-
-
 def needs_move(t: NBXTensor, target_dev: int) -> bool:
     """True iff `t` must be transferred to land on cuda:target_dev.
 
@@ -107,8 +87,9 @@ def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
 
     Stride handling — dense-window rule (P-TRITON-MLA root fix): the flat
     ``memcpy(tensor._nbytes)`` from ``data_ptr()`` is only meaningful when
-    the view's strided address span EQUALS its logical numel
-    (`is_dense_window`). For such views (contiguous tensors, the zero3
+    the view's elements tile exactly one dense span from data_ptr()
+    (`NBXTensor.spans_densely`, the one definition — it also refuses an
+    overlapping view whose span happens to equal its numel). For such views (contiguous tensors, the zero3
     pre-transposed weight ``.t()``, dim-0 narrows) the strides are carried
     over unchanged — the historical contract, preserved byte-for-byte.
     Every OTHER view — interior narrow/slice (span > numel, offset
@@ -127,7 +108,7 @@ def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     aten.cat::91, BOTH triton modes — this helper is shared by
     _run_multi_device and the triton_sequential per-op transfer block).
     """
-    if not is_dense_window(tensor):
+    if not tensor.spans_densely():
         tensor = tensor.contiguous()
     src_device = getattr(tensor, "_device", "cuda")
     kind = 1 if src_device == "cpu" else 3
