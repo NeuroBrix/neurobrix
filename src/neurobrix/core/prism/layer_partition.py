@@ -174,6 +174,8 @@ class LayerPartitioner:
         transpose and the contraction that reads it, a seam would carry the weight out of the
         piece that loaded it. Its bytes on the curve are what keeps that seam from looking free.
         """
+        if getattr(self, "_curve_memo", None) is not None:
+            return list(self._curve_memo)
         from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
         last = self._last_use()
         outputs = set(self._dag.get("output_tensor_ids") or [])
@@ -197,6 +199,9 @@ class LayerPartitioner:
                 if tid in alive and last.get(tid) == i and tid not in outputs:
                     live -= alive.pop(tid)
             curve.append(live)
+        # the graph, the request and the widths are fixed at construction, and the parked-change
+        # search (`partition`) cuts again many times over the same curve
+        self._curve_memo = list(curve)
         return curve
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
@@ -235,7 +240,12 @@ class LayerPartitioner:
         cut. Measured on the Mac (deepseek-moe-16b-chat, 2026-10-04): the last piece's 4.5 GB
         parked while the first one's arena allocated, 13.5 GB live against an 11.3 GB plan.
 
-        Cut again at the budget less the overshoot until every change fits, or the cut refuses."""
+        Cut again lower until every change fits, or the cut refuses. Lower by the overshoot, but by
+        at most a tenth of the cut at a time: the change peak is not monotonic in the cut (a change
+        whose incoming arena takes the parked one back costs nothing), and one jump by the whole
+        overshoot went from 3 768 MB to 486 MB on PixArt-XL-2-1024-MS's T5 at the Mac's 4096 rung —
+        under its 502 MB embedding, a refusal — where pieces of about half the budget fit every
+        change."""
         part = self._greedy(budget_bytes, max_arena_bytes)
         if parked_cap_bytes is None or not part.fits:
             return part
@@ -246,7 +256,7 @@ class LayerPartitioner:
             if over <= 0:
                 part.peak_resident_bytes = max(part.peak_resident_bytes, change)
                 return part
-            cut_at -= over
+            cut_at -= max(min(over, cut_at // 10), 1024 * 1024)
             again = self._greedy(cut_at, max_arena_bytes)
             if not again.fits:
                 again.refusal = (

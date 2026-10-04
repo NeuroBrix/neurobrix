@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A plan refusal under `--triton` names the component that does not fit.** When a model could not
+  be planned, the message could blame a component the planner had already split into tiles, or
+  suggest a tile count for a component that cannot be tiled. It now marks tiled components as not
+  the cause, says why an untileable one has no tiles, and on NVIDIA cards states the limit of the
+  last strategy that can help (streaming on the card) instead of asking for host memory that
+  `--triton` does not use. Example: SANA-Video 2B at 672x1344, 81 frames, on a 16 GB card, where one
+  transformer block needs 18.8 GB.
+
 - **On Apple machines under `--triton`, no weight block is planned larger than the GPU can allocate
   at once.** A Metal device refuses any single buffer above its maximum buffer length, however much
   memory is free; on an 18 GB M4 Pro, deepseek-moe-16b-chat at 17 GB free failed at load asking for
