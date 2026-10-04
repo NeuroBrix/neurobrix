@@ -140,8 +140,76 @@ def test_a_decoder_with_no_output_at_the_bin_is_refused():
     from neurobrix.core.flow.iterative_process import IterativeProcessHandler
     br = _binned((512, 512))
     resolved = {"vae.output_0": torch.randn(1, 3, 512, 512)}
-    with pytest.raises(RuntimeError, match="no 4-D output at"):
+    with pytest.raises(RuntimeError, match="no output at"):
         IterativeProcessHandler._restore_requested_resolution(_handler(br, resolved), ["vae"])
+
+
+def _vendor_video_resize_and_crop_tensor(samples, new_width: int, new_height: int):
+    """diffusers v0.37.0 src/diffusers/video_processor.py, `VideoProcessor.resize_and_crop_tensor`, verbatim."""
+    orig_height, orig_width = samples.shape[3], samples.shape[4]
+    if orig_height != new_height or orig_width != new_width:
+        ratio = max(new_height / orig_height, new_width / orig_width)
+        resized_width = int(orig_width * ratio)
+        resized_height = int(orig_height * ratio)
+        n, c, t, h, w = samples.shape
+        samples = samples.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
+        samples = F.interpolate(samples, size=(resized_height, resized_width), mode="bilinear", align_corners=False)
+        start_x = (resized_width - new_width) // 2
+        end_x = start_x + new_width
+        start_y = (resized_height - new_height) // 2
+        end_y = start_y + new_height
+        samples = samples[:, :, start_y:end_y, start_x:end_x]
+        samples = samples.reshape(n, t, c, new_height, new_width).permute(0, 2, 1, 3, 4)
+    return samples
+
+
+ASPECT_RATIO_720_BIN = {    # diffusers 0.38.0.dev0 pipeline_sana_video.py:61 (SANA-Video 720p, sample_size 22)
+    "0.5": [672.0, 1344.0], "0.57": [704.0, 1280.0], "0.68": [800.0, 1152.0], "0.78": [832.0, 1088.0],
+    "0.88": [896.0, 1024.0], "1.0": [960.0, 960.0], "1.13": [1024.0, 896.0], "1.29": [1088.0, 832.0],
+    "1.46": [1152.0, 800.0], "1.75": [1280.0, 704.0], "2.0": [1344.0, 672.0],
+}
+VIDEO_REQUESTS = [(256, 640), (704, 1280), (480, 480)]
+
+
+def _binned_video(req):
+    merged = {"height": req[0], "width": req[1]}
+    return rb.bin_request(_field(bins=ASPECT_RATIO_720_BIN, source="SanaVideoPipeline.__call__(use_resolution_binning)"), merged)
+
+
+def test_the_fold_names_the_planes_of_an_image_and_of_a_video():
+    assert rb.restore_fold((2, 3, 704, 1408), (704, 1408)) == (2, 3, 704, 1408)
+    assert rb.restore_fold((1, 3, 81, 672, 1344), (672, 1344)) == (3, 81, 672, 1344)
+    assert rb.restore_fold((1, 81, 3, 672, 1344), (672, 1344)) == (81, 3, 672, 1344)
+    assert rb.restore_fold((3, 672, 1344), (672, 1344)) is None            # fewer than four axes
+    assert rb.restore_fold((1, 3, 81, 672, 1344), (704, 1280)) is None     # not at the bin
+
+
+@pytest.mark.parametrize("req", VIDEO_REQUESTS)
+def test_the_aten_restore_of_a_video_is_the_vendors_frame_for_frame(req):
+    """A 5-D decoder output [N, C, T, H, W] at the bin: the vendor's VideoProcessor restore, bit for bit.
+    On the 4-D-only form this is refused as 'no 4-D output'."""
+    from neurobrix.core.flow.iterative_process import IterativeProcessHandler
+    br = _binned_video(req)
+    g = torch.Generator().manual_seed(req[0] * 131 + req[1])
+    video = torch.randn(1, 3, 5, *br.binned, generator=g)
+    resolved = {"vae.output_0": video, "vae.last_output": video}
+    IterativeProcessHandler._restore_requested_resolution(_handler(br, resolved), ["vae"])
+    want = _vendor_video_resize_and_crop_tensor(video, req[1], req[0])
+    got = resolved["vae.output_0"]
+    assert tuple(got.shape) == tuple(want.shape) == (1, 3, 5, req[0], req[1]), (req, tuple(got.shape))
+    assert torch.equal(got, want), (req, (got - want).abs().max().item())
+    assert resolved["vae.last_output"] is got
+
+
+def test_the_aten_restore_of_a_video_in_another_axis_order_restores_every_frame():
+    """[N, T, C, H, W]: the fold does not care which leading axis is which."""
+    from neurobrix.core.flow.iterative_process import IterativeProcessHandler
+    br = _binned_video((256, 640))
+    video = torch.randn(1, 5, 3, *br.binned, generator=torch.Generator().manual_seed(7))
+    resolved = {"vae.output_0": video}
+    IterativeProcessHandler._restore_requested_resolution(_handler(br, resolved), ["vae"])
+    want = _vendor_video_resize_and_crop_tensor(video.permute(0, 2, 1, 3, 4), 640, 256).permute(0, 2, 1, 3, 4)
+    assert torch.equal(resolved["vae.output_0"], want)
 
 
 # --- restore, the Triton branch -----------------------------------------------------------------
@@ -175,6 +243,26 @@ def test_the_triton_restore_is_the_vendors(req):
     # more closely than that (up to 3.4e-4 apart): each rounds its source coordinate in fp32 at a different
     # point, and at a coordinate near 1300 one fp32 step is 1.2e-4 pixel, which moves a value by up to about
     # 6e-4. A wrong mapping (align_corners, a half-pixel offset, a crop) misses by 0.1 to 1.
+    slack = 4 * float(np.spacing(np.float32(np.abs(host).max())))
+    vendor_err = float(np.abs(want - exact).max())
+    ours_err = float(np.abs(got - exact).max())
+    assert ours_err <= 1.25 * vendor_err + slack, (req, ours_err, vendor_err)
+
+
+@pytest.mark.skipif(not _gpu(), reason="needs a device")
+@pytest.mark.parametrize("req", VIDEO_REQUESTS)
+def test_the_triton_restore_of_a_video_is_the_vendors(req):
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler
+    br = _binned_video(req)
+    rng = np.random.default_rng(req[0] * 131 + req[1])
+    host = rng.standard_normal((1, 3, 5, *br.binned)).astype(np.float32)
+    resolved = {"vae.output_0": NBXTensor.from_numpy(host)}
+    TritonIterativeProcessHandler._restore_requested_resolution(_handler(br, resolved), ["vae"])
+    got = np.asarray(resolved["vae.output_0"].numpy(), dtype=np.float64)
+    want = _vendor_video_resize_and_crop_tensor(torch.from_numpy(host), req[1], req[0]).double().numpy()
+    exact = _vendor_video_resize_and_crop_tensor(torch.from_numpy(host).double(), req[1], req[0]).numpy()
+    assert got.shape == want.shape == (1, 3, 5, req[0], req[1]), (req, got.shape, want.shape)
     slack = 4 * float(np.spacing(np.float32(np.abs(host).max())))
     vendor_err = float(np.abs(want - exact).max())
     ours_err = float(np.abs(got - exact).max())
