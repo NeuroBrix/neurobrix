@@ -815,11 +815,15 @@ class PrismSolver:
 
     def _flow_phases(self, container):
         """The flow's phases on the engine this plan runs on, for a single run or a served session
-        (`core/flow/base.py resident_together`), or None when it declares none."""
+        (`core/flow/base.py resident_together`), or None when it declares none. A session is served
+        by the REQUEST (`_serve_requested`), never by `_serve_mode`, which the cold re-evaluation
+        turns off while the session it plans still runs several requests in one process: placed
+        under that pass, a served VLM's streamed tower was cut beside nothing, though the head and
+        the speech leg the request before left are loaded beside it."""
         from neurobrix.core.flow.base import resident_together
         from neurobrix.core.prism.host_footprint import engine_of
         return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
-                                 served=bool(getattr(self, "_serve_mode", False)))
+                                 served=bool(getattr(self, "_serve_requested", False)))
 
     def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
         """The most a plan that loads on demand holds at one moment, from a cost per component: the

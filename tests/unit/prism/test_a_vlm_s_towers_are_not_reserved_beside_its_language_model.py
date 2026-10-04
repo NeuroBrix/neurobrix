@@ -11,11 +11,19 @@ reserved its 1 872 MB of towers beside its streamed LM (the Mac, 2026-10-04; the
 puts the lifecycle in the check). `core/flow/base.py _vlm_phases` reads the phases from the
 topology: each tower and projection alone, then {LM, head, every speech component}.
 
-SEEN RED (2026-10-04) on three injections into `_vlm_phases` / RESIDENT_PHASES:
+A SERVED session differs (review of 785bc2b8, 2026-10-04): neither engine ever unloads the head
+(`_compute_logits` loads it) or a speech component (the legs unload only the model), and a served
+plan that loads on demand is not persistent — so from its second request each tower and projection
+loads beside the head and the speech components the request before left loaded. Its tower phases
+hold them; the first form put each tower alone in a served session too, and its served cell pinned
+that under-count.
+
+SEEN RED (2026-10-04) on four injections into `_vlm_phases` / RESIDENT_PHASES:
   * the "vlm" registration removed (every component concurrent again);
   * the towers put back into the decode phase;
   * the speech components left out of the decode phase (an under-count: the CFM leg loads them
-    beside the LM).
+    beside the LM);
+  * `served` ignored (the served tower phases alone again: the under-count above).
 
 Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src:. python -m pytest -q \
      tests/unit/prism/test_a_vlm_s_towers_are_not_reserved_beside_its_language_model.py
@@ -52,11 +60,21 @@ def _total(names):
 
 
 @pytest.mark.parametrize("engine", ["compiled", "triton"])
-@pytest.mark.parametrize("served", [False, True])
-def test_each_tower_runs_alone_and_the_lm_decodes_with_its_head_and_speech_leg(engine, served):
-    phases = resident_together(FLOW, engine, served)
+def test_each_tower_runs_alone_and_the_lm_decodes_with_its_head_and_speech_leg(engine):
+    phases = resident_together(FLOW, engine, served=False)
     assert sorted(map(sorted, phases)) == sorted(
         [["vision"], ["resampler"], ["audio"], ["audio_proj"], ["head", "lm", "talker", "vocoder"]]), phases
+
+
+@pytest.mark.parametrize("engine", ["compiled", "triton"])
+def test_a_served_session_s_towers_load_beside_what_the_request_before_left(engine):
+    """Served: the head and the speech components are never unloaded, so from the second request
+    every tower phase holds them; the LM is unloaded at the end of each request, so none does."""
+    phases = resident_together(FLOW, engine, served=True)
+    left = ["head", "talker", "vocoder"]
+    assert sorted(map(sorted, phases)) == sorted(
+        [sorted([t] + left) for t in ("vision", "resampler", "audio", "audio_proj")]
+        + [["head", "lm", "talker", "vocoder"]]), phases
 
 
 def test_a_flow_that_names_no_language_model_declares_no_phases():
@@ -75,6 +93,17 @@ def test_a_streamed_tower_reserves_nothing(monkeypatch):
     s = PrismSolver()
     monkeypatch.setattr(s, "_flow_topology", lambda c: FLOW)
     assert s._resident_beside_streamed(None, _comps(), {"vision"}) == 0
+
+
+def test_a_served_streamed_tower_reserves_the_head_and_speech_leg(monkeypatch):
+    s = PrismSolver()
+    monkeypatch.setattr(s, "_flow_topology", lambda c: FLOW)
+    # the REQUEST's intent: the cold re-evaluation turns `_serve_mode` off, the session stays served
+    monkeypatch.setattr(s, "_serve_requested", True, raising=False)
+    monkeypatch.setattr(s, "_serve_mode", False, raising=False)
+    assert s._resident_beside_streamed(None, _comps(), {"vision"}) == _total({"head", "talker", "vocoder"})
+    # the LM's own reserve is the same served or not: its phase already held them
+    assert s._resident_beside_streamed(None, _comps(), {"lm"}) == _total({"head", "talker", "vocoder"})
 
 
 def test_minicpm_streamed_lm_is_cut_beside_its_decode_phase_only(monkeypatch):

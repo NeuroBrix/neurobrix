@@ -320,7 +320,7 @@ def test_a_served_plan_keeps_what_the_handler_never_unloads(tmp_path):
     """A session's second request finds the decoder loaded (the triton handler leaves it): the SUM,
     whether the session is hot or degraded to cold."""
     s, c = _built(tmp_path, "triton")
-    s._serve_mode = True
+    s._serve_mode = s._serve_requested = True
     assert _kv(s, "lazy_sequential", c) == 10_000 - 500 + 200 + 700 + 600
     s._serve_cold_fallback = True
     assert _kv(s, "component_placement", c) == 10_000 - 500 + 200 + 700 + 600
