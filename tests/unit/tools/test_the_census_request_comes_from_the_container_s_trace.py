@@ -52,8 +52,10 @@ def _container(root: Path) -> Path:
     (d / "manifest.json").write_text(json.dumps({
         "model_name": MODEL, "family": "image", "vae_scale_factor": 32, "trace_resolution": 1024,
         "neurotax_version": NEUROTAX_VERSION}))
+    from neurobrix.nbx.fixed_point import FIXED_POINT_FLAG
     (d / "topology.json").write_text(json.dumps({
-        "components": {"transformer": {"shapes": {"hidden_states": [2, 32, 30, 34]}}}}))
+        "components": {"transformer": {"shapes": {"hidden_states": [2, 32, 30, 34]}}},
+        "extracted_values": {"transformer": {FIXED_POINT_FLAG: "fixture"}}}))
     (d / "runtime" / "variables.json").write_text("{}")
     (d / "runtime" / "defaults.json").write_text("{}")
     (d / "components" / "transformer" / "graph.json").write_text("{}")

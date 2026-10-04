@@ -104,6 +104,12 @@ class NBXRuntimeLoader:
                 f"  FIX: rename its keys in place (Forge `tools/neurotax_rename.py`, outputs "
                 f"byte-identical) or install the container published for this engine.")
 
+        # 1d. The symbolic fixed point (2026-10-04): every graph declares that it was written at
+        # the re-propagation fixed point, the only graphs the compiled sequence runs since its
+        # cross-branch compensation was deleted. Refused here, by name, before any weight I/O.
+        from neurobrix.nbx.fixed_point import refuse_unstamped
+        refuse_unstamped(cache_path, core_data["topology"])
+
         # 2. Discover and Load Components from cache
         # Components are in 'components/<name>/runtime.json'
         components = {}

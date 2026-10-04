@@ -84,6 +84,10 @@ def cache(tmp_path, monkeypatch):
     monkeypatch.setattr(T.Z, "CACHE", tmp_path / "cache")
 
     def write(topology):
+        # every graph declares the symbolic fixed point, as the loader requires (`nbx.fixed_point`)
+        from neurobrix.nbx.fixed_point import FIXED_POINT_FLAG
+        topology = json.loads(json.dumps(topology))
+        topology.setdefault("extracted_values", {})["transformer"] = {FIXED_POINT_FLAG: "fixture"}
         (d / "topology.json").write_text(json.dumps(topology))
     return write
 
