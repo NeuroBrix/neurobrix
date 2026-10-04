@@ -138,6 +138,10 @@ def _nbx_config_from(diffusers_kwargs: dict) -> dict:
     cfg.setdefault("timestep_spacing", "linspace")
     # algorithm_type is required by the shared validator but inert for UniPC.
     cfg.setdefault("algorithm_type", "dpmsolver++")
+    # The flow-sigma formula is selected by the container's declared diffusers
+    # version (it changed in 0.37.0, PR #12109): this file pins the 0.36/0.33 spec,
+    # so the NBX side declares what Wan2.1's container declares.
+    cfg.setdefault("_diffusers_version", "0.33.0.dev0")
     return cfg
 
 

@@ -49,6 +49,11 @@ class FlowEulerScheduler(FlowSchedulerBase):
         self.base_shift = validated.get("base_shift", 0.5)
         self.max_shift = validated.get("max_shift", 1.15)
         self.invert_sigmas = validated.get("invert_sigmas", False)
+        # The PIPELINE's sigma schedule, when it is not the scheduler's own
+        # linspace: a value the container carries (registry `sigma_schedule`
+        # on the scheduler component, merged into this config by the executor).
+        # Read from the raw config: the validator keeps only scheduler keys.
+        self.sigma_schedule = validate_sigma_schedule(config.get("sigma_schedule"))
 
         # State
         self.num_inference_steps: Optional[int] = None
@@ -77,8 +82,13 @@ class FlowEulerScheduler(FlowSchedulerBase):
         else:
             mu = self.shift
 
-        # Flow timesteps: 1 → 0
-        timesteps = torch.linspace(1, 0, num_inference_steps + 1)[:-1]
+        # Flow timesteps: 1 → 0 — the scheduler's own linspace, or the
+        # pipeline's declared schedule family (data-driven, never a model name).
+        if self.sigma_schedule is None or self.sigma_schedule["family"] == "linspace":
+            timesteps = torch.linspace(1, 0, num_inference_steps + 1)[:-1]   # byte-stable as before
+        else:
+            timesteps = torch.tensor(
+                flow_sigma_schedule(self.sigma_schedule, num_inference_steps), dtype=torch.float32)
 
         # Apply shift (time-shifting for better denoising)
         if mu != 1.0:
@@ -345,3 +355,53 @@ class RectifiedFlowScheduler(FlowSchedulerBase):
     def from_config(cls, config: Dict[str, Any]) -> "RectifiedFlowScheduler":
         """Create scheduler from NBX config."""
         return cls(config)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline sigma schedules (R30: mirrored, numpy-only, in triton/scheduler/flow_euler.py)
+# ---------------------------------------------------------------------------
+
+SIGMA_SCHEDULE_FAMILIES = ("linspace", "linear_quadratic")
+
+
+def validate_sigma_schedule(decl):
+    """The declared pipeline sigma schedule, checked; None = the scheduler's linspace."""
+    if decl is None:
+        return None
+    if not isinstance(decl, dict) or decl.get("family") not in SIGMA_SCHEDULE_FAMILIES:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: unknown sigma_schedule {decl!r}; families: {SIGMA_SCHEDULE_FAMILIES}.")
+    if decl["family"] == "linear_quadratic" and not isinstance(decl.get("threshold_noise"), (int, float)):
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: sigma_schedule linear_quadratic needs a numeric threshold_noise, got {decl!r}.")
+    return dict(decl)
+
+
+def flow_sigma_schedule(decl, num_steps: int):
+    """The flow sigmas 1 -> 0 (before shift and inversion), num_steps of them.
+
+    linspace: `linspace(1, 0, n + 1)[:-1]` (the scheduler's own).
+    linear_quadratic: genmo's schedule, as diffusers' MochiPipeline passes it
+    (pipelines/mochi/pipeline_mochi.py L61-75, from genmo models infer.py L77):
+    `linear_steps` (default n // 2) linear steps up to threshold_noise, then a
+    quadratic to 1; returned as 1 - x.
+    """
+    import numpy as np
+    if decl is None or decl.get("family") == "linspace":
+        return np.linspace(1, 0, num_steps + 1)[:-1]
+    thr = float(decl["threshold_noise"])
+    linear_steps = decl.get("linear_steps")
+    linear_steps = num_steps // 2 if linear_steps is None else int(linear_steps)
+    if linear_steps < 1 or linear_steps >= num_steps:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: sigma_schedule linear_quadratic needs 1 <= linear_steps < steps; "
+            f"got linear_steps={linear_steps} at {num_steps} step(s) (the vendor's schedule "
+            f"divides by linear_steps and by the quadratic steps).")
+    lin = [i * thr / linear_steps for i in range(linear_steps)]
+    diff = linear_steps - thr * num_steps
+    q_steps = num_steps - linear_steps
+    q_coef = diff / (linear_steps * q_steps ** 2)
+    l_coef = thr / linear_steps - 2 * diff / (q_steps ** 2)
+    const = q_coef * (linear_steps ** 2)
+    quad = [q_coef * (i ** 2) + l_coef * i + const for i in range(linear_steps, num_steps)]
+    return np.array([1.0 - x for x in lin + quad], dtype=np.float64)

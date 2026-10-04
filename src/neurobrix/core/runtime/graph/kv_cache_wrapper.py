@@ -24,6 +24,7 @@ import torch
 import torch.nn.functional as F
 
 from neurobrix.core.dtype.config import get_torch_dtype
+from neurobrix.core.runtime.graph.attention_mask import require_causal_frozen_mask
 
 
 @dataclass
@@ -560,6 +561,16 @@ class KVCacheAttentionWrapper:
         if attn_mask is not None:
             kv_seq = k_full.shape[2]
             if attn_mask.shape[-1] != kv_seq:
+                # The mask's content decides, never its shape alone: only the
+                # exact causal pattern has a defined extension (prefill: the
+                # causal flag with equal query and key lengths; decode: every
+                # cached key). Anything else — padding, a window, a bias — is
+                # refused by name (attention_mask.require_causal_frozen_mask).
+                require_causal_frozen_mask(
+                    attn_mask, q.shape[2], kv_seq,
+                    f"KV interceptor (layer {layer_idx}, "
+                    f"{'prefill' if self._is_prefill else 'decode'})",
+                    align_lengths=self._is_prefill)
                 attn_mask = None
                 mask_dropped = True
 
