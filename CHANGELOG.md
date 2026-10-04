@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Model weights are named with NeuroTax 5.1, and a model installed under NeuroTax 5.0 must be
-  updated before it runs.** Every weight of every model now carries a standard name: the
-  vocabulary covers the audio codecs and vocoders, video and image decoders, vision towers and
-  upscalers whose weights still carried their makers' own names. The engine refuses a model
-  installed under 5.0 by name, before loading any weight, and says how to update it; the weights
-  themselves do not change, only their names.
+- **Every model weight now carries a standard name, and a model installed with the earlier,
+  incomplete naming must be updated before it runs.** The naming vocabulary now covers the audio
+  codecs and vocoders, video and image decoders, vision towers and upscalers whose weights still
+  carried their makers' own names. The engine checks every weight name when it loads a model and
+  refuses, by name, one that still carries an old name, before loading any weight, and says how to
+  update it; the weights themselves do not change, only their names.
 
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now

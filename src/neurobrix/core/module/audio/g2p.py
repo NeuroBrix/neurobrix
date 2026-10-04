@@ -352,7 +352,7 @@ def phoneme_ids(prompt: str, nbx_path_str: str, phoneme_vocab: Dict,
                 phoneme_lang: str, voice: Optional[str]):
     """(IPA string, phoneme ids) for a prompt — the ONE text-to-ids path of a phonemizer model.
 
-    Both engines' preprocessing (core/flow/stages/kokoro.py, triton/audio_frontend.py) call
+    Both engines' preprocessing (core/audio_frontend.py, triton/audio_frontend.py) call
     it, and so does the derived census (tools/derived_census.py), which binds the text
     components' sequence symbol from `len(ids)` without running anything: one function, so
     the census's length is the run's length. Refuses a voice whose language the embedded

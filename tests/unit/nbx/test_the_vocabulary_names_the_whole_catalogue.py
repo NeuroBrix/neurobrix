@@ -1,4 +1,4 @@
-"""NeuroTax 5.1: the vocabulary names every key of the catalogue, and stays a fixed point doing it.
+"""NeuroTax 5.0, complete: the vocabulary names every key of the catalogue, and stays a fixed point doing it.
 
 The 2026-10-03 census of the 49 cached containers found 362 tokens the 5.0 registry refused
 (23 649 keys, 43 containers): VAE and codec stages, vocoders, vision towers, speech front-ends.
@@ -22,8 +22,9 @@ from neurobrix.nbx.neurotax import (NEUROTAX_VERSION, SynonymRegistry, normalize
 REFUSED_5_0 = (Path(__file__).parent / "data" / "neurotax_5_0_refused_tokens.txt").read_text().split()
 
 
-def test_the_version_is_5_1():
-    assert NEUROTAX_VERSION == "5.1"
+def test_the_version_is_5_0():
+    # The completed vocabulary IS 5.0 (the owner, 2026-10-04 02:05): no second public version.
+    assert NEUROTAX_VERSION == "5.0"
 
 
 def test_every_token_5_0_refused_resolves():
@@ -79,7 +80,7 @@ def test_pytorchs_own_parameter_spellings_stay(token):
     assert SynonymRegistry.resolve_strict(token, token) == token
 
 
-# One key per family, as the 5.0 container holds it -> as 5.1 names it (read from the cache, 2026-10-04).
+# One key per family, as the partial-vocabulary container holds it -> as the complete vocabulary names it (read from the cache, 2026-10-04).
 FAMILY_KEYS = [
     ("decoder.mid.temp_convs.0.conv1.0.bias", "decoder.mid.temporal_conv.0.conv1.0.bias"),          # video VAE
     ("decoder.conv_norm_out.weight", "decoder.norm_out.weight"),

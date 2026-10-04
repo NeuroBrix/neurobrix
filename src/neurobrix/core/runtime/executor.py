@@ -1462,7 +1462,15 @@ class RuntimeExecutor:
             )
 
         with open(graph_path) as f:
-            return json.load(f)
+            dag = json.load(f)
+        # The graph binds by the same names: every `param::`/`buffer::` id the parser can read is its
+        # fixed point (a lifted literal, `constant_T_*`, carries no module path and is no name).
+        from neurobrix.nbx.neurotax import refuse_non_canonical
+        refuse_non_canonical((t.split("::", 1)[1] for t in dag.get("tensors") or {}
+                              if t.startswith(("param::", "buffer::"))),
+                             container=cache_path.name, component=component_name,
+                             what="graph tensor id", unknown_is_literal=True)
+        return dag
 
     def _load_tokenizer(self, module_path: str, max_length: int):
         """Load tokenizer from extracted NBX cache."""

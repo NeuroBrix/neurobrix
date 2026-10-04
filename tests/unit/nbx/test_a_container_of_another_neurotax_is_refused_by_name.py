@@ -30,10 +30,7 @@ def _container(tmp_path, manifest):
     return d
 
 
-# 5.0: the NeuroTax 5.1 vocabulary renamed 22 749 keys 5.0 had written (rule 6, 2026-10-04) — a
-# 5.0 container holds keys the 5.1 readers (the RNNT joint, the TTS vocoder's token table) no
-# longer find.
-@pytest.mark.parametrize("manifest", [{"neurotax_version": "0.1"}, {"neurotax_version": "5.0"}, {}])
+@pytest.mark.parametrize("manifest", [{"neurotax_version": "0.1"}, {}])
 def test_another_version_is_refused_by_name(tmp_path, manifest):
     with pytest.raises(RuntimeError, match="NEUROTAX VERSION") as e:
         NBXRuntimeLoader().load(str(_container(tmp_path, {"model_name": "m", **manifest})))

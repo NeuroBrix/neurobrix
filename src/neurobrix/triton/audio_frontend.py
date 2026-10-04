@@ -192,10 +192,10 @@ def _load_voicepack_np(engine, phoneme_count: int) -> None:
 
 def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> None:
     """Zero-torch g2p: text → IPA → phoneme IDs, bound as NBXTensor. Mirror of
-    core/flow/stages/kokoro.preprocess_phonemizer_input (which uses torch)."""
+    core/audio_frontend.preprocess_phonemizer_input (which uses torch)."""
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
     from neurobrix.core.module.audio.g2p import phoneme_ids, request_voice
-    # R30 mirror of the compiled path (stages/kokoro.py): ONE text-to-ids function, whose
+    # R30 mirror of the compiled path (core/audio_frontend.py): ONE text-to-ids function, whose
     # language gate refuses a voice the embedded lexicon does not speak — measured NOT to
     # fire here once when it lived only in the compiled path (vitrine 2026-09-16, 17:47).
     phonemes, ids = phoneme_ids(prompt, engine.ctx.nbx_path_str, phoneme_vocab, klang,

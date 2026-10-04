@@ -31,11 +31,13 @@ from dataclasses import dataclass
 #: reader will find (the MoE fusion's expert match, first of them).
 #: 5.0: the parser is a fixed point on its own output — the SwiGLU gate is `ffn_gate` (was `gate`,
 #: the vendors' router token), diffusers' `attn1` is `attn` (was `self_attn`).
-#: 5.1 (2026-10-04): the vocabulary is complete over the catalogue — 362 tokens the 5.0 registry
-#: refused (and 4 it added after the keys were written) are translated, so 22 749 keys already
-#: emitted under 5.0 change: a new version (the neurotaxe's rule 6), every container rewritten once
-#: in place by Forge `tools/neurotax_rename.py`.
-NEUROTAX_VERSION = "5.1"
+#: The vocabulary completed over the catalogue (2026-10-04) IS 5.0 (the owner, 2026-10-04 02:05: no
+#: public engine reads the partial vocabulary of 2026-09-27): 362 tokens it refused are translated,
+#: and every container is written once with the complete vocabulary (Forge `tools/neurotax_rename.py`).
+#: The version string cannot tell a partial container from a complete one; the parser's own law
+#: does — `refuse_non_canonical`, at load. After the release a new model ADDS synonyms and never
+#: changes a key already emitted, so 5.0 stays and existing containers never move.
+NEUROTAX_VERSION = "5.0"
 
 
 class SynonymRegistry:
@@ -424,7 +426,7 @@ class SynonymRegistry:
         "latents_std": "latents_std",
 
         # ===========================================================================================
-        # NeuroTax 5.1 — the vocabulary completed over the catalogue (2026-10-04). Every entry is a
+        # The vocabulary completed over the catalogue (NeuroTax 5.0, 2026-10-04). Every entry is a
         # vendor's spelling of a role; the canonical side is an existing token wherever one names
         # the role (family alignment, rule 9). Tokens with a glued index (`conv3`, `tdnnd12`,
         # `feed_forward1`) are not listed one by one: the stem is translated and the index kept
@@ -798,6 +800,9 @@ class SynonymRegistry:
         r"^weight_[gv]$",
         r"^parametrizations$",
         r"^original\d+$",
+        # The engine's own weight-storage encoding (`kernels/quantized_tensor.STORAGE_LEAVES`): an
+        # encoded variant stores `<base>.weight` as `<base>.qweight` / `.scales` / `.qmins`.
+        r"^(qweight|scales|qmins)$",
     ]
 
     #: A token that carries its index glued to it (`conv3`, `tdnnd12`, `feed_forward1`, `linear_1`):
@@ -1166,3 +1171,53 @@ def normalize_tensor_name_strict(name: str) -> str:
     """
     parser = NeuroTaxParser()
     return parser.normalize_strict(name)
+
+
+def first_non_canonical(names, unknown_is_literal: bool = False):
+    """The first name that is not a fixed point of the parser, as (name, what it should be), or None.
+
+    One pass; each token resolved once (a 30B MoE index repeats a few hundred tokens over 18 867
+    keys). `unknown_is_literal`: a name holding a token the registry does not know is NOT a NeuroTax
+    name at all and is skipped (a graph's lifted literal, `constant_T_000001`, carries no module
+    path); otherwise it is refused like any other."""
+    seen: Dict[str, Optional[str]] = {}
+    for name in names:
+        out = []
+        for tok in name.split("."):
+            if tok not in seen:
+                try:
+                    seen[tok] = SynonymRegistry.resolve_strict(tok, name)
+                except ValueError:
+                    seen[tok] = None
+            out.append(seen[tok])
+        if None in out:
+            if unknown_is_literal:
+                continue
+            bad = [t for t, c in zip(name.split("."), out) if c is None]
+            return name, f"a token the registry does not know: {bad}"
+        canon = ".".join(out)
+        if canon != name:
+            return name, canon
+    return None
+
+
+def refuse_non_canonical(names, container: str, component: str, what: str = "weight key",
+                         unknown_is_literal: bool = False) -> None:
+    """The parser's own law, at load: every key a container binds is the parser's fixed point.
+
+    NeuroTax 5.0 names one vocabulary; a container written with its earlier, partial vocabulary
+    (2026-09-27) carries the same version string and keys the engine's readers no longer find (the
+    RNNT joint, the TTS vocoder's token table — and every raw token is a key no reader of the
+    parser's names can see). Refused here, by name, before any weight I/O: the container, the
+    component, the first offending key and its canonical form."""
+    hit = first_non_canonical(names, unknown_is_literal)
+    if hit is None:
+        return
+    name, should = hit
+    raise RuntimeError(
+        f"NEUROTAX KEYS: container '{container}', component '{component}': the {what} {name!r} is "
+        f"not a NeuroTax {NEUROTAX_VERSION} name (the parser names it {should!r}) — the container was "
+        f"written with an incomplete vocabulary.\n"
+        f"  FIX: rewrite it with the single-write pass (Forge `tools/neurotax_rename.py --apply`; "
+        f"names move, weights never do), or install the container published for this engine.")
+
