@@ -5690,6 +5690,13 @@ def bucketize_wrapper(x, boundaries, out_int32: bool = False,
     for d in xc.shape:
         n *= int(d)
     nb = int(bc.shape[0]) if bc.ndim >= 1 else 1
+    if nb == 0:
+        # No boundary is below any element: every index is 0, and the empty
+        # boundary vector has no buffer to bind (a one-image Qwen3-VL request
+        # buckets over cu_seqlens[1:-1], which is empty).
+        out = NBXTensor.zeros(list(xc.shape) or [1], dtype=NBXDtype.int64,
+                              device=xc.device)
+        return out.to(NBXDtype.int32) if out_int32 else out
     out = NBXTensor.empty(list(xc.shape) or [1], dtype=NBXDtype.int64,
                           device=xc.device)
     if n > 0:
