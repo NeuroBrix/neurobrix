@@ -40,4 +40,4 @@ def test_a_probe_started_by_a_large_process_measures_itself_not_its_parent():
         held[i] = 1
     base = A._measure_runtime_base_mb()
     assert all(0 < v < 1536 for v in base.values()), base
-    assert H.resident_bytes_now() >= 1536 << 20
+    assert H.process_footprint_now() >= 1536 << 20
