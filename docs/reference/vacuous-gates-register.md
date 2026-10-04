@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-119 entries, 113 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+128 entries, 121 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 123 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3768,3 +3768,26 @@ door's own test (`test_autotune_certified_directory.py`) proved the refusal; the
 beside it unread. The fix states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1`
 override in the help; the RED LINES of 2026-09-28 20:06 (release-decisions) make the runtime's
 door the only truth: a confirmation run is certified-only, and a miss is an error, never a sweep.
+
+### 121 — a proof run counted a pass's rewrite lines without turning the pass's print on
+
+The campaign script that compares each rewritten container's output with its staged reference
+(2026-10-04, `pw.sh` in the rack's workshop) wrote `[CBX] lines N` on every row, read as "the
+compiled sequence's cross-branch compensation rewrote nothing on this model". The count was a
+`grep -c '\[CBX\]'` over the run's log; the engine prints a `[CBX]` line only under
+`NBX_CROSS_BRANCH_DIAG=1` (`compiled_sequence.py`, the pass's own diagnostic), and the script
+never set it. Every row read `[CBX] lines 0`, including the Sana_1600M_4Kpx_BF16 row whose vae
+`view::31` the pass does rewrite.
+
+**What the gate said about a rewrite**: nothing. Measured on CPU on the pass's tree with the two
+fixtures of `test_an_unstamped_graph_is_refused_and_no_literal_is_rekeyed.py` (Sana's vae view,
+Ming's GQA expand and merge): with the flag unset the pass rewrote three literals and the log held
+0 `[CBX]` lines; with `NBX_CROSS_BRANCH_DIAG=1`, the same three rewrites printed 3.
+
+**Repair.** None owed to the script: the pass was deleted (the compiled sequence re-keys no
+literal; a graph not written at the symbolic fixed point is refused by name at load), so there is
+nothing left to count. The rows' `[CBX] lines 0` are void as evidence; each container's verdict
+rests on its output, judged from outside.
+
+**The lesson, in one line.** A count of a diagnostic's lines measures the diagnostic's switch
+before it measures the event; prove the count non-zero once on a case that must print.
