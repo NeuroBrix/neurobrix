@@ -44,7 +44,7 @@ def test_neurobrix_queue_is_drained_BEFORE_the_foreign_dispatch(monkeypatch):
     monkeypatch.setattr(D, "_nbx_queue_drain", lambda: events.append("drain-nbx"))
     monkeypatch.setattr(D, "_native", lambda: type(
         "N", (), {"synchronize": staticmethod(lambda: events.append("sync-ext"))})())
-    monkeypatch.setattr(D, "_buffer_for", lambda addr, ty: f"buf@{addr:#x}")
+    monkeypatch.setattr(D, "_buffer_for", lambda addr, ty, extent=None: f"buf@{addr:#x}")
 
     def _fn(*args, **kwargs):
         events.append("dispatch")
