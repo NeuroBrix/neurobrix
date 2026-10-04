@@ -1178,6 +1178,18 @@ class GraphExecutor:
         from neurobrix.core.runtime.precision_contract import registry_model_name
         return registry_model_name(getattr(self, "_cache_path", None))
 
+    def _graph_at_fixed_point(self) -> bool:
+        """Does this component declare that Forge's single write left its graph at the
+        re-propagation fixed point (`symbolic_fixed_point`, carried in the container's
+        extracted_values; the value is the writer's revision)? Such a graph carries every
+        cross-branch dimension itself, and the compiled sequence's cross-branch compensation
+        is never run on it. A streamed piece answers for its component."""
+        if self._contract_from is not None:
+            return self._contract_from._graph_at_fixed_point()
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        return bool(get_component_flag(self._registry_model_name(), self._component_name,
+                                       "symbolic_fixed_point", default=False))
+
     def precision_contract(self, compute_dtype, supports_op_pins: bool = True) -> tuple:
         """(activations_fp16_safe, fp32_op_uids, narrow_op_uids): a streamed piece's is its
         component's, resolved through its base on the whole graph at the caller's compute dtype
@@ -1544,6 +1556,7 @@ class GraphExecutor:
             activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
+            graph_at_fixed_point=self._graph_at_fixed_point(),
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)

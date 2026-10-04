@@ -175,6 +175,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model rebuilt with the current symbolic shapes no longer has its attention or decoder
+  shapes rewritten under `--compiled`.** A compatibility rewrite meant for older builds could
+  replace a fixed head count or channel count with an unrelated length expression of the same
+  traced value; on Ming-Lite-Omni-1.5 the first attention then failed on a 2 176-head key, and on
+  Sana 4K the decoder computed a wrong channel count. A rebuilt model now declares that its
+  shapes are complete and the rewrite is never applied to it; older builds are unchanged.
+
 - **Video models whose decoder works on a normalised latent decode it in the right range.** For
   models whose decoder declares per-channel latent statistics (mochi-1-preview, the Wan 2.1 / 2.2
   models, SANA-Video), the latent was mapped back into the decoder's range twice instead of once,

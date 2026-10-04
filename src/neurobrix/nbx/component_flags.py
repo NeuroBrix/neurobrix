@@ -32,6 +32,12 @@ RUNTIME_COMPONENT_FLAGS = (
     "pad_image_to_num_frames",
     "requires_fp32_compute",
     "fp16_conv_cascade_safe",
+    # Written by Forge's single write (tools/repropagate_in_place.py) on every
+    # component whose graph it leaves at the re-propagation fixed point; the
+    # value is the writer's revision. The compiled sequence's cross-branch
+    # compensation is unreachable for such a graph (core/runtime/graph_executor.py
+    # `_graph_at_fixed_point`).
+    "symbolic_fixed_point",
 )
 
 _ABSENT = object()

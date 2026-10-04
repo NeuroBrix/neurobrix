@@ -363,6 +363,7 @@ class CompiledSequence:
         '_is_multi_device',  # FGP: True when weights span multiple devices
         '_persistent_tensor_ids',  # Protected from liveness GC (e.g., hidden states for LLM)
         '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
+        '_graph_at_fixed_point',  # the component declares Forge's re-propagation fixed point: no cross-branch compensation
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
         '_sdpa_kv_layout',  # op_uid -> (k_pre_transposed, v_pre_transposed), read from the graph at compile
@@ -385,6 +386,7 @@ class CompiledSequence:
         activations_fp16_safe: bool = False,
         fp32_op_uids=None,
         narrow_op_uids=None,
+        graph_at_fixed_point: bool = False,
     ):
         """
         Initialize CompiledSequence.
@@ -401,8 +403,13 @@ class CompiledSequence:
             activations_fp16_safe: the component's precision contract
                 (DtypeEngine.activations_fp16_safe), resolved by the executor.
             fp32_op_uids: matmuls the vendor keeps in fp32 (DtypeEngine).
+            graph_at_fixed_point: the component declares that Forge's single
+                write left its graph at the re-propagation fixed point
+                (`symbolic_fixed_point`, read by the executor): the
+                cross-branch compensation is never run on it.
         """
         self.dag = dag
+        self._graph_at_fixed_point = bool(graph_at_fixed_point)
         # Architectural integer constants (profile.json config) — protected
         # from every value-matched rewrite of a shape list (see the guards).
         self._config_constants: set = set(config_constants or ())
@@ -947,6 +954,7 @@ class CompiledSequence:
         seq = CompiledSequence(
             sub_dag, self.device, self.dtype,
             amp_enabled=self.op_resolver.dtype_engine.amp_enabled,
+            graph_at_fixed_point=self._graph_at_fixed_point,
         )
         seq.compile()
         seq.bind_weights(weights)
@@ -1990,6 +1998,18 @@ class CompiledSequence:
         (avoids ambiguity). Only targets expand broadcast dims (input_dim=1)
         and view/reshape dims that merge/split symbolic dimensions.
         """
+        # THE DOOR (2026-10-04): a graph Forge's single write left at the
+        # re-propagation fixed point carries every cross-branch dimension
+        # itself; this pass can only re-key its literals by trace value.
+        # Measured on two such graphs: Ming-Lite-Omni-1.5 model.model, whose
+        # re-propagated MoE counts (s0*s1*6 - 1106, trace 4) became the only
+        # expressions of trace 3 and 4 — the GQA expand 4 and the K view 16
+        # were rewritten and the first attention saw 2176 heads at a
+        # 275-token prompt; Sana_1600M_4Kpx_BF16 vae view::31, whose literal
+        # 4096 became an expression worth 1536 at 4K. The component declares
+        # the fixed point; the pass is unreachable for it.
+        if getattr(self, "_graph_at_fixed_point", False):
+            return
         # Diagnostic kill (retained-diag-env class, §8): adjudicates
         # "is a cross-branch injection corrupting this model" in one
         # A/B run — the pass is a compensation layer for old builds,
