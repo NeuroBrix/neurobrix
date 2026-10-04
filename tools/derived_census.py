@@ -88,20 +88,73 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
                      sdpa_max_chunks: int, unhandled: collections.Counter, tiling=None,
                      tiled_tf=None, decode_kv=None):
     """[(op uid, kernel qual, key tuple)] for one component at one symbol binding. `tiling` is
-    the plan's `TilingView` for the component (its op-level tiling, empty when it has none)."""
-    from neurobrix.core.prism import runtime_widths as RW
-    from neurobrix.kernels import launch_keys as LK
-    from neurobrix.kernels.nbx_tensor import NBXDtype
-    from neurobrix.triton.symbols import SymbolResolver
-    g = runtime_graph(model, comp)
-    res = SymbolResolver(g.get("symbolic_context") or {})
-    for sid, v in symbols.items():
-        res._bind(sid, int(v))
-    T, ops = g["tensors"], g["ops"]
+    the plan's `TilingView` for the component (its op-level tiling, empty when it has none).
 
-    # Tensors computed from parameters and constants alone cannot depend on the request: their
-    # shape is the traced one, whatever their annotation says (Flex's transposed context-embedder
-    # weight annotates T5's 4096 width with the image-token symbol — 4096 at the trace).
+    A component holding a VALUE-DERIVED axis (`value_axes`) is derived at every key class of
+    that axis over its envelope at this binding: the ops outside the axis's cone once, the
+    cone's ops at each extent `census.bisect_extent` asks for — never at the trace's value
+    alone, which is one draw of the values the run computes."""
+    from neurobrix.kernels import census as _census
+    g = runtime_graph(model, comp)
+    args = (model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
+            sdpa_max_chunks, unhandled, tiling, tiled_tf, decode_kv)
+    axes = value_axes(model, comp)
+    if not axes:
+        return _derive_at(*args)
+    groups = []
+    try:
+        shape0 = _shape_fn(g, comp, symbols, {}, {})
+        for grp in axes:
+            bounded = []
+            for ax in grp:
+                lo, hi = ax.extent_range(g, shape0)
+                bounded.append((ax, lo, hi))
+            groups.append(bounded)
+    except (ValueDerivedAxisRefused, AnnotationContradiction) as e:
+        # an axis with no derivable envelope: the component is derived at the trace's extents
+        # and the model refused by name (a partial table would certify a partial model)
+        unhandled[f"{comp}: value-derived axis not classed — {e}"] += 1
+        return _derive_at(*args)
+    cone_ops = set().union(*(ax.cone_ops for grp in axes for ax in grp))
+    out = set(_derive_at(*args, skip=cone_ops))
+    for bounded in groups:
+        ops_ = set().union(*(ax.cone_ops for ax, _l, _h in bounded))
+        found = set()
+
+        def nest(i, vals, bounded=bounded, ops_=ops_, found=found):
+            if i == len(bounded):
+                got = set(_derive_at(*args, only=ops_, axis_values=vals, axes=[a for a, _l, _h in bounded]))
+                found.update(got)
+                return got
+            ax, lo, hi = bounded[i]
+            seen, here = {}, set()
+
+            def at(n):
+                if n not in seen:
+                    got = nest(i + 1, {**vals, ax.uid: n})     # every class of the inner axes at n
+                    here.update(got)
+                    seen[n] = frozenset((q_, k) for _u, q_, k in got)
+                return seen[n]
+            _census.bisect_extent(lo, hi, at)
+            if i == 0:
+                print(f"[derived] value axis {model}/{comp} {ax.uid} ({ax.kind}) {lo}..{hi}: "
+                      f"{len(set(seen.values()))} key class(es) in {len(seen)} derivation(s)", flush=True)
+            return here
+        nest(0, {})
+        out |= found
+    return sorted(out, key=lambda t: (t[0] or "", t[1], repr(t[2])))
+
+
+def _fixed_tensors(g: dict) -> set:
+    """Tensors computed from parameters and constants alone: they cannot depend on the request,
+    so their shape is the traced one, whatever their annotation says (Flex's transposed
+    context-embedder weight annotates T5's 4096 width with the image-token symbol — 4096 at the
+    trace)."""
+    key = id(g)
+    hit = _FIXED.get(key)
+    if hit is not None and hit[0] is g:
+        return hit[1]
+    T, ops = g["tensors"], g["ops"]
     fixed = set(t for t, m in T.items() if m.get("is_parameter") or m.get("constant")
                 or t.startswith(("param::", "buffer::")))
     for uid_ in g["execution_order"]:
@@ -109,6 +162,24 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
         ins_ = o_.get("input_tensor_ids") or []
         if ins_ and all(t in fixed for t in ins_):
             fixed.update(o_.get("output_tensor_ids") or [])
+    _FIXED[key] = (g, fixed)
+    return fixed
+
+
+_FIXED = {}
+
+
+def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dict):
+    """The `shape(tid)` every key reads at one binding: a parameter's stored shape, a symbolic
+    dim resolved by the runtime's `SymbolResolver`, a literal as traced — and a dim a
+    value-derived axis carries (`carried` {tid: {dim: (axis uid, fn)}}) at fn(the axis's extent)
+    when `axis_values` names that axis."""
+    from neurobrix.triton.symbols import SymbolResolver
+    res = SymbolResolver(g.get("symbolic_context") or {})
+    for sid, v in symbols.items():
+        res._bind(sid, int(v))
+    T = g["tensors"]
+    fixed = _fixed_tensors(g)
 
     def shape(tid):
         ss = T[tid].get("symbolic_shape")
@@ -125,8 +196,32 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
                 if isinstance(d, dict) and "trace" in d and i < len(conc) and d["trace"] != conc[i]:
                     raise AnnotationContradiction(f"{comp}: {tid} dim {i} ({d.get('type')}) records "
                                                   f"trace {d['trace']} for an extent of {conc[i]}")
-            return [res.resolve(d) for d in ss["dims"]]
-        return list(T[tid]["shape"])
+            out = [res.resolve(d) for d in ss["dims"]]
+        else:
+            out = list(T[tid]["shape"])
+        for dim, (ax, fn) in (carried.get(tid) or {}).items():
+            if ax in axis_values:
+                out[dim] = fn(axis_values[ax])
+        return out
+    return shape
+
+
+def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
+               sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, skip=(),
+               only=None, axis_values=None, axes=()):
+    """`derive_component`'s body at one binding — and, when `axis_values` names value-derived
+    axes, at those extents (`only`: the ops to derive, `skip`: the ops not to)."""
+    from neurobrix.core.prism import runtime_widths as RW
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    g = runtime_graph(model, comp)
+    ops = g["ops"]
+    carried = {}
+    for ax in axes:
+        for tid, dims in ax.carry.items():
+            for d, fn in dims.items():
+                carried.setdefault(tid, {})[d] = (ax.uid, fn)
+    shape = _shape_fn(g, comp, symbols, carried, axis_values or {})
 
     contract = _contract(model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
@@ -144,6 +239,8 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
     out = []
     half = cdtype in ("float16", "bfloat16")
     for uid in g["execution_order"]:
+        if uid in skip or (only is not None and uid not in only):
+            continue
         o = ops[uid]
         kind = o["op_type"]
         ins = [t for t in o["input_tensor_ids"]]
@@ -278,11 +375,385 @@ class AnnotationContradiction(ValueError):
     """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
 
 
+# ── Value-derived axes ─────────────────────────────────────────────────────────────────────────
+# An op whose OUTPUT extent is computed from its input's VALUES — `repeat_interleave` over
+# predicted repeats (a duration predictor's frames), the row count of `nonzero`, `masked_select`
+# or `unique` — leaves every dim downstream of it a literal at the trace's draw: no symbol names
+# it, and the runtime lets the actual extent win (`_meta_expand`, `_resolve_view_shape`, a scaled
+# upsample recomputing its width). The derivation classes such an axis over its ENVELOPE, read
+# from the graph alone:
+#   * the RANGE: `repeat_interleave`'s extent is the sum of its repeats, each repeat bounded by
+#     interval arithmetic over the ops that produce it (sigmoid in [0, 1], a sum over n elements
+#     n times its operand's range, a scalar division, round, clamp ...) — Kokoro's per-phoneme
+#     frames in [1, 50] from its 50-wide duration projection (the vendor's `max_dur`); a row
+#     count is in [1, numel(input)]. An unbounded range is refused by name, never guessed.
+#   * the CONE: every dim downstream that carries the axis, as a function of the extent — a dim
+#     equal to a carried input dim's traced extent inherits it; a convolution, a scaled upsample
+#     and a concatenation carry it by their own arithmetic, checked against the trace. A dim no
+#     rule explains in an extent-moving op, or a carried extent that collides with another
+#     input dim, is refused by name.
+# `derive_component` then derives the cone at every key class of the axis (`census.bisect_extent`).
+
+class ValueDerivedAxisRefused(ValueError):
+    """A value-derived axis the derivation cannot class: its envelope or its cone is not derivable
+    from the graph — named, and the model is not written."""
+
+
+_VALUE_SIZED = ("aten::repeat_interleave", "aten::nonzero", "aten::masked_select", "aten::unique",
+                "aten::_unique", "aten::_unique2", "aten::unique_dim", "aten::unique_consecutive")
+# Ops whose value range is their first operand's (a reshape, a cast, a subset of its elements).
+_SAME_VALUES = ("aten::_to_copy", "aten::to", "aten::squeeze", "aten::unsqueeze", "aten::view",
+                "aten::reshape", "aten::_unsafe_view", "aten::clone", "aten::expand", "aten::permute",
+                "aten::transpose", "aten::t", "aten::contiguous", "aten::alias", "aten::detach",
+                "aten::flatten", "aten::slice", "aten::select", "aten::lift_fresh_copy")
+# Ops whose output extents may differ from every input extent: a dim of theirs no rule explains
+# cannot be told carried or not, so it is refused rather than read as a literal.
+_EXTENT_MOVING = ("aten::view", "aten::reshape", "aten::_unsafe_view", "aten::flatten", "aten::slice",
+                  "aten::narrow", "aten::constant_pad_nd", "aten::pad", "aten::reflection_pad1d",
+                  "aten::reflection_pad2d", "aten::replication_pad1d", "aten::replication_pad2d",
+                  "aten::unfold", "aten::stack", "aten::repeat", "aten::split", "aten::split_with_sizes",
+                  "aten::chunk", "aten::pixel_shuffle", "aten::pixel_unshuffle", "aten::im2col",
+                  "aten::col2im", "aten::max_pool1d", "aten::max_pool2d", "aten::avg_pool1d",
+                  "aten::avg_pool2d", "aten::max_pool2d_with_indices", "aten::adaptive_avg_pool1d",
+                  "aten::adaptive_avg_pool2d", "aten::arange", "aten::new_zeros", "aten::new_ones")
+# upsample kinds: the position of the first per-dim scale argument (after `output_size`, and
+# after `align_corners` for the interpolating ones)
+_UPSAMPLE_SCALES = {"aten::upsample_nearest1d": 2, "aten::upsample_nearest2d": 2,
+                    "aten::upsample_nearest3d": 2, "aten::_upsample_nearest_exact1d": 2,
+                    "aten::_upsample_nearest_exact2d": 2, "aten::_upsample_nearest_exact3d": 2,
+                    "aten::upsample_linear1d": 3, "aten::upsample_bilinear2d": 3,
+                    "aten::upsample_bicubic2d": 3, "aten::upsample_trilinear3d": 3}
+
+
+def _arg(o: dict, i: int, name: str = None):
+    """An op's traced argument by position (its value for a scalar or a list), or by its
+    recorded attribute name; None when absent."""
+    at = o.get("attributes") or {}
+    if name is not None and name in at:
+        v = at[name]
+        return v.get("value") if isinstance(v, dict) else v
+    a = at.get("args") or []
+    if i < len(a) and isinstance(a[i], dict) and a[i].get("type") != "tensor":
+        return a[i].get("value")
+    return None
+
+
+def _producers(g: dict) -> dict:
+    hit = _PRODUCERS.get(id(g))
+    if hit is not None and hit[0] is g:
+        return hit[1]
+    prod = {t: u for u, o in g["ops"].items() for t in (o.get("output_tensor_ids") or [])}
+    _PRODUCERS[id(g)] = (g, prod)
+    return prod
+
+
+_PRODUCERS = {}
+
+
+def value_range(g: dict, tid: str, shape) -> tuple:
+    """(lo, hi) bounding every element of `tid`'s VALUES, by interval arithmetic over the ops that
+    produce it at the binding `shape` reads. Raises ValueDerivedAxisRefused naming the op with no
+    rule (a graph input, a parameter, a tensor-tensor arithmetic): an unbounded range is never
+    guessed."""
+    import math
+    T, ops = g["tensors"], g["ops"]
+    u = _producers(g).get(tid)
+    if u is None:
+        raise ValueDerivedAxisRefused(f"{tid} is a graph input or a stored tensor: the graph does not "
+                                      f"bound its values")
+    o = ops[u]
+    k = o["op_type"]
+    ins = o.get("input_tensor_ids") or []
+    if k in _SAME_VALUES:
+        return value_range(g, ins[0], shape)
+    if k in ("aten::sigmoid", "aten::softmax", "aten::_softmax"):
+        return (0.0, 1.0)
+    if k == "aten::tanh":
+        return (-1.0, 1.0)
+    if k in ("aten::sum", "aten::mean"):
+        lo, hi = value_range(g, ins[0], shape)
+        if k == "aten::mean":
+            return (lo, hi)
+        x = shape(ins[0])
+        dims = _arg(o, 1, "dim")
+        dims = list(range(len(x))) if dims in (None, []) else ([dims] if isinstance(dims, int) else dims)
+        n = 1
+        for d in dims:
+            n *= x[int(d) % len(x)]
+        return (n * lo, n * hi)
+    if k in ("aten::div", "aten::mul", "aten::add", "aten::sub"):
+        if len(ins) != 1:
+            raise ValueDerivedAxisRefused(f"{u} ({k}) of two tensors: no interval rule")
+        c = _arg(o, 1)
+        if not isinstance(c, (int, float)) or isinstance(c, bool):
+            raise ValueDerivedAxisRefused(f"{u} ({k}): its scalar operand is not recorded")
+        lo, hi = value_range(g, ins[0], shape)
+        if k == "aten::div":
+            if c == 0:
+                raise ValueDerivedAxisRefused(f"{u}: a division by zero")
+            a, b = lo / c, hi / c
+        elif k == "aten::mul":
+            a, b = lo * c, hi * c
+        else:
+            alpha = _arg(o, 2, "alpha")
+            s = c * (1 if alpha is None else alpha) * (1 if k == "aten::add" else -1)
+            a, b = lo + s, hi + s
+        return (min(a, b), max(a, b))
+    if k in ("aten::round", "aten::floor", "aten::ceil", "aten::trunc"):
+        lo, hi = value_range(g, ins[0], shape)
+        return (math.floor(lo), math.ceil(hi))
+    if k in ("aten::clamp", "aten::clamp_min", "aten::clamp_max", "aten::relu"):
+        lo, hi = value_range(g, ins[0], shape)
+        mn = 0 if k == "aten::relu" else (_arg(o, 1, "min") if k != "aten::clamp_max" else None)
+        mx = None if k in ("aten::relu", "aten::clamp_min") else _arg(o, 2 if k == "aten::clamp" else 1, "max")
+        if mn is not None:
+            lo, hi = max(lo, mn), max(hi, mn)
+        if mx is not None:
+            lo, hi = min(lo, mx), min(hi, mx)
+        return (lo, hi)
+    raise ValueDerivedAxisRefused(f"{u} ({k}): no interval rule bounds its values")
+
+
+class ValueAxis:
+    """One value-derived axis: the op that sizes it (`uid`), the dim it sizes, its traced extent,
+    the dims it carries downstream (`carry` {tid: {dim: fn(extent)}}) and the ops reading them
+    (`cone_ops`); `refused` names why it cannot be classed (then nothing else is trusted)."""
+
+    def __init__(self, uid, kind, out_tid, dim, trace):
+        self.uid, self.kind, self.out_tid, self.dim, self.trace = uid, kind, out_tid, dim, trace
+        self.carry = {out_tid: {dim: (lambda n: n)}}
+        self.cone_ops = {uid}
+        self.outputs = []          # graph outputs that carry the axis
+        self.refused = None
+        self.inert = False         # no autotuned kernel downstream: it moves no key
+
+    def extent_range(self, g: dict, shape) -> tuple:
+        """(lo, hi) of the axis at the binding `shape` reads — its envelope."""
+        import math
+        if self.refused:
+            raise ValueDerivedAxisRefused(f"{self.uid}: {self.refused}")
+        o = g["ops"][self.uid]
+        ins = o.get("input_tensor_ids") or []
+        numel = lambda t: math.prod(shape(t)) if shape(t) else 1
+        if self.kind == "aten::repeat_interleave":
+            a = (o.get("attributes") or {}).get("args") or []
+            rep = a[1]["tensor_id"] if len(a) > 1 and isinstance(a[1], dict) and a[1].get("type") == "tensor" else ins[0]
+            lo, hi = value_range(g, rep, shape)
+            if not (math.isfinite(lo) and math.isfinite(hi)):
+                raise ValueDerivedAxisRefused(f"{self.uid}: repeats unbounded ({lo}, {hi})")
+            n = numel(rep)
+            if rep != ins[0] and n == 1:     # one repeat for every element along `dim`
+                n = shape(ins[0])[int(_arg(o, 2, "dim") or 0)]
+            return max(1, n * math.floor(lo)), max(1, n * math.ceil(hi))
+        # a row count of `nonzero` / `masked_select` / `unique`: from one row to every element
+        return 1, max(1, numel(ins[0]))
+
+
+def _value_sized(o: dict, fixed: set):
+    """(output tid, dim) whose extent `o` computes from its input's VALUES, or None."""
+    k = o["op_type"]
+    ins = o.get("input_tensor_ids") or []
+    outs = o.get("output_tensor_ids") or []
+    if k not in _VALUE_SIZED or not ins or not outs or all(t in fixed for t in ins):
+        return None                          # a constant's values are the trace's: its extent is too
+    if k == "aten::repeat_interleave":
+        a = (o.get("attributes") or {}).get("args") or []
+        osz = ((o.get("attributes") or {}).get("kwargs") or {}).get("output_size")
+        osz = osz.get("value") if isinstance(osz, dict) else osz
+        if osz is None and len(a) > 3 and isinstance(a[3], dict):
+            osz = a[3].get("value")
+        if osz is not None:
+            return None                      # its output size is given: no value decides it
+        tensor_repeats = (len(a) == 1 and isinstance(a[0], dict) and a[0].get("type") == "tensor") or \
+                         (len(a) > 1 and isinstance(a[1], dict) and a[1].get("type") == "tensor")
+        if not tensor_repeats:
+            return None                      # an int repeat: the extent is the shape's multiple
+        dim = 0 if len(a) == 1 else int(_arg(o, 2, "dim") or 0)
+        return outs[0], dim
+    return outs[0], 0
+
+
+def _carry_op(ax: ValueAxis, g: dict, uid: str):
+    """Extend `ax.carry` through one op reading a carried tensor; raises ValueDerivedAxisRefused."""
+    T = g["tensors"]
+    o = g["ops"][uid]
+    k = o["op_type"]
+    ins = o.get("input_tensor_ids") or []
+    outs = o.get("output_tensor_ids") or []
+    probe = (ax.trace + 1, 3 * ax.trace + 7)          # two extents off the trace: tells functions apart
+    tshape = lambda t: list(T[t]["shape"])
+
+    def checked(fn, extent, what):
+        if fn(ax.trace) != extent:
+            raise ValueDerivedAxisRefused(f"{uid} ({k}): {what} gives {fn(ax.trace)} at the trace "
+                                          f"where the graph holds {extent}")
+        return fn
+    for oi, ot in enumerate(outs):
+        if ot not in T:
+            continue
+        oshape = tshape(ot)
+        dims = {}
+        for i, e in enumerate(oshape):
+            fn = None
+            if oi == 0 and k == "aten::convolution" and ins[0] in ax.carry and i >= 2 and \
+                    any(j >= 1 for j in ax.carry[ins[0]]):
+                xf = ax.carry[ins[0]]
+                if 1 in xf:
+                    raise ValueDerivedAxisRefused(f"{uid}: a convolution over carried channels")
+                if i in xf:
+                    s = (_arg(o, 3, "stride") or [1])[i - 2]
+                    p = (_arg(o, 4, "padding") or [0])[i - 2]
+                    dl = (_arg(o, 5, "dilation") or [1])[i - 2]
+                    tr = bool(_arg(o, 6, "transposed"))
+                    op_ = (_arg(o, 7, "output_padding") or [0] * 3)[i - 2] if tr else 0
+                    kk = tshape(ins[1])[i]
+                    f = xf[i]
+                    if tr:
+                        fn = (lambda n, f=f, s=s, p=p, dl=dl, kk=kk, op_=op_:
+                              (f(n) - 1) * s - 2 * p + dl * (kk - 1) + op_ + 1)
+                    else:
+                        fn = (lambda n, f=f, s=s, p=p, dl=dl, kk=kk:
+                              (f(n) + 2 * p - dl * (kk - 1) - 1) // s + 1)
+                    dims[i] = checked(fn, e, "the convolution's extent")
+                continue
+            if oi == 0 and k in _UPSAMPLE_SCALES and ins[0] in ax.carry and i >= 2:
+                if i in ax.carry[ins[0]]:
+                    sc = _arg(o, _UPSAMPLE_SCALES[k] + i - 2)
+                    if sc is None:
+                        raise ValueDerivedAxisRefused(f"{uid} ({k}): a carried extent upsampled to a "
+                                                      f"literal output size, no scale")
+                    f = ax.carry[ins[0]][i]
+                    fn = lambda n, f=f, sc=float(sc): int(f(n) * sc)
+                    dims[i] = checked(fn, e, "the upsample's scale")
+                continue
+            if oi == 0 and k == "aten::cat":
+                cd = int(_arg(o, 1, "dim") or 0) % len(oshape)
+                if i == cd and any(cd in ax.carry.get(t, {}) for t in ins):
+                    parts = [(ax.carry[t][cd] if cd in ax.carry.get(t, {}) else (lambda n, c=tshape(t)[cd]: c))
+                             for t in ins]
+                    fn = lambda n, parts=parts: sum(p(n) for p in parts)
+                    dims[i] = checked(fn, e, "the concatenation's extent")
+                    continue
+            if oi == 0 and k == "aten::constant_pad_nd" and i in ax.carry.get(ins[0], {}):
+                pad = list(_arg(o, 1, "pad") or [])       # (last-dim lo, hi, next-to-last lo, hi, ...)
+                j = len(oshape) - 1 - i
+                lo_hi = sum(pad[2 * j:2 * j + 2]) if 2 * j < len(pad) else 0
+                f = ax.carry[ins[0]][i]
+                dims[i] = checked(lambda n, f=f, d=int(lo_hi): f(n) + d, e, "the padding's extent")
+                continue
+            if oi == 0 and k == "aten::slice" and i in ax.carry.get(ins[0], {}) and \
+                    i == int(_arg(o, 1, "dim") or 0) % len(oshape):
+                st, en, sp = _arg(o, 2, "start"), _arg(o, 3, "end"), _arg(o, 4, "step")
+                f = ax.carry[ins[0]][i]
+                fn = (lambda n, f=f, st=st, en=en, sp=sp:
+                      len(range(f(n))[slice(None if st is None else int(st),
+                                            None if en is None else int(en), int(sp or 1))]))
+                dims[i] = checked(fn, e, "the slice's extent")
+                continue
+            # the generic rule: an output dim equal to a carried input dim's traced extent carries it
+            cands = [ax.carry[t][j] for t in ins if t in ax.carry for j in ax.carry[t]
+                     if j < len(tshape(t)) and tshape(t)[j] == e]
+            free = {tshape(t)[j] for t in ins if t in T for j in range(len(tshape(t)))
+                    if j not in ax.carry.get(t, {})}
+            if cands:
+                if e != 1 and e in free:
+                    raise ValueDerivedAxisRefused(f"{uid} ({k}): output dim {i} ({e}) equals both a "
+                                                  f"carried extent and another input's dim")
+                if len({tuple(c(n) for n in probe) for c in cands}) > 1:
+                    raise ValueDerivedAxisRefused(f"{uid} ({k}): output dim {i} ({e}) matches two "
+                                                  f"carried extents that differ off the trace")
+                dims[i] = cands[0]
+            elif k in _EXTENT_MOVING and e != 1 and e not in free:
+                raise ValueDerivedAxisRefused(f"{uid} ({k}): output dim {i} ({e}) moves a carried "
+                                              f"extent by no rule the derivation holds")
+        if dims:
+            ax.carry[ot] = dims
+
+
+def value_axes(model: str, comp: str) -> list:
+    """The component's value-derived axes, grouped by shared cone ops (a group is classed jointly,
+    nested; groups apart are classed apart), each with its cone — binding-free, computed once."""
+    key = (model, comp)
+    if key in _VALUE_AXES:
+        return _VALUE_AXES[key]
+    g = runtime_graph(model, comp)
+    T, ops = g["tensors"], g["ops"]
+    fixed = _fixed_tensors(g)
+    order = g["execution_order"]
+    axes = []
+    for pos, uid in enumerate(order):
+        hit = _value_sized(ops[uid], fixed)
+        if hit is None or hit[0] not in T:
+            continue
+        ot, dim = hit
+        ax = ValueAxis(uid, ops[uid]["op_type"], ot, dim, int(T[ot]["shape"][dim]))
+        reach = {ot}
+        keyed = False
+        for u in order[pos + 1:]:
+            if any(t in reach for t in (ops[u].get("input_tensor_ids") or [])):
+                reach.update(ops[u].get("output_tensor_ids") or [])
+                keyed = keyed or ops[u]["op_type"] in _KEYED_KINDS
+        if not keyed:
+            # nothing downstream launches an autotuned kernel: the axis moves no key (a vision
+            # tower's cu_seqlens from its grid, a row count only indexed) — inert, not classed
+            ax.inert = True
+            ax.outputs = [t for t in (g.get("output_tensor_ids") or []) if t in reach]
+        elif ax.trace <= 1:
+            ax.refused = (f"traced at {ax.trace}: its carried dims cannot be told from a broadcast's")
+        else:
+            try:
+                for u in order[pos + 1:]:
+                    if any(t in ax.carry for t in (ops[u].get("input_tensor_ids") or [])):
+                        ax.cone_ops.add(u)
+                        _carry_op(ax, g, u)
+            except ValueDerivedAxisRefused as e:
+                ax.refused = str(e)
+            if not ax.refused and not any(ops[u]["op_type"] in _KEYED_KINDS for u in ax.cone_ops):
+                # its values reach a keyed op, its extent none: the carried dims move no key
+                ax.inert = True
+                ax.outputs = [t for t in (g.get("output_tensor_ids") or []) if t in ax.carry]
+        if not ax.inert:
+            ax.outputs = [t for t in (g.get("output_tensor_ids") or []) if t in ax.carry]
+        axes.append(ax)
+    # two axes reaching one dim are not two axes: refused jointly
+    seen = {}
+    for ax in axes:
+        for tid, dims in ax.carry.items():
+            for d in dims:
+                other = seen.setdefault((tid, d), ax)
+                if other is not ax and not ax.refused:
+                    ax.refused = f"its extent meets {other.uid}'s in {tid} dim {d}"
+    _INERT_AXES[key] = [ax for ax in axes if ax.inert]
+    groups = []
+    for ax in (a for a in axes if not a.inert):
+        joined = [gr for gr in groups if any(a.cone_ops & ax.cone_ops for a in gr)]
+        merged = [ax] + [a for gr in joined for a in gr]
+        groups = [gr for gr in groups if gr not in joined] + [merged]
+    _VALUE_AXES[key] = groups
+    return groups
+
+
+_VALUE_AXES = {}
+_INERT_AXES = {}         # {(model, comp): [the axes no autotuned kernel reads]} — listed, never classed
+
+
+# The op kinds `_op_launches` keys — the one list: an op of any other kind launches no autotuned
+# kernel, and a value-derived axis whose descendants hold none of these moves no key.
+_KEYED_KINDS = frozenset({
+    "aten::mm", "aten::bmm", "aten::addmm", "aten::baddbmm", "aten::convolution", "aten::conv1d",
+    "aten::lstm", "aten::_fft_r2c", "aten::_fft_c2r", "aten::linear", "aten::matmul", "aten::stft",
+    "aten::istft", "aten::scaled_dot_product_attention", "aten::_scaled_dot_product_attention",
+    "aten::_scaled_dot_product_efficient_attention", "aten::_scaled_dot_product_flash_attention",
+    "aten::_scaled_dot_product_flash_attention_for_cpu"})
+
+
 def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_bf16,
                  sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks, conv_band_bytes, unhandled,
                  tile_factor=None, decode_kv=None):
     """The launches of one op; None when the op launches no autotuned kernel."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
+    if kind not in _KEYED_KINDS:
+        return None
     if True:  # noqa: SIM108 — the dispatch reads as the wrapper table it mirrors
         if kind in ("aten::mm",):
             (M, K), (Kb, N) = shape(ins[0]), shape(ins[1])
@@ -584,6 +1055,12 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
                                 tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv)
     outs = {}
+    for ax in [a for grp in value_axes(model, comp) for a in grp] + _INERT_AXES[(model, comp)]:
+        if ax.outputs and not ax.refused:
+            # the next stage would be fed this output at the trace's extent: a value-derived
+            # extent crossing a stage boundary is not derived yet — named, never fed as traced
+            unhandled[f"{comp}: value-derived axis {ax.uid} reaches its outputs "
+                      f"{', '.join(ax.outputs)} — a later stage fed from it is not derived"] += 1
     for i, tid in enumerate(g.get("output_tensor_ids") or []):
         meta = g["tensors"].get(tid) or {}
         ss = meta.get("symbolic_shape")
