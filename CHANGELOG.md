@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Large video and multimodal models stream on small unified-memory machines instead of being
+  refused.** On an 18 GB Apple machine, CogVideoX-5b-I2V, Wan2.2-I2V-A14B and Ming-Lite-Omni-1.5
+  were refused at their default request; they now run their largest components one piece at a time
+  on the GPU. The plan no longer reserves memory for components that are unloaded while the streamed
+  one runs, streams a component too when keeping it whole leaves no room for the pieces, and no longer
+  counts tensors nothing reads. A refusal on unified memory now names the streaming limit that bound
+  it rather than a host-memory figure no path uses.
+
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
   uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention

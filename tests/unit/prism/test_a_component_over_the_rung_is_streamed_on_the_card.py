@@ -143,7 +143,7 @@ def test_and_its_segments_are_cut_against_the_usable_rung_not_the_capacity(monke
     segments. The iterative flow unloads a pre_loop component after it runs and the loop's before
     post_loop, so PixArt's VAE decode (5 120 MB once its fp32 widths are priced) is never live
     beside the text encoder's segments. It now asserts peak + what the flow holds beside them,
-    read through the SOLVER's own `_resident_beside_streamed` (weights of other phases, totals of
+    read through the SOLVER's own `_resident_beside_streamed` (nothing of other phases, totals of
     the same phase; every total for a flow declaring no phases). Seen: with the solver back on the
     old reserve, the PixArt and Flex cells go RED (the plan is refused); with no reserve at all,
     every cell goes RED (peak over the usable rung)."""
