@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
+  every one of their 128 experts for every token and multiplied the unused ones by zero: correct
+  output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
+  All 48 layers now run the same routed MoE kernel as the other MoE models, in both engines.
+  If such a model's configuration and its traced graph disagree on whether the routing weights are
+  renormalised, the run now stops with a message naming both instead of following one of them.
+  A mixture-of-experts model with a router the engine cannot fuse now stops with a message naming
+  it, instead of running that layer unfused.
+
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
   uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention
@@ -24,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is cut into spatial tiles, each carrying the whole clip, was refused when the frame count was
   not of the form 4k+1 (88 frames, for example), although no tile depends on it. When the plan still
   gives a component no tile, the refusal now says why instead of "no tiling fits".
+
+- **A refusal under `--compiled` says why a component got no tile.** It said so only under
+  `--triton`. Each placement attempt now gives its own reason and the memory it was measured
+  against (for example "its tile and weights still need 666 MB" on a card with 589 MB usable).
 
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
@@ -187,6 +200,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model whose container is missing a weight is refused by name before it runs.** A weight
+  file the container lists but that is gone from disk, a weight missing from the file the
+  container says holds it, or a weight the model needs that the container does not list at all
+  used to load as nothing; the run then failed later inside an operation with
+  `'NoneType' object has no attribute 'ndim'`. Both `--triton` (compiled and sequential) and
+  `--compiled` now stop before the first operation runs — a missing file or entry when the weights
+  load, a weight the container does not list when they are bound — naming the component, each
+  missing weight and the file it was expected in. Under `--compiled`, a missing normalisation
+  weight is no longer replaced by ones and zeros. A container holding weight files without its
+  `weights_index.json` is refused the same way.
+
+- **`neurobrix validate` checks every weight a container lists, by the same rule a run applies.**
+  At the default `coherence` level it now reports each weight whose file is missing from the
+  container, or missing from the file the container says holds it, naming the weights; it used to
+  check only that the listed files existed.
+
 - **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
   On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
   kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a
@@ -197,6 +226,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never received the request's resolution, so a positional embedding computed at load time (Sana's)
   was never built and the run failed on its first addition; each piece now loads under its model's
   resolution, read again at every request.
+
 - **A language model streamed layer by layer hands its flow the same hidden states as when it runs
   whole.** When the memory plan streams a language model in pieces, the hidden states the
   generation reads after each step are now kept by the piece that computes them; before, an image

@@ -55,6 +55,16 @@ from .graph.memory_pool import MemoryPool
 from neurobrix.core.memory import MemoryManager
 
 
+def output_key(meta: Optional[dict], tid: str) -> str:
+    """The key a run returns the tensor `tid` under: its `output_name`, else the tid. ONE rule for
+    every engine's gather (torch and triton), for a `layer_streaming` component answering as a
+    whole run (`LayerStreamingStrategy._run_pieces`), and for anything standing in for a run. A
+    null name is an ABSENT name: `.get("output_name", tid)` returned None for a present-but-null
+    key and collapsed every such output onto the key None (measured 2026-09-09 building segment
+    graphs: four seam outputs declared, `{None: ...}` returned). Pure Python (R33)."""
+    return (meta or {}).get("output_name") or tid
+
+
 def _primary_output_tids(dag: dict) -> list:
     """Declared-contract-first ordering of a DAG's output tensor ids.
 
@@ -229,7 +239,6 @@ class GraphExecutor:
     #: embed + pos_embed), the Mac 2026-09-29. Read at EVERY load, never copied once at build: a
     #: piece outlives a request, and the next request may ask another resolution. None: its own.
     _component_from = None
-
     #: What a `layer_streaming` BASE's last run left behind, collected from its pieces: the
     #: component's declared outputs and its persistent tids (`enable_hidden_states_capture`),
     #: each read from the piece that produced it before that piece unloaded. A streamed base
@@ -507,13 +516,20 @@ class GraphExecutor:
         declared. Timing is safe: the graph is loaded, nothing has
         executed, and the compiled/triton sequences compile lazily after
         this call. Registry-driven declaration, never a family/model name.
+
+        The declared pass runs whenever ANY router is still unfused — not only
+        when none is fused: an llm-family graph fused undeclared at __init__
+        with 47 of 48 routers would otherwise run the 48th with its traced
+        routing, unrefused. The declared pass fuses it or refuses it by name.
         """
         self._moe_norm_topk_prob = norm_topk_prob
 
-        if self._dag and not any(
-                op.get("op_type") == "custom::moe_fused"
-                for op in self._dag.get("ops", {}).values()):
-            from .graph.moe_fusion import detect_and_fuse_moe
+        from .graph.moe_fusion import detect_and_fuse_moe, unfused_routers
+        if self._dag and unfused_routers(self._dag):
+            def _n_fused():
+                return sum(1 for op in self._dag.get("ops", {}).values()
+                           if op.get("op_type") == "custom::moe_fused")
+            n_before = _n_fused()
             self._dag = detect_and_fuse_moe(
                 self._dag, self.family,
                 norm_topk_prob=norm_topk_prob,
@@ -524,7 +540,8 @@ class GraphExecutor:
             # consumes the experts the trace never routed to; the fused
             # kernel reads them all (2026-09-13, Ming-Lite-Omni triton:
             # `moe_fused::block.0` met None — register 54).
-            self._load_what_the_rewrite_added()
+            if _n_fused() > n_before:
+                self._load_what_the_rewrite_added()
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
         #
@@ -538,6 +555,18 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     _a = op.setdefault("attributes", {})
+                    if _a.get("routing_from_graph"):
+                        # The renormalisation was READ off the traced graph (the dense
+                        # stacked block: sum + div present or not) — the vendor code's
+                        # own answer. A registry flag that contradicts it is a defect
+                        # of the data, named here, never patched over either way.
+                        if bool(_a.get("norm_topk_prob")) != bool(norm_topk_prob):
+                            raise RuntimeError(
+                                f"ZERO FALLBACK: {_uid}: the registry declares "
+                                f"norm_topk_prob={bool(norm_topk_prob)} but the traced graph "
+                                f"computes norm_topk_prob={bool(_a.get('norm_topk_prob'))} — "
+                                "fix the data at its source.")
+                        continue
                     if _a.get("routing_rewritten"):
                         # A fused op whose rewrite moved the softmax past the top-k
                         # (softmax-after-topk block shape) OWNS its renormalisation:
@@ -1820,7 +1849,8 @@ class GraphExecutor:
             # No index to read (an archive path, or a container without one):
             # the graph's names cannot be joined to the loader's, and handing
             # the graph-space set to a loader that filters by exact membership
-            # is the Wan2.2 failure again. Load everything — the safe direction.
+            # is the Wan2.2 failure again. Load everything — the safe direction; both loaders
+            # then refuse, by name, weight shards that come without their index.
             self._pending_weight_binding = None
             return None
         encodes = {k: v["encodes"] for k, v in tensors.items()
@@ -2601,8 +2631,7 @@ class GraphExecutor:
             elif compute_dtype == NBXDtype.bfloat16:
                 # Staying in bf16: the bits are already right, and the tensor
                 # is TAGGED bf16 below so they are read as bf16 and not as the
-                # uint16 they travel in (triton/constants.py does the same for
-                # the constants it loads).
+                # uint16 they travel in.
                 arr = np.ascontiguousarray(raw_u16)
             else:
                 arr = np.ascontiguousarray(fp32)
@@ -2895,9 +2924,8 @@ class GraphExecutor:
             # `{None: NBXTensor(shape=(1, 21, 2048))}`.
             #
             # A null name is an ABSENT name. `or` says that; `get`'s default
-            # does not.
-            name = info.get("output_name") or tid
-            outputs[name] = tensor
+            # does not. One rule for every engine: `output_key`.
+            outputs[output_key(info, tid)] = tensor
 
         elapsed = (_time.perf_counter() - start) * 1000
         self._last_stats = ExecutionStats(
@@ -3024,6 +3052,9 @@ class GraphExecutor:
             sym_resolver.bind_from_inputs(input_map,
                                           self._dag.get("input_tensor_ids", []),
                                           tensors)
+        # The dispatcher resolves keyword attributes itself: a symbolic one evaluates through
+        # this resolver (a scalar slot), never dropped as an unknown attribute.
+        dispatcher.symbol_resolver = sym_resolver
 
         # Tensor store: maps tensor_id → NBXTensor
         store: Dict[str, Any] = {}
@@ -3049,6 +3080,18 @@ class GraphExecutor:
                             break
                 if _w is not None:
                     store[tid] = _w
+        # A container weight an op reads and the store does not hold is refused here, by
+        # name, before the first op — the sequences' own door (R30), never a None handed to a
+        # kernel (Allegro, 2026-10-04).
+        from neurobrix.nbx.weight_presence import (
+            loader_weight_consumers, refuse_unbound_weights)
+        _key = (id(self._dag), len(self._dag.get("execution_order") or ()))
+        _cached = getattr(self, "_tseq_loader_consumers", None)
+        if _cached is None or _cached[0] != _key:     # once per graph, not per forward
+            _cached = self._tseq_loader_consumers = (_key, loader_weight_consumers(self._dag))
+        _consumers = _cached[1]
+        refuse_unbound_weights(self._dag.get("component_name") or "?",
+                               [(t, u) for t, u in _consumers.items() if t not in store], tensors)
 
         # Load inputs into store (POINT 1: cast through TritonDtypeEngine
         # to mirror DtypeEngine path at component entry — graph metadata
@@ -3605,8 +3648,12 @@ class GraphExecutor:
 
         return outputs, num_ops
 
-    def _resolve_sequential_arg(self, arg, store, sym_resolver, dispatcher):
-        """Resolve a single arg for sequential mode."""
+    def _resolve_sequential_arg(self, arg, store, sym_resolver, dispatcher, slot=None):
+        """Resolve a single arg for sequential mode. `slot` is the slot an expression is
+        evaluated for (core/runtime/symexpr.py): a top-level argument is SCALAR, a list
+        element is a SHAPE — the mirror of both compiled sequences."""
+        from neurobrix.core.runtime import symexpr as _symexpr
+        slot = _symexpr.SCALAR if slot is None else slot
         if isinstance(arg, dict):
             atype = arg.get("type")
             if atype in ("tensor", "tensor_ref"):
@@ -3635,31 +3682,32 @@ class GraphExecutor:
                         f"ran) — refused rather than passing a shorter list")
                 return items
             if atype == "symbol":
-                # Delegate to the resolver's own symbol semantics
-                # (bindings + offset, trace fallback + offset) — the
-                # mirror of triton/symbols.py _eval_expr. The previous
-                # inline form dropped the ref offset on the unbound
-                # fallback and conflated a bound value of 0 with unbound
-                # (get() defaults to 0).
+                # Delegate to the resolver's own symbol semantics (bindings +
+                # offset; an unbound symbol refuses by name) — the one evaluator
+                # of core/runtime/symexpr.py. A bound value of 0 is bound.
                 if sym_resolver:
                     return sym_resolver.resolve(arg)       # unbound: refuses by name inside
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic argument {arg.get('id')} met with no symbol "
                     f"resolver; its trace value {arg.get('trace_value', arg.get('trace'))} "
                     "is a witnessed extent, not a value")
-            if atype in ("mul", "add", "sub", "floordiv", "mod", "neg", "product"):
-                if sym_resolver:
-                    return sym_resolver.resolve(arg)       # an unbound factor refuses inside
+            if _symexpr.is_expression(arg):
+                if sym_resolver:                           # an unbound factor refuses inside
+                    if slot == _symexpr.SCALAR:
+                        return sym_resolver.resolve_scalar(arg)
+                    return sym_resolver.resolve(arg)
                 raise RuntimeError(
                     f"ZERO FALLBACK: symbolic expression of type {atype!r} met with no symbol "
                     "resolver; its trace value is a witnessed extent, not a value")
             if atype == "list":
                 items = arg.get("value", [])
-                return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+                return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher,
+                                                     _symexpr.SHAPE)
                         for item in items]
             return dispatcher.resolve_attr(arg)
         if isinstance(arg, (list, tuple)):
-            return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+            return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher,
+                                                 _symexpr.SHAPE)
                     for item in arg]
         return arg
 
@@ -3676,7 +3724,18 @@ class GraphExecutor:
         w_tid = attrs.get("topk_weights_tid")
         blended = idx_tid is not None and w_tid is not None
 
-        gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+        if attrs.get("stacked_experts"):
+            from neurobrix.triton.moe import StackedSlabPromotion
+            hidden = store.get(attrs["hidden_states_tid"])
+            if hidden is None:
+                raise RuntimeError("MoE fused (triton-sequential): hidden_states is None "
+                                   f"({attrs['hidden_states_tid']})")
+            promo = StackedSlabPromotion(store.get, hidden._device_idx)
+            gate_ws, up_ws, down_ws = expert_weight_lists(attrs, promo)
+            per_call = promo.per_call
+        else:
+            gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+            per_call = False
 
         cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
         return execute_moe_fused(
@@ -3691,6 +3750,7 @@ class GraphExecutor:
             cache_key=cache_key,
             topk_indices=store.get(idx_tid) if blended else None,
             topk_weights=store.get(w_tid) if blended else None,
+            weights_per_call=per_call,
         )
 
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):
@@ -5327,10 +5387,7 @@ class GraphExecutor:
             try:
                 tensor = self._resolver.resolve(tid)
                 # Use output_name as key if available, otherwise tensor_id
-                tensor_info = tensors_info.get(tid, {})
-                output_name = tensor_info.get("output_name")
-                key = output_name if output_name else tid
-                outputs[key] = tensor
+                outputs[output_key(tensors_info.get(tid), tid)] = tensor
             except RuntimeError as e:
                 raise RuntimeError(f"Failed to gather output '{tid}': {e}")
 
