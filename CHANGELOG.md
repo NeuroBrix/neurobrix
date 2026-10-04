@@ -175,6 +175,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wan video models step through the same timesteps as the diffusers version they ship for.** The
+  UniPC scheduler's flow schedule changed in diffusers 0.37.0; the engine now follows the formula of
+  the diffusers version the model's own scheduler configuration declares, in both engines.
+
 - **Under `--compiled`, an attention mask shorter than the sequence is no longer silently replaced.**
   A mask fixed at the length a model was converted at, used on a longer input (or, in language
   models, on a growing key-value cache), was always turned into causal attention. It now is only when the mask itself is causal; any other mask stops the
