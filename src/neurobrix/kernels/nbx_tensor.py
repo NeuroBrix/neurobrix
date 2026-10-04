@@ -3566,11 +3566,16 @@ class NBXTensor:
         if self._device == 'cpu' and self._pinned == pinned:
             return self
         dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=pinned)
-        if self._nbytes > 0:
+        # The destination is row-major: a source that is not (a transpose, a
+        # narrow on an inner axis, an expand) is laid out row-major on its own
+        # side first — one memcpy of nbytes from data_ptr is its elements only
+        # when it already is.
+        src = self if self.is_contiguous() else self.contiguous()
+        if src._nbytes > 0:
             # kind: 2 = D2H from GPU, 0 = H2H if we're re-packing CPU.
-            kind = 2 if self._device == 'cuda' else 0
-            DeviceAllocator.memcpy(dst.data_ptr(), self.data_ptr(),
-                                   self._nbytes, kind=kind)
+            kind = 2 if src._device == 'cuda' else 0
+            DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(),
+                                   src._nbytes, kind=kind)
             # A device result crossing to the host is an observation, and a
             # D2H copy has already flushed. Checking here rather than only at
             # `sync_device` matters because a decode never calls that: it

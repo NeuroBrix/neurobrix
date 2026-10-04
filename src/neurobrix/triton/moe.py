@@ -416,6 +416,22 @@ def _xfer(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     return transfer_tensor(tensor, target_dev)
 
 
+def promote_stacked_slabs(fetch, device_idx: int):
+    """A `fetch` for `expert_weight_lists` that brings a host-resident stacked
+    expert slab to the activation's device ONCE and WHOLE — one dense H2D per
+    slab — before the per-expert views are cut from it. Promoting the views
+    instead (execute_moe_fused's per-weight promotion) would copy each expert's
+    non-dense half on its own: 2E host-side strided copies and 3E transfers per
+    call. The promoted slab lives as long as the views that reference it (this
+    call), exactly like the per-weight promotion it replaces for slabs."""
+    def _fetch(tid):
+        t = fetch(tid)
+        if t is not None and getattr(t, "_device", "cuda") == "cpu":
+            return t.to_cuda(device_idx)
+        return t
+    return _fetch
+
+
 # ============================================================================
 # MAIN ENTRY POINT — FUSED EXECUTION
 # ============================================================================

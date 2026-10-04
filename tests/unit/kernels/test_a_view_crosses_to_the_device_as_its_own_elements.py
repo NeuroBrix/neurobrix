@@ -1,4 +1,5 @@
-"""`NBXTensor.to_cuda` copies a view's OWN elements, whatever its layout.
+"""`NBXTensor.to_cuda` / `to_cuda_async` / `to_cpu` copy a view's OWN elements, whatever
+its layout.
 
 The copy is one memcpy of `nbytes` from `data_ptr()`. That is the view's bytes
 only when its elements tile one dense span (contiguous, or a permutation of it —
@@ -7,7 +8,9 @@ of a stacked expert slab W_in[e][:, 0:F] out of [H, 2F] — the per-expert views
 the triton MoE promotes to the card when a weight is still on the host at the op
 (`execute_moe_fused`, the zero3 slow path). Before 2026-10-04 only an EXPAND view
 was materialised first; this one was copied as the first H*F contiguous elements
-of the slab and kept its strides — silent garbage.
+of the slab and kept its strides — silent garbage. `to_cpu` had the sibling defect:
+it copied nbytes from data_ptr into a row-major host buffer, so a transpose crossed
+as its storage order read row-major (values transposed in silence).
 
 What this test would do if the code were wrong: with the old condition the copied
 values are the slab's leading bytes, not the half — the element-by-element compare
@@ -35,6 +38,8 @@ NT.DeviceAllocator.malloc_cuda = staticmethod(malloc)
 NT.DeviceAllocator.memcpy = staticmethod(memcpy)
 NT.DeviceAllocator.set_device = staticmethod(lambda *a, **k: None)
 NT.DeviceAllocator.free_cuda = staticmethod(lambda *a, **k: None)
+NT.DeviceAllocator.memcpy_async = staticmethod(lambda dst, src, nbytes, kind=3, stream=0: ctypes.memmove(dst, src, nbytes))
+NT.DeviceAllocator.malloc_host_pinned = staticmethod(malloc)
 
 E, H, F = 3, 5, 4
 src = np.arange(E * H * 2 * F, dtype=np.float32).reshape(E, H, 2 * F)
@@ -59,6 +64,11 @@ cases = {
 for name, (view, want) in cases.items():
     got = read(view.to_cuda(0))
     assert np.array_equal(got, want), (name, got, want)
+    got = read(view.to_cuda_async(0))
+    assert np.array_equal(got, want), ("async", name, got, want)
+    # to_cpu: the host re-pack (pinned) of a host view, the D2H's sibling copy
+    got = read(view.to_cpu(pinned=True))
+    assert np.array_equal(got, want), ("to_cpu", name, got, want)
     print("OK", name)
 assert slab.select(0, 0).t().spans_densely()
 assert not slab.select(0, 1).narrow(1, F, F).spans_densely()
