@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A text request to an omni model no longer reserves memory for its speech generator.** Qwen3-Omni
+  with `--mode text` was planned as if the talker and the speech decoder (about 7.4 GB) were loaded
+  beside the language model, although only an `--mode audio` request runs them: on a 16 GB Apple
+  window the plan was refused, then, once planned, the language model was streamed in 48 small
+  segments. A text request now plans without them (6 segments at the same budget); an audio request
+  and a served session still reserve them.
+
 - **A plan refusal under `--triton` names the component that does not fit.** When a model could not
   be planned, the message could blame a component the planner had already split into tiles, or
   suggest a tile count for a component that cannot be tiled. It now marks tiled components as not

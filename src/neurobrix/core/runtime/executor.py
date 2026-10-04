@@ -29,6 +29,7 @@ from neurobrix.nbx.cache import ensure_extracted
 
 # Import modular components
 from neurobrix.core.flow import FlowContext, get_flow_handler
+from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.runtime.resolution.input_resolver import InputResolver
 from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
 from neurobrix.core.runtime.resolution.output_extractor import OutputExtractor
@@ -185,7 +186,7 @@ class RuntimeExecutor:
                 # plain AR flow silently drops the speech leg (the
                 # warm-daemon text-only prompt→wav class, 2026-08-08).
                 _wants_speech = (
-                    str(_resolved.get("global.mode") or "") == "audio"
+                    requests_speech(_resolved.get("global.mode"))
                     and bool(flow.get("speech")))
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
                         and not _has_modal and not _lm_splice
