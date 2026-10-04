@@ -25,7 +25,7 @@ from neurobrix.nbx.neurotax import normalize_tensor_name_strict
 
 # The transducer joint's three linears as the vendor names them (NeMo `joint.enc`, `joint.pred`,
 # `joint.joint_net.2`), keyed by the container's parser — the engine never matches the raw spelling
-# (the neurotaxe's rule 8; NeuroTax 5.1 renamed `enc` -> `enc_proj`, `pred` -> `pred_proj`).
+# (the neurotaxe's rule 8; the complete vocabulary of 2026-10-04 names `enc` `enc_proj`, `pred` `pred_proj`).
 _JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
     ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
     ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),

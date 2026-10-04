@@ -39,7 +39,7 @@ _TTS_LLM_SEED = 1234
 
 # The vocoder's token table, found by its canonical token (the neurotaxe's rule 8): the vendors spell it
 # `input_embedding`, `embed_tokens`, `wte`, `shared` ...; the parser names every one `token_embed`.
-# It was `"embedding" in weight_name`, which NeuroTax 5.1 (`input_embedding` -> `token_embed`) would miss.
+# It was `"embedding" in weight_name`, which the complete vocabulary (`input_embedding` -> `token_embed`) misses.
 _TOKEN_EMBED = SynonymRegistry.resolve("embed_tokens")
 
 

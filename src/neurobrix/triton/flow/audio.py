@@ -19,6 +19,11 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.memory_pool import release_flow_memory
 
 
+#: The stage executions the audio flow runs. Every execution a container of this flow declares
+#: must be one of them (`tests/unit/runtime/test_every_declared_flow_is_reached.py`); the same
+#: set in both engines (R30).
+STAGE_EXECUTIONS = ("forward",)
+
 class TritonAudioEngine:
     """
     Triton-mode audio flow orchestrator.
@@ -47,9 +52,7 @@ class TritonAudioEngine:
         """Return compute dtype as a STRING (e.g. "float16", "bfloat16").
 
         ZERO TORCH IN TRITON: this method MUST NOT import or return
-        torch.dtype. Stage handlers that need a torch.dtype (accepted
-        torch-boundary subroutines in core/flow/stages/) are responsible
-        for converting the string to torch.dtype themselves.
+        torch.dtype.
 
         Resolved from the Prism plan via the triton-side resolver
         (`triton/dtype.py:resolve_compute_dtype`) — the plan is the
@@ -95,7 +98,7 @@ class TritonAudioEngine:
                     f"Available: {list(self.ctx.executors.keys())}"
                 )
 
-            if execution == "forward":
+            if execution in STAGE_EXECUTIONS:
                 self._execute_forward_stage(stage)
             else:
                 # The former native_kokoro / diffusion / native_acoustic_decoder

@@ -53,7 +53,7 @@ def test_both_engines_ask_the_gate_before_phonemising(monkeypatch):
     from pathlib import Path
     from neurobrix.core.module.audio import g2p as G
     root = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
-    for rel in ("core/flow/stages/kokoro.py", "triton/audio_frontend.py"):
+    for rel in ("core/audio_frontend.py", "triton/audio_frontend.py"):
         src = (root / rel).read_text()
         assert "phoneme_ids(" in src, f"{rel} does not phonemise through phoneme_ids"
         assert "g2p_phonemes(" not in src, f"{rel} phonemises around the gate"
