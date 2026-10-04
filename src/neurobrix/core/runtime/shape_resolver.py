@@ -33,6 +33,8 @@ import os as _os_shape
 # (2026-09-05 profile: 16,802 environ reads per whisper request).
 _SHAPE_DEBUG = _os_shape.environ.get("NBX_DEBUG") == "1"
 
+from neurobrix.core.runtime import symexpr as _symexpr
+
 # Import SymInt support (from core/runtime, no trace/ dependency)
 try:
     from neurobrix.core.runtime.symint import SymInt
@@ -370,141 +372,30 @@ class SymbolicShapeResolver:
         # Unknown type - return as-is
         return value
 
-    def _resolve_symint_dict(self, data: Dict[str, Any]) -> int:
-        """
-        Resolve a SymInt serialized as a dict.
+    def _symbol_value(self, symbol_id: str, node: Any) -> int:
+        """The bound value of a symbol, or a refusal naming it (the shared evaluator's callback)."""
+        if symbol_id in self._runtime_values:
+            return self._runtime_values[symbol_id]
+        info = self._symbols.get(symbol_id) or {}
+        trace = (node or {}).get("trace", (node or {}).get("trace_value", info.get("trace_value")))
+        raise ShapeResolutionError(
+            f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
+            f"{info.get('source')}) is not bound at runtime; its trace value "
+            f"{trace} is a witnessed extent, not a value. Bound: {sorted(self._runtime_values)}.")
 
-        Handles:
-        - {"type": "symbol", "id": "s0", "trace": 2}
-        - {"type": "mul", "left": {...}, "right": {...}, "trace": 240}
-        - etc.
-        """
-        type_str = data.get("type", "")
+    def _resolve_symint_dict(self, data: Dict[str, Any], slot: str = _symexpr.SHAPE):
+        """Evaluate a serialized expression — the ONE vocabulary of `core/runtime/symexpr.py`,
+        shared with the Triton resolver. A SHAPE slot (the default: extents, size lists) refuses
+        a real by name; a SCALAR slot (an op's scalar argument) takes the int or float."""
+        return _symexpr.evaluate(data, self._symbol_value, slot)
 
-        # Constant
-        if type_str == "const" or "value" in data:
-            return data.get("value", data.get("trace", 0))
-
-        # Symbol reference
-        if type_str == "symbol":
-            # Handle both formats: (id/trace) and graph format (symbol_id/trace_value)
-            symbol_id = data.get("id") or data.get("symbol_id")
-            if symbol_id in self._runtime_values:
-                return self._runtime_values[symbol_id]
-            info = self._symbols.get(symbol_id) or {}
-            raise ShapeResolutionError(
-                f"ZERO FALLBACK: symbol '{symbol_id}' ({info.get('name')}, binds from "
-                f"{info.get('source')}) is not bound at runtime; its trace value "
-                f"{data.get('trace', data.get('trace_value'))} is a witnessed extent, not a "
-                f"value. Bound: {sorted(self._runtime_values)}.")
-
-        # Unary: neg
-        if type_str == "neg":
-            operand = self._resolve_symint_dict(data["operand"])
-            return -operand
-
-        # Binary operations
-        if type_str in ("add", "sub", "mul", "floordiv", "mod"):
-            left = self._resolve_single(data["left"])
-            right = self._resolve_single(data["right"])
-
-            if type_str == "add":
-                return left + right
-            elif type_str == "sub":
-                return left - right
-            elif type_str == "mul":
-                return left * right
-            elif type_str == "floordiv":
-                return left // right
-            elif type_str == "mod":
-                return left % right
-
-        # Product: multiply factors together (e.g., s1 * s2)
-        if type_str == "product":
-            factors = data.get("factors", [])
-            if not factors:
-                raise ShapeResolutionError("ZERO FALLBACK: a product expression with no factors")
-            result = 1
-            for factor in factors:
-                result *= self._resolve_single(factor)
-            return result
-
-        # Scaled product: (scale_h * factors[0]) * (scale_w * factors[1])
-        # Used by VAE expand operations that scale height/width
-        if type_str == "scaled_product":
-            factors = data.get("factors", [])
-            scale_h = data.get("scale_h", 1)
-            scale_w = data.get("scale_w", 1)
-
-            if len(factors) >= 2:
-                h_val = self._resolve_single(factors[0])
-                w_val = self._resolve_single(factors[1])
-                return (scale_h * h_val) * (scale_w * w_val)
-            elif len(factors) == 1:
-                val = self._resolve_single(factors[0])
-                return scale_h * scale_w * val
-            else:
-                raise ShapeResolutionError("ZERO FALLBACK: a scaled product with no factors")
-
-        # Scaled symbol: scale * symbol_value
-        if type_str == "scaled_symbol":
-            symbol_id = data.get("symbol_id") or data.get("id")
-            scale = data.get("scale", 1)
-            if symbol_id in self._runtime_values:
-                return scale * self._runtime_values[symbol_id]
-            raise ShapeResolutionError(
-                f"ZERO FALLBACK: symbol '{symbol_id}' is not bound at runtime (scaled symbol)")
-
-        raise ShapeResolutionError(f"Unknown SymInt type: {type_str}")
-
-    def _evaluate_expression(self, expr: str) -> int:
-        """
-        Evaluate a symbolic expression.
-
-        Args:
-            expr: Expression string like "s0 * s1" or "s1 / 2"
-
-        Returns:
-            Evaluated integer result
-        """
-        # Replace symbols with values
-        resolved_expr = expr
-        for symbol_id, value in self._runtime_values.items():
-            resolved_expr = resolved_expr.replace(symbol_id, str(value))
-
-        # Safe evaluation (only arithmetic via AST)
-        try:
-            import ast
-            import operator
-            allowed_chars = set("0123456789+-*/() ")
-            if not all(c in allowed_chars for c in resolved_expr):
-                raise ShapeResolutionError(
-                    f"Unsafe expression: {expr} -> {resolved_expr}"
-                )
-            if len(resolved_expr) > 256:
-                raise ShapeResolutionError(
-                    f"Expression too long ({len(resolved_expr)} chars): {expr}"
-                )
-            _safe_ops = {
-                ast.Add: operator.add, ast.Sub: operator.sub,
-                ast.Mult: operator.mul, ast.FloorDiv: operator.floordiv,
-                ast.Div: operator.truediv, ast.USub: operator.neg,
-            }
-            def _safe_eval(node):
-                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-                    return node.value
-                if isinstance(node, ast.BinOp) and type(node.op) in _safe_ops:
-                    return _safe_ops[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
-                if isinstance(node, ast.UnaryOp) and type(node.op) in _safe_ops:
-                    return _safe_ops[type(node.op)](_safe_eval(node.operand))
-                raise ShapeResolutionError(f"Unsafe AST node: {ast.dump(node)}")
-            tree = ast.parse(resolved_expr, mode='eval')
-            result = _safe_eval(tree.body)
-            return int(result)
-        except Exception as e:
-            raise ShapeResolutionError(
-                f"Failed to evaluate expression '{expr}': {e}"
-            )
+    def resolve_scalar(self, value: Any) -> Any:
+        """Resolve an op's SCALAR argument: a symbol or an expression evaluates in the scalar
+        slot (a `linspace` bound may be real); a dict outside the vocabulary refuses by name;
+        a plain number is returned as it stands."""
+        if isinstance(value, (dict, str)):
+            return self._resolve_symint_dict(value, _symexpr.SCALAR)
+        return value
 
     def resolve_tensor_shape(
         self,
