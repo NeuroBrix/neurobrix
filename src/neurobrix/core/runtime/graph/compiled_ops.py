@@ -399,7 +399,11 @@ class CompiledOpResolver:
         return rsqrt_stable
 
     def _make_pinned_rand(self, op_name: str) -> Callable:
-        """[PINNED NOISE] see the _resolve_op_func registration comment."""
+        """The graph's random draws. [PINNED NOISE] first (see the
+        _resolve_op_func registration comment); else the run's generator
+        (`graph/run_generator`: the one that draws the initial and scheduler
+        noise, as the vendor pipeline's single generator); else, on a run
+        with none (seedless), torch's global stream."""
         is_uniform = op_name in ("rand", "rand_like")
         is_like = op_name.endswith("_like")
         aten_fn = getattr(torch.ops.aten, op_name)
@@ -407,15 +411,19 @@ class CompiledOpResolver:
         def pinned_rand(*args, **kwargs):
             from neurobrix.kernels.rng_pin import (
                 pinned_seed, pinned_normal, pinned_uniform)
-            if pinned_seed() is None:
-                return aten_fn(*args, **kwargs)
+            from neurobrix.core.runtime.graph import run_generator
             if is_like and args and isinstance(args[0], torch.Tensor):
                 ref = args[0]
-                shp, dev, dt = list(ref.shape), ref.device, ref.dtype
+                shp = list(ref.shape)
+                dev = kwargs.get("device") or ref.device
+                dt = kwargs.get("dtype") or ref.dtype
             else:
                 shp = list(args[0]) if args else []
                 dev = kwargs.get("device") or self.device
                 dt = kwargs.get("dtype") or torch.float32
+            if pinned_seed() is None:
+                drawn = run_generator.draw(op_name, shp, dt, dev)
+                return drawn if drawn is not None else aten_fn(*args, **kwargs)
             arr = pinned_uniform(shp) if is_uniform else pinned_normal(shp)
             return torch.from_numpy(arr).to(device=dev, dtype=dt)
         return pinned_rand
