@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model.** Both engines run each encoder once, before the language model, and release it; the
   planner counted them as loaded during the whole generation. For MiniCPM-o-4_5 that was 1.9 GB of
   memory no moment holds, taken from the language model's streaming budget and its cache. The
-  speech output components, which are loaded beside the language model, are still counted.
+  speech output components, which are loaded beside the language model, are still counted, and
+  when the model is served, where its output head and speech components stay loaded from one
+  request to the next, they are counted beside each encoder too.
 
 - **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
   counted the transposed copy of every linear layer's weight as working memory, although the Triton

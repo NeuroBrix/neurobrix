@@ -222,8 +222,13 @@ def _vlm_phases(flow: Dict[str, Any], engine: Optional[str] = None, served: bool
     # what the decode holds). The generative-speech leg loads its talker groups beside the
     # still-loaded model (the CFM leg unloads the model after it) or right after releasing it (the
     # deepstack leg): one phase holds the model, its head and every speech component — the bound for
-    # both legs and for a request that runs no leg. A component no key names is in no phase: Prism
-    # holds it concurrent with every other.
+    # both legs and for a request that runs no leg. NEITHER ENGINE EVER UNLOADS THE HEAD OR A SPEECH
+    # COMPONENT: `_compute_logits` loads the head and nothing releases it, and the speech legs
+    # (speech.py, speech_cfm.py, both engines) unload only the model. A single run ends there; a
+    # SERVED session that loads on demand is not persistent, so from its second request every tower
+    # and projection loads beside the head and the speech components left loaded by the request
+    # before — a served plan's tower phases hold them too. A component no key names is in no phase:
+    # Prism holds it concurrent with every other.
     vlm = flow.get("vlm") or {}
     lm = vlm.get("lm_component")
     if not lm:
@@ -233,7 +238,8 @@ def _vlm_phases(flow: Dict[str, Any], engine: Optional[str] = None, served: bool
     speech = {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
     head = vlm.get("head_component")
     decode = {lm} | ({head} if head else set()) | speech
-    return [{t} for t in towers if t and t not in decode] + [decode]
+    left = (decode - {lm}) if served else set()   # what a request leaves loaded for the next
+    return [{t} | left for t in towers if t and t not in decode] + [decode]
 
 
 #: flow type -> the sets of components its handlers hold loaded AT THE SAME TIME, from the topology's
