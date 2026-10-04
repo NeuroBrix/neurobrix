@@ -372,6 +372,7 @@ class CompiledSequence:
         '_op_blocks_cache',  # Cache for get_op_blocks() — immutable post-compile
         '_const_fold_plan',  # dag["_optim_const_fold"] partition, executed once at bind (Phase 2)
         '_const_fold_sig',  # identity signature of the partition's external inputs at last fold
+        '_loader_consumers',  # container weights an op reads -> first reader, checked at every bind
     )
 
     def __init__(
@@ -432,6 +433,10 @@ class CompiledSequence:
 
         # Tensor categories
         self._weight_tensor_ids: List[str] = []
+        # Container weights an op reads → its first reader (`loader_weight_consumers`, the
+        # triton sequence's own function, R30), taken at compile before the elimination
+        # passes; checked at every weight bind.
+        self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_tensor_ids: List[str] = []
         self._output_tensor_ids: List[str] = []
 
@@ -580,6 +585,8 @@ class CompiledSequence:
         if self._compiled:
             return
 
+        from neurobrix.triton.weight_loader import loader_weight_consumers   # torch-free
+        self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_metadata = self.dag.get("ops", {})
         execution_order = self.dag.get("execution_order", [])
@@ -3058,7 +3065,21 @@ class CompiledSequence:
         # default). Only constant_*/shape-[0]/missing-norm slots are
         # touched — regular weight slots left unprovided by zero3
         # block-by-block streaming are intentionally NOT allocated.
+        # A container weight an op reads and the weights do not hold is refused here, by
+        # name, before any op runs — never left None for its first reader, and never filled
+        # in by the defaults below (R30 mirror of TritonSequence.bind_weights, which has no
+        # such defaults; Allegro, 2026-10-04). Checked BEFORE the defaults: a `.norm.` weight
+        # the container lacks would otherwise run as ones here and be refused under --triton.
         tensors_meta = self.dag.get("tensors", {})
+        from neurobrix.triton.weight_loader import (   # torch-free
+            loader_weight_consumers, refuse_unbound_weights)
+        if self._loader_consumers is None:
+            self._loader_consumers = loader_weight_consumers(self.dag)
+        unbound = [(tid, uid) for tid, uid in self._loader_consumers.items()
+                   if tid in self._tensor_id_to_slot
+                   and self._arena[self._tensor_id_to_slot[tid]] is None]
+        refuse_unbound_weights(self.dag.get("component_name") or "?", unbound, tensors_meta)
+
         for tensor_id in self._weight_tensor_ids:
             slot = self._tensor_id_to_slot[tensor_id]
             if self._arena[slot] is not None:

@@ -376,6 +376,9 @@ class TritonSequence:
         # Mappings (built during compile)
         self._tid_to_slot: Dict[str, int] = {}
         self._weight_ids: List[str] = []
+        # Container weights an op reads → its first reader (`loader_weight_consumers`),
+        # taken at compile before the elimination passes; checked at every weight bind.
+        self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_ids: List[str] = []
         self._output_ids: List[str] = []
 
@@ -509,6 +512,8 @@ class TritonSequence:
 
     def compile(self):
         """Compile graph.json into op list + arena."""
+        from .weight_loader import loader_weight_consumers
+        self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_raw = self.dag.get("ops", {})
         exec_order = self.dag.get("execution_order", [])
@@ -2923,6 +2928,11 @@ class TritonSequence:
         # weights do not"). Re-narrowing from a stale original reads freed
         # arena memory. Mirror of the compiled bind_weights (R30).
         self._seq_constant_originals.clear()
+        consumers = self._loader_consumers
+        if consumers is None:
+            from .weight_loader import loader_weight_consumers
+            consumers = self._loader_consumers = loader_weight_consumers(self.dag)
+        unbound = []
         for tid in self._weight_ids:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")
@@ -2950,6 +2960,15 @@ class TritonSequence:
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
                     tensor = tensor.t()
                 self._arena[self._tid_to_slot[tid]] = tensor
+            elif tid in consumers:
+                unbound.append((tid, consumers[tid]))
+        # A container weight an op reads and the weights do not hold is refused here, by
+        # name, before any op runs — never left None for its first reader (Allegro,
+        # 2026-10-04: `aten.convolution::0` met None for `post_quant_conv.weight`).
+        if unbound:
+            from .weight_loader import refuse_unbound_weights
+            refuse_unbound_weights(self.dag.get("component_name") or "?", unbound,
+                                   self.dag.get("tensors", {}))
         # const_fold partition (optim Phase 2): compute the frontier
         # constants once with this bind's weights — fills the
         # folded_const weight slots, before device classification.
