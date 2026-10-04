@@ -45,6 +45,8 @@ import time
 import torch
 from typing import Dict, List, Optional
 
+from ..table_gather import gather_rows
+
 
 def _coerce_torch_dtype(dt) -> torch.dtype:
     """Accept either torch.dtype (native engine) or string (Triton engine).
@@ -430,8 +432,7 @@ def _execute_native_text_encoder(engine, comp_name: str) -> None:
 
     with torch.inference_mode():
         # Embedding
-        embed_w = w["embed.weight"].to(device=device, dtype=dtype)
-        x = torch.nn.functional.embedding(input_ids.to(device), embed_w)
+        x = gather_rows(w["embed.weight"], input_ids, device=device, dtype=dtype)
         # x: [B, seq, 512]
         x = x.transpose(1, 2)  # [B, 512, seq]
 

@@ -15,7 +15,6 @@ Architecture (Strategy Pattern):
 import os
 import json
 import torch
-import torch.nn.functional as F
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
     from neurobrix.core.module.autoregressive.generator import AutoregressiveGenerator
 
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
 
 _SENTINEL = object()
@@ -179,8 +179,9 @@ class GraphLMSession:
                 raise RuntimeError(
                     "ZERO FALLBACK: Graph expects inputs_embeds but no embedding weight found."
                 )
-            with torch.no_grad():
-                inputs_embeds = F.embedding(input_ids, embed_weight)
+            # The one lookup rule (`gather_rows`): the rows are delivered on
+            # the device this session feeds its graph from.
+            inputs_embeds = gather_rows(embed_weight, input_ids, device=device)
             run_inputs = {"inputs_embeds": inputs_embeds}
             if 'position_ids' in self.graph_inputs:
                 run_inputs["position_ids"] = self._shape_positions(position_ids)
@@ -217,7 +218,7 @@ class GraphLMSession:
             if self.uses_embeds:
                 embed_weight = self.executor.get_embed_tokens()
                 if embed_weight is not None:
-                    self._accumulated_embeds = F.embedding(input_ids, embed_weight)
+                    self._accumulated_embeds = gather_rows(embed_weight, input_ids, device=device)
             else:
                 self._accumulated_ids = input_ids.clone()
 
@@ -272,6 +273,10 @@ class GraphLMSession:
             if self._accumulated_embeds is not None:
                 # Accumulate embeds (VQ image path)
                 embed_to_add = inputs_embeds if inputs_embeds is not None else self._embed_from_ids(input_ids)
+                # The new rows join the accumulated context where it lives
+                # (prefill left it on the table's device) — the mirror of
+                # the ids path below.
+                embed_to_add = embed_to_add.to(self._accumulated_embeds.device)
                 if embed_to_add.shape[0] != self._accumulated_embeds.shape[0]:
                     embed_to_add = embed_to_add.expand(self._accumulated_embeds.shape[0], -1, -1).contiguous()
                 self._accumulated_embeds = torch.cat([self._accumulated_embeds, embed_to_add], dim=1)
@@ -354,8 +359,7 @@ class GraphLMSession:
         embed_weight = self.executor.get_embed_tokens()
         if embed_weight is None:
             raise RuntimeError("ZERO FALLBACK: Graph expects inputs_embeds but no embedding weight found.")
-        with torch.no_grad():
-            return F.embedding(input_ids, embed_weight)
+        return gather_rows(embed_weight, input_ids, device=input_ids.device)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
