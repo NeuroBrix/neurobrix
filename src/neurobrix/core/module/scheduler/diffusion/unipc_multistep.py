@@ -82,6 +82,12 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
         # Flow matching support (Wan2.1 and newer flow models).
         self.use_flow_sigmas = validated.get("use_flow_sigmas", False)
         self.flow_shift = validated.get("flow_shift", 1.0)
+        # The flow-sigma formula changed upstream (diffusers PR #12109, first
+        # released in 0.37.0); the container's DECLARED diffusers version selects
+        # it — read from the raw config (the validator strips `_` keys).
+        self.flow_sigma_formula = (
+            unipc_flow_sigma_formula(config.get("_diffusers_version"))
+            if self.use_flow_sigmas else None)
 
         # ZERO FALLBACK: solver_type must be bh1 or bh2 (UniPC has no other
         # variants; legacy midpoint/heun/logrho map to bh2 in diffusers, but we
@@ -164,11 +170,8 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
             #   sigmas = 1 - alphas
             #   sigmas = flip(flow_shift*sigmas/(1+(flow_shift-1)*sigmas))[:-1]
             #   timesteps = sigmas * num_train_timesteps
-            alphas = np.linspace(1, 1 / self.num_train_timesteps, num_inference_steps + 1)
-            sigmas = 1.0 - alphas
-            sigmas = np.flip(
-                self.flow_shift * sigmas / (1 + (self.flow_shift - 1) * sigmas)
-            )[:-1].copy()
+            sigmas = unipc_flow_sigmas(self.flow_sigma_formula, num_inference_steps,
+                                       self.num_train_timesteps, self.flow_shift)
             timesteps = (sigmas * self.num_train_timesteps).copy()
 
             if self.final_sigmas_type == "sigma_min":
@@ -724,3 +727,55 @@ class UniPCMultistepScheduler(DiffusionSchedulerBase):
     def from_config(cls, config: Dict[str, Any]) -> "UniPCMultistepScheduler":
         """Create scheduler from NBX config."""
         return cls(config)
+
+
+UNIPC_FLOW_SIGMAS_LINSPACE_FROM = (0, 37, 0)
+
+
+def unipc_flow_sigma_formula(declared_version) -> str:
+    """Which flow-sigma formula a container's declared diffusers version computes.
+
+    diffusers <= 0.36: `sigmas = flip(shift(1 - linspace(1, 1/N, n+1)))[:-1]`.
+    diffusers >= 0.37.0 (PR #12109, https://github.com/huggingface/diffusers/pull/12109,
+    commit 7a02fadad3, released 2026-03-05): `sigmas = shift(linspace(1, 1/N, n+1)[:-1])`,
+    the first sigma nudged by 1e-6 when it equals 1. At 4 steps, shift 3:
+    timesteps 999/899/749/499 against 999/900/750/500. The version is the
+    container's own declaration (scheduler_config.json `_diffusers_version`),
+    never a model name; a 0.37.0 development build is refused — the change
+    landed during that cycle, so the declaration does not say which formula
+    the config was written against.
+    """
+    import re
+    if not declared_version:
+        raise SchedulerConfigError(
+            "ZERO FALLBACK: UniPCMultistepScheduler with use_flow_sigmas needs the "
+            "container's declared `_diffusers_version` to select the flow-sigma "
+            "formula (it changed in diffusers 0.37.0); the scheduler config has none.")
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", str(declared_version))
+    if not m:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: unreadable `_diffusers_version` {declared_version!r}.")
+    base, suffix = tuple(int(g) for g in m.groups()[:3]), m.group(4)
+    if base == UNIPC_FLOW_SIGMAS_LINSPACE_FROM and "dev" in suffix:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: `_diffusers_version` {declared_version!r} is a development "
+            f"build of the release that changed the UniPC flow-sigma formula "
+            f"(diffusers PR #12109); it does not say which formula it carries.")
+    return "linspace" if base >= UNIPC_FLOW_SIGMAS_LINSPACE_FROM else "one_minus_alphas"
+
+
+def unipc_flow_sigmas(formula: str, num_inference_steps: int, num_train_timesteps: int,
+                      flow_shift: float):
+    """The flow sigmas (without the terminal one) of the selected formula."""
+    import numpy as np
+    if formula == "one_minus_alphas":
+        alphas = np.linspace(1, 1 / num_train_timesteps, num_inference_steps + 1)
+        sigmas = 1.0 - alphas
+        return np.flip(flow_shift * sigmas / (1 + (flow_shift - 1) * sigmas))[:-1].copy()
+    if formula == "linspace":
+        sigmas = np.linspace(1, 1 / num_train_timesteps, num_inference_steps + 1)[:-1]
+        sigmas = flow_shift * sigmas / (1 + (flow_shift - 1) * sigmas)
+        if np.fabs(sigmas[0] - 1) < 1e-6:
+            sigmas[0] -= 1e-6
+        return sigmas
+    raise SchedulerConfigError(f"ZERO FALLBACK: unknown UniPC flow-sigma formula {formula!r}.")
