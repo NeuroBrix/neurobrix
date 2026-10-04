@@ -54,7 +54,7 @@ def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
         spec.setdefault("mask_channels", 4)
         spec.setdefault("channel_dim", 1)
     elif style == "cogvideox":
-        # CogVideoX-I2V: scalar-scaled, temporally-padded image latent, no mask.
+        # CogVideoX-I2V: the encoded (already scaled) image latent, temporally padded, no mask.
         # State is frames-first [B, T, C, H, W], so the channel-concat is dim 2.
         spec.setdefault("channel_dim", 2)
     elif style == "state_video_mask":
@@ -77,21 +77,6 @@ def condition_channel_dim(ctx: Any, loop_comp: str) -> int:
     """
     spec = conditioning_spec(ctx, loop_comp)
     return int(spec.get("channel_dim", 1)) if spec else 1
-
-
-def _vae_scaling(ctx: Any) -> tuple:
-    """Read (scaling_factor, invert_scale_latents) from the vae profile.
-
-    Scalar latent scaling for VAEs without per-channel mean/std (CogVideoX):
-    `latent = scaling_factor * latent` (or `1/scaling_factor` when inverted),
-    mirroring the vendor pipeline. Data-driven, never hardcoded.
-    """
-    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
-    prof = json.loads(prof_path.read_text())
-    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
-    sf = cfg.get("scaling_factor") or prof.get("scaling_factor")
-    invert = bool(cfg.get("invert_scale_latents") or prof.get("invert_scale_latents"))
-    return (float(sf) if sf else None), invert
 
 
 def _vae_temporal_ratio(ctx: Any) -> Optional[int]:
@@ -170,8 +155,8 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Ten
     """Build the per-step-invariant conditioning tensor for the active style.
 
     Multi-style, data-driven (spec["style"]): "wan" (frame-mask + per-channel
-    mean/std norm, channels-first), "cogvideox" (scalar-scaled, temporally-
-    padded image latent, no mask, frames-first) or "state_video_mask"
+    mean/std norm, channels-first), "cogvideox" (the encoded, already scaled
+    image latent, temporally padded, no mask, frames-first) or "state_video_mask"
     (Allegro-TI2V: VAE-encoded masked video + temporally-folded pixel mask,
     channels-first). Returns None if the vae_encoder output is not yet
     resolved.
@@ -184,11 +169,17 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Ten
 
 
 def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
-    """CogVideoX-I2V conditioning: scalar-scaled VAE image latent, temporally
-    padded (frame 0 = image, rest zeros) to the denoiser's latent frame count,
-    NO mask, frames-first [B, T, C, H, W]. Mirrors
-    CogVideoXImageToVideoPipeline.prepare_latents (the patch_size_t branch is a
-    no-op for models with patch_size_t=None, e.g. CogVideoX-5b-I2V).
+    """CogVideoX-I2V conditioning: the encoded image latent, temporally padded
+    (frame 0 = image, rest zeros) to the denoiser's latent frame count, NO mask,
+    frames-first [B, T, C, H, W]. Mirrors CogVideoXImageToVideoPipeline.prepare_latents
+    (the patch_size_t branch is a no-op for models with patch_size_t=None, e.g.
+    CogVideoX-5b-I2V).
+
+    The vae_encoder component's output IS the vendor's scaled latent: its traced
+    graph ends with `mode * scaling_factor` (invert-aware) and the frames-first
+    permute, as for state_video_mask below. Scaling it again here conditioned the
+    denoiser on scaling_factor**2 * mode (0.49x for CogVideoX-5b-I2V, against the
+    vendor's 0.7x on the same image).
     """
     cond_comp = spec["condition_component"]
     img = ctx.variable_resolver.resolved.get(f"{cond_comp}.output_0")
@@ -198,9 +189,6 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
         return None
     _, _, latent_channels = _vae_latent_stats(ctx)
     img = _to_channels_first(img, latent_channels)  # [B, C, F, H, W], F=1
-    sf, invert = _vae_scaling(ctx)
-    if sf:
-        img = (img / sf) if invert else (img * sf)
     b, c, f, h, w = img.shape
     t_target = _target_latent_frames(ctx)
     if t_target and t_target > f:
@@ -210,7 +198,7 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
     if _os.environ.get("NBX_DIAG_I2V") == "1":
         _f = img.float()
         print(f"   [NBX-DIAG-I2V] cogvideox condition shape={list(img.shape)} "
-              f"scaling={sf} invert={invert} mean={_f.mean():.3f} std={_f.std():.3f}")
+              f"mean={_f.mean():.3f} std={_f.std():.3f}")
     # frames-first to match the CogVideoX state layout [B, T, C, H, W]
     return img.permute(0, 2, 1, 3, 4).contiguous()
 
