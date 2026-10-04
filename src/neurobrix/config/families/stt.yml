@@ -14,12 +14,24 @@ defaults:
   max_tokens: 448   # Whisper standard max generation length
 
 long_form:
-  # Audio longer than one traced window. The whisper class runs the
-  # vendor's timestamp-seek algorithm (no policy: the model's own
-  # timestamps decide). The RNNT class runs buffered inference — the
-  # NeMo long-form recipe: consecutive windows overlap by this many
-  # seconds and tokens are merged by the encoder frame they were
-  # emitted at.
+  # Audio longer than one window. The whisper class runs the vendor's
+  # timestamp-seek algorithm over its own 30 s window (the extractor's
+  # `chunk_length`; no policy: the model's own timestamps decide). The
+  # RNNT class runs buffered inference — the NeMo long-form recipe
+  # (examples/asr/asr_chunked_inference/rnnt/
+  # speech_to_text_buffered_infer_rnnt.py): consecutive windows of
+  # `rnnt_window_seconds` overlap by `rnnt_overlap_seconds` and tokens
+  # are merged by the encoder frame they were emitted at. A recording
+  # that fits one window, and the last window of a longer one, reach
+  # the encoder at their own length — never padded.
+  #
+  # rnnt_window_seconds — source: the window the long-form gate was
+  # proven at (commit 2f57c914, 2026-09-02, its VERDICT under
+  # validation_outputs/maintenance_lot_2026_09_01/: parakeet-tdt-1.1b,
+  # 600 s -> 22 windows, word ratio 0.990 against NeMo). Until
+  # 2026-10-04 it was not a value: the flow read it off the encoder's
+  # TRACE extent (3 000 mel frames at a 10 ms hop).
+  rnnt_window_seconds: 30.0
   rnnt_overlap_seconds: 2.0
 
 execution:

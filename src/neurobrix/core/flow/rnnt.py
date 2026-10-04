@@ -55,8 +55,9 @@ class RNNTEngine(FlowHandler):
         audio_config = flow.get("audio", {})
 
         # Step 1: Audio preprocessing (stashes long-form windows —
-        # D-STT-LONGFORM-CHUNKING: one mel window per traced frame span;
-        # len==1 == the exact pre-change path)
+        # D-STT-LONGFORM-CHUNKING: one mel window per `rnnt_window_seconds`
+        # of the family profile; every window reaches the encoder at its
+        # own length)
         self._preprocess_audio(audio_config)
         _windows = getattr(self, "_stt_windows", None) or [None]
         _n_win = len(_windows)
@@ -91,9 +92,16 @@ class RNNTEngine(FlowHandler):
                 # window's encoder output against its mel span.
                 from neurobrix.core.module.audio.stt_longform import rnnt_merge_window
                 _w_enc = int(self._enc_frames)   # the FRAME axis the decode walked
-                _ov_enc = int(round(self._stt_overlap_mel * _w_enc / self._stt_window_mel))
+                if _wi == 0:
+                    # ONE overlap for every seam, measured on the first window (a full
+                    # one): both sides of a seam must split the same count. Measured
+                    # per window, a short last window rounds it differently (201 mel
+                    # frames -> 26 encoder frames, 26 instead of 25) and one encoder
+                    # frame would belong to no window.
+                    self._stt_overlap_enc = int(round(
+                        self._stt_overlap_mel * _w_enc / self._stt_window_mels[0]))
                 _wtok = rnnt_merge_window(_wtok, self._token_frames, _wi, _n_win,
-                                          _w_enc, _ov_enc)
+                                          _w_enc, self._stt_overlap_enc)
             tokens.extend(_wtok)
 
             dec_ms = (time.perf_counter() - start) * 1000
@@ -132,31 +140,22 @@ class RNNTEngine(FlowHandler):
 
         device = self.ctx.primary_device
 
-        # Load audio
-        import soundfile as sf
-        audio, sr = sf.read(str(audio_path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-
         # NeMo preprocessing params from the embedded model_config.yaml —
         # the single source the numpy mirror reads too
         # (mel_dsp.nemo_mel_params); the .nbx defaults keep precedence
         # for the values the build carries.
         from neurobrix.core.flow.audio_utils import find_model_config_path
-        from neurobrix.core.module.audio.mel_dsp import nemo_mel_params
+        from neurobrix.core.module.audio.mel_dsp import _load_audio, nemo_mel_params
         _p = nemo_mel_params(find_model_config_path(self.ctx))
         defaults = self.ctx.pkg.defaults
         n_fft, win_length, hop_length, n_mels = _p["n_fft"], _p["win"], _p["hop"], _p["n_mels"]
-        target_sr = _p["sr"]
+        sr = _p["sr"]
         dither = defaults.get("dither", _p["dither"])
 
-        # Resample to the model's rate if needed
-        if sr != target_sr:
-            import numpy as np
-            target_len = int(len(audio) * target_sr / sr)
-            indices = np.linspace(0, len(audio) - 1, target_len)
-            audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-            sr = target_sr
+        # Load at the model's rate with the loader the Triton flow, the plan and the
+        # census use (`mel_dsp._load_audio`: mono, linear resample) — one sample count,
+        # hence one frame count, for every reader of this recording.
+        audio = _load_audio(str(audio_path), sr)
 
         print(f"   [Audio] Loading: {audio_path}")
 
@@ -206,68 +205,45 @@ class RNNTEngine(FlowHandler):
         actual_frames = features.shape[2]
         print(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
 
-        # Pad to match encoder's traced frame count
-        expected_frames = 3000
-        _dag_frames = None
-        encoder_executor = self.ctx.executors.get("encoder")
-        if encoder_executor and hasattr(encoder_executor, '_dag'):
-            for tid in encoder_executor._dag.get("input_tensor_ids", []):
-                tdata = encoder_executor._dag.get("tensors", {}).get(tid, {})
-                shape = tdata.get("shape")
-                if shape and len(shape) == 3:
-                    expected_frames = _dag_frames = shape[2]
-                    break
-
-        # Long-form (D-STT-LONGFORM-CHUNKING): buffered inference over
-        # the encoder's window span — NeMo's own long-form recipe:
-        # overlapping windows (overlap from the family YAML, in seconds,
-        # converted with the extractor's own hop), one decode each,
-        # tokens merged by emission frame (stt_longform). Whole-
-        # utterance mel stats (the normalization above), last window
-        # padded like a short clip. The window length is the traced
-        # span: D-PARAKEET-SYMBOLIC-T (DETTE.md) names the symbolic-T
-        # trace that removes that coupling. NBX_DISABLE_STT_CHUNKING=1
-        # restores the truncating path for diagnosis.
-        import os as _os_sw
-        self._stt_windows = None
-        self._stt_window_mel = expected_frames
-        self._stt_overlap_mel = 0
-        if (actual_frames > expected_frames
-                and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
-            from neurobrix.core.config.loader import get_family_config
-            from neurobrix.core.module.audio.stt_longform import rnnt_window_plan
-            _lf = get_family_config("stt").get("long_form") or {}
-            if "rnnt_overlap_seconds" not in _lf:
-                raise RuntimeError(
-                    "ZERO FALLBACK: stt.yml long_form.rnnt_overlap_seconds missing.")
-            if _dag_frames is None:
-                raise RuntimeError(
-                    "ZERO FALLBACK: long-form RNNT needs the encoder's traced frame "
-                    "span from the DAG (no 3-D encoder input found).")
-            if not _p.get("source"):
-                # The overlap is converted with the SAME hop/rate the mel
-                # above was computed with; a legacy build without an
-                # embedded NeMo config runs both on the built-in NeMo
-                # values — said out loud, never silently (the rebuild
-                # that embeds model_config.yaml is D-PARAKEET-SYMBOLIC-T).
-                print(f"   [Audio] NeMo preprocessor params: built-in values "
-                      f"(no embedded config in this build) — sr={sr} hop={hop_length}")
-            self._stt_overlap_mel = int(round(float(_lf["rnnt_overlap_seconds"]) * sr / hop_length))
-            wins = []
-            for _start, _valid in rnnt_window_plan(actual_frames, expected_frames,
-                                                   self._stt_overlap_mel):
-                f = features[:, :, _start:_start + _valid]
-                if _valid < expected_frames:
-                    f = torch.nn.functional.pad(f, (0, expected_frames - _valid))
-                wins.append((f, torch.tensor([_valid], dtype=torch.long, device=device)))
-            self._stt_windows = wins
-            features, length = wins[0]
-        else:
-            if actual_frames < expected_frames:
-                features = torch.nn.functional.pad(features, (0, expected_frames - actual_frames))
-            elif actual_frames > expected_frames:
-                features = features[:, :, :expected_frames]
-            length = torch.tensor([min(actual_frames, expected_frames)], dtype=torch.long, device=device)
+        # The encoder takes the recording at its OWN length. The frame axis is
+        # symbolic; the flow never pads or cuts to the trace extent (it did until
+        # 2026-10-04 — `expected_frames = shape[2]` — and every length defect of
+        # the container stayed hidden behind it). Long-form
+        # (D-STT-LONGFORM-CHUNKING): buffered inference, NeMo's own long-form
+        # recipe — overlapping windows, one decode each, tokens merged by
+        # emission frame (stt_longform). The window and the overlap are the
+        # family profile's values in seconds, converted with the extractor's own
+        # rate and hop; whole-utterance mel stats (the normalization above); the
+        # last window is fed at its own length, like a short clip.
+        from neurobrix.core.config.loader import get_family_config
+        from neurobrix.core.flow.input_extent import admit, features_and_length
+        from neurobrix.core.module.audio.stt_longform import rnnt_feed_plan
+        _family = self.ctx.pkg.manifest.get("family")
+        _lf = get_family_config(_family).get("long_form") or {}
+        _plan, self._stt_overlap_mel = rnnt_feed_plan(actual_frames, _lf, sr, hop_length, _family)
+        if len(_plan) > 1 and not _p.get("source"):
+            # The window and the overlap are converted with the SAME hop/rate
+            # the mel above was computed with; a legacy build without an
+            # embedded NeMo config runs both on the built-in NeMo values —
+            # said out loud, never silently.
+            print(f"   [Audio] NeMo preprocessor params: built-in values "
+                  f"(no embedded config in this build) — sr={sr} hop={hop_length}")
+        _dag = getattr(self.ctx.executors.get("encoder"), "_dag", None)
+        _feat_in, _len_in = features_and_length(_dag)
+        wins = []
+        _admitted = set()
+        for _start, _valid in _plan:
+            f = features[:, :, _start:_start + _valid]
+            if tuple(f.shape) not in _admitted:
+                # Refused BY NAME when the container froze this axis, or a dim
+                # downstream of it, at its trace value (input_extent.admit).
+                admit(self.ctx.pkg.manifest.get("model_name"), "encoder", _dag,
+                      {_feat_in: tuple(f.shape), _len_in: (1,)})
+                _admitted.add(tuple(f.shape))
+            wins.append((f, torch.tensor([_valid], dtype=torch.long, device=device)))
+        self._stt_windows = wins if len(wins) > 1 else None
+        self._stt_window_mels = [v for _s, v in _plan]
+        features, length = wins[0]
 
         self._bind_window(features, length)
 
@@ -300,23 +276,15 @@ class RNNTEngine(FlowHandler):
         device = enc_output.device
         dtype = enc_output.dtype
 
-        # enc_output is [B, D_enc, T_padded] — transpose to [B, T_padded, D_enc]
-        enc_out = enc_output.transpose(1, 2)  # [1, T_padded, D_enc]
-        T_padded = enc_out.shape[1]
-        self._enc_frames = int(T_padded)   # encoder frame axis (long-form merge)
-
-        # Compute actual encoder output length from input length
-        # Conformer subsampling: 2 conv layers with stride 2 each = 4x reduction (typical)
-        # NeMo ConformerEncoder: subsampling_factor from config, or compute from kernel/stride
-        input_length = self.ctx.variable_resolver.resolved.get("global.length")
-        if input_length is not None:
-            actual_frames = input_length.item() if hasattr(input_length, 'item') else int(input_length)
-            # Standard NeMo subsampling: (length - 1) // 2 applied twice = ~4x
-            # More precisely: ceil(length / subsampling_factor)
-            sub_factor = self.ctx.pkg.defaults.get("subsampling_factor", 8)
-            T = min((actual_frames + sub_factor - 1) // sub_factor, T_padded)
-        else:
-            T = T_padded
+        # enc_output is [B, D_enc, T] — transpose to [B, T, D_enc]
+        enc_out = enc_output.transpose(1, 2)  # [1, T, D_enc]
+        # The decode walks the encoder's OWN frame axis: the features reached the
+        # encoder at their real length, so every frame it returns is a frame of the
+        # recording. (While the input was padded to the trace extent this bound was
+        # re-derived as ceil(length / subsampling_factor), with a literal 8 when the
+        # container carried no factor.)
+        T = enc_out.shape[1]
+        self._enc_frames = int(T)   # encoder frame axis (long-form merge)
         # Use encoder output dtype as compute dtype (set by DtypeEngine/Prism)
         dtype = enc_out.dtype
 

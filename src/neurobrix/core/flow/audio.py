@@ -151,20 +151,14 @@ class AudioEngine(FlowHandler):
         first_comp = stages[0]["component"] if stages else None
         input_shape = self._get_component_input_shape(first_comp)
 
-        # Auto-correct preprocessing type from graph input shape when topology is wrong
-        # [1, mel_bins, frames] with mel_bins in {40,64,80,128} -> mel_spectrogram
-        # [1, frames, feat_dim] with feat_dim > 80 -> conformer
-        if input_shape and len(input_shape) >= 3:
-            dim1, dim2 = input_shape[1], input_shape[2]
-            if preprocessing == "raw_waveform":
-                if dim1 in (40, 64, 80, 128) and dim2 > dim1:
-                    preprocessing = "mel_spectrogram"
-                elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
-                    preprocessing = "conformer"
+        # The extractor the first stage's graph shape asks for (one rule, shared with the
+        # Triton front end, the plan and the census)
+        from neurobrix.core.module.audio.mel_dsp import resolve_preprocessing
+        preprocessing = resolve_preprocessing(preprocessing, input_shape)
 
         print(f"   [Audio] Loading: {audio_path}")
         if input_shape:
-            print(f"   [Audio] Expected input shape: {input_shape}")
+            print(f"   [Audio] First stage traced at: {input_shape}")
 
         from neurobrix.core.module.audio.input_processor import AudioInputProcessor
         features = AudioInputProcessor.process(
@@ -176,22 +170,16 @@ class AudioEngine(FlowHandler):
             input_shape=input_shape,
         )
 
-        # Pad/truncate to match trace-time dimensions for encoders
-        # with non-symbolic position ops (relative PE, repeat, etc.)
-        if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):  # Skip batch dim
-                trace_size = input_shape[dim_idx]
-                actual_size = features.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(features.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        features = features[tuple(slices)]
-                    else:
-                        pad_shape = list(features.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = torch.zeros(pad_shape, device=features.device, dtype=features.dtype)
-                        features = torch.cat([features, pad], dim=dim_idx)
+        # The features reach the first stage AS THE FRONT END PRODUCED THEM: a symbolic
+        # axis carries the recording's own extent; an axis the container froze — at the
+        # input or downstream of it — is refused by name. (Until 2026-10-04 every
+        # non-batch axis was zero-padded or cut to the stage's trace shape here.)
+        from neurobrix.core.flow.input_extent import admit_features
+        admit_features(self.ctx.pkg.manifest.get("model_name"), self.ctx.pkg.topology,
+                       first_comp,
+                       getattr(self.ctx.executors.get(first_comp), "_dag", None) if first_comp else None,
+                       tuple(features.shape), variable)
+        self._admitted_stage = first_comp
 
         print(f"   [Audio] Features: {features.shape} ({preprocessing})")
 
@@ -201,8 +189,8 @@ class AudioEngine(FlowHandler):
         short_key = variable.split(".")[-1] if "." in variable else variable
         self.ctx.variable_resolver.resolved[short_key] = features
 
-        # Bind audio length for models that need it (NeMo Conformer, etc.)
-        # The actual audio length (before padding) is the feature frame count
+        # Bind audio length for models that need it (NeMo Conformer, etc.):
+        # the feature frame count of the recording itself
         actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
         length_tensor = torch.tensor([actual_frames], dtype=torch.long, device=features.device)
         self.ctx.variable_resolver.resolved["global.audio_signal_length"] = length_tensor
@@ -340,8 +328,12 @@ class AudioEngine(FlowHandler):
 
         self._ensure_weights_loaded(comp_name)
 
-        # Check if input needs chunking (e.g., codec.decoder expects fixed seq_len)
-        chunked = self._try_chunked_forward(comp_name)
+        # Check if input needs chunking (e.g., codec.decoder expects fixed seq_len).
+        # Never the stage the recording's features were just admitted to at their own
+        # extent (`_preprocess_audio_input`): chunking it to its trace length would
+        # re-impose the trace one step after the door removed it.
+        chunked = (comp_name != getattr(self, "_admitted_stage", None)
+                   and self._try_chunked_forward(comp_name))
         if not chunked:
             self._execute_component(comp_name, "forward", None)
 

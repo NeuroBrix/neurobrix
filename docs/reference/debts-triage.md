@@ -99,7 +99,8 @@ one leg).
 
 **Build toolchain — fixed at the source, rebuilds pending or landed:**
 D-TRACE-SUBMODULE-PARENT-FORWARD · D-PARAKEET-SYMBOLIC-T (build-side fix
-landed) · D-TI2V-DEGENERATE-BATCH · D-TRACE-DEVICE-INDEX ·
+landed; the engine's pad-to-the-trace that hid it removed 2026-10-04 — the flows feed the
+recording's own length and refuse a frozen container by name, `core/flow/input_extent.py`) · D-TI2V-DEGENERATE-BATCH · D-TRACE-DEVICE-INDEX ·
 D-TRACE-SYMBOLIC-DIMS-FOREIGN-INT (fix at source de82f60) ·
 D-TRACE-INPLACE-VIEW-ASSIGN · D-PROFILE-HEAD-DIM-UNSTATED ·
 D-ROPE-VALSYM-BORN-AT-SOURCE · D-RETRACE-SWIN2SR-SYMBOLIC (a trace-value

@@ -48,49 +48,42 @@ def preprocess_audio_input(
     first_comp = stages[0]["component"] if stages else None
     input_shape = get_component_input_shape(ctx, first_comp)
 
-    # Auto-correct preprocessing type from graph input shape
-    if input_shape and len(input_shape) >= 3:
-        dim1, dim2 = input_shape[1], input_shape[2]
-        if preprocessing == "raw_waveform":
-            if dim1 in (40, 64, 80, 128) and dim2 > dim1:
-                preprocessing = "mel_spectrogram"
-            elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
-                preprocessing = "conformer"
+    # The extractor the first stage's graph shape asks for (one rule, shared with the
+    # Triton front end, the plan and the census)
+    from neurobrix.core.module.audio.mel_dsp import resolve_preprocessing
+    preprocessing = resolve_preprocessing(preprocessing, input_shape)
 
     print(f"   [Audio] Loading: {audio_path}")
     if input_shape:
-        print(f"   [Audio] Expected input shape: {input_shape}")
+        print(f"   [Audio] First stage traced at: {input_shape}")
 
     from neurobrix.core.module.audio.input_processor import AudioInputProcessor
     # Long-form (D-STT-LONGFORM-CHUNKING, 2026-09-02): audio longer than
     # the whisper-class window runs the vendor's timestamp-seek
     # algorithm (rules in core/module/audio/stt_longform.py, shared with
     # the triton mirror); the flow builds each window's mel on demand
-    # from this context. One window == the exact pre-change path
-    # (byte-identical short clips). NBX_DISABLE_STT_CHUNKING=1 restores
-    # the truncating path for diagnosis.
+    # from this context. One window == the single-window path.
+    # NBX_DISABLE_STT_CHUNKING=1 keeps one window for diagnosis.
     import os as _os_sw
-    def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
-        if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
-                actual_size = feats.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(feats.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        feats = feats[tuple(slices)]
-                    else:
-                        pad_shape = list(feats.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
-                        feats = torch.cat([feats, pad], dim=dim_idx)
+    from neurobrix.core.flow.input_extent import admit_features
+    _first_dag = getattr(ctx.executors.get(first_comp), "_dag", None) if first_comp else None
+    _admitted = set()
+
+    def _admit(feats):  # noqa: E306 (defined before first use below)
+        """The features reach the first stage AS THE FRONT END PRODUCED THEM. Until 2026-10-04
+        they were zero-padded or cut to the stage's trace shape here (`_fit_to_trace`): a
+        symbolic frame axis never met another length, and a frozen one was padded silently.
+        A symbolic axis now carries the recording's own extent; an axis the container froze —
+        at the input or downstream of it — is refused by name (`input_extent.admit`)."""
+        if tuple(feats.shape) not in _admitted:
+            admit_features(ctx.pkg.manifest.get("model_name"), ctx.pkg.topology, first_comp,
+                           _first_dag, tuple(feats.shape), variable)
+            _admitted.add(tuple(feats.shape))
         return feats
 
     ctx._stt_seek = None
     features = None
-    # Only the encoder_decoder flow consumes the seek context (the
-    # audio/audio_llm flows still truncate: D-AUDIOLLM-LONGFORM).
+    # Only the encoder_decoder flow consumes the seek context.
     _flow_type = ctx.pkg.topology.get("flow", {}).get("type")
     if (preprocessing == "mel_spectrogram" and _flow_type == "encoder_decoder"
             and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
@@ -99,7 +92,7 @@ def preprocess_audio_input(
         _seek = _mel_dsp.whisper_seek_context(
             str(audio_path), find_model_config_path(ctx), input_shape)
         if _seek is not None:
-            _seek["build"] = (lambda mel_np: _fit_to_trace(
+            _seek["build"] = (lambda mel_np: _admit(
                 torch.from_numpy(_np_sw.ascontiguousarray(mel_np)).to(
                     device=device, dtype=dtype)))
             ctx._stt_seek = _seek
@@ -122,7 +115,7 @@ def preprocess_audio_input(
             str(audio_path), find_model_config_path(ctx), input_shape)
         if _wins is not None:
             ctx._audio_windows = [
-                _fit_to_trace(torch.from_numpy(_np_sw.ascontiguousarray(w[None])).to(
+                _admit(torch.from_numpy(_np_sw.ascontiguousarray(w[None])).to(
                     device=device, dtype=dtype)) for w in _wins]
             features = ctx._audio_windows[0]
     if features is None:
@@ -135,8 +128,7 @@ def preprocess_audio_input(
             input_shape=input_shape,
         )
 
-    # Pad/truncate to match trace-time dimensions
-    features = _fit_to_trace(features)
+    features = _admit(features)
 
     print(f"   [Audio] Features: {features.shape} ({preprocessing})"
           + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
@@ -147,7 +139,8 @@ def preprocess_audio_input(
     short_key = variable.split(".")[-1] if "." in variable else variable
     ctx.variable_resolver.resolved[short_key] = features
 
-    # Bind audio length for models that need it
+    # Bind audio length for models that need it: the frames the features carry —
+    # the recording's own, now that nothing pads them
     actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
     length_tensor = torch.tensor([actual_frames], dtype=torch.long, device=features.device)
     for key in ["global.audio_signal_length", "audio_signal_length", "global.length", "length"]:

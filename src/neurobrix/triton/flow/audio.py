@@ -138,12 +138,14 @@ class TritonAudioEngine:
 
         Delegates to the numpy/NBX front-end in ``triton.audio_frontend``: it
         loads the waveform, runs the family-specific extractor (whisper/nemo/
-        conformer/raw), pads/truncates to the trace dims and binds the result
-        as ``NBXTensor`` on the encoder device. No torch / torchaudio anywhere
+        conformer/raw), admits the features at the extent the front end produced
+        (never padded or cut to the trace dims) and binds the result as
+        ``NBXTensor`` on the encoder device. No torch / torchaudio anywhere
         on the triton compute path.
         """
         from neurobrix.triton.audio_frontend import preprocess_audio_input_np
         preprocess_audio_input_np(self.ctx, {"input": input_config}, stages)
+        self._admitted_stage = stages[0]["component"] if stages else None
 
     def _preprocess_text_input(self, input_config: Dict) -> None:
         """Tokenize text prompt for TTS/LLM-audio models."""
@@ -262,7 +264,10 @@ class TritonAudioEngine:
         # blocks — triton mirror of compiled AudioFlow._try_chunked_forward.
         # Data-driven: triggers only when the runtime 3D input seq_len differs from
         # the graph's trace seq_len; otherwise the normal single pass runs.
-        if not self._try_chunked_forward(comp_name):
+        # Never the stage the recording's features were just admitted to at their own
+        # extent (mirror of the compiled flow): chunking it would re-impose the trace.
+        if (comp_name == getattr(self, "_admitted_stage", None)
+                or not self._try_chunked_forward(comp_name)):
             self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000

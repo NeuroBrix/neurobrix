@@ -53,7 +53,11 @@ def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) 
                         MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
     if r.returncode != 0:
-        raise SystemExit(f"{model}: the plan could not be read (rc {r.returncode}): {r.stderr[-800:]}")
+        # A container the engine refuses BY NAME (its graph cannot take the request's extent,
+        # `core/flow/input_extent.FrozenTraceExtent`) is said whole — a tail cut it mid-sentence.
+        named = [ln for ln in r.stderr.splitlines() if "FrozenTraceExtent: " in ln]
+        why = named[-1].split("FrozenTraceExtent: ", 1)[1] if named else r.stderr[-800:]
+        raise SystemExit(f"{model}: the plan could not be read (rc {r.returncode}): {why}")
     return json.loads(r.stdout)
 
 
@@ -684,11 +688,17 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     if flow.get("type") == "encoder_decoder":
         sites.extend(_encoder_decoder_sites(model, topo, defaults, plan))
     # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
-    # (the frontend's own preprocessing choice and fit), their embeddings between the declared
-    # prefix and suffix ids, then the language model over the WHOLE context every step — its
-    # length from L0 to L0 + max_tokens - 1.
+    # (the frontend's own preprocessing choice, the features at the extent it produced — admitted
+    # by the graph, never fitted to the trace), their embeddings between the declared prefix and
+    # suffix ids, then the language model over the WHOLE context every step — its length from L0
+    # to L0 + max_tokens - 1.
     if flow.get("type") == "audio_llm" and audio_path:
         sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req))
+    # rnnt (triton/flow/rnnt.py): the encoder at EVERY extent the flow feeds it — the recording
+    # whole when it fits one window of the family's long-form plan, else each distinct window
+    # extent (the full window and the shorter last one), by the flow's own feed plan.
+    if flow.get("type") == "rnnt" and audio_path:
+        sites.extend(_rnnt_sites(model, topo, audio_path))
     return sites
 
 
@@ -779,6 +789,23 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
             (f"{lm} context", L0, L0 + int(mt) - 1, context)]
 
 
+def _rnnt_sites(model, topo, audio_path):
+    from neurobrix.core.module.audio.feeds import first_audio_stage, request_feeds
+    root = CACHE / model
+    comp = first_audio_stage(topo)
+    if comp is None:
+        raise SystemExit(f"{model}: an rnnt flow whose topology names no audio stage — the encoder "
+                         f"would be keyed at its trace extent; nothing is derived")
+    g = json.loads((root / "components" / comp / "graph.json").read_text())
+    family = json.loads((root / "manifest.json").read_text()).get("family")
+    # the SAME function the plan binds from (`FlowBindings.audio_feeds`): a container whose graph
+    # does not follow the recording's extent is refused by name here, never keyed at its trace
+    feeds = request_feeds(topo, root, audio_path, g, model, family)
+    return [(f"{comp} audio feed {i + 1}/{len(feeds)} {dict(feed)}", 1, 1,
+             lambda _n, comp=comp, feed=dict(feed): [(comp, {k: list(v) for k, v in feed.items()})])
+            for i, feed in enumerate(feeds)]
+
+
 def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
     from neurobrix.core.module.audio.mel_dsp import extract_features_np, fixed_window_mels
     from neurobrix.core.runtime.decode_bound import decode_bound
@@ -797,11 +824,15 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
     wins = None
     if prep == "mel_spectrogram" and os.environ.get("NBX_DISABLE_STT_CHUNKING") != "1":
         wins = fixed_window_mels(str(audio_path), Path(cfg), input_shape)
-    feats = (AF.fit_features(wins[0][None], input_shape) if wins is not None
-             else AF.fit_features(extract_features_np(prep, str(audio_path), Path(cfg), input_shape),
-                                  input_shape))
-    n_win = len(wins) if wins is not None else 1
     variable = (audio.get("input") or {}).get("variable", "global.input_features")
+    # the features AS THE FRONT END PRODUCED THEM, admitted by the first stage's graph — the
+    # flow's own function (`audio_frontend.admitted_features`); a container that cannot take the
+    # recording's extent is refused by name
+    feats = AF.admitted_features(
+        model, topo, fwd[0], graph(fwd[0]),
+        wins[0][None] if wins is not None
+        else extract_features_np(prep, str(audio_path), Path(cfg), input_shape), variable)
+    n_win = len(wins) if wins is not None else 1
     conns = topo.get("connections") or []
 
     def feeds(comp, produced):
@@ -952,6 +983,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     manifest = json.loads((CACHE / a.model / "manifest.json").read_text())
     args = create_parser().parse_args(["run", "--model", a.model, *request, MODE_FLAGS[a.mode],
                                        "--hardware", a.hardware])
+    if getattr(args, "audio", None):
+        args.audio = str(REPO / args.audio)       # the request's media, as the tool resolves them
     ic = request_input_config(args, manifest, manifest.get("family"), CACHE / a.model)
     loop_comps = set((flow.get("loop") or {}).get("components") or [])
     if flow.get("type") == "rnnt":

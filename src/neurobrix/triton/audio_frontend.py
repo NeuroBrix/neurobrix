@@ -37,6 +37,8 @@ from neurobrix.core.module.audio.mel_dsp import (  # noqa: F401
     _nemo_mel,
     _raw_waveform,
     extract_features_np,
+    model_config_dir,
+    resolve_preprocessing,
 )
 
 
@@ -72,14 +74,7 @@ def _component_input_shape(ctx, comp_name):
 
 
 def _model_config_path(ctx) -> Path:
-    nbx_path = Path(ctx.nbx_path_str)
-    for subdir in ["modules/processor", "modules/tokenizer"]:
-        cand = nbx_path / subdir
-        if cand.exists():
-            return cand
-    raise RuntimeError(
-        "Cannot find model config path. Expected modules/processor/ or "
-        "modules/tokenizer/ inside the .nbx.")
+    return model_config_dir(Path(ctx.nbx_path_str))
 
 
 # g2p is NeuroBrix-internal (ZO-3): text→IPA via the espeak-distilled lexicon
@@ -234,32 +229,17 @@ def postprocess_text_output_np(ctx) -> None:
     print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
-def resolve_preprocessing(preprocessing: str, input_shape) -> str:
-    """The feature extractor the first stage's graph shape asks for (mirror of the torch path):
-    a raw-waveform declaration on a graph that takes [B, mels, frames] is a mel spectrogram, one on
-    [B, frames, feats] a conformer front end."""
-    if input_shape and len(input_shape) >= 3 and preprocessing == "raw_waveform":
-        d1, d2 = input_shape[1], input_shape[2]
-        if d1 in (40, 64, 80, 128) and d2 > d1:
-            return "mel_spectrogram"
-        if d2 in (40, 64, 80, 128, 160, 256) and d1 > d2:
-            return "conformer"
-    return preprocessing
+def admitted_features(container, topology, component, dag, feats: np.ndarray,
+                      variable: str) -> np.ndarray:
+    """The features as the first stage receives them: AS THE FRONT END PRODUCED THEM, admitted by
+    the graph's own symbol table (`core/flow/input_extent.admit_features`, the door both engines
+    share) — the extent the encoder then runs at, which the derived census binds from.
 
-
-def fit_features(feats: np.ndarray, input_shape) -> np.ndarray:
-    """Features padded / truncated to the first stage's trace dims (mirror of the torch path) —
-    the extent the encoder then runs at, which the derived census binds from."""
-    if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
-        for d in range(1, len(input_shape)):
-            trace, actual = input_shape[d], feats.shape[d]
-            if actual > trace:
-                sl = [slice(None)] * feats.ndim
-                sl[d] = slice(None, trace)
-                feats = feats[tuple(sl)]
-            elif actual < trace:
-                ps = list(feats.shape); ps[d] = trace - actual
-                feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
+    Until 2026-10-04 this was `fit_features`: every non-batch axis zero-padded or cut to the
+    stage's trace shape. A symbolic axis now carries the recording's own extent; an axis the
+    container froze, at the input or downstream of it, is refused by name."""
+    from neurobrix.core.flow.input_extent import admit_features
+    admit_features(container, topology, component, dag, tuple(feats.shape), variable)
     return np.ascontiguousarray(feats.astype(np.float32))
 
 
@@ -284,20 +264,29 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
 
     print(f"   [Audio·np] Loading: {audio_path}")
 
-    def _fit(feats):
-        return fit_features(feats, input_shape)
+    _first_dag = getattr(ctx.executors.get(first_comp), "_dag", None) if first_comp else None
+
+    _admitted = set()
+
+    def _admit(feats):
+        # no fit: the features as produced, admitted by the graph once per distinct shape
+        # (R30 mirror of the compiled front end's `_admit`)
+        if tuple(feats.shape) in _admitted:
+            return np.ascontiguousarray(feats.astype(np.float32))
+        _admitted.add(tuple(feats.shape))
+        return admitted_features(ctx.pkg.manifest.get("model_name"), ctx.pkg.topology,
+                                 first_comp, _first_dag, feats, variable)
 
     # Long-form (D-STT-LONGFORM-CHUNKING, R30 mirror of the torch
     # path): audio longer than the whisper-class window runs the
     # vendor's timestamp-seek algorithm (rules in
     # core/module/audio/stt_longform.py); the flow builds each window's
-    # mel on demand from this context. One window == the exact
-    # pre-change path. NBX_DISABLE_STT_CHUNKING=1 = truncating path.
+    # mel on demand from this context. One window == the single-window
+    # path. NBX_DISABLE_STT_CHUNKING=1 keeps one window for diagnosis.
     import os as _os_sw
     ctx._stt_seek = None
     feats = None
-    # Only the encoder_decoder flow consumes the seek context (the
-    # audio/audio_llm flows still truncate: D-AUDIOLLM-LONGFORM).
+    # Only the encoder_decoder flow consumes the seek context.
     _flow_type = ctx.pkg.topology.get("flow", {}).get("type")
     if (preprocessing == "mel_spectrogram" and _flow_type == "encoder_decoder"
             and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
@@ -308,10 +297,10 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
         if _seek is not None:
             def _build(mel_np, _ctx=ctx):
                 _set_device_for(_ctx)   # the encoder's device, explicitly, every window
-                return NBXTensor.from_numpy(_fit(mel_np))
+                return NBXTensor.from_numpy(_admit(mel_np))
             _seek["build"] = _build
             ctx._stt_seek = _seek
-            feats = _fit(whisper_window_mel(_seek, 0))
+            feats = _admit(whisper_window_mel(_seek, 0))
     # Audio-LLM long-form (D-AUDIOLLM-LONGFORM) — R33 mirror of the compiled
     # `preprocess_audio_input`: the recording's fixed 30 s windows (numpy)
     # go on ctx._audio_windows as NBXTensors; window 0 is the classic input.
@@ -323,10 +312,10 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
         _wins = fixed_window_mels(str(audio_path), Path(find_model_config_path(ctx)), input_shape)
         if _wins is not None:
             _set_device_for(ctx)
-            ctx._audio_windows = [NBXTensor.from_numpy(_fit(w[None])) for w in _wins]
-            feats = _fit(_wins[0][None])
+            ctx._audio_windows = [NBXTensor.from_numpy(_admit(w[None])) for w in _wins]
+            feats = _admit(_wins[0][None])
     if feats is None:
-        feats = _fit(extract_features_np(preprocessing, str(audio_path),
+        feats = _admit(extract_features_np(preprocessing, str(audio_path),
                                          Path(find_model_config_path(ctx)), input_shape))
     print(f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})"
           + (" (long-form: timestamp seek)" if ctx._stt_seek else "")

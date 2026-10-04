@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A speech recording reaches its model at its own length.** Speech-to-text models whose encoder
+  takes any length (Parakeet, Canary-Qwen, Granite Speech) were fed every recording zero-padded — or
+  cut — to one fixed length (30 s; 14 s for Granite Speech): a 4 s clip ran as 30 s of mostly
+  silence, and a recording longer than that length lost its end without a word on the audio-LLM
+  models. The recording now runs at its real length, on both engines; a long recording on Parakeet
+  is still transcribed window by window, with the last window at its own length. Whisper-class models
+  keep their 30 s window, which is the vendor's own. A model file that cannot take another length is
+  refused with a message naming the model, the component and the frozen dimension, and saying it
+  must be rebuilt — it is no longer padded to make it pass.
+
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
   uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention

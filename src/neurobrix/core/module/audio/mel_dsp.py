@@ -243,7 +243,10 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
 
 def _raw_waveform(audio_path: str, model_path: Path, input_shape,
                   _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
-    """Raw waveform (Parakeet) reshaped to the graph input shape."""
+    """Raw waveform laid out as the graph's input: [1, samples], or [1, channels, samples]
+    for a rank-3 input (the channel count is the graph's; the SAMPLE axis is the
+    recording's own — never padded or cut to the graph's trace extent, which this did
+    until 2026-10-04; the flow admits or refuses the extent, `input_extent.admit`)."""
     sr = 16000
     cp = model_path / "preprocessor_config.json"
     if cp.exists():
@@ -251,17 +254,37 @@ def _raw_waveform(audio_path: str, model_path: Path, input_shape,
     audio = (_audio if _audio is not None
              else _load_audio(audio_path, sr))[None]       # [1, samples]
     if input_shape and len(input_shape) == 3:
-        channels, target = input_shape[1], input_shape[2]
+        channels = input_shape[1]
         wf = audio[:, None, :]                              # [1, 1, samples]
         if channels > 1:
             wf = np.repeat(wf, channels, axis=1)
-        if wf.shape[2] > target:
-            wf = wf[:, :, :target]
-        elif wf.shape[2] < target:
-            wf = np.concatenate(
-                [wf, np.zeros((1, channels, target - wf.shape[2]), np.float32)], axis=2)
         return wf.astype(np.float32)
     return audio.astype(np.float32)
+
+
+def resolve_preprocessing(preprocessing: str, input_shape) -> str:
+    """The feature extractor the first stage's graph shape asks for — one rule for both engines'
+    front ends, the plan and the census: a raw-waveform declaration on a graph that takes
+    [B, mels, frames] is a mel spectrogram, one on [B, frames, feats] a conformer front end."""
+    if input_shape and len(input_shape) >= 3 and preprocessing == "raw_waveform":
+        d1, d2 = input_shape[1], input_shape[2]
+        if d1 in (40, 64, 80, 128) and d2 > d1:
+            return "mel_spectrogram"
+        if d2 in (40, 64, 80, 128, 160, 256) and d1 > d2:
+            return "conformer"
+    return preprocessing
+
+
+def model_config_dir(nbx_path: Path) -> Path:
+    """The container directory that carries the front end's configuration: `modules/processor`
+    (preprocessor_config.json) before `modules/tokenizer`."""
+    for subdir in ("modules/processor", "modules/tokenizer"):
+        cand = Path(nbx_path) / subdir
+        if cand.exists():
+            return cand
+    raise RuntimeError(
+        "Cannot find model config path. Expected modules/processor/ or "
+        "modules/tokenizer/ inside the .nbx.")
 
 
 def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Path,

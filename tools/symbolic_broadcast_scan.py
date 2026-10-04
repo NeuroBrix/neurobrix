@@ -26,55 +26,13 @@ import os
 import sys
 from pathlib import Path
 
-#: Op types whose tensor inputs broadcast against each other (ATen's elementwise family).
-BROADCASTING = {
-    "aten::add", "aten::sub", "aten::mul", "aten::div", "aten::where", "aten::maximum",
-    "aten::minimum", "aten::pow", "aten::eq", "aten::ne", "aten::lt", "aten::le", "aten::gt",
-    "aten::ge", "aten::logical_and", "aten::logical_or", "aten::masked_fill", "aten::addcmul",
-    "aten::addcdiv", "aten::lerp", "aten::atan2", "aten::remainder", "aten::fmod",
-    "aten::bitwise_and", "aten::bitwise_or", "aten::copysign", "aten::hypot",
-}
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "src"))
 
-
-class Unknown(Exception):
-    pass
-
-
-def evaluate(e, env):
-    if isinstance(e, bool):
-        raise Unknown("bool")
-    if isinstance(e, int):
-        return e
-    if not isinstance(e, dict):
-        raise Unknown(type(e).__name__)
-    t = e.get("type")
-    if t == "symbol":
-        return env[e["id"]]
-    if t in ("add", "sub", "mul", "floordiv", "mod", "ceildiv", "max", "min"):
-        a, b = evaluate(e["left"], env), evaluate(e["right"], env)
-        if t == "add":
-            return a + b
-        if t == "sub":
-            return a - b
-        if t == "mul":
-            return a * b
-        if t == "floordiv":
-            return a // b
-        if t == "mod":
-            return a % b
-        if t == "ceildiv":
-            return -(-a // b)
-        return max(a, b) if t == "max" else min(a, b)
-    raise Unknown(str(t))
-
-
-def broadcasts(shapes):
-    rank = max(len(s) for s in shapes)
-    for i in range(1, rank + 1):
-        vals = {s[-i] for s in shapes if len(s) >= i} - {1}
-        if len(vals) > 1:
-            return False
-    return True
+# The scan's core is the engine's own door (`core/flow/input_extent.broadcast_breaks`): the flows
+# refuse a container whose graph does not follow the extent they feed with the SAME function this
+# tool sweeps the catalogue with — one implementation, evaluated by the runtime's resolver.
+from neurobrix.core.flow.input_extent import BROADCASTING, broadcast_breaks  # noqa: E402,F401
 
 
 def scan_graph(graph: dict):
@@ -89,36 +47,21 @@ def scan_graph(graph: dict):
     groups: dict = {}
     for k, v in symbols.items():
         groups.setdefault(v.get("name") or k, []).append(k)
-    envs, names = [trace], [None]
+    by_op: dict = {}
+    unknown = 0
     for name, ks in sorted(groups.items()):
-        envs.append({**trace, **{k: max(trace[k] * 3, int((symbols[k].get("constraints") or {}).get("min", 1)))
-                                 for k in ks}})
-        names.append(name)
-    tensors = graph.get("tensors") or {}
-    found, unknown = [], 0
-    for uid, op in (graph.get("ops") or {}).items():
-        if op.get("op_type") not in BROADCASTING:
-            continue
-        dims = []
-        for tid in op.get("input_tensor_ids") or []:
-            ss = (tensors.get(tid) or {}).get("symbolic_shape")
-            if ss and isinstance(ss.get("dims"), list):
-                dims.append((tid, ss["dims"]))
-        if len(dims) < 2:
-            continue
-        try:
-            at = [[[evaluate(d, env) for d in ds] for _, ds in dims] for env in envs]
-        except Unknown:
-            unknown += 1
-            continue
-        if not broadcasts(at[0]):
-            continue
-        moved = [names[i] for i in range(1, len(envs)) if not broadcasts(at[i])]
-        if moved:
-            found.append({"op": uid, "op_type": op["op_type"], "module": op.get("parent_module"),
-                          "inputs": [t for t, _ in dims], "at_trace": at[0], "breaks_when": moved,
-                          "away": {names[i]: at[i] for i in range(1, len(envs)) if names[i] in moved}})
-    return found, unknown
+        env = {**trace, **{k: max(trace[k] * 3, int((symbols[k].get("constraints") or {}).get("min", 1)))
+                           for k in ks}}
+        breaks, u = broadcast_breaks(graph, env, trace)
+        unknown = max(unknown, u)
+        for b in breaks:
+            rec = by_op.setdefault(b["op"], {"op": b["op"], "op_type": b["op_type"],
+                                             "module": b["module"], "inputs": b["inputs"],
+                                             "at_trace": b["at_trace"], "breaks_when": [], "away": {}})
+            rec["breaks_when"].append(name)
+            rec["away"][name] = b["at_binding"]
+    order = {uid: i for i, uid in enumerate(graph.get("ops") or {})}
+    return sorted(by_op.values(), key=lambda r: order[r["op"]]), unknown
 
 
 def main() -> int:

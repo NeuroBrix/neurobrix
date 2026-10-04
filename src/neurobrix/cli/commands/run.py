@@ -311,10 +311,11 @@ def request_input_config(args, manifest: dict, family, cache_path):
                                                 cached_defaults))[1])
 
     # The flow's per-component bindings (CFG batch, a diffusion encoder's length, the denoiser's
-    # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan
-    # and the derived census.
+    # text axis, a FLUX denoiser's packed inputs, the recording's own frame count on an audio
+    # flow's first stage) — `core.prism.flow_bindings`, one for the plan and the derived census.
     from neurobrix.core.prism.flow_bindings import FlowBindings
-    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
+    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"),
+                          audio_path=getattr(args, 'audio', None), family=family)
              if _topo_path.exists() else None)
 
     input_config = InputConfig(

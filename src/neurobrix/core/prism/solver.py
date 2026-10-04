@@ -30,6 +30,7 @@ from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _bud
                                                 host_budget_mb as _host_budget_mb_read)
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.runtime_values import MissingRuntimeValue
+from neurobrix.core.flow.input_extent import FrozenTraceExtent
 
 
 class PlanNotComputable(RuntimeError):
@@ -949,6 +950,8 @@ class PrismSolver:
         tried = []
         try:
             plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+        except FrozenTraceExtent:
+            raise      # the container cannot take the request's extent: no rung changes that
         except RuntimeError as refusal:
             # A rung no strategy fits is not the machine's last word on a pool whose rung is read from
             # the free memory: the rungs below are tried, highest first (Flex.1-alpha on the Mac at
@@ -2589,7 +2592,10 @@ class PrismSolver:
                         for _ov in (ap.overflow_ops or [])[:12]:
                             print(f"[PrismEstimate]   overflow {_ov[0]} ({_ov[1]}) out={_ov[2] / 2**30:.2f} GiB "
                                   f"ws={_ov[3] / 2**30:.2f} GiB", flush=True)
-                except MissingRuntimeValue:
+                except (MissingRuntimeValue, FrozenTraceExtent):
+                    # refusals that name their own cause (a value nobody declared; a container
+                    # that cannot take the request's extent) — never re-labelled as a failed
+                    # profile
                     raise
                 except Exception as exc:
                     # `int(weight_bytes * 0.5)` stood here. A coefficient is not

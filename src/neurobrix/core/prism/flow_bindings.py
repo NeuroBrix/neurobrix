@@ -21,6 +21,12 @@
   flag the run feeds the component `global.image` reaches the (inactive, reactive) clips stacked on
   its batch (`image_dsp.VACE_CONTROL_CLIPS`, the CLI's `vace_control_pair_np`).
 
+* **An audio flow's first stage** — the recording reaches the encoder at its OWN frame count
+  (`core/module/audio/feeds.request_feeds`: the front end's features, the RNNT feed plan), never at
+  the trace's: parakeet's encoder was priced and keyed at the 3 000 frames of its trace while an
+  11 s clip is 1 101. The largest feed binds the plan; a container whose graph froze that axis is
+  refused by name here, before a weight is loaded.
+
 Prism prices each component with these (the plan), and the derived census keys with the same map:
 one binding for both. Each rule CALLS the function the flow itself runs.
 """
@@ -52,7 +58,7 @@ class FlowBindings:
     topology (`run.request_input_config`), asked per component graph by `build_symbol_map`."""
 
     def __init__(self, topology: Dict[str, Any], cache_path, container_name: Optional[str] = None,
-                 tp_components=()):
+                 tp_components=(), audio_path=None, family: Optional[str] = None):
         self.topology = topology or {}
         self.cache_path = Path(cache_path) if cache_path is not None else None
         # the name the container registers its flags under: its MANIFEST model_name, never the
@@ -60,7 +66,11 @@ class FlowBindings:
         self.container_name = container_name
         self.tp_components = set(tp_components or ())
         self.flow = self.topology.get("flow") or {}
+        # the request's recording (`--audio`) and the container's family (its long-form values)
+        self.audio_path = audio_path
+        self.family = family
         self._graphs: Dict[str, Dict[str, Any]] = {}
+        self._audio_feeds: Dict[str, list] = {}
 
     # -- the container's own graphs ------------------------------------------------------------
     def graph(self, comp: str) -> Dict[str, Any]:
@@ -84,6 +94,19 @@ class FlowBindings:
             if n:
                 out[enc] = n
         return out
+
+    def audio_feeds(self, comp: str, dag: Dict[str, Any]) -> list:
+        """[{input name: shape}, ...] the audio flow feeds `comp` for this request's recording —
+        every distinct extent, in feed order (`feeds.request_feeds`, the flows' own functions);
+        empty for any component but the flow's first audio stage, and for a request without a
+        recording."""
+        from neurobrix.core.module.audio.feeds import first_audio_stage, request_feeds
+        if not self.audio_path or self.cache_path is None or comp != first_audio_stage(self.topology):
+            return []
+        if comp not in self._audio_feeds:
+            self._audio_feeds[comp] = request_feeds(self.topology, self.cache_path, self.audio_path,
+                                                    dag, self.container_name, self.family)
+        return self._audio_feeds[comp]
 
     def pixel_view(self, comp: str) -> Optional[Dict[str, tuple]]:
         """{input name: shape} of the image view the run feeds `comp` through `global.pixel_values`:
@@ -214,6 +237,13 @@ class FlowBindings:
         view = self.pixel_view(comp)
         if view:
             out.update({sid: v for sid, v in bind_from_shapes(dag, view).items()
+                        if (table.get(sid) or {}).get("name") != "batch"})
+        feeds = self.audio_feeds(comp, dag)
+        if feeds:
+            # the plan is priced at the LARGEST feed (a long-form run's full window)
+            import math
+            largest = max(feeds, key=lambda f: max(math.prod(shp) for shp in f.values()))
+            out.update({sid: v for sid, v in bind_from_shapes(dag, largest).items()
                         if (table.get(sid) or {}).get("name") != "batch"})
         pair = self.vace_control_batch(comp)
         if pair:
