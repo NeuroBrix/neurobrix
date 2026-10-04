@@ -32,10 +32,13 @@ def _executor(tmp_path, monkeypatch, mode):
     monkeypatch.setattr(ex, "_placement_torch_dtype", lambda: torch.float32, raising=False)
     tensors = {f"param::{n}": {"is_parameter": True, "weight_name": n} for n in PARAMS}
     # the trace routed to expert 0 only
+    # the layer's router (a top-k over 2 experts) is still in the order: unfused
     ex._dag = {"tensors": tensors,
                "ops": {"op0": {"input_tensor_ids": ["param::block.0.attn.key.weight",
-                                                    "param::block.0.ffn.expert.0.down.weight"]}},
-               "execution_order": ["op0"]}
+                                                    "param::block.0.ffn.expert.0.down.weight"]},
+                       "topk0": {"op_type": "aten::topk", "input_tensor_ids": [],
+                                 "attributes": {"args": [{"type": "scalar", "value": 2}]}}},
+               "execution_order": ["op0", "topk0"]}
     comp = tmp_path / "components" / "c"; comp.mkdir(parents=True)
     (comp / "weights_index.json").write_text(json.dumps({"tensors": {k: {} for k in PARAMS}}))
     return ex
@@ -58,6 +61,7 @@ def _fake_fusion(dag, family, norm_topk_prob=True, declared=False):
         "op_type": "custom::moe_fused",
         "input_tensor_ids": ["param::block.0.ffn.expert.0.down.weight",
                              "param::block.0.ffn.expert.1.down.weight"]}
+    dag["execution_order"].remove("topk0")          # the fused layer's router leaves the order
     dag["execution_order"].append("moe_fused::block.0")
     return dag
 

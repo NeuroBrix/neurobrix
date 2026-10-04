@@ -471,13 +471,20 @@ class GraphExecutor:
         declared. Timing is safe: the graph is loaded, nothing has
         executed, and the compiled/triton sequences compile lazily after
         this call. Registry-driven declaration, never a family/model name.
+
+        The declared pass runs whenever ANY router is still unfused — not only
+        when none is fused: an llm-family graph fused undeclared at __init__
+        with 47 of 48 routers would otherwise run the 48th with its traced
+        routing, unrefused. The declared pass fuses it or refuses it by name.
         """
         self._moe_norm_topk_prob = norm_topk_prob
 
-        if self._dag and not any(
-                op.get("op_type") == "custom::moe_fused"
-                for op in self._dag.get("ops", {}).values()):
-            from .graph.moe_fusion import detect_and_fuse_moe
+        from .graph.moe_fusion import detect_and_fuse_moe, unfused_routers
+        if self._dag and unfused_routers(self._dag):
+            def _n_fused():
+                return sum(1 for op in self._dag.get("ops", {}).values()
+                           if op.get("op_type") == "custom::moe_fused")
+            n_before = _n_fused()
             self._dag = detect_and_fuse_moe(
                 self._dag, self.family,
                 norm_topk_prob=norm_topk_prob,
@@ -488,7 +495,8 @@ class GraphExecutor:
             # consumes the experts the trace never routed to; the fused
             # kernel reads them all (2026-09-13, Ming-Lite-Omni triton:
             # `moe_fused::block.0` met None — register 54).
-            self._load_what_the_rewrite_added()
+            if _n_fused() > n_before:
+                self._load_what_the_rewrite_added()
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
         #
@@ -502,6 +510,18 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     _a = op.setdefault("attributes", {})
+                    if _a.get("routing_from_graph"):
+                        # The renormalisation was READ off the traced graph (the dense
+                        # stacked block: sum + div present or not) — the vendor code's
+                        # own answer. A registry flag that contradicts it is a defect
+                        # of the data, named here, never patched over either way.
+                        if bool(_a.get("norm_topk_prob")) != bool(norm_topk_prob):
+                            raise RuntimeError(
+                                f"ZERO FALLBACK: {_uid}: the registry declares "
+                                f"norm_topk_prob={bool(norm_topk_prob)} but the traced graph "
+                                f"computes norm_topk_prob={bool(_a.get('norm_topk_prob'))} — "
+                                "fix the data at its source.")
+                        continue
                     if _a.get("routing_rewritten"):
                         # A fused op whose rewrite moved the softmax past the top-k
                         # (softmax-after-topk block shape) OWNS its renormalisation:
@@ -3638,7 +3658,18 @@ class GraphExecutor:
         w_tid = attrs.get("topk_weights_tid")
         blended = idx_tid is not None and w_tid is not None
 
-        gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+        if attrs.get("stacked_experts"):
+            from neurobrix.triton.moe import StackedSlabPromotion
+            hidden = store.get(attrs["hidden_states_tid"])
+            if hidden is None:
+                raise RuntimeError("MoE fused (triton-sequential): hidden_states is None "
+                                   f"({attrs['hidden_states_tid']})")
+            promo = StackedSlabPromotion(store.get, hidden._device_idx)
+            gate_ws, up_ws, down_ws = expert_weight_lists(attrs, promo)
+            per_call = promo.per_call
+        else:
+            gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+            per_call = False
 
         cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
         return execute_moe_fused(
@@ -3653,6 +3684,7 @@ class GraphExecutor:
             cache_key=cache_key,
             topk_indices=store.get(idx_tid) if blended else None,
             topk_weights=store.get(w_tid) if blended else None,
+            weights_per_call=per_call,
         )
 
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):

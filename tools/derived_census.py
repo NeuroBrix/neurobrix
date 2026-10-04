@@ -214,12 +214,18 @@ def runtime_graph(model: str, comp: str) -> dict:
         GraphExecutor._normalize_sdpa_scaling(stub)
         GraphExecutor._mark_sdpa_k_layout(stub)
         manifest = json.loads((CACHE / model / "manifest.json").read_text())
+        from neurobrix.core.runtime.graph.moe_fusion import unfused_routers
         g = detect_and_fuse_moe(stub._dag, manifest.get("family"), norm_topk_prob=True)
-        if comp == declared_moe_lm(model):
-            # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): fused, declared
-            g = detect_and_fuse_moe(g, manifest.get("family"), norm_topk_prob=True, declared=True) \
-                if not any(o.get("op_type") == "custom::moe_fused"
-                           for o in (g.get("ops") or {}).values()) else g
+        if comp == declared_moe_lm(model) and unfused_routers(g):
+            # the flow's `set_moe_config` on its LM (lm_config.num_experts > 1): the declared pass
+            # over every router still unfused, with the registry's norm_topk_prob — as it runs
+            dp = CACHE / model / "runtime" / "defaults.json"
+            lmc = (json.loads(dp.read_text()) if dp.exists() else {}).get("lm_config") or {}
+            if lmc.get("norm_topk_prob") is None:
+                raise SystemExit(f"{model}: lm_config declares a MoE without norm_topk_prob — "
+                                 "the flows refuse it, so the derivation does")
+            g = detect_and_fuse_moe(g, manifest.get("family"),
+                                    norm_topk_prob=bool(lmc["norm_topk_prob"]), declared=True)
         _RUNTIME_GRAPHS[key] = g
     return _RUNTIME_GRAPHS[key]
 
