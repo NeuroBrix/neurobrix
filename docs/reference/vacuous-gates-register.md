@@ -3699,3 +3699,27 @@ the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
 
 **The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
 the rule; pin it on the case it was written for.
+
+### 119 — a cell pinned the estimator's figure as "the measurement", and the figure held a phantom
+
+`test_the_LM_and_its_head_together_exceed_the_Macs_rung` (register 104's repair) asserted that
+MiniCPM-o's `llm.model` + `llm.lm_head` are 16 516.2 MB, "over the Mac's 16 384 MB rung before any
+cache", and called it the measurement the SUM rests on. The figure came from the profiler, and
+1 192 MB of it was the head's TRANSPOSED WEIGHT counted as an activation: `aten::t` on a parameter,
+which the sequences remove at bind time (`_eliminate_weight_transpose_ops`) and the Triton `mm`
+reads through its strides. On that engine nothing allocates it. The arena's own record had said so for two weeks (2026-09-22,
+Qwen3-Coder-30B: "593.5 MB memory_pool ComponentArena (lm_head)" — the weight, once).
+
+**What it did while the figure was wrong**: green, and it certified the phantom — any repair of the
+estimate turned the "measurement" red. On the Mac the same phantom streamed orpheus-3b (927 MB of
+"activations" for 7 MB of logits; 196 s for 16 tokens) while 7 241 MB of weights fit whole.
+
+**Repair** (2026-10-04, `profiler.weight_transposes_read_in_place`, read by the placement estimate
+for the Triton engines; the compiled estimate keeps the bytes until its fp32 operand copy is
+measured, and the layer partitioner keeps them as the cost of a cut). The pair is 15 179 MB on
+triton, under the rung; the cell now pins what does exceed it —
+everything the vlm flow keeps with the pair (17 856 MB; the flow declares no phases) — and that the
+flow declares none, so it is re-read the day it does.
+
+**The lesson, in one line.** A figure the planner computed is the planner's claim; a cell that
+calls it a measurement must hold a byte someone read off the device.

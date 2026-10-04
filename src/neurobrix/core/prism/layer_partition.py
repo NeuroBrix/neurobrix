@@ -165,9 +165,14 @@ class LayerPartitioner:
         """Bytes of activation alive after each op in the order.
 
         This is the cost of cutting THERE, and its minima are where the
-        graph comes apart. The liveness and the zero-allocation rule are the
-        profiler's (`dag_last_uses`, `ZERO_ALLOC_OP_TYPES`): a graph output is
-        never freed, a stride-0 broadcast view allocates nothing.
+        graph comes apart. The liveness is the profiler's (`dag_last_uses`): a graph output is
+        never freed, and a stride-0 broadcast view allocates nothing (`ZERO_ALLOC_OP_TYPES`).
+
+        The transpose of a WEIGHT keeps its bytes on this curve, though the placement estimate
+        prices it at zero on the Triton engines (`profiler.weight_transposes_read_in_place`: the
+        contraction reads the view in place). Here the figure is the cost of a CUT: between the
+        transpose and the contraction that reads it, a seam would carry the weight out of the
+        piece that loaded it. Its bytes on the curve are what keeps that seam from looking free.
         """
         from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
         last = self._last_use()

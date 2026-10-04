@@ -12,8 +12,10 @@ WHY SUM, EVEN FOR `lazy_sequential` AND `cpu_streaming`. They LOAD one component
 stays resident is the FLOW's decision. The VLM decode loop keeps the LM and its head together, the
 speech legs load their talker groups beside or after the LM, the triton dual_ar flow loads its
 quantizer with the model still resident. A MAX (the strategies' docstrings) over-accepted MiniCPM on
-the Mac — its LM + head alone are over the rung (register 104). The SUM is the bound that holds for
-every flow until Prism reads what each flow keeps.
+the Mac — its LM, its head and the towers the flow keeps beside them are over the rung (registers
+104, 119). The SUM is the bound that holds for every flow that declares no phases; a flow whose
+handlers were read into `core/flow/base.py RESIDENT_PHASES` is held to what it keeps with the cache
+(`test_a_model_that_fits_whole_is_planned_whole.py`).
 
 The machine is built (register 102): hand-built components where the answer is known exactly, a
 pinned Mac or a pinned V100 for the plan cells.
@@ -124,14 +126,22 @@ def _plan_mac(monkeypatch):
     return p, refusal, s, seen, c
 
 
-def test_the_LM_and_its_head_together_exceed_the_Macs_rung(monkeypatch):
+def test_the_LM_its_head_and_the_towers_beside_them_exceed_the_Macs_rung(monkeypatch):
     """The measurement register 104 rests on, from the solver's own estimate and the flow's own
-    lifecycle: MiniCPM's persistent pair alone is over the rung."""
+    lifecycle — re-read 2026-10-04 (register 119). This cell pinned "MiniCPM's persistent pair alone
+    is over the rung" at 16 516.2 MB; 1 192 MB of that was the head's transposed weight priced as an
+    activation, which the Triton engine never allocates (profiler.weight_transposes_read_in_place).
+    The pair is 15 179 MB, UNDER
+    the 16 384 rung. What exceeds it is what the vlm flow keeps with the pair — the flow declares no
+    phases, so every component: 17 856 MB. The SUM still refuses the whole strategies; a MAX, or the
+    pair alone, would accept them."""
     _, _, s, seen, c = _plan_mac(monkeypatch)
     persistent, _ = s._classify_lifecycle(c)
     together = sum(m.total_bytes for n, m in seen.items() if n in persistent) / MB
+    everything = sum(m.total_bytes for m in seen.values()) / MB
     rung = s._effective_capacity_mb(s._prepare_devices(profile(APPLE_M4_PRO))[0])
-    assert persistent and together > rung, (sorted(persistent), together, rung)
+    assert persistent and together < rung < everything, (sorted(persistent), together, rung, everything)
+    assert s._flow_phases(c) is None      # the day the vlm flow declares phases, this cell is re-read
 
 
 def test_and_the_whole_strategies_are_refused_on_it_while_the_lm_streams(monkeypatch):

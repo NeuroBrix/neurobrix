@@ -64,28 +64,46 @@ def _solve(rung_mb, monkeypatch, mode="compiled"):
     return p, s, seen, c
 
 
-@pytest.fixture(scope="module")
-def band():
+_BANDS = {}
+
+
+def band_for(mode):
     """[lo, hi): the rungs at which the component is too big for `total > rung` streaming and
-    too big to place whole — derived from the solver's own figures, at a neutral rung."""
-    mp = pytest.MonkeyPatch()
-    try:
-        _, s, seen, c = _solve(16384, mp)
-        dev = s._prepare_devices(profile(APPLE))[0]
-        whole = s._whole_component_mb(c, COMP, seen[COMP], dev)
-        total = seen[COMP].total_mb
-        return total, whole / s.whole_component_fraction
-    finally:
-        mp.undo()
+    too big to place whole — derived from the solver's own figures, at a neutral rung, FOR THE
+    MODE the cell plans in. The two engines price the component differently (the triton estimate
+    reads a weight's transpose in place, the compiled one keeps it — 2026-10-04: text_encoder
+    9 630 MB compiled, 9 234 MB triton), so a band derived in one mode is not a band in the other:
+    the triton cell at 0.9 of the compiled band sat ABOVE the triton component and planned it
+    whole, correctly."""
+    if mode not in _BANDS:
+        mp = pytest.MonkeyPatch()
+        try:
+            _, s, seen, c = _solve(16384, mp, mode)
+            dev = s._prepare_devices(profile(APPLE))[0]
+            whole = s._whole_component_mb(c, COMP, seen[COMP], dev)
+            total = seen[COMP].total_mb
+            _BANDS[mode] = (total, whole / s.whole_component_fraction)
+        finally:
+            mp.undo()
+    return _BANDS[mode]
 
 
-def test_the_band_exists_for_this_component(band):
+@pytest.fixture(params=MODES)
+def mode(request):
+    return request.param
+
+
+@pytest.fixture
+def band(mode):
+    return band_for(mode)
+
+
+def test_the_band_exists_for_this_component(band, mode):
     lo, hi = band
     assert hi - lo > 50, (f"the band [{lo:.1f}, {hi:.1f}) MB is too thin to put three rungs in; "
                           f"the component or the fraction moved — re-derive the scenario")
 
 
-@pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("where", [0.1, 0.5, 0.9])
 def test_a_rung_inside_the_band_streams_on_the_card(monkeypatch, band, where, mode):
     lo, hi = band
@@ -97,7 +115,6 @@ def test_a_rung_inside_the_band_streams_on_the_card(monkeypatch, band, where, mo
         f"whole on the accelerator is streamed on it, never sent to the host")
 
 
-@pytest.mark.parametrize("mode", MODES)
 def test_and_the_streamed_peak_stays_inside_the_usable_part_of_the_rung(monkeypatch, band, mode):
     """CHANGED 2026-09-28 (e4b1370a's rule). It asserted peak + the TOTAL of every other component
     <= usable — the all-at-once reserve, which counts the VAE's decode peak beside the text
@@ -122,20 +139,20 @@ def test_and_the_streamed_peak_stays_inside_the_usable_part_of_the_rung(monkeypa
         f"{rung} MB rung: a streamed component is held to a looser standard than a whole one")
 
 
-def test_above_the_band_the_component_is_held_whole(monkeypatch, band):
+def test_above_the_band_the_component_is_held_whole(monkeypatch, band, mode):
     """The control: past the band nothing is streamed that fits whole."""
     _, hi = band
-    p, *_ = _solve(int(hi) + 64, monkeypatch)
+    p, *_ = _solve(int(hi) + 64, monkeypatch, mode)
     assert getattr(p, "strategy", repr(p)) == "lazy_sequential", p
 
 
-def test_a_component_that_fits_whole_is_never_the_one_streamed(monkeypatch, band):
+def test_a_component_that_fits_whole_is_never_the_one_streamed(monkeypatch, band, mode):
     """The other half of the law. Just above the band the text_encoder fits whole (its whole
     cost <= usable) while its TOTAL, which counts the estimator's overhead, does not. Streaming
     must classify by the same whole cost `_place_component` uses: classified by the total it
     would stream a component the rung above already holds whole."""
     _, hi = band
-    _, s, seen, _ = _solve(int(hi) + 64, monkeypatch)
+    _, s, seen, _ = _solve(int(hi) + 64, monkeypatch, mode)
     dev = s._prepare_devices(profile(APPLE))[0]
     assert seen[COMP].total_mb > s._usable_mb(dev), (
         "precondition: at this rung the component's total must exceed the usable figure, or the "
