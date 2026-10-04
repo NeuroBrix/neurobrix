@@ -483,13 +483,22 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     _a = op.setdefault("attributes", {})
-                    if _a.get("routing_rewritten") or _a.get("routing_from_graph"):
+                    if _a.get("routing_from_graph"):
+                        # The renormalisation was READ off the traced graph (the dense
+                        # stacked block: sum + div present or not) — the vendor code's
+                        # own answer. A registry flag that contradicts it is a defect
+                        # of the data, named here, never patched over either way.
+                        if bool(_a.get("norm_topk_prob")) != bool(norm_topk_prob):
+                            raise RuntimeError(
+                                f"ZERO FALLBACK: {_uid}: the registry declares "
+                                f"norm_topk_prob={bool(norm_topk_prob)} but the traced graph "
+                                f"computes norm_topk_prob={bool(_a.get('norm_topk_prob'))} — "
+                                "fix the data at its source.")
+                        continue
+                    if _a.get("routing_rewritten"):
                         # A fused op whose rewrite moved the softmax past the top-k
                         # (softmax-after-topk block shape) OWNS its renormalisation:
-                        # the registry's flag would change the math it proved. One
-                        # whose renormalisation was READ off the traced graph (the
-                        # dense stacked block: sum + div present or not) carries the
-                        # vendor code's own answer, which the flag cannot overrule.
+                        # the registry's flag would change the math it proved.
                         continue
                     _a["norm_topk_prob"] = norm_topk_prob
 
@@ -3623,7 +3632,15 @@ class GraphExecutor:
         w_tid = attrs.get("topk_weights_tid")
         blended = idx_tid is not None and w_tid is not None
 
-        gate_ws, up_ws, down_ws = expert_weight_lists(attrs, store.get)
+        fetch = store.get
+        if attrs.get("stacked_experts"):
+            from neurobrix.triton.moe import promote_stacked_slabs
+            hidden = store.get(attrs["hidden_states_tid"])
+            if hidden is None:
+                raise RuntimeError("MoE fused (triton-sequential): hidden_states is None "
+                                   f"({attrs['hidden_states_tid']})")
+            fetch = promote_stacked_slabs(store.get, hidden._device_idx)
+        gate_ws, up_ws, down_ws = expert_weight_lists(attrs, fetch)
 
         cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
         return execute_moe_fused(

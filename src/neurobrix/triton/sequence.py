@@ -2129,7 +2129,11 @@ class TritonSequence:
                 _st = _stacked_attrs["stacked_experts"]
                 _lut = {_st["input_linear_tid"]: arena[_in_slot_c],
                         _st["output_linear_tid"]: arena[_out_slot_c]}
-                _g, _u, _d = _ewl(_stacked_attrs, _lut.get)
+                _hs = arena[_hs_slot]
+                if _hs is None:
+                    raise RuntimeError(f"MoE fused: hidden_states is None ({op_uid})")
+                from .moe import promote_stacked_slabs as _promote
+                _g, _u, _d = _ewl(_stacked_attrs, _promote(_lut.get, _hs._device_idx))
             else:
                 _g = [arena[s] for s in _gw]
                 _u = [arena[s] for s in _uw]

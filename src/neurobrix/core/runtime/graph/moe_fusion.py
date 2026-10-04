@@ -102,6 +102,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     fused_count = 0
     ops_removed_total = 0
     dead_outputs_total = 0
+    declined: Dict[str, str] = {}
 
     for topk_uid in moe_topk_uids:
         blend = blends.get(topk_uid)
@@ -123,8 +124,10 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             # its refusals carry their reason.
             result = _fuse_one_stacked_layer(
                 dag, ops, execution_order, tensors,
-                consumer_map, producer_map, topk_uid)
+                consumer_map, producer_map, topk_uid,
+                declared_norm=norm_topk_prob if declared else None)
             if isinstance(result, Declined):
+                declined[topk_uid] = result.reason
                 if refusals is not None:
                     refusals[topk_uid] = result.reason
                 if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
@@ -143,6 +146,16 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
                 consumer_map[in_tid].append(fused_uid)
             for out_tid in fused_op.get("output_tensor_ids", []):
                 producer_map[out_tid] = fused_uid
+
+    # A DECLARED MoE (the registry says num_experts > 1) whose router neither
+    # matcher fuses would run as traced: trace-frozen routing, or every expert
+    # for every token — in silence. Refused by name instead.
+    if declared and declined:
+        named = "; ".join(f"{u}: {r}" for u, r in list(declined.items())[:3])
+        raise RuntimeError(
+            f"ZERO FALLBACK: [MoE Fusion] {len(declined)} router(s) of a declared MoE "
+            f"are fused by no matcher — {named}. Extend the matcher to this block "
+            "rather than letting the traced routing run.")
 
     # Update DAG
     dag["ops"] = ops
@@ -1407,8 +1420,9 @@ def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
                       in_axis, gate_offset, out_in_axis, norm_topk_prob,
                       extra_attrs):
     """The ONE emission of a stacked-expert custom::moe_fused op, whichever
-    traced form the matcher recognised."""
-    sdt = tensors.get(in_tid, {}).get("dtype", "bfloat16")
+    traced form the matcher recognised. The per-expert entries carry the
+    slab's own dtype — a parameter the graph describes."""
+    sdt = tensors[in_tid]["dtype"]
     syn = lambda half, e: f"{in_tid}::stacked::{half}::{e}"
     syn_down = lambda e: f"{out_tid}::stacked::down::{e}"
     gate_ids = [syn("gate", e) for e in range(num_experts)]
@@ -1455,7 +1469,8 @@ def _stacked_fused_op(tensors, fused_uid, *, top_k, num_experts, F, H,
 
 
 def _fuse_one_stacked_layer(dag, ops, execution_order, tensors,
-                            consumer_map, producer_map, topk_uid):
+                            consumer_map, producer_map, topk_uid,
+                            declared_norm=None):
     """Match and fuse one stacked-expert MoE layer, either routing order.
     Returns like `_fuse_one_moe_layer`, or a `Declined` naming why this is
     not such a block — every check REFUSES rather than guessing."""
@@ -1473,7 +1488,7 @@ def _fuse_one_stacked_layer(dag, ops, execution_order, tensors,
             topk_uid)
     return _fuse_softmax_first_dense_layer(
         dag, ops, execution_order, tensors, consumer_map, producer_map,
-        topk_uid)
+        topk_uid, declared_norm=declared_norm)
 
 
 def _fuse_softmax_after_topk_layer(dag, ops, execution_order, tensors,
@@ -1589,6 +1604,8 @@ def _fuse_softmax_after_topk_layer(dag, ops, execution_order, tensors,
     F = int(sh[out_tid_p][2])
     if int(sh[in_tid][1]) != 2 * F:
         return D(f"the input slab {sh[in_tid]} does not hold 2F={2 * F} rows")
+    if not tensors.get(in_tid, {}).get("dtype"):
+        return D(f"the input slab {in_tid} carries no dtype in the graph")
 
     # The gate|up halves, read from the graph's own split of the projection.
     _splits = [u for u in interior
@@ -1700,12 +1717,15 @@ def _same_shape(tensors: Dict[str, Any], a: str, b: str) -> bool:
 
 
 def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
-                                    consumer_map, producer_map, topk_uid):
+                                    consumer_map, producer_map, topk_uid,
+                                    declared_norm=None):
     """Match and fuse one softmax-before-topk stacked block traced in its dense
     all-experts form (see the section header). Returns like
     `_fuse_one_moe_layer`, or a `Declined` naming the first structural
     mismatch. The fused op's routing is the graph's own — topk of the softmax
-    scores, renormalised exactly when the graph divides by the top-k sum."""
+    scores, renormalised exactly when the graph divides by the top-k sum.
+    `declared_norm` is the registry's norm_topk_prob when the caller declares
+    it (a declared pass), None otherwise; a contradiction is raised by name."""
     D = Declined
     topk = ops[topk_uid]
     k = _extract_topk_k(topk)
@@ -1877,6 +1897,15 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
             or wsh_in[0] != E or wsh_in[1] != H or wsh_in[2] != 2 * F:
         return D(f"the gate|up projection does not read a stacked "
                  f"[E={E}, H={H}, 2F={2 * F}] parameter ({w_in}: {wsh_in})")
+    if not tensors.get(w_in, {}).get("dtype"):
+        return D(f"the input slab {w_in} carries no dtype in the graph")
+    # The dispatchers weight each expert's output by its routing score cast to the
+    # weight dtype: faithful only when the graph's combine runs in that dtype too.
+    combine_dt = {tensors.get(x, {}).get("dtype") for x in (route_tid, xo_tid)}
+    if combine_dt != {tensors[w_in].get("dtype")} or \
+            tensors.get(w_out, {}).get("dtype") != tensors[w_in].get("dtype"):
+        return D(f"the weighted combine runs in {sorted(map(str, combine_dt))}, not the "
+                 f"slabs' dtype {tensors[w_in].get('dtype')}")
     interior.add(up_uid)
     t = hrep_tid
     while ops.get(producer_map.get(t), {}).get("op_type") in _RESHAPE \
@@ -1929,9 +1958,19 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
             if esc:
                 return D(f"{ot} escapes the block to {esc[0]}")
 
+    # A registry that DECLARES the renormalisation and a trace that computes the
+    # other one is a contradiction in the data, not "another block": refused
+    # loudly, never overruled in silence, never left to run unfused unnoticed.
+    if declared_norm is not None and bool(declared_norm) != renorm:
+        raise RuntimeError(
+            f"ZERO FALLBACK: [MoE Fusion] {topk_uid}: the registry declares "
+            f"norm_topk_prob={bool(declared_norm)} but the traced graph computes "
+            f"norm_topk_prob={renorm} (it {'divides' if renorm else 'does not divide'} "
+            "the top-k scores by their sum) — fix the data at its source.")
+
     # --- the fused op -------------------------------------------------------
     parent = topk.get("parent_module", "") or ""
-    bm = re.match(r"(block\.\d+)", parent)
+    bm = re.match(rf"({re.escape(_NeuroTax.resolve('layers'))}\.\d+)", parent)
     fused_uid = f"moe_fused::{bm.group(1) if bm else topk_uid}"
     if fused_uid in ops:
         fused_uid = f"moe_fused::{topk_uid}"

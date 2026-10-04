@@ -33,6 +33,7 @@ Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_a_stacked_expert_bl
 from __future__ import annotations
 
 import copy
+import re
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -63,7 +64,7 @@ def _l(v):
 
 
 def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=False,
-                  escape=False, idx_reused=False, dtype="float64"):
+                  escape=False, idx_reused=False, dtype="float64", cast_to=None):
     """One MoE layer in the traced form of transformers 4.57's Qwen3-VL-MoE block
     (op for op as the container's graph.json, block.0), small sizes."""
     tensors, ops, order = {}, {}, []
@@ -107,11 +108,13 @@ def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=Fal
     if scale_routing:
         op("mul.scale", "aten::mul", [_t(w_tid), _s(2.5)], [tensor("sscaled", [T, K], "float32")])
         w_tid = "sscaled"
-    op("cast.w", "aten::_to_copy", [_t(w_tid)], [tensor("wcast", [T, K])],
-       kwargs={"dtype": {"type": "dtype", "value": f"torch.{dtype}"}})
-    op("zeros", "aten::zeros_like", [_t("logits")], [tensor("z", [T, E])])
+    cdt = cast_to or dtype
+    op("cast.w", "aten::_to_copy", [_t(w_tid)], [tensor("wcast", [T, K], cdt)],
+       kwargs={"dtype": {"type": "dtype", "value": f"torch.{cdt}"}})
+    op("zeros", "aten::zeros_like", [_t("l32" if cast_to else "logits")],
+       [tensor("z", [T, E], cdt)])
     op("scatter", "aten::scatter", [_t("z"), _s(1), _t("idx"), _t("wcast")],
-       [tensor("R", [T, E])])
+       [tensor("R", [T, E], cdt)])
     if idx_reused:
         op("idx.view", "aten::view", [_t("idx"), _l([-1])], [tensor("idx_flat", [T * K], "int64")])
     op("view.b", "aten::view", [_t("va"), _l([B, -1, H])], [tensor("hb", [B, S, H])])
@@ -133,11 +136,11 @@ def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=Fal
        parent="block.0.ffn.expert")
     op("view.e", "aten::view", [_t("dn"), _l([E, B, S, H])], [tensor("de", [E, B, S, H])],
        parent="block.0.ffn.expert")
-    op("transpose", "aten::transpose", [_t("R"), _s(0), _s(1)], [tensor("Rt", [E, T])],
+    op("transpose", "aten::transpose", [_t("R"), _s(0), _s(1)], [tensor("Rt", [E, T], cdt)],
        parent="block.0.ffn.expert")
-    op("view.f", "aten::view", [_t("Rt"), _l([E, B, -1])], [tensor("Rv", [E, B, S])],
+    op("view.f", "aten::view", [_t("Rt"), _l([E, B, -1])], [tensor("Rv", [E, B, S], cdt)],
        parent="block.0.ffn.expert")
-    op("unsqueeze", "aten::unsqueeze", [_t("Rv"), _s(3)], [tensor("Ru", [E, B, S, 1])],
+    op("unsqueeze", "aten::unsqueeze", [_t("Rv"), _s(3)], [tensor("Ru", [E, B, S, 1], cdt)],
        parent="block.0.ffn.expert")
     op("mul.c", "aten::mul", [_t("de"), _t("Ru")], [tensor("wsum_in", [E, B, S, H])],
        parent="block.0.ffn.expert")
@@ -267,9 +270,13 @@ def native_engine(uid, op, env):
 _native_meta = [None]
 
 
-def _fuse(dag, refusals=None):
+def _fuse(dag, refusals=None, norm=None):
+    """The declared pass, the registry's norm_topk_prob agreeing with the graph
+    unless the test says otherwise."""
     d = copy.deepcopy(dag)
-    return MF.detect_and_fuse_moe(d, "multimodal", norm_topk_prob=True, declared=True,
+    if norm is None:
+        norm = any(o["op_type"] == "aten::div" for o in dag["ops"].values())
+    return MF.detect_and_fuse_moe(d, "multimodal", norm_topk_prob=norm, declared=True,
                                   refusals=refusals)
 
 
@@ -321,6 +328,24 @@ def test_the_gate_half_is_the_piece_silu_reads():
 def test_the_renormalisation_is_read_off_the_graph():
     d2 = _fuse(qwen3vl_block(renorm=False))
     assert d2["ops"]["moe_fused::block.0"]["attributes"]["norm_topk_prob"] is False
+    # an undeclared pass (the llm family's first fusion) takes the graph's answer
+    d3 = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(renorm=False)), "llm",
+                                norm_topk_prob=True)
+    assert d3["ops"]["moe_fused::block.0"]["attributes"]["norm_topk_prob"] is False
+
+
+@pytest.mark.parametrize("renorm", [True, False])
+def test_a_registry_that_contradicts_the_trace_is_named(renorm):
+    with pytest.raises(RuntimeError, match="the registry declares"):
+        _fuse(qwen3vl_block(renorm=renorm), norm=not renorm)
+    # and the executor's patch loop names it on an op the first pass fused
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    ex = GraphExecutor.__new__(GraphExecutor)
+    ex._dag = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(renorm=renorm)), "llm")
+    ex.family = "llm"
+    ex.set_moe_config(norm_topk_prob=renorm)          # agreeing: silent
+    with pytest.raises(RuntimeError, match="the registry declares"):
+        ex.set_moe_config(norm_topk_prob=not renorm)
 
 
 @pytest.mark.parametrize("variant, reason", [
@@ -328,14 +353,19 @@ def test_the_renormalisation_is_read_off_the_graph():
     (dict(scale_routing=True), "not scattered"),
     (dict(escape=True), "escapes the block"),
     (dict(idx_reused=True), "read beyond the routing scatter"),
+    (dict(cast_to="float32"), "weighted combine runs in"),
 ])
 def test_a_block_that_is_not_this_one_is_declined_by_name(variant, reason):
+    # an undeclared pass: declined, named, the graph left exactly as traced
     refusals = {}
-    d2 = _fuse(qwen3vl_block(**variant), refusals)
+    d2 = MF.detect_and_fuse_moe(copy.deepcopy(qwen3vl_block(**variant)), "llm",
+                                refusals=refusals)
     assert not _fused_ops(d2), f"{variant} must not fuse"
     assert "topk" in refusals and reason in refusals["topk"], refusals
-    # the declined graph is left exactly as traced
     assert d2["execution_order"] == qwen3vl_block(**variant)["execution_order"]
+    # a DECLARED MoE that no matcher fuses is refused, never run as traced in silence
+    with pytest.raises(RuntimeError, match=f"fused by no matcher .*{re.escape(reason)}"):
+        _fuse(qwen3vl_block(**variant))
 
 
 # ───────────────────── (b) the fused op computes the graph's math ─────────────────
@@ -433,4 +463,10 @@ def test_every_qwen3_vl_moe_layer_now_fuses():
 def test_the_other_moe_containers_fuse_as_before(model, comp, family, layers):
     dag, _ = _graph(model, comp)
     d2 = MF.detect_and_fuse_moe(dag, family, norm_topk_prob=True)
-    assert len(_fused_ops(d2)) == layers
+    fused = _fused_ops(d2)
+    assert len(fused) == layers
+    for u in fused:
+        st = d2["ops"][u]["attributes"].get("stacked_experts")
+        if st:    # granite's slabs, as its select -> t -> mm reads them, gate half first
+            assert (st["input_linear_in_axis"], st["gate_offset"],
+                    st["output_linear_in_axis"]) == (1, 0, 1), st
