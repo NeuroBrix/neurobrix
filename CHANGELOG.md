@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not of the form 4k+1 (88 frames, for example), although no tile depends on it. When the plan still
   gives a component no tile, the refusal now says why instead of "no tiling fits".
 
+- **A refusal under `--compiled` says why a component got no tile.** It said so only under
+  `--triton`. Each placement attempt now gives its own reason and the memory it was measured
+  against (for example "its tile and weights still need 666 MB" on a card with 589 MB usable).
+
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.
