@@ -188,6 +188,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Open-Sora v2 reads its prompt's CLIP vector correctly.** The built-in reader of `tokenizer.json`
+  ignored the word-end marker that CLIP tokenizers declare, so every word was split into mid-word pieces
+  (e.g. "a" became a different token than CLIP expects) and the pooled prompt vector that steers
+  Open-Sora v2 pointed elsewhere (cosine 0.57 to the reference). Tokens now match the reference
+  tokenizer exactly; every other installed model tokenizes as before.
+
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty
   negative prompt instead of ignoring it, which pulled every step away from the prompt. On
