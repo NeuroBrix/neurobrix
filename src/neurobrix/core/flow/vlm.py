@@ -41,6 +41,7 @@ import torch
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 from neurobrix import decode_progress
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -442,10 +443,7 @@ class VLMEngine(FlowHandler):
                 f"ZERO FALLBACK: vlm stage '{lm_name}' requires embed_tokens weight.")
 
         def _embed(ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([ids], dtype=torch.long, device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [ids], device=device, dtype=dtype)
 
         parts = []
         if prefix_ids:
@@ -926,11 +924,7 @@ class VLMEngine(FlowHandler):
                 "weight.")
 
         def _embed(token_ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([token_ids], dtype=torch.long,
-                                device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [token_ids], device=device, dtype=dtype)
 
         # --mode audio on a hidden_text_merge speech contract: the vendor
         # tts template ends the assistant prefix with the tts-bos marker
@@ -1427,11 +1421,7 @@ class VLMEngine(FlowHandler):
                 "embedding weight.")
 
         def _embed(token_ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([token_ids], dtype=torch.long,
-                                device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [token_ids], device=device, dtype=dtype)
 
         # Placeholder rows are overwritten IN-GRAPH by masked_scatter —
         # the context embeds the full ids, placeholders included.
