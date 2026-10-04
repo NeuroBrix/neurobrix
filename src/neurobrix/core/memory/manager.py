@@ -121,13 +121,12 @@ class MemoryManager:
         # memory beside the next one (`moe.release_pinned_tables`). Only when the triton MoE
         # module is already loaded: a run that never built a table has none to release, and a
         # compiled-path unload imports nothing. On CUDA a table pins nothing and none is dropped.
-        try:
-            import sys
-            _moe = sys.modules.get("neurobrix.triton.moe")
-            if _moe is not None:
-                _moe.release_pinned_tables()
-        except Exception:
-            pass
+        # Never swallowed: a table that could not release its pins keeps the unloaded weights in
+        # memory — the very defect this step removes — and that must be seen, not survived.
+        import sys
+        _moe = sys.modules.get("neurobrix.triton.moe")
+        if _moe is not None:
+            _moe.release_pinned_tables()
 
         # Step 2: drop references — ComponentArena.__del__ / NBXTensor
         # finalizers run cudaFree here, but the kernels that touched
