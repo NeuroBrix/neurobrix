@@ -205,3 +205,30 @@ def test_a_component_whole_over_the_largest_allocation_is_streamed_and_named(mon
     assert p.strategy == "layer_streaming" and lm in _pieces(s), (p.strategy, _pieces(s))
     assert max(_pieces(s)[lm]) <= int(lm_mb) - 1, _pieces(s)
     assert f"'{lm}'" in (s._arena_declined.get(lm) or "") and "max_allocation_mb" in s._arena_declined[lm]
+
+
+def test_the_door_alone_keeps_a_rung_that_forgot_from_winning(monkeypatch):
+    """Every rung made to forget the bound (`_arena_over_allocation` answers None to all but the door):
+    the door in the ranked loop still rejects each plan holding the language model whole over it — the
+    plan refuses naming the bound, or does not hold the model whole on the card."""
+    import sys as _sys
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    p, s = _plan("Janus-Pro-7B", APPLE_M4_PRO)
+    lm = ((s._flow_topology(NBXContainer.load(str(container_root("Janus-Pro-7B")))).get("flow") or {})
+          .get("generation") or {}).get("lm_component")
+    spec = copy.deepcopy(APPLE_M4_PRO)
+    spec["devices"][0]["max_allocation_mb"] = int(p.component_memory[lm].weight_bytes / MB) - 1
+    real = PrismSolver._arena_over_allocation
+
+    def forgetful(self, *a, **k):
+        return real(self, *a, **k) if _sys._getframe(1).f_code.co_name == "_arena_door" else None
+    monkeypatch.setattr(PrismSolver, "_arena_over_allocation", forgetful)
+    try:
+        p, s = _plan("Janus-Pro-7B", spec)
+    except RuntimeError as refusal:
+        assert "max_allocation_mb" in str(refusal), str(refusal)[-1500:]
+        return
+    dev = p.components[lm].device
+    assert (p.strategy == "layer_streaming" and lm in p.layer_stream_plan) or not str(dev).startswith("mps"), \
+        (p.strategy, dev)
