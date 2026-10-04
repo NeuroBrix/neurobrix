@@ -103,11 +103,13 @@ def run_gate(repo: str, abs_dir: str, gate_cmd: List[str], env_extra: Optional[D
     return {"refused": refused, "ok": ok}
 
 
-def entry_delta(repo: str, rel_path: str) -> Dict[str, int]:
-    """Entries added / changed / removed in a certified file against HEAD (0/0/0 for a non-JSON file)."""
+def entry_delta(repo: str, rel_path: str, content: Optional[bytes] = None) -> Dict[str, int]:
+    """Entries added / changed / removed in a certified file against HEAD (0/0/0 for a non-JSON file).
+    `content`: the bytes being committed (read once, gated, committed); the disk otherwise."""
     try:
-        disk = json.loads((Path(repo) / rel_path).read_text(encoding="utf-8")).get("entries") or {}
-    except (OSError, ValueError, AttributeError):
+        text = content.decode("utf-8") if content is not None else (Path(repo) / rel_path).read_text(encoding="utf-8")
+        disk = json.loads(text).get("entries") or {}
+    except (OSError, ValueError, AttributeError, UnicodeDecodeError):
         return {"added": 0, "changed": 0, "removed": 0}
     shown = _git(repo, "show", f"HEAD:{rel_path}", check=False)
     try:
@@ -153,8 +155,12 @@ def last_push_time(repo: str) -> float:
 
 
 def touch_push(repo: str, when: Optional[float] = None) -> None:
-    """Record a push of this repository now (this tool's pushes, and manual batched ones via `--touch-push`)."""
-    _push_stamp_path(repo).write_text(f"{when if when is not None else time.time():.0f}\n")
+    """Record a push of this repository now (this tool's pushes and push ATTEMPTS, and manual batched
+    ones via `--touch-push`). Written beside itself and replaced: a torn stamp read as 0 opened the window."""
+    p = _push_stamp_path(repo)
+    tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+    tmp.write_text(f"{when if when is not None else time.time():.0f}\n")
+    os.replace(tmp, p)
 
 
 def push_and_verify(repo: str, remote: str, branch: str) -> str:
@@ -169,9 +175,66 @@ def push_and_verify(repo: str, remote: str, branch: str) -> str:
     return ""
 
 
+def _git_dir(repo: str) -> Path:
+    common = subprocess.run(["git", "-C", repo, "rev-parse", "--git-common-dir"], capture_output=True, text=True)
+    d = common.stdout.strip() if common.returncode == 0 and common.stdout.strip() else ".git"
+    return Path(d if os.path.isabs(d) else os.path.join(repo, d))
+
+
+def _gate_snapshot(repo: str, rel_dir: str, snap: Dict[str, bytes], gate_cmd: List[str]) -> List[str]:
+    """The gate run on a COPY of exactly the bytes about to be committed (read once); returns the
+    refused files as repo-relative paths. The gate used to read the disk and the commit to take the
+    working tree as it stood later: a certifier write in between was committed ungated (the tools
+    audit, 2026-09-29)."""
+    import shutil
+    import tempfile
+    td = tempfile.mkdtemp(prefix="nbx-ckpt-gate-", dir=str(_git_dir(repo)))
+    try:
+        root = Path(td) / "dir"
+        for rel, data in snap.items():
+            dst = root / os.path.relpath(rel, rel_dir)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(data)
+        gate = run_gate(repo, str(root), gate_cmd)
+        return sorted({os.path.join(rel_dir, os.path.relpath(p, root)) for p in gate["refused"]})
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _commit_blobs(repo: str, blobs: Dict[str, bytes], message: str) -> subprocess.CompletedProcess:
+    """Commit EXACTLY these bytes at these paths on top of HEAD, through a temporary index (the
+    repository's hooks run as for any commit); the real index is then reset for those paths, so the
+    working tree's later writes stay changes for the next checkpoint. HEAD moved meanwhile (another
+    committer): nothing is committed, said, retried at the next tick."""
+    import tempfile
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    fd, idx = tempfile.mkstemp(prefix="nbx-ckpt-index-", dir=str(_git_dir(repo)))
+    os.close(fd)
+    os.unlink(idx)
+    env = dict(os.environ, GIT_INDEX_FILE=idx)
+    try:
+        subprocess.run(["git", "-C", repo, "read-tree", head], env=env, check=True, capture_output=True)
+        for rel, data in blobs.items():
+            sha = subprocess.run(["git", "-C", repo, "hash-object", "-w", "--stdin"], input=data,
+                                 capture_output=True, check=True).stdout.decode().strip()
+            subprocess.run(["git", "-C", repo, "update-index", "--add", "--cacheinfo", f"100644,{sha},{rel}"],
+                           env=env, check=True, capture_output=True)
+        if _git(repo, "rev-parse", "HEAD").stdout.strip() != head:
+            return subprocess.CompletedProcess([], 1, "", "HEAD moved while the checkpoint was prepared")
+        r = subprocess.run(["git", "-C", repo, "commit", "-q", "-F", "-"], input=message, env=env,
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            _git(repo, "reset", "-q", "--", *blobs, check=False)
+        return r
+    finally:
+        if os.path.exists(idx):
+            os.unlink(idx)
+
+
 def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str], trailers: List[str],
                record: Optional[str] = None, say=print, label: str = "") -> Dict[str, object]:
-    """One checkpoint: gate → commit the files that pass → push every remote → read back → record."""
+    """One checkpoint: read the changed files ONCE → gate those bytes → commit those bytes → push
+    every remote (never main) → read back → record."""
     stamp = time.strftime("%H:%M:%S %Z", time.localtime())   # the machine's clock, its zone named (never a bare UTC)
     files = changed_files(repo, rel_dir)
     result: Dict[str, object] = {"committed": [], "refused": [], "sha": None, "remotes": {}, "files": files}
@@ -191,17 +254,20 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
             return result
         _record(record, f"== checkpoint {stamp}: nothing to commit under {rel_dir}", say)
         return result
-    abs_dir = str(Path(repo) / rel_dir)
-    gate = run_gate(repo, abs_dir, gate_cmd)
-    refused_rel = sorted({os.path.relpath(p, repo) for p in gate["refused"]})
-    to_commit = [f for f in files if f not in refused_rel]
+    snap = {}
+    for f in files:
+        try:
+            snap[f] = (Path(repo) / f).read_bytes()
+        except FileNotFoundError:
+            continue                    # replaced away between the status and the read: the next tick sees it
+    refused_rel = _gate_snapshot(repo, rel_dir, snap, gate_cmd)
+    to_commit = [f for f in snap if f not in refused_rel]
     result["refused"] = refused_rel
     if not to_commit:
         _record(record, f"== checkpoint {stamp}: {len(files)} changed file(s), ALL refused by the gate, nothing committed: "
                         + ", ".join(refused_rel), say)
         return result
-    _git(repo, "add", "--", *to_commit)
-    deltas = {f: entry_delta(repo, f) for f in to_commit}           # measured AFTER the add, before the message
+    deltas = {f: entry_delta(repo, f, snap[f]) for f in to_commit}   # measured on the committed bytes
     added = sum(d["added"] for d in deltas.values()); changed = sum(d["changed"] for d in deltas.values())
     lines = [f"certified: checkpoint{(' ' + label) if label else ''} — {added} entries added, {changed} changed, "
              f"{len(to_commit)} file(s), written while the certifier runs", ""]
@@ -212,17 +278,22 @@ def checkpoint(repo: str, rel_dir: str, remotes: List[str], gate_cmd: List[str],
     lines += ["", "Committed by tools/certified_checkpoint.py: a cut must cost minutes, not a pass."]
     if trailers:
         lines += ["", *trailers]
-    rr = subprocess.run(["git", "-C", repo, "commit", "-q", "-F", "-", "--", *to_commit], input="\n".join(lines),
-                        capture_output=True, text=True)
+    rr = _commit_blobs(repo, {f: snap[f] for f in to_commit}, "\n".join(lines))
     if rr.returncode != 0:
-        # the commit itself failed — another writer's index lock, a hook — said, retried at the next tick
-        _git(repo, "reset", "-q", "--", *to_commit, check=False)
+        # the commit itself failed — a moved HEAD, a hook — said, retried at the next tick
         _record(record, f"== checkpoint {stamp}: commit FAILED — {(rr.stderr or rr.stdout).strip()[-300:]}", say)
         return result
     sha = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     result["sha"] = sha; result["committed"] = to_commit
     branch = current_branch(repo)
     status = []
+    if remotes and branch == "main":
+        # an unattended process never pushes main (the supervisor, 2026-09-28 06:16) — checked HERE, where
+        # the push is, on the branch as it is now; it used to be checked once, in main(), at start only
+        for remote in remotes:
+            result["remotes"][remote] = "REFUSED: main is never pushed by an unattended process"
+        status.append("NOT pushed: the branch is main")
+        remotes = []
     for remote in remotes:
         why = push_and_verify(repo, remote, branch)
         result["remotes"][remote] = why
@@ -251,6 +322,10 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
     branch only. Commits are local and as frequent as the interval; a commit made inside the
     push window stays local and is said so; the final checkpoint waits for the window to open
     rather than leave a proof only where it was written."""
+    holder = hold_the_repository(repo)
+    if holder is None:
+        say(f"[checkpoint] REFUSED: another checkpointer holds {repo} ({_holder_line(repo)}) — one per repository")
+        return 2
     for pid in producers:
         if not producer_alive(pid):
             say(f"[checkpoint] producer {pid} ({producer_name(pid)}) is already gone at start — one last checkpoint, then exit")
@@ -281,7 +356,9 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
             res = checkpoint(repo, rel_dir, remotes if push_now else [], gate_cmd, trailers, record, say=say, label=label)
             last = time.monotonic()
             if res.get("sha"):
-                if push_now and any(not why for why in (res.get("remotes") or {}).values()):
+                if push_now and res.get("remotes"):
+                    # an ATTEMPT spends the window, landed or refused: a refused push was retried at every
+                    # tick (10 min), three attempts per window (the tools audit, 2026-09-29)
                     touch_push(repo)
                 elif not push_now:
                     _record(record, f"== {res['sha']}: committed, NOT pushed (the repository's push window opens in "
@@ -293,6 +370,40 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
                     return 3
                 return 0
         time.sleep(poll)
+
+
+_HELD: Dict[str, object] = {}
+
+
+def _holder_path(repo: str) -> Path:
+    return _git_dir(repo) / "nbx-checkpointer.lock"
+
+
+def _holder_line(repo: str) -> str:
+    try:
+        return _holder_path(repo).read_text().strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
+def hold_the_repository(repo: str):
+    """ONE checkpointer per repository (every worktree shares the common git dir): an exclusive,
+    non-blocking lock held for this process's life. None when another process holds it — the rule
+    was written in a skill and enforced nowhere (the tools audit, 2026-09-29); two checkpointers
+    collided on the index lock. Idempotent within one process."""
+    import fcntl
+    key = str(_holder_path(repo))
+    if key in _HELD:
+        return _HELD[key]
+    fh = open(key, "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    fh.seek(0); fh.truncate(); fh.write(f"pid {os.getpid()} since {time.strftime('%Y-%m-%d %H:%M:%S')}\n"); fh.flush()
+    _HELD[key] = fh
+    return fh
 
 
 def refuse_a_repo_this_tool_is_not_from(repo: str, tool: Optional[str] = None) -> str:
@@ -386,6 +497,11 @@ def main(argv=None) -> int:
         print("REFUSED: an unattended checkpointer never pushes main — run it on a working branch", file=sys.stderr)
         return 2
     gate = json.loads(a.gate_cmd) if a.gate_cmd else DEFAULT_GATE
+    d = Path(a.repo) / a.dir
+    if not a.touch_push and not d.is_dir():
+        print(f"REFUSED: --dir {a.dir}: no such directory under {a.repo} — a checkpointer over nothing "
+              f"commits nothing forever", file=sys.stderr)
+        return 2
     if a.touch_push:
         touch_push(a.repo); print(f"[checkpoint] push of {a.repo} recorded at {time.strftime('%H:%M:%S')}")
         return 0
