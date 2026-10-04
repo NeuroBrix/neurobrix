@@ -103,6 +103,11 @@ class TritonExtDriver(Driver):
     #: "flat arg count does not match signature keep-mask length".
     wants_scratch_params = False
 
+    #: This driver binds a pointer by wrapping memory, and a wrap costs what it maps (~11.5 ms per GiB on M4 Pro,
+    #: 2026-10-04): it asks the launcher for each tensor's addressable extent so it wraps that, not the rest of the
+    #: allocation the tensor lives in.
+    wants_extents = True
+
     _instance: Optional["TritonExtDriver"] = None
 
     @classmethod
@@ -208,7 +213,7 @@ class TritonExtDriver(Driver):
 
     def launch(self, function, grid, block, shared: int, stream: int,
                params: Sequence[Tuple[str, Any]], names=None, types=None,
-               trailing=None) -> None:
+               trailing=None, extents=None) -> None:
         if types is None:
             raise RuntimeError(
                 "the triton-ext driver needs the Triton type of every launch "
@@ -236,9 +241,10 @@ class TritonExtDriver(Driver):
         scalar_types: List[str] = []
         scalar_vals: List[Tuple[str, int]] = []
 
-        for (kind, value), ty in zip(params, types):
+        extents = list(extents) if extents is not None else [None] * len(params)
+        for ((kind, value), ty), extent in zip(zip(params, types), extents):
             if kind == "ptr":
-                ptr_args.append(_buffer_for(int(value), ty))
+                ptr_args.append(_buffer_for(int(value), ty, extent))
             else:
                 scalar_types.append(ty)
                 scalar_vals.append((kind, int(value)))
@@ -352,7 +358,7 @@ class _Trailing(NamedTuple):
 #: takes its LENGTH from the allocator's range table rather than from an exact
 #: pointer hit, which is the one place a stale entry could hand back a buffer
 #: shorter than the tensor.
-_STATS = {"exact": 0, "interior": 0}
+_STATS = {"exact": 0, "interior": 0, "extent_bound": 0}
 
 import os as _os_stats
 if _os_stats.environ.get("NBX_EXT_STATS"):
@@ -552,8 +558,14 @@ class pinned_addresses:
         return False
 
 
-def _buffer_for(addr: int, ty: str):
+def _buffer_for(addr: int, ty: str, extent: Optional[int] = None):
     """Alias the NBXTensor allocation containing `addr` as a MetalBuffer.
+
+    `extent`: the bytes the launch's tensor can address from `addr` (the launcher's `_addressable_extent`), or None.
+    Given, the wrap covers that, rounded up to the page and never past the allocation — not the rest of the
+    allocation: a no-copy wrap costs what it maps, and a weight at the start of its multi-GB arena made every launch
+    on it map the whole remaining arena (10.9 ms at 1 GiB, 46.7 ms at 4 GiB for a 0.5 ms gemv; orpheus decoded at
+    6.3 s per token, 2026-10-04). A pinned address keeps the whole-allocation span its scope's captured table needs.
 
     The launcher reduces a pointer parameter to its integer address, so the
     length has to come from the allocator, which already records it. A tensor
@@ -621,6 +633,10 @@ def _buffer_for(addr: int, ty: str):
     _pinned = _PINNED_WRAPS.get(_pin_key)
     if _pinned is not None:
         return _pinned
+    if extent is not None and addr not in _PIN_COUNTS:
+        reach = -(-max(int(extent), 1) // _PAGE) * _PAGE          # the tensor's extent, rounded up to the page
+        span = (min(span, reach) // itemsize) * itemsize
+        _STATS["extent_bound"] += 1
     raw = (ctypes.c_byte * span).from_address(addr)
     view = np.frombuffer(memoryview(raw), dtype=np_dtype)
     try:
