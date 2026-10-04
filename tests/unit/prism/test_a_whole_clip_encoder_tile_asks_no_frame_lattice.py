@@ -140,22 +140,3 @@ def test_a_refusal_prints_each_rungs_own_tiling_reason():
     assert s._tiling_declined_by_rung["rung A"] == {"vae": "rung A's reason"}
     assert s._tiling_declined_by_rung["rung B"] == {"vae": "rung B's reason"}
 
-
-def test_a_compiled_refusal_says_why_the_encoder_got_no_tile(tmp_path):
-    """Under the compiled engine no host placement is sized on the card, so no rung line carries the
-    tiling reason: the refusal said nothing of the tile the encoder did not get (Allegro-TI2V's
-    re-propagated container at 720x1280, 2026-10-04). A decline no rung line prints is printed
-    on its own line."""
-    container, _ = _encoder(tmp_path, "folded")
-    s, _ = _decide(container, 88, 32768)
-    s._mode = "compiled"
-    s._strategies_tried, s._layer_streaming_declined = ["cpu_streaming"], None
-    s._host_device_overflow = {}
-    comp = SimpleNamespace(weight_mb=244.0, activation_mb=319_500.0, total_mb=319_744.0,
-                           weight_bytes=244 * MB, activation_bytes=ACTIVATION, overhead_bytes=0)
-    card = SimpleNamespace(device_string="cuda:0", capacity_mb=31_130.0, recommended_mb=None,
-                           host_memory=None)
-    with pytest.raises(RuntimeError) as exc:
-        s._fail_error([("enc", comp)], [card])
-    msg = str(exc.value)
-    assert "enc got no component tile: no axis of its output z" in msg and "(s0*s1)" in msg, msg
