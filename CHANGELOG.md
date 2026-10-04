@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Wan2.1-VACE plans its control encoder for the two clips it really encodes.** The memory plan and the
+  certified kernel set priced the VACE control encoder at one clip, while a run encodes the inactive and
+  reactive pair together. Its plan and its kernel keys now match what the run does.
+
 ### Changed
 
 - **Every model weight now carries a standard name, and a model installed with the earlier,
