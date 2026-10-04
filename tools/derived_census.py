@@ -128,7 +128,7 @@ def derive_component(model: str, comp: str, cdtype: str, mode: str, symbols: dic
             return [res.resolve(d) for d in ss["dims"]]
         return list(T[tid]["shape"])
 
-    contract = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    contract = _contract(model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
@@ -196,6 +196,32 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
 
 
 _RUNTIME_GRAPHS = {}
+_RAW_GRAPHS = {}
+_CONTRACTS = {}
+
+
+def _contract(model: str, comp: str, g: dict, cdtype: str):
+    """The component's plan-time precision contract, computed once per (model, component, compute
+    dtype): it reads the calibration record and the runtime graph, never the request's extents, and an
+    extent probe recomputed it over the whole graph each time (openaudio's LM, hundreds of probes per
+    extent). The widths that DO read the request (the matmul store rule's M) stay per probe."""
+    from neurobrix.core.prism import runtime_widths as RW
+    key = (model, comp, str(cdtype))
+    if key not in _CONTRACTS:
+        _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+    return _CONTRACTS[key]
+
+
+def raw_graph(model: str, comp: str) -> dict:
+    """The component's graph.json as stored, parsed ONCE per derivation process and shared READ-ONLY by
+    every probe. Each extent probe re-read and re-parsed it: openaudio's LM graph is 189 MB and its
+    decode extents ask hundreds of derivations each, so one model's table ran past an hour (2026-10-04,
+    the tts table timed out at 3 600 s after two models) — the red line: a census takes minutes per model.
+    Callers never mutate it; `runtime_graph` keeps its own parse, which its load-time passes rewrite."""
+    key = (model, comp)
+    if key not in _RAW_GRAPHS:
+        _RAW_GRAPHS[key] = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    return _RAW_GRAPHS[key]
 
 
 def runtime_graph(model: str, comp: str) -> dict:
@@ -412,9 +438,35 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 ad = C_ if ad.name in ("float16", "bfloat16", "float32") else ad
                 bd = C_ if bd.name in ("float16", "bfloat16", "float32") else bd
             launches = LK.matmul_launches(a_s, b_s, ad, bd, has_native_bf16)
-        elif kind in ("aten::baddbmm", "aten::stft", "aten::istft"):
-            unhandled[f"{kind} (not yet derived)"] += 1
-            launches = []
+        elif kind == "aten::baddbmm":
+            # baddbmm(input, batch1, batch2): an AMP_FP16 op — `_wrap_lower_precision` casts every
+            # float operand (the bias included) to a half compute dtype; an fp32 island's operands
+            # are fp32 (`dt` answers that); a non-float bias keeps its dtype.
+            (_, M, K), (_, _, N) = shape(ins[1]), shape(ins[2])
+            C_ = {"float16": NBXDtype.float16, "bfloat16": NBXDtype.bfloat16}.get(cdtype)
+            fl = ("float16", "bfloat16", "float32")
+            bd, ad, cd = dt(ins[0]), dt(ins[1]), dt(ins[2])
+            if C_ is not None and uid not in contract.fp32_op_uids:
+                bd, ad, cd = (C_ if d.name in fl else d for d in (bd, ad, cd))
+            launches = LK.baddbmm_launches(M, K, N, ad, cd, bd)
+        elif kind in ("aten::stft", "aten::istft"):
+            # stft(x, n_fft, hop_length, win_length, window, normalized, onesided, return_complex);
+            # istft(x, n_fft, hop_length, win_length, window, ...) — `stft_wrapper` /
+            # `istft_wrapper` with the args as traced (a 1-D signal / a 2-D spectrum is one row)
+            a_ = (o.get("attributes") or {}).get("args") or []
+            val = lambda i: a_[i].get("value") if i < len(a_) and isinstance(a_[i], dict) else None
+            n_fft = val(1)
+            n_fft = int(n_fft[0] if isinstance(n_fft, (list, tuple)) else n_fft)
+            x_s = shape(ins[0])
+            if kind == "aten::stft":
+                lead = 1
+                for e in x_s[:-1]:
+                    lead *= e
+                launches = LK.stft_launches(lead, x_s[-1], n_fft, val(2), val(3), val(6),
+                                            has_native_bf16)
+            else:
+                batch, bins, frames = ([1, *x_s] if len(x_s) == 2 else x_s)[-3:]
+                launches = LK.istft_launches(batch, bins, frames, n_fft, has_native_bf16)
         else:
             return None
         return launches
@@ -524,7 +576,7 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
     from neurobrix.triton.symbols import SymbolResolver
-    g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+    g = raw_graph(model, comp)
     res = SymbolResolver(g.get("symbolic_context") or {})
     feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
@@ -559,7 +611,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # through codec.quantizer, whose features feed every later codec stage; n in 1..max_tokens.
     if flow.get("type") == "dual_ar" and "codec.quantizer" in comps:
         mt = decode_bound(require_max_tokens(defaults))
-        gq = json.loads((CACHE / model / "components" / "codec.quantizer" / "graph.json").read_text())
+        gq = raw_graph(model, "codec.quantizer")
         cb = gq["tensors"]["input::indices"]["shape"][1]
         later = [st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])[1:]
                  if st.get("component") in comps]
@@ -628,7 +680,7 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         if image_ar:
             def one(comp, lead):
                 """The component's single input at its trace shape, the leading dim `lead`."""
-                g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                g = raw_graph(model, comp)
                 sp = next(t for t in g["tensors"].values() if t.get("input_name"))
                 return {sp["input_name"]: [lead, *sp["shape"][1:]]}
             steps = [(gen["head_component"], one(gen["head_component"], 1)),
@@ -715,9 +767,9 @@ def _encoder_decoder_sites(model, topo, defaults, plan):
     kvp = decoder_self_attention_plan(runtime_graph(model, dec))
     if kvp is None or not (kvp["arange_uids"] or kvp.get("position_slice_uids")):
         return []                 # the flow's recompute path: the whole sequence every step
-    ge = json.loads((CACHE / model / "components" / enc / "graph.json").read_text())
+    ge = raw_graph(model, enc)
     frames = ge["tensors"][ge["output_tensor_ids"][0]]["shape"]      # the window's encoder frames
-    gd = json.loads((CACHE / model / "components" / dec / "graph.json").read_text())["tensors"]
+    gd = raw_graph(model, dec)["tensors"]
     ids_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and "ids" in k)
     enc_in = next(k[len("input::"):] for k in gd if k.startswith("input::") and k != f"input::{ids_in}")
     dtype = {c["name"]: c["dtype"] for c in plan["components"]}[dec]
@@ -731,23 +783,68 @@ def _encoder_decoder_sites(model, topo, defaults, plan):
     return [(f"{dec} self-attention KV length", 1, int(mt) - 1, step)]
 
 
-def vlm_splice_path(model: str, topo: dict) -> bool:
-    """Whether the vlm flow takes its splice path (the flow's own contract detection: neither a
-    staged vision graph nor a masked-splice LM graph)."""
+def vlm_contract(model: str, topo: dict):
+    """The vlm flow's contract, by the flow's own detection (`TritonVLMEngine.execute`, in its
+    order) on the graphs' declared inputs: "staged" when the vision graph declares
+    `input::all_pixel_values` (`_execute_staged_splice`), "masked" when the LM graph declares
+    `input::image_pos_masks` (`_execute_mrope_masked_splice`), else "splice" (the legacy splice
+    path); None when the topology names no vision or LM component."""
     v = (topo.get("flow") or {}).get("vlm") or {}
-    g = lambda c: json.loads((CACHE / model / "components" / c / "graph.json").read_text())
-    return (bool(v.get("vision_component")) and bool(v.get("lm_component"))
-            and "input::all_pixel_values" not in g(v["vision_component"])["tensors"]
-            and "input::image_pos_masks" not in g(v["lm_component"])["tensors"])
+    vis, lm = v.get("vision_component"), v.get("lm_component")
+    g = lambda c: raw_graph(model, c)
+    if vis and "input::all_pixel_values" in g(vis)["tensors"]:
+        return "staged"
+    if lm and "input::image_pos_masks" in g(lm)["tensors"]:
+        return "masked"
+    return "splice" if vis and lm else None
+
+
+def vlm_runs(model: str, topo: dict) -> set:
+    """The components a vlm image+text request runs, per contract: the vision tower, its
+    projection when the contract has one, the LM. The logits are the flow's own projection of
+    the last position (`_compute_logits`: one row through `matmul_wrapper`), never the head
+    component's graph; the audio and generative legs run only on their own requests."""
+    v = topo["flow"]["vlm"]
+    c = vlm_contract(model, topo)
+    runs = {v["vision_component"], v["lm_component"]}
+    if c in ("staged", "masked"):
+        runs.add(v["vision_projection_component"])
+    return runs
+
+
+def vlm_legs_not_derived(request: list, args) -> list:
+    """The legs of a vlm request the sites do not derive (`TritonVLMEngine.execute`'s branches
+    other than image+text): an audio recording, the image-generation / speech leg selected by
+    `global.mode`, a request with no image. Each is counted by name by `derive_keys`."""
+    legs = []
+    if "--audio" in request:
+        legs.append("an audio recording")
+    if getattr(args, "mode", None) in ("image", "audio"):
+        legs.append(f"the '{args.mode}' leg")
+    if not getattr(args, "input_image", None):
+        legs.append("a request with no image")
+    return legs
+
+
+def _vlm_flow_stub(model: str):
+    """The attributes the vlm flow's id builders read (`ctx.modules["tokenizer"]`, the request's
+    resolved variables): the container's tokenizer, no request override of the template."""
+    return _Stub(ctx=_Stub(modules={"tokenizer": container_tokenizer(model)},
+                           variable_resolver=_Stub(resolved={})))
 
 
 def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+    contract = vlm_contract(model, topo)
+    if contract == "staged":
+        return _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req)
+    if contract == "masked":
+        return _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req)
+    if contract != "splice":
+        return []
     import numpy as np
     from neurobrix.core.module.vision.input_processor import prepare_image_inputs
     from neurobrix.core.runtime.decode_bound import decode_bound
     from neurobrix.triton.flow.vlm import tokenize_around_span
-    if not vlm_splice_path(model, topo):
-        return []
     v = topo["flow"]["vlm"]
     vis, lm = v["vision_component"], v["lm_component"]
     in_cfg = v.get("input") or {}
@@ -767,7 +864,7 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
                          f"{t}x{h}x{w_} / {merge} names {t * (h // merge) * (w_ // merge)}")
     pre, suf = tokenize_around_span(container_tokenizer(model), prompt, v["image_token_id"], "image")
     L0 = len(pre) + n_modal + len(suf)
-    gl = json.loads((CACHE / model / "components" / lm / "graph.json").read_text())["tensors"]
+    gl = raw_graph(model, lm)["tensors"]
     H = gl["input::inputs_embeds"]["shape"][-1]
     ds = sorted((k[len("input::"):] for k in gl if k.startswith("input::deepstack_visual_embeds.")),
                 key=lambda n: int(n.rsplit(".", 1)[1]))
@@ -783,6 +880,115 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
         return [(lm, feed)]
     return [("vision tower", 1, 1, lambda _n, st=[step]: st),
             (f"{lm} context", L0, L0 + int(mt) - 1, context)]
+
+
+def _vlm_context_site(lm, L0, mt, feed):
+    """The LM's whole-context site of a re-forward vlm decode (no KV cache: every step runs the
+    LM on the whole context, `L0` the templated prompt, one more position per generated token)."""
+    return (f"{lm} context", L0, L0 + int(mt) - 1, lambda n: [(lm, feed(n))])
+
+
+def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+    """The M-RoPE masked-splice contract (`TritonVLMEngine._execute_mrope_masked_splice`), image
+    request: the vision tower on the processor's patch grid, the projection on the tower's rows
+    (`vis_out.reshape(-1, D)`), the ids by the flow's own `_build_masked_splice_ids`, then the LM
+    over the whole context every step with the six splice inputs as the flow builds them —
+    rank-3 M-RoPE positions (`_build_mrope_positions_np`), the two [1, S, H] masks, the projected
+    image rows and the audio's one-row zero stub."""
+    import numpy as np
+    from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.triton.flow.vlm import TritonVLMEngine as E
+    v = topo["flow"]["vlm"]
+    vis, vproj, lm = v["vision_component"], v["vision_projection_component"], v["lm_component"]
+    merge = int(v["spatial_merge_size"])
+    in_cfg = v.get("input") or {}
+    ins = prepare_image_inputs(topo, model, str(image_path), CACHE / model)
+    pix = ins[in_cfg.get("image_variable", "global.pixel_values")]
+    grid = np.asarray(ins[in_cfg.get("grid_variable", "global.image_grid_thw")])
+    dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
+    vstep = (vis, {"hidden_states": list(pix.shape), "grid_thw": grid})
+    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], False, (0, 1, 1),
+                              collections.Counter())
+    vo = vouts["output_0"]
+    rows = 1
+    for d in vo[:-1]:
+        rows *= int(d)
+    pstep = (vproj, {"image_embeds": [rows, int(vo[-1])]})
+    _l, pouts = run_at_inputs(model, vproj, dtypes[vproj], "triton", pstep[1], False, (0, 1, 1),
+                              collections.Counter())
+    po = pouts["output_0"]
+    n_img = 1
+    for d in po[:-1]:
+        n_img *= int(d)
+    t, h, w_ = (int(x) for x in grid.reshape(-1)[:3])
+    if n_img != t * (h // merge) * (w_ // merge):
+        raise SystemExit(f"{model}: the visual chain gives {n_img} tokens, the grid "
+                         f"{t}x{h}x{w_} / {merge} names {t * (h // merge) * (w_ // merge)}")
+    ids, img_span, aud_span = E._build_masked_splice_ids(
+        _vlm_flow_stub(model), str(prompt), v, v.get("preprocessing") or {},
+        v.get("audio_preprocessing") or {}, n_img, 0, False)
+    L0 = len(ids)
+    base, _next = E._build_mrope_positions_np(
+        E._mrope_segments(L0, img_span, aud_span, (t, h // merge, w_ // merge)))
+    gl = raw_graph(model, lm)["tensors"]
+    H = gl["input::inputs_embeds"]["shape"][-1]
+    mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
+
+    def feed(n):
+        return {"inputs_embeds": [1, n, H], "position_ids": [*base.shape[:-1], n],
+                "image_pos_masks": [1, n, H], "audio_pos_masks": [1, n, H],
+                "image_embeds": [n_img, int(po[-1])], "audio_embeds": [1, H]}
+    return [("vision tower and projection", 1, 1, lambda _n, st=[vstep, pstep]: st),
+            _vlm_context_site(lm, L0, mt, feed)]
+
+
+def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+    """The staged-splice contract (`TritonVLMEngine._execute_staged_splice`), image request: the
+    vision tower on the processor's three outputs, the projection on the tower's hidden states
+    with the same `tgt_sizes`, the ids by the flow's own `_tokenize_with_placeholder_run`, then
+    the LM over the whole context every step — plain [1, S] positions, the two [1, S, H] masks,
+    the projected rows and the audio's one-row zero stub."""
+    import numpy as np
+    from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.triton.flow.vlm import TritonVLMEngine as E
+    v = topo["flow"]["vlm"]
+    vis, proj, lm = v["vision_component"], v["vision_projection_component"], v["lm_component"]
+    pre = v.get("preprocessing") or {}
+    ins = prepare_image_inputs(topo, model, str(image_path), CACHE / model)
+    names = ("all_pixel_values", "patch_attention_mask", "tgt_sizes")     # the flow's own feeds
+    missing = [n for n in names if f"global.{n}" not in ins]
+    if missing:
+        raise SystemExit(f"{model}: the image processor produced no {missing} — the staged "
+                         f"flow refuses the request")
+    tgt = np.asarray(ins["global.tgt_sizes"])
+    dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
+    vstep = (vis, {n: np.asarray(ins[f"global.{n}"]) for n in names})
+    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], False, (0, 1, 1),
+                              collections.Counter())
+    pstep = (proj, {"x": vouts["output_0"], "tgt_sizes": tgt})
+    _l, pouts = run_at_inputs(model, proj, dtypes[proj], "triton", pstep[1], False, (0, 1, 1),
+                              collections.Counter())
+    po = pouts["output_0"]
+    n_modal = 1
+    for d in po[:-1]:
+        n_modal *= int(d)
+    ids, _lo, _hi = E._tokenize_with_placeholder_run(
+        _vlm_flow_stub(model), str(prompt), "image",
+        (pre.get("image_start_token_id"), pre.get("image_end_token_id")), pre.get("unk_token_id"),
+        n_modal)
+    L0 = len(ids)
+    gl = raw_graph(model, lm)["tensors"]
+    H = gl["input::inputs_embeds"]["shape"][-1]
+    mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
+
+    def feed(n):
+        return {"inputs_embeds": [1, n, H], "position_ids": [1, n],
+                "visual_pos_masks": [1, n, H], "audio_pos_masks": [1, n, H],
+                "vision_hidden_states": [n_modal, int(po[-1])], "audio_hidden_states": [1, H]}
+    return [("vision tower and projection", 1, 1, lambda _n, st=[vstep, pstep]: st),
+            _vlm_context_site(lm, L0, mt, feed)]
 
 
 def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
@@ -875,7 +1081,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                     if isinstance(feed, dict) and "__decode__" in feed:
                         # one position: every batch / sequence symbol at 1, the cache's K and V
                         from neurobrix.kernels.nbx_tensor import NBXDtype
-                        g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+                        g = raw_graph(model, comp)
                         d = dict(feed["__decode__"])
                         syms = {sid: (int(d.get("batch") or 1) if i.get("name") == "batch" else 1)
                                 for sid, i in ((g.get("symbolic_context") or {})
@@ -965,9 +1171,13 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
         # on the host from their weights (`_run_lstm_np`, `_run_joint_np`) — no launch
         runs = {st["component"] for st in ((flow.get("audio") or {}).get("stages") or [])
                 if st.get("execution", "forward") == "forward"}
-    if flow.get("type") == "vlm" and vlm_splice_path(a.model, topo):
-        _v = flow["vlm"]
-        runs = {_v["vision_component"], _v["lm_component"]}
+    if flow.get("type") == "vlm" and vlm_contract(a.model, topo) is not None:
+        runs = vlm_runs(a.model, topo)
+        # The sites derive the image+text request; every other leg the flow takes is counted by
+        # name, never derived as if it were that request (`execute`: an audio recording, the
+        # image-generation and speech legs on `global.mode`, a request with no image).
+        for leg in vlm_legs_not_derived(request, args):
+            unhandled[f"vlm {vlm_contract(a.model, topo)} contract: {leg} (not yet derived)"] += 1
     tilings = plan.get("component_tiling") or {}
     _prompt = args.prompt or ""                              # the parser's answer: the LAST --prompt
     _defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
