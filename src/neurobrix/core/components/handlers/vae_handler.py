@@ -56,12 +56,11 @@ class VAEComponentHandler(ComponentHandler):
 
     def transform_inputs(self, inputs: Dict[str, Any], phase: str) -> Dict[str, Any]:
         """
-        Apply latent denormalization and scaling_factor before VAE decode.
+        Apply scaling_factor before VAE decode: latents = latents / scaling_factor
+        (profile.json config; 1.0 or absent = untouched).
 
-        Two data-driven steps (from profile.json):
-        1. Per-channel denormalization: latents = latents / latents_std + latents_mean
-           (only if latents_mean/latents_std exist in profile config)
-        2. Scaling: latents = latents / scaling_factor
+        The per-channel latent statistics are the flow's single step
+        (`resolution.latent_statistics`), never re-applied here.
 
         Args:
             inputs: Input dictionary
@@ -90,50 +89,33 @@ class VAEComponentHandler(ComponentHandler):
         import os as _os
         _dbg = _os.environ.get("NBX_DEBUG") == "1"
         if _dbg and is_torch_tensor(latent):
-            print(f"[VAE-SEAM] pre-denorm  key={latent_key} shape={list(latent.shape)} "
+            print(f"[VAE-SEAM] in   key={latent_key} shape={list(latent.shape)} "
                   f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f}")
         _dump = _os.environ.get("NBX_DUMP_LATENT")
         if _dump and is_torch_tensor(latent):
             import torch
             torch.save(latent.detach().cpu(), _dump)
-            print(f"[VAE-SEAM] dumped pre-denorm latent -> {_dump}")
+            print(f"[VAE-SEAM] dumped the decoder-space latent (after the flow's affine) -> {_dump}")
 
-        # Step 1: Per-channel latent denormalization (DATA-DRIVEN)
-        # Some VAEs (LTX2Video, etc.) train with normalized latent space.
-        # The pipeline must denormalize before decoding.
-        latents_mean = self.config.get("latents_mean")
-        latents_std = self.config.get("latents_std")
-        if latents_mean is not None and latents_std is not None:
-            view_shape = [1, -1] + [1] * (latent.dim() - 2)
-            if is_torch_tensor(latent):
-                import torch
-                mean_t = torch.tensor(latents_mean, device=latent.device, dtype=latent.dtype)
-                std_t = torch.tensor(latents_std, device=latent.device, dtype=latent.dtype)
-                mean_t = mean_t.view(*view_shape)
-                std_inv = (1.0 / std_t).view(*view_shape)
-            else:
-                # NBXTensor path
-                import numpy as np
-                from neurobrix.kernels.nbx_tensor import NBXTensor
-                mean_arr = np.asarray(latents_mean, dtype=np.float32)
-                std_arr = np.asarray(1.0 / np.asarray(latents_std, dtype=np.float32), dtype=np.float32)
-                mean_t = NBXTensor.from_numpy(mean_arr)
-                std_inv = NBXTensor.from_numpy(std_arr)
-                if mean_t.nbx_dtype != latent.nbx_dtype:
-                    mean_t = mean_t.to(latent.nbx_dtype)
-                    std_inv = std_inv.to(latent.nbx_dtype)
-                mean_t = mean_t.view(*view_shape)
-                std_inv = std_inv.view(*view_shape)
-            latent = latent / std_inv + mean_t
+        # The per-channel statistics (latents_mean / latents_std) are NOT applied
+        # here. They belong to the flow, which maps the loop output into the
+        # decoder's space once, in both engines, before the post-loop decode
+        # (`resolution.latent_statistics` via `_apply_latent_affine`). This
+        # handler applied them a second time: every container declaring them
+        # (mochi-1-preview, the Wan 2.1 / 2.2 VAEs, SANA-Video) decoded
+        # `(x*std + mean)*std + mean` — measured 2026-10-04 on mochi's first
+        # decode tile (conv_in l2 534.777 = the vendor's conv_in on the
+        # twice-mapped latent 534.765; once-mapped 539.601) and on Wan2.1-T2V
+        # (the latent entering here already equal to final*std + mean, to 0.0).
 
-        # Step 2: scaling_factor (DATA-DRIVEN)
+        # scaling_factor (DATA-DRIVEN)
         scaling_factor = self.config.scaling_factor
         if scaling_factor is not None and scaling_factor != 0 and scaling_factor != 1.0:
             latent = latent / scaling_factor
 
         if _dbg and is_torch_tensor(latent):
             _ls = self.config.get("latents_std")
-            print(f"[VAE-SEAM] post-denorm shape={list(latent.shape)} "
+            print(f"[VAE-SEAM] out  shape={list(latent.shape)} "
                   f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
                   f"(config latents_std[0:3]={_ls[:3] if isinstance(_ls, list) else _ls}, "
                   f"scaling_factor={self.config.scaling_factor})")

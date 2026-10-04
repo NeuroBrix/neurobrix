@@ -175,6 +175,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video models whose decoder works on a normalised latent decode it in the right range.** For
+  models whose decoder declares per-channel latent statistics (mochi-1-preview, the Wan 2.1 / 2.2
+  models, SANA-Video), the latent was mapped back into the decoder's range twice instead of once,
+  shifting and stretching colours. It is now mapped once, as the reference pipelines do.
+
 - **Video models whose attention carries a padding mask no longer render a mosaic under `--compiled`.**
   A mask that applies to every query alike (one row broadcast over the sequence) was taken for a
   stale, too-short mask and replaced by causal attention, so each video patch only saw the patches
