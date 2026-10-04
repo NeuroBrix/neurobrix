@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.dtype.config import get_torch_dtype
+from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
 from neurobrix.core.runtime.resolution.i2v_conditioning import (
     CONDITION_VAR as _I2V_CONDITION_VAR,
     apply as _i2v_apply,
@@ -279,8 +280,10 @@ class CFGEngine:
         # Batch mask
         batched_mask = None
         if pos_mask is not None and pos_mask.shape[-1] == pos_hidden.shape[1]:
-            neg_mask = self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)
-            if neg_mask is None or neg_mask.shape[-1] != neg_hidden.shape[1]:
+            neg_mask = _negative_mask_for(
+                self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None),
+                neg_hidden, encoder_comp)
+            if neg_mask is None:
                 neg_mask = torch.ones(neg_hidden.shape[0], neg_hidden.shape[1],
                                      dtype=pos_mask.dtype, device=pos_mask.device)
             elif neg_mask.dtype != pos_mask.dtype:
@@ -433,8 +436,10 @@ class CFGEngine:
             )
 
         pos_mask = self._ctx.variable_resolver.get("global.attention_mask")
-        neg_mask = self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None)
-        if neg_mask is None or neg_mask.shape[-1] != neg_hidden.shape[1]:
+        neg_mask = _negative_mask_for(
+            self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None),
+            neg_hidden, encoder_comp)
+        if neg_mask is None:
             neg_mask = torch.ones(neg_hidden.shape[0], neg_hidden.shape[1],
                                  dtype=pos_mask.dtype, device=pos_mask.device)
         elif neg_mask.dtype != pos_mask.dtype:
