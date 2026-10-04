@@ -758,6 +758,8 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         if not isinstance(expr, dict):
             return expr, False
         t = expr.get("type")
+        # Integer extents only: a real node (truediv/sqrt, symexpr.REAL_TYPES) is a scalar-slot
+        # value and never a spatial dim — deliberately not rewritten here.
         if t not in ("mul", "add", "sub", "floordiv", "mod", "product", "neg"):
             return expr, False
 

@@ -22,6 +22,7 @@ from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 from neurobrix.core.dtype.config import parse_dtype as _parse_dtype
+from neurobrix.core.runtime import symexpr as _symexpr
 
 if TYPE_CHECKING:
     from .execution_context import ExecutionContext
@@ -436,7 +437,7 @@ class TensorResolver:
             trace_value = arg_info.get("trace_value")
 
             if self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
-                resolved = self._ctx.shape_resolver.resolve(arg_info)
+                resolved = self._ctx.shape_resolver.resolve_scalar(arg_info)
 
                 # HEURISTIC: Detect config-derived constants that were incorrectly
                 # marked as symbolic due to coincidental value match at trace time.
@@ -460,23 +461,18 @@ class TensorResolver:
                 f"disabled or no shape resolver; its trace value {trace_value} is a witnessed "
                 "extent, not a value")
 
-        elif arg_type in ("add", "sub", "mul", "floordiv", "div", "mod", "neg"):
-            # Symbolic ARITHMETIC expression as a scalar arg — e.g. the
-            # MochiRoPE positional-grid `linspace` steps = ((s2 - 2)//2 + 2),
-            # an expression over the symbolic height/width dim s2. The compiled
-            # sequence folds such expressions to a concrete int at compile time,
-            # but the per-op sequential path resolves args LIVE and must evaluate
-            # the expression here. The shape_resolver already implements the
-            # add/sub/mul/floordiv/mod/neg algebra over runtime symbol bindings
-            # (it is the same evaluator used for symbolic dims), so we reuse it —
-            # no duplicate arithmetic. Without this the raw expr dict reaches the
-            # torch op (linspace steps) and fails the schema cast (dict -> int).
-            # R30: mirrors the compiled-mode fold; pure fix (only fires on
-            # arithmetic-expr scalar args, which previously crashed).
+        elif _symexpr.is_expression(arg_info):
+            # A symbolic EXPRESSION at a scalar slot — the MochiRoPE positional grid's `linspace`
+            # steps ((s2 - 2)//2 + 2) and, since the vocabulary carries true division and sqrt,
+            # its bounds +-(h * sqrt(area / (h * w))) / 2. The per-op sequential path resolves
+            # args LIVE through the ONE evaluator (core/runtime/symexpr.py) in the SCALAR slot —
+            # the compiled sequence's ExprArg evaluates the same tree the same way (R30).
             if self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
-                return self._ctx.shape_resolver.resolve(arg_info)
-            # No resolver: fall back to the trace value baked into the expr node.
-            return arg_info.get("trace")
+                return self._ctx.shape_resolver.resolve_scalar(arg_info)
+            raise RuntimeError(
+                f"ZERO FALLBACK: symbolic expression argument {arg_type!r} met with symbolic "
+                "shapes disabled or no shape resolver; its trace value is a witnessed extent, "
+                "not a value")
 
         elif arg_type == "list":
             # For view/reshape, check if OUTPUT tensor has symbolic_shape
