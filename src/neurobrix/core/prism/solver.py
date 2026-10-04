@@ -431,6 +431,13 @@ class ExecutionPlan:
     # resolution; reuses the R31 TilingEngine brick). Each entry:
     # {"tile_size", "scale_factor", "overlap", "window_alignment"}.
     component_tiling: Dict = field(default_factory=dict)
+    #: The loop components whose classifier-free guidance runs its branches ONE PASS EACH instead of
+    #: one batch holding both (`_split_guidance_batch`). Set only when no plan holds the request on
+    #: the accelerator at the guidance batch and one does at the batch of a single branch: the
+    #: batch axis is the cut that is exact — every op of a denoiser is per-sample — and the two CFG
+    #: engines (core/cfg, triton/cfg) read it from here and run the same prepared batch branch by
+    #: branch. Empty for every other plan.
+    cfg_split_components: List[str] = field(default_factory=list)
     # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
     # it, a measured peak judges it.
     host_footprint: Dict = field(default_factory=dict)
@@ -1493,6 +1500,13 @@ class PrismSolver:
         candidates = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
+        self._cfg_split = []
+        _split = self._split_guidance_batch(
+            candidates, container, neural_components, input_config, target_dtype_str, profile,
+            component_dtypes, strategies, devices, shard_sizes)
+        if _split is not None:
+            candidates, component_memory, input_config, devices = _split
+            sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
         # When NBX_FORCE_STRATEGY is set and the strategy cannot fit, the
         # rest of solve() would fall through to fp32 fallback or the final
@@ -1788,6 +1802,13 @@ class PrismSolver:
         # Step 7: Build plan
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
+        # The guidance split the cascade was re-run under (`_split_guidance_batch`): the CFG engines
+        # run these components' branches one pass each, the batch every figure above was priced at.
+        plan.cfg_split_components = list(self._cfg_split)
+        if self._cfg_split:
+            plan.selection_reason = (
+                f"{plan.selection_reason} — guidance branches of {', '.join(self._cfg_split)} run one "
+                f"pass each: no plan held the guidance batch on the accelerator")
 
         # Component-level spatial tiling decided during placement (Strategy 3.5
         # in _place_component) — keep only entries whose final allocation
@@ -5204,6 +5225,90 @@ class PrismSolver:
     # SCORE-BASED STRATEGY EVALUATION
     # =========================================================================
 
+    @staticmethod
+    def _allocation_on_host(alloc) -> bool:
+        """True when a strategy's allocation of one component is the host's (the CPU computes it,
+        or — under the Triton engine — holds its weights while a card computes it)."""
+        dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
+        return isinstance(dev, str) and dev.startswith("cpu")
+
+    def _holds_on_accelerator(self, candidate) -> bool:
+        """A candidate that keeps every component on an accelerator."""
+        allocs = candidate[2] or {}
+        return bool(allocs) and not any(self._allocation_on_host(a) for a in allocs.values())
+
+    #: Solver state a rung writes while it is evaluated. `_split_guidance_batch` re-evaluates the
+    #: cascade on another request and puts these back when it does not keep the result, so a
+    #: declined split leaves the plan exactly as the guidance batch made it.
+    _RUNG_STATE = (
+        "_strategies_tried", "_layer_streaming_declined", "_rejected", "_component_tiling",
+        "_host_device_tilings", "_host_device_overflow", "_host_device_card", "_tiling_declined",
+        "_tiling_declined_by_rung", "_arena_declined", "_tiling_rung_figure", "_input_config",
+        "_output_elements", "_op_tiling_declined", "_op_tiling_plans", "_op_tiling_from_rung",
+        "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
+        "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
+        "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
+        "_unified_rung_cap_mb",
+    )
+
+    def _split_guidance_batch(self, candidates, container, neural_components, input_config,
+                              target_dtype_str, profile, component_dtypes, strategies, devices,
+                              shard_sizes):
+        """Re-plan the request with the guidance branches run one pass each, when no candidate
+        holds it on the accelerator at the guidance batch. Returns (candidates, component memory,
+        request, devices) to plan with, or None to keep the guidance batch.
+
+        Classifier-free guidance concatenates [uncond, cond] on the batch axis and runs the loop
+        denoiser once on both (`CFGEngine._execute_batched_cfg`). Every op of a denoiser is
+        per-sample, so running the two halves of that same prepared batch one after the other is
+        the same computation at half the live activations: the cut that is EXACT where a spatial
+        or token tile of a global-attention transformer is not. SANA-Video at its derived request
+        on a 16 GB V100: the transformer's live set peaks at 18 774 MB at batch 2 (residual, q, k, v
+        at [2, 155 232, 2 240] fp32 alive together — no single op dominates), over the 15 072 MB
+        layer-streaming budget; the host rungs cannot size it on the card either, so every strategy
+        refused. One branch at a time is the batch the refusal said it needed.
+
+        Only below the accelerator: a candidate already holding every component on a card keeps
+        the guidance batch (one pass, the faster schedule), so no plan that places today changes.
+        Tried before the host rungs win, because host compute is the last resort."""
+        passes = getattr(input_config, "guidance_passes", None)
+        flow = getattr(input_config, "flow", None)
+        if not passes or flow is None:
+            return None
+        if any(self._holds_on_accelerator(c) for c in candidates):
+            return None
+        topology = self._flow_topology(container)
+        from neurobrix.triton.cfg.engine import guidance_embedding_component
+        if guidance_embedding_component(topology) is not None:
+            return None   # the scale is embedded: the flow runs no guidance batch
+        loop = [c for c in ((topology.get("flow") or {}).get("loop") or {}).get("components") or []
+                if c in {n.name for n in neural_components}]
+        if not loop:
+            return None
+        import copy
+        import dataclasses
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        split_ic = dataclasses.replace(input_config, flow=flow.split_guidance(loop))
+        self._input_config = split_ic
+        memory = self._compute_memory(
+            container, neural_components, split_ic, target_dtype_str,
+            profile=profile, component_dtypes=component_dtypes)
+        ranked = sorted(memory.items(), key=lambda x: -x[1].total_bytes)
+        split_devices = self._prepare_devices(profile)
+        split = self._evaluate_all_strategies(
+            strategies, ranked, memory, split_devices, shard_sizes, profile, container)
+        if any(self._holds_on_accelerator(c) for c in split):
+            self._cfg_split = sorted(loop)
+            logging.getLogger(__name__).info(
+                "Prism: no plan holds %s on the accelerator at the guidance batch; its %d guidance "
+                "branches run one pass each", ", ".join(self._cfg_split), int(passes))
+            return split, memory, split_ic, split_devices
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        return None
+
     def _evaluate_all_strategies(
         self, strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
     ) -> List[Tuple[float, str, Dict, List]]:
@@ -7129,6 +7234,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "num_kv_heads": getattr(kv, "num_kv_heads", None),
                            "k_head_dim": getattr(kv, "k_head_dim", None),
                            "v_head_dim": getattr(kv, "v_head_dim", None)}
+    if plan.cfg_split_components:
+        rec["cfg_split_components"] = list(plan.cfg_split_components)
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     if plan.unified_rungs_tried:
@@ -7169,6 +7276,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
                       + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
         shard = "  sharded" if getattr(alloc, "sharded", False) else ""
         lines.append(f"  {name:<20} -> {where}{shard}{detail}")
+    if plan.cfg_split_components:
+        lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
+                     f"each (the guidance batch held on no accelerator plan)")
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
