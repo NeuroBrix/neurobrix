@@ -139,3 +139,4 @@ def test_a_refusal_prints_each_rungs_own_tiling_reason():
     s._snapshot_tiling_declines("rung B", {"vae": 100.0})
     assert s._tiling_declined_by_rung["rung A"] == {"vae": "rung A's reason"}
     assert s._tiling_declined_by_rung["rung B"] == {"vae": "rung B's reason"}
+
