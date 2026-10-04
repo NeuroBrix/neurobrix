@@ -210,6 +210,32 @@ def _autoregressive_phases(flow: Dict[str, Any], engine: Optional[str] = None,
     return [{lm, decoder} | beside]
 
 
+def _vlm_phases(flow: Dict[str, Any], engine: Optional[str] = None, served: bool = False) -> Optional[List[set]]:
+    # Both engines' VLM handlers (core/flow/vlm.py, triton/flow/vlm.py), in each of their three paths
+    # (the legacy splice, the staged splice, the M-RoPE masked splice), run every modality tower and
+    # every projection ONCE, before the language model, and unload it right after
+    # (`_unload_component_weights`; the compiled engine then `release_flow_memory`) unless the
+    # session is persistent — which
+    # only an EAGER served plan is (serving/engine.py `_warm_serving`), and an eager plan reads no
+    # phases (Prism keeps the sum where nothing loads on demand). Each tower and projection is
+    # therefore alone. The language model and its head decode together (register 104: their pair is
+    # what the decode holds). The generative-speech leg loads its talker groups beside the
+    # still-loaded model (the CFM leg unloads the model after it) or right after releasing it (the
+    # deepstack leg): one phase holds the model, its head and every speech component — the bound for
+    # both legs and for a request that runs no leg. A component no key names is in no phase: Prism
+    # holds it concurrent with every other.
+    vlm = flow.get("vlm") or {}
+    lm = vlm.get("lm_component")
+    if not lm:
+        return None   # the handler refuses such a flow; nothing is declared to read
+    towers = [vlm.get(k) for k in ("vision_component", "vision_projection_component",
+                                   "audio_component", "audio_projection_component")]
+    speech = {c for c in ((flow.get("speech") or {}).get("components") or {}).values() if isinstance(c, str)}
+    head = vlm.get("head_component")
+    decode = {lm} | ({head} if head else set()) | speech
+    return [{t} for t in towers if t and t not in decode] + [decode]
+
+
 #: flow type -> the sets of components its handlers hold loaded AT THE SAME TIME, from the topology's
 #: flow, for an engine ("compiled" or "triton"; the two handlers of a flow need not release at the same
 #: point) and for a single request or a served session (what a handler leaves loaded when a request
@@ -220,6 +246,7 @@ def _autoregressive_phases(flow: Dict[str, Any], engine: Optional[str] = None,
 RESIDENT_PHASES = {
     "iterative_process": _iterative_phases,
     "autoregressive_generation": _autoregressive_phases,
+    "vlm": _vlm_phases,
 }
 
 

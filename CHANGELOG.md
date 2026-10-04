@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such as Janus-Pro-7B under a 4 GB budget is planned instead of refused. NVIDIA cards and
   `--compiled` plans are unchanged.
 
+- **A vision-language model's image and audio encoders are no longer counted beside its language
+  model.** Both engines run each encoder once, before the language model, and release it; the
+  planner counted them as loaded during the whole generation. For MiniCPM-o-4_5 that was 1.9 GB of
+  memory no moment holds, taken from the language model's streaming budget and its cache. The
+  speech output components, which are loaded beside the language model, are still counted.
+
 - **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
   counted the transposed copy of every linear layer's weight as working memory, although the Triton
   engine reads the weight in place; for a speech or language model with a large vocabulary that was
