@@ -137,6 +137,39 @@ def test_the_cut_holds_every_change_with_the_parked_arena():
     assert [s.weight_bytes for s in capped.segments] == [s.weight_bytes for s in greedy.segments]
 
 
+def _weighted(weights_mb, act_mb):
+    """One weighted op per entry, `act_mb` of activation flowing through the chain to the graph's
+    output (live to the end, so carried across the wrap-around like a model's)."""
+    a_elems = act_mb * MB // 2
+    tensors = {"x0": {"shape": [a_elems], "dtype": "bfloat16", "is_parameter": False}}
+    ops, order, prev = {}, [], "x0"
+    for i, w in enumerate(weights_mb):
+        tensors[f"p{i}"] = {"shape": [w * MB // 2], "dtype": "bfloat16", "is_parameter": True, "weight_name": f"w{i}"}
+        tensors[f"x{i+1}"] = {"shape": [a_elems], "dtype": "bfloat16", "is_parameter": False}
+        ops[f"o{i}"] = {"input_tensor_ids": [prev, f"p{i}"], "output_tensor_ids": [f"x{i+1}"]}
+        order.append(f"o{i}"); prev = f"x{i+1}"
+    return {"tensors": tensors, "ops": ops, "execution_order": order, "output_tensor_ids": [prev]}
+
+
+def test_the_change_search_does_not_step_past_the_cuts_floor():
+    """Weights 20/1/19 MB under 1 000 MB of activations, at a 1 021 MB budget: the greedy cut is
+    [20+1][19], and the wrap-around parks the 19 MB piece beside the 21 MB one, 19 MB over. Stepping by
+    that overshoot lands at 1 002 MB, under the 1 020 MB floor (activations + the 20 MB op), a refusal;
+    AT the floor the cut is [20][1+19], each arena taken back by the next, 1 020 MB at every change.
+    The class: Janus-Pro-7B's language model at the Mac's 4096 rung, 1 508 -> 1 427 MB under a 1 461 MB
+    floor, where 1 461-1 470 MB fit (2026-10-04)."""
+    g = _weighted([20, 1, 19], act_mb=1000)
+    lp = LayerPartitioner(g)
+    assert lp._cut_floor() == 1020 * MB
+    greedy = lp.partition(1021 * MB)
+    assert [s.weight_bytes // MB for s in greedy.segments] == [21, 19]
+    assert _changes(greedy.segments, math.inf) == 1040 * MB
+    priced = LayerPartitioner(g).partition(1021 * MB, parked_cap_bytes=math.inf)
+    assert priced.fits, priced.refusal
+    assert [s.weight_bytes // MB for s in priced.segments] == [20, 20]
+    assert _changes(priced.segments, math.inf) <= 1021 * MB and priced.peak_resident_bytes <= 1021 * MB
+
+
 def test_the_arena_door_refuses_a_plan_holding_one_component_whole_over_the_bound():
     s = PrismSolver()
     s._mode = "triton"

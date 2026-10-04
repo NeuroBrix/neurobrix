@@ -245,18 +245,24 @@ class LayerPartitioner:
         whose incoming arena takes the parked one back costs nothing), and one jump by the whole
         overshoot went from 3 768 MB to 486 MB on PixArt-XL-2-1024-MS's T5 at the Mac's 4096 rung —
         under its 502 MB embedding, a refusal — where pieces of about half the budget fit every
-        change."""
+        change. Nor below the cut's own floor in one step (`_cut_floor`: the activations' peak plus
+        the most weight one op reads — under it the greedy refuses whatever the change): a step
+        that would cross it lands ON it. Janus-Pro-7B's language model at the Mac's 4096 rung
+        (triton-sequential) stepped from 1 508 to 1 427 MB, under its 1 461 MB floor, and was
+        refused, where every cut from 1 461 to 1 470 MB fits every change at 1 439 MB."""
         part = self._greedy(budget_bytes, max_arena_bytes)
         if parked_cap_bytes is None or not part.fits:
             return part
         cut_at = budget_bytes
+        floor = self._cut_floor()
         while True:
             change = self._change_peak(part.segments, parked_cap_bytes)
             over = change - budget_bytes
             if over <= 0:
                 part.peak_resident_bytes = max(part.peak_resident_bytes, change)
                 return part
-            cut_at -= max(min(over, cut_at // 10), 1024 * 1024)
+            step = max(min(over, cut_at // 10), 1024 * 1024)
+            cut_at = floor if cut_at - step < floor < cut_at else cut_at - step
             again = self._greedy(cut_at, max_arena_bytes)
             if not again.fits:
                 again.refusal = (
@@ -266,6 +272,15 @@ class LayerPartitioner:
                     f"to make room refuses: " + again.refusal)
                 return again
             part = again
+
+    def _cut_floor(self) -> int:
+        """The lowest cut the greedy can take: the activations' peak (reserved in every piece) plus
+        the most weight a single op reads (an op is never split across pieces). Below it `_greedy`
+        refuses by construction; at or above it the op that reads the most fits in a piece."""
+        curve = self.live_activation_curve()
+        one_op = max((sum(self._bytes_for(n) for n in self._op_weight_names(uid)) for uid in self.order),
+                     default=0)
+        return (max(curve) if curve else 0) + one_op
 
     @staticmethod
     def _change_peak(segments: List[Segment], parked_cap_bytes: float) -> int:
