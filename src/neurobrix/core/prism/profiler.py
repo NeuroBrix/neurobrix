@@ -429,6 +429,57 @@ class ActivationProfile:
 #: which sizes the same graph's activations and must not count what this one does not.
 ZERO_ALLOC_OP_TYPES = ("aten::expand", "aten::broadcast_to")
 
+#: The prefixes of a tensor id that names a stored weight (a parameter or a buffer of the container).
+WEIGHT_TENSOR_PREFIXES = ("param::", "buffer::")
+
+#: The contractions whose TRITON wrapper reads a transposed weight in place, by its strides:
+#: kernels/wrappers.py `mm` ("The weight is walked by its own strides ... a pre-transposed weight —
+#: the (K, N) stride view of a (N, K) row-major buffer — is read in place") and `addmm` ("A
+#: pre-transposed weight is walked by its strides (as mm)"). Every other consumer is held to copy it:
+#: `matmul`'s batched route expands the weight and `bmm` materialises it.
+IN_PLACE_WEIGHT_READERS = ("aten::mm", "aten::addmm")
+
+
+def weight_transposes_read_in_place(dag: Dict[str, Any]) -> set:
+    """The `aten::t` ops of `dag` whose output is no buffer on the TRITON engine: the transpose of
+    a WEIGHT (its input is a parameter or a buffer) that every consumer reads in place
+    (`IN_PLACE_WEIGHT_READERS`), and that the graph does not return.
+
+    The Triton sequence removes such an op when it binds the weights — the weight is transposed
+    once, a stride view of its own buffer (triton/sequence.py `_eliminate_weight_transpose_ops`);
+    triton_sequential runs it as the same view (`NBXTensor.t`). Counted as an allocation, a linear's
+    weight was priced twice while its contraction ran: orpheus-3b's `lm_head` (156 940 x 3 072,
+    920 MB in bf16) planned 927 MB of "activations" for 7 MB of logits, and the Mac's 24 GB machine
+    streamed a model whose 7 241 MB of weights it holds whole (196 s for 16 tokens, 2026-10-04). The
+    arena's own record agrees: Qwen3-Coder-30B's lm_head held 593.5 MB — its weight, once — at the
+    failure measured 2026-09-22.
+
+    NOT applied to the compiled engine, by measurement owed and not by symmetry: there the view is
+    free too, but on fp16 hardware a contraction outside an fp16-safe contract runs under
+    `DtypeEngine._make_fp32_wrapper` (core/dtype/engine.py), which copies EVERY float operand to
+    fp32 — the weight included, twice its fp16 bytes, per call. The transpose's bytes were the only
+    price near that copy, so the compiled estimate keeps them until the copy is measured and priced
+    as what it is.
+    """
+    ops = dag.get("ops") or {}
+    readers: Dict[str, List[str]] = {}
+    for op in ops.values():
+        for tid in op.get("input_tensor_ids") or []:
+            readers.setdefault(tid, []).append(op.get("op_type"))
+    returned = set(dag.get("output_tensor_ids") or [])
+    free = set()
+    for uid, op in ops.items():
+        if op.get("op_type") != "aten::t":
+            continue
+        ins = op.get("input_tensor_ids") or []
+        outs = op.get("output_tensor_ids") or []
+        if not ins or not outs or not str(ins[0]).startswith(WEIGHT_TENSOR_PREFIXES):
+            continue
+        if all(o not in returned and readers.get(o)
+               and all(r in IN_PLACE_WEIGHT_READERS for r in readers[o]) for o in outs):
+            free.add(uid)
+    return free
+
 
 def dag_last_uses(dag: Dict[str, Any]) -> Dict[str, str]:
     """
@@ -786,6 +837,7 @@ class ActivationProfiler:
         widths: Optional[Dict[str, int]] = None,
         source_holding_uids: Optional[set] = None,
         placement_floor: bool = False,
+        in_place_weight_reads: bool = False,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -865,6 +917,10 @@ class ActivationProfiler:
         # here mirrors the runtime exactly. See P-PRISM-ACTIVATION-ESTIMATOR-
         # TILING-AWARE audit for the gap quantification.
         zero_set = set(zero_alloc_uids) if zero_alloc_uids else set()
+        # The engine this estimate is for reads a transposed weight in place (the Triton engines:
+        # the caller says so): those transposes are no buffer (`weight_transposes_read_in_place`).
+        if in_place_weight_reads:
+            zero_set |= weight_transposes_read_in_place(self.dag)
 
         # In-place add aliasing: at runtime, in-place adds reuse one input
         # buffer as the output (no new allocation). Each in-place add's

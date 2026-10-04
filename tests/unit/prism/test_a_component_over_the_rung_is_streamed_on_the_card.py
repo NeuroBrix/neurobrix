@@ -110,9 +110,16 @@ def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatc
     dev = s._prepare_devices(profile(APPLE))[0]
     largest = max(m.total_bytes for m in seen.values()) / MB
     assert dev.budget_mb == rung, f"the door did not impose the rung: {dev.budget_mb}"
-    assert rung < largest < dev.capacity_mb, (
-        f"{model}: largest component {largest:.1f} MB is not strictly between the rung {rung} and "
-        f"the capacity {dev.capacity_mb:.1f} — the scenario these cells judge is not the one planned")
+    # Over what a WHOLE component may occupy at the rung (`_usable_mb`, the one authority for
+    # "does it fit whole") and under the capacity. The bound was the rung itself until 2026-10-04:
+    # granite-speech's language model read 16 4xx MB while the transposes of its weights were
+    # priced as activations (profiler.weight_transposes_read_in_place); it is 16 374.4 MB, 9.6 MB under the
+    # 16 384 rung and 1 301 MB over its usable part — still a component no whole rung holds.
+    usable = s._usable_mb(dev)
+    assert usable < largest < dev.capacity_mb, (
+        f"{model}: largest component {largest:.1f} MB is not strictly between the usable part "
+        f"{usable:.1f} of the rung {rung} and the capacity {dev.capacity_mb:.1f} — the scenario "
+        f"these cells judge is not the one planned")
 
 
 # ───────────────── the law: streamed on the card ─────────────────
@@ -188,7 +195,15 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 [embedding::0, split_with_sizes::35] [slice::502, view::427] [moe_fused::block.21, rms_norm::81]
       a-partition-is-cut-at-the-request: activations sized at the REQUEST at the plan's compute
                 width (the profiler's resolver) instead of the trace's float32 widths, which doubled
-                them: 2 segments, the boundaries below, identical in both modes.
+                them: 2 segments, identical in both modes.
+      a-model-that-fits-whole-is-planned-whole (2026-10-04), TRITON ONLY: the head kept whole
+                beside the segments is priced without the transpose of its weight
+                (profiler.weight_transposes_read_in_place; the arena held 593.5 MB for that head, its
+                weight once), so the segments have that much more room: still 3, both seams now on
+                block boundaries:
+                [embedding::0, view::227] [moe_fused::block.11, view::427] [moe_fused::block.21, rms_norm::81]
+                The compiled estimate keeps the transposed bytes (its fp32 operand copy is not
+                measured yet) and its cut did not move: the two modes differ from here on.
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -207,6 +222,10 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     # widths, release-candidate-1, 2026-09-28): activations the engine keeps in fp32 cost 4 bytes, the
     # segments shrink to fit the same usable rung. Two segments before, cut under the compute dtype's
     # 2 bytes; the solver's own note on this card already read three.
-    assert cut == {"model": [["aten.embedding::0", "aten.split_with_sizes::35"],
-                             ["aten.slice::502", "aten.view::427"],
-                             ["moe_fused::block.21", "custom.rms_norm::81"]]}, cut
+    pinned = {"compiled": [["aten.embedding::0", "aten.split_with_sizes::35"],
+                           ["aten.slice::502", "aten.view::427"],
+                           ["moe_fused::block.21", "custom.rms_norm::81"]],
+              "triton": [["aten.embedding::0", "aten.view::227"],
+                         ["moe_fused::block.11", "aten.view::427"],
+                         ["moe_fused::block.21", "custom.rms_norm::81"]]}
+    assert cut == {"model": pinned[mode]}, cut

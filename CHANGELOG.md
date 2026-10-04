@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
+  counted the transposed copy of every linear layer's weight as working memory, although the Triton
+  engine reads the weight in place; for a speech or language model with a large vocabulary that was
+  close to a gigabyte that never exists. On a 24 GB Apple machine with 12 GB free, orpheus-3b was
+  streamed (every token re-reading the model from disk) and is now held whole. Janus-Pro-7B on the
+  same machine when idle is held whole too: the planner now knows that an image decode releases the
+  language model before the image decoder loads, and no longer prices the language model's logits
+  as the saved picture (3.4 GB of host memory for a 384x384 image).
+
 - **Large video and multimodal models stream on small unified-memory machines instead of being
   refused.** On an 18 GB Apple machine, CogVideoX-5b-I2V, Wan2.2-I2V-A14B and Ming-Lite-Omni-1.5
   were refused at their default request; they now run their largest components one piece at a time

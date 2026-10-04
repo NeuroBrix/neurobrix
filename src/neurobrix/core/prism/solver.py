@@ -132,14 +132,24 @@ _DTYPE_WIDTH = {
 }
 
 
-def unified_device_bytes(plan, profile) -> int:
+def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
     """The plan's device bytes that are host bytes: all of them when the profile declares its device
     unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
-    ledger reserves what a unified run really takes (the Mac, 2026-10-03)."""
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03).
+
+    What a plan holds AT ONCE, not every component it ever loads: a streamed plan its window; a plan
+    that loads on demand (`loading_mode == "lazy"`) the dearest of its flow's phases, which the solver
+    passes as `peak_loaded_bytes` (`PrismSolver._peak_loaded_bytes`); an eager plan, or a caller with
+    no phases to give, the plan's total. Janus-Pro-7B on the Mac's idle reading planned
+    lazy_sequential whole at the 16 384 rung and was then sent down to a streamed 12 288 because its
+    host side summed the decoder the triton flow loads only after the language model is released."""
     if any(d.has_unified_memory for d in profile.devices):
-        # a streamed plan holds its window, not every component at once
         window = getattr(plan, "device_window_mb", None)
-        return int((window if window is not None else plan.total_memory_mb) * 2**20)
+        if window is not None:
+            return int(window * 2**20)
+        if peak_loaded_bytes is not None and plan.loading_mode == "lazy":
+            return int(peak_loaded_bytes)
+        return int(plan.total_memory_mb * 2**20)
     return 0
 
 
@@ -735,7 +745,7 @@ class PrismSolver:
 
     def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
                                      component_memory: Dict, profile,
-                                     kv_already_counted: int = 0) -> int:
+                                     kv_already_counted: int = 0, container=None) -> int:
         """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
 
         Each component costs what its allocation keeps resident: a `layer_streaming` segment's
@@ -746,14 +756,20 @@ class PrismSolver:
         "over capacity" on a 32 GB card, the KV check failed, the cascade fell to
         cpu_execution on a GPU node).
 
-        The costs are SUMMED, for every strategy. `lazy_sequential` and `cpu_streaming` LOAD one
-        component at a time, but what stays resident is the FLOW's decision, and Prism does not model
-        it yet: the VLM decode loop keeps the LM and its head together (MiniCPM-o's pair is
-        16 516.2 MB, over the Mac's 16 384 rung — a MAX would have accepted it, register 104), the
-        speech legs load their talker groups beside or after the LM, and the triton dual_ar flow
-        loads its quantizer with the model still resident where the compiled one unloads first.
-        The SUM is the bound that holds for every one of those; a one-at-a-time combination waits
-        on a lifecycle model that reads what each flow keeps.
+        The costs are combined by what the plan holds AT ONCE. Under a strategy that loads on
+        demand (`_loads_on_demand`) that is the FLOW's lifecycle, read from its own phases for the
+        engine and the kind of session the plan runs under (`core/flow/base.py resident_together`,
+        `_phase_peak`): the dearest phase, with every component no phase names. An image decode on
+        the triton engine releases its language model before its decoder loads, so a single run
+        never holds the two together. The cache this check sizes is in no phase — its buffers
+        outlive the language model (triton/kv_cache.py `clear`) — so it is held against the dearest
+        phase, whichever that is. A flow that declares no phases keeps the SUM of every component —
+        the bound that holds whatever it keeps: the VLM decode loop keeps the LM and its head
+        together with its towers (MiniCPM-o: 17 856 MB against the Mac's 16 384 rung — a MAX would
+        have accepted it, registers 104 and 119), the speech legs load their talker groups beside or
+        after the LM, and the triton dual_ar flow loads its quantizer with the model still resident
+        where the compiled one unloads first; each waits on its own handlers being read into a
+        phase function. A strategy that does not load on demand keeps the SUM: nothing unloads.
 
         Combined only after every cost is known, so the result does not depend on the order the
         components are visited in — an in-loop `max(total, x)` beside `total += y` did.
@@ -780,7 +796,51 @@ class PrismSolver:
             if name == self._lm_component_name:
                 cost = max(cost - int(kv_already_counted), 0)
             costs[name] = cost
+        if container is not None and self._loads_on_demand(strat_name):
+            return self._phase_peak(container, costs)
         return sum(costs.values())
+
+    def _loads_on_demand(self, strat_name: str) -> bool:
+        """True when a plan of `strat_name` loads a component when the flow reaches it and lets the
+        flow release it — `_build_plan`'s `loading_mode == "lazy"` for every strategy it decides by
+        NAME: one that is not eager, the two streaming rungs, a serve session degraded to cold. A
+        name that is no AllocationStrategy member (`op_level_tiling`) is decided there from the
+        plan's totals, which this check does not have: it is held to the SUM here, the bound that
+        holds either way. (An eager plan preloads nothing either — executors are built without
+        weights — but nothing it loads is released, so the SUM is what it ends up holding.)"""
+        if getattr(self, "_serve_cold_fallback", False) or strat_name in ("cpu_streaming", "layer_streaming"):
+            return True
+        return strat_name in {s.value for s in AllocationStrategy if not s.is_eager}
+
+    def _flow_phases(self, container):
+        """The flow's phases on the engine this plan runs on, for a single run or a served session
+        (`core/flow/base.py resident_together`), or None when it declares none."""
+        from neurobrix.core.flow.base import resident_together
+        from neurobrix.core.prism.host_footprint import engine_of
+        return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
+                                 served=bool(getattr(self, "_serve_mode", False)))
+
+    def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
+        """The most a plan that loads on demand holds at one moment, from a cost per component: the
+        dearest of the flow's phases, each with every component no phase names (nothing says it is
+        unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
+        in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
+        does not hold `owner`."""
+        phases = self._flow_phases(container)
+        if not phases:
+            return sum(costs.values())
+        named = set().union(*phases)
+        loose = sum(c for n, c in costs.items() if n not in named)
+        return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
+                           for ph in phases)
+
+    def _peak_loaded_bytes(self, container, plan) -> int:
+        """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
+        each component's total); the KV cache, priced inside its owner's total, stays allocated in
+        the phases that no longer hold the owner."""
+        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
+        return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
     @property
     def whole_component_fraction(self) -> float:
@@ -1520,7 +1580,8 @@ class PrismSolver:
                     # KV check failed → the cascade fell through to
                     # cpu_execution on a GPU node).
                     total_allocated = self._resident_bytes_for_kv_check(
-                        strat_name, strat_allocs, component_memory, profile, kv_already_counted)
+                        strat_name, strat_allocs, component_memory, profile, kv_already_counted,
+                        container=container)
 
 
                 if strat_name in ("zero3", "single_gpu", "single_gpu_lifecycle"):
@@ -1704,7 +1765,7 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=resident_bytes_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile))
+            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -2477,6 +2538,10 @@ class PrismSolver:
                     # (core/prism/runtime_widths).
                     widths = self._activation_widths(
                         comp, container, profiler, input_config, comp_dtype_str, profile)
+                    # The Triton engines read a transposed weight in place; the compiled engine's
+                    # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why).
+                    from neurobrix.core.prism.host_footprint import engine_of as _engine_of
+                    _in_place = _engine_of(getattr(self, "_mode", "compiled")) == "triton"
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -2493,6 +2558,7 @@ class PrismSolver:
                         # 2026-08-10). Per-request paths keep the
                         # unfloored map.
                         placement_floor=True,
+                        in_place_weight_reads=_in_place,
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -2545,6 +2611,7 @@ class PrismSolver:
                                 # their consumer: its buffer lives until then.
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
+                                in_place_weight_reads=_in_place,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -2566,6 +2633,7 @@ class PrismSolver:
                                 dtype_bytes=dtype_bytes,
                                 inplace_adds=inplace_adds,
                                 widths=widths,
+                                in_place_weight_reads=_in_place,
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -5745,26 +5813,8 @@ class PrismSolver:
                         "ZERO FALLBACK: layer_streaming must reserve the KV cache at the dtype the "
                         "solver decided, and no dtype was decided (_target_dtype_str unset); refusing "
                         "rather than sizing it at an invented one")
-                # At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve
-                # mode two turns, twice the run estimate. Reserving only the run estimate cut segments
-                # that left too little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's
-                # profile, serve, was then refused (or, judged against the summed capacity, planned
-                # at 20 361 MB on a 17 277 MB device).
-                _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
-                _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
-                # Reserved once. A WHOLE LM sits in `resident_beside` with the estimate already inside
-                # its total, so only what the plan's minimum needs beyond it is added; a streamed LM,
-                # or no named LM (the estimate is then in no component), reserves the whole need.
-                _lm = self._lm_component_name
-                kv_bytes = (max(0, _kv_need - _kv_est) if (_lm is not None and _lm not in streamed)
-                            else _kv_need)
-                # The cache's bytes inside the window: the reserve, and the estimate a WHOLE LM
-                # carries in its total where that total sits beside the segments.
-                kv_in_window = kv_bytes
-                if _lm is not None and _lm not in streamed:
-                    _lm_beside = resident_beside - self._resident_beside_streamed(
-                        container, [(n, m) for n, m in sorted_comps if n != _lm], streamed, cost=cost)
-                    kv_in_window += min(int(_kv_est), max(0, int(_lm_beside)))
+                kv_bytes, kv_in_window = self._kv_reserve_beside(container, sorted_comps, streamed,
+                                                                 resident_beside, cost)
             segment_budget = budget_bytes - resident_beside - constant_bytes - flow_read_bytes - kv_bytes
             if segment_budget <= 0:
                 return _no(
@@ -5934,13 +5984,21 @@ class PrismSolver:
         return allocations, devices
 
     def _output_bytes(self, container) -> int:
-        """What the run's output boundary holds on the host: the largest graph output among the plan's
-        components at the request, times what the family's save path holds per element
-        (output_dispatch.host_bytes_per_output_element). The largest, not a named component: which one is
-        final is the flow's business, and the largest bounds it."""
+        """What the run's output boundary holds on the host: the largest graph output among the
+        components the flow SAVES from, at the request, times what the family's save path holds per
+        element (output_dispatch.host_bytes_per_output_element). Which component is final is the
+        flow's business (`core/flow/base.py saved_output_components`); where the flow does not
+        declare it, the largest output of any component bounds it. Janus-Pro-7B's language model
+        returns its logits over the whole sequence (5 x 704 x 102 400 at the placement floor): priced
+        as the saved image, 3 437 MB of host for a 384x384 picture (2026-10-04)."""
+        from neurobrix.core.flow.base import saved_output_components
         from neurobrix.core.runtime.output_dispatch import host_bytes_per_output_element
         family = (container.get_manifest() or {}).get("family")
-        elements = max(self.__dict__.get("_output_elements", {}).values(), default=0)
+        sized = self.__dict__.get("_output_elements", {})
+        saved = saved_output_components(self._flow_topology(container))
+        if saved and any(n in sized for n in saved):
+            sized = {n: e for n, e in sized.items() if n in saved}
+        elements = max(sized.values(), default=0)
         if not family or not elements:
             return 0
         return int(elements) * host_bytes_per_output_element(family)
@@ -5958,6 +6016,31 @@ class PrismSolver:
             out[index.parent.name] = {str(v.get("dtype")) for v in tensors.values()
                                       if isinstance(v, dict) and str(v.get("dtype", "")).startswith(("float", "bfloat"))}
         return out
+
+    def _kv_reserve_beside(self, container, sorted_comps, streamed, resident_beside: int, cost=None):
+        """(bytes reserved for the KV cache beside the streamed segments, the cache's bytes inside the
+        window).
+
+        At least the minimum the KV plan will demand of this plan (`_kv_min_bytes`): in serve mode
+        two turns, twice the run estimate. Reserving only the run estimate cut segments that left too
+        little for the serve minimum — Qwen3-Coder-30B-A3B on the Mac's profile, serve, was then
+        refused (or, judged against the summed capacity, planned at 20 361 MB on a 17 277 MB device).
+
+        Reserved once. A WHOLE language model whose total sits in `resident_beside` carries the
+        estimate inside it, so only what the plan's minimum needs beyond it is added. A streamed
+        one, no named one (the estimate is then in no component), or a whole one that is NOT beside
+        these segments — another phase of the flow: the cache's buffers outlive it — reserves the
+        whole need."""
+        _kv_est = self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+        _kv_need = max(_kv_est, self._kv_min_bytes(container, self._target_dtype_str))
+        _lm = self._lm_component_name
+        _carried = 0
+        if _lm is not None and _lm not in streamed:
+            _lm_beside = resident_beside - self._resident_beside_streamed(
+                container, [(n, m) for n, m in sorted_comps if n != _lm], streamed, cost=cost)
+            _carried = min(int(_kv_est), max(0, int(_lm_beside)))
+        kv_bytes = max(0, int(_kv_need) - _carried)
+        return kv_bytes, kv_bytes + _carried
 
     def _resident_beside_streamed(self, container, sorted_comps, streamed, cost=None) -> int:
         """Bytes held beside a streamed component's segments by the components kept WHOLE.
@@ -5979,8 +6062,7 @@ class PrismSolver:
         planned: CogVideoX-5b-I2V on the Mac's profile at the 16 384 rung kept its 11 003 MB text
         encoder whole and reserved it beside the transformer's segments (3 088 MB left), while at
         8 192 the encoder was itself streamed and the plan held (the Mac, 2026-10-04)."""
-        from neurobrix.core.flow.base import resident_together
-        phases = resident_together(self._flow_topology(container))
+        phases = self._flow_phases(container)
         whole = [(n, m) for n, m in sorted_comps if n not in streamed]
 
         def _total(n, m) -> int:
@@ -5991,11 +6073,14 @@ class PrismSolver:
         named = set().union(*phases) if phases else set()
 
         def _beside(s) -> int:
-            phase = next((ph for ph in phases if s in ph), None) if phases is not None else None
             # A whole component no phase names is concurrent, as a streamed one no phase names is:
-            # nothing says it is unloaded.
-            return sum(_total(n, m) for n, m in whole
-                       if phases is None or phase is None or n in phase or n not in named)
+            # nothing says it is unloaded. A streamed component in several phases (an image
+            # decode's head runs beside the language model, then beside the decoder) reserves
+            # the dearest of them.
+            mine = [ph for ph in (phases or []) if s in ph]
+            if not mine:
+                return sum(_total(n, m) for n, m in whole)
+            return max(sum(_total(n, m) for n, m in whole if n in ph or n not in named) for ph in mine)
 
         if not streamed:
             return sum(_total(n, m) for n, m in whole)
