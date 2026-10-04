@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
+from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.triton import i2v_conditioning as _i2v
 from neurobrix.triton import vace_control_conditioning as _vace
 
@@ -347,6 +348,10 @@ class TritonCFGEngine:
         # mismatch the batch otherwise). Restored after. R30 mirror of core CFG.
         extra_restore: Dict[str, NBXTensor] = {}
         _handled_from = {encoder_key, state_key}
+        # A text condition beside the hidden states (a pooled vector) has its own negative: [neg, pos],
+        # never [pos, pos] (`resolution.negative_pooled_condition`). A shared one stays [v, v].
+        _negatives = dict(_negative_swaps(self._ctx.pkg.topology, self._ctx.variable_resolver.resolved,
+                                          comp_name, skip=(encoder_key, state_key)))
         for conn in self._ctx.pkg.topology.get("connections", []):
             to_port = conn.get("to", "")
             from_port = conn.get("from", "")
@@ -364,7 +369,7 @@ class TritonCFGEngine:
             _v = _ensure_nbx(_raw)
             if isinstance(_v, NBXTensor) and _v.dim() >= 1 and _v.shape[0] == 1:
                 extra_restore[from_port] = _v
-                self._ctx.variable_resolver.set(from_port, NBXTensor.cat([_v, _v], dim=0))
+                self._ctx.variable_resolver.set(from_port, NBXTensor.cat([_ensure_nbx(_negatives[from_port]) if from_port in _negatives else _v, _v], dim=0))
 
         # Batch timestep
         if timestep.dim() == 0:
@@ -488,7 +493,12 @@ class TritonCFGEngine:
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
 
-        # Pass 1: unconditional
+        # Pass 1: unconditional — every text condition at its negative (hidden states and pooled)
+        _swaps = _negative_swaps(self._ctx.pkg.topology, self._ctx.variable_resolver.resolved,
+                                 comp_name, skip=(encoder_key, state_key))
+        _pos_pooled = [(k, self._ctx.variable_resolver.get(k)) for k, _ in _swaps]
+        for _k, _n in _swaps:
+            self._ctx.variable_resolver.set(_k, _n)
         self._ctx.variable_resolver.set(encoder_key, neg_hidden)
         self._ctx.variable_resolver.set(state_key, current_state)
         self._ctx.variable_resolver.set("global.encoder_attention_mask", neg_mask)
@@ -498,6 +508,8 @@ class TritonCFGEngine:
         noise_pred_uncond = self._extract_primary_output(comp_name, output_uncond)
 
         # Pass 2: conditional
+        for _k, _p in _pos_pooled:
+            self._ctx.variable_resolver.set(_k, _p)
         self._ctx.variable_resolver.set(encoder_key, pos_hidden)
         self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
 
