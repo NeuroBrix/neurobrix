@@ -109,6 +109,7 @@ class LayerPartitioner:
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
                  widths: Optional[Dict[str, int]] = None):
+        self._dag = graph
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
         # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
@@ -150,37 +151,46 @@ class LayerPartitioner:
     # -- dataflow ---------------------------------------------------------
 
     def _last_use(self) -> Dict[str, int]:
-        last: Dict[str, int] = {}
-        for i, op_uid in enumerate(self.order):
-            for tid in (self.ops.get(op_uid) or {}).get("input_tensor_ids") or []:
-                last[tid] = i
-        return last
+        """tensor id -> index of the op after which it is dead: the PROFILER's liveness
+        (`profiler.dag_last_uses`), one rule for both walks of the same graph. This copy recorded
+        consumers only, so an output no op reads (a layer norm's statistics, an attention's
+        log-sum-exp, a RoPE `copy_` result) was never freed and the curve climbed to the last op:
+        Wan2.2-I2V-A14B's transformer at 480x832x81, 108 800 MB of "activations alone" (the Mac's
+        refusal, 2026-10-04); this rule prices 7 737 MB."""
+        from neurobrix.core.prism.profiler import dag_last_uses
+        index = {uid: i for i, uid in enumerate(self.order)}
+        return {tid: index[uid] for tid, uid in dag_last_uses(self._dag).items() if uid in index}
 
     def live_activation_curve(self) -> List[int]:
         """Bytes of activation alive after each op in the order.
 
         This is the cost of cutting THERE, and its minima are where the
-        graph comes apart.
+        graph comes apart. The liveness and the zero-allocation rule are the
+        profiler's (`dag_last_uses`, `ZERO_ALLOC_OP_TYPES`): a graph output is
+        never freed, a stride-0 broadcast view allocates nothing.
         """
+        from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
         last = self._last_use()
+        outputs = set(self._dag.get("output_tensor_ids") or [])
         curve, live = [], 0
         # Only what has been ADDED can be freed. Subtracting every input at
         # its last use freed the graph's own inputs too — tensors no op
         # produced — and drove the curve negative, reporting a peak of 0 on a
         # graph whose activations were 64 MB. A live set, not a running total.
-        alive: Set[str] = set()
+        alive: Dict[str, int] = {}
         for i, op_uid in enumerate(self.order):
             op = self.ops.get(op_uid) or {}
+            zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
             for tid in op.get("output_tensor_ids") or []:
                 t = self.tensors.get(tid)
                 if t is not None and not t.get("is_parameter") and tid not in alive:
-                    alive.add(tid)
-                    live += self._activation_bytes(tid, t)
-            for tid in op.get("input_tensor_ids") or []:
-                if tid in alive and last.get(tid) == i:
-                    t = self.tensors.get(tid)
-                    alive.discard(tid)
-                    live -= self._activation_bytes(tid, t)
+                    alive[tid] = 0 if zero else self._activation_bytes(tid, t)
+                    live += alive[tid]
+            # Every tensor dead after this op: its inputs at their last use and its own outputs
+            # no op reads.
+            for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
+                if tid in alive and last.get(tid) == i and tid not in outputs:
+                    live -= alive.pop(tid)
             curve.append(live)
         return curve
 

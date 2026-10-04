@@ -424,6 +424,62 @@ class ActivationProfile:
         )
 
 
+#: Ops whose output is a STRIDE-0 broadcast view at runtime: they allocate nothing (see the
+#: simulation loop in `ActivationProfiler.estimate_peak_memory`). Shared with the layer partitioner,
+#: which sizes the same graph's activations and must not count what this one does not.
+ZERO_ALLOC_OP_TYPES = ("aten::expand", "aten::broadcast_to")
+
+
+def dag_last_uses(dag: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Build map: tensor_id -> last_op_uid that uses it — THE liveness rule of a graph.
+
+    Liveness Analysis: Tensor can be freed after its last use.
+
+    CRITICAL FIX: Dead output tensors (outputs never consumed as inputs
+    to any downstream op) must be freed immediately at the producing op.
+    Without this, graphs with many detach ops (e.g., text_encoder with
+    ~1041 aten::detach) accumulate dead tensors, inflating peak memory
+    from ~2GB to 89GB.
+
+    One function for every place that walks a graph's liveness: the placement
+    estimate below and the layer partitioner (`layer_partition.py`). The
+    partitioner kept a second copy without the dead-output rule, and a Wan
+    transformer's never-read outputs (layer-norm statistics, attention
+    log-sum-exps, RoPE `copy_` results) stayed alive to the last op: 108 800 MB
+    of "activations alone" at 480x832x81 where this rule prices 7 737 (the Mac,
+    2026-10-04).
+    """
+    execution_order = dag.get("execution_order", [])
+    ops = dag.get("ops", {})
+    last_use = {}
+
+    # Step 1: Collect ALL tensors used as inputs anywhere
+    used_as_input = set()
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        used_as_input.update(op.get("input_tensor_ids", []))
+
+    # Step 2: Standard last-use tracking (input tensors)
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        for tid in op.get("input_tensor_ids", []):
+            # Overwrite = last use wins
+            last_use[tid] = op_uid
+
+    # Step 3: Dead outputs — free immediately after producing op
+    # Output tensors that are never consumed as inputs AND are not
+    # graph outputs would otherwise accumulate forever in live_tensors.
+    graph_outputs = set(dag.get("output_tensor_ids", []))
+    for op_uid in execution_order:
+        op = ops.get(op_uid, {})
+        for out_tid in op.get("output_tensor_ids", []):
+            if out_tid not in used_as_input and out_tid not in graph_outputs:
+                last_use[out_tid] = op_uid  # Free immediately
+
+    return last_use
+
+
 class ActivationProfiler:
     """
     Symbolic Activation Memory Profiler.
@@ -471,43 +527,8 @@ class ActivationProfiler:
         return cls(dag)
 
     def _compute_last_uses(self) -> Dict[str, str]:
-        """
-        Build map: tensor_id -> last_op_uid that uses it.
-
-        Liveness Analysis: Tensor can be freed after its last use.
-
-        CRITICAL FIX: Dead output tensors (outputs never consumed as inputs
-        to any downstream op) must be freed immediately at the producing op.
-        Without this, graphs with many detach ops (e.g., text_encoder with
-        ~1041 aten::detach) accumulate dead tensors, inflating peak memory
-        from ~2GB to 89GB.
-        """
-        last_use = {}
-
-        # Step 1: Collect ALL tensors used as inputs anywhere
-        used_as_input = set()
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            used_as_input.update(op.get("input_tensor_ids", []))
-
-        # Step 2: Standard last-use tracking (input tensors)
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            for tid in op.get("input_tensor_ids", []):
-                # Overwrite = last use wins
-                last_use[tid] = op_uid
-
-        # Step 3: Dead outputs — free immediately after producing op
-        # Output tensors that are never consumed as inputs AND are not
-        # graph outputs would otherwise accumulate forever in live_tensors.
-        graph_outputs = set(self.dag.get("output_tensor_ids", []))
-        for op_uid in self.execution_order:
-            op = self.ops.get(op_uid, {})
-            for out_tid in op.get("output_tensor_ids", []):
-                if out_tid not in used_as_input and out_tid not in graph_outputs:
-                    last_use[out_tid] = op_uid  # Free immediately
-
-        return last_use
+        """tensor_id -> the op after which it is dead (`dag_last_uses`, the one liveness rule)."""
+        return dag_last_uses(self.dag)
 
     def build_symbol_map(self, input_config: InputConfig,
                          placement_floor: bool = False, flow: bool = True) -> Dict[str, int]:
@@ -973,8 +994,7 @@ class ActivationProfiler:
             # the existing stride-0 proxy set. R34: branch on op semantics, not
             # model family.
             op_is_zero_alloc = (op_uid in zero_set or
-                                op.get("op_type") in ("aten::expand",
-                                                      "aten::broadcast_to"))
+                                op.get("op_type") in ZERO_ALLOC_OP_TYPES)
             for out_tid in output_tids:
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
