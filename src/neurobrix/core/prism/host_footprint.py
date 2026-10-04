@@ -136,26 +136,16 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             "loading": plan.loading_mode}
 
 
-def resident_bytes_now() -> int:
-    """This process's resident memory now (at planning time: the interpreter, the CLI, the parsed
-    container). Linux: VmRSS from /proc/self/status. NOT getrusage's ru_maxrss there — Linux carries it
-    across fork and exec, so a process started by a large one reports its parent's size (measured
-    2026-09-27: 1 509 MB in a child of a 1.5 GB parent whose own VmHWM was 8 MB). Elsewhere (macOS, no
-    /proc) ru_maxrss, which macOS reports in bytes."""
-    import sys
-    if sys.platform.startswith("linux"):
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("VmRSS:"):
-                    return int(line.split()[1]) << 10
-        raise RuntimeError("ZERO FALLBACK: /proc/self/status carries no VmRSS")
-    import resource
-    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-
-
 def process_footprint_now() -> int:
     """This process's memory NOW, as the host's memory guard counts it — the floor a price door adds a
-    key's priced peak to. Linux: VmRSS (/proc/self/status). macOS: the physical footprint
+    key's priced peak to, and the `resident` term of a plan's host footprint (what the planning process
+    holds when it prices; solve()'s unified descent takes it off as already out of the reading). ONE
+    reader for both: the resident term was read by its own function, ru_maxrss on macOS — a high-water
+    mark, not what the process holds, so the descent took off more than the reading had excluded and
+    the host ledger reserved it in full. DeepSeek-Coder-V2-Lite-Instruct on the Mac (2026-10-04 20:25,
+    15.5-15.7 GB free): resident 5 025 MB, yet the plan read at least 12 288 MB free in that same
+    process (it planned the 12 288 rung, base 0), so it held at most ~3.2 GB then; a host side of
+    17 128 MB was accepted as 12 103 and no ledger could admit it. Linux: VmRSS (/proc/self/status). macOS: the physical footprint
     (`proc_pid_rusage`, `ri_phys_footprint` — what `footprint -f` reports and what a unified-memory
     guard kills on), never `ru_maxrss`, a high-water mark: the certifier read it ONCE at its start
     (425 MiB on the Mac, 2026-10-03) while the process sat at 1.1-1.7 GB between keys, so the door
