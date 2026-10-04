@@ -418,8 +418,23 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 bd, ad, cd = (C_ if d.name in fl else d for d in (bd, ad, cd))
             launches = LK.baddbmm_launches(M, K, N, ad, cd, bd)
         elif kind in ("aten::stft", "aten::istft"):
-            unhandled[f"{kind} (not yet derived)"] += 1
-            launches = []
+            # stft(x, n_fft, hop_length, win_length, window, normalized, onesided, return_complex);
+            # istft(x, n_fft, hop_length, win_length, window, ...) — `stft_wrapper` /
+            # `istft_wrapper` with the args as traced (a 1-D signal / a 2-D spectrum is one row)
+            a_ = (o.get("attributes") or {}).get("args") or []
+            val = lambda i: a_[i].get("value") if i < len(a_) and isinstance(a_[i], dict) else None
+            n_fft = val(1)
+            n_fft = int(n_fft[0] if isinstance(n_fft, (list, tuple)) else n_fft)
+            x_s = shape(ins[0])
+            if kind == "aten::stft":
+                lead = 1
+                for e in x_s[:-1]:
+                    lead *= e
+                launches = LK.stft_launches(lead, x_s[-1], n_fft, val(2), val(3), val(6),
+                                            has_native_bf16)
+            else:
+                batch, bins, frames = ([1, *x_s] if len(x_s) == 2 else x_s)[-3:]
+                launches = LK.istft_launches(batch, bins, frames, n_fft, has_native_bf16)
         else:
             return None
         return launches
