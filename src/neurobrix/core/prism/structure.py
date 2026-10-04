@@ -271,6 +271,10 @@ class DeviceSpec:
     brand: DeviceBrand = DeviceBrand.NVIDIA
     # None = the profile did not say; fall back to the architecture mapping.
     unified_memory: Optional[bool] = None
+    # The largest SINGLE allocation the device grants, in MB (Metal: `MTLDevice.maxBufferLength`, 13 639 MB on an
+    # M4 Pro whose working set is 18 186 MB). One arena is one allocation, so no segment, component or tile
+    # buffer may be planned above it. None = the profile does not say: no limit below `memory_mb` (a CUDA card).
+    max_allocation_mb: Optional[int] = None
 
     @property
     def memory_class_gb(self) -> Optional[int]:

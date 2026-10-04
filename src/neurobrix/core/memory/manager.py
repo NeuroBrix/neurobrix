@@ -115,6 +115,19 @@ class MemoryManager:
         except Exception:
             pass
 
+        # Step 1c: release the MoE pointer tables that PIN weights (Metal: each holds its expert
+        # tensors and a whole-allocation wrap for as long as it is cached). Without this the
+        # reference drop below frees nothing an MoE table pins, and a streamed segment stays in
+        # memory beside the next one (`moe.release_pinned_tables`). Only when the triton MoE
+        # module is already loaded: a run that never built a table has none to release, and a
+        # compiled-path unload imports nothing. On CUDA a table pins nothing and none is dropped.
+        # Never swallowed: a table that could not release its pins keeps the unloaded weights in
+        # memory — the very defect this step removes — and that must be seen, not survived.
+        import sys
+        _moe = sys.modules.get("neurobrix.triton.moe")
+        if _moe is not None:
+            _moe.release_pinned_tables()
+
         # Step 2: drop references — ComponentArena.__del__ / NBXTensor
         # finalizers run cudaFree here, but the kernels that touched
         # this memory are now guaranteed to have completed.

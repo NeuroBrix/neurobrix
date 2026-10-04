@@ -533,3 +533,9 @@ tiling:
 # This chip's ladder is the measured one above; the duplicate is refused by
 # tests/unit/config/test_config_yaml_has_no_duplicate_keys.py.
 # ---------------------------------------------------------------------------
+
+# The flash kernel at a power-of-two head dim >= 128 is NOT measured on this architecture: the zero-pad
+# detour stays (launch_keys.flash_headdim_detour). Declared, never left absent: true only where the
+# correctness oracle was run with the detour off on this arch and stack (Volta, Triton 3.8, 2026-10-03).
+flash:
+  pow2_head_dim_correct: false
