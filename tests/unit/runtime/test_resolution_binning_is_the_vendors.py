@@ -163,10 +163,11 @@ def _vendor_video_resize_and_crop_tensor(samples, new_width: int, new_height: in
     return samples
 
 
-ASPECT_RATIO_720_BIN = {    # diffusers 0.38.0.dev0 pipeline_sana_video.py:61 (SANA-Video 720p, sample_size 22)
+ASPECT_RATIO_720_BIN = {    # diffusers 0.38.0.dev0 pipeline_sana_video.py:61, as Forge's capture recorded it from
+                            # SanaVideoPipeline's own call (2026-10-04, binning_field.json of the SANA-Video ladder)
     "0.5": [672.0, 1344.0], "0.57": [704.0, 1280.0], "0.68": [800.0, 1152.0], "0.78": [832.0, 1088.0],
-    "0.88": [896.0, 1024.0], "1.0": [960.0, 960.0], "1.13": [1024.0, 896.0], "1.29": [1088.0, 832.0],
-    "1.46": [1152.0, 800.0], "1.75": [1280.0, 704.0], "2.0": [1344.0, 672.0],
+    "1.0": [960.0, 960.0], "1.13": [1024.0, 896.0], "1.29": [1088.0, 832.0], "1.46": [1152.0, 800.0],
+    "1.67": [1248.0, 736.0], "1.75": [1280.0, 704.0], "2.0": [1344.0, 672.0],
 }
 VIDEO_REQUESTS = [(256, 640), (704, 1280), (480, 480)]
 
