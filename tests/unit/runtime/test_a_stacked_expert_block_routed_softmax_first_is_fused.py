@@ -64,7 +64,8 @@ def _l(v):
 
 
 def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=False,
-                  escape=False, idx_reused=False, dtype="float64", cast_to=None):
+                  escape=False, idx_reused=False, dtype="float64", cast_to=None,
+                  largest=True):
     """One MoE layer in the traced form of transformers 4.57's Qwen3-VL-MoE block
     (op for op as the container's graph.json, block.0), small sizes."""
     tensors, ops, order = {}, {}, []
@@ -97,7 +98,7 @@ def qwen3vl_block(renorm=True, gate_piece=0, act="aten::silu", scale_routing=Fal
        kwargs={"dtype": {"type": "dtype", "value": "torch.float32"}})
     op("softmax", "aten::_softmax", [_t("l32"), _s(-1), _s(False)],
        [tensor("probs", [T, E], "float32")])
-    op("topk", "aten::topk", [_t("probs"), _s(K)],
+    op("topk", "aten::topk", [_t("probs"), _s(K)] + ([] if largest else [_s(-1), _s(False)]),
        [tensor("scores", [T, K], "float32"), tensor("idx", [T, K], "int64")])
     w_tid = "scores"
     if renorm:
@@ -354,6 +355,7 @@ def test_a_registry_that_contradicts_the_trace_is_named(renorm):
     (dict(escape=True), "escapes the block"),
     (dict(idx_reused=True), "read beyond the routing scatter"),
     (dict(cast_to="float32"), "weighted combine runs in"),
+    (dict(largest=False), "SMALLEST"),
 ])
 def test_a_block_that_is_not_this_one_is_declined_by_name(variant, reason):
     # an undeclared pass: declined, named, the graph left exactly as traced
@@ -364,7 +366,7 @@ def test_a_block_that_is_not_this_one_is_declined_by_name(variant, reason):
     assert "topk" in refusals and reason in refusals["topk"], refusals
     assert d2["execution_order"] == qwen3vl_block(**variant)["execution_order"]
     # a DECLARED MoE that no matcher fuses is refused, never run as traced in silence
-    with pytest.raises(RuntimeError, match=f"fused by no matcher .*{re.escape(reason)}"):
+    with pytest.raises(RuntimeError, match=f"left unfused .*{re.escape(reason)}"):
         _fuse(qwen3vl_block(**variant))
 
 
@@ -470,3 +472,60 @@ def test_the_other_moe_containers_fuse_as_before(model, comp, family, layers):
         if st:    # granite's slabs, as its select -> t -> mm reads them, gate half first
             assert (st["input_linear_in_axis"], st["gate_offset"],
                     st["output_linear_in_axis"]) == (1, 0, 1), st
+
+
+def _with_a_stray_router(dag):
+    """A graph whose MoE layer fused and which still holds one more router (k > 1)
+    that no matcher recognises — the 48th of 48 left unfused."""
+    d = copy.deepcopy(dag)
+    d["tensors"]["stray_in"] = {"tensor_id": "stray_in", "shape": [T, E], "dtype": "float32"}
+    d["tensors"]["stray_s"] = {"tensor_id": "stray_s", "shape": [T, K], "dtype": "float32"}
+    d["tensors"]["stray_i"] = {"tensor_id": "stray_i", "shape": [T, K], "dtype": "int64"}
+    d["ops"]["stray.mm"] = {"op_uid": "stray.mm", "op_type": "aten::mm",
+                            "input_tensor_ids": ["va", "tr"], "output_tensor_ids": ["stray_in"],
+                            "attributes": {"args": [_t("va"), _t("tr")], "kwargs": {}},
+                            "parent_module": "block.1.ffn.router"}
+    d["ops"]["stray.topk"] = {"op_uid": "stray.topk", "op_type": "aten::topk",
+                              "input_tensor_ids": ["stray_in"],
+                              "output_tensor_ids": ["stray_s", "stray_i"],
+                              "attributes": {"args": [_t("stray_in"), _s(K)], "kwargs": {}},
+                              "parent_module": "block.1.ffn"}
+    i = d["execution_order"].index("add")
+    d["execution_order"][i:i] = ["stray.mm", "stray.topk"]
+    d["output_tensor_ids"] = list(d["output_tensor_ids"]) + ["stray_s", "stray_i"]
+    return d
+
+
+def test_the_declared_pass_sees_every_router_left_unfused():
+    """An llm-family graph is fused UNDECLARED at the executor's __init__; one
+    router fused, one did not. set_moe_config must still run the declared pass
+    over the one left — which refuses it by name — instead of skipping because
+    some fused op exists."""
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    d = MF.detect_and_fuse_moe(_with_a_stray_router(qwen3vl_block()), "llm")
+    assert _fused_ops(d) == ["moe_fused::block.0"]
+    assert MF.unfused_routers(d) == ["stray.topk"]
+    ex = GraphExecutor.__new__(GraphExecutor)
+    ex._dag, ex.family = d, "llm"
+    with pytest.raises(RuntimeError, match="left unfused .*stray.topk"):
+        ex.set_moe_config(norm_topk_prob=True)
+    # a fully fused graph: the declared pass has nothing to see and is not run
+    full = MF.detect_and_fuse_moe(qwen3vl_block(), "llm")
+    ex2 = GraphExecutor.__new__(GraphExecutor)
+    ex2._dag, ex2.family = full, "llm"
+    order = list(full["execution_order"])
+    ex2.set_moe_config(norm_topk_prob=True)
+    assert ex2._dag["execution_order"] == order
+
+
+def test_a_multi_gate_layer_covers_its_gates():
+    """A multi-gate layer keeps its gates' topk in the graph and names them in its
+    fused op's gate group: they are covered, not left unfused."""
+    d = {"ops": {
+        "g1": {"op_type": "aten::topk", "attributes": {"args": [_t("x"), _s(2)]}},
+        "g2": {"op_type": "aten::topk", "attributes": {"args": [_t("y"), _s(2)]}},
+        "g3": {"op_type": "aten::topk", "attributes": {"args": [_t("z"), _s(2)]}},
+        "moe_fused::block.0": {"op_type": "custom::moe_fused",
+                               "attributes": {"gate_group": ["g1", "g2"]}}},
+         "execution_order": ["g1", "g2", "moe_fused::block.0", "g3"]}
+    assert MF.unfused_routers(d) == ["g3"]

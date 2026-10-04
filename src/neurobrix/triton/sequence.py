@@ -2132,12 +2132,15 @@ class TritonSequence:
                 _hs = arena[_hs_slot]
                 if _hs is None:
                     raise RuntimeError(f"MoE fused: hidden_states is None ({op_uid})")
-                from .moe import promote_stacked_slabs as _promote
-                _g, _u, _d = _ewl(_stacked_attrs, _promote(_lut.get, _hs._device_idx))
+                from .moe import StackedSlabPromotion as _Promote
+                _promo = _Promote(_lut.get, _hs._device_idx)
+                _g, _u, _d = _ewl(_stacked_attrs, _promo)
+                _per_call = _promo.per_call
             else:
                 _g = [arena[s] for s in _gw]
                 _u = [arena[s] for s in _uw]
                 _d = [arena[s] for s in _dw]
+                _per_call = False
             return _moe_exec(
                 gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
@@ -2148,6 +2151,7 @@ class TritonSequence:
                 cache_key=_cache_key,
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
                 topk_weights=None if _tw_slot is None else arena[_tw_slot],
+                weights_per_call=_per_call,
             )
 
         # Output slots

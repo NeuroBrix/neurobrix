@@ -147,15 +147,22 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             for out_tid in fused_op.get("output_tensor_ids", []):
                 producer_map[out_tid] = fused_uid
 
-    # A DECLARED MoE (the registry says num_experts > 1) whose router neither
-    # matcher fuses would run as traced: trace-frozen routing, or every expert
-    # for every token — in silence. Refused by name instead.
-    if declared and declined:
-        named = "; ".join(f"{u}: {r}" for u, r in list(declined.items())[:3])
-        raise RuntimeError(
-            f"ZERO FALLBACK: [MoE Fusion] {len(declined)} router(s) of a declared MoE "
-            f"are fused by no matcher — {named}. Extend the matcher to this block "
-            "rather than letting the traced routing run.")
+    # A DECLARED MoE (the registry says num_experts > 1) with a router left
+    # unfused would run it as traced: trace-frozen routing, or every expert for
+    # every token — in silence. Refused by name instead, whichever matcher (or
+    # none) looked at it. A router is covered when its topk left the order (its
+    # layer was fused) or a fused op names it in its gate group (a multi-gate
+    # layer keeps its gates in the graph and binds their blend).
+    if declared:
+        left = unfused_routers({"ops": ops, "execution_order": execution_order})
+        if left:
+            named = "; ".join(
+                f"{u}: {declined.get(u, 'no matcher recognised an expert block behind it')}"
+                for u in left[:3])
+            raise RuntimeError(
+                f"ZERO FALLBACK: [MoE Fusion] {len(left)} router(s) of a declared MoE "
+                f"left unfused — {named}. Extend the matcher to this block rather "
+                "than letting the traced routing run.")
 
     # Update DAG
     dag["ops"] = ops
@@ -171,6 +178,28 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
         )
 
     return dag
+
+
+def unfused_routers(dag: Dict[str, Any]) -> List[str]:
+    """The MoE routers (topk with k > 1) still in the execution order that no
+    custom::moe_fused op covers — a fused layer's topk leaves the order; a
+    multi-gate layer's gates stay and are named in its fused op's gate group."""
+    ops = dag.get("ops", {})
+    order = dag.get("execution_order", [])
+    covered: Set[str] = set()
+    for uid in order:
+        op = ops.get(uid) or {}
+        if op.get("op_type") == "custom::moe_fused":
+            covered.update((op.get("attributes") or {}).get("gate_group") or [])
+    left = []
+    for uid in order:
+        op = ops.get(uid) or {}
+        if op.get("op_type") != "aten::topk" or uid in covered:
+            continue
+        k = _extract_topk_k(op)
+        if k is not None and k > 1:
+            left.append(uid)
+    return left
 
 
 def _fuse_one_moe_layer(
@@ -1518,6 +1547,9 @@ def _fuse_softmax_after_topk_layer(dag, ops, execution_order, tensors,
           if ops.get(u, {}).get("op_type") == "aten::_softmax"]
     if len(sm) != 1:
         return D("no single softmax consumes the top-k scores")
+    if not _topk_selects_largest(topk_data):
+        return D("the top-k keeps the SMALLEST scores (largest=False); the fused op "
+                 "routes to the largest")
 
     # Forward walk from the routing outputs to the index_add join.
     interior = {topk_uid}
@@ -1699,6 +1731,19 @@ _VIEW_LIKE = {"aten::view", "aten::reshape", "aten::_unsafe_view",
 _RESHAPE = {"aten::view", "aten::reshape", "aten::_unsafe_view"}
 
 
+def _topk_selects_largest(op: Dict[str, Any]) -> bool:
+    """aten::topk(input, k, dim=-1, largest=True, sorted=True): the router keeps
+    the LARGEST scores unless the graph says otherwise."""
+    vals = _scalar_args(op)
+    if len(vals) > 2 and vals[2] is not None:
+        return bool(vals[2])
+    kw = (op.get("attributes") or {}).get("kwargs") or {}
+    v = kw.get("largest")
+    if isinstance(v, dict):
+        v = v.get("value")
+    return True if v is None else bool(v)
+
+
 def _scalar_args(op: Dict[str, Any]) -> List[Any]:
     return [a.get("value") for a in op.get("attributes", {}).get("args", [])
             if a.get("type") in ("scalar", "list")]
@@ -1739,6 +1784,9 @@ def _fuse_softmax_first_dense_layer(dag, ops, execution_order, tensors,
     tk_args = _scalar_args(topk)
     if len(tk_args) > 1 and tk_args[1] not in (-1, 1):
         return D(f"the top-k does not select over the expert axis (dim={tk_args[1]})")
+    if not _topk_selects_largest(topk):
+        return D("the top-k keeps the SMALLEST scores (largest=False); the fused op "
+                 "routes to the largest")
     sm_op = ops.get(producer_map.get(gs_tid), {})
     if sm_op.get("op_type") != "aten::_softmax":
         return D("the top-k neither feeds a softmax nor reads one: the routing "
