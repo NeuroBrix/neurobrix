@@ -2547,8 +2547,7 @@ class GraphExecutor:
             elif compute_dtype == NBXDtype.bfloat16:
                 # Staying in bf16: the bits are already right, and the tensor
                 # is TAGGED bf16 below so they are read as bf16 and not as the
-                # uint16 they travel in (triton/constants.py does the same for
-                # the constants it loads).
+                # uint16 they travel in.
                 arr = np.ascontiguousarray(raw_u16)
             else:
                 arr = np.ascontiguousarray(fp32)
@@ -2997,7 +2996,7 @@ class GraphExecutor:
         # A container weight an op reads and the store does not hold is refused here, by
         # name, before the first op — the sequences' own door (R30), never a None handed to a
         # kernel (Allegro, 2026-10-04).
-        from neurobrix.triton.weight_loader import (
+        from neurobrix.nbx.weight_presence import (
             loader_weight_consumers, refuse_unbound_weights)
         _key = (id(self._dag), len(self._dag.get("execution_order") or ()))
         _cached = getattr(self, "_tseq_loader_consumers", None)

@@ -512,7 +512,7 @@ class TritonSequence:
 
     def compile(self):
         """Compile graph.json into op list + arena."""
-        from .weight_loader import loader_weight_consumers
+        from neurobrix.nbx.weight_presence import loader_weight_consumers
         self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_raw = self.dag.get("ops", {})
@@ -2930,7 +2930,7 @@ class TritonSequence:
         self._seq_constant_originals.clear()
         consumers = self._loader_consumers
         if consumers is None:
-            from .weight_loader import loader_weight_consumers
+            from neurobrix.nbx.weight_presence import loader_weight_consumers
             consumers = self._loader_consumers = loader_weight_consumers(self.dag)
         unbound = []
         for tid in self._weight_ids:
@@ -2966,7 +2966,7 @@ class TritonSequence:
         # name, before any op runs — never left None for its first reader (Allegro,
         # 2026-10-04: `aten.convolution::0` met None for `post_quant_conv.weight`).
         if unbound:
-            from .weight_loader import refuse_unbound_weights
+            from neurobrix.nbx.weight_presence import refuse_unbound_weights
             refuse_unbound_weights(self.dag.get("component_name") or "?", unbound,
                                    self.dag.get("tensors", {}))
         # const_fold partition (optim Phase 2): compute the frontier

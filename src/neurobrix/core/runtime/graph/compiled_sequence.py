@@ -434,7 +434,7 @@ class CompiledSequence:
         # Tensor categories
         self._weight_tensor_ids: List[str] = []
         # Container weights an op reads → its first reader (`loader_weight_consumers`, the
-        # triton sequence's own function, R30), taken at compile before the elimination
+        # container layer's rule both sequences apply, R30), taken at compile before the elimination
         # passes; checked at every weight bind.
         self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_tensor_ids: List[str] = []
@@ -585,7 +585,7 @@ class CompiledSequence:
         if self._compiled:
             return
 
-        from neurobrix.triton.weight_loader import loader_weight_consumers   # torch-free
+        from neurobrix.nbx.weight_presence import loader_weight_consumers
         self._loader_consumers = loader_weight_consumers(self.dag)
         tensors = self.dag.get("tensors", {})
         ops_metadata = self.dag.get("ops", {})
@@ -3071,7 +3071,7 @@ class CompiledSequence:
         # such defaults; Allegro, 2026-10-04). Checked BEFORE the defaults: a `.norm.` weight
         # the container lacks would otherwise run as ones here and be refused under --triton.
         tensors_meta = self.dag.get("tensors", {})
-        from neurobrix.triton.weight_loader import (   # torch-free
+        from neurobrix.nbx.weight_presence import (
             loader_weight_consumers, refuse_unbound_weights)
         if self._loader_consumers is None:
             self._loader_consumers = loader_weight_consumers(self.dag)

@@ -3012,9 +3012,9 @@ class NBXTensor:
         # derived from `dtype` HERE and never again, so assigning `_dtype`
         # after construction leaves a tensor whose declared length belongs
         # to the old dtype — a buffer overrun when the new dtype is smaller.
-        # There is no such retag left in the tree: the two bf16-bits sites
-        # (triton/constants.py, graph_executor._load_constant_triton) declare
-        # the dtype to from_numpy instead.
+        # There is no such retag left in the tree: the bf16-bits site
+        # (graph_executor._load_constant_triton) declares the dtype to
+        # from_numpy instead.
         self._elem_size = dtype_size(dtype)
         self._nbytes = self._numel * self._elem_size
         # C6a: contiguity is a pure function of the (immutable) shape and
