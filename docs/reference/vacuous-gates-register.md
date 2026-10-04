@@ -3700,7 +3700,7 @@ the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
 **The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
 the rule; pin it on the case it was written for.
 
-### 119 — a proof run counted a pass's rewrite lines without turning the pass's print on
+### 121 — a proof run counted a pass's rewrite lines without turning the pass's print on
 
 The campaign script that compares each rewritten container's output with its staged reference
 (2026-10-04, `pw.sh` in the rack's workshop) wrote `[CBX] lines N` on every row, read as "the
