@@ -66,15 +66,12 @@ PARALLEL_SHARD_WORKERS = _io_workers()
 
 # Centralized dtype conversion — single source of truth
 from neurobrix.core.dtype.converter import safe_dtype_convert
-
-
-def _absent_weight_door():
-    """The absent-weight door and the safetensors header reader — the triton loader's own,
-    torch-free: one rule and one message for both engines (R30). Imported where used, the
-    way `GraphExecutor` imports `is_block_key`, so importing this module never imports the
-    other engine."""
-    from neurobrix.triton import weight_loader as _w
-    return _w
+# The absent-weight rule and the safetensors header reader: the container layer's, torch-free —
+# one rule and one message for both engines and the validator (R30).
+from neurobrix.nbx.weight_presence import (
+    AbsentWeightError, absent_weights, refuse_absent_weights, read_safetensors_header,
+    read_safetensors_header_from,
+)
 
 
 class WeightLoader:
@@ -299,7 +296,7 @@ class WeightLoader:
         except (KeyError, json.JSONDecodeError, FileNotFoundError) as e:
             # An index that is there and cannot be read is not "no index": every weight's
             # presence is then unverifiable. Refused by name (was a warning and None).
-            raise _absent_weight_door().AbsentWeightError(
+            raise AbsentWeightError(
                 f"component '{component_name}': its weights index {index_path} in "
                 f"{self.nbx_path} cannot be read ({e}) — refused: without it no weight can "
                 f"be verified present.") from e
@@ -308,14 +305,14 @@ class WeightLoader:
         """The safetensors header of the container file `rel_path`, read from disk (the
         extracted cache) or from the archive, without loading data; None when the file is
         absent. A `.bin` shard has no header to read: True when present (the post-load door
-        then checks its keys). Torch-free, the triton loader's own reader."""
+        then checks its keys). The container layer's reader, the triton loader's too."""
         if self.use_cache and self._cache_path:
             p = self._cache_path / rel_path
             if not p.is_file():
                 return None
             if not rel_path.endswith(".safetensors"):
                 return True
-            return _absent_weight_door()._read_header(str(p))[0]
+            return read_safetensors_header(str(p))[0]
         if self._zip is None:
             self.open()
         assert self._zip is not None
@@ -325,10 +322,8 @@ class WeightLoader:
             return None
         if not rel_path.endswith(".safetensors"):
             return True
-        import struct
         with self._zip.open(info) as f:
-            n = struct.unpack("<Q", f.read(8))[0]
-            return json.loads(f.read(n))
+            return read_safetensors_header_from(f)[0]
 
     def _where(self, rel_path: str) -> str:
         """`rel_path` as a reader finds it: the file on disk, or `archive!member`."""
@@ -349,28 +344,27 @@ class WeightLoader:
         """Pre-flight, before any tensor is read: every weight this load is asked for (`only`,
         else every key the index lists) sits in the shard the index places it in, and that
         shard is in the container. Returns the index tensor table (None for a component that
-        stores no weights). The rule and its message are the triton loader's
-        (`absent_weights` / `refuse_absent_weights`, R30)."""
-        door = _absent_weight_door()
+        stores no weights). The rule and its message are the container layer's
+        (`neurobrix.nbx.weight_presence`), the triton loader's too (R30)."""
         index = self._load_weights_index(component_name)
         if index is None:
             files = self._find_weight_files(component_name)
             if files:
-                raise door.AbsentWeightError(
+                raise AbsentWeightError(
                     f"component '{component_name}': {len(files)} weight file(s) in "
                     f"{self.nbx_path} (e.g. {files[0]}) but no weights_index.json — refused: "
                     f"without the index no weight the graph binds can be verified present.")
             return None
         tensors = index.get("tensors")
         if not isinstance(tensors, dict):
-            raise door.AbsentWeightError(
+            raise AbsentWeightError(
                 f"component '{component_name}': its weights index in {self.nbx_path} carries "
                 f"no `tensors` table — refused: without it no weight can be verified present.")
         prefix = self._weights_prefix(component_name)
-        door.refuse_absent_weights(
+        refuse_absent_weights(
             component_name, self._where(prefix),
             self._where(self._find_weights_index_path(component_name) or ""),
-            door.absent_weights(tensors, tensors.keys() if only is None else only,
+            absent_weights(tensors, tensors.keys() if only is None else only,
                            lambda shard: self._shard_header(prefix + shard)))
         return tensors
 
@@ -385,7 +379,7 @@ class WeightLoader:
         if not missing:
             return
         prefix = self._weights_prefix(component_name)
-        _absent_weight_door().refuse_absent_weights(
+        refuse_absent_weights(
             component_name, self._where(prefix),
             self._where(self._find_weights_index_path(component_name) or ""),
             [(k, (tensors.get(k) or {}).get("shard"),
@@ -738,8 +732,10 @@ class WeightLoader:
         """
         Load weights respecting Prism shard_map (`only`: exactly these keys).
 
-        CRITICAL: Loads ONLY files present in shard_map (standard mode).
-        PipelineExecutor passes partial shard_maps (one stage at a time).
+        Standard mode: the shard_map is the component's WHOLE file-path map (Prism builds it
+        over every shard of the component); each file is read onto the device it names.
+        Every weight the index lists (or `only` names) is verified present first, whatever the
+        map holds: a map built from the files on disk never lists a missing one.
 
         FGP MODE: When shard_map contains key patterns (block.N.*),
         loads all files and routes per-key based on pattern matching.
@@ -753,7 +749,7 @@ class WeightLoader:
 
         Args:
             component_name: Name of component (for error messages)
-            shard_map: Prism shard_map {zip_path: device} - ONLY these loaded
+            shard_map: Prism shard_map {zip_path: device} for the whole component
             dtype: Target dtype from Prism (embedded from hardware profile)
 
         Returns:
@@ -762,6 +758,7 @@ class WeightLoader:
         Raises:
             RuntimeError: If shard_map is empty
             FileNotFoundError: If any shard file not found in container
+            AbsentWeightError: If a weight the index lists (or `only` names) is absent
         """
         self._only = only
         if not self._zip:
@@ -796,8 +793,7 @@ class WeightLoader:
             actual_path = self._resolve_shard_path(shard_path, component_name, file_list)
             shard_items.append((actual_path, device))
 
-        # === CRITICAL: Load ONLY files in shard_map ===
-        # PipelineExecutor passes partial maps (one stage's shards only)
+        # === Read every file of the map, each onto its device ===
         if len(shard_items) > 1 and PARALLEL_SHARD_WORKERS > 1:
             def load_shard(item):
                 """Load a single shard (runs in thread)."""

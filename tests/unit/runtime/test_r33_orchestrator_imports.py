@@ -78,6 +78,8 @@ ORCHESTRATOR_MODULES = [
     "neurobrix.core.runtime.output_dispatch",
     "neurobrix.core.module.audio.output_processor",
     "neurobrix.serving.engine",
+    # the absent-weight rule both engines' loaders and binds apply (2026-10-04)
+    "neurobrix.nbx.weight_presence",
 ]
 
 

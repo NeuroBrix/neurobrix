@@ -23,6 +23,9 @@ The three absences, each refused naming the component, the key and the shard pat
 
 Every refusal test runs clean -> injected -> restored on the same container, the restored arm green.
 
+The rule lives in `neurobrix.nbx.weight_presence`, beside the container format it guards; the
+container validator applies the same rule (`neurobrix validate --level coherence`).
+
 Run: PYTHONPATH=src CUDA_VISIBLE_DEVICES= python -m pytest tests/unit/runtime/test_a_weight_the_graph_binds_is_never_absent_silently.py
 """
 from __future__ import annotations
@@ -35,7 +38,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from neurobrix.triton import weight_loader as W
+from neurobrix.nbx import weight_presence as P      # the rule, one place
+from neurobrix.triton import weight_loader as W     # the triton loader that applies it
 
 COMP = "vae"
 ARRAYS = {   # two shards, so a missing one leaves the other loadable
@@ -104,7 +108,7 @@ def _triton_passes(root, monkeypatch, only=None):
 
 
 def _triton_refuses(root, monkeypatch, *needles, only=None):
-    with pytest.raises(W.AbsentWeightError) as e:
+    with pytest.raises(P.AbsentWeightError) as e:
         _triton_load(root, monkeypatch, only)
     msg = str(e.value)
     for n in (f"component '{COMP}'",) + needles:
@@ -208,7 +212,7 @@ def _compiled_complete(root, only=None, shard_map=None):
 
 
 def _compiled_refuses(root, *needles, only=None, shard_map=None):
-    with pytest.raises(W.AbsentWeightError) as e:
+    with pytest.raises(P.AbsentWeightError) as e:
         _compiled_load(root, only, shard_map)
     msg = str(e.value)
     for n in (f"component '{COMP}'",) + needles:
@@ -303,7 +307,7 @@ def test_the_consumers_are_the_container_weights_an_op_reads():
     dag["tensors"]["buffer::pos_embed"] = {"is_computable": True, "weight_name": "pos_embed"}
     dag["tensors"]["param::unrouted.expert"] = {"is_parameter": True, "weight_name": "unrouted.expert"}
     dag["ops"]["aten.convolution::0"]["input_tensor_ids"] += ["param::constant_T_000001", "buffer::pos_embed"]
-    assert W.loader_weight_consumers(dag) == {
+    assert P.loader_weight_consumers(dag) == {
         "param::post_quant_conv.weight": "aten.convolution::0",
         "param::post_quant_conv.bias": "aten.convolution::0"}, (
         "a graph constant, a computed buffer or a weight no op reads is not the loader's to deliver")
@@ -319,7 +323,7 @@ def test_compiled_bind_refuses_a_weight_the_graph_binds_and_nothing_fills():
     seq.bind_weights(full)                                                          # clean
     seq = CompiledSequence(_dag(), torch.device("cpu"), torch.float32)
     seq.compile()
-    with pytest.raises(W.AbsentWeightError) as e:                                   # injected
+    with pytest.raises(P.AbsentWeightError) as e:                                   # injected
         seq.bind_weights({"param::post_quant_conv.weight": full["param::post_quant_conv.weight"]})
     for n in (f"component '{COMP}'", "param::post_quant_conv.bias", "aten.convolution::0"):
         assert n in str(e.value), str(e.value)
@@ -339,7 +343,7 @@ def test_triton_bind_refuses_a_weight_the_graph_binds_and_nothing_fills(monkeypa
     seq.compile()
     monkeypatch.setattr(seq, "compute_op_devices", lambda: None)   # placement, after the door
     seq.bind_weights(full)                                                          # clean
-    with pytest.raises(W.AbsentWeightError) as e:                                   # injected
+    with pytest.raises(P.AbsentWeightError) as e:                                   # injected
         seq.bind_weights({"post_quant_conv.weight": full["post_quant_conv.weight"]})
     for n in (f"component '{COMP}'", "param::post_quant_conv.bias", "aten.convolution::0"):
         assert n in str(e.value), str(e.value)
@@ -366,7 +370,7 @@ def test_compiled_bind_refuses_before_its_defaults_fill_a_missing_norm():
                 a["tensor_id"] = "param::" + new
     seq = CompiledSequence(dag, torch.device("cpu"), torch.float32)
     seq.compile()
-    with pytest.raises(W.AbsentWeightError) as e:
+    with pytest.raises(P.AbsentWeightError) as e:
         seq.bind_weights({"param::block.0.norm.weight": torch.ones(4, 4, 1, 1)})
     assert "param::block.0.norm.bias" in str(e.value), str(e.value)
     seq.bind_weights({"param::block.0.norm.weight": torch.ones(4, 4, 1, 1),
@@ -395,7 +399,46 @@ def test_triton_sequential_refuses_a_weight_the_graph_binds_and_the_store_lacks(
             err = None
         except Exception as e:      # the clean arm fails later, at the device
             err = e
-        assert isinstance(err, W.AbsentWeightError) is refused, repr(err)
+        assert isinstance(err, P.AbsentWeightError) is refused, repr(err)
         if refused:
             for n in (f"component '{COMP}'", "param::post_quant_conv.bias", "aten.convolution::0"):
                 assert n in str(err), str(err)
+
+
+# ---------------------------------------------------------------------------------------------
+# The validator applies the same rule to an archive.
+# ---------------------------------------------------------------------------------------------
+
+def _archive(root: Path, out: Path) -> Path:
+    import zipfile
+    (root / "components" / COMP / "graph.json").write_text("{}")
+    (root / "components" / COMP / "config.json").write_text("{}")
+    (root / "manifest.json").write_text(json.dumps({
+        "nbx_version": "1.0", "model_name": root.name,
+        "components": {COMP: {"type": "neural"}}}))
+    with zipfile.ZipFile(out, "w") as zf:
+        for f in sorted(root.rglob("*")):
+            if f.is_file():
+                zf.write(f, f.relative_to(root).as_posix())
+    return out
+
+
+def _weight_errors(archive: Path) -> list:
+    from neurobrix.core.validators.nbx_validator import NBXValidator, ValidationLevel
+    res = NBXValidator(ValidationLevel.COHERENCE).validate(archive)
+    return [e.message for e in res.errors
+            if e.level == ValidationLevel.COHERENCE and "absent" in e.message]
+
+
+def test_the_validator_applies_the_same_rule_to_an_archive(tmp_path):
+    root = _container(tmp_path / "Synth")
+    assert _weight_errors(_archive(root, tmp_path / "clean.nbx")) == []             # clean
+    _container(root, drop_from_shard={"post_quant_conv.bias"})                      # injected: key
+    msgs = _weight_errors(_archive(root, tmp_path / "key.nbx"))
+    assert any("post_quant_conv.bias" in m and "header holds no such key" in m for m in msgs), msgs
+    _container(root)
+    _shard(root).unlink()                                                           # injected: shard
+    msgs = _weight_errors(_archive(root, tmp_path / "shard.nbx"))
+    assert any("post_quant_conv.weight" in m and "absent on disk" in m for m in msgs), msgs
+    _container(root)                                                                # restored
+    assert _weight_errors(_archive(root, tmp_path / "restored.nbx")) == []
