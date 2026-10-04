@@ -175,6 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Video models whose attention carries a padding mask no longer render a mosaic under `--compiled`.**
+  A mask that applies to every query alike (one row broadcast over the sequence) was taken for a
+  stale, too-short mask and replaced by causal attention, so each video patch only saw the patches
+  before it. mochi-1-preview rendered a patchwork of misplaced blocks; its attention now matches the
+  reference implementation, as `--triton` already did.
+
 - **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
   On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
   kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a
