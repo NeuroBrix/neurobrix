@@ -3699,3 +3699,25 @@ the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
 
 **The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
 the rule; pin it on the case it was written for.
+
+### 120 — a test replaced the flag reader, so it could not see that the census never registered the flags
+
+(119 is taken on `a-component-over-the-rung-streams-inside-itself`.)
+
+**Gate**: `tests/unit/prism/test_the_plan_binds_what_the_flow_runs.py::test_the_vace_control_encoder_runs_the_pair`.
+It monkeypatches `registry_flags.get_component_flag` to answer `vace_control_conditioning = True`.
+
+**What the gate said about the defect**: green. The real reader answers from `nbx.component_flags`, a
+table filled only when a container is opened. The run opens the container; the derived census builds
+`FlowBindings` without opening it, so every flag read through the bindings answered its default.
+Wan2.1-VACE's control encoder was keyed at batch 1, while the run feeds it the (inactive, reactive)
+pair at batch 2. The miss was measured by the Mac's zero-miss gate (2026-10-04 19:19,
+`aten.convolution::0`, conv2d_forward (2, 3, 162, 162, ...)). `zero_pad_embeddings` in `text_axes` was
+read the same way.
+
+**Repair.** `FlowBindings` registers the flags of the topology it is built from.
+`test_the_flow_bindings_read_their_containers_flags.py` keeps the real reader and an empty table. It
+goes red when the registration is removed.
+
+**The lesson, in one line.** A test that replaces the reader proves the rule, not that the rule
+reaches its data; keep the real reader and starve its table.
