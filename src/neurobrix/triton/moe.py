@@ -100,6 +100,23 @@ def _ptr_cache_put(fp: int, tables):
         evicted.release_pins()
 
 
+def release_pinned_tables() -> int:
+    """Drop every cached table that PINS (Metal), releasing its pins; returns how many. Called at the unload
+    boundary (`MemoryManager.unload_weights`), after the devices were synchronised.
+
+    A pinning table holds its expert tensors and one whole-allocation wrap per arena for as long as it lives,
+    and it lived until LRU eviction, 256 tables later: an unloaded component stayed pinned, its tensors not
+    freed and its arena still mapped. Under `layer_streaming` each unloaded segment stayed beside the next
+    (deepseek-moe-16b-chat on the Mac, 2026-10-04: swap 3.4 -> 10.2 GB in 30 s while the second of four
+    segments loaded, the guard killed the run). All of them go, not only the unloading component's: a table is
+    three small host arrays, rebuilt at the next call that misses, and a table that outlives ANY weight it
+    pins is the defect. A table that pins nothing (CUDA: integers only) is left where it is."""
+    pinned = [fp for fp, tables in _ptr_cache.items() if tables.pins]
+    for fp in pinned:
+        _ptr_cache.pop(fp).release_pins()
+    return len(pinned)
+
+
 class PtrTables:
     """Per-projection absolute pointer tables for zero-copy expert access.
 
@@ -834,6 +851,10 @@ def execute_moe_fused(
         # byte-identical to its triton output; with it the same request timed out at 900 s
         # (2026-09-27, two runs in different windows of host load — a controlled timing of the
         # collection itself is the proof still owed).
+        # A per-call table's pins (Metal) end with the call too: dropping the table does not exit them, and
+        # the driver then keeps the wrap of every allocation promoted for this call (24 kept after one call
+        # of the 8-expert probe, 2026-10-04). Every launch of this call has synchronised.
+        tables.release_pins()
         del gate_weights, up_weights, down_weights
         del tables
 

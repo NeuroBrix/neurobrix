@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 
 
 @register_flow("rnnt")
@@ -343,8 +344,7 @@ class RNNTEngine(FlowHandler):
                 skip = 1
                 while need_loop and symbols_added < max_symbols_per_step:
                     if g is None:
-                        token_tensor = torch.tensor([[last_token]], dtype=torch.long, device=device)
-                        dec_embed = torch.nn.functional.embedding(token_tensor, dec_weights["embedding"])
+                        dec_embed = gather_rows(dec_weights["embedding"], [[last_token]], device=device)
                         dec_input = dec_embed.transpose(0, 1)  # [seq=1, batch=1, D_dec]
                         dec_rnn_out, (h_next, c_next) = self._run_lstm(
                             dec_input, (h, c),

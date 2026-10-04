@@ -198,6 +198,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`granite-speech-3.3-8b` transcribes under `--compiled` on a 16 GB GPU.** On a card too small
+  to hold its 8B language model, the model's weights stay in host memory and are streamed to the
+  GPU. The run then stopped after the first decoded token with `Expected all tensors to be on the
+  same device, but got index is on cuda:0, different from other tensors on cpu`. The token lookup
+  now runs where the embedding table is, and only the looked-up rows are sent to the GPU.
+  `--triton` was not affected.
+
 - **A model whose container is missing a weight is refused by name before it runs.** A weight
   file the container lists but that is gone from disk, a weight missing from the file the
   container says holds it, or a weight the model needs that the container does not list at all
