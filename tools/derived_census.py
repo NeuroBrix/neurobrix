@@ -201,6 +201,8 @@ def _contraction(k_act: int, k_weight: int, ins, o, uid, unhandled) -> int:
 
 _RUNTIME_GRAPHS = {}
 _RAW_GRAPHS = {}
+_AT_INPUTS = {}                 # run_at_inputs: one derivation per (hardware, component, feed, ...)
+_BOUND_HARDWARE = [None]        # the profile the keys are bucketed with (`derive_keys` binds it)
 _CONTRACTS = {}
 
 
@@ -580,13 +582,29 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
     its symbols bound by the RUNTIME's binder from those shapes (`bind_from_inputs`), its keys
     derived, its outputs' shapes resolved at that binding — what the next stage of a flow reads."""
     from neurobrix.triton.symbols import SymbolResolver
+    # One derivation per (component, feed, dtype, mode, tiling, cache) and per hardware binding:
+    # the rungs of a ladder that plan the component alike ask the SAME derivation, and an
+    # enumerated extent (an encoder's audio frames: thousands of feeds) asks it once per rung.
+    # Only a shape-only feed is remembered; what the derivation named `unhandled` is replayed.
+    memo_key = None
+    if all(isinstance(v, (list, tuple)) and all(isinstance(d, int) for d in v) for v in inputs.values()):
+        memo_key = (_BOUND_HARDWARE[0], model, comp, cdtype, mode, has_native_bf16, tuple(sdpa),
+                    tuple(sorted((k, tuple(v)) for k, v in inputs.items())),
+                    repr(tiling), repr(tiled_tf), repr(decode_kv))
+        hit = _AT_INPUTS.get(memo_key)
+        if hit is not None:
+            launches, outs, named = hit
+            unhandled.update(named)
+            return list(launches), {k: list(v) for k, v in outs.items()}
+    named = collections.Counter()
     g = raw_graph(model, comp)
     res = SymbolResolver(g.get("symbolic_context") or {})
     feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
     res.bind_from_inputs(feed, list(feed), g.get("tensors") or {})
     syms = dict(res.bindings)
-    launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, unhandled,
+    launches = derive_component(model, comp, cdtype, mode, syms, has_native_bf16, *sdpa, named,
                                 tiling=tiling, tiled_tf=tiled_tf, decode_kv=decode_kv)
+    unhandled.update(named)
     outs = {}
     for i, tid in enumerate(g.get("output_tensor_ids") or []):
         meta = g["tensors"].get(tid) or {}
@@ -598,6 +616,8 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
         outs[f"output_{i}"] = shp
         if meta.get("output_name"):
             outs[meta["output_name"]] = shp
+    if memo_key is not None:
+        _AT_INPUTS[memo_key] = (list(launches), {k: list(v) for k, v in outs.items()}, named)
     return launches, outs
 
 
@@ -745,18 +765,19 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # (`decoder_self_attention_plan`, the flow's own split).
     if flow.get("type") == "encoder_decoder":
         sites.extend(_encoder_decoder_sites(model, topo, defaults, plan))
-    # audio_llm (triton/flow/audio_llm.py): the recording's features through the forward stages
-    # (the frontend's own preprocessing choice, the features at the extent it produced — admitted
-    # by the graph, never fitted to the trace), their embeddings between the declared prefix and
-    # suffix ids, then the language model over the WHOLE context every step — its length from L0
-    # to L0 + max_tokens - 1.
+    # audio_llm (triton/flow/audio_llm.py): the forward stages over the first stage's ENUMERATED
+    # frame extent (the family profile's shortest to longest recording, through the frontend's
+    # own extractor — admitted by the graph, never fitted to the trace; one point for an
+    # extractor that pads to its own window), their embeddings between the declared prefix and
+    # suffix ids, then the language model over the WHOLE context every step — its length from the
+    # shortest recording's context to the longest's plus max_tokens - 1.
     if flow.get("type") == "audio_llm" and audio_path:
         sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req))
-    # rnnt (triton/flow/rnnt.py): the encoder at EVERY extent the flow feeds it — the recording
-    # whole when it fits one window of the family's long-form plan, else each distinct window
-    # extent (the full window and the shorter last one), by the flow's own feed plan.
-    if flow.get("type") == "rnnt" and audio_path:
-        sites.extend(_rnnt_sites(model, topo, audio_path))
+    # rnnt (triton/flow/rnnt.py): the encoder over its ENUMERATED frame extent — every frame
+    # count the flow can feed it for a recording of any length, from the family's shortest
+    # declared clip to its long-form window (the family profile's values); not one recording.
+    if flow.get("type") == "rnnt":
+        sites.extend(_rnnt_sites(model, topo))
     return sites
 
 
@@ -1001,25 +1022,48 @@ def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_token
             _vlm_context_site(lm, L0, mt, feed)]
 
 
-def _rnnt_sites(model, topo, audio_path):
-    from neurobrix.core.module.audio.feeds import first_audio_stage, request_feeds
+def _audio_frame_extent(model, topo):
+    """(component, lo, hi, feed(n)) — the frame extent of the flow's first audio stage over the
+    recordings the family profile declares (`feeds.extent_feeds`: the flows' own extractor on the
+    shortest declared clip, the longest declared feed), `feed(n)` the stage's inputs at n frames.
+    An extractor that pads to its own window is one point (lo == hi). A container whose graph
+    does not follow the extent is refused by name there, never keyed at its trace. None for a
+    flow with no audio stage."""
+    from neurobrix.core.module.audio.feeds import extent_feeds
     root = CACHE / model
+    family = json.loads((root / "manifest.json").read_text()).get("family")
+    from neurobrix.core.module.audio.feeds import first_audio_stage
     comp = first_audio_stage(topo)
     if comp is None:
+        return None
+    _comp, lo, hi = extent_feeds(topo, root, raw_graph(model, comp), model, family)
+    moved = [(k, i) for k in lo for i, (x, y) in enumerate(zip(lo[k], hi[k])) if x != y]
+    if not moved:
+        return comp, 1, 1, (lambda _n, f=dict(hi): {k: list(v) for k, v in f.items()})
+    name, axis = moved[0]
+
+    def feed(n, base=dict(hi), name=name, axis=axis):
+        out = {k: list(v) for k, v in base.items()}
+        out[name][axis] = int(n)
+        return out
+    return comp, int(lo[name][axis]), int(hi[name][axis]), feed
+
+
+def _rnnt_sites(model, topo):
+    """The encoder at EVERY frame count the flow can feed it: from the family's shortest declared
+    clip to its long-form window (a recording of any length is fed whole below the window, in
+    windows of it above, the last one at its own length — all inside this range)."""
+    ext = _audio_frame_extent(model, topo)
+    if ext is None:
         raise SystemExit(f"{model}: an rnnt flow whose topology names no audio stage — the encoder "
                          f"would be keyed at its trace extent; nothing is derived")
-    g = raw_graph(model, comp)                    # read-only: the door and the feed plan read it
-    family = json.loads((root / "manifest.json").read_text()).get("family")
-    # the SAME function the plan binds from (`FlowBindings.audio_feeds`): a container whose graph
-    # does not follow the recording's extent is refused by name here, never keyed at its trace
-    feeds = request_feeds(topo, root, audio_path, g, model, family)
-    return [(f"{comp} audio feed {i + 1}/{len(feeds)} {dict(feed)}", 1, 1,
-             lambda _n, comp=comp, feed=dict(feed): [(comp, {k: list(v) for k, v in feed.items()})])
-            for i, feed in enumerate(feeds)]
+    comp, lo, hi, feed = ext
+    return [(f"{comp} audio frames", lo, hi, lambda n, comp=comp, feed=feed: [(comp, feed(n))])]
 
 
 def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
-    from neurobrix.core.module.audio.mel_dsp import extract_features_np, fixed_window_mels
+    from neurobrix.core.flow import input_extent as IE
+    from neurobrix.core.module.audio.mel_dsp import fixed_window_mels
     from neurobrix.core.runtime.decode_bound import decode_bound
     from neurobrix.triton import audio_frontend as AF
     root = CACHE / model
@@ -1028,8 +1072,7 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
     stages = audio.get("stages") or []
     fwd = [st["component"] for st in stages if st.get("execution", "forward") != "autoregressive"]
     lm = next(st["component"] for st in stages if st.get("execution") == "autoregressive")
-    graph = lambda c: json.loads((root / "components" / c / "graph.json").read_text())
-    ctx = _Stub(executors={fwd[0]: _Stub(_dag=graph(fwd[0]))}, nbx_path_str=str(root))
+    ctx = _Stub(executors={fwd[0]: _Stub(_dag=raw_graph(model, fwd[0]))}, nbx_path_str=str(root))
     input_shape = AF._component_input_shape(ctx, fwd[0])
     prep = AF.resolve_preprocessing((audio.get("input") or {}).get("preprocessing"), input_shape)
     cfg = AF._model_config_path(ctx)
@@ -1037,19 +1080,19 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
     if prep == "mel_spectrogram" and os.environ.get("NBX_DISABLE_STT_CHUNKING") != "1":
         wins = fixed_window_mels(str(audio_path), Path(cfg), input_shape)
     variable = (audio.get("input") or {}).get("variable", "global.input_features")
-    # the features AS THE FRONT END PRODUCED THEM, admitted by the first stage's graph — the
-    # flow's own function (`audio_frontend.admitted_features`); a container that cannot take the
-    # recording's extent is refused by name
-    feats = AF.admitted_features(
-        model, topo, fwd[0], raw_graph(model, fwd[0]),
-        wins[0][None] if wins is not None
-        else extract_features_np(prep, str(audio_path), Path(cfg), input_shape), variable)
     n_win = len(wins) if wins is not None else 1
     conns = topo.get("connections") or []
+    # The first stage's frame extent over the recordings the family declares — NOT this request's
+    # one recording: an any-length encoder (a NeMo or conformer front end) is keyed at every frame
+    # count from the shortest clip to the longest, a whisper-class one at its extractor's own
+    # window (one point; a long recording is then `n_win` such windows). Admitted by the graph at
+    # both ends (`feeds.extent_feeds`): a container that cannot take them is refused by name.
+    first, lo, hi, first_feed = _audio_frame_extent(model, topo)
+    feat_name = IE.fed_input(topo, first, variable) or IE.input_axes(raw_graph(model, first)).name
 
-    def feeds(comp, produced):
-        """{input name: shape} of `comp` from the topology's connections: the features variable,
-        a previous stage's named output, a length scalar."""
+    def feeds(comp, produced, n):
+        """{input name: shape} of `comp` from the topology's connections: the features variable
+        at `n` frames, a previous stage's named output, a length scalar."""
         out = {}
         for c in conns:
             src, dst = c.get("from", ""), c.get("to", "")
@@ -1057,11 +1100,11 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
                 continue
             inp = dst[len(comp) + 1:]
             if src in (variable, variable.split(".")[-1], "global." + variable.split(".")[-1]):
-                out[inp] = list(feats.shape)
+                out[inp] = list(first_feed(n)[feat_name])
             elif src in produced:
                 # the flow's frame pooling to the target's feature width (`pooled_frames_shape`)
                 from neurobrix.triton.flow.audio_llm import pooled_frames_shape
-                tg = graph(comp)
+                tg = raw_graph(model, comp)
                 tfeat = next((sp["shape"][-1] for sp in tg["tensors"].values()
                               if sp.get("input_name") == inp and len(sp.get("shape", [])) >= 3), None)
                 out[inp] = (pooled_frames_shape(produced[src], tfeat) if tfeat else None) or produced[src]
@@ -1069,26 +1112,35 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
                 out[inp] = [1]
         return out
 
-    # The forward stages once (every window has the same fitted shape), fed through the topology's
-    # connections; their last output gives the embeddings count per window.
-    sites = []
-    produced = {}
-    fwd_steps = []
-    for comp in fwd:
-        fwd_steps.append((comp, feeds(comp, produced)))
-        _l, outs = run_at_inputs(model, comp, {c["name"]: c["dtype"] for c in plan["components"]}[comp],
-                                 "triton", fwd_steps[-1][1], False, (0, 1, 1), collections.Counter())
-        for name, shp in outs.items():
-            produced[f"{comp}.{name}"] = shp
-    last_out = next(iter(v for k, v in produced.items() if k.startswith(fwd[-1] + ".")))
-    A = int(last_out[1]) * n_win
-    dim = int(last_out[-1])
-    L0 = len(defaults.get("stt_prefix_ids", [1])) + A + len(defaults.get("stt_suffix_ids", []))
+    def chain(n):
+        """The forward stages at `n` frames, each fed through the topology's connections from
+        what the stages before it produced at that same `n`."""
+        produced, prev, steps = {}, [None], []
+        for comp in fwd:
+            def feed(outs, comp=comp):
+                if prev[0] is not None and outs:
+                    for name, shp in outs.items():
+                        produced[f"{prev[0]}.{name}"] = shp
+                prev[0] = comp
+                return feeds(comp, produced, n)
+            steps.append((comp, feed))
+        return steps
+
+    def embeddings(n):
+        """(count, width) of the audio embeddings the last forward stage yields at `n` frames."""
+        outs = None
+        for comp, feed in chain(n):
+            _l, outs = run_at_inputs(model, comp, {c["name"]: c["dtype"] for c in plan["components"]}[comp],
+                                     "triton", feed(outs), False, (0, 1, 1), collections.Counter())
+        last = next(iter(outs.values()))
+        return int(last[1]) * n_win, int(last[-1])
+
+    (a_lo, dim), (a_hi, _dim) = embeddings(lo), embeddings(hi)
+    fixed = len(defaults.get("stt_prefix_ids", [1])) + len(defaults.get("stt_suffix_ids", []))
     mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
-    sites.append(("audio forward stages", 1, 1, lambda _n, st=list(fwd_steps): st))
-    sites.append((f"{lm} context", L0, L0 + int(mt) - 1,
-                  lambda n, dim=dim: [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})]))
-    return sites
+    return [("audio forward stages frames", lo, hi, chain),
+            (f"{lm} context", fixed + a_lo, fixed + a_hi + int(mt) - 1,
+             lambda n, dim=dim: [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})])]
 
 
 def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unhandled, prompt="",
@@ -1155,6 +1207,7 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     plan = plan_record(a.model, request, a.mode, a.hardware, rung)
     prof = load_profile(a.hardware)
     _census._bind_target(a.hardware, None)     # the vendor ladders the keys are bucketed with
+    _BOUND_HARDWARE[0] = a.hardware
     P = None
     unhandled: collections.Counter = collections.Counter()
     derived = set()

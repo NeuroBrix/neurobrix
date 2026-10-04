@@ -160,7 +160,8 @@ def _whisper_logmel(audio: np.ndarray, sr: int, n_fft: int, hop: int,
     return log.astype(np.float32)
 
 
-def _conformer_mel(audio_path: str, model_path: Path, n_mels_override) -> np.ndarray:
+def _conformer_mel(audio_path: str, model_path: Path, n_mels_override,
+                   _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
     """Granite conformer: log10 mel + amax norm + frame-stacking."""
     sr, n_fft, win, hop, n_mels, fs = 16000, 512, 400, 160, 80, 2
     cp = model_path / "preprocessor_config.json"
@@ -169,7 +170,7 @@ def _conformer_mel(audio_path: str, model_path: Path, n_mels_override) -> np.nda
         sr = c.get("sampling_rate", sr); n_fft = c.get("n_fft", n_fft)
         win = c.get("win_length", win); hop = c.get("hop_length", hop)
         n_mels = c.get("n_mels", n_mels); fs = c.get("frame_stack", fs)
-    audio = _load_audio(audio_path, sr)
+    audio = _audio if _audio is not None else _load_audio(audio_path, sr)
     power = _stft_power(audio, n_fft, win, hop)
     mf = _mel_filters(sr, n_fft, n_mels, htk=True, norm=None)
     log = np.log10(np.clip((mf @ power).T, 1e-10, None))    # [frames, n_mels]
@@ -183,12 +184,12 @@ def _conformer_mel(audio_path: str, model_path: Path, n_mels_override) -> np.nda
 
 
 def nemo_mel_params(model_path: Path) -> dict:
-    """NeMo preprocessor parameters (sr, n_fft, win, hop, n_mels, dither,
-    preemph) from the embedded model_config.yaml / config.json — the
+    """NeMo preprocessor parameters (sr, n_fft, win, hop, n_mels, preemph)
+    from the embedded model_config.yaml / config.json — the
     single source both engines read, for the mel itself and for any
     frame arithmetic built on it (long-form window overlap)."""
     n_mels, n_fft, win, hop = 80, 512, 400, 160
-    sr, dither, preemph = 16000, 1e-5, 0.97
+    sr, preemph = 16000, 0.97
     source = None   # which embedded file the values came from (None = the
                     # NeMo defaults above; the long-form arithmetic refuses that)
     yp = model_path / "model_config.yaml"
@@ -197,7 +198,7 @@ def nemo_mel_params(model_path: Path) -> dict:
             import yaml
             pp = (yaml.safe_load(open(yp)) or {}).get("preprocessor", {})
             sr = pp.get("sample_rate", sr); n_fft = pp.get("n_fft", n_fft)
-            n_mels = pp.get("features", n_mels); dither = pp.get("dither", dither)
+            n_mels = pp.get("features", n_mels)
             win = int(pp.get("window_size", 0.025) * sr)
             hop = int(pp.get("window_stride", 0.01) * sr)
             source = str(yp)
@@ -209,29 +210,34 @@ def nemo_mel_params(model_path: Path) -> dict:
             pp = (json.load(open(cp)).get("perception", {}) or {}).get("preprocessor", {})
             if pp:
                 sr = pp.get("sample_rate", sr); n_fft = pp.get("n_fft", n_fft)
-                n_mels = pp.get("features", n_mels); dither = pp.get("dither", dither)
+                n_mels = pp.get("features", n_mels)
                 win = int(pp.get("window_size", 0.025) * sr)
                 hop = int(pp.get("window_stride", 0.01) * sr)
                 source = str(cp)
         except Exception:
             pass
     return {"sr": sr, "n_fft": n_fft, "win": win, "hop": hop, "n_mels": n_mels,
-            "dither": dither, "preemph": preemph, "source": source}
+            "preemph": preemph, "source": source}
 
 
-def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> np.ndarray:
-    """NeMo mel (Canary): pre-emphasis + dither + log mel + per-feature normalize."""
+def _nemo_mel(audio_path: str, model_path: Path, n_mels_override,
+              _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
+    """NeMo mel (Canary, Parakeet): pre-emphasis + log mel + per-feature normalize.
+
+    NO DITHER. The vendor draws its dither noise only while TRAINING
+    (NeMo `FilterbankFeatures.forward`, nemo/collections/asr/parts/preprocessing/
+    features.py, read 2026-10-04: `# dither (only in training mode for eval determinism)` /
+    `if self.training and self.dither > 0:`). The engine drew it at inference until that
+    day, from an unseeded stream: a 45 s recording transcribed three ways in three runs
+    ("librivox org" / "librivox dot org", "fogerty" / "fogarty")."""
     _p = nemo_mel_params(model_path)
     n_mels, n_fft, win, hop = _p["n_mels"], _p["n_fft"], _p["win"], _p["hop"]
-    sr, dither, preemph = _p["sr"], _p["dither"], _p["preemph"]
+    sr, preemph = _p["sr"], _p["preemph"]
     if n_mels_override in (40, 64, 80, 128):
         n_mels = n_mels_override
-    audio = _load_audio(audio_path, sr).astype(np.float64)
+    audio = (_audio if _audio is not None else _load_audio(audio_path, sr)).astype(np.float64)
     if preemph > 0:
         audio = np.concatenate([audio[:1], audio[1:] - preemph * audio[:-1]])
-    if dither > 0:
-        _r = rng if rng is not None else np.random
-        audio = audio + dither * _r.standard_normal(audio.shape)
     power = _stft_power(audio, n_fft, win, hop)
     mf = _mel_filters(sr, n_fft, n_mels, htk=True, norm=None)
     mel = np.log(np.clip((power.T @ mf.T), 1e-5, None))     # [frames, n_mels]
@@ -287,9 +293,34 @@ def model_config_dir(nbx_path: Path) -> Path:
         "modules/tokenizer/ inside the .nbx.")
 
 
+def extractor_sample_rate(preprocessing_type: str, model_path: Path) -> int:
+    """The rate the extractor of `preprocessing_type` resamples a recording to — the value each
+    extractor reads for itself (the container's embedded config, its vendor default otherwise)."""
+    if preprocessing_type == "nemo_mel":
+        return int(nemo_mel_params(model_path)["sr"])
+    cfg = {}
+    cp = Path(model_path) / "preprocessor_config.json"
+    if cp.exists():
+        cfg = json.load(open(cp))
+    return int(cfg.get("sampling_rate", cfg.get("sample_rate", 16000)))
+
+
+def feature_shape_at(preprocessing_type: str, seconds: float, model_path: Path,
+                     input_shape: Optional[Tuple[int, ...]] = None) -> Tuple[int, ...]:
+    """The shape the extractor yields for a recording of `seconds` — by RUNNING the extractor on
+    that many samples of silence at its own rate, never by a second copy of its frame arithmetic
+    (centred STFT, a dropped frame, a frame stack, a vendor window: each extractor's own). What the
+    plan and the census read to turn the family profile's declared durations into extents."""
+    sr = extractor_sample_rate(preprocessing_type, Path(model_path))
+    silence = np.zeros(int(round(float(seconds) * sr)), np.float32)
+    return tuple(int(d) for d in extract_features_np(
+        preprocessing_type, "", Path(model_path), input_shape, _audio=silence).shape)
+
+
 def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Path,
                         input_shape: Optional[Tuple[int, ...]] = None,
-                        rng=None, params: Optional[dict] = None) -> np.ndarray:
+                        params: Optional[dict] = None,
+                        _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
     n_mels_override = None
     if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
         n_mels_override = input_shape[1]
@@ -297,13 +328,13 @@ def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Pa
         # 2-D packed-varlen contract ([mel, frames] — Qwen3-Omni tower)
         n_mels_override = input_shape[0]
     if preprocessing_type == "mel_spectrogram":
-        return _whisper_mel(audio_path, model_path, n_mels_override, params)
+        return _whisper_mel(audio_path, model_path, n_mels_override, params, _audio=_audio)
     if preprocessing_type == "conformer":
-        return _conformer_mel(audio_path, model_path, n_mels_override)
+        return _conformer_mel(audio_path, model_path, n_mels_override, _audio=_audio)
     if preprocessing_type == "nemo_mel":
-        return _nemo_mel(audio_path, model_path, n_mels_override, rng=rng)
+        return _nemo_mel(audio_path, model_path, n_mels_override, _audio=_audio)
     if preprocessing_type == "raw_waveform":
-        return _raw_waveform(audio_path, model_path, input_shape)
+        return _raw_waveform(audio_path, model_path, input_shape, _audio=_audio)
     raise RuntimeError(
         f"ZERO FALLBACK: unknown numpy audio preprocessing '{preprocessing_type}'. "
         f"Supported: mel_spectrogram, nemo_mel, conformer, raw_waveform.")

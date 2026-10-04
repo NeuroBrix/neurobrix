@@ -133,7 +133,7 @@ class RNNTEngine(FlowHandler):
         - n_fft=512, window=400 (25ms), hop=160 (10ms)
         - log mel with guard value
         - per_feature normalization (subtract mean, divide by std per mel bin)
-        - optional dither (1e-5 Gaussian noise)
+        - NO dither: the vendor draws it only while training (see below)
         """
         audio_path = self.ctx.variable_resolver.resolved.get("global.audio_path")
         if audio_path is None:
@@ -151,7 +151,6 @@ class RNNTEngine(FlowHandler):
         defaults = self.ctx.pkg.defaults
         n_fft, win_length, hop_length, n_mels = _p["n_fft"], _p["win"], _p["hop"], _p["n_mels"]
         sr = _p["sr"]
-        dither = defaults.get("dither", _p["dither"])
 
         # Load at the model's rate with the loader the Triton flow, the plan and the
         # census use (`mel_dsp._load_audio`: mono, linear resample) — one sample count,
@@ -167,9 +166,10 @@ class RNNTEngine(FlowHandler):
         if preemph > 0:
             waveform = torch.cat([waveform[:1], waveform[1:] - preemph * waveform[:-1]])
 
-        # Apply dither
-        if dither > 0:
-            waveform = waveform + dither * torch.randn_like(waveform)
+        # No dither at inference — the vendor's own rule (NeMo FilterbankFeatures.forward:
+        # `if self.training and self.dither > 0`, "only in training mode for eval
+        # determinism"). It was drawn here on every run, from an unseeded stream, until
+        # 2026-10-04: one recording could transcribe differently from run to run.
 
         # STFT
         window = torch.hann_window(win_length, device=device)

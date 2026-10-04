@@ -59,6 +59,7 @@ class InferenceEngine:
 
         self._pkg = None           # RuntimePackage (immutable)
         self._plan = None          # ExecutionPlan (immutable)
+        self._audio_flow = None    # FlowBindings of a flow fed a recording (the served extent)
         self._executor = None      # RuntimeExecutor (persistent, setup once)
         self._container = None     # NBXContainer
         self._family = None        # "llm", "image", "audio", "video"
@@ -120,12 +121,22 @@ class InferenceEngine:
                                      extra=[("the container's own VAE scale",
                                              _vsf(manifest, cached_defaults, _topo_components))])
 
+        # A served plan is solved before any request exists. For a flow that is fed a recording
+        # it prices the LONGEST feed the family profile declares (the RNNT long-form window, the
+        # audio-LLM family's `audio_extent.max_seconds`) through the plan's own audio binding
+        # (`FlowBindings.audio_feeds`) — it used to price the encoder at its trace extent, and a
+        # request longer than the trace then ran at an extent no plan had priced. A request
+        # beyond the served extent is refused by name in `generate`.
+        _topology = json.load(open(_topo_path)) if _topo_path.exists() else {}
+        self._audio_flow = self.served_audio_flow(_topology, cache_path, manifest)
+
         input_config = InputConfig(
             batch_size=2,
             height=height,
             width=width,
             dtype="float16",
             vae_scale=vae_scale,
+            flow=self._audio_flow,
         )
 
         solver = PrismSolver()
@@ -205,6 +216,7 @@ class InferenceEngine:
             inputs["global.prompt"] = prompt
         if "audio_path" in kwargs and kwargs["audio_path"]:
             inputs["global.audio_path"] = kwargs.pop("audio_path")
+            self._refuse_a_recording_beyond_the_served_extent(inputs["global.audio_path"])
         _upscale_orig_hw = None
         if "image_path" in kwargs and kwargs["image_path"]:
             # Image input through the shared CLI/daemon brick — single
@@ -276,6 +288,37 @@ class InferenceEngine:
             # (D-UPSCALE-SERVING-CROP) — the server passes it back.
             result["_upscale_orig_hw"] = _upscale_orig_hw
         return result
+
+    @staticmethod
+    def served_audio_flow(topology: Dict[str, Any], cache_path, manifest: Dict[str, Any]):
+        """The flow bindings a SERVED plan is solved with, for a container whose flow is fed a
+        recording (`feeds.first_audio_stage`, the topology's own declaration): the first audio
+        stage priced at the longest feed the family profile declares. None for every other
+        container — their served plan keeps the name-driven map."""
+        from neurobrix.core.module.audio.feeds import first_audio_stage
+        if first_audio_stage(topology) is None:
+            return None
+        from neurobrix.core.prism.flow_bindings import FlowBindings
+        return FlowBindings(topology, cache_path, manifest.get("model_name"),
+                            family=manifest.get("family"), serve=True)
+
+    def _refuse_a_recording_beyond_the_served_extent(self, audio_path) -> None:
+        """The served plan priced the longest recording the family profile declares; a request
+        whose flow would feed the first audio stage more than that is refused by name before
+        anything runs (`feeds.refuse_beyond_served`)."""
+        flow = getattr(self, "_audio_flow", None)
+        if flow is None:
+            return
+        from neurobrix.core.module.audio.feeds import (first_audio_stage, refuse_beyond_served,
+                                                       request_feeds)
+        comp = first_audio_stage(flow.topology)
+        dag = getattr(self._executor.executors.get(comp), "_dag", None)
+        if not dag:
+            return      # the stage has no graph in this run: nothing was priced for it
+        served = flow.audio_feeds(comp, dag)
+        request = request_feeds(flow.topology, flow.cache_path, audio_path, dag,
+                                flow.container_name, flow.family)
+        refuse_beyond_served(served[0], request, flow.container_name, comp, flow.family)
 
     def _generate_from_token_ids(self, token_ids: list, **kwargs) -> Dict[str, Any]:
         """

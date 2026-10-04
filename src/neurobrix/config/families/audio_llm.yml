@@ -54,6 +54,21 @@ output:
     text: ".txt"
     chat: ".txt"
 
+audio_extent:
+  # The recording lengths an any-length audio encoder of this family is PLANNED and CENSUSED over
+  # (see stt.yml `audio_extent`). The whisper-encoder models of the family (Voxtral) are one point:
+  # their extractor pads every clip to its own 30 s window.
+  #
+  # min_seconds — source: the vendor's floor on a training utterance, NeMo
+  # examples/asr/conf/fastconformer/fast-conformer_transducer_bpe.yaml `train_ds.min_duration: 0.1`
+  # (read 2026-10-04; canary-qwen's perception is that encoder class).
+  min_seconds: 0.1
+  # max_seconds — source: nvidia/canary-qwen-2.5b model card, "Input length. The maximum audio
+  # duration in training was 40s [...] The model may technically be able to process longer
+  # sequences, but its accuracy may be degraded" (read 2026-10-04). It is the only duration bound a
+  # vendor of this family states: ibm-granite/granite-speech-3.3-8b's card states none.
+  max_seconds: 40.0
+
 # Confirmation request (tools/regression_matrix.py)
 confirmation:
   # The smallest request that still judges an audio-understanding model (the owner's method, 2026-09-28).

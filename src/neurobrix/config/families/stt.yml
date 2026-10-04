@@ -13,6 +13,19 @@ defaults:
   temperature: 0.0  # Greedy decoding default for STT
   max_tokens: 448   # Whisper standard max generation length
 
+audio_extent:
+  # The recording lengths an any-length encoder of this family is PLANNED and CENSUSED over: the
+  # derived census enumerates the encoder's frame extent from the shortest clip to the longest
+  # feed (tools/derived_census.py), and a served plan prices the longest (serving/engine.py).
+  # A fixed-window encoder (Whisper: its extractor pads every clip to its own 30 s) is one point.
+  #
+  # min_seconds — source: the vendor's own floor on a training utterance, NeMo
+  # examples/asr/conf/fastconformer/fast-conformer_transducer_bpe.yaml and
+  # conf/conformer/tdt/conformer_tdt_bpe.yaml, `train_ds.min_duration: 0.1` (read 2026-10-04).
+  min_seconds: 0.1
+  # The top needs no second value for the RNNT flow: it never feeds more than one window,
+  # `long_form.rnnt_window_seconds` below.
+
 long_form:
   # Audio longer than one window. The whisper class runs the vendor's
   # timestamp-seek algorithm over its own 30 s window (the extractor's

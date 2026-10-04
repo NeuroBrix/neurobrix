@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused with a message naming the model, the component and the frozen dimension, and saying it
   must be rebuilt — it is no longer padded to make it pass.
 
+- **Parakeet and Canary-Qwen give the same transcript on every run.** The engine added a small
+  random noise ("dither") to the audio before these models, which their maker applies only while
+  training. Without `--seed`, a long recording could come back with different words from one run
+  to the next ("librivox org" / "librivox dot org"). The noise is gone at inference, on both engines.
+
+- **`neurobrix serve` plans a speech model for the longest recording it accepts.** A served
+  Canary-Qwen or Granite Speech was planned for 30 s (14 s) of audio whatever arrived; it is now
+  planned for the longest recording its family declares (40 s; one 30 s window for Parakeet, which
+  transcribes longer recordings window by window). A longer recording is refused with a message
+  saying so and pointing to `neurobrix run`, which plans each request.
+
 - **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
   every one of their 128 experts for every token and multiplied the unused ones by zero: correct
   output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.

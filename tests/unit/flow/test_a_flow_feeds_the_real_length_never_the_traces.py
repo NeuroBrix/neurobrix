@@ -38,7 +38,6 @@ no file differing), 2026-10-04 07:54-08:01 CEST:
     an op the resolver cannot evaluate waved through                         1 failed
     the audio rule removed from `FlowBindings.overrides`                     1 failed
     the feeds read the modality stricter than the flows                      1 failed
-    the shape-only pass draws its dither from the run's stream               1 failed
 
 Run: python -m pytest tests/unit/flow/test_a_flow_feeds_the_real_length_never_the_traces.py
 """
@@ -580,16 +579,49 @@ def test_the_feeds_are_the_flows_own(tmp_path):
         request_feeds(topo, root, _wav(tmp_path, 11.0), frozen, "toy-stt", "stt")
 
 
-def test_shape_only_planning_leaves_the_runs_noise_stream_alone(tmp_path):
-    """The NeMo extractor's dither draws noise; the plan's shape-only pass draws from its own
-    generator, so planning a request never moves the stream the run's features draw from."""
+@pytest.mark.parametrize("engine", RNNT_ENGINES)
+def test_the_nemo_front_end_draws_no_noise_at_inference(tmp_path, monkeypatch, engine):
+    """The vendor dithers only while TRAINING (NeMo `FilterbankFeatures.forward`:
+    `if self.training and self.dither > 0`, "only in training mode for eval determinism"). The
+    engine drew the dither at inference, unseeded: one recording could transcribe differently from
+    run to run. Two runs of each front end now give the same features to the bit, with different
+    seeds armed, and neither moves a noise stream — the plan's shape-only pass included."""
     from neurobrix.core.module.audio.feeds import request_feeds
     root, topo, manifest, g = _container(tmp_path, encoder_graph())
     wav = _wav(tmp_path, 4.0)
+
+    def rnnt_features(seed):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        ctx = _ctx(root, topo, manifest, g, wav)
+        eng = _rnnt(engine, ctx, monkeypatch)
+        eng._preprocess_audio({})
+        f = ctx.variable_resolver.resolved["global.audio_signal"]
+        return f.numpy() if engine == "triton" else f.detach().numpy()
+
+    assert np.array_equal(rnnt_features(1), rnnt_features(2))
+
+    g2 = encoder_graph(feat="audio_signal", length="audio_signal_length", mels=128)
+    root2, topo2, manifest2, g2 = _container(tmp_path, g2, flow_type="audio_llm",
+                                             stage="perception", name="toy-llm")
+
+    def generic_features(seed):
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        ctx = _ctx(root2, topo2, manifest2, g2, wav, stage="perception")
+        f = _front_end(engine, ctx, topo2, monkeypatch)["global.input_features"]
+        return f.numpy() if engine == "triton" else f.detach().numpy()
+
+    assert np.array_equal(generic_features(1), generic_features(2))
+
     np.random.seed(7)
-    before = np.random.get_state()[1].copy()
+    torch.manual_seed(7)
+    before_np, before_torch = np.random.get_state()[1].copy(), torch.get_rng_state().clone()
+    rnnt_features_unseeded = _ctx(root, topo, manifest, g, wav)
+    _rnnt(engine, rnnt_features_unseeded, monkeypatch)._preprocess_audio({})
     request_feeds(topo, root, wav, g, "toy-stt", "stt")
-    assert np.array_equal(np.random.get_state()[1], before)
+    assert np.array_equal(np.random.get_state()[1], before_np)
+    assert torch.equal(torch.get_rng_state(), before_torch)
 
 
 def test_prism_binds_the_encoder_to_the_recordings_frames(tmp_path):
@@ -612,3 +644,121 @@ def test_prism_binds_the_encoder_to_the_recordings_frames(tmp_path):
     # a request without a recording keeps the name-driven map: the trace, a witnessed extent
     ic = InputConfig(batch_size=1, dtype="float32", flow=FlowBindings(topo, root, "toy-stt"))
     assert ActivationProfiler(g).build_symbol_map(ic)["s1"] == TRACE_FRAMES
+
+
+# ---------------------------------------------------------------------------------------------
+# the declared extent range: a served plan prices its top, the census enumerates all of it
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("prep,seconds", [("nemo_mel", 0.1), ("nemo_mel", 4.0), ("nemo_mel", 30.0),
+                                          ("conformer", 0.1), ("conformer", 4.0), ("conformer", 11.0),
+                                          ("mel_spectrogram", 0.1), ("mel_spectrogram", 4.0)])
+def test_the_shape_of_a_duration_is_the_extractors_own(tmp_path, prep, seconds):
+    """`feature_shape_at` runs the extractor on silence: the shape it answers for a duration is
+    the shape the extractor yields for a real recording of that duration — no second copy of any
+    frame arithmetic to drift."""
+    from neurobrix.core.module.audio import mel_dsp
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    real = mel_dsp.extract_features_np(prep, str(_wav(tmp_path, seconds)), cfg, (1, 80, 3000)).shape
+    assert mel_dsp.feature_shape_at(prep, seconds, cfg, (1, 80, 3000)) == tuple(real)
+
+
+def test_the_family_profile_declares_the_range_and_its_two_ends_are_admitted(tmp_path):
+    from neurobrix.core.module.audio.feeds import declared_extent_seconds, extent_feeds
+    assert declared_extent_seconds("stt") == {"min_seconds": 0.1}
+    assert declared_extent_seconds("audio_llm") == {"min_seconds": 0.1, "max_seconds": 40.0}
+    with pytest.raises(RuntimeError, match="audio_extent.min_seconds"):
+        declared_extent_seconds("llm")
+    # rnnt: from the shortest declared clip to the long-form WINDOW (the flow never feeds more)
+    root, topo, manifest, g = _container(tmp_path, encoder_graph())
+    assert extent_feeds(topo, root, g, "toy-stt", "stt") == (
+        "encoder", {"audio_signal": (1, 80, 11), "length": (1,)},
+        {"audio_signal": (1, 80, 3000), "length": (1,)})
+    # an any-length audio-LLM encoder: the family's declared shortest and longest recording
+    g2 = encoder_graph(feat="audio_signal", length="audio_signal_length", mels=128)
+    root2, topo2, _m, g2 = _container(tmp_path, g2, flow_type="audio_llm", stage="perception",
+                                      name="toy-llm", family="audio_llm")
+    assert extent_feeds(topo2, root2, g2, "toy-llm", "audio_llm") == (
+        "perception", {"audio_signal": (1, 128, 11)}, {"audio_signal": (1, 128, 4001)})
+    # an extractor that pads to its own window: one point, and no top needs declaring
+    g3 = encoder_graph(feat="input_features", frozen_input=True, mels=80)
+    root3, topo3, _m, g3 = _container(tmp_path, g3, flow_type="encoder_decoder", name="toy-whisper",
+                                      preprocessing="mel_spectrogram", feat="input_features")
+    comp, lo, hi = extent_feeds(topo3, root3, g3, "toy-whisper", "stt")
+    assert lo == hi == {"input_features": (1, 80, TRACE_FRAMES)}
+    # an any-length encoder in a family that declares no top is refused by name
+    with pytest.raises(RuntimeError, match="audio_extent.max_seconds"):
+        extent_feeds(topo2, root2, g2, "toy-llm", "stt")
+    # and a container that cannot take the range is refused at its first end
+    with pytest.raises(IE.FrozenTraceExtent, match="literal 375"):
+        extent_feeds(topo, root, encoder_graph(frozen_downstream=True), "toy-stt", "stt")
+
+
+def test_a_served_plan_prices_the_longest_declared_recording(tmp_path):
+    """A served plan is solved before any request. It priced the encoder at its trace extent, and
+    a request longer than the trace then ran at an extent no plan had priced; it now prices the
+    family's longest declared feed through the plan's own audio binding, and a request beyond it
+    is refused by name."""
+    from neurobrix.core.module.audio.feeds import BeyondServedExtent
+    from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
+    from neurobrix.serving.engine import InferenceEngine
+    g2 = encoder_graph(feat="audio_signal", length="audio_signal_length", mels=128)
+    root, topo, manifest, g2 = _container(tmp_path, g2, flow_type="audio_llm", stage="perception",
+                                          name="toy-llm", family="audio_llm")
+    flow = InferenceEngine.served_audio_flow(topo, root, manifest)
+    ic = InputConfig(batch_size=2, dtype="float16", flow=flow)
+    assert ActivationProfiler(g2).build_symbol_map(ic)["s1"] == 4001          # 40 s, not 3 000
+    # the RNNT flow's longest feed is its window, whatever the recording's length
+    root_r, topo_r, manifest_r, g = _container(tmp_path, encoder_graph(), name="toy-rnnt")
+    flow_r = InferenceEngine.served_audio_flow(topo_r, root_r, manifest_r)
+    assert ActivationProfiler(g).build_symbol_map(
+        InputConfig(batch_size=2, dtype="float16", flow=flow_r))["s1"] == 3000
+    # a container whose flow is fed no recording keeps the name-driven served plan
+    assert InferenceEngine.served_audio_flow({"flow": {"type": "iterative_process"}}, root, manifest) is None
+
+    def engine(flow, stage, graph):
+        e = InferenceEngine.__new__(InferenceEngine)
+        e._audio_flow = flow
+        e._executor = SimpleNamespace(executors={stage: SimpleNamespace(_dag=graph)})
+        return e
+
+    eng = engine(flow, "perception", g2)
+    eng._refuse_a_recording_beyond_the_served_extent(str(_wav(tmp_path, 11.0)))      # inside: runs
+    eng._refuse_a_recording_beyond_the_served_extent(str(_wav(tmp_path, 40.0)))      # the top itself
+    with pytest.raises(BeyondServedExtent) as e:
+        eng._refuse_a_recording_beyond_the_served_extent(str(_wav(tmp_path, 45.0)))
+    msg = str(e.value)
+    for said in ("'toy-llm'", "'perception'", "(1, 128, 4501)", "(1, 128, 4001)", "audio_llm.yml",
+                 "neurobrix run"):
+        assert said in msg, (said, msg)
+    # the RNNT flow windows a long recording: no feed exceeds the served window
+    engine(flow_r, "encoder", g)._refuse_a_recording_beyond_the_served_extent(str(_wav(tmp_path, 45.0)))
+    # an engine serving a flow with no recording refuses nothing
+    engine(None, "x", None)._refuse_a_recording_beyond_the_served_extent("unused.wav")
+
+
+def test_the_census_enumerates_the_encoders_frame_extent(tmp_path, monkeypatch):
+    """The derived census keys the encoder over the family's whole declared range of recordings
+    (an enumerated extent, like a decode length), not at one recording: the site runs from the
+    shortest clip's frames to the longest feed's, each `n` a feed of n frames."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import derived_census as D
+    root, topo, manifest, g = _container(tmp_path, encoder_graph(), name="toy-rnnt")
+    monkeypatch.setattr(D, "CACHE", tmp_path)
+    monkeypatch.setattr(D, "_RAW_GRAPHS", {})
+    (name, lo, hi, chain), = D._rnnt_sites("toy-rnnt", topo)
+    assert (name, lo, hi) == ("encoder audio frames", 11, 3000)
+    assert chain(501) == [("encoder", {"audio_signal": [1, 80, 501], "length": [1]})]
+    assert chain(11)[0][1]["audio_signal"] == [1, 80, 11]
+    # the sites no longer depend on a recording: the same range with none at all
+    sites = D.extent_sites("toy-rnnt", topo, {}, {"components": [{"name": "encoder"}]})
+    assert [(n, a, b) for n, a, b, _c in sites] == [("encoder audio frames", 11, 3000)]
+    # a whisper-class first stage is one point
+    g3 = encoder_graph(feat="input_features", frozen_input=True, mels=80)
+    _container(tmp_path, g3, flow_type="encoder_decoder", name="toy-whisper",
+               preprocessing="mel_spectrogram", feat="input_features")
+    topo3 = json.loads((tmp_path / "toy-whisper" / "topology.json").read_text())
+    comp, lo3, hi3, feed3 = D._audio_frame_extent("toy-whisper", topo3)
+    assert (comp, lo3, hi3) == ("encoder", 1, 1) and feed3(1) == {"input_features": [1, 80, 3000]}
