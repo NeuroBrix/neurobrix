@@ -70,7 +70,13 @@ from trace_request import derived_request, off_trace_size  # noqa: E402
 from container_renames import by_current_name, current_name  # noqa: E402
 
 MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-sequential"]}
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
+#: Where the containers are: the ENGINE's own door (`NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`, then the
+#: default), because the cells this harness launches read that door. A literal default stood here, so a
+#: container the engine finds elsewhere (a NAS mount, for one that does not fit the local disk) was refused as
+#: absent before its cell could run (the Mac, 2026-10-04: Qwen3-Coder-30B in place from the mount).
+from neurobrix.core import paths as _engine_paths  # noqa: E402
+
+CACHE = _engine_paths.cache_dir()
 #: The certified reference a cell reads, under the `--src` tree: the directory and the census tables.
 #: A gate compares against the COMMITTED reference — a row says whether the working copy differed.
 CERTIFIED_REFERENCE = ("neurobrix/config/autotune", "neurobrix/config/census")
