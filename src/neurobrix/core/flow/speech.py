@@ -39,6 +39,7 @@ from typing import Any, Dict, List, Optional
 import torch
 
 from neurobrix.kernels.seeded_draw import SeededDrawStream
+from .table_gather import gather_rows
 
 
 def _require(block: Dict[str, Any], key: str, where: str):
@@ -164,9 +165,8 @@ class SpeechLeg:
         thinker_embed_w = self.engine._get_embed_weight(state["lm_name"])
         if thinker_embed_w is None:
             raise RuntimeError("ZERO FALLBACK: thinker embed weight not found.")
-        tts_embeds = thinker_embed_w[
-            torch.tensor(tts_ids, device=thinker_embed_w.device)] \
-            .to(device=device, dtype=dtype).unsqueeze(0)                       # [1, 3, 2048]
+        tts_embeds = gather_rows(
+            thinker_embed_w, tts_ids, device=device, dtype=dtype).unsqueeze(0)  # [1, 3, 2048]
         # The thinker LM (the placement giant) is finished once its embed
         # rows are extracted — the tap/context activations are plain
         # tensors, independent of the weights. Release it BEFORE loading

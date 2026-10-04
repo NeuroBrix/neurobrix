@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts tensors nothing reads. A refusal on unified memory now names the streaming limit that bound
   it rather than a host-memory figure no path uses.
 
+- **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
+  every one of their 128 experts for every token and multiplied the unused ones by zero: correct
+  output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
+  All 48 layers now run the same routed MoE kernel as the other MoE models, in both engines.
+  If such a model's configuration and its traced graph disagree on whether the routing weights are
+  renormalised, the run now stops with a message naming both instead of following one of them.
+  A mixture-of-experts model with a router the engine cannot fuse now stops with a message naming
+  it, instead of running that layer unfused.
+
 - **Attention under `--triton` on Volta GPUs (V100) is 14-32x faster.** Triton no longer uses
   tensor cores on GPUs older than Ampere, and the attention kernel's tile was sized for them; it now
   uses a tile measured for the path Triton actually takes there. On a V100 a 4 096-token attention
@@ -41,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is cut into spatial tiles, each carrying the whole clip, was refused when the frame count was
   not of the form 4k+1 (88 frames, for example), although no tile depends on it. When the plan still
   gives a component no tile, the refusal now says why instead of "no tiling fits".
+
+- **A refusal under `--compiled` says why a component got no tile.** It said so only under
+  `--triton`. Each placement attempt now gives its own reason and the memory it was measured
+  against (for example "its tile and weights still need 666 MB" on a card with 589 MB usable).
 
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
@@ -192,6 +205,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`granite-speech-3.3-8b` transcribes under `--compiled` on a 16 GB GPU.** On a card too small
+  to hold its 8B language model, the model's weights stay in host memory and are streamed to the
+  GPU. The run then stopped after the first decoded token with `Expected all tensors to be on the
+  same device, but got index is on cuda:0, different from other tensors on cpu`. The token lookup
+  now runs where the embedding table is, and only the looked-up rows are sent to the GPU.
+  `--triton` was not affected.
+
+- **A model whose container is missing a weight is refused by name before it runs.** A weight
+  file the container lists but that is gone from disk, a weight missing from the file the
+  container says holds it, or a weight the model needs that the container does not list at all
+  used to load as nothing; the run then failed later inside an operation with
+  `'NoneType' object has no attribute 'ndim'`. Both `--triton` (compiled and sequential) and
+  `--compiled` now stop before the first operation runs — a missing file or entry when the weights
+  load, a weight the container does not list when they are bound — naming the component, each
+  missing weight and the file it was expected in. Under `--compiled`, a missing normalisation
+  weight is no longer replaced by ones and zeros. A container holding weight files without its
+  `weights_index.json` is refused the same way.
+
+- **`neurobrix validate` checks every weight a container lists, by the same rule a run applies.**
+  At the default `coherence` level it now reports each weight whose file is missing from the
+  container, or missing from the file the container says holds it, naming the weights; it used to
+  check only that the listed files existed.
+
+- **mochi-1-preview denoises along its own pipeline's schedule.** Its reference pipeline spaces the
+  denoising steps with a linear-then-quadratic schedule that is not in its scheduler configuration;
+  the engine used an even spacing, which at few steps renders a blurred wash where the reference
+  renders the scene. A model whose container declares its pipeline's schedule now follows it, in
+  both engines (the container needs the updated declaration).
+
+- **Wan video models step through the same timesteps as the diffusers version they ship for.** The
+  UniPC scheduler's flow schedule changed in diffusers 0.37.0; the engine now follows the formula of
+  the diffusers version the model's own scheduler configuration declares, in both engines.
+
+- **Under `--compiled`, an attention mask shorter than the sequence is no longer silently replaced.**
+  A mask fixed at the length a model was converted at, used on a longer input (or, in language
+  models, on a growing key-value cache), was always turned into causal attention. It now is only when the mask itself is causal; any other mask stops the
+  run with a message naming the operation, instead of attending to the wrong positions.
+
+- **Video models whose decoder works on a normalised latent decode it in the right range.** For
+  models whose decoder declares per-channel latent statistics (mochi-1-preview, the Wan 2.1 / 2.2
+  models, SANA-Video), the latent was mapped back into the decoder's range twice instead of once,
+  shifting and stretching colours. It is now mapped once (checked against the reference
+  decoder on mochi-1-preview, and on Wan2.1-T2V's decoder input).
+
+- **Video models whose attention carries a padding mask no longer render a mosaic under `--compiled`.**
+  A mask that applies to every query alike (one row broadcast over the sequence) was taken for a
+  stale, too-short mask and replaced by causal attention, so each video patch only saw the patches
+  before it. mochi-1-preview rendered a patchwork of misplaced blocks; its attention now matches the
+  reference implementation, as `--triton` already did.
+
 - **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
   On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
   kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a
@@ -202,6 +265,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never received the request's resolution, so a positional embedding computed at load time (Sana's)
   was never built and the run failed on its first addition; each piece now loads under its model's
   resolution, read again at every request.
+
+- **A language model streamed layer by layer hands its flow the same hidden states as when it runs
+  whole.** When the memory plan streams a language model in pieces, the hidden states the
+  generation reads after each step are now kept by the piece that computes them; before, an image
+  generator such as Janus-Pro-7B under `--triton` fed its image head the text logits instead (and
+  under the PyTorch engines every streamed language model stopped with "could not extract
+  hidden_states"). A streamed model also returns all of its declared outputs, not only those of
+  its last piece.
 
 - **A plan performs the in-place additions it was priced with.** When a decoder's large residual
   additions were counted as done in place but no single operation overflowed the card, the plan left

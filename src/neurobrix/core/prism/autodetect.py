@@ -1326,6 +1326,7 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
         # that does not share memory with the host says nothing rather than
         # saying False, so a profile never asserts what was not detected.
         host_mem_mb = None
+        max_alloc_mb = None
         unified = None
 
         # Determine brand
@@ -1337,6 +1338,7 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             # they differ by 26% here and Prism budgets against the former.
             mem_mb = _detect_apple_memory_mb()
             host_mem_mb = _detect_apple_host_memory_mb()
+            max_alloc_mb = _detect_apple_max_allocation_mb()
             unified = True
             dtypes = ["float32", "float16"]
             if _apple_supports_bf16(name):
@@ -1386,6 +1388,10 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             # What the MACHINE has. `memory_mb` is what the GPU may hold.
             # Recorded so the gap is visible instead of being rediscovered.
             _dev["host_memory_mb"] = host_mem_mb
+        if max_alloc_mb is not None:
+            # The largest single allocation the device grants (Metal: one buffer). The solver cuts no arena
+            # above it. Absent = no limit below `memory_mb`.
+            _dev["max_allocation_mb"] = max_alloc_mb
         devices.append(_dev)
         idx += 1
 
@@ -1815,6 +1821,9 @@ def _detect_torch_fallback() -> Tuple[List[Dict[str, Any]], str]:
             "pcie_version": "N/A",
             "unified_memory": True,
         }]
+        max_alloc_mb = _detect_apple_max_allocation_mb()
+        if max_alloc_mb is not None:
+            devices[0]["max_allocation_mb"] = max_alloc_mb
         return devices, "apple"
 
     return [], "unknown"
@@ -2374,6 +2383,30 @@ def _detect_apple_memory_mb() -> int:
     except Exception:
         pass
     return _detect_apple_host_memory_mb()
+
+
+def _detect_apple_max_allocation_mb() -> Optional[int]:
+    """The largest SINGLE allocation the Metal device grants, or None when it cannot be asked.
+
+    `memory_mb` is how much the GPU may hold in all (`recommendedMaxWorkingSetSize`); one buffer has its own,
+    smaller ceiling, `MTLDevice.maxBufferLength`, and the device refuses a larger one however much is free.
+    Measured on this M4 Pro (2026-10-04): maxBufferLength = 14302248960 bytes (13 639 MB) against a working set
+    of 19069665280 (18 186 MB). A streamed segment is ONE arena, one buffer: at 17.1 GB free Prism cut
+    deepseek-moe-16b-chat in 3 segments, the first asked 14 661 558 272 bytes and the allocation failed ("GPU
+    malloc failed (error 1) … driver_free=17785MB"), where 4 segments of ~10 GB allocate. Published as the
+    device's `max_allocation_mb` for the solver to cut against. The device is asked, never a table; a profile
+    that does not carry the key says "no limit below the device's memory", which is what a CUDA card gives.
+    """
+    try:
+        import Metal                                    # vendor layer: allowed here
+        device = Metal.MTLCreateSystemDefaultDevice()
+        if device is not None:
+            largest = int(device.maxBufferLength())
+            if largest > 0:
+                return largest // (1024 * 1024)
+    except Exception:
+        pass
+    return None
 
 
 def _parse_mac_vram(vram_str: str) -> int:

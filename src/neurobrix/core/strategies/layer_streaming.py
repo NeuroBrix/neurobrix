@@ -23,6 +23,7 @@ import os
 
 from typing import Any, Dict, List, Optional
 
+from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
 
 
@@ -74,6 +75,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._installed: set = set()
         self._cut_verified: set = set()
         self._non_block: Dict[str, set] = {}
+        #: Per streamed component, the tids each piece's ops produce, in piece order.
+        self._produced: Dict[str, List[set]] = {}
 
     # -- segment executors -------------------------------------------------
 
@@ -276,36 +279,107 @@ class LayerStreamingStrategy(ExecutionStrategy):
             self._graph_prism_cut(component_name,
                                   self.context.component_executors.get(component_name))
             self._cut_verified.add(component_name)
-        executors = self._segment_executors[component_name]
+        return self._run_pieces(component_name,
+                                self.context.component_executors.get(component_name),
+                                self._segment_executors[component_name], inputs)
 
-        values: Dict[str, Any] = dict(inputs or {})
-        last: Dict[str, Any] = {}
+    def _run_pieces(self, component_name: str, base: Any, pieces: List[Any],
+                    inputs: Optional[Dict[str, Any]], *args, **kwargs) -> Dict[str, Any]:
+        """Run the component's pieces in order, one resident at a time, and answer as the WHOLE
+        component would: its declared outputs, keyed as a whole run keys them, and — on the
+        base, for every reader of its run (`get_hidden_states`) — the tensors the whole run
+        keeps.
+
+        Values flow by NAME: a piece declares `segment_input_names`, the tensor ids the
+        executor looks up after stripping the `input::` prefix, and its outputs come back keyed
+        by tensor id, so a piece's outputs feed the next piece's inputs with no renaming.
+
+        What a whole run keeps beyond its outputs is what its base was asked to protect
+        (`enable_hidden_states_capture`: the pre-head tensor of a graph whose output is the
+        logits). That tid lives INSIDE a piece, never crosses a seam, and was protected on the
+        base, which runs no op — so no piece kept it and the base's reader found nothing:
+        Janus-Pro-7B streamed on the Mac fed its text-vocab logits to gen_head as the hidden
+        (addmm M = 102400 / 4096 = 25), while whole it reads the (B, T, 4096) hidden. Each
+        protected tid is now protected on the piece that PRODUCES it, and read from that piece
+        after it runs and BEFORE it unloads — unloading drops the arena and the capture both.
+        """
+        dag = getattr(base, "_dag", None) or {}
+        tensors = dag.get("tensors") or {}
+        declared = list(dag.get("output_tensor_ids") or [])
+        protected = set(getattr(base, "_persistent_tensor_ids", None) or ())
+        kept = protected | set(declared)
         nbx_path = self._nbx_path(component_name)
 
-        for executor in executors:
-            sub = executor._dag
+        # A protected tid no piece produces cannot be kept by any of them: the graph the
+        # pieces were cut from is not the one the base protected on. Refused by name rather
+        # than leaving the base's reader to find nothing.
+        if component_name not in self._produced:           # once: the pieces' graphs are fixed
+            self._produced[component_name] = [
+                {tid for op in ((p._dag or {}).get("ops") or {}).values()
+                 for tid in (op.get("output_tensor_ids") or [])} for p in pieces]
+        produced_by = self._produced[component_name]
+        all_produced = set().union(*produced_by)
+        orphan = sorted(t for t in protected - all_produced if not t.startswith("input::"))
+        if orphan:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}' protects {orphan[:3]} on its base and "
+                f"no piece produces it, so none can keep it for the base's readers")
+
+        capture: Dict[str, Any] = {}
+        base._pieces_capture = capture        # rebuilt every run: a decode step reads its own
+        values: Dict[str, Any] = dict(inputs or {})
+        for seg_exec, produced in zip(pieces, produced_by):
+            sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
-            seg_inputs = {n: _piece_input(values, n) for n in needed}
-            missing = [n for n, v in seg_inputs.items() if v is _ABSENT]
+            feed = {n: _piece_input(values, n) for n in needed}
+            missing = [n for n, v in feed.items() if v is _ABSENT]
             if missing:
                 raise RuntimeError(
-                    f"layer_streaming: segment {sub.get('segment_index')} of "
-                    f"'{component_name}' needs {missing[:3]} and nothing "
-                    f"before it produced them")
-
-            # This segment's weights, and only this segment's: the executor
-            # asks its own dag what it consumes.
-            executor.load_weights(nbx_path, component_name)
+                    f"layer_streaming: segment {sub.get('segment_index')} "
+                    f"of '{component_name}' needs {missing[:3]} and "
+                    f"nothing before it produced them")
+            for tid in protected & produced:
+                seg_exec.protect_tensor_id(tid)
+            # This piece's weights, and only this piece's: the executor asks its own dag
+            # what it consumes.
+            seg_exec.load_weights(nbx_path, component_name)
             try:
-                out = executor.run(seg_inputs) or {}
+                out = seg_exec.run(feed, *args, **kwargs) or {}
+                capture.update(seg_exec.tensors_of_last_run(kept & produced))
             finally:
-                # Released before the next segment is loaded, which is the
-                # whole point: one segment resident at a time.
-                executor.unload_weights()
+                # Released before the next piece loads. This is the residency the plan was
+                # budgeted against.
+                seg_exec.unload_weights()
+            lost = sorted(t for t in protected & produced if t not in capture)
+            if lost:
+                raise RuntimeError(
+                    f"layer_streaming: segment {sub.get('segment_index')} of "
+                    f"'{component_name}' produced {lost[:3]}, protected on its base, and did "
+                    f"not keep it: the base's readers would find nothing")
+            if os.environ.get("NBX_LAYER_DIAG") == "1":
+                print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                      f"type={type(out).__name__} repr={repr(out)[:160]}",
+                      flush=True)
+                print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                      f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
+                      f"returns {len(out)} keys; "
+                      f"returned={sorted(out)[:4]}; "
+                      f"kept={sorted(kept & produced)[:4]}",
+                      flush=True)
             values.update(out)
-            last = out
 
-        return last
+        # The component's declared outputs, keyed as a whole run keys them (`output_name`,
+        # else the tid) — not the last piece's dict, which holds only what the last piece
+        # produced and, in the triton engine, the protected tids beside them.
+        result: Dict[str, Any] = {}
+        for tid in declared:
+            key = output_key(tensors.get(tid), tid)
+            if key not in values:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}' declares output {key!r} and no "
+                    f"piece returned it")
+            result[key] = values[key]
+        return result
 
     def install_for_executor(self, component_name: str, executor) -> bool:
         """Make this component's own executor run segment by segment.
@@ -331,7 +405,6 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
-        nbx_path = self._nbx_path(component_name)
 
         # The base executor's constants are now dead, and they are not small.
         #
@@ -372,39 +445,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 # (the vlm flows' `set_moe_config` comes after this install).
                 self._graph_prism_cut(component_name, executor)
                 self._cut_verified.add(component_name)
-            values = dict(inputs or {})
-            last = {}
-            for seg_exec in segments:
-                sub = seg_exec._dag
-                needed = sub.get("segment_input_names") or []
-                feed = {n: _piece_input(values, n) for n in needed}
-                missing = [n for n, v in feed.items() if v is _ABSENT]
-                if missing:
-                    raise RuntimeError(
-                        f"layer_streaming: segment {sub.get('segment_index')} "
-                        f"of '{component_name}' needs {missing[:3]} and "
-                        f"nothing before it produced them")
-                seg_exec.load_weights(nbx_path, component_name)
-                try:
-                    out = seg_exec.run(feed, *args, **kwargs) or {}
-                finally:
-                    # Released before the next segment loads. This is the
-                    # residency the plan was budgeted against.
-                    seg_exec.unload_weights()
-                import os as _os
-                if _os.environ.get("NBX_LAYER_DIAG") == "1":
-                    print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
-                          f"type={type(out).__name__} repr={repr(out)[:160]}",
-                          flush=True)
-                    print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
-                          f"declares {len(sub.get('output_tensor_ids') or [])} outputs, "
-                          f"returns {len(out)} keys; "
-                          f"returned={sorted(out)[:4]}; "
-                          f"ctx_out={sorted(getattr(getattr(seg_exec,'_ctx',None),'output_tensor_ids',[]) or [])[:4]}",
-                          flush=True)
-                values.update(out)
-                last = out
-            return last
+            return self._run_pieces(component_name, executor, segments, inputs,
+                                    *args, **kwargs)
 
         executor.run = segmented_run
 
