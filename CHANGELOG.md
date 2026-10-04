@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--compiled` no longer rewrites a model's fixed sizes, and a container built before this
+  release is refused by name.** The PyTorch engine used to guess, before running, that some fixed
+  sizes in a model's graph were really variable lengths and replace them. On current containers that
+  guess could only be wrong: Ming-Lite-Omni-1.5 stopped at its first attention, and
+  Sana_1600M_4Kpx_BF16's decoder changed 28 output values. The guess is removed; current containers
+  record every variable size themselves. A container that does not declare this stops at load with a
+  message naming it and its components; install the container published for this release
+  (`neurobrix remove <model> && neurobrix import <org>/<model>`). `--triton` never made the guess.
+
 - **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
   every one of their 128 experts for every token and multiplied the unused ones by zero: correct
   output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
