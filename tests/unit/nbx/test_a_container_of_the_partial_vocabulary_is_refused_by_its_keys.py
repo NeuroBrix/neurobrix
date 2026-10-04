@@ -87,3 +87,22 @@ def test_the_renamed_stage_copy_passes():
         NBXRuntimeLoader().load(str(STAGE))
     except RuntimeError as e:
         assert "NEUROTAX" not in str(e)
+
+
+def _graph(tmp_path, ids):
+    d = _container(tmp_path, ["pred_proj.weight"])
+    (d / "components" / "lm" / "graph.json").write_text(json.dumps(
+        {"tensors": {i: {"tensor_id": i} for i in ids}, "ops": {}}))
+    from types import SimpleNamespace
+    from neurobrix.core.runtime.executor import RuntimeExecutor
+    return lambda: RuntimeExecutor._load_graph(SimpleNamespace(_nbx_path_str=str(d)), "lm")
+
+
+def test_the_executor_refuses_a_graph_id_of_the_partial_vocabulary(tmp_path):
+    with pytest.raises(RuntimeError, match="graph tensor id 'tfmr.rotary_embed.inv_freq'.*'backbone"):
+        _graph(tmp_path, ["param::pred_proj.weight", "param::tfmr.rotary_embed.inv_freq"])()
+
+
+def test_the_executor_loads_a_complete_graph_and_skips_lifted_literals(tmp_path):
+    dag = _graph(tmp_path, ["param::pred_proj.weight", "param::constant_T_000001", "input::x"])()
+    assert "param::constant_T_000001" in dag["tensors"]
