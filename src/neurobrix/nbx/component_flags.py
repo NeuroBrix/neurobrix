@@ -32,6 +32,7 @@ RUNTIME_COMPONENT_FLAGS = (
     "pad_image_to_num_frames",
     "requires_fp32_compute",
     "fp16_conv_cascade_safe",
+    "sigma_schedule",          # the pipeline's sigma schedule (scheduler component)
 )
 
 _ABSENT = object()

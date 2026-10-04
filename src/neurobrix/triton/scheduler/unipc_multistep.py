@@ -47,6 +47,10 @@ class TritonUniPCMultistepScheduler:
         self.lower_order_final = bool(config.get("lower_order_final", True))
         self.disable_corrector = list(config.get("disable_corrector", []) or [])
         self.use_flow_sigmas = bool(config.get("use_flow_sigmas", False))
+        # R30 mirror of the torch UniPC: the container's declared diffusers version
+        # selects the flow-sigma formula (changed in diffusers 0.37.0, PR #12109).
+        self.flow_sigma_formula = (_unipc_flow_sigma_formula(config.get("_diffusers_version"))
+                                   if self.use_flow_sigmas else None)
         self.flow_shift = float(config.get("flow_shift", 1.0))
         self.final_sigmas_type = config.get("final_sigmas_type", "zero")
 
@@ -82,12 +86,8 @@ class TritonUniPCMultistepScheduler:
     def set_timesteps(self, num_inference_steps: int, device=None, **kwargs):
         self.num_inference_steps = num_inference_steps
         if self.use_flow_sigmas:
-            alphas = np.linspace(1, 1 / self.num_train_timesteps,
-                                 num_inference_steps + 1, dtype=np.float64)
-            sigmas = 1.0 - alphas
-            sigmas = np.flip(
-                self.flow_shift * sigmas / (1 + (self.flow_shift - 1) * sigmas)
-            )[:-1].copy()
+            sigmas = _unipc_flow_sigmas(self.flow_sigma_formula, num_inference_steps,
+                                        self.num_train_timesteps, self.flow_shift)
             timesteps = (sigmas * self.num_train_timesteps).copy()
             sigma_last = sigmas[-1] if self.final_sigmas_type == "sigma_min" else 0.0
             self.sigmas = np.concatenate([sigmas, [sigma_last]]).astype(np.float64)
@@ -299,3 +299,43 @@ class TritonUniPCMultistepScheduler:
     @property
     def init_noise_sigma(self) -> float:
         return 1.0
+
+
+# R30 mirror of core/module/scheduler/diffusion/unipc_multistep.py (two engines, no
+# shared compute code; numpy only, R33). See unipc_flow_sigma_formula there for the
+# upstream source (diffusers PR #12109, released in 0.37.0).
+_UNIPC_FLOW_SIGMAS_LINSPACE_FROM = (0, 37, 0)
+
+
+def _unipc_flow_sigma_formula(declared_version) -> str:
+    import re
+    if not declared_version:
+        raise RuntimeError(
+            "ZERO FALLBACK: UniPCMultistepScheduler with use_flow_sigmas needs the "
+            "container's declared `_diffusers_version` to select the flow-sigma "
+            "formula (it changed in diffusers 0.37.0); the scheduler config has none.")
+    m = re.match(r"^(\d+)\.(\d+)\.(\d+)(.*)$", str(declared_version))
+    if not m:
+        raise RuntimeError(f"ZERO FALLBACK: unreadable `_diffusers_version` {declared_version!r}.")
+    base, suffix = tuple(int(g) for g in m.groups()[:3]), m.group(4)
+    if base == _UNIPC_FLOW_SIGMAS_LINSPACE_FROM and "dev" in suffix:
+        raise RuntimeError(
+            f"ZERO FALLBACK: `_diffusers_version` {declared_version!r} is a development "
+            f"build of the release that changed the UniPC flow-sigma formula "
+            f"(diffusers PR #12109); it does not say which formula it carries.")
+    return "linspace" if base >= _UNIPC_FLOW_SIGMAS_LINSPACE_FROM else "one_minus_alphas"
+
+
+def _unipc_flow_sigmas(formula: str, num_inference_steps: int, num_train_timesteps: int,
+                       flow_shift: float):
+    if formula == "one_minus_alphas":
+        alphas = np.linspace(1, 1 / num_train_timesteps, num_inference_steps + 1, dtype=np.float64)
+        sigmas = 1.0 - alphas
+        return np.flip(flow_shift * sigmas / (1 + (flow_shift - 1) * sigmas))[:-1].copy()
+    if formula == "linspace":
+        sigmas = np.linspace(1, 1 / num_train_timesteps, num_inference_steps + 1, dtype=np.float64)[:-1]
+        sigmas = flow_shift * sigmas / (1 + (flow_shift - 1) * sigmas)
+        if np.fabs(sigmas[0] - 1) < 1e-6:
+            sigmas[0] -= 1e-6
+        return sigmas
+    raise RuntimeError(f"ZERO FALLBACK: unknown UniPC flow-sigma formula {formula!r}.")
