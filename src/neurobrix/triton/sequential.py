@@ -15,6 +15,7 @@ from neurobrix.kernels.dispatch import dispatch as kernel_dispatch
 from neurobrix.kernels import wrappers as w
 
 from .symbols import SymbolResolver
+from neurobrix.core.runtime import symexpr as _symexpr
 from .dtype import TritonDtypeEngine
 
 
@@ -75,10 +76,23 @@ class TritonSequentialDispatcher:
         """
         return self._dtype_engine.cast_runtime_inputs(input_map, graph_tensors)
 
+    # The run's SymbolResolver (set by the executor once it is bound): a symbolic keyword
+    # attribute evaluates through it in the scalar slot (core/runtime/symexpr.py).
+    symbol_resolver: Optional[SymbolResolver] = None
+
     def resolve_attr(self, attr: Any) -> Any:
         """Resolve a single attribute from graph.json format."""
         if not isinstance(attr, dict):
             return attr
+
+        if _symexpr.is_symbolic(attr):
+            # A symbol or an expression (a linspace bound passed by keyword): evaluated, never
+            # dropped — an unknown dict used to resolve to its absent "value" and vanish.
+            if self.symbol_resolver is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: symbolic attribute of type {attr.get('type')!r} met with no "
+                    "symbol resolver; its trace value is a witnessed extent, not a value")
+            return self.symbol_resolver.resolve_scalar(attr)
 
         atype = attr.get("type")
         value = attr.get("value")

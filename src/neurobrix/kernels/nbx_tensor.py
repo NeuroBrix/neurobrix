@@ -3012,9 +3012,9 @@ class NBXTensor:
         # derived from `dtype` HERE and never again, so assigning `_dtype`
         # after construction leaves a tensor whose declared length belongs
         # to the old dtype — a buffer overrun when the new dtype is smaller.
-        # There is no such retag left in the tree: the two bf16-bits sites
-        # (triton/constants.py, graph_executor._load_constant_triton) declare
-        # the dtype to from_numpy instead.
+        # There is no such retag left in the tree: the bf16-bits site
+        # (graph_executor._load_constant_triton) declares the dtype to
+        # from_numpy instead.
         self._elem_size = dtype_size(dtype)
         self._nbytes = self._numel * self._elem_size
         # C6a: contiguity is a pure function of the (immutable) shape and
@@ -3139,6 +3139,23 @@ class NBXTensor:
         """
         return any(st == 0 and sh > 1
                    for sh, st in zip(self._shape, self._strides))
+
+    def spans_densely(self) -> bool:
+        """True when the view's elements tile exactly one dense span of
+        `nbytes` starting at data_ptr() — contiguous, or a permutation of a
+        contiguous layout (a transpose). False for an expand view (stride 0
+        on a broadcast axis) and for a narrow on an inner axis (gaps between
+        rows): a single memcpy of nbytes copies the wrong bytes from those.
+        The one definition: `triton.device_transfer.transfer_tensor` asks it too."""
+        if self._numel == 0:
+            return True
+        expected = 1
+        for sh, st in sorted(((sh, st) for sh, st in zip(self._shape, self._strides)
+                              if sh != 1), key=lambda p: p[1]):
+            if st != expected:
+                return False
+            expected *= sh
+        return True
 
     @property
     def is_cuda(self) -> bool:
@@ -3496,12 +3513,15 @@ class NBXTensor:
 
         Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
         tensor is already on the requested CUDA device, returns self.
-        Expand views (stride == 0 on a broadcast axis) are materialised
-        first so the memcpy does not over-read the backing storage.
+        A view whose elements do not tile one dense span (an expand view's
+        stride-0 axis, or a narrow on an inner axis — a stacked expert
+        slab's gate half) is materialised first: the copy is ONE memcpy of
+        nbytes from data_ptr, which is the view's bytes only when they are
+        dense.
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
-        src = self.contiguous() if self.is_expanded() else self
+        src = self if self.spans_densely() else self.contiguous()
         DeviceAllocator.set_device(device_idx)
         ptr = DeviceAllocator.malloc_cuda(src._nbytes)
         if src._nbytes > 0:
@@ -3529,7 +3549,7 @@ class NBXTensor:
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
-        src = self.contiguous() if self.is_expanded() else self
+        src = self if self.spans_densely() else self.contiguous()
         DeviceAllocator.set_device(device_idx)
         ptr = DeviceAllocator.malloc_cuda(src._nbytes)
         if src._nbytes > 0:
@@ -3549,11 +3569,16 @@ class NBXTensor:
         if self._device == 'cpu' and self._pinned == pinned:
             return self
         dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=pinned)
-        if self._nbytes > 0:
+        # The destination is row-major: a source that is not (a transpose, a
+        # narrow on an inner axis, an expand) is laid out row-major on its own
+        # side first — one memcpy of nbytes from data_ptr is its elements only
+        # when it already is.
+        src = self if self.is_contiguous() else self.contiguous()
+        if src._nbytes > 0:
             # kind: 2 = D2H from GPU, 0 = H2H if we're re-packing CPU.
-            kind = 2 if self._device == 'cuda' else 0
-            DeviceAllocator.memcpy(dst.data_ptr(), self.data_ptr(),
-                                   self._nbytes, kind=kind)
+            kind = 2 if src._device == 'cuda' else 0
+            DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(),
+                                   src._nbytes, kind=kind)
             # A device result crossing to the host is an observation, and a
             # D2H copy has already flushed. Checking here rather than only at
             # `sync_device` matters because a decode never calls that: it
