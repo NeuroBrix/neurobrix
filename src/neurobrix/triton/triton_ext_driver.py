@@ -471,8 +471,15 @@ def _resident_acquire(addr: int) -> int:
         return base
     raw = (ctypes.c_byte * size).from_address(base)
     view = np.frombuffer(memoryview(raw), dtype=np.uint8)
-    buf = _native().wrap(view)
-    gpu_va = int(buf.gpu_address())                    # also records it as exposed, weakly
+    # Inside a pool: `gpu_address()` records the buffer in triton-ext's weak table of exposed buffers, and an
+    # insert into a weak NSHashTable can load its live members, each load a retain + AUTORELEASE. A Python
+    # thread has no pool, so that reference was never dropped: about one pinned scope in fifteen kept its whole
+    # arena for good (48 rounds on a fresh 128 MiB arena, no kernel: +128 MB at rounds 15, 30 and 45;
+    # deepseek-moe streamed kept one 8.5 GB segment at its third pass, 2026-10-04).
+    import objc
+    with objc.autorelease_pool():
+        buf = _native().wrap(view)
+        gpu_va = int(buf.gpu_address())                # also records it as exposed, weakly
     _RESIDENT_WRAPS[base] = [buf, 1, gpu_va]
     return base
 
