@@ -254,6 +254,28 @@ def dft_c2r_launches(M: int, bins: int, N: int, native_bf16: bool) -> List[Launc
     return mm_launches(M, bins, N, F32, F32, native_bf16)
 
 
+def stft_launches(lead: int, length: int, n_fft: int, hop_length: Optional[int],
+                  win_length: Optional[int], onesided: Optional[bool],
+                  native_bf16: bool) -> List[Launch]:
+    """`stft_wrapper` on a signal of `lead` rows x `length` samples: frames of win_length every
+    hop_length (`unfold`, defaults n_fft // 4 and n_fft as the wrapper's), each zero-padded to
+    n_fft, then `fft_r2c_wrapper` over [lead x frames, n_fft] — `dft_r2c_launches`'s rule (a
+    power-of-two n_fft runs the butterfly: no autotuned key)."""
+    hop = (n_fft // 4) if hop_length in (None, 0) else int(hop_length)
+    win = n_fft if win_length in (None, 0) else int(win_length)
+    frames = (int(length) - win) // hop + 1
+    return dft_r2c_launches(int(lead) * frames, int(n_fft),
+                            True if onesided is None else bool(onesided), native_bf16)
+
+
+def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
+                   native_bf16: bool) -> List[Launch]:
+    """`istft_wrapper` on a [batch, bins, frames] spectrum: `fft_c2r_wrapper` over the frames
+    [batch x frames, bins] to n_fft samples each (`dft_c2r_launches`); the overlap-add and the
+    window envelope launch no autotuned kernel."""
+    return dft_c2r_launches(int(batch) * int(frames), int(bins), int(n_fft), native_bf16)
+
+
 # ---------------------------------------------------------------------------------------------
 # Attention (scaled_dot_product_attention): the route, then the math route's two bmm launches.
 # ---------------------------------------------------------------------------------------------
