@@ -175,6 +175,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **mochi-1-preview denoises along its own pipeline's schedule.** Its reference pipeline spaces the
+  denoising steps with a linear-then-quadratic schedule that is not in its scheduler configuration;
+  the engine used an even spacing, which at few steps renders a blurred wash where the reference
+  renders the scene. A model whose container declares its pipeline's schedule now follows it, in
+  both engines (the container needs the updated declaration).
+
 - **Wan video models step through the same timesteps as the diffusers version they ship for.** The
   UniPC scheduler's flow schedule changed in diffusers 0.37.0; the engine now follows the formula of
   the diffusers version the model's own scheduler configuration declares, in both engines.
