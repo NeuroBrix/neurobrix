@@ -25,6 +25,7 @@ import trace_request as TR  # noqa: E402
 def test_the_confirmation_values_replace_the_family_bound(monkeypatch):
     monkeypatch.setattr(TR.Z, "request_args", lambda model, family, extra: ["--prompt", "x", "--steps", "20"])
     monkeypatch.setattr(TR, "confirmation", lambda family: {"steps": 8, "size_fraction": 0.5})
+    monkeypatch.setattr(TR, "container_topology", lambda model: {})      # a container that declares none
     monkeypatch.setattr(TR, "off_trace_size", lambda model, family: (320, 512))
     req = TR.derived_request("M", "image")
     assert req == ["--prompt", "x", "--steps", "8", "--height", "320", "--width", "512"], req
