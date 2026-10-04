@@ -2749,6 +2749,10 @@ either machine's.
 before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
 are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
 
+`115 -> 506` (2026-10-05, merge-queue-18): an entry written on this Mac inside the rack's range
+(`a-queue-never-blocks-at-its-head`) met the rack's own 115 on merge; it moves into this Mac's
+block with its old number kept in the heading.
+
 ---
 
 ### 94 — the register's own gate went blind the moment the numbering scheme changed
@@ -3745,7 +3749,7 @@ goes red when the registration is removed.
 **The lesson, in one line.** A test that replaces the reader proves the rule, not that the rule
 reaches its data; keep the real reader and starve its table.
 
-### 115 — the re-prove flag's help promised a serving the runtime refuses
+### 506 (was 115 — renumbered, see note) — the re-prove flag's help promised a serving the runtime refuses
 
 `neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
 that a proof made under another code generator "stays correct and served meanwhile". The runtime

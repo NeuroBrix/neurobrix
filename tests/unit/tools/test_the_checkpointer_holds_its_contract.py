@@ -130,6 +130,29 @@ def test_a_second_checkpointer_on_one_repository_is_refused(repo):
         holder.join(20)
 
 
+def test_a_checkpointer_on_another_worktree_of_the_clone_is_not_refused(repo, tmp_path):
+    """Two worktrees of one clone: each has its own index, so each may carry its own checkpointer;
+    the push window stays shared. Injection: the hold in the common git dir -> the second worktree's
+    checkpointer is refused, RED (rc1 against value_axis, 2026-10-04 19:07)."""
+    other = tmp_path / "other_worktree"
+    subprocess.run(["git", "-C", repo["path"], "worktree", "add", "-q", "-b", "other-branch", str(other)], check=True)
+    ctx = mp.get_context("fork")
+    ready, release = ctx.Event(), ctx.Event()
+    holder = ctx.Process(target=_hold, args=(repo["path"], ready, release))
+    holder.start()
+    assert ready.wait(20)
+    try:
+        said = []
+        rc = CP.run(str(other), "src/neurobrix/config/autotune", [], 600, [], repo["gate"], [], None,
+                    once=True, say=said.append)
+        assert not any("another checkpointer holds" in x for x in said), said
+        assert rc != 2, (rc, said)
+        assert CP._push_stamp_path(str(other)) == CP._push_stamp_path(repo["path"]), "the push window is per repository"
+    finally:
+        release.set()
+        holder.join(20)
+
+
 def test_a_refused_push_spends_the_window(repo):
     """A remote that refuses. Injection: the window stamped only after a push that LANDED -> the
     stamp stays unset and the next tick pushes again, RED."""
