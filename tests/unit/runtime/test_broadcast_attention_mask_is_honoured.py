@@ -75,3 +75,49 @@ def test_a_key_axis_broadcast_mask_is_applied():
                                                (23, 40, True), (2, 40, True)])
 def test_only_an_axis_between_one_and_the_sequence_is_short(extent, seq, short):
     assert CO._mask_axis_short(extent, seq) is short
+
+
+# ---- a GENUINELY short mask (its extent froze at the trace length) ----------------
+# Static scan 2026-10-04 (every SDPA mask in the shared cache): masks frozen at 23x23 in ten language models (GLM-4.1V,
+# MiniCPM-o, Qwen3-30B/Coder/VL, Voxtral, canary-qwen, deepseek-moe, granite-1b),
+# 704x704 in Janus-Pro, 506x506 in the Sana-4K text encoder. The old branch replaced
+# ANY short mask by causal attention without looking at it. What these tests would do
+# if the code were wrong: the refusal tests would not raise (seen on injection).
+
+T = 4                                   # the frozen extent, shorter than S
+
+
+def _frozen(kind):
+    tri = torch.ones(T, T, dtype=torch.bool).tril()
+    if kind == "bool":
+        return tri
+    if kind == "neginf":
+        return torch.where(tri, 0.0, float("-inf"))
+    if kind == "finfo_min":                                   # the Hugging Face spelling
+        return torch.where(tri, 0.0, torch.finfo(torch.float32).min)
+    if kind == "padding":                                     # causal AND a padded key
+        m = torch.where(tri, 0.0, float("-inf")); m[:, 0] = float("-inf"); return m
+    if kind == "bias":                                        # causal support, non-zero bias
+        return torch.where(tri, 0.5, float("-inf"))
+    raise ValueError(kind)
+
+
+@pytest.mark.parametrize("kind", ["bool", "neginf", "finfo_min"])
+def test_a_frozen_causal_mask_is_read_as_causal(kind):
+    q, k, v = _qkv(4)
+    ours = _attention()(q, k, v, _frozen(kind))
+    assert torch.allclose(ours, F.scaled_dot_product_attention(q, k, v, is_causal=True), atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", ["padding", "bias"])
+def test_a_frozen_mask_that_is_not_causal_is_refused_by_name(kind):
+    q, k, v = _qkv(5)
+    with pytest.raises(RuntimeError, match=r"shorter than the sequence.*not the causal"):
+        _attention()(q, k, v, _frozen(kind))
+
+
+def test_a_frozen_mask_with_unequal_query_and_key_lengths_is_refused():
+    q, k, v = _qkv(6)
+    q = q[:, :, :7]                                           # 7 queries, 9 keys
+    with pytest.raises(RuntimeError, match="query and key lengths differ"):
+        _attention()(q, k, v, _frozen("bool"))
