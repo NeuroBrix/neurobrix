@@ -763,13 +763,14 @@ class PrismSolver:
         the triton engine releases its language model before its decoder loads, so a single run
         never holds the two together. The cache this check sizes is in no phase — its buffers
         outlive the language model (triton/kv_cache.py `clear`) — so it is held against the dearest
-        phase, whichever that is. A flow that declares no phases keeps the SUM of every component —
-        the bound that holds whatever it keeps: the VLM decode loop keeps the LM and its head
-        together with its towers (MiniCPM-o: 17 856 MB against the Mac's 16 384 rung — a MAX would
-        have accepted it, registers 104 and 119), the speech legs load their talker groups beside or
-        after the LM, and the triton dual_ar flow loads its quantizer with the model still resident
-        where the compiled one unloads first; each waits on its own handlers being read into a
-        phase function. A strategy that does not load on demand keeps the SUM: nothing unloads.
+        phase, whichever that is. The VLM flow runs each tower and projection alone and decodes with
+        the LM, its head and its speech leg together (MiniCPM-o: 16 247 MB of decode phase where
+        the SUM counted 18 119, its 1 872 MB of towers never beside the LM — a MAX over single
+        components would have accepted far less, registers 104 and 119). A flow that declares no
+        phases keeps the SUM of every component — the bound that holds whatever it keeps: the
+        triton dual_ar flow loads its quantizer with the model still resident where the compiled one
+        unloads first, and waits on its handlers being read into a phase function. A strategy that
+        does not load on demand keeps the SUM: nothing unloads.
 
         Combined only after every cost is known, so the result does not depend on the order the
         components are visited in — an in-loop `max(total, x)` beside `total += y` did.
@@ -814,11 +815,15 @@ class PrismSolver:
 
     def _flow_phases(self, container):
         """The flow's phases on the engine this plan runs on, for a single run or a served session
-        (`core/flow/base.py resident_together`), or None when it declares none."""
+        (`core/flow/base.py resident_together`), or None when it declares none. A session is served
+        by the REQUEST (`_serve_requested`), never by `_serve_mode`, which the cold re-evaluation
+        turns off while the session it plans still runs several requests in one process: placed
+        under that pass, a served VLM's streamed tower was cut beside nothing, though the head and
+        the speech leg the request before left are loaded beside it."""
         from neurobrix.core.flow.base import resident_together
         from neurobrix.core.prism.host_footprint import engine_of
         return resident_together(self._flow_topology(container), engine_of(getattr(self, "_mode", "compiled")),
-                                 served=bool(getattr(self, "_serve_mode", False)))
+                                 served=bool(getattr(self, "_serve_requested", False)))
 
     def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
         """The most a plan that loads on demand holds at one moment, from a cost per component: the

@@ -23,8 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one 14.7 GB block. The planner now cuts every streamed piece below that limit, streams a component
   whose weights alone exceed it instead of holding it whole, and names the component when nothing
   else fits. On unified memory the planner also counts the previous piece's block, which the
-  allocator keeps cached, while the next piece loads. NVIDIA cards and `--compiled` plans are
-  unchanged.
+  allocator keeps cached, while the next piece loads; when that count forces smaller pieces, the
+  planner now tries every size down to the smallest that still holds the largest layer, so a model
+  such as Janus-Pro-7B under a 4 GB budget is planned instead of refused. NVIDIA cards and
+  `--compiled` plans are unchanged.
+
+- **A vision-language model's image and audio encoders are no longer counted beside its language
+  model.** Both engines run each encoder once, before the language model, and release it; the
+  planner counted them as loaded during the whole generation. For MiniCPM-o-4_5 that was 1.9 GB of
+  memory no moment holds, taken from the language model's streaming budget and its cache. The
+  speech output components, which are loaded beside the language model, are still counted, and
+  when the model is served, where its output head and speech components stay loaded from one
+  request to the next, they are counted beside each encoder too.
 
 - **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
   counted the transposed copy of every linear layer's weight as working memory, although the Triton
