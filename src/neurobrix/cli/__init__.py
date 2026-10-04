@@ -233,8 +233,10 @@ For more information: https://neurobrix.es
                                 'does not say its clock is re-proven at the protocol clock')
     certify_p.add_argument('--reprove-generator', action='store_true',
                            help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
-                                '(the Triton version); a proof made under another one is re-ranked by this optimisation pass — '
-                                'it stays correct and served meanwhile')
+                                '(the Triton version and the backend hash); a proof made under another one is re-proven by this '
+                                'pass — until then the RUNTIME DOES NOT SERVE IT (a configuration is a property of the compiler '
+                                'that produced it: the shape sweeps at runtime and lands in the local replay cache; '
+                                'NBX_AUTOTUNE_ANY_GENERATOR=1 serves it anyway, at the caller\'s risk)')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
