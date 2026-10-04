@@ -112,3 +112,29 @@ def test_the_arena_leaves_the_footprint_after_a_kernel_read_through_its_address(
     assert kept < KEPT_MB, (
         f"{kept} MB of a {ARENA_MB} MB arena are still in the footprint after it was freed: the launch that read "
         f"through its address left the exposed buffer retained")
+
+
+def test_a_pinned_scope_alone_never_keeps_its_arena():
+    """The same retention without any kernel, and only once in a while: reading the pinned wrap's address
+    (`gpu_address()`) inserts it in triton-ext's weak table of exposed buffers, and an insert into a weak
+    NSHashTable can load its live members, each load a retain + autorelease with no pool to drop it. Measured
+    2026-10-04, 48 rounds on a fresh 128 MiB arena each (pinned scope, address read, arena freed): +128 MB kept
+    at rounds 15, 30 and 45. One round cannot show it, so this runs enough rounds to cross the table's growth."""
+    drv = _metal_or_skip()
+    arena_mb, rounds = 64, 48
+    chunk = np.random.default_rng(1).standard_normal((arena_mb << 20) // 4, dtype=np.float32)
+    after = []
+    for _ in range(rounds):
+        t = NBXTensor.from_numpy(chunk)                # a fresh allocation, incompressible
+        view = t.narrow(0, 1024, 4096)
+        with drv.pinned_addresses(view):
+            drv.pinned_gpu_address(view.data_ptr())
+        del view, t
+        gc.collect()
+        DeviceAllocator.sync_device()
+        DeviceAllocator.empty_cache_pool()
+        after.append(_footprint_mb())
+    kept = after[-1] - after[1]                         # from the second round: the first pays one-off costs
+    assert kept < arena_mb, (
+        f"{kept} MB kept over {rounds} pinned scopes on fresh {arena_mb} MB arenas ({kept / arena_mb:.1f} "
+        f"arenas never returned); footprint after each round: {after}")
