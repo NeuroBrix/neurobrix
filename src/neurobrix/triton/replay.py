@@ -1014,8 +1014,8 @@ def _output_hashes(seq) -> Dict[str, str]:
 def signature(seq) -> Optional[tuple]:
     if getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF:
         return None
-    # Stage-driven sequences (core/flow/stages/ calling convention —
-    # the documented R33-exception path) live outside the standard
+    # Stage-driven sequences (the VibeVoice tokenizers the next_token_diffusion
+    # flow marks — formerly the core/flow/stages/ calling convention) live outside the standard
     # flow contract: five falsified byte-divergence mechanisms on the
     # VibeVoice tokenizers (2026-08-13 adjudication log) put them
     # behind the capability gate until the residual is root-caused.

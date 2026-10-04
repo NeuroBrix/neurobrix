@@ -31,6 +31,12 @@ from dataclasses import dataclass
 #: reader will find (the MoE fusion's expert match, first of them).
 #: 5.0: the parser is a fixed point on its own output — the SwiGLU gate is `ffn_gate` (was `gate`,
 #: the vendors' router token), diffusers' `attn1` is `attn` (was `self_attn`).
+#: The vocabulary completed over the catalogue (2026-10-04) IS 5.0 (the owner, 2026-10-04 02:05: no
+#: public engine reads the partial vocabulary of 2026-09-27): 362 tokens it refused are translated,
+#: and every container is written once with the complete vocabulary (Forge `tools/neurotax_rename.py`).
+#: The version string cannot tell a partial container from a complete one; the parser's own law
+#: does — `refuse_non_canonical`, at load. After the release a new model ADDS synonyms and never
+#: changes a key already emitted, so 5.0 stays and existing containers never move.
 NEUROTAX_VERSION = "5.0"
 
 
@@ -418,6 +424,327 @@ class SynonymRegistry:
         # VIDEO — VAE latent statistics buffers (SANA-Video / LTX-class)
         "latents_mean": "latents_mean",
         "latents_std": "latents_std",
+
+        # ===========================================================================================
+        # The vocabulary completed over the catalogue (NeuroTax 5.0, 2026-10-04). Every entry is a
+        # vendor's spelling of a role; the canonical side is an existing token wherever one names
+        # the role (family alignment, rule 9). Tokens with a glued index (`conv3`, `tdnnd12`,
+        # `feed_forward1`) are not listed one by one: the stem is translated and the index kept
+        # (`resolve` below). Census of the 49 cached containers: 362 refused tokens, 23 649 keys.
+        # ===========================================================================================
+
+        # --- repeated units and stages -----------------------------------------------------------
+        "double_blocks": "block",            # Flux-lineage double-stream blocks (diffusers: transformer_blocks)
+        "single_blocks": "single_block",     # Flux-lineage single-stream blocks (diffusers: single_transformer_blocks)
+        "vace_blocks": "control_block",      # Wan-VACE control (context) blocks beside the main blocks
+        "stages": "stage",                   # multi-scale stages (Swin v2, ConvNeXt-style codec encoders)
+        "conv_blocks": "conv_block",         # taming/VQGAN encoder and decoder stages of conv blocks
+        "residual_group": "res_group",       # SwinIR/HAT residual group inside a residual Swin block
+        "body": "trunk",                     # ESRGAN RRDB trunk (BasicSR `body`, original `RRDB_trunk`)
+        "xvector": "trunk",                  # CAM++ speaker-embedding trunk
+        "rdb": "dense_block",                # ESRGAN residual dense block (rdb1..rdb3)
+        "tdnnd": "dense_layer",              # CAM++ dense TDNN layer (tdnnd1..)
+        "transit": "transition",             # CAM++ transition layer (transit1..)
+        "encoders": "enc_layer",             # ESPnet/CosyVoice conformer layer list
+        "up_encoders": "up_enc_layer",       # CosyVoice upsampling conformer layer list
+        "encode": "enc_resnet",              # StyleTTS2/Kokoro decoder: its AdaIN residual encode block
+        "decode": "dec_resnet",              # StyleTTS2/Kokoro decoder: its AdaIN residual decode blocks
+        "mid_blocks": "bottleneck_block",    # Matcha-TTS U-Net middle blocks (`mid_block` is diffusers' vendor token)
+        "resblocks": "resblock",             # HiFi-GAN / iSTFTNet multi-receptive-field residual blocks
+        "source_resblocks": "source_resblock",   # HiFT/NSF source-branch residual blocks
+        "noise_res": "source_resnet",        # iSTFTNet (Kokoro) source-branch residual blocks
+        "res": "resnet",                     # taming/VQGAN residual block list
+        "albert_layer_groups": "layer_group",
+        "albert_layers": "shared_block",     # ALBERT's cross-layer shared block
+        "final_block": "out_block",          # Matcha-TTS U-Net output block
+        "block_in": "in_block",              # Mochi VAE decoder entry stage
+        "block_out": "out_block",            # Mochi VAE decoder exit stage
+        "pre_transformer": "pre_net",        # codec decoders: transformer before the upsampler
+        "pre_module": "pre_net",
+        "post_module": "post_net",
+        "conv_block": "conv_block",          # HAT: the convolutional block beside window attention
+        "cab": "chan_attn",                  # HAT channel-attention block
+        "overlap_attn": "overlap_cross_attn",# HAT overlapping cross-window attention
+        "mixer": "token_mixer",              # ConvNeXt-style token mixer (VibeVoice codec)
+        "cam_layer": "ctx_mask",             # CAM++ context-aware masking
+        "nonlinear": "bn_act",               # CAM++ BatchNorm + activation pair
+        "out_nonlinear": "out_bn_act",
+        "fsmn_block": "memory_conv",         # FSMN memory block (S3 tokenizer attention)
+        "tdnn": "conv_in",                   # CAM++ first TDNN layer: the trunk's input convolution
+
+        # --- model and sub-model prefixes ---------------------------------------------------------
+        "swin2sr": "model",                  # HF base-model prefix (same role as `model`)
+        "vision_tower": "vision",            # same role as `vision_model`
+        "tfmr": "backbone",                  # a speech LM's transformer backbone
+        "flow": "acoustic",                  # flow-matching acoustic model (tokens -> mel)
+        "estimator": "denoiser",             # the flow's velocity estimator network
+        "mel2wav": "vocoder",                # same role as `istftnet`
+        "generator": "vocoder",              # iSTFTNet generator
+        "speaker_encoder": "voice_encoder",  # same role as `ve`
+        "cond_enc": "cond_encoder",
+        "qformer": "resampler",              # query transformer resampling a sequence to queries
+        "perceiver": "resampler",
+        "connector": "bridge",               # a model connecting two others' token spaces
+        "preprocessor": "frontend",          # audio feature front-end
+        "featurizer": "mel",
+        "f0_predictor": "pitch_predictor",
+        "condnet": "trunk",
+        "m_source": "harmonic_source",       # NSF harmonic source module
+        "merger": "mm_proj",                 # vision patch merger into the LM width
+        "merger_list": "mm_proj",
+        "deepstack_merger_list": "layer_mm_proj",
+        "audio_projector": "audio_proj",
+        "semantic_quantizer": "semantic_quant",
+        "quantizer": "quant",
+        "quantizers": "quant",
+        "quantize": "quant",
+        "_codebook": "codebook",
+        "project_down": "down",              # a codebook's input projection to its lower width
+        "lstms": "lstm",
+        "cnn": "conv",
+
+        # --- attention --------------------------------------------------------------------------
+        "self": "attn",                      # HF BERT-style `attention.self`
+        "crossattention": "cross_attn",
+        "img_attn": "attn",                  # Flux-lineage image-stream attention
+        "txt_attn": "ctx_attn",              # Flux-lineage text-stream attention
+        "query_key_value": "qkv",
+        "to_qkv_multiscale": "qkv_multiscale",
+        "to_kv": "kv",
+        "kv_proj": "kv",
+        "kv": "kv",
+        "linear_q": "query",
+        "linear_k": "key",
+        "linear_v": "value",
+        "linear_out": "out",
+        "linear_pos": "pos_proj",            # relative-position projection (Transformer-XL lineage)
+        "pos_bias_u": "pos_bias_u",
+        "pos_bias_v": "pos_bias_v",
+        "kv_a_proj_with_mqa": "kv_down",     # multi-head latent attention: KV down-projection
+        "kv_a_layernorm": "kv_norm",
+        "kv_b_proj": "kv_up",
+        "q_norm": "norm_q",
+        "k_norm": "norm_k",
+        "query_norm": "norm_q",
+        "key_norm": "norm_k",
+        "ln_q": "norm_q",
+        "ln_kv": "norm_kv",
+        "attn_pool": "pool_attn",            # attention-pooling head
+        "latent": "pool_query",              # its learned probe
+        "pre_attention_query": "pool_query",
+        "relative_position_bias_table": "rel_attn_bias",   # same role as T5's relative_attention_bias
+        "relative_position_index": "rel_pos_index",
+        "relative_position_index_SA": "rel_pos_index_sa",
+        "relative_position_index_OCA": "rel_pos_index_oca",
+        "continuous_position_bias_mlp": "rel_pos_mlp",
+        "rel_pos_emb": "rel_pos_embed",
+        "attn_mask": "attn_mask",
+        "causal_mask": "causal_mask",
+        "logit_scale": "logit_scale",
+
+        # --- feed-forward -----------------------------------------------------------------------
+        "intermediate": "ffn",               # HF BERT-style intermediate.dense
+        "intermediate_query": "query_ffn",   # Q-Former query-token FFN
+        "output_query": "query_ffn_out",
+        "img_mlp": "ffn",
+        "txt_mlp": "ffn_context",            # same role as diffusers' ff_context
+        "v_mlp": "value_ffn",
+        "block_sparse_moe": "ffn",           # the MoE feed-forward (Mixtral lineage)
+        "shared_experts": "shared_expert",
+        "gate_up_proj": "ffn_gate_up",       # fused SwiGLU gate + up
+        "input_linear": "proj_in",
+        "output_linear": "proj_out",
+        "audio_gate": "audio_router",        # modality-specific MoE routers
+        "image_gate": "image_router",
+        "w_1": "up",                         # ESPnet position-wise FFN
+        "w_2": "down",
+        "linear_fc1": "up",
+        "linear_fc2": "down",
+        "ffn_output": "ffn_out",
+
+        # --- norms ------------------------------------------------------------------------------
+        "batchnorm": "bnorm",
+        "batch_norm": "bnorm",
+        "bn": "bnorm",
+        "norms": "norm",
+        "conv_norm_out": "norm_out",         # diffusers VAE GroupNorm before conv_out
+        "self_attn_layer_norm": "pre_attn_norm",
+        "norm_self_att": "pre_attn_norm",
+        "attn_ln": "pre_attn_norm",
+        "norm_mha": "pre_attn_norm",
+        "layernorm_before": "pre_attn_norm",
+        "attention_norm": "input_norm",      # LLaMA-original spelling of input_layernorm
+        "ffn_norm": "pre_ffn_norm",
+        "norm_feed_forward": "pre_ffn_norm",
+        "mlp_ln": "pre_ffn_norm",
+        "norm_ff": "pre_ffn_norm",
+        "layernorm_after": "pre_ffn_norm",
+        "norm_conv": "pre_conv_norm",
+        "post_self_attn_layernorm": "attn_out_norm",
+        "post_mlp_layernorm": "post_ffn_norm",
+        "full_layer_layer_norm": "post_ffn_norm",
+        "pre_layrnorm": "pre_norm",
+        "pre_norm": "pre_norm",
+        "post_layernorm": "post_norm",
+        "ln_post": "post_norm",
+        "post_norm": "post_norm",
+        "after_norm": "final_norm",
+        "post_projection_norm": "post_proj_norm",
+        "post_conv_layernorm": "post_conv_norm",
+        "adain": "adanorm",                  # adaptive instance norm (adain1/2)
+        "self_attn_layer_scale": "attn_scale",
+        "attention_layer_scale": "attn_scale",
+        "mlp_layer_scale": "ffn_scale",
+        "ffn_layer_scale": "ffn_scale",
+        "ffn_gamma": "ffn_scale",
+
+        # --- convolutions -----------------------------------------------------------------------
+        "convs": "conv",                     # stem of convs1/convs2
+        "conv2d": "conv",                    # stem of conv2d1..3
+        "convolution": "conv",               # stem of convolution_0/1
+        "conv_first": "conv_in",
+        "first_convolution": "conv_in",
+        "conv_pre": "conv_in",
+        "conv_last": "conv_out",
+        "final_convolution": "conv_out",
+        "conv_post": "conv_out",
+        "conv_after_body": "trunk_conv",
+        "conv_body": "trunk_conv",
+        "conv_before_upsample": "pre_up_conv",
+        "conv_up": "up_sample_conv",         # ESRGAN: the conv after each nearest upsampling (conv_up1..)
+        "up_conv": "pointwise_conv1",        # a conformer conv module's expanding pointwise conv (NeMo: pointwise_conv1)
+        "down_conv": "pointwise_conv2",      # ... and its contracting one (NeMo: pointwise_conv2)
+        "conv_hr": "hr_conv",
+        "pointwise_conv": "pointwise_conv",
+        "pwconv": "pointwise_conv",
+        "dwconv": "depthwise_conv",
+        "depth_conv": "depthwise_conv",
+        "depthwise_conv": "depthwise_conv",
+        "temp_convs": "temporal_conv",
+        "temp_conv_in": "temporal_conv_in",
+        "temp_conv_out": "temporal_conv_out",
+        "temp_conv_up": "temporal_up_conv",
+        "temp_convs_down": "temporal_down_conv",
+        "shortcut": "skip_conv",
+        "nin_shortcut": "skip_conv",
+        "res_conv": "skip_conv",
+        "conv1x1": "skip_conv",
+        "convtr": "deconv",
+        "pool": "pool_conv",                 # iSTFTNet's learned (transposed-conv) upsampling pool
+        "pre_lookahead_layer": "lookahead_conv",
+        "upsample": "up_sample",
+        "upsample_layers": "up_block",       # a codec decoder's upsampling stages
+        "ups": "up_sample",
+        "up_layer": "up_sample",
+        "downsample": "down_sample",
+        "downsample_layers": "down_block",   # a codec encoder's downsampling stages
+        "source_downs": "source_down",
+        "noise_convs": "source_down",        # iSTFTNet's spelling of the source-branch downsamplers
+
+        # --- linears and projections -------------------------------------------------------------
+        "lin": "proj",
+        "l_linear": "proj",
+        "linear_layer": "proj",
+        "linear_local": "local_proj",
+        "in_layer": "proj_1",                # MLP embedder: same roles as linear_1 / linear_2
+        "out_layer": "proj_2",
+        "in_proj": "proj_in",
+        "encoder_proj": "enc_proj",
+        "enc": "enc_proj",                   # transducer joint: encoder-side projection
+        "pred": "pred_proj",                 # transducer joint: predictor-side projection
+        "spkr_enc": "spk_proj",
+        "spk_embed_affine_layer": "spk_proj",
+        "emotion_adv_fc": "emotion_proj",
+        "embedding_hidden_mapping_in": "embed_proj",
+        "output_mlp_projector": "head_proj",
+        "vision_head": "vision_head",
+        "text_head": "text_head",
+        "speech_head": "speech_head",
+        "classifier": "head",
+        "out_mid": "mid_head",               # an intermediate (CTC) output head
+        "final_proj": "proj_out",
+        "cond_proj": "cond_proj",
+        "noisy_images_proj": "x_embed",      # the denoiser's noisy-input projection
+        "final_layer": "head",               # DiT final layer: adaLN + output projection
+        "pooler": "pool_head",               # a pooling head (BERT pooler, attention pooler)
+        "audio_proj": "audio_proj",
+
+        # --- embeddings and conditioning ---------------------------------------------------------
+        "token_embedding": "token_embed",
+        "word_embeddings": "token_embed",
+        "input_embedding": "token_embed",
+        "code_embedding": "codec_embed",
+        "codebook_embeddings": "codebook_embed",
+        "fast_embeddings": "fast_embed",
+        "fast_norm": "fast_norm",
+        "fast_output": "fast_out",
+        "text_emb": "text_token_embed",
+        "speech_emb": "speech_token_embed",
+        "text_pos_emb": "text_pos_embed",
+        "speech_pos_emb": "speech_pos_embed",
+        "position_embeddings": "pos_embed",
+        "embed_positions": "pos_embed",
+        "positional_embedding": "pos_embed",
+        "patch_embeddings": "patch_embed",
+        "token_type_embeddings": "type_embed",
+        "class_embedding": "cls_embed",
+        "position_ids": "pos_ids",
+        "pos_frequencies": "pos_freqs",
+        "ref_pos_embed": "ref_pos_embed",
+        "image_embedder": "image_embed",
+        "vace_patch_embedding": "control_patch_embed",
+        "pos_embed_first_frame": "first_frame_embed",
+        "pos_embed_mask": "mask_embed",
+        "pos_embed_masked_video": "masked_video_embed",
+        "img_in": "x_embed",                 # Flux lineage: same role as x_embedder
+        "txt_in": "context_embedder",        # same role as context_embedder
+        "time_in": "time_embed",
+        "vector_in": "text_embed",           # pooled-text embedder (diffusers: text_embedder)
+        "cond_in": "cond_embed",
+        "time_mlp": "time_embed",
+        "y_embedding": "uncond_embed",       # the caption projection's learned null embedding
+        "aspect_ratio_embedder": "aspect_embed",
+        "resolution_embedder": "res_embed",
+        "up_embed": "up_input_embed",
+        "img_mod": "mod",                    # Flux-lineage modulation
+        "txt_mod": "ctx_mod",
+        "modulation": "mod",
+        "noise_refiner": "latent_refiner",
+        "ref_image_refiner": "ref_refiner",
+
+        # --- speech: pitch, energy, source ------------------------------------------------------
+        "F0": "pitch",                       # StyleTTS2 lineage: fundamental-frequency branch
+        "N": "energy",                       # StyleTTS2 lineage: energy branch
+        "F0_conv": "pitch_conv",
+        "N_conv": "energy_conv",
+        "F0_proj": "pitch_proj",
+        "N_proj": "energy_proj",
+        "asr_res": "align_res",              # residual on the aligned text features
+
+        # --- parameters and buffers -------------------------------------------------------------
+        "alpha": "alpha",                    # Snake activation's learned frequency
+        "activations": "act",                # stem of activations1/2
+        "similarity_weight": "sim_weight",
+        "similarity_bias": "sim_bias",
+        "codebook_used": "codebook_usage",
+        "_mel_filters": "mel_filters",
+        "fb": "mel_filters",
+        "window": "window",
+        # Module buffers the trace lifts into a graph as constants (no shard holds them; the graph
+        # names them by the module's path, so the parser names them too).
+        "mean": "mean",                      # an image normaliser's mean (SwinIR / HAT)
+        "rotary_pos_emb": "pos_rotary",      # a vision tower's 2-D rotary table (not `rotary_embed`:
+                                             # the RoPE re-extension finds `rotary_embed.inv_freq` by name)
+        "pos_enc": "pos_encoding",           # a conformer's sinusoidal relative positional encoding
+        "pe": "pos_table",                   # ... and its table
+        "token_type_ids": "type_ids",
+        "relative_coords_table": "rel_coords_table",
+        "att_cache_buffer": "attn_cache",
+        "cnn_cache_buffer": "conv_cache",
+        "code_offset": "codec_offset",
+        "trim_fade": "fade_window",
+        "fast_freqs_cis": "fast_freqs_cis",
+        "fast": "fast_net",                  # a dual-AR model's fast transformer
     }
 
     # Patterns that should NEVER be modified
@@ -464,7 +791,55 @@ class SynonymRegistry:
         # LoRA wrapper tokens (preserve for suffix matching)
         r"^base_layer$",
         r"^base_model$",
+        # PyTorch's own parameter spellings — the framework's names, the same class as `weight` /
+        # `bias` / `running_mean`, never a vendor's: nn.RNN/LSTM/GRU per-layer parameters,
+        # nn.MultiheadAttention's packed input projection, the legacy weight_norm pair and the
+        # parametrize API (`<module>.parametrizations.weight.original0/1`).
+        r"^(weight|bias)_(ih|hh)_l\d+(_reverse)?$",
+        r"^in_proj_(weight|bias)$",
+        r"^weight_[gv]$",
+        r"^parametrizations$",
+        r"^original\d+$",
+        # The engine's own weight-storage encoding (`kernels/quantized_tensor.STORAGE_LEAVES`): an
+        # encoded variant stores `<base>.weight` as `<base>.qweight` / `.scales` / `.qmins`.
+        r"^(qweight|scales|qmins)$",
     ]
+
+    #: A token that carries its index glued to it (`conv3`, `tdnnd12`, `feed_forward1`, `linear_1`):
+    #: the stem, the optional underscore, the index.
+    _GLUED_INDEX = re.compile(r"^(.*?[A-Za-z])(_?)(\d+)$")
+
+    @classmethod
+    def _explicit(cls, token: str) -> Optional[str]:
+        """The registry's own translation of a token (case-sensitive first, then lowercase)."""
+        if token in cls._REGISTRY:
+            return cls._REGISTRY[token]
+        return cls._REGISTRY.get(token.lower())
+
+    @classmethod
+    def _lookup(cls, token: str) -> Optional[str]:
+        """The translation of a token, or None when the registry does not know it.
+
+        An explicit entry wins (`fc1` -> `up`, `norm1` -> `norm1`, `linear_1` -> `proj_1`). A token
+        with a glued index whose stem the registry knows — as a vendor token or as a canonical one —
+        is the stem's translation with the index kept as it is (`tdnnd12` -> `dense_layer12`,
+        `conv3` -> `conv3`, `layer_norm1` -> `norm1`): an index is a numeric anchor, glued or not,
+        and listing `tdnnd1` .. `tdnnd24` one by one would refuse the 25th. Canonical side: a
+        stem's translation never ends in a digit, so the derived token is read back to itself.
+        """
+        hit = cls._explicit(token)
+        if hit is not None:
+            return hit
+        m = cls._GLUED_INDEX.match(token)
+        if m is None:
+            return None
+        stem, sep, idx = m.groups()
+        canon = cls._explicit(stem)
+        if canon is None and stem in cls.canonical_tokens():
+            canon = stem
+        if canon is None or canon[-1].isdigit():
+            return None
+        return f"{canon}{sep}{idx}"
 
     @classmethod
     def resolve(cls, token: str) -> str:
@@ -472,11 +847,8 @@ class SynonymRegistry:
         Resolve a vendor token to NeuroTax standard.
         Returns original token if no mapping found (permissive mode).
         """
-        # Check case-sensitive first, then lowercase
-        if token in cls._REGISTRY:
-            return cls._REGISTRY[token]
-        lower = token.lower()
-        return cls._REGISTRY.get(lower, token)
+        hit = cls._lookup(token)
+        return token if hit is None else hit
 
     @classmethod
     def resolve_strict(cls, token: str, original_name: str) -> str:
@@ -484,12 +856,9 @@ class SynonymRegistry:
         Resolve a vendor token with ZERO FALLBACK.
         Raises ValueError if token is unknown and not preserved.
         """
-        # Try to resolve
-        if token in cls._REGISTRY:
-            return cls._REGISTRY[token]
-        lower = token.lower()
-        if lower in cls._REGISTRY:
-            return cls._REGISTRY[lower]
+        hit = cls._lookup(token)
+        if hit is not None:
+            return hit
 
         # A preserved token with no translation stays as it is. The registry is read FIRST: the
         # preserve list named tokens the registry translates (`mlp` -> `ffn`, `ln` -> `norm`,
@@ -525,7 +894,7 @@ class SynonymRegistry:
     @classmethod
     def has_mapping(cls, token: str) -> bool:
         """Check if a token has a mapping (case-insensitive)."""
-        return token in cls._REGISTRY or token.lower() in cls._REGISTRY
+        return cls._lookup(token) is not None
 
 
 @dataclass
@@ -802,3 +1171,53 @@ def normalize_tensor_name_strict(name: str) -> str:
     """
     parser = NeuroTaxParser()
     return parser.normalize_strict(name)
+
+
+def first_non_canonical(names, unknown_is_literal: bool = False):
+    """The first name that is not a fixed point of the parser, as (name, what it should be), or None.
+
+    One pass; each token resolved once (a 30B MoE index repeats a few hundred tokens over 18 867
+    keys). `unknown_is_literal`: a name holding a token the registry does not know is NOT a NeuroTax
+    name at all and is skipped (a graph's lifted literal, `constant_T_000001`, carries no module
+    path); otherwise it is refused like any other."""
+    seen: Dict[str, Optional[str]] = {}
+    for name in names:
+        out = []
+        for tok in name.split("."):
+            if tok not in seen:
+                try:
+                    seen[tok] = SynonymRegistry.resolve_strict(tok, name)
+                except ValueError:
+                    seen[tok] = None
+            out.append(seen[tok])
+        if None in out:
+            if unknown_is_literal:
+                continue
+            bad = [t for t, c in zip(name.split("."), out) if c is None]
+            return name, f"a token the registry does not know: {bad}"
+        canon = ".".join(out)
+        if canon != name:
+            return name, canon
+    return None
+
+
+def refuse_non_canonical(names, container: str, component: str, what: str = "weight key",
+                         unknown_is_literal: bool = False) -> None:
+    """The parser's own law, at load: every key a container binds is the parser's fixed point.
+
+    NeuroTax 5.0 names one vocabulary; a container written with its earlier, partial vocabulary
+    (2026-09-27) carries the same version string and keys the engine's readers no longer find (the
+    RNNT joint, the TTS vocoder's token table — and every raw token is a key no reader of the
+    parser's names can see). Refused here, by name, before any weight I/O: the container, the
+    component, the first offending key and its canonical form."""
+    hit = first_non_canonical(names, unknown_is_literal)
+    if hit is None:
+        return
+    name, should = hit
+    raise RuntimeError(
+        f"NEUROTAX KEYS: container '{container}', component '{component}': the {what} {name!r} is "
+        f"not a NeuroTax {NEUROTAX_VERSION} name (the parser names it {should!r}) — the container was "
+        f"written with an incomplete vocabulary.\n"
+        f"  FIX: rewrite it with the single-write pass (Forge `tools/neurotax_rename.py --apply`; "
+        f"names move, weights never do), or install the container published for this engine.")
+

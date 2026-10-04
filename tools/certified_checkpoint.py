@@ -375,8 +375,20 @@ def run(repo: str, rel_dir: str, producers: List[int], interval: float, remotes:
 _HELD: Dict[str, object] = {}
 
 
+def _worktree_git_dir(repo: str) -> Path:
+    own = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"], capture_output=True, text=True)
+    d = own.stdout.strip() if own.returncode == 0 and own.stdout.strip() else ".git"
+    return Path(d if os.path.isabs(d) else os.path.join(repo, d))
+
+
 def _holder_path(repo: str) -> Path:
-    return _git_dir(repo) / "nbx-checkpointer.lock"
+    """The hold lives in the WORKTREE's git dir: what two checkpointers collided on was the index
+    lock, and a worktree has its own index. The push window stays in the common git dir
+    (`_push_stamp_path`), so the one-push-per-30-minutes rule still counts the whole repository.
+    Measured 2026-10-04 19:07: rc1's checkpointer held the clone-wide lock, so no checkpointer could
+    start for the value-axis worktree, and the certifier, which correctly asks for one on its own
+    tree, refused both memory classes (rc=3)."""
+    return _worktree_git_dir(repo) / "nbx-checkpointer.lock"
 
 
 def _holder_line(repo: str) -> str:
@@ -387,7 +399,7 @@ def _holder_line(repo: str) -> str:
 
 
 def hold_the_repository(repo: str):
-    """ONE checkpointer per repository (every worktree shares the common git dir): an exclusive,
+    """ONE checkpointer per worktree (the index it commits through is the worktree's own): an exclusive,
     non-blocking lock held for this process's life. None when another process holds it — the rule
     was written in a skill and enforced nowhere (the tools audit, 2026-09-29); two checkpointers
     collided on the index lock. Idempotent within one process."""

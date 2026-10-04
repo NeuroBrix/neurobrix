@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-119 entries, 113 in the rack's block (1-499) and 6 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 108 carry a site. Two
+128 entries, 121 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 123 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -2201,8 +2201,7 @@ sound.
 It was not sound. The census's own merged report named the casualties an hour later: six
 models — `whisper-large-v3-turbo`, `orpheus-3b-0.1-ft-snac`, `real-esrgan-x2/x4/x8`,
 `TinyLlama-1.1B-Chat-v1.0` — every one of them `SyntaxError: invalid syntax` at
-`census.py:397`, `<<<<<<< HEAD`, all stamped 02:45. A seventh of the catalogue, silently
-missing from a census that was about to feed certification on four cards.
+`census.py:397`, `missing from a census that was about to feed certification on four cards.
 
 **What would it have done if the code were wrong?** Printed nothing, exactly as it did when
 the code WAS wrong — the check could not distinguish "no damage" from "no files read".
@@ -2749,6 +2748,10 @@ either machine's.
 `88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
 before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
 are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
+
+`115 -> 506` (2026-10-05, merge-queue-18): an entry written on this Mac inside the rack's range
+(`a-queue-never-blocks-at-its-head`) met the rack's own 115 on merge; it moves into this Mac's
+block with its old number kept in the heading.
 
 ---
 
@@ -3699,25 +3702,30 @@ the flow's batch (red on either floor put back), and keeps the `seq_len` floor.
 
 **The lesson, in one line.** A test that pins a safety margin on every axis turns the margin into
 the rule; pin it on the case it was written for.
-### 115 — the re-prove flag's help promised a serving the runtime refuses
 
-`neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
-that a proof made under another code generator "stays correct and served meanwhile". The runtime
-does the opposite and says so at every run under a new generator (`kernels/autotune_certified.py`,
-the generator door): "a configuration is a property of the compiler that produced it" — the entry
-is not served, the shape sweeps at runtime and lands in the local replay cache. Measured on the
-Mac after the `adbf6e84` bump landed: the 30 keys the 17:01 re-prove pass refused (24 witness
-drifts, 6 price-door) swept at runtime in every Triton cell that reached them (six of the 24
-cells of each gate carried "no certified setting"), and 545 of the two "served" gates' 1 400 key
-uses came from the replay cache, keyed by architecture without the generator. Nothing checked the
-help text against the door; it was read as a fact by the person who queued the gate.
+### 119 — a cell pinned the estimator's figure as "the measurement", and the figure held a phantom
 
-**What would have caught it.** Prose that states a serving, a cost or a neutrality is an
-assertion like an `assert`: either a test pins it or the sentence says it is unverified. Here the
-door's own test (`test_autotune_certified_directory.py`) proved the refusal; the help text lived
-beside it unread. The fix states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1`
-override in the help; the RED LINES of 2026-09-28 20:06 (release-decisions) make the runtime's
-door the only truth: a confirmation run is certified-only, and a miss is an error, never a sweep.
+`test_the_LM_and_its_head_together_exceed_the_Macs_rung` (register 104's repair) asserted that
+MiniCPM-o's `llm.model` + `llm.lm_head` are 16 516.2 MB, "over the Mac's 16 384 MB rung before any
+cache", and called it the measurement the SUM rests on. The figure came from the profiler, and
+1 192 MB of it was the head's TRANSPOSED WEIGHT counted as an activation: `aten::t` on a parameter,
+which the sequences remove at bind time (`_eliminate_weight_transpose_ops`) and the Triton `mm`
+reads through its strides. On that engine nothing allocates it. The arena's own record had said so for two weeks (2026-09-22,
+Qwen3-Coder-30B: "593.5 MB memory_pool ComponentArena (lm_head)" — the weight, once).
+
+**What it did while the figure was wrong**: green, and it certified the phantom — any repair of the
+estimate turned the "measurement" red. On the Mac the same phantom streamed orpheus-3b (927 MB of
+"activations" for 7 MB of logits; 196 s for 16 tokens) while 7 241 MB of weights fit whole.
+
+**Repair** (2026-10-04, `profiler.weight_transposes_read_in_place`, read by the placement estimate
+for the Triton engines; the compiled estimate keeps the bytes until its fp32 operand copy is
+measured, and the layer partitioner keeps them as the cost of a cut). The pair is 15 179 MB on
+triton, under the rung; the cell now pins what does exceed it —
+everything the vlm flow keeps with the pair (17 856 MB; the flow declares no phases) — and that the
+flow declares none, so it is re-read the day it does.
+
+**The lesson, in one line.** A figure the planner computed is the planner's claim; a cell that
+calls it a measurement must hold a byte someone read off the device.
 
 ### 120 — a test replaced the flag reader, so it could not see that the census never registered the flags
 
@@ -3740,3 +3748,46 @@ goes red when the registration is removed.
 
 **The lesson, in one line.** A test that replaces the reader proves the rule, not that the rule
 reaches its data; keep the real reader and starve its table.
+
+### 506 (was 115 — renumbered, see note) — the re-prove flag's help promised a serving the runtime refuses
+
+`neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
+that a proof made under another code generator "stays correct and served meanwhile". The runtime
+does the opposite and says so at every run under a new generator (`kernels/autotune_certified.py`,
+the generator door): "a configuration is a property of the compiler that produced it" — the entry
+is not served, the shape sweeps at runtime and lands in the local replay cache. Measured on the
+Mac after the `adbf6e84` bump landed: the 30 keys the 17:01 re-prove pass refused (24 witness
+drifts, 6 price-door) swept at runtime in every Triton cell that reached them (six of the 24
+cells of each gate carried "no certified setting"), and 545 of the two "served" gates' 1 400 key
+uses came from the replay cache, keyed by architecture without the generator. Nothing checked the
+help text against the door; it was read as a fact by the person who queued the gate.
+
+**What would have caught it.** Prose that states a serving, a cost or a neutrality is an
+assertion like an `assert`: either a test pins it or the sentence says it is unverified. Here the
+door's own test (`test_autotune_certified_directory.py`) proved the refusal; the help text lived
+beside it unread. The fix states the runtime's rule and the `NBX_AUTOTUNE_ANY_GENERATOR=1`
+override in the help; the RED LINES of 2026-09-28 20:06 (release-decisions) make the runtime's
+door the only truth: a confirmation run is certified-only, and a miss is an error, never a sweep.
+
+### 121 — a proof run counted a pass's rewrite lines without turning the pass's print on
+
+The campaign script that compares each rewritten container's output with its staged reference
+(2026-10-04, `pw.sh` in the rack's workshop) wrote `[CBX] lines N` on every row, read as "the
+compiled sequence's cross-branch compensation rewrote nothing on this model". The count was a
+`grep -c '\[CBX\]'` over the run's log; the engine prints a `[CBX]` line only under
+`NBX_CROSS_BRANCH_DIAG=1` (`compiled_sequence.py`, the pass's own diagnostic), and the script
+never set it. Every row read `[CBX] lines 0`, including the Sana_1600M_4Kpx_BF16 row whose vae
+`view::31` the pass does rewrite.
+
+**What the gate said about a rewrite**: nothing. Measured on CPU on the pass's tree with the two
+fixtures of `test_an_unstamped_graph_is_refused_and_no_literal_is_rekeyed.py` (Sana's vae view,
+Ming's GQA expand and merge): with the flag unset the pass rewrote three literals and the log held
+0 `[CBX]` lines; with `NBX_CROSS_BRANCH_DIAG=1`, the same three rewrites printed 3.
+
+**Repair.** None owed to the script: the pass was deleted (the compiled sequence re-keys no
+literal; a graph not written at the symbolic fixed point is refused by name at load), so there is
+nothing left to count. The rows' `[CBX] lines 0` are void as evidence; each container's verdict
+rests on its output, judged from outside.
+
+**The lesson, in one line.** A count of a diagnostic's lines measures the diagnostic's switch
+before it measures the event; prove the count non-zero once on a case that must print.

@@ -386,82 +386,12 @@ class WeightLoader:
               "the pre-flight found it and the load did not deliver it (the file changed "
               "under the load)") for k in missing])
 
-    def _load_neurotax_map(self, component_name: str) -> Optional[Dict[str, str]]:
-        """
-        Load neurotax_map.json and build reverse mapping.
-
-        neurotax_map.json format:
-        {
-            "mappings": {
-                "hf_name": "neurotax_name",
-                ...
-            }
-        }
-
-        Returns:
-            Dict of HF_name → NeuroTax_name (forward mapping)
-            or None if not found
-        """
-        # Path patterns for neurotax_map.json
-        patterns = [
-            f"components/{component_name}/neurotax_map.json",
-            f"{component_name}/neurotax_map.json",
-        ]
-
-        for pattern in patterns:
-            if pattern in self._get_file_list():
-                try:
-                    # FAST PATH: Load from cache
-                    if self.use_cache and self._cache_path:
-                        cache_file = self._cache_path / pattern
-                        if cache_file.exists():
-                            with open(cache_file) as f:
-                                data = json.load(f)
-                            if "mappings" in data:
-                                return data["mappings"]
-
-                    # SLOW PATH: Load from ZIP
-                    if not self._zip:
-                        self.open()
-                    assert self._zip is not None
-                    data = json.loads(self._zip.read(pattern))
-                    if "mappings" in data:
-                        return data["mappings"]
-                except (KeyError, json.JSONDecodeError, FileNotFoundError):
-                    pass
-
-        return None
-
-    def _build_weight_aliases(
-        self,
-        weights: Dict[str, torch.Tensor],
-        neurotax_map: Dict[str, str],
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Add HuggingFace aliases to weights dict.
-
-        Graph.json uses HF names in parent_module, but weights are stored
-        with NeuroTax names. This creates aliases so both lookups work.
-
-        Args:
-            weights: Dict with NeuroTax keys
-            neurotax_map: HF_name → NeuroTax_name mapping
-
-        Returns:
-            weights dict with both HF and NeuroTax keys
-        """
-        # Build reverse map: NeuroTax → HF
-        reverse_map = {v: k for k, v in neurotax_map.items()}
-
-        aliases_added = 0
-        for neurotax_name, tensor in list(weights.items()):
-            hf_name = reverse_map.get(neurotax_name)
-            if hf_name and hf_name not in weights:
-                weights[hf_name] = tensor
-                aliases_added += 1
-
-        return weights
-
+    # A component's neurotax_map.json (the neurotaxe's rule 2) is a RECORD of where each key came
+    # from, never read by the engine: weights are bound by the container's keys alone. The loaders
+    # below used to add every source name of that map as an alias of its tensor ("graph.json uses
+    # HF names in parent_module" — no longer true, the graphs carry the parser's names); no
+    # container carried a map before 2026-10-04, and with them that would have put the keys of the
+    # partial vocabulary back beside the complete ones.
     def load_component(
         self,
         component_name: str,
@@ -528,10 +458,6 @@ class WeightLoader:
             torch.cuda.synchronize()
         self._refuse_undelivered(component_name, index_tensors, only, weights)
 
-        # NBX: Add HF aliases if neurotax_map exists
-        neurotax_map = self._load_neurotax_map(component_name)
-        if neurotax_map:
-            weights = self._build_weight_aliases(weights, neurotax_map)
 
         return weights
 
@@ -715,10 +641,6 @@ class WeightLoader:
 
         gc.collect()
 
-        # NBX: Add HF aliases if neurotax_map exists
-        neurotax_map = self._load_neurotax_map(component_name)
-        if neurotax_map:
-            weights = self._build_weight_aliases(weights, neurotax_map)
 
         return weights
 
@@ -818,10 +740,6 @@ class WeightLoader:
             torch.cuda.synchronize()
         self._refuse_undelivered(component_name, index_tensors, only, weights)
 
-        # NBX: Add HF aliases if neurotax_map exists
-        neurotax_map = self._load_neurotax_map(component_name)
-        if neurotax_map:
-            weights = self._build_weight_aliases(weights, neurotax_map)
 
         return weights
 

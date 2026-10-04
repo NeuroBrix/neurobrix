@@ -29,6 +29,7 @@ from neurobrix.nbx.cache import ensure_extracted
 
 # Import modular components
 from neurobrix.core.flow import FlowContext, get_flow_handler
+from neurobrix.core.flow.base import requests_speech
 from neurobrix.core.runtime.resolution.input_resolver import InputResolver
 from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
 from neurobrix.core.runtime.resolution.output_extractor import OutputExtractor
@@ -185,7 +186,7 @@ class RuntimeExecutor:
                 # plain AR flow silently drops the speech leg (the
                 # warm-daemon text-only prompt→wav class, 2026-08-08).
                 _wants_speech = (
-                    str(_resolved.get("global.mode") or "") == "audio"
+                    requests_speech(_resolved.get("global.mode"))
                     and bool(flow.get("speech")))
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
                         and not _has_modal and not _lm_splice
@@ -416,11 +417,22 @@ class RuntimeExecutor:
             # certified autotune directory (an engine component) serves every
             # shape it holds for the profile in force; a shape it lacks sweeps
             # at runtime, announced, and lands in the local replay cache.
+        else:
+            # The ATen branch's mirror: the graph's own random ops (a traced
+            # posterior sample, a vocoder's phase) draw from the run's
+            # sampling generator — the one the initial and scheduler noise
+            # come from — never from a second stream on the same seed
+            # (graph/run_generator).
+            from neurobrix.core.runtime.graph import run_generator
+            run_generator.arm(self.variable_resolver.sampling_generator)
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         try:
             return handler.execute()
         finally:
+            if self.mode not in ("triton", "triton_sequential"):
+                from neurobrix.core.runtime.graph import run_generator
+                run_generator.arm(None)
             if self.mode in ("triton", "triton_sequential"):
                 from neurobrix.kernels import autotune_certified as _cert
                 _served = _cert.served()
@@ -1473,7 +1485,15 @@ class RuntimeExecutor:
             )
 
         with open(graph_path) as f:
-            return json.load(f)
+            dag = json.load(f)
+        # The graph binds by the same names: every `param::`/`buffer::` id the parser can read is its
+        # fixed point (a lifted literal, `constant_T_*`, carries no module path and is no name).
+        from neurobrix.nbx.neurotax import refuse_non_canonical
+        refuse_non_canonical((t.split("::", 1)[1] for t in dag.get("tensors") or {}
+                              if t.startswith(("param::", "buffer::"))),
+                             container=cache_path.name, component=component_name,
+                             what="graph tensor id", unknown_is_literal=True)
+        return dag
 
     def _load_tokenizer(self, module_path: str, max_length: int):
         """Load tokenizer from extracted NBX cache."""

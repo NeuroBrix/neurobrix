@@ -70,51 +70,6 @@ def test_compiled_promotion_sizes_exact_slice_ends_keep_plus_one():
     _check(dag["ops"])
 
 
-def test_cross_branch_injection_protects_architectural_config_constants():
-    """A literal equal to a profile.json config int (the head count) is never
-    rewritten by the cross-branch expression injection, in an expand
-    broadcast slot or a view slot, even when an expression with that trace
-    value exists in the graph (text_len + 1 = 24 = num_attention_heads)."""
-    from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
-    s10 = {"type": "symbol", "id": "s10", "trace": 23}
-    plus1 = {"type": "add", "left": s10, "right": 1, "trace": 24}
-    dag = {
-        "symbolic_context": {"symbols": {"s10": {"name": "seq_len", "trace_value": 23, "source": "input::mask::dim_1"}}},
-        "tensors": {
-            "input::mask": {"shape": [3, 1, 1, 23], "symbolic_shape": {"dims": [3, 1, 1, s10]}},
-            "aten.pad::0::out_0": {"shape": [3, 24], "symbolic_shape": {"dims": [3, plus1]}},
-            "input::q": {"shape": [3, 385, 2304], "symbolic_shape": {"dims": [3, 385, 2304]}},
-        },
-        "ops": {
-            "aten.expand::0": {"op_type": "aten::expand", "input_tensor_ids": ["input::mask"],
-                               "input_shapes": [[3, 1, 1, 23]],
-                               "attributes": {"args": [{"type": "tensor", "tensor_id": "input::mask"},
-                                                       {"type": "list", "value": [3, 24, 1, 23]}]}},
-            "aten.view::0": {"op_type": "aten::view", "input_tensor_ids": ["input::q"],
-                             "input_shapes": [[3, 385, 2304]],
-                             "attributes": {"args": [{"type": "tensor", "tensor_id": "input::q"},
-                                                     {"type": "list", "value": [3, -1, 24, 96]}],
-                                            "shape": [3, -1, 24, 96]}},
-        },
-        "execution_order": ["aten.expand::0", "aten.view::0"],
-    }
-    import copy
-
-    def run(constants):
-        d = copy.deepcopy(dag)
-        seq = CompiledSequence.__new__(CompiledSequence)
-        seq.dag = d
-        seq._config_constants = set(constants)
-        seq._propagate_cross_branch_expressions(d["tensors"], d["ops"])
-        ex = d["ops"]["aten.expand::0"]["attributes"]["args"][1]["value"]
-        vw = d["ops"]["aten.view::0"]["attributes"].get("shape")
-        return ex[1], vw[2]
-
-    assert run({24, 96, 2}) == (24, 24)          # protected: the head count stays literal
-    injected = run(set())
-    assert injected[0] == plus1                 # the unguarded pass DID rewrite the broadcast slot (the 2026-09-02 defect)
-
-
 def test_both_mirrors_skip_a_seq_len_whose_trace_value_is_a_config_constant():
     """R30: a seq_len symbol whose trace value equals a profile.json config
     int is a collision on BOTH mirrors — the triton promotion (which also

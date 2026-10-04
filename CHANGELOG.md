@@ -15,6 +15,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every model weight now carries a standard name, and a model installed with the earlier,
+  incomplete naming must be updated before it runs.** The naming vocabulary now covers the audio
+  codecs and vocoders, video and image decoders, vision towers and upscalers whose weights still
+  carried their makers' own names. The engine checks every weight name when it loads a model and
+  refuses, by name, one that still carries an old name, before loading any weight, and says how to
+  update it; the weights themselves do not change, only their names.
+
+- **`--compiled` no longer rewrites a model's fixed sizes, and a container built before this
+  release is refused by name.** The PyTorch engine used to guess, before running, that some fixed
+  sizes in a model's graph were really variable lengths and replace them. On current containers that
+  guess could only be wrong: Ming-Lite-Omni-1.5 stopped at its first attention, and
+  Sana_1600M_4Kpx_BF16's decoder changed 28 output values. The guess is removed; current containers
+  record every variable size themselves. A container that does not declare this stops at load with a
+  message naming it and its components; install the container published for this release
+  (`neurobrix remove <model> && neurobrix import <org>/<model>`). `--triton` never made the guess.
+
+- **A text request to an omni model no longer reserves memory for its speech generator.** Qwen3-Omni
+  with `--mode text` was planned as if the talker and the speech decoder (about 7.4 GB) were loaded
+  beside the language model, although only an `--mode audio` request runs them: on a 16 GB Apple
+  window the plan was refused, then, once planned, the language model was streamed in 48 small
+  segments. A text request now plans without them (6 segments at the same budget); an audio request
+  and a served session still reserve them.
+
+- **On Apple silicon, the planner counts the memory the process holds now, not the most it ever held.**
+  A plan's host figure included the process's peak memory instead of its current memory, so a plan the
+  planner accepted could carry a total no memory check before the run would admit:
+  DeepSeek-Coder-V2-Lite-Instruct at 15.5 GB free was planned with a 17.1 GB total. The figure and the
+  planner's own check now read the same, current number.
+
+- **A plan refusal under `--triton` names the component that does not fit.** When a model could not
+  be planned, the message could blame a component the planner had already split into tiles, or
+  suggest a tile count for a component that cannot be tiled. It now marks tiled components as not
+  the cause, says why an untileable one has no tiles, and on NVIDIA cards states the limit of the
+  last strategy that can help (streaming on the card) instead of asking for host memory that
+  `--triton` does not use. Example: SANA-Video 2B at 672x1344, 81 frames, on a 16 GB card, where one
+  transformer block needs 18.8 GB.
+
+- **On Apple machines under `--triton`, no weight block is planned larger than the GPU can allocate
+  at once.** A Metal device refuses any single buffer above its maximum buffer length, however much
+  memory is free; on an 18 GB M4 Pro, deepseek-moe-16b-chat at 17 GB free failed at load asking for
+  one 14.7 GB block. The planner now cuts every streamed piece below that limit, streams a component
+  whose weights alone exceed it instead of holding it whole, and names the component when nothing
+  else fits. On unified memory the planner also counts the previous piece's block, which the
+  allocator keeps cached, while the next piece loads; when that count forces smaller pieces, the
+  planner now tries every size down to the smallest that still holds the largest layer, so a model
+  such as Janus-Pro-7B under a 4 GB budget is planned instead of refused. NVIDIA cards and
+  `--compiled` plans are unchanged.
+
+- **A vision-language model's image and audio encoders are no longer counted beside its language
+  model.** Both engines run each encoder once, before the language model, and release it; the
+  planner counted them as loaded during the whole generation. For MiniCPM-o-4_5 that was 1.9 GB of
+  memory no moment holds, taken from the language model's streaming budget and its cache. The
+  speech output components, which are loaded beside the language model, are still counted, and
+  when the model is served, where its output head and speech components stay loaded from one
+  request to the next, they are counted beside each encoder too.
+
+- **A model that fits in memory is no longer streamed from disk under `--triton`.** The planner
+  counted the transposed copy of every linear layer's weight as working memory, although the Triton
+  engine reads the weight in place; for a speech or language model with a large vocabulary that was
+  close to a gigabyte that never exists. On a 24 GB Apple machine with 12 GB free, orpheus-3b was
+  streamed (every token re-reading the model from disk) and is now held whole. Janus-Pro-7B on the
+  same machine when idle is held whole too: the planner now knows that an image decode releases the
+  language model before the image decoder loads, and no longer prices the language model's logits
+  as the saved picture (3.4 GB of host memory for a 384x384 image).
+
+- **Large video and multimodal models stream on small unified-memory machines instead of being
+  refused.** On an 18 GB Apple machine, CogVideoX-5b-I2V, Wan2.2-I2V-A14B and Ming-Lite-Omni-1.5
+  were refused at their default request; they now run their largest components one piece at a time
+  on the GPU. The plan no longer reserves memory for components that are unloaded while the streamed
+  one runs, streams a component too when keeping it whole leaves no room for the pieces, and no longer
+  counts tensors nothing reads. A refusal on unified memory now names the streaming limit that bound
+  it rather than a host-memory figure no path uses.
+
 - **Qwen3-VL-30B-A3B reads and computes only the experts each token is routed to.** Its MoE layers ran
   every one of their 128 experts for every token and multiplied the unused ones by zero: correct
   output, but about 10x the weight bytes and 16x the expert work of the 8 experts actually chosen.
@@ -134,6 +207,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `config/system.yml` (or `NBX_IO_WORKERS`) now sets it for every loader; the loaders had each
   written their own value. An unconfigured count stops with a message naming both places.
 
+### Fixed — granite-speech transcribes on a 16 GB card in the PyTorch engine
+
+- **Speech models whose language model is placed in host memory no longer stop at their first
+  generated token.** On a card too small to hold the language model, granite-speech-3.3-8b failed
+  with a device mismatch as soon as it generated a token; every token lookup and the final
+  projection now run where the token table lives.
+
 ### Added
 
 - The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
@@ -205,6 +285,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting, instead of running it differently from everyone else.
 
 ### Fixed
+
+- **A video model whose pipeline bins the request renders at its bin and is restored to the requested
+  size.** The restore after a binned render (`flow.resolution_binning`, PixArt and Sana) handled an
+  image and refused a video: a container of SANA-Video carrying the field would have stopped after the
+  decode with "produced no 4-D output". Both `--compiled` and `--triton` now resize and crop every
+  frame as the vendor's `VideoProcessor.resize_and_crop_tensor` does.
+
+- **A random draw inside a model now comes from the run's own seeded generator in the PyTorch
+  modes.** Under `--compiled` and sequential with a seed, a model that samples inside its graph (an
+  image encoder drawing from its latent distribution) drew from a second stream seeded alike, which
+  repeated the initial noise of the same run. It now draws from the same generator as the initial
+  and scheduler noise, in the order the reference pipelines consume it, as the Triton modes already did.
+
+- **CogVideoX image-to-video follows its input image as the reference pipeline does.** The encoded
+  image was scaled by the VAE's latent factor twice, so the model was conditioned on an image
+  latent at 0.7x its intended magnitude, and the video drifted away from the picture it was given.
+  It is now scaled once, in both engines.
+
+- **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
+  classifier-free guidance, the unconditional half of each step attended the padding of the empty
+  negative prompt instead of ignoring it, which pulled every step away from the prompt. On
+  SANA-Video (720p model, 4 steps) the result differed strongly from the vendor's pipeline on the
+  same noise (decoded frames at 17-21 dB PSNR); it now matches it (37-50 dB) in both `--compiled`
+  and `--triton`. On Sana 1600M 1024px (8 steps) the image goes from 17 dB to 48 dB against the
+  vendor's. Outputs of these models change for a given seed.
+
+- **`granite-speech-3.3-8b` transcribes under `--compiled` on a 16 GB GPU.** On a card too small
+  to hold its 8B language model, the model's weights stay in host memory and are streamed to the
+  GPU. The run then stopped after the first decoded token with `Expected all tensors to be on the
+  same device, but got index is on cuda:0, different from other tensors on cpu`. The token lookup
+  now runs where the embedding table is, and only the looked-up rows are sent to the GPU.
+  `--triton` was not affected.
 
 - **A model whose container is missing a weight is refused by name before it runs.** A weight
   file the container lists but that is gone from disk, a weight missing from the file the

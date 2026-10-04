@@ -23,6 +23,11 @@ from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
 
+#: The stage executions the audio flow runs. Every execution a container of this flow declares
+#: must be one of them (`tests/unit/runtime/test_every_declared_flow_is_reached.py`); the same
+#: set in both engines (R30).
+STAGE_EXECUTIONS = ("forward",)
+
 @register_flow("audio")
 class AudioEngine(FlowHandler):
     """
@@ -85,28 +90,20 @@ class AudioEngine(FlowHandler):
                     f"Available: {list(self.ctx.executors.keys())}"
                 )
 
-            if execution == "forward":
+            if execution in STAGE_EXECUTIONS:
                 self._execute_forward_stage(stage)
-            elif execution == "diffusion":
-                from .stages.vibevoice import execute_diffusion_stage
-                execute_diffusion_stage(self, stage, audio_config)
-            elif execution == "native_acoustic_decoder":
-                from .stages.vibevoice import execute_native_acoustic_decoder
-                execute_native_acoustic_decoder(self, stage, audio_config)
             else:
-                # NOTE: `native_kokoro` was removed from the COMPILED dispatch —
-                # Kokoro's predictor now runs the traced forward graph
-                # (registry execution: forward), validated element-wise vs the
-                # vendor oracle. The `execute_native_kokoro` band-aid is retained
-                # ONLY for the TRITON path (triton/flow/audio.py), which cannot
-                # yet run the LSTM forward graph (no Triton LSTM kernel) — a
-                # separate workstream (P-KOKORO-TRITON-LSTM-KERNEL + R33). The
-                # removal here is scoped to compiled so an untested triton path
-                # is not broken.
+                # The diffusion / native_acoustic_decoder / native_kokoro handlers
+                # (core/flow/stages/) were reached by no flow and were removed on
+                # 2026-10-04: Kokoro's stages run their traced graphs, and VibeVoice's
+                # diffusion head and acoustic decoder run in the next_token_diffusion
+                # flow. `tests/unit/runtime/test_every_declared_flow_is_reached.py`
+                # holds every execution the catalogue declares to this set.
                 raise RuntimeError(
-                    f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, "
-                    f"diffusion, native_acoustic_decoder"
+                    f"ZERO FALLBACK: the audio flow runs stages of execution "
+                    f"{list(STAGE_EXECUTIONS)} (got '{execution}' for stage "
+                    f"'{comp_name}'). Diffusion/acoustic-decoder TTS routes through "
+                    f"the next_token_diffusion flow."
                 )
 
         # -- Step 3: Output postprocessing --
@@ -230,7 +227,7 @@ class AudioEngine(FlowHandler):
         # instead of a standard tokenizer. Vocab stored in defaults.json.
         phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
         if tokenizer is None and phoneme_vocab:
-            from .stages.kokoro import preprocess_phonemizer_input
+            from neurobrix.core.audio_frontend import preprocess_phonemizer_input
             preprocess_phonemizer_input(self, prompt, phoneme_vocab)
             return
 

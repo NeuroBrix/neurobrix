@@ -19,16 +19,17 @@ ZERO SEMANTIC: No knowledge of specific models.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
+from neurobrix.nbx.neurotax import SynonymRegistry
 from neurobrix.core.memory.manager import release_flow_memory
 import time
 import numpy as np
 import torch
 from neurobrix.core.device_utils import device_multinomial
-import torch.nn.functional as F
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 
 # The rule and its history live in core.runtime_values.
 from neurobrix.core.runtime_values import require_max_tokens
@@ -40,6 +41,12 @@ from neurobrix.core.runtime_values import require_max_tokens
 # stochastic TTS (chatterbox t3 temperature sampling) is otherwise non-
 # reproducible and the four modes can't be cross-validated.
 _TTS_LLM_SEED = 1234
+
+
+# The vocoder's token table, found by its canonical token (the neurotaxe's rule 8): the vendors spell it
+# `input_embedding`, `embed_tokens`, `wte`, `shared` ...; the parser names every one `token_embed`.
+# It was `"embedding" in weight_name`, which the complete vocabulary (`input_embedding` -> `token_embed`) misses.
+_TOKEN_EMBED = SynonymRegistry.resolve("embed_tokens")
 
 
 def _dump_t3_logits(path: str, step: int, cond, uncond, comb) -> None:
@@ -331,26 +338,22 @@ class TTSLLMEngine(FlowHandler):
         # text_emb[1].zero_() THEN += text_pos_emb). So uncond_text = position-only,
         # NOT all-zeros — used to build the uncond context below.
         with torch.no_grad():
-            text_embeds = F.embedding(input_ids, text_emb_w.to(dtype=dtype))
+            text_embeds = gather_rows(text_emb_w, input_ids, device=device, dtype=dtype)
             uncond_text_embeds = torch.zeros_like(text_embeds)  # token zeroed
             if text_pos_emb_w is not None:
                 # Learned position embeddings: index by token positions
                 pos_ids = torch.arange(input_ids.shape[1], device=device)
-                text_pos = F.embedding(pos_ids, text_pos_emb_w.to(dtype=dtype)).unsqueeze(0)
+                text_pos = gather_rows(text_pos_emb_w, pos_ids, device=device, dtype=dtype).unsqueeze(0)
                 text_embeds = text_embeds + text_pos
                 uncond_text_embeds = uncond_text_embeds + text_pos  # zero-token + position
 
         print(f"   [{lm_name}] Text embeds: {text_embeds.shape}")
 
         # ── Initial speech token (BOS) ──
-        bos_tensor = torch.tensor([[bos_token_id]], dtype=torch.long, device=device)
         with torch.no_grad():
-            bos_embed = F.embedding(bos_tensor, speech_emb_w.to(dtype=dtype))
+            bos_embed = gather_rows(speech_emb_w, [[bos_token_id]], device=device, dtype=dtype)
             if speech_pos_emb_w is not None:
-                bos_pos = F.embedding(
-                    torch.tensor([0], device=device),
-                    speech_pos_emb_w.to(dtype=dtype)
-                )
+                bos_pos = gather_rows(speech_pos_emb_w, [0], device=device, dtype=dtype)
                 bos_embed = bos_embed + bos_pos.unsqueeze(0)
 
         # ── Build initial context: [cond, text, bos_speech] ──
@@ -459,13 +462,12 @@ class TTSLLMEngine(FlowHandler):
                 break
 
             # Embed new speech token for next step
-            token_tensor = torch.tensor([[next_token]], dtype=torch.long, device=device)
             with torch.no_grad():
-                token_embed = F.embedding(token_tensor, speech_emb_w.to(dtype=dtype))
+                token_embed = gather_rows(speech_emb_w, [[next_token]], device=device, dtype=dtype)
                 if speech_pos_emb_w is not None:
                     pos_idx = torch.tensor([step + 1], device=device)
                     pos_idx = pos_idx.clamp(max=speech_pos_emb_w.shape[0] - 1)
-                    token_pos = F.embedding(pos_idx, speech_pos_emb_w.to(dtype=dtype))
+                    token_pos = gather_rows(speech_pos_emb_w, pos_idx, device=device, dtype=dtype)
                     token_embed = token_embed + token_pos.unsqueeze(0)
 
             # Grow both contexts in lockstep (shared speech sequence).
@@ -488,7 +490,7 @@ class TTSLLMEngine(FlowHandler):
                 if voc_dag:
                     for _tid, tspec in voc_dag.get("tensors", {}).items():
                         wname = tspec.get("weight_name", "")
-                        if "embedding" in wname and tspec.get("shape"):
+                        if _TOKEN_EMBED in wname.split(".") and tspec.get("shape"):
                             vocoder_vocab_size = tspec["shape"][0]
                             break
 
@@ -688,7 +690,7 @@ class TTSLLMEngine(FlowHandler):
 
         cond_tokens = conds["t3.cond_prompt_speech_tokens"].to(device)
         with torch.no_grad():
-            cond_prompt_speech_emb = F.embedding(cond_tokens, speech_emb_w.to(dtype=dtype))
+            cond_prompt_speech_emb = gather_rows(speech_emb_w, cond_tokens, device=device, dtype=dtype)
             # Vendor prepare_conditioning (t3.py:97-100, is_gpt=False) adds learned
             # positional embeddings to the prompt-token embedding BEFORE T3CondEnc — the
             # embedding is a pre-cond_enc step in the vendor too ("instead of in T3CondEnc").
@@ -698,8 +700,8 @@ class TTSLLMEngine(FlowHandler):
             if speech_pos_emb_w is not None:
                 _L = cond_tokens.shape[1]
                 _pos_idx = torch.arange(_L, device=device).clamp(max=speech_pos_emb_w.shape[0] - 1)
-                cond_prompt_speech_emb = cond_prompt_speech_emb + F.embedding(
-                    _pos_idx, speech_pos_emb_w.to(dtype=dtype))
+                cond_prompt_speech_emb = cond_prompt_speech_emb + gather_rows(
+                    speech_pos_emb_w, _pos_idx, device=device, dtype=dtype)
 
         # Live reference speaker_emb overrides the default voice when present
         spk = speaker_emb.view(1, -1) if speaker_emb is not None \

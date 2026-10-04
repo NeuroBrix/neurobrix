@@ -40,7 +40,8 @@ import os as _os_vlm
 import torch
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from .base import FlowHandler, FlowContext, register_flow
+from .base import FlowHandler, FlowContext, register_flow, requests_speech
+from .table_gather import gather_rows
 from neurobrix import decode_progress
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -194,7 +195,7 @@ class VLMEngine(FlowHandler):
         # while the AR flow has no speech leg).
         text_only = (
             not has_visual and audio_path is None
-            and str(resolved.get("global.mode") or "") == "audio"
+            and requests_speech(resolved.get("global.mode"))
             and bool(self.ctx.pkg.topology.get("flow", {}).get("speech")))
         if not has_visual and audio_path is None and not text_only:
             raise RuntimeError(
@@ -442,10 +443,7 @@ class VLMEngine(FlowHandler):
                 f"ZERO FALLBACK: vlm stage '{lm_name}' requires embed_tokens weight.")
 
         def _embed(ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([ids], dtype=torch.long, device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [ids], device=device, dtype=dtype)
 
         parts = []
         if prefix_ids:
@@ -599,7 +597,7 @@ class VLMEngine(FlowHandler):
         # contract (topology.flow.speech) — data only, no model names.
         # Runs BEFORE the LM unload: the leg reads the thinker embed
         # weight and the final forward's hidden_tap output.
-        if str(resolved.get("global.mode") or "") == "audio":
+        if requests_speech(resolved.get("global.mode")):
             if not self.ctx.pkg.topology.get("flow", {}).get("speech"):
                 raise RuntimeError(
                     "ZERO FALLBACK: --mode audio on a build without "
@@ -926,17 +924,13 @@ class VLMEngine(FlowHandler):
                 "weight.")
 
         def _embed(token_ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([token_ids], dtype=torch.long,
-                                device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [token_ids], device=device, dtype=dtype)
 
         # --mode audio on a hidden_text_merge speech contract: the vendor
         # tts template ends the assistant prefix with the tts-bos marker
         # (use_tts_template) so generation ENTERS the speakable span.
         # Contract-driven append — inert for every other request.
-        if str(resolved.get("global.mode") or "") == "audio":
+        if requests_speech(resolved.get("global.mode")):
             _sp_pre = self.ctx.pkg.topology.get("flow", {}).get("speech") \
                 or {}
             if str(_sp_pre.get("condition_type") or "") \
@@ -1016,7 +1010,7 @@ class VLMEngine(FlowHandler):
         # CFM) — data only, no model names. `output` is the FINAL
         # decode forward's last-hidden [1, S, H]: causal ⇒ row p equals
         # the vendor's per-step hidden for the token at p.
-        if str(resolved.get("global.mode") or "") == "audio":
+        if requests_speech(resolved.get("global.mode")):
             _sp_c = self.ctx.pkg.topology.get("flow", {}).get("speech")
             if not _sp_c:
                 raise RuntimeError(
@@ -1427,11 +1421,7 @@ class VLMEngine(FlowHandler):
                 "embedding weight.")
 
         def _embed(token_ids: List[int]) -> torch.Tensor:
-            tens = torch.tensor([token_ids], dtype=torch.long,
-                                device=embed_weight.device)
-            with torch.no_grad():
-                return torch.nn.functional.embedding(tens, embed_weight)\
-                    .to(device=device, dtype=dtype)
+            return gather_rows(embed_weight, [token_ids], device=device, dtype=dtype)
 
         # Placeholder rows are overwritten IN-GRAPH by masked_scatter —
         # the context embeds the full ids, placeholders included.

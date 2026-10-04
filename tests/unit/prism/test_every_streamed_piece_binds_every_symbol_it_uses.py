@@ -177,6 +177,28 @@ def _shape(meta, whole):
     return tuple(r.resolve(d) for d in dims)
 
 
+def _carrier(tid, seg, whole):
+    """A piece input as the binder reads it: its shape under the whole component's bindings and,
+    for an input a symbol binds from by VALUE (`input::grid_thw::val_1`, a dynamic-resolution grid),
+    its data — entry i the whole binding of the symbol sourced at `val_i`. A shape alone left
+    every value-sourced symbol unbound, which no runtime input does: the strategy hands the piece
+    the component's own input, data included (Qwen3-Omni's and Qwen3-VL's vision towers, streamed
+    on the Mac's profile at the 4 096 rung since 2026-10-04). Values are not judged (above)."""
+    import numpy as np
+    meta = seg["tensors"][tid]
+    data = {}
+    for sid, info in ((seg.get("symbolic_context") or {}).get("symbols") or {}).items():
+        src = str((info or {}).get("source") or "")
+        if src.startswith(tid + "::val_") and "_fd" not in src.rsplit("::val_", 1)[1]:
+            data[int(src.rsplit("::val_", 1)[1])] = whole[sid]
+    if not data:
+        return SimpleNamespace(shape=_shape(meta, whole))
+    flat = np.zeros(max(data) + 1, dtype=np.int64)
+    for i, v in data.items():
+        flat[i] = v
+    return SimpleNamespace(shape=_shape(meta, whole), numpy=lambda flat=flat: flat)
+
+
 @functools.lru_cache(maxsize=4)
 def _normalized(root, comp, family, declared_moe):
     """The graph Prism cuts, once per component: it depends on neither the size nor the rung,
@@ -195,8 +217,7 @@ def _check_every_piece(model, root, plan, family, size):
             seg = build_segment_graph(graph, Segment(
                 index=k, first_op=first, last_op=last,
                 op_count=order_index[last] - order_index[first] + 1), order_index)
-            inputs = {tid: SimpleNamespace(shape=_shape(seg["tensors"][tid], whole))
-                      for tid in seg["input_tensor_ids"]}
+            inputs = {tid: _carrier(tid, seg, whole) for tid in seg["input_tensor_ids"]}
             dangling = _dangling(seg)
             assert not dangling, (
                 f"{model}.{comp} piece {k}/{len(bounds)}: ops name tensors the piece does not "
