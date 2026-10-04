@@ -44,24 +44,32 @@ def moe_align_stage1_kernel(
     BE: tl.constexpr,    # padded expert count (pow2 >= E)
     E: tl.constexpr,     # true expert count
     BT: tl.constexpr,    # token chunk width
+    BF: tl.constexpr,    # expert chunk width (divides BE)
 ):
     """Single program: per-expert counts -> padded counts -> exclusive
-    prefix offsets (masked triangular sum — no tl.cumsum dependency)."""
+    prefix offsets (masked triangular sum — no tl.cumsum dependency).
+    Worked over expert chunks of BF: each chunk's padded counts go to the
+    prefix sum as a [BE, BF] block, so no [BE, BE] or [BE, BT] matrix is
+    held; the host sizes BT and BF to the backend's threadgroup memory
+    (Metal 32 KB: 128 experts at BT = BF = 128 asked 64 KB, Qwen3-30B-A3B)."""
     e = tl.arange(0, BE)
-    counts = tl.zeros((BE,), dtype=tl.int32)
-    for start in range(0, n, BT):
-        t = start + tl.arange(0, BT)
-        ids = tl.load(topk_ids_ptr + t, mask=t < n, other=-1)
-        m = (ids[None, :] == e[:, None]) & (t[None, :] < n)
-        counts += tl.sum(m.to(tl.int32), axis=1)
-    padded = ((counts + BS - 1) // BS) * BS
-    f = tl.arange(0, BE)
-    tri = f[None, :] < e[:, None]
-    excl = tl.sum(tl.where(tri, padded[None, :], 0), axis=1)
-    mask_e = e < E
-    tl.store(offsets_ptr + e, excl.to(tl.int64), mask=mask_e)
-    tl.store(padded_ptr + e, padded.to(tl.int64), mask=mask_e)
-    total = tl.sum(tl.where(mask_e, padded, 0), axis=0)
+    excl = tl.zeros((BE,), dtype=tl.int32)
+    total = tl.sum(tl.zeros((BF,), dtype=tl.int32), axis=0)
+    for f0 in tl.static_range(0, BE, BF):
+        f = f0 + tl.arange(0, BF)
+        counts = tl.zeros((BF,), dtype=tl.int32)
+        for start in range(0, n, BT):
+            t = start + tl.arange(0, BT)
+            ids = tl.load(topk_ids_ptr + t, mask=t < n, other=-1)
+            m = (ids[None, :] == f[:, None]) & (t[None, :] < n)
+            counts += tl.sum(m.to(tl.int32), axis=1)
+        padded = ((counts + BS - 1) // BS) * BS
+        mask_f = f < E
+        tl.store(padded_ptr + f, padded.to(tl.int64), mask=mask_f)
+        total += tl.sum(tl.where(mask_f, padded, 0), axis=0)
+        tri = f[None, :] < e[:, None]
+        excl += tl.sum(tl.where(tri, padded[None, :], 0), axis=1)
+    tl.store(offsets_ptr + e, excl.to(tl.int64), mask=e < E)
     tl.store(num_post_pad_ptr, total.to(tl.int64))
 
 
@@ -77,27 +85,33 @@ def moe_align_stage2_kernel(
     BE: tl.constexpr,
     E: tl.constexpr,
     BLK: tl.constexpr,   # positions per program (multiple of BS)
+    BF: tl.constexpr,    # expert chunk width (divides BE)
 ):
     """Grid over output positions: sentinel-fill sorted ids and resolve
     each block's owning expert (offsets[e] <= block_start < offsets[e]
     + padded[e]); blocks past the true total get -1 and are skipped by
-    the fused kernels' num_tokens_post_padded early-exit anyway."""
+    the fused kernels' num_tokens_post_padded early-exit anyway. The
+    experts are read in chunks of BF ([BLK, BF] blocks, sized by the host
+    to the backend's threadgroup memory, as stage 1)."""
     pid = tl.program_id(0).to(tl.int64)
     p = pid * BLK + tl.arange(0, BLK)
     in_p = p < max_total
     tl.store(sorted_ids_ptr + p, tl.zeros((BLK,), dtype=tl.int64) + n,
              mask=in_p)
-    e = tl.arange(0, BE)
-    mask_e = e < E
-    offs = tl.load(offsets_ptr + e, mask=mask_e, other=0)
-    padd = tl.load(padded_ptr + e, mask=mask_e, other=0)
     b = p // BS
     pb = (b * BS).to(tl.int64)
-    m = (pb[:, None] >= offs[None, :]) \
-        & (pb[:, None] < (offs + padd)[None, :]) & mask_e[None, :]
-    eid = tl.sum(tl.where(m, e[None, :], 0), axis=1)
-    has = tl.sum(m.to(tl.int32), axis=1) > 0
-    eid = tl.where(has, eid, -1)
+    eid = tl.zeros((BLK,), dtype=tl.int32)
+    hits = tl.zeros((BLK,), dtype=tl.int32)
+    for f0 in tl.static_range(0, BE, BF):
+        e = f0 + tl.arange(0, BF)
+        mask_e = e < E
+        offs = tl.load(offsets_ptr + e, mask=mask_e, other=0)
+        padd = tl.load(padded_ptr + e, mask=mask_e, other=0)
+        m = (pb[:, None] >= offs[None, :]) \
+            & (pb[:, None] < (offs + padd)[None, :]) & mask_e[None, :]
+        eid += tl.sum(tl.where(m, e[None, :], 0), axis=1)
+        hits += tl.sum(m.to(tl.int32), axis=1)
+    eid = tl.where(hits > 0, eid, -1)
     write_b = in_p & (p % BS == 0)
     tl.store(expert_ids_ptr + b, eid.to(tl.int64), mask=write_b)
 
