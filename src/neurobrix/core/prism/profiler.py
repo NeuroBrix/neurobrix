@@ -283,6 +283,39 @@ def temporal_causal_downscale_ratio(dag: Dict) -> Optional[tuple]:
     return None
 
 
+def render_symbolic_expr(node) -> str:
+    """A symbolic dim expression tree as text — `((s1+1)//2)` — for a refusal that must name it."""
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            return str(node.get("id"))
+        sign = {"add": "+", "sub": "-", "mul": "*", "floordiv": "//", "mod": "%"}.get(node.get("type"))
+        if sign is None:
+            return f"<{node.get('type')}>"
+        return f"({render_symbolic_expr(node.get('left'))}{sign}{render_symbolic_expr(node.get('right'))})"
+    return str(node)
+
+
+def temporal_map_unread(dag: Dict) -> str:
+    """Why neither temporal class reads this encoder graph — its time symbol and its rank-5 output's
+    dims, rendered — so a decline names what it could not read rather than saying "no tiling fits".
+    Called only after both `temporal_downscale_ratio` and `temporal_causal_downscale_ratio` gave
+    None."""
+    tensors = dag.get("tensors", {})
+    t_symbol = next((dims[2].get("id") for dims in (_symbolic_dims(tensors, i)
+                                                    for i in dag.get("input_tensor_ids", []))
+                     if len(dims) == 5 and isinstance(dims[2], dict)
+                     and dims[2].get("type") == "symbol"), None)
+    if t_symbol is None:
+        return "its graph has no rank-5 input whose time axis (dim 2) is a symbol"
+    out = next(((o, dims) for o, dims in ((o, _symbolic_dims(tensors, o))
+                                          for o in dag.get("output_tensor_ids", []))
+                if len(dims) == 5), None)
+    if out is None:
+        return "its graph has no rank-5 output"
+    return (f"no axis of its output {out[0]} [{', '.join(render_symbolic_expr(d) for d in out[1])}] is "
+            f"a linear (t/r) or causal (1 + (t-1)//r) map of its time symbol {t_symbol} alone")
+
+
 def is_linear_downscale_graph(dag: Dict) -> bool:
     """True iff the graph is a rank-5 spatial DOWNSAMPLER (output spatial
     trace extent < input's — a VAE encoder) whose temporal map is in the

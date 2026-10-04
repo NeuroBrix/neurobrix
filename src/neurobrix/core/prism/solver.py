@@ -955,6 +955,9 @@ class PrismSolver:
             # 12.6 GB free was refused at 11 264 and planned at 8 192 — the Mac, 2026-10-03 23:48).
             if not descends:
                 raise
+            # The refusal's own record (what it rejected and why streaming declined) is the one said if
+            # no lower rung fits either: each lower solve resets it.
+            _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             plan = None
             for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
@@ -969,6 +972,7 @@ class PrismSolver:
                     rung = lower
             if plan is None:
                 self._unified_rung_cap_mb = None
+                self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
                 raise refusal
         if not descends or not plan.host_footprint:
             return plan
@@ -1166,6 +1170,9 @@ class PrismSolver:
         self._host_device_tilings = {}
         self._host_device_overflow = {}
         self._host_device_card = {}
+        # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
+        self._tiling_declined = {}
+        self._tiling_declined_by_rung = {}
         self._input_config = input_config
 
         # Step 2: Compute memory requirements (tiling-aware via profile)
@@ -4091,6 +4098,23 @@ class PrismSolver:
         except Exception:
             return 0
 
+    def _tiling_decline(self, comp_name: str, why: str) -> None:
+        """Record WHY the tiling engine gave `comp_name` no tile, and return None. Read by the refusal
+        (`_fail_error`), which said "no tiling fits" whatever the reason: Allegro-TI2V's encoder was
+        refused with that line while the tiling arithmetic beside it said 39 tiles fit, because its
+        time map was never read (2026-10-04). Kept per component, the last attempt's reason."""
+        self.__dict__.setdefault("_tiling_declined", {})[comp_name] = why
+        return None
+
+    def _snapshot_tiling_declines(self, rung: str, comps) -> None:
+        """Keep, for the rung that records an overflow, the tiling reasons of ITS components as they
+        stand now — the per-component record is overwritten by the next rung's attempt (sized at
+        another card or rung), and the refusal printed one rung's overflow beside another's reason
+        (the doctrine review of 2ba2c40e, 2026-10-04)."""
+        now = getattr(self, "_tiling_declined", {}) or {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {})[rung] = {
+            c: now[c] for c in comps if c in now}
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, tile_rung_mb: int,
@@ -4110,12 +4134,13 @@ class PrismSolver:
         import json, math
         cache_path = getattr(container, "_cache_path", None)
         ic = getattr(self, "_input_config", None)
+        self.__dict__.setdefault("_tiling_declined", {}).pop(comp_name, None)
         if cache_path is None or ic is None:
-            return None
+            return self._tiling_decline(comp_name, "the plan holds no container path or no request")
         gpath = cache_path / "components" / comp_name / "graph.json"
         ppath = cache_path / "components" / comp_name / "profile.json"
         if not gpath.exists() or not ppath.exists():
-            return None
+            return self._tiling_decline(comp_name, "its graph.json or profile.json is absent")
         try:
             with open(gpath) as _gf:
                 graph = json.load(_gf)
@@ -4142,7 +4167,7 @@ class PrismSolver:
                 in_spatial_w = shape[-1]
                 break
         if not trace_size:
-            return None
+            return self._tiling_decline(comp_name, "its graph has no rank-4 or rank-5 input to tile")
 
         # Downsampler guard (data-driven, no name/family match): a component
         # whose OUTPUT spatial extent is smaller than its INPUT (a VAE *encoder*:
@@ -4186,7 +4211,7 @@ class PrismSolver:
             # and causal maps cannot be tiled mid-clip (identical doctrine
             # to the decode-side AFFINE decline).
             return self._encode_component_tiling(
-                graph, profile_j, mem, budget_bytes, rung_mb,
+                comp_name, graph, profile_j, mem, budget_bytes, rung_mb,
                 trace_size, out_spatial)
 
         # Scale factor: what the graph MEASURES first — its traced input and output extents —
@@ -4234,7 +4259,7 @@ class PrismSolver:
             if db:
                 scale_factor = 2 ** (len(db) - 1)
         if not scale_factor:
-            return None
+            return self._tiling_decline(comp_name, "neither its graph nor its profile states a spatial scale")
 
         full_act = mem.activation_bytes
         # The rung sizes the tile (`rung_mb`, `budget_bytes`, derived above); the LIVE reading
@@ -4387,10 +4412,14 @@ class PrismSolver:
         if tiled_act <= budget_bytes:
             return spec
 
-        return None  # spatial-only insufficient; causal/4D class — no temporal axis
+        # spatial-only insufficient; causal/4D class — no temporal axis
+        return self._tiling_decline(
+            comp_name, f"its smallest spatial tile ({tile_size} wide) still holds "
+                       f"{tiled_act / 2 ** 20:,.0f} MB over its {budget_bytes / 2 ** 20:,.0f} MB tile "
+                       f"budget, and no temporal tile was taken")
 
     def _encode_component_tiling(
-        self, graph: Dict, profile_j: Dict, mem: ComponentMemory,
+        self, comp_name: str, graph: Dict, profile_j: Dict, mem: ComponentMemory,
         budget_bytes: int, rung_mb: int, trace_size: int, out_spatial: int,
     ) -> Optional[Dict[str, Any]]:
         """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
@@ -4420,16 +4449,17 @@ class PrismSolver:
         - spatial ratio from the profile's block channel list
           (2^(len-1), the same law as decode) and verified against the
           graph traces (trace_in / trace_out must equal it exactly).
-        - runtime extents must sit on the ratio lattices (an input that
-          violates the compression divisibility is invalid for the untiled
-          encoder too).
+        - runtime extents must sit on the lattices the tiles are placed on:
+          the spatial ratio always, the frame ratio only for the linear
+          class (the causal class carries the whole clip in every tile).
         """
         import math
-        from neurobrix.core.prism.profiler import temporal_causal_downscale_ratio, temporal_downscale_ratio
+        from neurobrix.core.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
+                                                   temporal_map_unread)
 
         ic = getattr(self, "_input_config", None)
         if ic is None:
-            return None
+            return self._tiling_decline(comp_name, "no request is bound")
 
         full_act = mem.activation_bytes
         if full_act <= budget_bytes or full_act <= 0:
@@ -4444,7 +4474,7 @@ class PrismSolver:
             # the first activation alone is 8.5 GiB, and the plan declined, so the run died.
             tmap = temporal_causal_downscale_ratio(graph)
             if tmap is None:
-                return None  # 4D / unreadable temporal map — declined
+                return self._tiling_decline(comp_name, temporal_map_unread(graph))
             causal = True
         t_ratio, t_axis_out = tmap
 
@@ -4461,21 +4491,36 @@ class PrismSolver:
             # this graph, which the check below would have held the config to anyway.
             sp_ratio = trace_size // out_spatial
         else:
-            return None
+            return self._tiling_decline(
+                comp_name, f"no block list in its profile, and its traced extents {trace_size} -> "
+                           f"{out_spatial} do not divide")
         # Trace coherence: the graph's own in/out spatial traces must agree
         # with the config-derived ratio, else decline (never guess geometry).
         if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
                 or trace_size // sp_ratio != out_spatial:
-            return None
+            return self._tiling_decline(
+                comp_name, f"its profile's spatial ratio {sp_ratio} disagrees with its traced extents "
+                           f"{trace_size} -> {out_spatial}")
 
         height = getattr(ic, "height", None)
         width = getattr(ic, "width", None)
         num_frames = getattr(ic, "num_frames", None)
         if not height or not width or not num_frames:
-            return None
-        if height % sp_ratio or width % sp_ratio or (
-                (num_frames - 1) % t_ratio if causal else num_frames % t_ratio):
-            return None  # off-lattice runtime extents — invalid untiled too
+            return self._tiling_decline(
+                comp_name, f"the request binds height={height!r} width={width!r} frames={num_frames!r}")
+        # The spatial lattice binds every tile: each one's latent lands at its pixel position / ratio.
+        # The FRAME lattice binds only a tile taken in time — the linear class, whose temporal tiles
+        # land at frame / ratio. The causal class never tiles time: every tile carries the whole clip
+        # and holds the latent frames the graph computes for that clip, whatever its count, exactly
+        # as the untiled encoder does. `(num_frames - 1) % t_ratio` stood here and asked that class a
+        # question no tile of it depends on. The integer map 1 + (t-1)//r is also ceil(t/r): it is
+        # what a stride-2 slice `[::2]` records (Allegro-TI2V's encoder, `((t+1)//2+1)//2`, read
+        # here as causal r=4), and the gate refused that encoder at its own 88 frames — the
+        # request the vendor encodes — so the plan had no tile for it (2026-10-04).
+        if height % sp_ratio or width % sp_ratio or (not causal and num_frames % t_ratio):
+            return self._tiling_decline(
+                comp_name, f"the request {num_frames}x{height}x{width} is off the lattice its tiles are "
+                           f"placed on ({sp_ratio} pixels" + ("" if causal else f", {t_ratio} frames") + ")")
 
         window_alignment = config.get("window_size", 1) or 1
         # Spatial tile lattice: multiples of the compression ratio (latent
@@ -4517,7 +4562,9 @@ class PrismSolver:
             t_tile -= t_ratio
         tiled_act = _tiled_act(sp_tile, t_tile)
         if tiled_act > budget_bytes:
-            return None  # even the minimum lattice tile overflows
+            return self._tiling_decline(
+                comp_name, f"its smallest lattice tile still holds {tiled_act / 2 ** 20:,.0f} MB over its "
+                           f"{budget_bytes / 2 ** 20:,.0f} MB tile budget")
 
         # Input-space halos on the ratio lattices (stride = tile - overlap
         # stays lattice-exact so every position maps to an integral latent
@@ -4697,6 +4744,7 @@ class PrismSolver:
                 shard_map = {s: largest.device_string
                              for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
+            self._tiling_decline(comp_name, f"its tile and weights still need {tiled_total_mb:,.0f} MB")
 
         # Strategy 4: cpu — both weights AND compute on CPU.
         # Last-resort placement for a single component whose activations
@@ -4735,6 +4783,7 @@ class PrismSolver:
             comps = dict(prev[2]) if prev else {}
             comps[comp_name] = self._live_activation_mb(mem)
             store["a component's host placement"] = (largest.device_string, usable, comps)
+            self._snapshot_tiling_declines("a component's host placement", comps)
             return None
         #
         # When `profile.cpu` is missing (some older or hand-written
@@ -5308,15 +5357,19 @@ class PrismSolver:
                 continue
             tiling = self._spatial_component_tiling(
                 container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
-            if tiling is not None and self._tiled_component_mb(
-                    container, comp_name, mem, largest, tiling) <= usable:
+            tiled_mb = (self._tiled_component_mb(container, comp_name, mem, largest, tiling)
+                        if tiling is not None else None)
+            if tiled_mb is not None and tiled_mb <= usable:
                 tilings[comp_name] = tiling
             else:
+                if tiled_mb is not None:
+                    self._tiling_decline(comp_name, f"its tile and weights still need {tiled_mb:,.0f} MB")
                 overflow[comp_name] = whole
         card_by_rung[strategy] = largest.device_string
         tilings_by_rung[strategy] = tilings
         if overflow:
             overflow_by_rung[strategy] = (largest.device_string, usable, overflow)
+            self._snapshot_tiling_declines(strategy, overflow)
             return False
         return True
 
@@ -6458,10 +6511,15 @@ class PrismSolver:
         tried_str = (", ".join(tried) + " - ALL FAILED") if tried else "no strategy was evaluated"
         if self._layer_streaming_declined:
             tried_str += f"\n  layer_streaming declined: {self._layer_streaming_declined}"
+        _why_by_rung = getattr(self, "_tiling_declined_by_rung", {}) or {}
         for _rung, (_card, _usable, _comps) in (getattr(self, "_host_device_overflow", {}) or {}).items():
+            _why_untiled = _why_by_rung.get(_rung, {})
             tried_str += (f"\n  {_rung} declined: under the Triton engine a host-placed component computes on "
                           f"the card, and {_card} cannot hold " + ", ".join(
-                              f"{c}'s activations ({mb:,.0f} MB; no tiling fits)" for c, mb in _comps.items())
+                              f"{c}'s activations ({mb:,.0f} MB untiled; "
+                              + (f"no tile: {_why_untiled[c]}" if c in _why_untiled
+                                 else "the tiling engine returned no tile") + ")"
+                              for c, mb in _comps.items())
                           + f" within its {_usable:,.0f} MB usable — `--compiled` computes it on the host")
         # Reaching here now means REAL impossibility, not a gap in the
         # cascade. The ladder ends in `cpu_streaming`, which needs only the

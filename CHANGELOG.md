@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel is correct at these sizes (checked against a float64 reference), so a 128-wide head now
   runs about 30x faster on a V100. Other GPUs keep the detour until it is measured there.
 
+- **A video encoder too large for the GPU is tiled at any frame count under `--triton`.** An encoder
+  that is cut into spatial tiles, each carrying the whole clip, was refused when the frame count was
+  not of the form 4k+1 (88 frames, for example), although no tile depends on it. When the plan still
+  gives a component no tile, the refusal now says why instead of "no tiling fits".
+
 - **Speech-to-text models with an encoder and a decoder plan their decoder's cache.** Whisper's decoder
   cache (a few to about a hundred MB) was built by the run outside the memory plan; it is now in the
   plan, and a run whose plan carries none, or one of another shape, is refused by name.
@@ -32,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spilled, and the driver reserved spill memory for every thread the card can run (4.3 GB for one
   sum in a Wan2.1 image-to-video run at 480x832, enough to make a 16 GB card run out of memory).
   Long rows are now reduced in tiles; rows of up to 4 096 elements give the same bytes as before.
+
+- **On a unified-memory device (Apple silicon), the plan's host figure now counts the device plan.**
+  Device memory there is host memory, so `--explain-plan` states the planned device bytes inside the
+  host footprint, and a scheduler reserving that figure no longer admits a run the machine cannot hold.
 
 - **When a video or image model streams its weights from host memory under `--triton`, the card
   that computes it is planned too.** The large decoders and encoders are tiled on the card as they
@@ -177,6 +186,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting, instead of running it differently from everyone else.
 
 ### Fixed
+
+- **Under `--triton`, a tensor created "like" another at half precision gets half precision.**
+  On float16 GPUs, creating a tensor shaped like another with an explicit float16 type silently
+  kept the other tensor's type instead (MiniCPM-o's image resampler built its attention mask as a
+  boolean); the requested type is now honoured, as `--compiled` always did.
 
 - **An image model streamed layer by layer computes its positional embedding at the requested size.**
   When a diffusion transformer too large for its memory budget was run a few layers at a time, the pieces

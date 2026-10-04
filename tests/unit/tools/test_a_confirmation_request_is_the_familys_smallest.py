@@ -39,3 +39,17 @@ def test_a_flag_the_request_lacks_is_added_once():
 def test_every_lattice_family_names_its_confirmation_size():
     for family in TR.LATTICE:
         assert "size_fraction" in TR.confirmation(family), family
+
+
+def test_a_speech_models_confirmation_is_one_short_sentence():
+    """tts: the derived request is the family's confirmation sentence, shorter than its calibration
+    sentence — a TTS decode is as long as the text it speaks (orpheus past 2 400 s on the Mac, 2026-10-04)."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import trace_request as T
+    from neurobrix.core.config import get_family_config
+    cal = get_family_config("tts")["calibration"]["prompt"]
+    req = T.derived_request("orpheus-3b-0.1-ft", "tts")
+    said = req[req.index("--prompt") + 1]
+    assert len(said.split()) < len(cal.split()), (said, cal)
