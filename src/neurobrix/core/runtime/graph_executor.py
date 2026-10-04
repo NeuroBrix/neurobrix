@@ -1765,7 +1765,8 @@ class GraphExecutor:
             # No index to read (an archive path, or a container without one):
             # the graph's names cannot be joined to the loader's, and handing
             # the graph-space set to a loader that filters by exact membership
-            # is the Wan2.2 failure again. Load everything — the safe direction.
+            # is the Wan2.2 failure again. Load everything — the safe direction; both loaders
+            # then refuse, by name, weight shards that come without their index.
             self._pending_weight_binding = None
             return None
         encodes = {k: v["encodes"] for k, v in tensors.items()
@@ -2993,6 +2994,18 @@ class GraphExecutor:
                             break
                 if _w is not None:
                     store[tid] = _w
+        # A container weight an op reads and the store does not hold is refused here, by
+        # name, before the first op — the sequences' own door (R30), never a None handed to a
+        # kernel (Allegro, 2026-10-04).
+        from neurobrix.triton.weight_loader import (
+            loader_weight_consumers, refuse_unbound_weights)
+        _key = (id(self._dag), len(self._dag.get("execution_order") or ()))
+        _cached = getattr(self, "_tseq_loader_consumers", None)
+        if _cached is None or _cached[0] != _key:     # once per graph, not per forward
+            _cached = self._tseq_loader_consumers = (_key, loader_weight_consumers(self._dag))
+        _consumers = _cached[1]
+        refuse_unbound_weights(self._dag.get("component_name") or "?",
+                               [(t, u) for t, u in _consumers.items() if t not in store], tensors)
 
         # Load inputs into store (POINT 1: cast through TritonDtypeEngine
         # to mirror DtypeEngine path at component entry — graph metadata
