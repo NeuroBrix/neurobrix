@@ -106,11 +106,20 @@ def test_missing_cpu_telemetry_does_not_cause_a_refusal(solver):
 def test_streaming_forces_lazy_loading():
     """Eager loading would restore the sum(components) requirement this rung
     exists to avoid, silently undoing it."""
-    import inspect
-
-    source = inspect.getsource(PrismSolver)
-    assert 'if strategy == "cpu_streaming":' in source
-    assert source.count('loading_mode = "lazy"') >= 1
+    # Executed, not read from the source: the source pin broke when layer_streaming joined the rule
+    # (2026-10-04) while the behaviour it pinned held. A small plan on a roomy card is what the
+    # generic rule would have made eager.
+    from neurobrix.core.prism.solver import ComponentMemory, DeviceState
+    from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec
+    from tests.unit.prism._pinned_machine import V100_16GB, profile
+    spec = DeviceSpec(index=0, name="dev", memory_mb=16384, compute_capability="7.0",
+                      supports_dtypes=["float16"], architecture="volta", brand=DeviceBrand.NVIDIA)
+    mem = {"m": ComponentMemory("m", 100 * 2**20, 100 * 2**20, 0)}
+    for strategy, device in (("cpu_streaming", "cpu"), ("layer_streaming", "cuda:0")):
+        dev = DeviceState(device_string="cuda:0", capacity_mb=15565.0, spec=spec, recommended_mb=15565.0)
+        plan = PrismSolver()._build_plan({"m": (device, {})}, mem, [dev], {"m": "float16"},
+                                         profile(V100_16GB), strategy)
+        assert plan.loading_mode == "lazy", strategy
 
 
 def test_the_plan_carries_a_selection_reason():

@@ -21,6 +21,24 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+from neurobrix.nbx.neurotax import normalize_tensor_name_strict
+
+# The transducer joint's three linears as the vendor names them (NeMo `joint.enc`, `joint.pred`,
+# `joint.joint_net.2`), keyed by the container's parser — the engine never matches the raw spelling
+# (the neurotaxe's rule 8; the complete vocabulary of 2026-10-04 names `enc` `enc_proj`, `pred` `pred_proj`).
+_JOINT_KEYS = {normalize_tensor_name_strict(vendor): role for vendor, role in (
+    ("enc.weight", "enc_weight"), ("enc.bias", "enc_bias"),
+    ("pred.weight", "dec_weight"), ("pred.bias", "dec_bias"),
+    ("joint_net.2.weight", "out_weight"), ("joint_net.2.bias", "out_bias"))}
+
+
+def joint_role(key: str) -> Optional[str]:
+    """The joint-network role of a weight key (the key itself, or the key under a component prefix)."""
+    for canon, role in _JOINT_KEYS.items():
+        if key == canon or key.endswith("." + canon):
+            return role
+    return None
+from .table_gather import gather_rows
 
 
 @register_flow("rnnt")
@@ -375,8 +393,7 @@ class RNNTEngine(FlowHandler):
                 skip = 1
                 while need_loop and symbols_added < max_symbols_per_step:
                     if g is None:
-                        token_tensor = torch.tensor([[last_token]], dtype=torch.long, device=device)
-                        dec_embed = torch.nn.functional.embedding(token_tensor, dec_weights["embedding"])
+                        dec_embed = gather_rows(dec_weights["embedding"], [[last_token]], device=device)
                         dec_input = dec_embed.transpose(0, 1)  # [seq=1, batch=1, D_dec]
                         dec_rnn_out, (h_next, c_next) = self._run_lstm(
                             dec_input, (h, c),
@@ -523,10 +540,10 @@ class RNNTEngine(FlowHandler):
     def _extract_joint_weights(self) -> Dict[str, Any]:
         """Extract joint network weights from GraphExecutor.
 
-        NeuroTax standard names in NBX:
-          enc.weight: [D_joint, D_enc]    enc.bias: [D_joint]
-          pred.weight: [D_joint, D_dec]   pred.bias: [D_joint]
-          joint.2.weight: [V, D_joint]    joint.2.bias: [V]
+        Keys through the parser (`_JOINT_KEYS`):
+          enc_proj.weight: [D_joint, D_enc]    enc_proj.bias: [D_joint]
+          pred_proj.weight: [D_joint, D_dec]   pred_proj.bias: [D_joint]
+          joint.2.weight: [V, D_joint]         joint.2.bias: [V]
         """
         executor = self.ctx.executors["joint"]
         w = executor._weights
@@ -535,18 +552,9 @@ class RNNTEngine(FlowHandler):
         for key, tensor in w.items():
             if tensor is None:
                 continue
-            if key.endswith("enc.weight"):
-                result["enc_weight"] = tensor
-            elif key.endswith("enc.bias"):
-                result["enc_bias"] = tensor
-            elif key.endswith("pred.weight"):
-                result["dec_weight"] = tensor
-            elif key.endswith("pred.bias"):
-                result["dec_bias"] = tensor
-            elif key.endswith("joint.2.weight"):
-                result["out_weight"] = tensor
-            elif key.endswith("joint.2.bias"):
-                result["out_bias"] = tensor
+            role = joint_role(key)
+            if role is not None:
+                result[role] = tensor
 
         required = ["enc_weight", "enc_bias", "dec_weight", "dec_bias", "out_weight", "out_bias"]
         missing = [k for k in required if k not in result]

@@ -184,20 +184,32 @@ class NativeATenDispatcher:
         # rand wrappers: both engines draw from one numpy RandomState so a
         # stochastic vocoder (s3gen CFM + NSF/SineGen source) is reproducible and
         # bit-identical across modes. Default-off → torch RNG path unchanged.
+        # [RUN GENERATOR] Else the graph's draws come from the run's generator
+        # (graph/run_generator, armed by the executor: the one that draws the
+        # initial and scheduler noise, as the vendor pipeline's single
+        # generator); a run with none (seedless) keeps torch's global stream.
         if base_name in ("randn_like", "rand_like", "randn", "rand"):
             from neurobrix.kernels.rng_pin import (
                 pinned_seed, pinned_normal, pinned_uniform)
+            from neurobrix.core.runtime.graph import run_generator
+            kw = self._extract_kwargs(attributes)
+            ref = inputs[0] if (inputs and isinstance(inputs[0], torch.Tensor)) else None
+            if ref is not None:
+                shp = list(ref.shape)
+                dev = kw.get("device") or ref.device
+                dt = kw.get("dtype") or ref.dtype
+            else:
+                out_shapes = attributes.get("output_shapes") or []
+                shp = list(inputs[0]) if inputs else list(out_shapes[0])
+                dev = kw.get("device") or self._runtime_device
+                dt = kw.get("dtype") or torch.float32
             if pinned_seed() is not None:
                 is_uniform = base_name in ("rand", "rand_like")
-                ref = inputs[0] if (inputs and isinstance(inputs[0], torch.Tensor)) else None
-                if ref is not None:
-                    shp = list(ref.shape); dev = ref.device; dt = ref.dtype
-                else:
-                    out_shapes = attributes.get("output_shapes") or []
-                    shp = list(out_shapes[0]) if out_shapes else list(inputs[0])
-                    dev = "cuda"; dt = torch.float32
                 arr = pinned_uniform(shp) if is_uniform else pinned_normal(shp)
                 return torch.from_numpy(arr).to(device=dev, dtype=dt)
+            drawn = run_generator.draw(base_name, shp, dt, dev)
+            if drawn is not None:
+                return drawn
 
         # [IDENTITY OPS] These ops just pass through their input unchanged
         # lift_fresh: Used by FakeTensorMode to mark tensors as "fresh"

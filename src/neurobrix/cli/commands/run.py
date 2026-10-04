@@ -317,12 +317,16 @@ def request_input_config(args, manifest: dict, family, cache_path):
     _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
              if _topo_path.exists() else None)
 
+    # The request's output mode, resolved as `cmd_run` resolves it for the flow (`global.mode`): it
+    # decides the legs the flow runs, so the components Prism prices.
+    from neurobrix.core.runtime.output_dispatch import resolve_mode
     input_config = InputConfig(
         batch_size=batch_size,
         height=height,
         width=width,
         seq_len=seq_len,
         flow=_flow,
+        mode=resolve_mode(family, args),
         dtype=dtype,
         vae_scale=vae_scale,
         num_frames=num_frames,

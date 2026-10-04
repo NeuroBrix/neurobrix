@@ -22,6 +22,7 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from neurobrix.nbx.neurotax import SynonymRegistry
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.device_transfer import parse_device_idx
@@ -34,6 +35,12 @@ from neurobrix.core.runtime_values import require_max_tokens
 # triton-compiled produce reproducible (and, given matching logits, identical)
 # speech tokens. Same discipline as core/flow/dual_ar's _DUALAR_SEED.
 _TTS_LLM_SEED = 1234
+
+
+# The vocoder's token table, found by its canonical token (the neurotaxe's rule 8): the vendors spell it
+# `input_embedding`, `embed_tokens`, `wte`, `shared` ...; the parser names every one `token_embed`.
+# It was `"embedding" in weight_name`, which the complete vocabulary (`input_embedding` -> `token_embed`) misses.
+_TOKEN_EMBED = SynonymRegistry.resolve("embed_tokens")
 
 
 class TritonTTSLLMEngine:
@@ -399,7 +406,7 @@ class TritonTTSLLMEngine:
                 if voc_dag:
                     for _tid, tspec in voc_dag.get("tensors", {}).items():
                         wname = tspec.get("weight_name", "")
-                        if "embedding" in wname and tspec.get("shape"):
+                        if _TOKEN_EMBED in wname.split(".") and tspec.get("shape"):
                             vocoder_vocab_size = tspec["shape"][0]
                             break
 

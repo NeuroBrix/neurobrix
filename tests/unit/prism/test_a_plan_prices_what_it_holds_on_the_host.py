@@ -91,7 +91,7 @@ def test_the_planning_process_resident_memory_is_part_of_the_figure():
     f = H.host_footprint(plan, {"lm": {}}, {"lm": {}}, "triton", 100, DT, _block, resident_bytes=300 * MB)
     assert f["resident_bytes"] == 300 * MB and f["total_bytes"] == 400 * MB
     assert "resident 300 MB" in H.summary(f)
-    assert H.resident_bytes_now() > 0
+    assert H.process_footprint_now() > 0
 
 
 def test_an_unknown_engine_is_refused():

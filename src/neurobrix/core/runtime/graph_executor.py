@@ -967,9 +967,9 @@ class GraphExecutor:
         # `config`: num_attention_heads, attention_head_dim, patch_size, …).
         # The engine-side twin of the build toolchain's de-collision
         # "occupied set": a literal equal to one of them in a shape list IS
-        # the constant, never a length — the cross-branch and seq-length
-        # promotions must leave it alone (2026-09-02, Allegro-TI2V: the
-        # head count 24 = text_len 23 + 1 was injected as `text_len + 1`).
+        # the constant, never a length — the seq-length promotion must leave
+        # it alone (2026-09-02, Allegro-TI2V: the head count 24 = text_len
+        # 23 + 1 was injected as `text_len + 1`).
         self._config_constants = self._read_config_constants(Path(graph_path).parent / "profile.json")
 
         self._init_from_dag()

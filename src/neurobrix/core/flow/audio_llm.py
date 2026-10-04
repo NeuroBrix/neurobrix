@@ -16,7 +16,23 @@ from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix import decode_progress
 from .base import FlowHandler, FlowContext, register_flow
+from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
+
+
+# A token table and the context it feeds may live on different devices: under a
+# host placement of the language model (granite-speech on a 16 GB card) the
+# table is on the CPU while the context is on the GPU, and torch refuses an op
+# across devices — the prompt's lookup (calibration campaign, 2026-09-05), the
+# join (Voxtral-Mini-3B on mps, 2026-09-21), then the decode step's lookup
+# (granite-speech compiled on 16 GB, 2026-10-04). So every table op runs where
+# the table lives and its result joins where the context lives; each `.to` is a
+# no-op when the devices agree, and the table itself never moves.
+def project_on_table(hidden: torch.Tensor, table: torch.Tensor) -> torch.Tensor:
+    """``hidden @ table.T`` in ``hidden``'s dtype, computed on the table's device,
+    returned on ``hidden``'s."""
+    w = table.to(dtype=hidden.dtype)
+    return torch.matmul(hidden.to(device=w.device), w.T).to(device=hidden.device)
 
 
 @register_flow("audio_llm")
@@ -200,31 +216,20 @@ class AudioLLMEngine(FlowHandler):
         prefix_ids = defaults.get("stt_prefix_ids", [1])
         suffix_ids = defaults.get("stt_suffix_ids", [])
 
+        # Every lookup in the table goes through `gather_rows`: gathered where
+        # the table lives (the host, under a `zero3` placement of the language
+        # model — granite-speech on a 16 GB card), delivered where the context
+        # lives. One rule for the prompt and for every decoded token.
+        def _embed(ids: List[int]) -> torch.Tensor:
+            return gather_rows(embed_weight, [ids],
+                               device=audio_embeds.device, dtype=dtype)
+
         parts = []
         if prefix_ids:
-            # The index lives where the table lives: under a host placement of
-            # the language model (granite-speech on a 16 GB card) `embed_weight`
-            # is on the CPU while `device` names the GPU, and torch refuses the
-            # lookup across devices (calibration campaign, 2026-09-05).
-            prefix_tensor = torch.tensor([prefix_ids], dtype=torch.long, device=embed_weight.device)
-            with torch.no_grad():
-                # Look up where the table lives, then JOIN the context where
-                # the context lives: the lookup's result inherits the table's
-                # device, and torch.cat refuses mixed devices — measured on
-                # Voxtral-Mini-3B (mps), "Passed CPU tensor to MPS op",
-                # 2026-09-21. The .to is a no-op when the devices agree.
-                prefix_embeds = torch.nn.functional.embedding(
-                    prefix_tensor, embed_weight).to(
-                        device=audio_embeds.device, dtype=dtype)
-            parts.append(prefix_embeds)
+            parts.append(_embed(prefix_ids))
         parts.append(audio_embeds)
         if suffix_ids:
-            suffix_tensor = torch.tensor([suffix_ids], dtype=torch.long, device=embed_weight.device)
-            with torch.no_grad():
-                suffix_embeds = torch.nn.functional.embedding(
-                    suffix_tensor, embed_weight).to(
-                        device=audio_embeds.device, dtype=dtype)
-            parts.append(suffix_embeds)
+            parts.append(_embed(suffix_ids))
 
         context_embeds = torch.cat(parts, dim=1) if len(parts) > 1 else audio_embeds
 
@@ -262,10 +267,7 @@ class AudioLLMEngine(FlowHandler):
                 break
 
             # Append new token embedding to context
-            token_tensor = torch.tensor([[next_token]], dtype=torch.long, device=device)
-            with torch.no_grad():
-                token_embed = torch.nn.functional.embedding(token_tensor, embed_weight).to(dtype=dtype)
-            context_embeds = torch.cat([context_embeds, token_embed], dim=1)
+            context_embeds = torch.cat([context_embeds, _embed([next_token])], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in {elapsed:.0f}ms")
@@ -327,13 +329,11 @@ class AudioLLMEngine(FlowHandler):
             executor = self.ctx.executors["lm_head"]
             for key, tensor in executor._weights.items():
                 if tensor is not None and tensor.ndim == 2:
-                    w = tensor.to(dtype=last_hidden.dtype)
-                    return torch.matmul(last_hidden, w.T)
+                    return project_on_table(last_hidden, tensor)
             return last_hidden
 
         if logits_source == "embed_weight_tied" and embed_weight is not None:
-            w = embed_weight.to(dtype=last_hidden.dtype)
-            return torch.matmul(last_hidden, w.T)
+            return project_on_table(last_hidden, embed_weight)
 
         return last_hidden
 

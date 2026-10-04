@@ -242,13 +242,17 @@ def mechanical(path: Path, family: str, expect_hw=None) -> dict:
     if not path.exists():
         return {"missing": True}
     suffix = path.suffix.lower()
-    if suffix == ".png":
-        return image_degeneracy(path, expect_shape=expect_hw)
-    if suffix == ".txt":
-        return text_degeneracy(path)
-    if suffix == ".mp4":
-        return video_degeneracy(path, expect_shape=expect_hw)
-    return {"path": str(path), "bytes": path.stat().st_size}
+    judge = {".png": lambda: image_degeneracy(path, expect_shape=expect_hw),
+             ".txt": lambda: text_degeneracy(path),
+             ".mp4": lambda: video_degeneracy(path, expect_shape=expect_hw)}.get(suffix)
+    if judge is None:
+        return {"path": str(path), "bytes": path.stat().st_size}
+    try:
+        return judge()
+    except Exception as exc:  # noqa: BLE001 — a judge that cannot judge names its row, never ends the run
+        # mochi-1-preview, 2026-10-04: imageio absent, the raise left run_cell with no row and killed the run.
+        # Not judged is neither degenerate nor clean: `degenerate` None, the error named in the table.
+        return {"judge_error": f"{type(exc).__name__}: {exc}", "degenerate": None}
 
 
 @functools.lru_cache(maxsize=None)
@@ -273,6 +277,11 @@ PEAK_SAMPLE_S = 1.0
 #: How often a cell the host cannot admit yet says so (at its first refusal, then every WAIT_SAY_S): a wait
 #: that writes nothing holds the card with no trace (the Mac, 2026-10-03 22:34-22:36, Voxtral).
 WAIT_SAY_S = 300.0
+WAIT_POLL_S = 30.0
+DEFERRED_RC = 75          # EX_TEMPFAIL: cells left without a row by --defer-after, named DEFERRED
+#: A waiting cell's plan is asked again this often: Prism plans against the memory free when asked, so a need
+#: planned when more was free is stale once it is not (DeepSeek-Coder-V2-Lite, 2026-10-04 19:30-20:00).
+REPLAN_S = 300.0
 GIB = float(1 << 30)
 
 
@@ -466,15 +475,9 @@ def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     return int(total), ("plan-unified" if int(hf.get("device_bytes") or 0) > 0 else "plan")
 
 
-def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True):
-    """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
-    runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
-    gate runs — nothing runs beside a gate) holds every new cell.
-
-    The reservation is the plan's own host figure when the tree states one, the static estimate
-    (container bytes x HOST_PER_WEIGHT_BYTE) otherwise — written in the row either way
-    (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
-    estimate while the host used 17 GB (2026-09-28 07:49)."""
+def cell_need(model: str, mode: str, gpu: str, out: Path, src: Path) -> tuple:
+    """(bytes, source) the cell reserves of the host: the plan's own host figure when the tree states one
+    (or a proven-identical pricing tree's, `<out>/price_src`), the static estimate otherwise."""
     planned = plan_host_need(model, mode, gpu, src)
     if planned is None:
         # A tree that states no host figure (one before prism-prices-the-host) may be PRICED by another
@@ -487,7 +490,20 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
             got = plan_host_need(model, mode, gpu, ptree / "src")
             if got:
                 planned = (got[0], f"{got[1]}@{ptree.name}")
-    need, need_from = planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
+    return planned if planned else (int(container_bytes(model) * HOST_PER_WEIGHT_BYTE), "estimate")
+
+
+def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path, wait: bool = True,
+             need: tuple = None):
+    """The cell's row; None when the host budget cannot take it now and `wait` is False (the card
+    runs its other cells meanwhile and comes back). A pause file (`<out>/PAUSE`, written while a
+    gate runs — nothing runs beside a gate) holds every new cell.
+
+    The reservation is the plan's own host figure when the tree states one, the static estimate
+    (container bytes x HOST_PER_WEIGHT_BYTE) otherwise — written in the row either way
+    (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
+    estimate while the host used 17 GB (2026-09-28 07:49)."""
+    need, need_from = need if need else cell_need(model, mode, gpu, out, src)
     said_at, waiting_since = None, time.time()
     while True:
         while (out / "PAUSE").exists():
@@ -666,31 +682,92 @@ def cmd_run(a) -> int:
         print(f"[matrix] {cell[0]} {cell[1]}: the earlier row ({prev.get('date')}) is not reused — {why}; "
                   f"the cell runs again", flush=True)
     todo = [cell for cell in asked if cell not in done]
+    # The queue never blocks at its head on memory (the supervisor, 2026-10-04 17:23: VALIDATE 49 waited
+    # 1 h 45 min on one cell while the card did nothing): a cell the host cannot take now is skipped and
+    # the cells that fit go first, smallest first; while none fits, every waiting cell is retried, smallest
+    # first, each WAIT_POLL_S. With --defer-after, a cell still unadmitted after that long leaves the run
+    # without a row, named DEFERRED, and the run ends DEFERRED_RC so its caller can come back to it; without
+    # it the run waits (a gate needs every row). Each skip and retry is written. A waiting cell's plan is asked
+    # again every REPLAN_S (Prism plans against the memory free now), and a changed need is written.
+    needs, planned_at = {}, {}
+    deferred_named, skipped_at, said_at = [], {}, None
+    defer_after = getattr(a, "defer_after", None)
+
+    def need_of(cell):
+        if cell not in needs:
+            needs[cell], planned_at[cell] = cell_need(cell[0], cell[1], a.gpu, out, src), time.time()
+        return needs[cell]
+
+    def plan_again(cell):
+        # a plan's need is asked again of the plan, never shrunk by the harness: an estimate does not move
+        if not needs[cell][1].startswith("plan") or time.time() - planned_at[cell] < REPLAN_S:
+            return
+        old = needs.pop(cell)[0]
+        need_of(cell)
+        if needs[cell][0] != old:
+            print(f"[matrix] {cell[0]} {cell[1]}: planned again at {_mem_available() / GIB:.1f} GiB available — need "
+                  f"{old / GIB:.1f} GiB -> {needs[cell][0] / GIB:.1f} GiB ({needs[cell][1]})", flush=True)
+
+    def try_cell(cell):
+        # the need is asked only once a cell has to be ranked or named: a cell that fits plans once, in run_cell
+        row = run_cell(cell[0], cell[1], a.gpu, out, a.timeout, src, wait=False,
+                       **({"need": needs[cell]} if cell in needs else {}))
+        if row is None and cell not in skipped_at:
+            skipped_at[cell] = time.time()
+            need_of(cell)
+            print(f"[matrix] {cell[0]} {cell[1]}: skipped — need {needs[cell][0] / GIB:.1f} GiB ({needs[cell][1]}), "
+                  f"available {_mem_available() / GIB:.1f} GiB; the cells that fit go first, smallest first, and it "
+                  f"is retried after each of them", flush=True)
+        return row
+
     while todo:
-        deferred = []
-        for i, (model, mode) in enumerate(todo):
-            # A cell the host budget cannot take now is deferred while this pass has cells left;
-            # the pass's last cell waits for the budget (and the deferred ones come next pass).
-            row = run_cell(model, mode, a.gpu, out, a.timeout, src, wait=i == len(todo) - 1)
-            if row is None:
-                deferred.append((model, mode))
-                continue
+        cell, row = todo[0], try_cell(todo[0])         # the head first, every round: retried each time memory moved
+        if row is None:
+            for cell in sorted(todo[1:], key=lambda c: need_of(c)[0]):
+                row = try_cell(cell)
+                if row is not None:
+                    break
+        if row is not None:
+            model, mode = cell
+            if cell in skipped_at:
+                print(f"[matrix] {model} {mode}: admitted on retry after {time.time() - skipped_at.pop(cell):.0f} s",
+                      flush=True)
+            todo.remove(cell)
             prev = latest.get((model, mode))
             if prev is not None:
                 row["supersedes"] = {k: prev.get(k) for k in ("date", "gpu", "rc", "wall_s", "error", "engine", "sha256")}
             append_jsonl(rows_path, row)
             print(f"[matrix] {model} {mode} rc={row['rc']} {row.get('wall_s')}s "
                   f"{row.get('error', '')[:120]}", flush=True)
-        todo = deferred
+            continue
+        # none fits now: the waiting ones are retried smallest first; past --defer-after, each is named and left
+        if defer_after is not None:
+            for c in [c for c in todo if time.time() - skipped_at[c] >= defer_after]:
+                print(f"[matrix] {c[0]} {c[1]}: DEFERRED after {time.time() - skipped_at[c]:.0f} s — need "
+                      f"{needs[c][0] / GIB:.1f} GiB, available {_mem_available() / GIB:.1f} GiB; no row, the caller "
+                      f"comes back to it", flush=True)
+                deferred_named.append(c)
+                todo.remove(c)
+            if not todo:
+                break
+        for c in todo:
+            plan_again(c)
+        todo.sort(key=lambda c: need_of(c)[0])
+        if said_at is None or time.time() - said_at >= WAIT_SAY_S:
+            said_at = time.time()
+            print(f"[matrix] none fits now; retries every {WAIT_POLL_S:.0f} s, smallest first: " + ", ".join(
+                f"{m} {mo} ({needs[(m, mo)][0] / GIB:.1f} GiB)" for m, mo in todo)
+                + f"; available {_mem_available() / GIB:.1f} GiB", flush=True)
+        time.sleep(WAIT_POLL_S)
     # Every cell asked for has a row in the matrix — read back from the files, never from this loop's
     # own bookkeeping: a cell with no row is an error naming it.
     have = {(r["model"], r["mode"]) for f in out.glob("rows_card*.jsonl") for r in read_jsonl(f)}
-    lost = [cell for cell in asked if cell not in have]
+    lost = [cell for cell in asked if cell not in have and cell not in deferred_named]
     if lost:
         print(f"ERROR: {len(lost)} cell(s) asked for have no row in {out}: "
               f"{', '.join(f'{m}/{mo}' for m, mo in lost)}", file=sys.stderr, flush=True)
         return 1
-    return 0
+    return DEFERRED_RC if deferred_named else 0
 
 
 def _row_time(r) -> float:
@@ -769,20 +846,27 @@ def cmd_table(a) -> int:
         lp = (proofs.get(model) or {}).get("last_proof") or {}
         cells = []
         for mode in MODES:
-            r = by[model].get(mode)
-            if r is None:
-                cells.append("not run")
-            elif r["rc"] != 0:
-                cells.append(f"rc {r['rc']}: {r.get('error', '')[:80]}")
-            else:
-                mech = r.get("mechanical") or {}
-                cells.append(("DEGENERATE " + "; ".join(mech.get("reasons", []))[:80]) if mech.get("degenerate")
-                             else f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}")
+            cells.append(table_cell(by[model].get(mode)))
         lines.append(f"| {model} | {by[model][next(iter(by[model]))]['family']} | "
                      f"{lp.get('date') or '—'} {lp.get('verdict') or ''} | " + " | ".join(cells) + " |")
     write_atomic(out / "table.md", "\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
+
+
+def table_cell(r) -> str:
+    """One mode's cell of table.md: not run, the rc and its error, the judge's error, a degenerate
+    artefact, or the run and its verdict."""
+    if r is None:
+        return "not run"
+    if r["rc"] != 0:
+        return f"rc {r['rc']}: {r.get('error', '')[:80]}"
+    mech = r.get("mechanical") or {}
+    if mech.get("judge_error"):
+        return f"JUDGE ERROR {mech['judge_error'][:80]}"
+    if mech.get("degenerate"):
+        return "DEGENERATE " + "; ".join(mech.get("reasons", []))[:80]
+    return f"ran {r['wall_s']} s, {r.get('verdict', 'pending')}: {r.get('judged', 'not judged')}"
 
 
 def catalogue_repo_ids(path: Path) -> dict:
@@ -859,6 +943,9 @@ def main() -> int:
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
+    r.add_argument("--defer-after", type=float, default=None, metavar="SECONDS",
+                   help="a cell the host cannot take for this long leaves the run without a row, named DEFERRED, "
+                        f"and the run ends {DEFERRED_RC} (never for a gate: a gate needs every row)")
     r.add_argument("--src", default=str(REPO / "src"), help="the engine tree's src the runs import (a frozen worktree)")
     r.add_argument("--allow-certified-dir-override", action="store_true",
                    help=f"run although {CERTIFIED_DIR_ENV} relocates the certified directory (never a gate: "

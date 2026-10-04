@@ -52,8 +52,10 @@ def _container(root: Path) -> Path:
     (d / "manifest.json").write_text(json.dumps({
         "model_name": MODEL, "family": "image", "vae_scale_factor": 32, "trace_resolution": 1024,
         "neurotax_version": NEUROTAX_VERSION}))
+    from neurobrix.nbx.fixed_point import FIXED_POINT_FLAG
     (d / "topology.json").write_text(json.dumps({
-        "components": {"transformer": {"shapes": {"hidden_states": [2, 32, 30, 34]}}}}))
+        "components": {"transformer": {"shapes": {"hidden_states": [2, 32, 30, 34]}}},
+        "extracted_values": {"transformer": {FIXED_POINT_FLAG: "fixture"}}}))
     (d / "runtime" / "variables.json").write_text("{}")
     (d / "runtime" / "defaults.json").write_text("{}")
     (d / "components" / "transformer" / "graph.json").write_text("{}")
@@ -154,6 +156,8 @@ def test_a_plan_refused_below_the_top_rung_is_not_a_failed_model(monkeypatch, tm
     monkeypatch.setattr(CC2, "frozen_dims", lambda m: [])
     monkeypatch.setattr(CC2, "_device_count", lambda hw: 1)
     monkeypatch.setattr(CC2, "_tiling_probe", lambda *a, **k: None)
+    # `M` has no container: the derivation reads a container's own confirmation values (2026-10-04)
+    monkeypatch.setattr(CC2._trace, "container_topology", lambda m: {})
     row = CC2.census_model("M", "hw", ["triton"], [], [["--prompt", "x"]], 60, tmp_path, rungs=[4096, 8192])
     assert row["status"] == "ok", row["status"]
     monkeypatch.setattr(CC2, "shadow", lambda *a, **k: {**fake_shadow(*a, **k), "rc": 1,

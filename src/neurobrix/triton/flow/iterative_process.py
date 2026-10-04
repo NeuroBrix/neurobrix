@@ -485,6 +485,11 @@ class TritonIterativeProcessHandler:
                 tokenizer_config=tokenizer_vals
             )
             neg_hidden_state = finalized["hidden_state"]
+            # The mask goes with the embedding it masks: a finalization that changes the
+            # sequence's length returns the mask cut or padded the same way
+            # (`resolution.negative_text_mask`, R30 mirror of core/flow).
+            from neurobrix.core.runtime.resolution.negative_text_mask import finalized_mask
+            neg_attention_mask = finalized_mask(neg_attention_mask, finalized)
         # -----------------------------------------------------
 
         # Store negative embedding AND its attention mask (for CFG executor)
@@ -1161,24 +1166,27 @@ class TritonIterativeProcessHandler:
             self._unload_component(comp_name)
 
     def _restore_requested_resolution(self, post_loop: List[str]) -> None:
-        """The vendor's restore after a binned render (`flow.resolution_binning`): the decoder's image,
+        """The vendor's restore after a binned render (`flow.resolution_binning`): the decoder's output,
         decoded at the bin, is resized to cover the requested size and centre-cropped to it —
         diffusers' `resize_and_crop_tensor`, which `PixArtAlphaPipeline.__call__` applies right after
-        `vae.decode`. The plan (sizes, crop bounds) is the shared torch-free half
-        (`resolution.resolution_binning.restore_plan`); the compute is this branch's own.
-        Every output of the last post-loop component at the bin's extent is restored (one
-        tensor bound under several names is restored once); none at that extent is refused."""
+        `vae.decode` to the image and `SanaVideoPipeline.__call__` to the video, frame by frame. The
+        plan (which outputs, how they fold to planes, sizes, crop bounds) is the shared torch-free half
+        (`resolution.resolution_binning.restore_fold` / `restore_plan`); the compute is this branch's own
+        (R30 mirror of core/flow).
+        Every output of the last post-loop component at the bin's extent is restored (one tensor bound
+        under several names is restored once); none at that extent is refused."""
         br = self.ctx.binned_request
         if br is None or not post_loop:
             return
         from neurobrix.kernels.wrappers import upsample_bilinear2d_wrapper
-        from neurobrix.core.runtime.resolution.resolution_binning import restore_plan
+        from neurobrix.core.runtime.resolution.resolution_binning import restore_fold, restore_plan
         comp = post_loop[-1]
         resolved = self.ctx.variable_resolver.resolved
         restored: Dict[int, Any] = {}
         for key in [k for k in resolved if k.startswith(f"{comp}.")]:
             v = resolved[key]
-            if not (isinstance(v, NBXTensor) and v.dim() == 4 and tuple(v.shape[-2:]) == br.binned):
+            fold = restore_fold(tuple(v.shape), br.binned) if isinstance(v, NBXTensor) else None
+            if fold is None:
                 continue
             if id(v) not in restored:
                 plan = restore_plan(v.shape[-2], v.shape[-1], br.requested[0], br.requested[1], br.contract)
@@ -1186,16 +1194,18 @@ class TritonIterativeProcessHandler:
                 if plan is not None:
                     # R33: the house bilinear kernel (same source mapping as torch's align_corners=False,
                     # clamped at 0 and at the last row/column) and NBXTensor views, no torch.
-                    out = upsample_bilinear2d_wrapper(v, (plan.resized_h, plan.resized_w),
+                    out = upsample_bilinear2d_wrapper(v.contiguous().reshape(*fold), (plan.resized_h, plan.resized_w),
                                                       align_corners=plan.align_corners)
                     out = out.narrow(2, plan.top, plan.bottom - plan.top).narrow(
                         3, plan.left, plan.right - plan.left).contiguous()
+                    out = out.reshape(*(tuple(v.shape[:-2]) + tuple(out.shape[-2:])))
                 restored[id(v)] = out
             resolved[key] = restored[id(v)]
         if not restored:
             raise RuntimeError(
                 f"ZERO FALLBACK: resolution binning ran at {br.binned} for a {br.requested} request, but "
-                f"'{comp}' produced no 4-D output at {br.binned} to restore: "
+                f"'{comp}' produced no output at {br.binned} (an image or a video whose last two axes are the "
+                f"bin) to restore: "
                 f"{ {k: tuple(v.shape) for k, v in resolved.items() if k.startswith(f'{comp}.') and hasattr(v, 'shape')} }")
 
     def _unload_component(self, comp_name: str, force: bool = False) -> None:
