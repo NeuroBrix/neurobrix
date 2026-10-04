@@ -66,7 +66,7 @@ where the tiling probe lives, is not hashed), mode, rungs_mb, ops, kernel, key, 
 |---|---|
 | the committed bytes are the gated bytes | the changed files read once, a copy gated, those blobs committed through a temporary index (the repository's hooks run); the real index reset for those paths |
 | main is never pushed | refused inside `checkpoint()`, on the branch at push time |
-| one per repository | an exclusive lock in the common git dir for the process's life; a second instance refused by name |
+| one per worktree | an exclusive lock in the worktree's git dir for the process's life (each worktree has its own index); a second instance on the same worktree refused by name; the push window stays in the common git dir, so one unattended push per 30 minutes counts the whole repository |
 | at most one push per 30 minutes | every ATTEMPT spends the window; the stamp replaced atomically |
 | an input that names nothing | a `--dir` that does not exist refused |
 
