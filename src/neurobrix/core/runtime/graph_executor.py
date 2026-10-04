@@ -184,6 +184,15 @@ class GraphExecutor:
     #: embed + pos_embed), the Mac 2026-09-29. Read at EVERY load, never copied once at build: a
     #: piece outlives a request, and the next request may ask another resolution. None: its own.
     _component_from = None
+    #: What a `layer_streaming` BASE's last run left behind, collected from its pieces: the
+    #: component's declared outputs and its persistent tids (`enable_hidden_states_capture`),
+    #: each read from the piece that produced it before that piece unloaded. A streamed base
+    #: runs no op — its `run` walks the pieces — so its own run state stays empty, and
+    #: `get_hidden_states` answered None on it: the compiled session refused, the triton one
+    #: fell to its output scan and handed the image-AR head the text-vocab logits as "hidden"
+    #: (Janus-Pro-7B streamed on the Mac: gen_head's addmm asked M = 102400 / 4096 = 25).
+    #: Rebuilt by every streamed run. None: not a streamed base, read this executor's own run.
+    _pieces_capture = None
 
     def __init__(
         self,
@@ -5356,6 +5365,35 @@ class GraphExecutor:
                     return hidden_tid
         return None
 
+    def protect_tensor_id(self, tid: str) -> None:
+        """Keep `tid` alive through this executor's run and readable after it, in every engine:
+        the compiled sequence pins it (now if compiled, at compile otherwise), the triton
+        sequence declares it an output at compile, the op-by-op engines skip it at eviction and
+        capture it. The same protection `enable_hidden_states_capture` gives the pre-head
+        tensor, for a tid chosen by the caller — a `layer_streaming` piece is told which of the
+        tensors it produces its component's base protects."""
+        self._persistent_tensor_ids.add(tid)
+        if self._compiled_seq is not None:
+            self._compiled_seq.protect_tensor(tid)
+
+    def tensors_of_last_run(self, tids) -> Dict[str, Any]:
+        """The tensors named by `tids` as this executor's LAST run left them, read where its
+        engine keeps them: the triton sequence's arena, the triton op-by-op capture, or the
+        torch execution context. A tid the run did not keep is absent from the result. Read it
+        before `unload_weights`, which drops all three. No torch here: the triton arms are
+        NBXTensor end to end (R33)."""
+        tids = list(tids)
+        if not tids:
+            return {}
+        if self.mode in ("triton", "triton_sequential"):
+            seq = getattr(self, "_triton_seq", None)
+            if seq is not None:
+                return seq.gather_outputs(tids)
+            captured = getattr(self, "_tritonseq_captured", None) or {}
+            return {t: captured[t] for t in tids if captured.get(t) is not None}
+        store = self._ctx.tensor_store if self._ctx is not None else {}
+        return {t: store[t] for t in tids if store.get(t) is not None}
+
     def get_hidden_states(
         self,
         expected_hidden_dim: int = 4096,
@@ -5384,14 +5422,20 @@ class GraphExecutor:
             return self._get_hidden_states_triton(
                 expected_hidden_dim, expected_batch_size)
 
-        if self._ctx is None:
+        # A streamed base reads what its pieces left (`_pieces_capture`); any
+        # other executor reads its own last run.
+        if self._pieces_capture is not None:
+            store = self._pieces_capture
+        elif self._ctx is not None:
+            store = self._ctx.tensor_store
+        else:
             return None
 
         # Strategy 1: Check graph output — if last dim matches hidden_dim,
         # the graph outputs hidden_states directly (no lm_head in graph).
         assert self._dag is not None
         for tid in _primary_output_tids(self._dag):
-            tensor = self._ctx.tensor_store.get(tid)
+            tensor = store.get(tid)
             if tensor is not None and tensor.shape[-1] == expected_hidden_dim:
                 result = self._reshape_hidden(tensor, expected_hidden_dim, expected_batch_size)
                 if result is not None:
@@ -5417,7 +5461,7 @@ class GraphExecutor:
             return None
 
         hidden_tid = input_ids[0]
-        hidden_tensor = self._ctx.tensor_store.get(hidden_tid)
+        hidden_tensor = store.get(hidden_tid)
         if hidden_tensor is None:
             return None
 
@@ -5442,7 +5486,12 @@ class GraphExecutor:
         assert self._dag is not None
         triton_seq = getattr(self, "_triton_seq", None)
         seq_captured = getattr(self, "_tritonseq_captured", None)
-        if triton_seq is not None:
+        pieces = self._pieces_capture
+        if pieces is not None:
+            # A streamed base: what its pieces left (see `_pieces_capture`).
+            def _gather(tids):
+                return {t: pieces.get(t) for t in tids}
+        elif triton_seq is not None:
             def _gather(tids):
                 return triton_seq.gather_outputs(list(tids))
         elif seq_captured is not None:
@@ -5627,6 +5676,9 @@ class GraphExecutor:
         # LM unload that precedes the VQ decoder).
         if hasattr(self, '_tritonseq_captured'):
             self._tritonseq_captured = {}
+        # Same hazard on a streamed base: what its pieces left (`_pieces_capture`).
+        if self._pieces_capture is not None:
+            self._pieces_capture = {}
 
         # Step 2: Use centralized memory manager
         MemoryManager.cleanup_context(self._ctx)
@@ -5661,6 +5713,8 @@ class GraphExecutor:
                 self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             if hasattr(self, '_tritonseq_captured'):
                 self._tritonseq_captured = {}
+            if self._pieces_capture is not None:
+                self._pieces_capture = {}
             MemoryManager.cleanup_context(self._ctx)
             return
 
@@ -5684,6 +5738,8 @@ class GraphExecutor:
         # of the unload_weights Step 1c — same retention hazard).
         if hasattr(self, '_tritonseq_captured'):
             self._tritonseq_captured = {}
+        if self._pieces_capture is not None:
+            self._pieces_capture = {}
 
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
