@@ -188,6 +188,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
+  classifier-free guidance, the unconditional half of each step attended the padding of the empty
+  negative prompt instead of ignoring it, which pulled every step away from the prompt. On
+  SANA-Video (720p model, 4 steps) the result differed strongly from the vendor's pipeline on the
+  same noise (decoded frames at 17-21 dB PSNR); it now matches it (37-50 dB) in both `--compiled`
+  and `--triton`. On Sana 1600M 1024px (8 steps) the image goes from 17 dB to 48 dB against the
+  vendor's. Outputs of these models change for a given seed.
+
 - **`granite-speech-3.3-8b` transcribes under `--compiled` on a 16 GB GPU.** On a card too small
   to hold its 8B language model, the model's weights stay in host memory and are streamed to the
   GPU. The run then stopped after the first decoded token with `Expected all tensors to be on the
