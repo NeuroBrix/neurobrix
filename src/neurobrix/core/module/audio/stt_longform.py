@@ -192,8 +192,9 @@ def whisper_advance_samples(advance_index: int, mel_frames_window: int,
 def rnnt_window_plan(actual_frames: int, window_frames: int,
                      overlap_frames: int) -> List[Tuple[int, int]]:
     """`(start, valid)` per window over the mel timeline: consecutive
-    windows overlap by `overlap_frames`; the last one is shorter (the
-    flow pads it like a short clip). One window when it all fits."""
+    windows overlap by `overlap_frames`; the last one is shorter and is
+    fed at its own length, like a short clip. One window when it all
+    fits."""
     if actual_frames <= window_frames:
         return [(0, actual_frames)]
     if not 0 < overlap_frames < window_frames:
@@ -203,6 +204,35 @@ def rnnt_window_plan(actual_frames: int, window_frames: int,
     n = -(-(actual_frames - overlap_frames) // stride)
     return [(i * stride, min(window_frames, actual_frames - i * stride))
             for i in range(n)]
+
+
+def rnnt_feed_plan(actual_frames: int, long_form: Optional[dict], sample_rate: int,
+                   hop: int, family: str = "stt") -> Tuple[List[Tuple[int, int]], int]:
+    """What the RNNT flow feeds its encoder for a recording of `actual_frames` mel frames:
+    `([(start, valid), ...], overlap_frames)` — ONE function for both engines' flows, for
+    the plan (Prism prices the largest feed) and for the derived census (it keys every feed).
+
+    The window and the overlap are VALUES of the family profile
+    (`long_form.rnnt_window_seconds`, `long_form.rnnt_overlap_seconds`), converted with the
+    extractor's own rate and hop. Until 2026-10-04 the window was the encoder's TRACE extent
+    (3 000 frames) and every feed was zero-padded to it: a recording that fits one window
+    is now fed whole at its own length, and so is the last window of a longer one.
+
+    `NBX_DISABLE_STT_CHUNKING=1` (diagnosis) feeds the whole recording in one pass."""
+    import os
+    if os.environ.get("NBX_DISABLE_STT_CHUNKING") == "1":
+        return [(0, int(actual_frames))], 0
+    long_form = long_form or {}
+    missing = [k for k in ("rnnt_window_seconds", "rnnt_overlap_seconds") if k not in long_form]
+    if missing:
+        raise RuntimeError(
+            f"ZERO FALLBACK: {family}.yml long_form.{' and long_form.'.join(missing)} missing — "
+            f"the RNNT window and its overlap are the family profile's values, never the "
+            f"encoder's trace extent.")
+    window = int(round(float(long_form["rnnt_window_seconds"]) * sample_rate / hop))
+    overlap = int(round(float(long_form["rnnt_overlap_seconds"]) * sample_rate / hop))
+    plan = rnnt_window_plan(int(actual_frames), window, overlap)
+    return plan, (overlap if len(plan) > 1 else 0)
 
 
 def rnnt_keep_range(i: int, n: int, window_enc: int,
