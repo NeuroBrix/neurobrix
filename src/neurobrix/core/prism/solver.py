@@ -1173,6 +1173,8 @@ class PrismSolver:
         # Why the tiling engine gave a component no tile ({component: reason}, `_tiling_decline`).
         self._tiling_declined = {}
         self._tiling_declined_by_rung = {}
+        # {rung: (card, usable MB)}: the figure a rung's tiling reasons were held to (`_record_rung_tiling_decline`).
+        self._tiling_rung_figure = {}
         self._input_config = input_config
 
         # Step 2: Compute memory requirements (tiling-aware via profile)
@@ -4115,6 +4117,18 @@ class PrismSolver:
         self.__dict__.setdefault("_tiling_declined_by_rung", {})[rung] = {
             c: now[c] for c in comps if c in now}
 
+    def _record_rung_tiling_decline(self, rung: str, card: str, usable_mb: float, comp_name: str) -> None:
+        """A rung that does not size host placements on the card (the compiled engine's component placement,
+        layer streaming under either engine) keeps ITS components' tiling reasons as they stand when it gives
+        up on the tile, beside the figure they were held to — as the Triton host-sizing rungs do
+        (`_snapshot_tiling_declines`). The compiled refusal read the last-written reason, which the next
+        rung's attempt overwrites (the doctrine review of 64c24b13, 2026-10-04)."""
+        why = (getattr(self, "_tiling_declined", {}) or {}).get(comp_name)
+        if why is None:
+            return
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
+        self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
+
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
         mem: ComponentMemory, tile_rung_mb: int,
@@ -4745,6 +4759,12 @@ class PrismSolver:
                              for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
             self._tiling_decline(comp_name, f"its tile and weights still need {tiled_total_mb:,.0f} MB")
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            # The Triton branch below records this placement's overflow and its reasons per rung; the
+            # compiled one goes to the host, and its refusal must still say why the card got no tile.
+            self._record_rung_tiling_decline("a component's placement", largest.device_string, usable,
+                                             comp_name)
 
         # Strategy 4: cpu — both weights AND compute on CPU.
         # Last-resort placement for a single component whose activations
@@ -5604,6 +5624,7 @@ class PrismSolver:
         # component tiling only if this rung wins.
         tiled: Dict[str, Dict[str, Any]] = {}
         cost: Dict[str, int] = {}
+        self.__dict__.setdefault("_tiling_declined_by_rung", {}).pop("layer_streaming", None)
         for name, mem in sorted_comps:
             whole = self._whole_component_mb(container, name, mem, target) * 1024 * 1024
             cost[name] = int(mem.total_bytes)
@@ -5617,6 +5638,13 @@ class PrismSolver:
                 if _tiled_bytes <= budget_bytes:
                     tiled[name] = _t
                     cost[name] = _tiled_bytes
+                else:
+                    # A tile exists and its weights take it over the rung: said, as the placement rungs say it.
+                    # Nothing was recorded here, and the refusal was silent exactly where it should speak.
+                    self._tiling_decline(name, f"its tile and weights still need {_tiled_bytes / 2 ** 20:,.0f} MB")
+            if name not in tiled:
+                self._record_rung_tiling_decline("layer_streaming", target.device_string,
+                                                 budget_bytes / 2 ** 20, name)
         self._layer_stream_tilings = tiled
         streamed = {name for name, mem in sorted_comps
                     if name not in tiled
@@ -6521,6 +6549,19 @@ class PrismSolver:
                                  else "the tiling engine returned no tile") + ")"
                               for c, mb in _comps.items())
                           + f" within its {_usable:,.0f} MB usable — `--compiled` computes it on the host")
+        # The rungs no Triton host line above carries: their components' tiling reasons, each rung's own,
+        # beside the figure it held them to. Those lines exist only where a host placement is sized on
+        # the card; under the compiled engine a component the tiling engine declined went to the host
+        # and the refusal said nothing of the tile it did not get — Allegro-TI2V's re-propagated encoder
+        # at 720x1280, whose time map still folds the batch, was refused with no word of it (2026-10-04).
+        _host_rungs = set(getattr(self, "_host_device_overflow", {}) or {})
+        _figure = getattr(self, "_tiling_rung_figure", {}) or {}
+        for _rung, _whys in _why_by_rung.items():
+            if _rung in _host_rungs or not _whys or _rung not in _figure:
+                continue
+            _card, _usable = _figure[_rung]
+            tried_str += (f"\n  {_rung}: no component tile on {_card} ({_usable:,.0f} MB usable) — "
+                          + "; ".join(f"{c}: {why}" for c, why in _whys.items()))
         # Reaching here now means REAL impossibility, not a gap in the
         # cascade. The ladder ends in `cpu_streaming`, which needs only the
         # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
