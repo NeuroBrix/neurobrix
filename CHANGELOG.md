@@ -70,6 +70,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mixture-of-experts models prepare faster.** Before a run, the engine replaces each layer's experts
+  with one fused operation and removes the operations left unused. That cleanup rescanned the whole model
+  once per layer; it now follows only the operations each removal touches. On Qwen3-30B-A3B it takes
+  12.8 s instead of 48.9 s, and planning runs it twice. The prepared model is unchanged.
+
 - **Every model weight now carries a standard name, and a model installed with the earlier,
   incomplete naming must be updated before it runs.** The naming vocabulary now covers the audio
   codecs and vocoders, video and image decoders, vision towers and upscalers whose weights still
