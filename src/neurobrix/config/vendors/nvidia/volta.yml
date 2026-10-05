@@ -220,6 +220,16 @@ autotune:
       - {up_to: null, step: 131072}
 
 memory:
+  # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py), applied once
+  # per process before a weight loads; the Triton engine never reads it. Expandable segments make
+  # the bytes Prism prices the bytes the card hands out: under fixed segments Wan2.1-I2V-14B
+  # compiled on a 16 GB V100 (2026-10-05) died asking 2.50 GiB at aten.view_as_complex::4 with
+  # 8.52 GiB allocated (the plan's price, 11.0 GiB) and 6.76 GiB reserved-but-unallocated;
+  # Allegro-TI2V compiled the same way with 5.93 GiB. The vendor's remedy for that case:
+  # https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf
+  # It is the allocator's behaviour on CUDA, not this architecture's, so every NVIDIA profile
+  # declares it. An operator's PYTORCH_ALLOC_CONF wins and is logged.
+  compiled_allocator_settings: "expandable_segments:True"
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
   max_registers_per_block: 65536
   warp_size: 32

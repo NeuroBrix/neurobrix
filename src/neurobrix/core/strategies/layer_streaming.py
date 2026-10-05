@@ -201,40 +201,123 @@ class LayerStreamingStrategy(ExecutionStrategy):
         for index, (first_op, last_op) in enumerate(bounds):
             seg = Segment(index=index, first_op=first_op, last_op=last_op,
                           op_count=order_index[last_op] - order_index[first_op] + 1)
-            sub = build_segment_graph(dag, seg, order_index)
-            seg_exec = type(base)(
-                family=getattr(base, "family", None),
-                vendor=getattr(base, "vendor", None),
-                arch=getattr(base, "arch", None),
-                device=getattr(base, "device", None),
-                dtype=getattr(base, "dtype", None),
-                mode=getattr(base, "mode", "compiled"),
-            )
-            cache_path = getattr(base, "_cache_path", None)
-            if cache_path is not None:
-                seg_exec._cache_path = cache_path
-            # Set BEFORE the graph loads: loading resolves the compiled engines' precision
-            # contract (`_init_from_dag`), and a piece must resolve its COMPONENT's — through the
-            # base, on the whole graph its calibration record was measured on, at the piece's own
-            # compute dtype. Resolved on a piece's graph the record was refused ("measured on
-            # another graph") and every piece ran the conservative contract: GLM-4.1V streamed,
-            # same tokens, logits off from whole. A piece's op uids index the whole's sets.
-            seg_exec._contract_from = base
-            # And it loads under its COMPONENT's runtime state — the request's resolution and the
-            # component handler, which the runtime and the factory give the base only — read at
-            # each load (`GraphExecutor._component_from`): a computable buffer is computed from it.
-            seg_exec._component_from = base
-            seg_exec._flow_reads_weights = False
-            seg_exec._borrow_from = base
-            seg_exec.load_graph_from_dict(sub)
-            seg_exec._component_name = component_name
-            # A piece loads what its own ops consume, and BORROWS any non-block key it consumes
-            # from the base, which holds them all resident for the flow's by-name reads
-            # (`_ensure_flow_reads`): one copy. Before, every piece reloaded every non-block
-            # weight with every run — the embedding into pieces that never read it, in no
-            # plan's budget.
-            executors.append(seg_exec)
+            executors.append(self._piece_executor(base, build_segment_graph(dag, seg, order_index),
+                                                  component_name, base))
+        pieces = self._slice_stretches(component_name, base, dag, bounds, executors)
+        self._forward_op_level_tiling(component_name, base, pieces)
+        return pieces
+
+    @staticmethod
+    def _forward_op_level_tiling(component_name: str, base: Any, pieces: List[Any]) -> None:
+        """The plan's op-level tiling (`runtime_op_tiling`: banded convolutions, fused
+        upsample->conv pairs, residual chains) runs in the PIECES, which run every op of a
+        streamed component — never in the base, whose `run` walks them.
+
+        The runtime registers it on the base (`OpLevelTilingEngine.register_into_graph_executor`);
+        nothing carried it further, so a streamed component ran every planned band whole.
+        Measured 2026-10-05 on SANA-Video_2B_720p, 16 GB V100, triton certified-only: the plan
+        banded `aten.convolution::3` of each transformer block, the census keyed the bands
+        (11, 6720, 10|11, 42, ...) and the piece launched (11, 6720, 21, 42) — a refused key,
+        and in the compiled engine the full intermediate the band exists to avoid.
+
+        Each piece takes the interceptors of its own ops, now and at any later registration
+        on the base (forwarded like `register_triton_interceptors`). Refused by name: a group of
+        interceptors that hand each other a proxy split across two pieces (the proxy would
+        cross a seam no executor carries), and an op the plan tiles that no piece holds (its
+        band would silently run whole — the failure this exists to end)."""
+        held = [set((getattr(p, "_dag", None) or {}).get("execution_order") or []) for p in pieces]
+
+        def forward(interceptors: Dict[str, Any], groups, planned) -> None:
+            groups = [tuple(g) for g in groups]
+            for g in groups:
+                where = sorted(i for i, ops in enumerate(held) if any(u in ops for u in g))
+                if len(where) > 1:
+                    raise RuntimeError(
+                        f"layer_streaming: '{component_name}'s op-level tiling group {list(g)} "
+                        f"is split across pieces {where} of the plan; its interceptors hand "
+                        f"each other a proxy that cannot cross a seam")
+            nowhere = sorted(u for u in planned if u in interceptors
+                             and not any(u in ops for ops in held))
+            if nowhere:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}'s plan tiles {nowhere[:4]}"
+                    f"{'...' if len(nowhere) > 4 else ''}, which no piece of the streamed graph "
+                    f"holds — the band would never run")
+            for piece, ops in zip(pieces, held):
+                mine = {u: f for u, f in interceptors.items() if u in ops}
+                if mine:
+                    piece.register_op_uid_interceptors(
+                        mine, groups=[g for g in groups if g[0] in ops],
+                        planned=[u for u in planned if u in mine])
+
+        forward(dict(getattr(base, "_op_uid_interceptors", None) or {}),
+                list(getattr(base, "_op_uid_groups", None) or []),
+                set(getattr(base, "_op_uid_planned", None) or ()))
+        registered = getattr(base, "register_op_uid_interceptors", None)
+        if registered is not None:
+            def register_on_pieces(interceptors, groups=(), planned=(), _base=registered):
+                _base(interceptors, groups=groups, planned=planned)
+                forward(interceptors, groups, set(planned))
+            base.register_op_uid_interceptors = register_on_pieces
+
+    def _slice_stretches(self, component_name: str, base: Any, dag: Dict[str, Any],
+                         bounds: List[List[str]], executors: List[Any]) -> List[Any]:
+        """The pieces Prism planned in slices of a token axis (`layer_chunks`), each run by a
+        `ChunkedPiece` over its own executor: the piece loads the stretch's weights once and
+        every pass of it borrows them. A planned stretch that is not one of the plan's pieces is
+        refused — the budget was accepted on that piece."""
+        chunks = (getattr(self.context, "layer_chunks", None) or {}).get(component_name) or []
+        if not chunks:
+            return executors
+        from neurobrix.core.strategies.chunked_piece import ChunkedPiece
+        at = {(f, l): i for i, (f, l) in enumerate(bounds)}
+        for chunk in chunks:
+            i = at.get((chunk["first_op"], chunk["last_op"]))
+            if i is None:
+                raise RuntimeError(
+                    f"layer_streaming: '{component_name}'s plan slices the stretch "
+                    f"{chunk['first_op']!r}..{chunk['last_op']!r} along {chunk['symbol']}, which "
+                    f"is not one of its pieces")
+            executors[i] = ChunkedPiece(
+                dag, executors[i], chunk,
+                lambda sub, lender: self._piece_executor(base, sub, component_name, lender))
         return executors
+
+    @staticmethod
+    def _piece_executor(base: Any, sub: Dict[str, Any], component_name: str, lender: Any) -> Any:
+        """An executor over a piece's graph `sub`, borrowing what `lender` holds."""
+        seg_exec = type(base)(
+            family=getattr(base, "family", None),
+            vendor=getattr(base, "vendor", None),
+            arch=getattr(base, "arch", None),
+            device=getattr(base, "device", None),
+            dtype=getattr(base, "dtype", None),
+            mode=getattr(base, "mode", "compiled"),
+        )
+        cache_path = getattr(base, "_cache_path", None)
+        if cache_path is not None:
+            seg_exec._cache_path = cache_path
+        # Set BEFORE the graph loads: loading resolves the compiled engines' precision
+        # contract (`_init_from_dag`), and a piece must resolve its COMPONENT's — through the
+        # base, on the whole graph its calibration record was measured on, at the piece's own
+        # compute dtype. Resolved on a piece's graph the record was refused ("measured on
+        # another graph") and every piece ran the conservative contract: GLM-4.1V streamed,
+        # same tokens, logits off from whole. A piece's op uids index the whole's sets.
+        seg_exec._contract_from = base
+        # And it loads under its COMPONENT's runtime state — the request's resolution and the
+        # component handler, which the runtime and the factory give the base only — read at
+        # each load (`GraphExecutor._component_from`): a computable buffer is computed from it.
+        seg_exec._component_from = base
+        seg_exec._flow_reads_weights = False
+        # A piece loads what its own ops consume, and BORROWS any key it consumes that its
+        # lender holds: the base's non-block weights, resident for the flow's by-name reads
+        # (`_ensure_flow_reads`) — one copy; before, every piece reloaded every non-block weight
+        # with every run, the embedding into pieces that never read it, in no plan's budget. A
+        # pass of a sliced stretch (`ChunkedPiece`) borrows its whole stretch's from the piece.
+        seg_exec._borrow_from = lender
+        seg_exec.load_graph_from_dict(sub)
+        seg_exec._component_name = component_name
+        return seg_exec
 
     # -- the strategy API --------------------------------------------------
 

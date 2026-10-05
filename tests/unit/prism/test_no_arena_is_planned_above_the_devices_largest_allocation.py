@@ -122,33 +122,38 @@ def test_the_cut_holds_every_piece_under_the_arena_bound():
 
 
 def test_the_cut_holds_every_change_with_the_parked_arena():
-    """Seven 10 MB blocks at 31 MB: the greedy cut is 20/20/20/10, and the 10 MB last piece parks
-    beside the 20 MB first one at the wrap-around — over the budget. Priced, every change fits."""
+    """Seven 10 MB blocks at 32 MB (each op holds its 1 MB input and its 1 MB output while it runs,
+    `op_peak_curve`, + 30 MB of weights): the greedy cut is 30/30/10, and the 10 MB last piece parks
+    beside the 30 MB first one at the wrap-around — over the budget. Priced, every change fits."""
     g = _chain(7, weight_mb=10)
-    greedy = LayerPartitioner(g).partition(31 * MB)
-    assert greedy.fits and _changes(greedy.segments, math.inf) > 31 * MB, \
+    budget = 32 * MB
+    greedy = LayerPartitioner(g).partition(budget)
+    assert greedy.fits and _changes(greedy.segments, math.inf) > budget, \
         ([s.weight_bytes / MB for s in greedy.segments], _changes(greedy.segments, math.inf) / MB)
-    priced = LayerPartitioner(g).partition(31 * MB, parked_cap_bytes=math.inf)
-    assert priced.fits and _changes(priced.segments, math.inf) <= 31 * MB, \
+    priced = LayerPartitioner(g).partition(budget, parked_cap_bytes=math.inf)
+    assert priced.fits and _changes(priced.segments, math.inf) <= budget, \
         ([s.weight_bytes / MB for s in priced.segments], _changes(priced.segments, math.inf) / MB)
-    assert priced.peak_resident_bytes <= 31 * MB
+    assert priced.peak_resident_bytes <= budget
     # a cap below the outgoing piece: it is freed to the driver, nothing parks, the greedy cut stands
-    capped = LayerPartitioner(g).partition(31 * MB, parked_cap_bytes=5 * MB)
+    capped = LayerPartitioner(g).partition(budget, parked_cap_bytes=5 * MB)
     assert [s.weight_bytes for s in capped.segments] == [s.weight_bytes for s in greedy.segments]
 
 
 def _weighted(weights_mb, act_mb):
-    """One weighted op per entry, `act_mb` of activation flowing through the chain to the graph's
-    output (live to the end, so carried across the wrap-around like a model's)."""
-    a_elems = act_mb * MB // 2
-    tensors = {"x0": {"shape": [a_elems], "dtype": "bfloat16", "is_parameter": False}}
+    """One weighted op per entry; the first also writes `act_mb` of activation that is a graph
+    output (live to the end, so carried across the wrap-around like a model's). The chain between
+    the ops is empty, so the activations held WHILE an op runs (`op_peak_curve`) are the ones a cut
+    carries: `act_mb`."""
+    tensors = {"x0": {"shape": [0], "dtype": "bfloat16", "is_parameter": False},
+               "carry": {"shape": [act_mb * MB // 2], "dtype": "bfloat16", "is_parameter": False}}
     ops, order, prev = {}, [], "x0"
     for i, w in enumerate(weights_mb):
         tensors[f"p{i}"] = {"shape": [w * MB // 2], "dtype": "bfloat16", "is_parameter": True, "weight_name": f"w{i}"}
-        tensors[f"x{i+1}"] = {"shape": [a_elems], "dtype": "bfloat16", "is_parameter": False}
-        ops[f"o{i}"] = {"input_tensor_ids": [prev, f"p{i}"], "output_tensor_ids": [f"x{i+1}"]}
+        tensors[f"x{i+1}"] = {"shape": [0], "dtype": "bfloat16", "is_parameter": False}
+        ops[f"o{i}"] = {"input_tensor_ids": [prev, f"p{i}"],
+                        "output_tensor_ids": [f"x{i+1}"] + (["carry"] if i == 0 else [])}
         order.append(f"o{i}"); prev = f"x{i+1}"
-    return {"tensors": tensors, "ops": ops, "execution_order": order, "output_tensor_ids": [prev]}
+    return {"tensors": tensors, "ops": ops, "execution_order": order, "output_tensor_ids": [prev, "carry"]}
 
 
 def test_the_change_search_does_not_step_past_the_cuts_floor():

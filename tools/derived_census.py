@@ -1013,6 +1013,49 @@ def tile_bindings(g: dict, syms: dict, spec: dict) -> list:
     return [out]
 
 
+def sliced_bindings(model: str, comp: str, syms: dict, plan: dict, unhandled) -> list:
+    """[(op uids, binding)] of the stretches the plan runs in slices of a token axis
+    (`plan.layer_stream_chunks[comp]`, run by `core/strategies/chunked_piece.ChunkedPiece`): the
+    ops of the stretch's SLICED passes (`plan_region` on the graph the executor runs), at each
+    length a slice takes (`chunk_extents` over the slice count — the runtime's own split). A pass
+    that does not touch the axis runs once at the request's binding, already derived. One entry
+    per binding, its ops every stretch's at it: the component is derived once per length (SANA's
+    40 stretches take 4)."""
+    from neurobrix.core.prism.chunked_region import (
+        TokenAxis, chunk_extents, plan_region, region_carriers)
+    chunks = (plan.get("layer_stream_chunks") or {}).get(comp) or []
+    if not chunks:
+        return []
+    g = runtime_graph(model, comp)
+    out: dict = {}
+    axes: dict = {}
+    for ch in chunks:
+        sym = ch["symbol"]
+        if sym not in syms:
+            unhandled[f"{comp}: sliced stretch {ch['first_op']}..{ch['last_op']}: {sym} unbound"] += 1
+            continue
+        if sym not in axes:
+            axes[sym] = TokenAxis(g, sym)
+        ax = axes[sym]
+        if ch["first_op"] not in ax.index or ch["last_op"] not in ax.index:
+            unhandled[f"{comp}: sliced stretch {ch['first_op']}..{ch['last_op']} is not in the "
+                      f"graph the executor runs"] += 1
+            continue
+        lo, hi = ax.index[ch["first_op"]], ax.index[ch["last_op"]]
+        rp, why = plan_region(ax, lo, hi, carriers=region_carriers(g, ax.order[lo:hi + 1]))
+        if rp is None or len(rp.passes) != int(ch["passes"]):
+            unhandled[f"{comp}: sliced stretch {ch['first_op']}..{ch['last_op']} plans "
+                      f"{'no pass: ' + why if rp is None else str(len(rp.passes)) + ' passes'} on "
+                      f"the graph the executor runs, the plan {ch['passes']}"] += 1
+            continue
+        ops_ = {u for cp in rp.passes if cp.chunked for u in cp.ops}
+        total = int(syms[sym])
+        for length in sorted({n for _f, n in chunk_extents(total, -(-total // int(ch["slice"])))}):
+            if length != total:
+                out.setdefault((sym, length), set()).update(ops_)
+    return [(ops_, {**syms, sym: length}) for (sym, length), ops_ in sorted(out.items())]
+
+
 def plan_tiling(plan: dict, comp: str):
     """(TilingView, {tiled op uid: tile factor}) of a component — the plan's op-level cut as the
     width pass and the tiled launches read it (empty when the component has none)."""
@@ -1707,6 +1750,15 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
                                                 prof.has_native_bf16, budget, min_rows, max_chunks,
                                                 unhandled, tiling=view, tiled_tf=tiled_tf):
                 derived.add((uid, q_, C.key_repr(key)))
+            # A stretch the plan runs in slices of a token axis (`layer_stream_chunks`): its sliced
+            # passes' ops launch at each slice's length, not the request's.
+            for ops_, b_ in sliced_bindings(a.model, comp, b, plan, unhandled):
+                for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, b_,
+                                                    prof.has_native_bf16, budget, min_rows,
+                                                    max_chunks, unhandled, tiling=view,
+                                                    tiled_tf=tiled_tf):
+                    if uid in ops_:
+                        derived.add((uid, q_, C.key_repr(key)))
     defaults = json.loads((CACHE / a.model / "runtime" / "defaults.json").read_text()) \
         if (CACHE / a.model / "runtime" / "defaults.json").exists() else {}
     for uid, q_, key in derive_extents(a.model, a.mode, topo, defaults, plan, prof.has_native_bf16,

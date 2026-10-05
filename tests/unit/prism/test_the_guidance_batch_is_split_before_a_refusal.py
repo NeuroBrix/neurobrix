@@ -10,18 +10,24 @@ linear-attention region holds four [2, 155 232, 2 240] fp32 tensors at once (res
 18 774.5 MB of activations alone against the 15 072.4 MB layer_streaming window, so no cut between
 ops serves it, and the census wrote no row ("the derivation cannot place it completely").
 
-The rule (`PrismSolver._split_guidance_batch`): when no candidate holds every component on an
-accelerator, the loop components' guidance branches are priced one pass each
-(`FlowBindings.split_guidance`, `InputConfig.guidance_passes`); the split is kept only if it places
-on the accelerator, and the plan says so (`ExecutionPlan.cfg_split_components`). Both CFG engines
-read that field and run the branches one pass each, joining the halves where the single pass put
-them; the derived census binds the split components' batch at one branch, as the plan priced it.
+The rule (`PrismSolver._split_guidance_batch`): the loop components' guidance branches are priced
+one pass each (`FlowBindings.split_guidance`, `InputConfig.guidance_passes`) and the split is taken
+when it raises the residency class of the plan that runs — weights resident on the card beat
+weights streamed per pass (layer_streaming, zero3), which beat the host — and the plan says so
+(`ExecutionPlan.cfg_split_components`). Both CFG engines read that field and run the branches one
+pass each, joining the halves where the single pass put them; the derived census binds the split
+components' batch at one branch, as the plan priced it.
 
-Allegro and Allegro-TI2V were refused on this rung for another cause — their `vae_encoder` froze the
-time axis — which Forge's re-trace (2026-10-04) removed; they are held here at the same rung.
+SANA-Video no longer needs it: priced at the vae_scale its container declares (32, not the
+arch formula's 8) it places at the guidance batch. Allegro and Allegro-TI2V do: at the guidance
+batch their transformer streamed (layer_streaming under Triton, zero3 under Allegro-TI2V's compiled
+plan) and died on the card at aten.gelu::16 ([2, 79 200, 9 216] fp32) in both engines (2026-10-05);
+one branch per pass holds it resident. Allegro's compiled plan holds it resident at the batch and
+keeps it.
 
-SEEN RED (2026-10-05): `_split_guidance_batch` made to return None -> SANA-Video refuses in every
-mode and the split cells fail; the split rule removed from `FlowBindings.overrides` -> the binding
+SEEN RED (2026-10-05): `_split_guidance_batch` made to return None -> the split cells fail;
+the class comparison made "any candidate on the accelerator" again -> the split cells fail (a
+streamed plan is on the accelerator); the split rule removed from `FlowBindings.overrides` -> the binding
 cell fails; the per-branch pass in the compiled CFG engine made to run the whole batch -> the
 values cell fails on its pass count. Triton's CFG engine mirrors the compiled one line for line
 (R33: no Triton on this CPU) — its values are the GPU proof's.
@@ -78,16 +84,30 @@ def test_the_video_models_place_on_the_16gb_card_at_its_top_rung(monkeypatch, mo
     assert not _off_the_card(plan), f"{model} [{mode}] put components on the host: {_off_the_card(plan)}"
 
 
-@pytest.mark.parametrize("mode", MODES)
-def test_sana_video_places_by_splitting_its_guidance_batch(monkeypatch, mode):
-    plan = _plan(monkeypatch, "SANA-Video_2B_720p_diffusers", mode)
+SPLIT = [("Allegro", "triton"), ("Allegro", "triton_sequential"), ("Allegro-TI2V", "triton"),
+         ("Allegro-TI2V", "triton_sequential"), ("Allegro-TI2V", "compiled")]
+KEEP = [("Allegro", "compiled")] + [("SANA-Video_2B_720p_diffusers", m) for m in MODES]
+
+
+@pytest.mark.parametrize("model,mode", SPLIT)
+def test_a_split_that_holds_the_transformer_resident_is_taken(monkeypatch, model, mode):
+    """At the guidance batch the FFN intermediate ([2, 79 200, 9 216] fp32, 5 569 MB in and as much
+    out at gelu) left these plans streaming the transformer (layer_streaming under Triton, zero3
+    under Allegro-TI2V's compiled plan) — and both engines died there on the card. One branch per
+    pass holds it resident."""
+    plan = _plan(monkeypatch, model, mode)
     assert plan.cfg_split_components == ["transformer"], plan.cfg_split_components
-    assert "guidance branches of transformer run one pass each" in plan.selection_reason
+    assert plan.components["transformer"].devices == ["cuda:0"], plan.components["transformer"].devices
+    assert "one branch per pass holds every component resident" in plan.selection_reason, \
+        plan.selection_reason
 
 
-def test_a_plan_that_places_whole_keeps_its_guidance_batch(monkeypatch):
-    """The split is a cut taken only where the batch does not fit: Allegro places as it is."""
-    assert _plan(monkeypatch, "Allegro", "triton").cfg_split_components == []
+@pytest.mark.parametrize("model,mode", KEEP)
+def test_a_plan_the_split_does_not_raise_keeps_its_guidance_batch(monkeypatch, model, mode):
+    """The split is taken only where it raises the plan's residency class: Allegro's compiled plan
+    holds the transformer resident at the guidance batch, and SANA-Video's (vae_scale 32, the
+    container's) places without it."""
+    assert _plan(monkeypatch, model, mode).cfg_split_components == []
 
 
 def test_a_split_component_binds_one_branchs_batch(tmp_path):

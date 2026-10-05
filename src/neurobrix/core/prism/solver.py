@@ -398,6 +398,11 @@ class ExecutionPlan:
     # fused). The strategy cuts with the SAME declaration: the vlm flows declare only after the
     # pieces are built, so the base graph at the cut is not yet fused.
     layer_stream_moe: Dict[str, bool] = field(default_factory=dict)
+    # component -> the stretches of it run in slices of a token axis, each one of its segments
+    # (`LayerPartitioner._chunk_regions`, core/prism/chunked_region.py): [{"first_op", "last_op",
+    # "symbol", "slice", "count", "passes", "peak_bytes"}, ...]. The streaming strategy runs each
+    # such segment slice by slice at the planned `slice`; empty for every other plan.
+    layer_stream_chunks: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -1114,6 +1119,34 @@ class PrismSolver:
     # PUBLIC API
     # =========================================================================
 
+    @staticmethod
+    def _declared_vae_scale(container) -> Optional[int]:
+        """The VAE's spatial compression of this container, by its ONE derivation:
+        `resolution.container_size.vae_scale_factor` — the manifest, then the defaults in both
+        spellings, then the trace — the brick the CLI binds the request with and the executor
+        sizes its latents with. None for a container without a latent space.
+
+        Prism used to read a second one, `2 ** (len(block_out_channels) - 1)` from the VAE's
+        arch, and wrote it over the caller's: right for a VAE whose compression is its block
+        count, 4x short per side for one that patchifies on top of it. Over the shared cache the
+        two disagree on SANA-Video_2B_720p only (declared 32, `spatial_compression_ratio`; the
+        arch 8): every spatial symbol of its transformer was priced at 4x per side the latent
+        the runtime runs (84x168 for 21x42 at 672x1344) — 16x over, and a 16 GB plan of layer
+        streaming, a guidance split and op-level bands it never needed (2026-10-05). The tiled
+        VAE decode was not moved by it: its tile is sized at the scale its graph measures."""
+        if not container.cache_path:
+            return None
+        import json as _json
+        from neurobrix.core.runtime.resolution.container_size import vae_scale_factor
+        root = Path(str(container.cache_path))
+
+        def read(rel):
+            f = root / rel
+            return _json.loads(f.read_text()) if f.exists() else {}
+        declared = vae_scale_factor(read("manifest.json"), read("runtime/defaults.json"),
+                                    read("topology.json").get("components") or {})
+        return int(declared) if declared else None
+
     def solve(
         self, container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None,
         serve_mode: bool = False, mode: str = "compiled",
@@ -1253,32 +1286,14 @@ class PrismSolver:
         neural_components = sorted(neural_components, key=lambda c: c.name)
         self._neural_components = neural_components
 
-        # vae_scale is a MODEL property (the VAE's spatial compression ratio),
-        # NOT a run-time knob. Callers pass a placeholder default (8) because
-        # runtime defaults.json does not carry vae_scale_factor; left
-        # uncorrected it mis-sizes the latent-space activation estimate for any
-        # VAE whose true compression != 8. Sana DC-AE compresses 32x, so the
-        # default 8 makes the estimator resolve latent = height // 8 (512 at
-        # 4096px) instead of height // 32 (128) -> a 16x (4^2) spatial
-        # over-estimate that flips the 4Kpx transformer single_gpu -> zero3 and
-        # (on the triton path) kills it at op-0. Derive the true value from the
-        # VAE component's arch (2^(len(block_out_channels)-1), the same formula
-        # TilingEngine and src/CLAUDE.md §19 use), reusing config_loader so
-        # there is one derivation. No VAE component (LLM / upscaler) leaves the
-        # caller's value untouched. Estimate-only: runtime symbol resolution is
-        # independent of this field, so this changes placement, never compute.
-        if container.cache_path:
-            from neurobrix.core.components.config_loader import (
-                get_vae_config_for_transformer,
-            )
-            vae_cfg = get_vae_config_for_transformer(str(container.cache_path))
-            if vae_cfg and vae_cfg.vae_scale_factor:
-                if input_config.vae_scale != vae_cfg.vae_scale_factor:
-                    logging.getLogger(__name__).debug(
-                        "Prism: vae_scale %s -> %s (derived from VAE arch)",
-                        input_config.vae_scale, vae_cfg.vae_scale_factor,
-                    )
-                input_config.vae_scale = vae_cfg.vae_scale_factor
+        # vae_scale is a MODEL property: the container's own declaration (`_declared_vae_scale`)
+        # replaces whatever the caller passed. No VAE (an LLM, an upscaler) leaves it untouched.
+        _declared = self._declared_vae_scale(container)
+        if _declared and input_config.vae_scale != _declared:
+            logging.getLogger(__name__).debug(
+                "Prism: vae_scale %s -> %s (the container's declaration)",
+                input_config.vae_scale, _declared)
+            input_config.vae_scale = int(_declared)
 
         # Step 0a: Detect op-level tiling needs per component (fused
         # upsample→conv pairs whose intermediate tensor would OOM). Done
@@ -1497,15 +1512,25 @@ class PrismSolver:
             )
 
         shard_sizes = container.get_shard_sizes()
+        # Every rung starts unsliced: `solve` re-enters here down the unified ladder, and a slicing
+        # the previous rung kept must not reach this rung's first pass before its cheaper cuts.
+        self._token_split = False
         candidates = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
         self._cfg_split = []
+        self._cfg_split_reason = ""
         _split = self._split_guidance_batch(
             candidates, container, neural_components, input_config, target_dtype_str, profile,
             component_dtypes, strategies, devices, shard_sizes)
         if _split is not None:
             candidates, component_memory, input_config, devices = _split
+            sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
+        _sliced = self._split_token_axis(
+            candidates, container, neural_components, input_config, target_dtype_str, profile,
+            component_dtypes, strategies, devices, shard_sizes)
+        if _sliced is not None:
+            candidates, component_memory, input_config, devices = _sliced
             sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
         # When NBX_FORCE_STRATEGY is set and the strategy cannot fit, the
@@ -1808,7 +1833,7 @@ class PrismSolver:
         if self._cfg_split:
             plan.selection_reason = (
                 f"{plan.selection_reason} — guidance branches of {', '.join(self._cfg_split)} run one "
-                f"pass each: no plan held the guidance batch on the accelerator")
+                f"pass each: {self._cfg_split_reason}")
 
         # Component-level spatial tiling decided during placement (Strategy 3.5
         # in _place_component) — keep only entries whose final allocation
@@ -1836,6 +1861,13 @@ class PrismSolver:
                 for name, part in _parts.items()}
             plan.layer_stream_graph = dict(getattr(self, "_layer_stream_graphs", None) or {})
             plan.layer_stream_moe = dict(getattr(self, "_layer_stream_moe", None) or {})
+            plan.layer_stream_chunks = {name: [dict(c) for c in part.chunks]
+                                        for name, part in _parts.items() if part.chunks}
+            if plan.layer_stream_chunks:
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — {', '.join(sorted(plan.layer_stream_chunks))} run "
+                    f"{sum(len(v) for v in plan.layer_stream_chunks.values())} stretch(es) in slices of "
+                    f"a token axis: no plan held the request on the accelerator otherwise")
             plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
             # The components this rung kept resident by tiling them: their tiling is the plan's.
             for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
@@ -1917,6 +1949,34 @@ class PrismSolver:
                     print(f"   [OpTiling] {_cn}: dropped full-extent op-level "
                           f"tiling (component-level tiling active — per-tile "
                           f"extents fit without band streaming)")
+
+        # The same coherence for a stretch the plan runs in slices of a token axis
+        # (`layer_stream_chunks`): its ops run on slices, the partitioner budgeted the SLICE peak
+        # (`_chunk_regions`), and the overflow analysis above priced them at full extent. Their
+        # op-level tiling is dropped here, at the plan — the runtime refuses an op-level
+        # interceptor inside a sliced stretch (`ChunkedPiece.register_op_uid_interceptors`): it
+        # was proven on the whole graph's liveness, a slice is not the call it was written for.
+        if plan.layer_stream_chunks and plan.runtime_op_tiling:
+            _orders = getattr(self, "_layer_stream_orders", None) or {}
+            for _cn, _stretches in plan.layer_stream_chunks.items():
+                _op_plan = plan.runtime_op_tiling.get(_cn)
+                if _op_plan is None:
+                    continue
+                _order = _orders.get(_cn)
+                if not _order:
+                    raise RuntimeError(
+                        f"Prism: '{_cn}' runs sliced stretches and carries op-level tiling, and "
+                        f"the streaming rung recorded no execution order to tell them apart")
+                _at = {u: i for i, u in enumerate(_order)}
+                _inside = set()
+                for _c in _stretches:
+                    _inside.update(_order[_at[_c["first_op"]]:_at[_c["last_op"]] + 1])
+                _dropped = _op_plan.drop_ops(_inside)
+                if _dropped:
+                    print(f"   [OpTiling] {_cn}: dropped op-level tiling of {_dropped} op(s) "
+                          f"inside its sliced stretches (budgeted per slice)")
+                if _op_plan.is_empty():
+                    del plan.runtime_op_tiling[_cn]
 
         # Step 7.9: what this plan holds in host memory on its engine — priced from the plan, per the
         # runtime's own rules (host_footprint.py): what this process holds now (the parsed container
@@ -5237,6 +5297,35 @@ class PrismSolver:
         allocs = candidate[2] or {}
         return bool(allocs) and not any(self._allocation_on_host(a) for a in allocs.values())
 
+    #: Strategies whose weights do not stay on the card while it computes: they cross the host
+    #: link during every pass (a block window, or zero3's per-block fetch).
+    _STREAMED_STRATEGIES = ("layer_streaming", "zero3")
+
+    def _residency_class(self, candidate) -> int:
+        """Where a candidate keeps the weights it computes with: 2 every component resident on a
+        card, 1 weights streamed to the card per pass (`layer_streaming`, `zero3` — the model's or
+        one component's `zero3:` allocation), 0 a component on the host. `_split_guidance_batch`
+        compares the class of the plan each request would run."""
+        if not self._holds_on_accelerator(candidate):
+            return 0
+        if candidate[1] in self._STREAMED_STRATEGIES:
+            return 1
+        for alloc in (candidate[2] or {}).values():
+            dev = alloc[0] if isinstance(alloc, tuple) else getattr(alloc, "device", alloc)
+            if isinstance(dev, str) and dev.startswith("zero3:"):
+                return 1
+        return 2
+
+    #: What each residency class says in a plan's reason.
+    _CLASS_WORDS = {-1: "places nothing", 0: "computes a component on the host",
+                    1: "streams its weights to the card each pass",
+                    2: "holds every component resident on the card"}
+
+    def _plan_class(self, candidates) -> int:
+        """The residency class of the candidate the cascade would choose (the highest score), -1
+        when nothing places."""
+        return self._residency_class(max(candidates, key=lambda c: c[0])) if candidates else -1
+
     #: Solver state a rung writes while it is evaluated. `_split_guidance_batch` re-evaluates the
     #: cascade on another request and puts these back when it does not keep the result, so a
     #: declined split leaves the plan exactly as the guidance batch made it.
@@ -5248,14 +5337,14 @@ class PrismSolver:
         "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
         "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
         "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
-        "_unified_rung_cap_mb",
+        "_unified_rung_cap_mb", "_layer_stream_orders",
     )
 
     def _split_guidance_batch(self, candidates, container, neural_components, input_config,
                               target_dtype_str, profile, component_dtypes, strategies, devices,
                               shard_sizes):
-        """Re-plan the request with the guidance branches run one pass each, when no candidate
-        holds it on the accelerator at the guidance batch. Returns (candidates, component memory,
+        """Re-plan the request with the guidance branches run one pass each, when that holds its
+        weights closer to the card than the guidance batch can. Returns (candidates, component memory,
         request, devices) to plan with, or None to keep the guidance batch.
 
         Classifier-free guidance concatenates [uncond, cond] on the batch axis and runs the loop
@@ -5268,21 +5357,24 @@ class PrismSolver:
         layer-streaming budget; the host rungs cannot size it on the card either, so every strategy
         refused. One branch at a time is the batch the refusal said it needed.
 
-        Only below the accelerator: a candidate already holding every component on a card keeps
-        the guidance batch (one pass, the faster schedule), so no plan that places today changes.
-        Tried before the host rungs win, because host compute is the last resort."""
+        Taken whenever it raises the residency class of the plan that runs (`_residency_class`):
+        weights resident beat weights streamed per pass, which beat the host. Allegro at its derived
+        request on a 16 GB V100: the transformer's FFN intermediate at the guidance batch is
+        [2, 79 200, 9 216] fp32, 5 569 MB for gelu's input and as much for its output, so at
+        batch 2 the Triton engine could only stream it in layer windows (and died at aten.gelu::16
+        with 11 050 MB live), and Allegro-TI2V's compiled plan put it on zero3; one branch per pass
+        holds the transformer whole on the card in both engines. A plan whose class the split does
+        not raise keeps the guidance batch (one pass, the faster schedule) — every plan that holds
+        its components resident today is unchanged."""
         passes = getattr(input_config, "guidance_passes", None)
         flow = getattr(input_config, "flow", None)
         if not passes or flow is None:
             return None
-        if any(self._holds_on_accelerator(c) for c in candidates):
+        batch_class = self._plan_class(candidates)
+        if batch_class == 2:
             return None
-        topology = self._flow_topology(container)
-        from neurobrix.triton.cfg.engine import guidance_embedding_component
-        if guidance_embedding_component(topology) is not None:
-            return None   # the scale is embedded: the flow runs no guidance batch
-        loop = [c for c in ((topology.get("flow") or {}).get("loop") or {}).get("components") or []
-                if c in {n.name for n in neural_components}]
+        # [] also when the scale is embedded: the flow runs no guidance batch
+        loop = self._guidance_loop(input_config, container, neural_components)
         if not loop:
             return None
         import copy
@@ -5298,16 +5390,96 @@ class PrismSolver:
         split_devices = self._prepare_devices(profile)
         split = self._evaluate_all_strategies(
             strategies, ranked, memory, split_devices, shard_sizes, profile, container)
-        if any(self._holds_on_accelerator(c) for c in split):
+        if self._plan_class(split) > batch_class:
             self._cfg_split = sorted(loop)
+            self._cfg_split_reason = (
+                f"at the guidance batch the plan {self._CLASS_WORDS[batch_class]}, one branch per "
+                f"pass {self._CLASS_WORDS[self._plan_class(split)]}")
             logging.getLogger(__name__).info(
-                "Prism: no plan holds %s on the accelerator at the guidance batch; its %d guidance "
-                "branches run one pass each", ", ".join(self._cfg_split), int(passes))
+                "Prism: one pass per guidance branch holds %s %s; its %d guidance branches run one "
+                "pass each", ", ".join(self._cfg_split),
+                ("resident on the accelerator" if self._plan_class(split) == 2
+                 else "on the accelerator"), int(passes))
             return split, memory, split_ic, split_devices
         self.__dict__.update(saved)
         for k in absent:
             self.__dict__.pop(k, None)
         return None
+
+    def _split_token_axis(self, candidates, container, neural_components, input_config,
+                          target_dtype_str, profile, component_dtypes, strategies, devices,
+                          shard_sizes):
+        """Re-plan with a streamed component's over-budget stretches run in slices of a token axis
+        (`LayerPartitioner._chunk_regions`), when no candidate holds the request on the accelerator
+        after the cuts that cost nothing — between ops, and the guidance branches one pass each
+        (`_split_guidance_batch`). Returns (candidates, component memory, request, devices) to plan
+        with, or None to keep the plan as it is.
+
+        A sliced stretch is exact: its ops are per token or additive over the axis
+        (core/prism/chunked_region.py), and its later passes RECOMPUTE the per-token tensors they read
+        rather than hold them whole — the one cost the cuts before it do not pay, so it is the last
+        cut tried on the accelerator, and the host rungs, slower still, come after it. SANA-Video at
+        its derived request on the 16 GB V100 at the 8 192 rung, one guidance branch: the
+        transformer's activations peak at 9 486.7 MB in its ReLU linear attention, every tensor
+        [1, 155 232, ...], over the rung — and that attention is per token but for two contractions.
+
+        The request it slices is the one the guidance split chose when it could (one branch is the
+        smaller live set); a declined slice puts the rung state back, so a plan that places today
+        does not change."""
+        if any(self._holds_on_accelerator(c) for c in candidates):
+            return None
+        import copy
+        import dataclasses
+        saved = {k: copy.deepcopy(self.__dict__[k]) for k in self._RUNG_STATE if k in self.__dict__}
+        absent = [k for k in self._RUNG_STATE if k not in self.__dict__]
+        saved_split = list(self._cfg_split)
+        saved_reason = self._cfg_split_reason
+        request = input_config
+        loop = self._guidance_loop(input_config, container, neural_components)
+        if loop and not self._cfg_split:
+            request = dataclasses.replace(input_config, flow=input_config.flow.split_guidance(loop))
+        self._input_config = request
+        self._token_split = True
+        memory = self._compute_memory(
+            container, neural_components, request, target_dtype_str,
+            profile=profile, component_dtypes=component_dtypes)
+        ranked = sorted(memory.items(), key=lambda x: -x[1].total_bytes)
+        sliced_devices = self._prepare_devices(profile)
+        sliced = self._evaluate_all_strategies(
+            strategies, ranked, memory, sliced_devices, shard_sizes, profile, container)
+        # kept only where a stretch IS sliced: a placement the slices did not make is the cascade's
+        # without them, and the rungs after this one (the host's, the fp32 pass) are its to try
+        sliced_any = any(getattr(p, "chunks", None)
+                         for p in (self.__dict__.get("_layer_stream_partitions") or {}).values())
+        if sliced_any and any(self._holds_on_accelerator(c) for c in sliced):
+            if request is not input_config:
+                self._cfg_split = sorted(loop)
+                self._cfg_split_reason = ("no plan held the guidance batch on the accelerator, and "
+                                          "the token-axis slices run one branch per pass")
+            logging.getLogger(__name__).info(
+                "Prism: no plan holds the request on the accelerator with cuts between ops%s; "
+                "stretches of a streamed component run in slices of a token axis",
+                " and the guidance branches one pass each" if self._cfg_split else "")
+            return sliced, memory, request, sliced_devices
+        self.__dict__.update(saved)
+        for k in absent:
+            self.__dict__.pop(k, None)
+        self._cfg_split = saved_split
+        self._cfg_split_reason = saved_reason
+        self._token_split = False
+        return None
+
+    def _guidance_loop(self, input_config, container, neural_components):
+        """The loop components a guidance split runs one branch per pass, or [] when the request
+        runs no guidance batch (`_split_guidance_batch`'s conditions, ONE reading for both)."""
+        if not getattr(input_config, "guidance_passes", None) or getattr(input_config, "flow", None) is None:
+            return []
+        topology = self._flow_topology(container)
+        from neurobrix.triton.cfg.engine import guidance_embedding_component
+        if guidance_embedding_component(topology) is not None:
+            return []
+        return [c for c in ((topology.get("flow") or {}).get("loop") or {}).get("components") or []
+                if c in {n.name for n in neural_components}]
 
     def _evaluate_all_strategies(
         self, strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
@@ -5943,6 +6115,7 @@ class PrismSolver:
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}
         fingerprints: Dict[str, str] = {}
+        orders: Dict[str, List[str]] = {}
         moe_declared: Dict[str, bool] = {}
         dev_str = target.spec.get_device_string()
 
@@ -6190,7 +6363,8 @@ class PrismSolver:
                         f"not profile it) — a partition cut at the trace's shapes would plan a run that "
                         f"is not this one")
                 _cutter = LayerPartitioner(graph, _piece_sizes, symbol_map=_sizing[0],
-                                           compute_dtype_bytes=_sizing[1], widths=_sizing[2])
+                                           compute_dtype_bytes=_sizing[1], widths=_sizing[2],
+                                           token_split=bool(getattr(self, "_token_split", False)))
                 # One piece's weights are one arena: bounded by the device's largest allocation, in
                 # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
                 # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
@@ -6230,6 +6404,7 @@ class PrismSolver:
                         comp=comp_name)
                 partitions[comp_name] = part
                 fingerprints[comp_name] = graph_fingerprint(graph)
+                orders[comp_name] = list(graph.get("execution_order") or [])
             return (partitions, fingerprints, moe_declared, resident_beside, constant_bytes,
                     flow_read_bytes, kv_bytes, kv_in_window), None, (False, None)
 
@@ -6290,6 +6465,7 @@ class PrismSolver:
         # accounting sees the same number the executor will.
         self._layer_stream_partitions = partitions
         self._layer_stream_graphs = fingerprints
+        self._layer_stream_orders = orders
         self._layer_stream_moe = {k: v for k, v in moe_declared.items() if k in partitions}
         # Resident beside the pieces and outside any component's figure: the graph constants and
         # the flow-read weights the base holds.
@@ -7236,6 +7412,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
+    if getattr(plan, "layer_stream_chunks", None):
+        rec["layer_stream_chunks"] = {k: [dict(c) for c in v] for k, v in plan.layer_stream_chunks.items()}
     if plan.host_footprint:
         rec["host_footprint"] = dict(plan.host_footprint)
     if plan.unified_rungs_tried:
@@ -7278,7 +7456,12 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append(f"  {name:<20} -> {where}{shard}{detail}")
     if plan.cfg_split_components:
         lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
-                     f"each (the guidance batch held on no accelerator plan)")
+                     f"each (the reason is the plan's why)")
+    for _cn, _chunks in sorted((getattr(plan, "layer_stream_chunks", None) or {}).items()):
+        for _c in _chunks:
+            lines.append(f"sliced          {_cn} {_c['first_op']}..{_c['last_op']}: {_c['count']} slices of "
+                         f"{_c['slice']} along {_c['symbol']}, {_c['passes']} pass(es), "
+                         f"{_c['peak_bytes'] / 2**20:.0f} MB live at worst")
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")

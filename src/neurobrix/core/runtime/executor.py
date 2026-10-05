@@ -39,6 +39,8 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
+from neurobrix.core.prism.host_footprint import engine_of
+from neurobrix.core.runtime.torch_allocator import configure_torch_allocator
 
 
 class RuntimeExecutor:
@@ -283,6 +285,9 @@ class RuntimeExecutor:
         if self._is_setup:
             return
         self._optimize_cpu_threading()
+        if engine_of(self.mode) == "compiled":
+            # before any executor loads a weight (core/runtime/torch_allocator.py)
+            configure_torch_allocator(self.plan)
         self._setup_modules()
         self._setup_executors()
         self._init_strategy()
@@ -1124,6 +1129,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_graph", None) or {}),
             layer_moe=dict(
                 getattr(self.plan, "layer_stream_moe", None) or {}),
+            layer_chunks=dict(
+                getattr(self.plan, "layer_stream_chunks", None) or {}),
             mode=self.mode,
         )
 

@@ -37,7 +37,7 @@ reported with its arithmetic rather than approximated.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 _DTYPE_WIDTH = {
     "float64": 8, "float32": 4, "bfloat16": 2, "float16": 2,
@@ -91,6 +91,10 @@ class Partition:
     peak_resident_bytes: int
     peak_live_bytes: int
     refusal: Optional[str] = None
+    #: The stretches run in slices of a token axis (`LayerPartitioner._chunk_regions`), each one
+    #: segment of its own: {"first_op", "last_op", "symbol", "slice", "count", "passes",
+    #: "peak_bytes"}. Empty when every piece runs whole — every plan before this brick.
+    chunks: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def fits(self) -> bool:
@@ -101,6 +105,17 @@ class Partition:
         return self.peak_resident_bytes / (1024 * 1024)
 
 
+#: ATen ops whose output is a VIEW of their first input (https://docs.pytorch.org/docs/2.14/tensor_view.html),
+#: in both engines for the contiguous tensors a graph hands them: the op allocates nothing WHILE it
+#: runs (`LayerPartitioner.op_peak_curve`). Not `reshape` or `contiguous` (they copy a strided input),
+#: and not `expand` (already allocation-free on both curves, `ZERO_ALLOC_OP_TYPES`).
+VIEW_OP_TYPES = frozenset({
+    "aten::view", "aten::_unsafe_view", "aten::t", "aten::transpose", "aten::permute",
+    "aten::unsqueeze", "aten::squeeze", "aten::slice", "aten::select", "aten::narrow",
+    "aten::as_strided", "aten::alias",
+})
+
+
 class LayerPartitioner:
     """Partition one component graph into budget-sized segments."""
 
@@ -108,8 +123,21 @@ class LayerPartitioner:
                  weight_sizes: Optional[Dict[str, int]] = None,
                  symbol_map: Optional[Dict[str, int]] = None,
                  compute_dtype_bytes: Optional[int] = None,
-                 widths: Optional[Dict[str, int]] = None):
+                 widths: Optional[Dict[str, int]] = None,
+                 token_split: bool = False):
         self._dag = graph
+        # Whether a refusal on the activations may be answered by running a stretch of the graph in
+        # slices of a token axis (`_chunk_regions`). The solver turns it on only once the cuts that
+        # cost nothing — between ops, and the guidance branches one pass each — have refused: a
+        # sliced stretch recomputes what its later passes read.
+        self._token_split = bool(token_split)
+        # Tensors the runtime keeps past their last reader (the strategy's protected ids): a sliced
+        # stretch must hand them out whole.
+        self.protected: FrozenSet[str] = frozenset()
+        self._axes: Dict[str, Any] = {}
+        self._op_syms: Optional[Dict[str, Any]] = None
+        self._pass_peak_memo: Dict[Tuple[Tuple[str, ...], str, int], int] = {}
+        self._regions_used: Optional[Tuple[List["_Region"], int]] = None
         self.tensors: Dict[str, Any] = graph.get("tensors") or {}
         # Activations are sized AT THE REQUEST when the caller gives the request's symbol map: the
         # profiler's resolver (symbolic_shape at the request's symbols) and its compute-dtype rule,
@@ -176,10 +204,37 @@ class LayerPartitioner:
         """
         if getattr(self, "_curve_memo", None) is not None:
             return list(self._curve_memo)
+        self._walk_liveness()
+        return list(self._curve_memo)
+
+    def op_peak_curve(self) -> List[int]:
+        """Bytes of activation alive WHILE each op runs: what was live before it plus the outputs it
+        allocates, its inputs not yet freed — the profiler's rule (`estimate_peak_memory`: allocate,
+        record the peak, then free). This is what a piece must RESERVE; `live_activation_curve` is
+        what a CUT carries, and its maximum is not the peak.
+
+        The two differ by the op's inputs at their last use: an FFN's activation reads the
+        projection's output and writes one of the same size, both alive while it runs. Reserving the
+        after-op figure, layer streaming priced Allegro's transformer at its derived request on a
+        16 GB V100 (guidance batch 2, 720x1280, 88 frames) at 7 012 MB of activations where the
+        profiler prices 12 541 — the gelu's [2, 79 200, 9 216] fp32 input and output, 5 569 MB each,
+        counted once — and the Triton run died at aten.gelu::16 asking 5 569 MB with 11 050 MB live
+        (split16, 2026-10-05).
+
+        A view (`VIEW_OP_TYPES`) allocates nothing while it runs: its output IS its input's storage,
+        so its in-op figure is the live set before it. Counted as a new buffer, Ming-Lite-Omni-1.5's
+        vision tower on the busy Mac read 9 878 MB at an `_unsafe_view` of a 4 420 MB bmm output —
+        the same buffer twice — and the plan that streams it was refused."""
+        if getattr(self, "_op_peak_memo", None) is None:
+            self._walk_liveness()
+        return list(self._op_peak_memo)
+
+    def _walk_liveness(self) -> None:
+        """One walk of the order, filling both curves (`live_activation_curve`, `op_peak_curve`)."""
         from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
         last = self._last_use()
         outputs = set(self._dag.get("output_tensor_ids") or [])
-        curve, live = [], 0
+        curve, during, live = [], [], 0
         # Only what has been ADDED can be freed. Subtracting every input at
         # its last use freed the graph's own inputs too — tensors no op
         # produced — and drove the curve negative, reporting a peak of 0 on a
@@ -188,11 +243,13 @@ class LayerPartitioner:
         for i, op_uid in enumerate(self.order):
             op = self.ops.get(op_uid) or {}
             zero = op.get("op_type") in ZERO_ALLOC_OP_TYPES
+            before = live
             for tid in op.get("output_tensor_ids") or []:
                 t = self.tensors.get(tid)
                 if t is not None and not t.get("is_parameter") and tid not in alive:
                     alive[tid] = 0 if zero else self._activation_bytes(tid, t)
                     live += alive[tid]
+            during.append(before if op.get("op_type") in VIEW_OP_TYPES else live)
             # Every tensor dead after this op: its inputs at their last use and its own outputs
             # no op reads.
             for tid in list(op.get("input_tensor_ids") or []) + list(op.get("output_tensor_ids") or []):
@@ -202,7 +259,7 @@ class LayerPartitioner:
         # the graph, the request and the widths are fixed at construction, and the parked-change
         # search (`partition`) cuts again many times over the same curve
         self._curve_memo = list(curve)
-        return curve
+        self._op_peak_memo = list(during)
 
     def _op_weight_names(self, op_uid: str) -> Set[str]:
         names: Set[str] = set()
@@ -275,12 +332,17 @@ class LayerPartitioner:
 
     def _cut_floor(self) -> int:
         """The lowest cut the greedy can take: the activations' peak (reserved in every piece) plus
-        the most weight a single op reads (an op is never split across pieces). Below it `_greedy`
-        refuses by construction; at or above it the op that reads the most fits in a piece."""
-        curve = self.live_activation_curve()
+        the most weight a single op reads (an op is never split across pieces) — or, when stretches
+        run in slices (`_chunk_regions`), the peak those slices leave plus the most weight one op
+        or one stretch reads (a stretch is one piece). Below it `_greedy` refuses by construction;
+        at or above it the op that reads the most fits in a piece."""
+        if self._regions_used is not None:
+            regions, reserve = self._regions_used
+            return reserve + self._weights_floor(regions)
+        peaks = self.op_peak_curve()
         one_op = max((sum(self._bytes_for(n) for n in self._op_weight_names(uid)) for uid in self.order),
                      default=0)
-        return (max(curve) if curve else 0) + one_op
+        return (max(peaks) if peaks else 0) + one_op
 
     @staticmethod
     def _change_peak(segments: List[Segment], parked_cap_bytes: float) -> int:
@@ -299,6 +361,33 @@ class LayerPartitioner:
         return peak
 
     def _greedy(self, budget_bytes: int, max_arena_bytes: Optional[int] = None) -> Partition:
+        """The cut between ops (`_greedy_on` over the activation curve); when it refuses and the
+        solver allows it, the same cut over the curve that running some stretches in slices of a
+        token axis leaves (`_chunk_regions`), each such stretch a piece of its own."""
+        self._regions_used = None
+        part = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes,
+                               peaks=self.op_peak_curve())
+        if part.fits or not self._token_split or self._resolver is None:
+            return part
+        regions, why = self._chunk_regions(budget_bytes, max_arena_bytes)
+        if regions is None:
+            part.refusal = (f"{part.refusal} Nor does running a stretch of it in slices of a token "
+                            f"axis: {why}.")
+            return part
+        eff, reserve = self._effective_curve(regions)
+        again = self._greedy_on(self.live_activation_curve(), budget_bytes, max_arena_bytes, regions,
+                                reserve, peaks=eff)
+        if again.fits:
+            self._regions_used = (regions, reserve)
+            again.chunks = [r.record() for r in regions]
+        else:
+            again.refusal = (f"{part.refusal} Running {len(regions)} stretch(es) in slices of a token "
+                             f"axis still refuses: {again.refusal}")
+        return again
+
+    def _greedy_on(self, curve: List[int], budget_bytes: int, max_arena_bytes: Optional[int] = None,
+                   regions: Sequence["_Region"] = (), reserve: Optional[int] = None,
+                   peaks: Optional[List[int]] = None) -> Partition:
         """Greedy left-to-right: extend while the segment's weights fit.
 
         Greedy is right here because the order is fixed — the engine replays
@@ -310,9 +399,20 @@ class LayerPartitioner:
         ONE allocation when the piece loads (its arena), and a device grants a
         single allocation only up to its largest one (the profile's
         `max_allocation_mb`). None: the device grants its whole memory in one.
+
+        `regions`: stretches run in slices (`_chunk_regions`). Each is one piece of its own — cut
+        before its first op and after its last — and `reserve` is the activations' peak with them
+        sliced (`_effective_curve`).
+
+        `curve` is what each cut carries (`live_activation_curve`, a piece's `live_bytes_at_exit`);
+        `peaks` what each op holds while it runs (`op_peak_curve`), the activations every piece
+        reserves. None: `curve` stands for both (a caller with no op inside its ops' live sets).
         """
-        curve = self.live_activation_curve()
-        peak_live = max(curve) if curve else 0
+        peaks = curve if peaks is None else peaks
+        peak_live = max(peaks) if peaks else 0
+        if reserve is not None:
+            peak_live = max(peak_live, reserve)
+        starts = {r.first: r for r in regions}
 
         # The weights get the budget MINUS what the activations will hold.
         # Sizing segments against the whole budget and then adding the
@@ -345,7 +445,42 @@ class LayerPartitioner:
         cur_ops = 0
         total = 0
 
-        for i, op_uid in enumerate(self.order):
+        def close(last_index: int) -> None:
+            nonlocal cur_names, cur_bytes, cur_first, cur_ops, total
+            segments.append(Segment(
+                index=len(segments), first_op=cur_first,
+                last_op=self.order[last_index], op_count=cur_ops,
+                weight_names=set(cur_names), weight_bytes=cur_bytes,
+                live_bytes_at_exit=curve[last_index]))
+            total += cur_bytes
+            cur_names, cur_bytes, cur_first, cur_ops = set(), 0, None, 0
+
+        i = 0
+        while i < len(self.order):
+            op_uid = self.order[i]
+            region = starts.get(i)
+            if region is not None:
+                # A sliced stretch is ONE piece: every pass re-reads its weights.
+                if cur_first is not None:
+                    close(i - 1)
+                names = region.weight_names
+                add = sum(self._bytes_for(n) for n in names)
+                if add > weight_budget:
+                    return Partition(
+                        segments=[], total_weight_bytes=0, peak_resident_bytes=0,
+                        peak_live_bytes=peak_live,
+                        refusal=(
+                            f"the stretch {region.first_op!r}..{region.last_op!r} run in slices of "
+                            f"{region.symbol} reads {add / (1024*1024):.1f} MB of weights, over the "
+                            f"{weight_budget / (1024*1024):.1f} MB left once activations are reserved "
+                            f"({peak_live / (1024*1024):.1f} MB of a "
+                            f"{budget_bytes / (1024*1024):.1f} MB budget){arena_bound}"))
+                cur_first, cur_names, cur_bytes = op_uid, set(names), add
+                cur_ops = region.last - region.first + 1
+                close(region.last)
+                i = region.last + 1
+                continue
+
             names = self._op_weight_names(op_uid)
             new = {n for n in names if n not in cur_names}
             add = sum(self._bytes_for(n) for n in new)
@@ -368,13 +503,7 @@ class LayerPartitioner:
                         f"sharded, which is a different rung."))
 
             if cur_first is not None and cur_bytes + add > weight_budget:
-                segments.append(Segment(
-                    index=len(segments), first_op=cur_first,
-                    last_op=self.order[i - 1], op_count=cur_ops,
-                    weight_names=set(cur_names), weight_bytes=cur_bytes,
-                    live_bytes_at_exit=curve[i - 1]))
-                total += cur_bytes
-                cur_names, cur_bytes, cur_first, cur_ops = set(), 0, None, 0
+                close(i - 1)
                 new, add = names, sum(self._bytes_for(n) for n in names)
 
             if cur_first is None:
@@ -382,14 +511,10 @@ class LayerPartitioner:
             cur_names |= new
             cur_bytes += add
             cur_ops += 1
+            i += 1
 
         if cur_first is not None:
-            segments.append(Segment(
-                index=len(segments), first_op=cur_first,
-                last_op=self.order[-1], op_count=cur_ops,
-                weight_names=set(cur_names), weight_bytes=cur_bytes,
-                live_bytes_at_exit=curve[-1] if curve else 0))
-            total += cur_bytes
+            close(len(self.order) - 1)
 
         # What is resident at the worst moment: one segment's weights plus
         # the activations alive while it runs. This is the number the
@@ -400,6 +525,276 @@ class LayerPartitioner:
         return Partition(segments=segments, total_weight_bytes=total,
                          peak_resident_bytes=peak_resident,
                          peak_live_bytes=peak_live)
+
+    # -- stretches run in slices of a token axis --------------------------
+
+    def _bytes_at(self, tid: str, symbol_map: Dict[str, int]) -> int:
+        """One activation's bytes at `symbol_map` (the request's, or a slice's)."""
+        t = self.tensors.get(tid) or {}
+        shape = self._resolver._resolve_shape(t, symbol_map)
+        if tid in self._widths:
+            numel = 1
+            for d in shape:
+                numel *= int(d)
+            return numel * int(self._widths[tid])
+        return self._resolver._compute_size(shape, t, self._compute_dtype_bytes)
+
+    def _axis(self, sym: str):
+        from neurobrix.core.prism.chunked_region import TokenAxis
+        if sym not in self._axes:
+            self._axes[sym] = TokenAxis(self._dag, sym)
+        return self._axes[sym]
+
+    def _op_symbols(self) -> Dict[str, Any]:
+        from neurobrix.core.prism.chunked_region import op_symbols
+        if self._op_syms is None:
+            self._op_syms = op_symbols(self._dag)
+        return self._op_syms
+
+    def _op_weight_bytes(self, i: int) -> int:
+        return sum(self._bytes_for(n) for n in self._op_weight_names(self.order[i]))
+
+    def _weights_floor(self, regions: Sequence["_Region"]) -> int:
+        """The most weight one piece must hold: one op's outside every stretch, or one stretch's."""
+        inside: Set[int] = set()
+        for r in regions:
+            inside.update(range(r.first, r.last + 1))
+        one_op = max((self._op_weight_bytes(i) for i in range(len(self.order)) if i not in inside),
+                     default=0)
+        return max([one_op] + [sum(self._bytes_for(n) for n in r.weight_names) for r in regions])
+
+    def _effective_curve(self, regions: Sequence["_Region"]) -> Tuple[List[int], int]:
+        """What each op holds while it runs (`op_peak_curve`) with these stretches sliced, and the
+        peak to reserve. Inside a stretch the live set is its sliced peak (`_Region.peak_bytes`);
+        outside, the op's own figure — the stretch hands out exactly the tensors the whole ops
+        would."""
+        eff = list(self.op_peak_curve())
+        reserve = 0
+        for r in regions:
+            for i in range(r.first, r.last + 1):
+                eff[i] = r.peak_bytes
+            reserve = max(reserve, r.peak_bytes)
+        return eff, max([reserve] + eff) if eff else reserve
+
+    def _pass_peak(self, cp, sym: str, c: int, chunked: bool) -> int:
+        """The live activations of one pass at slice `c`: its own curve (its ops alone, its targets
+        kept) plus the contiguous slices of the stretch's inputs it is fed."""
+        from neurobrix.core.prism.chunked_region import pass_graph
+        key = (tuple(cp.ops), sym, c if chunked else 0)
+        if key not in self._pass_peak_memo:
+            sm = dict(self._symbol_map)
+            if chunked:
+                sm[sym] = c
+            sub = LayerPartitioner(pass_graph(self._dag, cp), {}, symbol_map=sm,
+                                   compute_dtype_bytes=self._compute_dtype_bytes, widths=self._widths)
+            peaks = sub.op_peak_curve()
+            self._pass_peak_memo[key] = max(peaks) if peaks else 0
+        return self._pass_peak_memo[key]
+
+    def _region_peak(self, ax, plan, c: int) -> int:
+        """What a stretch run in slices of `c` holds at its worst: everything live before it (held
+        until its last pass), its outputs assembled whole, each contraction's accumulator and the
+        sum that replaces it, and the worst pass — its slice's activations plus the slices of the
+        inputs it reads that carry the axis (a contiguous copy each, a broadcast's too)."""
+        sm = self._symbol_map
+        curve = self.live_activation_curve()
+        before = curve[plan.first - 1] if plan.first > 0 else 0
+        outs = sum(self._bytes_at(t, sm) for t in plan.outputs)
+        acc = sum(2 * self._bytes_at(t, sm) for t in plan.contractions if t not in plan.outputs)
+        sliced = dict(sm)
+        sliced[plan.symbol] = c
+        worst = 0
+        for cp in plan.passes:
+            fed = 0
+            if cp.chunked:
+                reads = set()
+                inside = set()
+                for uid in cp.ops:
+                    op = self.ops.get(uid) or {}
+                    reads.update(t for t in op.get("input_tensor_ids") or [] if t not in inside)
+                    inside.update(op.get("output_tensor_ids") or [])
+                # and the carriers of the stretch's symbols, sliced into every pass beside them
+                reads.update(t for t in plan.layouts if t not in plan.outputs)
+                for t in reads:
+                    if t in plan.layouts and t not in plan.outputs:
+                        fed += self._bytes_at(t, sliced)
+            worst = max(worst, self._pass_peak(cp, plan.symbol, c, cp.chunked) + fed)
+        return before + outs + acc + worst
+
+    def _chunk_regions(self, budget_bytes: int, max_arena_bytes: Optional[int]
+                       ) -> Tuple[Optional[List["_Region"]], str]:
+        """The stretches to run in slices of a token axis so the cut between ops fits, or (None,
+        why not). Activations first: the curve's hottest op not yet in a stretch is enclosed in
+        one (`_new_region`), a stretch over the target is sliced finer, until every op's live set
+        leaves room for the most weight one piece must hold."""
+        from neurobrix.core.prism.chunked_region import token_symbols
+        syms = token_symbols(self._dag, self._symbol_map)
+        if not syms:
+            return None, "no symbol of this graph is bound from a dimension of one of its inputs"
+        regions: List[_Region] = []
+        while True:
+            for r in regions:
+                w = sum(self._bytes_for(n) for n in r.weight_names)
+                if max_arena_bytes is not None and w > max_arena_bytes:
+                    return None, (f"the stretch {r.first_op!r}..{r.last_op!r} reads {w / _MB:.1f} MB "
+                                  f"of weights, over the device's largest allocation "
+                                  f"({max_arena_bytes / _MB:.1f} MB)")
+            eff, _ = self._effective_curve(regions)
+            target = budget_bytes - self._weights_floor(regions)
+            h = max(range(len(eff)), key=lambda i: eff[i]) if eff else 0
+            if not eff or eff[h] <= target:
+                if not regions:
+                    return None, "the activations are not what binds"
+                return regions, ""
+            owner = next((r for r in regions if r.first <= h <= r.last), None)
+            if owner is not None:
+                c = self._largest_slice(owner.axis, owner.plan, target, owner.slice - 1)
+                if c is None:
+                    return None, (f"the stretch {owner.first_op!r}..{owner.last_op!r} peaks at "
+                                  f"{self._region_peak(owner.axis, owner.plan, 1) / _MB:.1f} MB in "
+                                  f"slices of one {owner.symbol}, over the {target / _MB:.1f} MB its "
+                                  f"activations may hold")
+                owner.set_slice(c, self._region_peak(owner.axis, owner.plan, c), self._symbol_map)
+                continue
+            best: Optional[_Region] = None
+            whys: List[str] = []
+            for sym in syms:
+                got, why = self._new_region(self._axis(sym), h, eff, target, regions)
+                if got is None:
+                    whys.append(f"{sym}: {why}")
+                elif best is None or (got.count, got.peak_bytes) < (best.count, best.peak_bytes):
+                    best = got
+            if best is None:
+                return None, (f"{self.order[h]!r} holds {eff[h] / _MB:.1f} MB of activations "
+                              f"against {target / _MB:.1f} MB — " + "; ".join(whys))
+            regions.append(best)
+            regions.sort(key=lambda r: r.first)
+
+    def _largest_slice(self, ax, plan, target: int, upper: int) -> Optional[int]:
+        """The largest slice in [1, upper] whose stretch peak is at most `target`, or None."""
+        if upper < 1 or self._region_peak(ax, plan, 1) > target:
+            return None
+        lo, hi = 1, upper
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._region_peak(ax, plan, mid) <= target:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    def _new_region(self, ax, h: int, eff: List[int], target: int, regions: Sequence["_Region"]
+                    ) -> Tuple[Optional["_Region"], str]:
+        """A stretch around op `h` run in slices of `ax.sym`: the ops over the target around it
+        (none may mix the axis), widened to the seams where the least is live — before its first op
+        and after its last — among the ops that do not mix the axis either."""
+        from neurobrix.core.prism.chunked_region import MIX, plan_region, region_carriers
+        if ax.verdicts[h].kind == MIX:
+            return None, f"{self.order[h]} mixes the axis ({ax.verdicts[h].reason})"
+        taken: Set[int] = set()
+        for r in regions:
+            taken.update(range(r.first, r.last + 1))
+
+        def free(i: int) -> bool:
+            return 0 <= i < len(self.order) and i not in taken and ax.verdicts[i].kind != MIX
+
+        lo = hi = h
+        while free(lo - 1) and eff[lo - 1] > target:
+            lo -= 1
+        while free(hi + 1) and eff[hi + 1] > target:
+            hi += 1
+        span_lo, span_hi = lo, hi
+        while free(span_lo - 1):
+            span_lo -= 1
+        while free(span_hi + 1):
+            span_hi += 1
+        curve = self.live_activation_curve()
+
+        def before(i: int) -> int:
+            return curve[i - 1] if i > 0 else 0
+
+        # A seam farther from the hot ops is worth taking only where less is live there than at
+        # every seam nearer them: it adds ops (their weights, and recomputation in later passes)
+        # for nothing otherwise. The record lows walking outward, under the target.
+        def record_lows(seq: Sequence[int], value: Callable[[int], int]) -> List[int]:
+            out: List[int] = []
+            low: Optional[int] = None
+            for i in seq:
+                v = value(i)
+                if v <= target and (low is None or v < low):
+                    out.append(i)
+                    low = v
+            return out
+
+        lefts = record_lows(range(lo, span_lo - 1, -1), before)
+        rights = record_lows(range(hi, span_hi + 1), lambda i: curve[i])
+        pairs = sorted(((L, R) for L in lefts for R in rights),
+                       key=lambda p: (max(before(p[0]), curve[p[1]]), before(p[0]) + curve[p[1]],
+                                      p[1] - p[0]))
+        total = int(self._symbol_map[ax.sym])
+        why = f"no seam around {self.order[h]} leaves the stretch under {target / _MB:.1f} MB"
+        for L, R in pairs:
+            plan, no = plan_region(ax, L, R, protected=self.protected,
+                                   carriers=region_carriers(self._dag, self.order[L:R + 1],
+                                                            self._op_symbols()))
+            if plan is None:
+                why = no
+                continue
+            c = self._largest_slice(ax, plan, target, total - 1)
+            if c is None:
+                why = (f"{self.order[L]}..{self.order[R]} peaks at "
+                       f"{self._region_peak(ax, plan, 1) / _MB:.1f} MB in slices of one")
+                continue
+            names: Set[str] = set()
+            for uid in self.order[L:R + 1]:
+                names |= self._op_weight_names(uid)
+            reg = _Region(axis=ax, plan=plan, weight_names=names)
+            reg.set_slice(c, self._region_peak(ax, plan, c), self._symbol_map)
+            return reg, ""
+        return None, why
+
+
+_MB = 1024 * 1024
+
+
+@dataclass
+class _Region:
+    """One stretch run in slices of a token axis, as the partitioner sized it."""
+    axis: Any
+    plan: Any
+    weight_names: Set[str]
+    slice: int = 0
+    count: int = 0
+    peak_bytes: int = 0
+
+    @property
+    def first(self) -> int:
+        return self.plan.first
+
+    @property
+    def last(self) -> int:
+        return self.plan.last
+
+    @property
+    def first_op(self) -> str:
+        return self.plan.first_op
+
+    @property
+    def last_op(self) -> str:
+        return self.plan.last_op
+
+    @property
+    def symbol(self) -> str:
+        return self.plan.symbol
+
+    def set_slice(self, c: int, peak: int, symbol_map: Dict[str, int]) -> None:
+        total = int(symbol_map[self.symbol])
+        self.slice, self.count, self.peak_bytes = int(c), -(-total // int(c)), int(peak)
+
+    def record(self) -> Dict[str, Any]:
+        return {"first_op": self.first_op, "last_op": self.last_op, "symbol": self.symbol,
+                "slice": self.slice, "count": self.count, "passes": len(self.plan.passes),
+                "peak_bytes": self.peak_bytes}
 
 
 def rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
@@ -462,7 +857,9 @@ def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
 
 
 def build_segment_graph(graph: Dict[str, Any], segment: Segment,
-                        order_index: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+                        order_index: Optional[Dict[str, int]] = None,
+                        pass_ops: Optional[Sequence[str]] = None,
+                        outputs: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """One segment as a standalone, executable graph.
 
     The point of returning a GRAPH rather than an op range is that the whole
@@ -474,6 +871,11 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     outputs are the tensors produced inside it and read AFTER it, plus any of
     the component's own outputs it produces. Those two sets are exactly what
     must cross the seam, and they are computed here rather than assumed.
+
+    `pass_ops` / `outputs`: one PASS of a stretch run in slices (core/prism/chunked_region.py) — a
+    subset of the segment's ops, in order, and the tensors it hands out — instead of the whole
+    range and what is read after it. Everything else (seam aliasing, carried symbols) is the
+    segment's rule, unchanged.
     """
     tensors: Dict[str, Any] = graph.get("tensors") or {}
     ops: Dict[str, Any] = graph.get("ops") or {}
@@ -483,8 +885,7 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
 
     first = order_index[segment.first_op]
     last = order_index[segment.last_op]
-    inside = order[first:last + 1]
-    inside_set = set(inside)
+    inside = list(pass_ops) if pass_ops is not None else order[first:last + 1]
 
     produced_here: Set[str] = set()
     for op_uid in inside:
@@ -508,6 +909,11 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         read_later.update((ops.get(op_uid) or {}).get("input_tensor_ids") or [])
     seg_outputs = [tid for tid in produced_here
                    if tid in read_later or tid in component_outputs]
+    if outputs is not None:
+        stray = [t for t in outputs if t not in produced_here]
+        if stray:
+            raise ValueError(f"build_segment_graph: outputs {stray[:3]} are not produced by its ops")
+        seg_outputs = list(outputs)
 
     keep = set(produced_here)
     for op_uid in inside:
