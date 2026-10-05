@@ -17,6 +17,15 @@ tree's revision is the `tool` column; `ops` is [None] for these rows (the shadow
 converts a table written one row per (op, key) — the schema before 2026-09-29 — to one row per key
 with its `ops` list, in place, under the table's lock; a table already converted is left as it is.
 
+    python tools/census_table.py retire-absent <table.jsonl> [...] --record DIR [--apply]
+
+removes the rows of every model whose container is no longer in the cache (no `manifest.json`): a
+container renamed or deleted leaves rows nobody will ask for, and a certifier that reads them certifies
+keys of a graph that no longer exists. Without `--apply` it only names them. The retired rows are
+written to `DIR/<table>.retired.<stamp>.jsonl` first, so a retirement is reversible. A cache holding no
+container at all, or one that would retire EVERY model of a table, is refused: that is an unmounted or
+mis-pointed cache, not a catalogue.
+
 Nothing here runs a model or touches a device.
 """
 from __future__ import annotations
@@ -163,6 +172,46 @@ def migrate(a) -> int:
     return 0
 
 
+def retire_absent(a) -> int:
+    from neurobrix.kernels import census_table as T
+    import datetime
+    cache = Path(a.cache)
+    present = {d.name for d in cache.iterdir() if (d / "manifest.json").exists()} if cache.is_dir() else set()
+    if not present:
+        raise SystemExit(f"--cache {cache}: no container in it — an unmounted or mis-pointed cache would "
+                         f"retire every row; refused")
+    record = Path(a.record)
+    stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    for p in map(Path, a.table):
+        if not p.exists():
+            raise SystemExit(f"{p}: no such table")
+        with T.locked(p):
+            rows = T.read(p)
+            models = {r["model"] for r in rows}
+            absent = sorted(models - present)
+            if models and len(absent) == len(models):
+                raise SystemExit(f"{p}: every one of its {len(models)} models is absent from {cache} — "
+                                 f"a mis-pointed cache, not a catalogue; refused")
+            gone = [r for r in rows if r["model"] in absent]
+            for m in absent:
+                print(f"[census-table] {p.name}: {m}: {sum(r['model'] == m for r in gone)} row(s), "
+                      f"container absent from the cache", flush=True)
+            if not absent:
+                print(f"[census-table] {p}: every model is in the cache ({len(models)})", flush=True)
+                continue
+            if not a.apply:
+                print(f"[census-table] {p}: {len(gone)} row(s) of {len(absent)} model(s) WOULD retire "
+                      f"(dry run; --apply writes)", flush=True)
+                continue
+            record.mkdir(parents=True, exist_ok=True)
+            out = record / f"{p.parent.parent.name}_{p.parent.name}_{p.stem}.retired.{stamp}.jsonl"
+            out.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in gone), encoding="utf-8")
+            n = T.write(p, [r for r in rows if r["model"] not in absent])
+        print(f"[census-table] {p}: {len(gone)} row(s) of {len(absent)} model(s) retired -> {n} rows; "
+              f"record {out}", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -174,8 +223,13 @@ def main(argv=None) -> int:
     c.add_argument("--root", default=None, help="the table root (default: the engine package's config/census)")
     m = sub.add_parser("migrate")
     m.add_argument("table", nargs="+", help="a census table file written one row per (op, key)")
+    r = sub.add_parser("retire-absent", help="remove the rows of models whose container left the cache")
+    r.add_argument("table", nargs="+", help="a census table file")
+    r.add_argument("--record", required=True, help="where the retired rows are written before the table changes")
+    r.add_argument("--cache", default=str(CACHE), help="the container cache (default: the shared cache)")
+    r.add_argument("--apply", action="store_true", help="write; without it the retirement is only named")
     a = ap.parse_args(argv)
-    return consolidate(a) if a.cmd == "consolidate" else migrate(a)
+    return {"consolidate": consolidate, "migrate": migrate, "retire-absent": retire_absent}[a.cmd](a)
 
 
 if __name__ == "__main__":
