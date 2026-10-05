@@ -223,6 +223,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Open-Sora v2 pointed elsewhere (cosine 0.57 to the reference). Tokens now match the reference
   tokenizer exactly; every other installed model tokenizes as before.
 
+- **Open-Sora v2 denoises along the noise schedule its authors use.** Its schedule's time shift was
+  computed from the whole video's token count, where the reference sampler computes it from one frame's
+  tokens scaled by the square root of the latent frame count; at 4 steps the engine visited
+  t = 0.886, 0.721, 0.462 where the reference visits 0.915, 0.783, 0.545. The length the shift reads is
+  now carried by the model package and followed in both engines.
+
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty
   negative prompt instead of ignoring it, which pulled every step away from the prompt. On

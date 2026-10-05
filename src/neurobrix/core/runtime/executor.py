@@ -910,10 +910,13 @@ class RuntimeExecutor:
                 # the scheduler's config for both engines; absent = the
                 # scheduler's own schedule.
                 from neurobrix.core.runtime.registry_flags import get_component_flag
-                _ss = get_component_flag(self.pkg.manifest.get("model_name"), mod_name,
-                                         "sigma_schedule", default=None)
-                if _ss is not None:
-                    config = dict(config, sigma_schedule=_ss)
+                # Same for the LENGTH its dynamic shift reads (Open-Sora v2: one
+                # frame's tokens times sqrt(frames), not the total token count).
+                for _flag in ("sigma_schedule", "dynamic_shift_length"):
+                    _val = get_component_flag(self.pkg.manifest.get("model_name"), mod_name,
+                                              _flag, default=None)
+                    if _val is not None:
+                        config = dict(config, **{_flag: _val})
                 # Two totally separate scheduler implementations; the orchestrator
                 # (this shared entry point) picks by mode. Triton gets the
                 # zero-torch NBXTensor scheduler; PyTorch gets the torch one.
