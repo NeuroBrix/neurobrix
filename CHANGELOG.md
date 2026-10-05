@@ -286,6 +286,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The first frame of a CogVideoX or Open-Sora video is decoded correctly in the Triton engine.**
+  Their video decoders enlarge the first frame on its own path, and the Triton enlargement read that
+  frame from the wrong place in memory: the first frame came out flat grey (Open-Sora-v2) or blocky
+  (CogVideoX-2b) while the later frames were right. It now reads its input as laid out in memory.
+
 - **A video model whose pipeline bins the request renders at its bin and is restored to the requested
   size.** The restore after a binned render (`flow.resolution_binning`, PixArt and Sana) handled an
   image and refused a video: a container of SANA-Video carrying the field would have stopped after the
@@ -302,6 +307,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image was scaled by the VAE's latent factor twice, so the model was conditioned on an image
   latent at 0.7x its intended magnitude, and the video drifted away from the picture it was given.
   It is now scaled once, in both engines.
+
+- **Open-Sora v2's guidance contrasts the prompt with the negative prompt through both text encoders.**
+  The unconditional half of each guided step received the negative prompt's T5 encoding but the PROMPT's
+  CLIP vector, so guidance pushed away from a half-prompted prediction instead of an unprompted one. The
+  negative prompt is now encoded through every text encoder whose output steers the denoiser, as the
+  reference pipeline does, in both engines. Models conditioned on an image embedding keep sharing it
+  between the two halves.
+
+- **Open-Sora v2 reads its prompt's CLIP vector correctly.** The built-in reader of `tokenizer.json`
+  ignored the word-end marker that CLIP tokenizers declare, so every word was split into mid-word pieces
+  (e.g. "a" became a different token than CLIP expects) and the pooled prompt vector that steers
+  Open-Sora v2 pointed elsewhere (cosine 0.57 to the reference). Tokens now match the reference
+  tokenizer exactly; every other installed model tokenizes as before.
+
+- **Open-Sora v2 denoises along the noise schedule its authors use.** Its schedule's time shift was
+  computed from the whole video's token count, where the reference sampler computes it from one frame's
+  tokens scaled by the square root of the latent frame count; at 4 steps the engine visited
+  t = 0.886, 0.721, 0.462 where the reference visits 0.915, 0.783, 0.545. The length the shift reads is
+  now carried by the model package and followed in both engines.
 
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty

@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.dtype.config import get_torch_dtype
 from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
+from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.core.runtime.resolution.i2v_conditioning import (
     CONDITION_VAR as _I2V_CONDITION_VAR,
     apply as _i2v_apply,
@@ -342,6 +343,10 @@ class CFGEngine:
         # Restored after the batched forward. Inert when there is no such input.
         extra_restore = {}
         _handled_from = {encoder_key, state_key}
+        # A text condition beside the hidden states (a pooled vector) has its own negative: [neg, pos],
+        # never [pos, pos] (`resolution.negative_pooled_condition`). A shared one stays [v, v].
+        _negatives = dict(_negative_swaps(self._ctx.pkg.topology, self._ctx.variable_resolver.resolved,
+                                          comp_name, skip=(encoder_key, state_key)))
         for conn in self._ctx.pkg.topology.get("connections", []):
             to_port = conn.get("to", "")
             from_port = conn.get("from", "")
@@ -358,7 +363,7 @@ class CFGEngine:
             if isinstance(_v, torch.Tensor) and _v.dim() >= 1 and _v.shape[0] == 1:
                 extra_restore[from_port] = _v
                 self._ctx.variable_resolver.set(
-                    from_port, torch.cat([_v, _v], dim=0))
+                    from_port, torch.cat([_negatives.get(from_port, _v), _v], dim=0))
 
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", batched_mask)
@@ -448,7 +453,12 @@ class CFGEngine:
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
 
-        # Pass 1: unconditional
+        # Pass 1: unconditional — every text condition at its negative (hidden states and pooled)
+        _swaps = _negative_swaps(self._ctx.pkg.topology, self._ctx.variable_resolver.resolved,
+                                 comp_name, skip=(encoder_key, state_key))
+        _pos_pooled = [(k, self._ctx.variable_resolver.get(k)) for k, _ in _swaps]
+        for _k, _n in _swaps:
+            self._ctx.variable_resolver.set(_k, _n)
         self._ctx.variable_resolver.set(encoder_key, neg_hidden)
         # I2V channel-concat conditioning (shared by both passes; batch=1 here).
         _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
@@ -463,6 +473,8 @@ class CFGEngine:
         noise_pred_uncond = self._extract_primary_output(comp_name, output_uncond)
 
         # Pass 2: conditional
+        for _k, _p in _pos_pooled:
+            self._ctx.variable_resolver.set(_k, _p)
         self._ctx.variable_resolver.set(encoder_key, pos_hidden)
         self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
 

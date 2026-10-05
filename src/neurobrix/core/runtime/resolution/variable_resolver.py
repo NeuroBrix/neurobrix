@@ -201,6 +201,10 @@ class VariableResolver:
             f"  Tip: Check if variable was set via vr.set() or defined in runtime/variables.json"
         )
 
+    def resolve_pointer(self, pointer: Union[str, int, float]) -> Any:
+        """A runtime or component pointer's value (the public form of _resolve_pointer)."""
+        return self._resolve_pointer(pointer)
+
     def _resolve_pointer(self, pointer: Union[str, int, float]) -> Any:
         """
         Resolves a NBX v0.1 pointer (without $ prefix).
