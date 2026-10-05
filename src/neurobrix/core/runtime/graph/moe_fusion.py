@@ -497,32 +497,33 @@ def _fuse_one_moe_layer(
             if out_tid not in fused_output_tids:
                 removed_producers.add(out_tid)
 
-    # Iteratively remove ops whose inputs depend on removed tensors
+    # Remove the ops whose inputs depend on removed tensors: the forward closure from the
+    # removed tensors, walked through the consumer map (a worklist, not a rescan of the whole
+    # order until nothing changes — that rescan was O(layers x ops x passes): 64 s of a
+    # Qwen3-30B-A3B plan read, 48 layers over ~30k ops, 2026-10-05). The closure is the same
+    # set the rescan reached: an op of the order, neither the fused op nor a shared path, with
+    # an input among the removed tensors.
     dead_ops: Set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for uid in new_order:
-            if uid in dead_ops or uid == fused_uid:
+    in_order = set(new_order)
+    frontier = list(removed_producers)
+    while frontier:
+        tid = frontier.pop()
+        for uid in consumer_map.get(tid, ()):
+            if uid in dead_ops or uid == fused_uid or uid not in in_order:
                 continue
             # PROTECT shared_expert paths from dead-op elimination
             op_data = ops.get(uid, {})
             parent_module = op_data.get("parent_module", "")
             if "shared_expert" in parent_module or "shared" in parent_module:
                 continue
-            for in_tid in _collect_input_tids(op_data):
-                if in_tid in removed_producers:
-                    dead_ops.add(uid)
-                    # This dead op's outputs are also removed — EXCEPT the
-                    # fused op's own outputs (same exemption as the seeding
-                    # above): cascading a fused output tid into
-                    # removed_producers self-poisons every consumer of the
-                    # fused result.
-                    for out_tid in op_data.get("output_tensor_ids", []):
-                        if out_tid not in fused_output_tids:
-                            removed_producers.add(out_tid)
-                    changed = True
-                    break
+            dead_ops.add(uid)
+            # This dead op's outputs are also removed — EXCEPT the fused op's own
+            # outputs (same exemption as the seeding above): cascading a fused output
+            # tid into removed_producers self-poisons every consumer of the fused result.
+            for out_tid in op_data.get("output_tensor_ids", []):
+                if out_tid not in fused_output_tids and out_tid not in removed_producers:
+                    removed_producers.add(out_tid)
+                    frontier.append(out_tid)
 
     if dead_ops:
         new_order = [uid for uid in new_order if uid not in dead_ops]
@@ -550,44 +551,47 @@ def _fuse_one_moe_layer(
     # PROTECTS: fused_uid, shared_expert paths, DAG-level output tids.
     active_ops: Set[str] = set(new_order) - dead_ops
     graph_outputs: Set[str] = set(dag.get("output_tensor_ids", []))
+    # The fused op reads its inputs though the shared consumer map does not list it yet (the
+    # caller adds it on return): those tensors are live.
+    fused_inputs: Set[str] = set(_collect_input_tids(fused_op))
 
-    local_consumer_map: Dict[str, Set[str]] = {}
-    for uid in active_ops:
-        op_data = ops.get(uid, {})
-        for in_tid in _collect_input_tids(op_data):
-            local_consumer_map.setdefault(in_tid, set()).add(uid)
+    def _outputs_dead(uid: str, op_data: Dict[str, Any]) -> bool:
+        out_tids = op_data.get("output_tensor_ids", [])
+        if not out_tids:
+            return False
+        for out_tid in out_tids:
+            if out_tid in graph_outputs or out_tid in fused_inputs:
+                return False
+            for c_uid in consumer_map.get(out_tid, ()):
+                if c_uid != uid and c_uid in active_ops:
+                    return False
+        return True
 
+    # A worklist: every op once, then the producers of a removed op's inputs, which may have
+    # lost their last consumer with it. Removing an op only ever makes more ops removable, so
+    # the set reached is the one the whole-order fixed point reached, in any order.
     dead_outputs_count = 0
-    changed = True
-    while changed:
-        changed = False
-        for uid in list(active_ops):
-            if uid == fused_uid:
-                continue
-            op_data = ops.get(uid, {})
-            parent_module = op_data.get("parent_module", "")
-            if "shared_expert" in parent_module or "shared" in parent_module:
-                continue
-            out_tids = op_data.get("output_tensor_ids", [])
-            if not out_tids:
-                continue
-            all_dead = True
-            for out_tid in out_tids:
-                if out_tid in graph_outputs:
-                    all_dead = False
-                    break
-                live_consumers = local_consumer_map.get(out_tid, set()) & active_ops
-                live_consumers.discard(uid)
-                if live_consumers:
-                    all_dead = False
-                    break
-            if all_dead:
-                dead_ops.add(uid)
-                active_ops.discard(uid)
-                dead_outputs_count += 1
-                for in_tid in _collect_input_tids(op_data):
-                    local_consumer_map.get(in_tid, set()).discard(uid)
-                changed = True
+    pending = [uid for uid in new_order if uid in active_ops]
+    queued = set(pending)
+    while pending:
+        uid = pending.pop()
+        queued.discard(uid)
+        if uid == fused_uid or uid not in active_ops:
+            continue
+        op_data = ops.get(uid, {})
+        parent_module = op_data.get("parent_module", "")
+        if "shared_expert" in parent_module or "shared" in parent_module:
+            continue
+        if not _outputs_dead(uid, op_data):
+            continue
+        dead_ops.add(uid)
+        active_ops.discard(uid)
+        dead_outputs_count += 1
+        for in_tid in _collect_input_tids(op_data):
+            p_uid = producer_map.get(in_tid)
+            if p_uid is not None and p_uid in active_ops and p_uid not in queued:
+                pending.append(p_uid)
+                queued.add(p_uid)
 
     if dead_outputs_count:
         new_order = [uid for uid in new_order if uid not in dead_ops]
