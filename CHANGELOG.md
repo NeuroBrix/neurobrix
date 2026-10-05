@@ -9,11 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A component's weights are freed when it is unloaded.** In the PyTorch engine, a component whose
+  weight names needed matching to the graph kept every weight of its last run in memory after it was
+  unloaded. On SANA-Video at 720p this left the transformer's 7.8 GB on the GPU during the video
+  decode, which ran out of memory on a 16 GB card. A model streamed layer by layer kept each layer's
+  weights the same way. They are now released.
+
+- **The memory plan uses the VAE compression the model declares.** For SANA-Video 2B 720p, the plan
+  computed the latent size from the VAE's layer count, which gives 8, when the model declares 32. Its
+  transformer was planned at 16 times its real memory, which forced slower strategies on a 16 GB GPU.
+  The plan now reads the same value the run uses. No other model in the catalogue is affected.
+
+- **A model streamed layer by layer now runs the per-operation tiling its plan asks for.** When the
+  plan both streamed a component and split its largest operations into bands, the bands were not
+  applied. The full operation ran instead, and its memory and kernel keys did not match the plan.
+  Both engines now apply them.
+
 - **SANA-Video 2B 720p now runs on a 16 GB GPU with guidance on.** Guidance runs the model on the
   conditional and unconditional inputs together, and at 720p that doubled batch needed more memory
   than the card has, so the run was refused. When the doubled batch does not fit, the engine now runs
   the two halves one after the other. The result is the same, it needs half the working memory, and
   the plan says when it does this. Both engines, PyTorch and Triton, follow the same plan.
+
+- **The memory plan for Allegro and Allegro-TI2V at 720p on a 16 GB GPU counts what their layers
+  hold.** With guidance on, their transformer's feed-forward layers at the doubled batch needed more
+  memory than the plan counted: it priced the memory left after each operation, not the memory an
+  operation holds while it runs. The plan now counts both. When the doubled batch would force the engine to stream the transformer's weights to
+  the card on every step, it now runs the two guidance halves one after the other instead, which
+  keeps the weights on the card. Both engines, PyTorch and Triton, follow the same plan.
+
+- **The PyTorch engine uses PyTorch's expandable memory segments on NVIDIA GPUs.** On a 16 GB GPU,
+  Wan2.1-I2V-14B ran out of memory with 6.8 GB of GPU memory reserved but unusable, split into pieces
+  too small for the next request. Expandable segments are PyTorch's documented fix for this problem.
+  A `PYTORCH_ALLOC_CONF` (or `PYTORCH_CUDA_ALLOC_CONF`) you set yourself still takes precedence. The Triton engine manages its
+  own memory and is unchanged.
+
+- **A model whose attention alone is too large for the card is now run in slices of its tokens instead
+  of being refused.** Some video models hold every token of the clip at once in parts of their
+  attention. On a long or high-resolution SANA-Video request on a 16 GB GPU, even one guidance half
+  needed more working memory than the card has, so the request was refused. When that happens, the
+  engine now runs those parts a slice of frames at a time and adds up the few values that span the
+  whole clip. The result matches the unsliced run up to rounding. `--explain-plan` lists each sliced
+  part, its slice size and its memory. This is the last option the engine tries before running on the
+  CPU, because the later slices recompute some values. Both engines, PyTorch and Triton, follow the
+  same plan.
 
 - **Wan2.1-VACE plans its control encoder for the two clips it really encodes.** The memory plan and the
   certified kernel set priced the VACE control encoder at one clip, while a run encodes the inactive and

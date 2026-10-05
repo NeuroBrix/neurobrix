@@ -66,6 +66,10 @@ class StrategyContext:
     layer_graphs: Dict[str, str] = field(default_factory=dict)
     # component -> norm_topk_prob for a streamed MoE LM the plan declared (`layer_stream_moe`).
     layer_moe: Dict[str, bool] = field(default_factory=dict)
+    # component -> the stretches Prism planned in slices of a token axis (`Partition.chunks`):
+    # [{"first_op", "last_op", "symbol", "slice", "count", "passes", "peak_bytes"}, ...]. Each is
+    # one of `layer_segments`' pieces, run by `ChunkedPiece`. Empty for every other plan.
+    layer_chunks: Dict[str, Any] = field(default_factory=dict)
 
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can

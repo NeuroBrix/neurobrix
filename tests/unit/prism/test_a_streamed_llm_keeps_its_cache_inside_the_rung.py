@@ -116,7 +116,11 @@ def test_the_reserve_refuses_to_invent_a_dtype(monkeypatch):
 
 def test_after_the_fp32_fallback_the_reserve_and_the_plan_read_fp32(monkeypatch):
     """Force the fallback path: the first evaluation yields nothing, the fallback applies. Every
-    KV figure taken after it must be taken at float32."""
+    KV figure taken after it must be taken at float32.
+
+    "After" is read from the fallback itself, not from an evaluation count: the rungs between the
+    first evaluation and the fallback (the token-axis slices, `_split_token_axis`) re-evaluate at
+    the dtype that just failed, as they must."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
     s = PrismSolver()
@@ -128,14 +132,43 @@ def test_after_the_fp32_fallback_the_reserve_and_the_plan_read_fp32(monkeypatch)
         return [] if calls["n"] == 1 else real_eval(*a, **k)
 
     dtypes = []
+    fell = {"back": False}
     real_est, real_min, real_plan = s._estimate_kv_cache_bytes, s._kv_min_bytes, s._compute_kv_cache_plan
     s._evaluate_all_strategies = first_empty
-    s._try_fp32_fallback = lambda *a, **k: True
-    s._estimate_kv_cache_bytes = lambda c, d: (dtypes.append(("estimate", calls["n"], d)), real_est(c, d))[1]
-    s._kv_min_bytes = lambda c, d: (dtypes.append(("minimum", calls["n"], d)), real_min(c, d))[1]
-    s._compute_kv_cache_plan = lambda c, d, r: (dtypes.append(("plan", calls["n"], d)), real_plan(c, d, r))[1]
+
+    def fall_back(*a, **k):
+        fell["back"] = True
+        return True
+    s._try_fp32_fallback = fall_back
+    s._estimate_kv_cache_bytes = lambda c, d: (dtypes.append(("estimate", fell["back"], d)), real_est(c, d))[1]
+    s._kv_min_bytes = lambda c, d: (dtypes.append(("minimum", fell["back"], d)), real_min(c, d))[1]
+    s._compute_kv_cache_plan = lambda c, d, r: (dtypes.append(("plan", fell["back"], d)), real_plan(c, d, r))[1]
     s.solve_smart(NBXContainer.load(str(container_root(LLMS[0]))), profile(APPLE_M4_PRO),
                   InputConfig(batch_size=1), mode="triton")
-    after = [(what, d) for what, n, d in dtypes if n >= 2]
+    assert fell["back"], "the fallback was never reached"
+    after = [(what, d) for what, back, d in dtypes if back]
     assert any(w == "minimum" for w, _ in after) and any(w == "plan" for w, _ in after), dtypes
     assert all(d == "float32" for _, d in after), after
+
+
+def test_every_rung_starts_unsliced(monkeypatch):
+    """`solve` re-enters `_solve_at_rung` down the unified ladder; a token-axis slicing a previous
+    rung kept (`_split_token_axis` sets `_token_split`) must not reach the next rung's first
+    evaluation, which tries the cuts that cost nothing first.
+
+    Injection (seen red, then restored green): the reset before the first evaluation removed ->
+    the first evaluation runs sliced."""
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    s = PrismSolver()
+    s._token_split = True                       # what a previous rung that sliced left behind
+    seen = []
+    real_eval = s._evaluate_all_strategies
+
+    def record(*a, **k):
+        seen.append(bool(getattr(s, "_token_split", False)))
+        return real_eval(*a, **k)
+    s._evaluate_all_strategies = record
+    s.solve_smart(NBXContainer.load(str(container_root(LLMS[0]))), profile(APPLE_M4_PRO),
+                  InputConfig(batch_size=1), mode="triton")
+    assert seen and seen[0] is False, seen
