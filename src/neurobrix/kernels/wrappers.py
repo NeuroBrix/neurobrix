@@ -3356,8 +3356,9 @@ def upsample_nearest2d_wrapper(
         triton.cdiv(N * C, 4),
     )
     _set_device(output)
+    s_n, s_c, s_h, s_w = x.stride()
     upsample_nearest2d_kernel[grid](
-        output, x, N, C, OH, OW, IH, IW,
+        output, x, N, C, OH, OW, IH, IW, s_n, s_c, s_h, s_w,
         reciprocal_scale_h, reciprocal_scale_w,
         BLOCK_SIZE=_EW_BLOCK,
     )
