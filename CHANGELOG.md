@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A video model with a learned position table no longer fails to load at its own resolution.**
+  The engine used to resize any stored position table to the requested image grid when it loaded
+  the weights, which broke models that read the table themselves (CogVideoX-5b-I2V failed at load
+  in both `--compiled` and `--triton`). Stored tables now reach the model exactly as shipped.
+
 ### Changed
 
 - **Every model weight now carries a standard name, and a model installed with the earlier,
