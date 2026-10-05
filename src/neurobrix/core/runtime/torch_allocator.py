@@ -16,13 +16,17 @@ sizes that change", https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizin
 one segment per stream that grows by mapping pages, whose free pages go back to the driver when an
 allocation would fail. It makes the bytes Prism prices the bytes the card can hand out. Which
 setting a vendor's cards run is a fact of that hardware stack, so it is DATA: the vendor profile's
-`memory.compiled_allocator_settings` (config/vendors/<vendor>/<arch>.yml). A profile that declares
-none runs torch's own default.
+`memory.compiled_allocator_settings` (config/vendors/<vendor>/<arch>.yml), declared wherever the
+vendor's allocator implements the setting: every NVIDIA profile, and every AMD one — ROCm's build of
+the same allocator maps expandable segments with hipMemCreate / hipMemMap from ROCm 7.0
+(https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h). Apple's MPS
+allocator has no such setting (aten/src/ATen/mps/MPSAllocator.mm reads only its watermark ratios),
+so no Apple profile declares one. A profile that declares none runs torch's own default.
 
 Applied once per process, before the executors load a weight (`RuntimeExecutor.setup`), under the
 compiled engine only: the Triton engine never imports torch (R33) and allocates through its own
-runtime. An operator's explicit `PYTORCH_ALLOC_CONF` / `PYTORCH_CUDA_ALLOC_CONF` is theirs and wins;
-the engine says so instead of overriding it.
+runtime. An operator's explicit `PYTORCH_ALLOC_CONF` (or a legacy spelling, `OPERATOR_ENV`) is
+theirs and wins; the engine says so instead of overriding it.
 """
 from __future__ import annotations
 
@@ -30,8 +34,9 @@ import logging
 import os
 from typing import Any, Optional
 
-#: The allocator environment variables torch reads (the second is its deprecated spelling).
-OPERATOR_ENV = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF")
+#: The allocator environment variables torch reads: the unified name and the CUDA and HIP legacy
+#: spellings (https://github.com/pytorch/pytorch/blob/v2.14.0/c10/core/AllocatorConfig.cpp).
+OPERATOR_ENV = ("PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_ALLOC_CONF")
 
 #: The vendor-profile key, under `memory:`.
 PROFILE_KEY = "compiled_allocator_settings"

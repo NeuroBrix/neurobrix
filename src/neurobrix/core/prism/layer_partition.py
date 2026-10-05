@@ -105,17 +105,6 @@ class Partition:
         return self.peak_resident_bytes / (1024 * 1024)
 
 
-#: ATen ops whose output is a VIEW of their first input (https://docs.pytorch.org/docs/2.14/tensor_view.html),
-#: in both engines for the contiguous tensors a graph hands them: the op allocates nothing WHILE it
-#: runs (`LayerPartitioner.op_peak_curve`). Not `reshape` or `contiguous` (they copy a strided input),
-#: and not `expand` (already allocation-free on both curves, `ZERO_ALLOC_OP_TYPES`).
-VIEW_OP_TYPES = frozenset({
-    "aten::view", "aten::_unsafe_view", "aten::t", "aten::transpose", "aten::permute",
-    "aten::unsqueeze", "aten::squeeze", "aten::slice", "aten::select", "aten::narrow",
-    "aten::as_strided", "aten::alias",
-})
-
-
 class LayerPartitioner:
     """Partition one component graph into budget-sized segments."""
 
@@ -221,8 +210,8 @@ class LayerPartitioner:
         counted once — and the Triton run died at aten.gelu::16 asking 5 569 MB with 11 050 MB live
         (split16, 2026-10-05).
 
-        A view (`VIEW_OP_TYPES`) allocates nothing while it runs: its output IS its input's storage,
-        so its in-op figure is the live set before it. Counted as a new buffer, Ming-Lite-Omni-1.5's
+        A view (`profiler.VIEW_OP_TYPES`, the profiler's own rule) allocates nothing while it runs:
+        its output IS its input's storage, so its in-op figure is the live set before it. Counted as a new buffer, Ming-Lite-Omni-1.5's
         vision tower on the busy Mac read 9 878 MB at an `_unsafe_view` of a 4 420 MB bmm output —
         the same buffer twice — and the plan that streams it was refused."""
         if getattr(self, "_op_peak_memo", None) is None:
@@ -231,7 +220,7 @@ class LayerPartitioner:
 
     def _walk_liveness(self) -> None:
         """One walk of the order, filling both curves (`live_activation_curve`, `op_peak_curve`)."""
-        from neurobrix.core.prism.profiler import ZERO_ALLOC_OP_TYPES
+        from neurobrix.core.prism.profiler import VIEW_OP_TYPES, ZERO_ALLOC_OP_TYPES
         last = self._last_use()
         outputs = set(self._dag.get("output_tensor_ids") or [])
         curve, during, live = [], [], 0
@@ -591,16 +580,34 @@ class LayerPartitioner:
             self._pass_peak_memo[key] = max(peaks) if peaks else 0
         return self._pass_peak_memo[key]
 
+    def _accumulator_bytes(self, tid: str, symbol_map: Dict[str, int]) -> int:
+        """What summing a contraction's slices holds at once (`chunked_region.accumulate`): the
+        running sum and the sum that replaces it, in the accumulator the engines' DtypeEngine
+        names (`triton/dtype.contraction_accumulator_bytes`, the width form of
+        `contraction_accumulator_dtype`), plus the partial cast to it when the op stores
+        narrower. The store once summed (`chunked_region.store`) is no wider than one of them."""
+        from neurobrix.triton.dtype import contraction_accumulator_bytes
+        store = self._bytes_at(tid, symbol_map)
+        numel = 1
+        for d in self._resolver._resolve_shape(self.tensors.get(tid) or {}, symbol_map):
+            numel *= int(d)
+        if numel == 0:
+            return 0
+        width = store // numel
+        acc = contraction_accumulator_bytes(width)
+        return numel * (2 * acc + (acc if acc != width else 0))
+
     def _region_peak(self, ax, plan, c: int) -> int:
         """What a stretch run in slices of `c` holds at its worst: everything live before it (held
         until its last pass), its outputs assembled whole, each contraction's accumulator and the
-        sum that replaces it, and the worst pass — its slice's activations plus the slices of the
-        inputs it reads that carry the axis (a contiguous copy each, a broadcast's too)."""
+        sum that replaces it (`_accumulator_bytes`, its store included), and the worst pass — its
+        slice's activations plus the slices of the inputs it reads that carry the axis (a
+        contiguous copy each, a broadcast's too)."""
         sm = self._symbol_map
         curve = self.live_activation_curve()
         before = curve[plan.first - 1] if plan.first > 0 else 0
-        outs = sum(self._bytes_at(t, sm) for t in plan.outputs)
-        acc = sum(2 * self._bytes_at(t, sm) for t in plan.contractions if t not in plan.outputs)
+        outs = sum(self._bytes_at(t, sm) for t in plan.outputs if t not in plan.contractions)
+        acc = sum(self._accumulator_bytes(t, sm) for t in plan.contractions)
         sliced = dict(sm)
         sliced[plan.symbol] = c
         worst = 0

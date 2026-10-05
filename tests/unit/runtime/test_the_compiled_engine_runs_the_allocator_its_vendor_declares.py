@@ -9,6 +9,7 @@ Injections (each seen red, then restored green):
   * the `configure_torch_allocator` call removed from `RuntimeExecutor.setup` -> the compiled
     setup applies nothing;
   * `compiled_allocator_settings` removed from volta.yml -> nothing declared for the V100 plan;
+  * removed from amd/cdna3.yml, or added to an Apple profile -> the per-profile test names it;
   * the engine test in `setup` dropped (applied under every mode) -> the Triton setup calls it.
 """
 import sys
@@ -69,17 +70,52 @@ def test_the_triton_engine_never_touches_torchs_allocator(monkeypatch, setter):
     assert setter == []
 
 
-def test_every_nvidia_profile_declares_a_setting_torch_parses():
+def _profiles():
+    """(vendor, arch) of every vendor profile in the package, read from the directory."""
+    from pathlib import Path
+    import neurobrix
+    root = Path(neurobrix.__file__).resolve().parent / "config" / "vendors"
+    return sorted((p.parent.name, p.stem) for p in root.glob("*/*.yml"))
+
+
+#: The vendors whose torch allocator implements expandable segments: CUDA's, and ROCm's build of
+#: the same allocator (hipMemCreate / hipMemMap, ROCm >= 7.0 —
+#: https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h). Apple's MPS
+#: allocator has no such setting (aten/src/ATen/mps/MPSAllocator.mm).
+EXPANDABLE = {"nvidia", "amd"}
+
+
+def test_every_profile_whose_allocator_has_the_setting_declares_one_torch_parses():
+    """Injections (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
+    the declaration removed from amd/cdna3.yml -> red naming amd/cdna3; one added to an Apple
+    profile -> red naming it."""
     import torch
     from neurobrix.core.config.loader import get_vendor_config
+    profiles = _profiles()
+    assert {v for v, _ in profiles} >= EXPANDABLE | {"apple"}, profiles      # not vacuous
     before = torch._C._accelerator_getAllocatorSettings()
     try:
-        for arch in ("volta", "ampere", "hopper"):
-            value = get_vendor_config("nvidia", arch)["memory"][TA.PROFILE_KEY]
+        for vendor, arch in profiles:
+            value = (get_vendor_config(vendor, arch).get("memory") or {}).get(TA.PROFILE_KEY)
+            if vendor not in EXPANDABLE:
+                assert value is None, f"{vendor}/{arch} declares {value!r}; its allocator has none"
+                continue
+            assert value, f"{vendor}/{arch} declares no memory.{TA.PROFILE_KEY}"
             torch._C._accelerator_setAllocatorSettings(value)        # the real parser
-            assert torch._C._accelerator_getAllocatorSettings() == value
+            assert torch._C._accelerator_getAllocatorSettings() == value, (vendor, arch)
     finally:
         torch._C._accelerator_setAllocatorSettings(before or "expandable_segments:False")
+
+
+@pytest.mark.parametrize("name", TA.OPERATOR_ENV)
+def test_every_spelling_torch_reads_is_the_operators(monkeypatch, setter, name):
+    """torch reads PYTORCH_CUDA_ALLOC_CONF, PYTORCH_HIP_ALLOC_CONF and PYTORCH_ALLOC_CONF
+    (c10/core/AllocatorConfig.cpp); an operator's value under any of them wins on any vendor."""
+    assert set(TA.OPERATOR_ENV) == {
+        "PYTORCH_ALLOC_CONF", "PYTORCH_CUDA_ALLOC_CONF", "PYTORCH_HIP_ALLOC_CONF"}
+    monkeypatch.setenv(name, "expandable_segments:False")
+    assert TA.configure_torch_allocator(_plan((["cuda:0"], "amd", "cdna3"))) is None
+    assert setter == []
 
 
 def test_the_operators_setting_wins_and_a_host_plan_declares_nothing(monkeypatch, setter):

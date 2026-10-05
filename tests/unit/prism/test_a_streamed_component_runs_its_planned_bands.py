@@ -93,3 +93,30 @@ def test_a_planned_band_no_piece_holds_is_refused_by_name():
     with pytest.raises(RuntimeError, match=r"no piece of the streamed graph holds"):
         _streamed_base("compiled").register_op_uid_interceptors(
             {"aten.absent::0": lambda *a, **k: None}, planned=["aten.absent::0"])
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_the_forward_is_the_executor_s_hook_not_a_replaced_method(mode):
+    """The strategy follows the base's registrations through the explicit hook
+    (`GraphExecutor.follow_interceptor_registrations`), never by assigning over the executor's
+    own `register_*` methods.
+
+    Injections (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
+      A. the follower loop removed from `register_op_uid_interceptors` -> red here and in
+         test_a_band_registered_after_the_install_reaches_its_piece;
+      B. the instance assignment put back in `_forward_op_level_tiling` -> red here."""
+    base = _streamed_base(mode)
+    assert not {"register_op_uid_interceptors", "register_triton_interceptors"} & set(vars(base))
+    assert "layer_streaming:" + W.COMPONENT in base._op_uid_followers
+    calls = []
+    base.register_op_uid_interceptors({"aten.mm::0": _recording_mm(calls)})
+    base.run({"inputs_embeds": torch.randn(W.B, 5, W.D)})
+    assert calls == [(W.B * 5, W.D)], calls
+
+
+def test_an_executor_without_the_hook_is_refused_by_name():
+    from types import SimpleNamespace
+    from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+    ex = SimpleNamespace(register_op_uid_interceptors=lambda *a, **k: None)
+    with pytest.raises(RuntimeError, match=r"'c'.*follow_interceptor_registrations"):
+        LayerStreamingStrategy._follow(ex, "c", op_uid=lambda *a, **k: None)
