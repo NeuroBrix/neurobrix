@@ -179,7 +179,7 @@ def _cfg_ctx():
         "global.img_ids": torch.zeros(1, 6, 3), "global.txt_ids": torch.zeros(1, 5, 3),
         "global.cond": torch.zeros(1, 6, 4),
     })
-    return SimpleNamespace(variable_resolver=resolver, loop_id="loop", strategy=None,
+    return SimpleNamespace(variable_resolver=resolver, loop_id="loop", strategy=None, plan=None,
                            pkg=SimpleNamespace(topology=OPEN_SORA, defaults={}))
 
 
@@ -204,28 +204,18 @@ def test_the_batched_pass_feeds_the_negative_pooled_vector_to_the_unconditional_
     assert ctx.variable_resolver.get("text_encoder_2.pooler_output") is POS_POOLED
 
 
-class _NbxLike(torch.Tensor):
-    """A host tensor answering the two NBXTensor attributes the Triton sequential pass reads."""
-    @property
-    def _dtype(self):
-        return self.dtype
-
-    @property
-    def _device(self):
-        return self.device
-
-
-@pytest.mark.parametrize("module_name", ("neurobrix.core.cfg.engine", "neurobrix.triton.cfg.engine"))
-def test_the_sequential_passes_feed_the_negative_then_the_prompt(monkeypatch, module_name):
-    module = importlib.import_module(module_name)
-    if hasattr(module, "_ensure_nbx"):                 # the Triton engine wraps at its boundary; stand-ins pass through
-        monkeypatch.setattr(module, "_ensure_nbx",
-                            lambda t, *a, **k: t.as_subclass(_NbxLike) if isinstance(t, torch.Tensor) else t)
+def test_the_plan_split_passes_feed_the_negative_then_the_prompt():
+    """A component the plan prices at one branch's batch runs the batched inputs half by half; the
+    unconditional half carries the negative pooled vector, the conditional half the prompt's."""
+    from neurobrix.core.cfg import engine as core_engine
     ctx, fed = _cfg_ctx(), []
-    _engine(module, ctx, fed)._execute_sequential_cfg("transformer", torch.zeros(1, 6, 64), torch.tensor(0.5), 7.0)
+    ctx.plan = SimpleNamespace(cfg_split_components=("transformer",))
+    _engine(core_engine, ctx, fed)._execute_batched_cfg(
+        "transformer", torch.zeros(1, 6, 64), torch.tensor(0.5), 7.0, torch.float32)
     assert [p for p, _ in fed] == ["cfg_uncond", "cfg_cond"]
-    assert fed[0][1] is NEG_POOLED, "the unconditional pass read the prompt's pooled vector"
-    assert fed[1][1] is POS_POOLED, "the conditional pass read the negative"
+    assert torch.equal(fed[0][1][0], NEG_POOLED[0]), "the unconditional half read the prompt's pooled vector"
+    assert torch.equal(fed[1][1][0], POS_POOLED[0]), "the conditional half read the negative"
+    assert ctx.variable_resolver.get("text_encoder_2.pooler_output") is POS_POOLED
 
 
 def test_the_triton_batched_site_takes_the_negative_for_the_unconditional_row():
