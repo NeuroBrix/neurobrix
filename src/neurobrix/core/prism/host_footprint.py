@@ -53,7 +53,7 @@ Pure arithmetic, no torch: Prism is torch-free (R33).
 """
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional
+from typing import Collection, Dict, Mapping, Optional, Sequence, Tuple
 
 #: Copies of one tensor the triton loader holds: as read and as converted (triton/weight_loader.py).
 TRITON_COPIES_PER_TENSOR = 2
@@ -76,7 +76,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
-                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0) -> Dict:
+                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
+                   device_phases: Optional[Sequence[Tuple[int, Collection[str]]]] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -87,6 +88,14 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
     resident_bytes what the planning process holds when it prices (the caller measures it)
     output_bytes   what the output boundary holds (the largest graph output x the family's save cost)
     device_bytes   the device plan's bytes when the device draws on host memory (unified), 0 otherwise
+    device_phases  on a unified device under a lazy plan: [(device bytes held in a phase, the components
+                   loaded in it)]. A component's loading transient is then paired with the device bytes
+                   of ITS phase, never with another phase's: the plan holds the dearest of the
+                   (phase, its own load) sums, not the largest window plus the largest load of the run.
+                   Wan2.1-T2V-1.3B on the Mac (2026-10-05 13:40, 14 687 MB free): the umt5 encoder's
+                   4 006 MB float32 embedding (8 012 MB loading) was added to the transformer's
+                   window, which runs in the next phase, and every rung that held the transformer
+                   whole was walked down to one that streams it every step.
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -114,26 +123,59 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             steady[name] = int(held)
     steady_bytes = (max(steady.values(), default=0) if plan.loading_mode == "lazy"
                     else sum(steady.values()))
-    if engine == "compiled":
-        def _passes_through(name, stored_bytes):
-            alloc = plan.components.get(name)
-            widths = [dtype_bytes[d] for d in ((stored_dtypes or {}).get(name) or ()) if d in dtype_bytes]
-            pinned = stored_bytes
-            if alloc is not None and widths and str(alloc.dtype) in dtype_bytes:
-                pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
-            return stored_bytes + pinned
-        passes = [_passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
-        transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
-    else:
-        transient = TRITON_COPIES_PER_TENSOR * max(
-            (n for ks in key_sizes.values() for n in ks.values()), default=0)
+    loads = component_loads(engine, {n: str(a.dtype) for n, a in plan.components.items()},
+                            key_sizes, shard_sizes, stored_dtypes, dtype_bytes)
+    transient = (sum(loads.values()) if engine == "compiled" and plan.loading_mode == "eager"
+                 else max(loads.values(), default=0))
     base = int(base_mb) << 20 if base_mb is not None else 0
+    # The device plan and the load beside it. Without phases (a discrete card, an eager plan, a caller
+    # with none to give) the two are summed, each at its largest; with them, the dearest phase's own pair.
+    paired = int(device_bytes) + transient
+    if device_phases and plan.loading_mode == "lazy":
+        paired = max(int(held) + max((loads.get(n, 0) for n in names), default=0)
+                     for held, names in device_phases)
     return {"engine": engine,
-            "total_bytes": int(resident_bytes) + base + steady_bytes + transient + int(output_bytes) + int(device_bytes),
+            "total_bytes": int(resident_bytes) + base + steady_bytes + paired + int(output_bytes),
             "resident_bytes": int(resident_bytes), "output_bytes": int(output_bytes), "device_bytes": int(device_bytes),
             "base_bytes": base, "base_measured": base_mb is not None,
             "steady_bytes": steady_bytes, "steady": steady, "transient_bytes": transient,
+            "device_and_loading_bytes": paired, "phased": bool(device_phases and plan.loading_mode == "lazy"),
             "loading": plan.loading_mode}
+
+
+def component_loads(engine: str, plan_dtypes: Mapping[str, str], key_sizes: Mapping[str, Mapping[str, int]],
+                    shard_sizes: Mapping[str, Mapping[str, int]], stored_dtypes: Optional[Mapping[str, set]],
+                    dtype_bytes: Mapping[str, int]) -> Dict[str, int]:
+    """{component: what LOADING it holds on the host beyond what it lands in}, per the engine's loader
+    (module docstring, `transient`): compiled, the component's stored shards plus their pinned copy at
+    the plan's width (`plan_dtypes`); triton, one tensor at a time (`loading_transient_bytes`). One
+    figure for the host footprint and for the solver's unified host-room door, so the door holds a
+    component to the load the footprint will price."""
+    if engine not in ENGINES:
+        raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
+    if engine == "triton":
+        return {name: loading_transient_bytes(engine, ks) for name, ks in key_sizes.items()}
+    loads = {}
+    for name, sh in shard_sizes.items():
+        if not sh:
+            continue
+        stored = sum(sh.values())
+        widths = [dtype_bytes[d] for d in ((stored_dtypes or {}).get(name) or ()) if d in dtype_bytes]
+        pinned = stored
+        if name in plan_dtypes and widths and str(plan_dtypes[name]) in dtype_bytes:
+            pinned = stored * dtype_bytes[str(plan_dtypes[name])] // min(widths)
+        loads[name] = stored + pinned
+    return loads
+
+
+def loading_transient_bytes(engine: str, key_sizes: Mapping[str, int]) -> int:
+    """What loading ONE component (or one streamed piece of it) holds on the host beyond what it lands in,
+    under the Triton engine: one tensor at a time, as read and as converted (triton/weight_loader.py),
+    priced at its largest tensor's stored bytes. The compiled loader passes a whole component through
+    the host (`host_footprint` above), which no cut lowers: it has no per-piece figure, refused by name."""
+    if engine != "triton":
+        raise ValueError(f"ZERO FALLBACK: the {engine!r} loader holds a whole component, not a tensor at a time")
+    return TRITON_COPIES_PER_TENSOR * max(key_sizes.values(), default=0)
 
 
 def process_footprint_now() -> int:
@@ -186,4 +228,6 @@ def summary(hf: Mapping) -> str:
             f" + held {hf['steady_bytes'] / 2**20:.0f} MB ({hf['loading']})"
             f" + loading {hf['transient_bytes'] / 2**20:.0f} MB + output {hf.get('output_bytes', 0) / 2**20:.0f} MB"
             + (f" + device plan {hf['device_bytes'] / 2**20:.0f} MB (unified)" if hf.get("device_bytes") else "")
+            + (f" — device and loading paired by phase: {hf['device_and_loading_bytes'] / 2**20:.0f} MB at the "
+               f"dearest" if hf.get("phased") else "")
             + (f"  [held: {held}]" if held else ""))

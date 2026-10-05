@@ -860,23 +860,65 @@ class PrismSolver:
         unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
         in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
         does not hold `owner`."""
+        return max(held for held, _names in self._phase_costs(container, costs, outliving, owner))
+
+    def _phase_costs(self, container, costs: Dict[str, int], outliving: int = 0,
+                     owner: Optional[str] = None) -> List[Tuple[int, set]]:
+        """`_phase_peak`'s phases one by one: [(bytes held, the components held)] — each flow phase with
+        every component no phase names, or ONE phase of every component when the flow declares none."""
         unloaded = self._unloaded_by_request(container)
         costs = {n: c for n, c in costs.items() if n not in unloaded}
         phases = self._flow_phases(container)
         if not phases:
-            return sum(costs.values())
+            return [(sum(costs.values()), set(costs))]
         named = set().union(*phases)
-        loose = sum(c for n, c in costs.items() if n not in named)
-        return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
-                           for ph in phases)
+        loose = {n for n in costs if n not in named}
+        return [(sum(costs[n] for n in loose) + sum(costs.get(n, 0) for n in ph)
+                 + (0 if owner in ph else int(outliving)), (set(ph) & set(costs)) | loose)
+                for ph in phases]
 
-    def _peak_loaded_bytes(self, container, plan) -> int:
-        """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
-        each component's total); the KV cache, priced inside its owner's total, stays allocated in
+    def _held_cost_bytes(self, container, plan, name: str, devices) -> int:
+        """What component `name` holds on its device in `plan`: its whole total, or — tiled by the plan
+        (`component_tiling`) — `_tiled_component_mb`, the figure every rung that tiles it placed it at.
+        The untiled total of a tiled component is a peak no moment of the plan holds: Wan2.1-T2V-1.3B's
+        VAE at 480x832, 37 853 MB untiled, was priced whole by the unified host side and refused the
+        lazy plan that tiles it (the Mac, 2026-10-05 13:40)."""
+        mem = plan.component_memory[name]
+        tiling = (getattr(plan, "component_tiling", None) or {}).get(name)
+        if not tiling:
+            return int(mem.total_bytes)
+        dev_str = plan.components[name].device
+        dev = next((d for d in devices if d.device_string == dev_str), None)
+        if dev is None:
+            raise RuntimeError(f"ZERO FALLBACK: '{name}' is tiled on {dev_str!r}, a device the plan does not hold")
+        return int(self._tiled_component_mb(container, name, mem, dev, tiling) * 2**20)
+
+    def _peak_loaded_bytes(self, container, plan, devices=()) -> int:
+        """What a plan that loads on demand holds on its device at one moment: the dearest of
+        `_unified_device_phases`. The KV cache, priced inside its owner's total, stays allocated in
         the phases that no longer hold the owner."""
-        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        return max(held for held, _names in self._unified_device_phases(container, plan, devices))
+
+    def _unified_device_phases(self, container, plan, devices=()) -> List[Tuple[int, set]]:
+        """What a lazy plan holds on a UNIFIED device in each phase of its flow, and which components it
+        loads there: the host side pairs each load with its own phase (`host_footprint`'s
+        `device_phases`). A streamed plan holds, in a phase, the whole components of that phase, the
+        graph constants, flow-read weights and KV reserve it cut around, and the largest segment peak
+        of the components it streams there; a plan held whole, the components of the phase at what
+        they hold (`_held_cost_bytes`) and the KV cache that outlives its owner."""
+        costs = {n: self._held_cost_bytes(container, plan, n, devices) for n in plan.component_memory}
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
-        return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
+        parts = ((getattr(self, "_layer_stream_partitions", None) or {})
+                 if getattr(plan, "strategy", None) == "layer_streaming" else {})
+        if not parts:
+            return self._phase_costs(container, costs, outliving=kv, owner=self._lm_component_name)
+        whole = {n: c for n, c in costs.items() if n not in parts}
+        fixed = int(getattr(self, "_layer_stream_fixed_bytes", 0))
+        out = []
+        for held, names in self._phase_costs(container, dict(whole, **{n: 0 for n in parts})):
+            peak = max((int(parts[n].peak_resident_bytes) for n in names if n in parts), default=0)
+            out.append((held + fixed + peak, names))
+        return out
 
     @property
     def whole_component_fraction(self) -> float:
@@ -986,7 +1028,14 @@ class PrismSolver:
             dev = by_name.get(dev_str)
             if dev is None or any(v != dev_str for v in (shard_map or {}).values()):
                 continue
-            why = self._arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+            mem = component_memory[comp_name]
+            why = self._arena_over_allocation(container, comp_name, mem, dev)
+            # The host room (`_over_host_room`) for a component the rung holds UNTILED: one over the
+            # usable rung is held tiled (`component_tiling`), at a cost the door's whole figure is not.
+            if (why is None and getattr(self, "_unified_host_free_mb", None) is not None
+                    and dev.spec.has_unified_memory
+                    and self._whole_component_mb(container, comp_name, mem, dev) <= self._usable_mb(dev)):
+                why = self._over_host_room(container, comp_name, mem, dev)
             if why is not None:
                 return why
         return None
@@ -998,7 +1047,67 @@ class PrismSolver:
         device's largest allocation."""
         usable = self._usable_mb(dev) if usable_mb is None else usable_mb
         return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
-                and self._arena_over_allocation(container, comp_name, mem, dev) is None)
+                and self._arena_over_allocation(container, comp_name, mem, dev) is None
+                and self._over_host_room(container, comp_name, mem, dev) is None)
+
+    def _host_room_mb(self, container) -> Optional[float]:
+        """On a UNIFIED device whose rung `solve` descends by the host side: the free reading less what
+        the run holds on the host beside any one component's phase (the engine's measured base, the
+        output boundary) — what one phase's device bytes and its own loading may take together, the
+        figure `solve`'s descent holds the plan to (`host_footprint`, `need_mb`). None where `solve`
+        does not descend (a discrete card, the census, a budget door): nothing to hold a phase to."""
+        free = getattr(self, "_unified_host_free_mb", None)
+        if free is None:
+            return None
+        base = float(getattr(self, "_unified_host_base_mb", 0.0) or 0.0)
+        return float(free) - base - self._output_bytes(container) / (1024 * 1024)
+
+    def _host_load_mb(self, container, comp_name: str) -> float:
+        """What loading `comp_name` holds on the host beyond what it lands in, on this engine
+        (`host_footprint.component_loads`, the footprint's own figure)."""
+        from neurobrix.core.prism.host_footprint import component_loads, engine_of
+        seen = self.__dict__.setdefault("_host_loads_mb", {})
+        if comp_name not in seen:
+            dtypes = getattr(self, "_component_dtypes", None) or {}
+            if comp_name not in dtypes:
+                raise RuntimeError(f"ZERO FALLBACK: the host room prices loading '{comp_name}' at the "
+                                   f"width the plan runs it at, and no width was resolved for it")
+            loads = component_loads(engine_of(getattr(self, "_mode", "compiled")),
+                                    {comp_name: str(dtypes[comp_name])},
+                                    {comp_name: self._weight_sizes_by_component(container).get(comp_name) or {}},
+                                    {comp_name: (container.get_shard_sizes() or {}).get(comp_name) or {}},
+                                    self._stored_dtypes_by_component(container), get_dtype_bytes())
+            seen[comp_name] = loads.get(comp_name, 0) / (1024 * 1024)
+        return seen[comp_name]
+
+    def _over_host_room(self, container, comp_name: str, mem: "ComponentMemory",
+                        dev: "DeviceState") -> Optional[str]:
+        """Why `comp_name` held whole on a UNIFIED `dev` cannot be loaded in the host memory its phase
+        has (`_host_room_mb`), or None when it can — or when nothing holds the plan to the host.
+
+        On unified memory the device's bytes ARE host bytes, and loading a component holds its loader's
+        transient beside them. A component whose whole cost plus its own load exceeds the room is never
+        held whole on any rung of this reading: `solve` would price it, step the rung down, and keep
+        stepping while the rung decides nothing about it — streaming every component of the lower rung
+        instead. Wan2.1-T2V-1.3B on the Mac at 14 687 MB free (2026-10-05 13:40): the umt5 encoder
+        whole, 11 471 MB, plus its 4 006 MB float32 embedding loaded twice (8 012 MB), refused rung
+        12 288, then 11 264 and 8 192, until the 6 144 rung streamed the 2.7 GB transformer in eight
+        segments re-read every step (~10 min a step). Declined here, the encoder is streamed under
+        the room (`_try_layer_streaming`'s host cap) and the transformer stays whole."""
+        if not dev.spec.has_unified_memory:
+            return None
+        room = self._host_room_mb(container)
+        if room is None:
+            return None
+        whole = self._whole_component_mb(container, comp_name, mem, dev)
+        load = self._host_load_mb(container, comp_name)
+        if whole + load <= room:
+            return None
+        why = (f"'{comp_name}' held whole on the unified {dev.device_string} is {whole:,.0f} MB, and "
+               f"loading it holds {load:,.0f} MB more on the host: {whole + load:,.0f} MB over the "
+               f"{room:,.0f} MB of host memory a phase has at this reading")
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
 
     def _live_activation_mb(self, mem: "ComponentMemory") -> float:
         """A component's activation AS THE ARENA HOLDS IT while the component runs WHOLE on a
@@ -1166,12 +1275,19 @@ class PrismSolver:
         the rung above, said. Behind the census door the rung is imposed and this is not done.
         """
         from neurobrix.core.prism.memory_budget import memory_ladder_mb
+        from neurobrix.core.prism.host_footprint import engine_of
         self._unified_rung_cap_mb = None
+        self._host_loads_mb = {}
         host = memory_state()
         unified = [d for d in profile.devices if d.has_unified_memory]
         descends = bool(unified and host.measured and not _census_shadow_active()
                         and not os.environ.get("NBX_PRISM_BUDGET_MB"))
         log = logging.getLogger(__name__)
+        # The host room every phase of a unified plan is held to while the descent is live
+        # (`_over_host_room`): the same reading and the same base the descent compares against.
+        self._unified_host_free_mb = float(host.available_mb) if descends else None
+        self._unified_host_base_mb = (float((getattr(profile.cpu, "runtime_base_mb", None) or {})
+                                            .get(engine_of(mode)) or 0.0) if descends and profile.cpu else 0.0)
         tried = []
         try:
             plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
@@ -1367,6 +1483,7 @@ class PrismSolver:
         # downstream (`_resolve_component_dtypes`, Step 5).
         component_dtypes = self._resolve_component_dtypes(
             neural_components, profile, container)
+        self._component_dtypes = dict(component_dtypes)   # the plan's widths, for `_host_load_mb`
 
         # Component-level spatial tiling accumulator. Populated by
         # _place_component when a spatial-overflow component is kept on GPU
@@ -1986,11 +2103,15 @@ class PrismSolver:
         from neurobrix.triton.weight_loader import is_block_key   # torch-free
         _engine = engine_of(self._mode)
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
+        _phases = (self._unified_device_phases(container, plan, devices)
+                   if plan.loading_mode == "lazy" and any(d.has_unified_memory for d in profile.devices) else None)
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
+            device_bytes=unified_device_bytes(plan, profile,
+                                              max(b for b, _n in _phases) if _phases else None),
+            device_phases=_phases)
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
@@ -5337,7 +5458,7 @@ class PrismSolver:
         "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
         "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
         "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
-        "_unified_rung_cap_mb", "_layer_stream_orders",
+        "_unified_rung_cap_mb", "_layer_stream_orders", "_layer_stream_fixed_bytes",
     )
 
     def _split_guidance_batch(self, candidates, container, neural_components, input_config,
@@ -6372,8 +6493,37 @@ class PrismSolver:
                 _mult = target.get_cost_multiplier(self._get_component_dtype(container, comp_name))
                 _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
                 _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
-                part = _cutter.partition(segment_budget, max_arena_bytes=_arena_cap,
+                # On a unified device the phase that streams this component also holds its LOAD on
+                # the host (`_over_host_room`): its segments are cut so the phase — what stays
+                # beside them, the segment, and the load — fits the room `solve` holds the plan to.
+                # Unbounded where nothing holds it (a discrete card, the census, a budget door), and
+                # said, not applied, where the load alone fills the room: the descent then decides.
+                _budget_c = segment_budget
+                _room = (self._host_room_mb(container) if target.spec.has_unified_memory else None)
+                if _room is not None:
+                    _over = int(budget_bytes + self._host_load_mb(container, comp_name) * _mb - _room * _mb)
+                    if 0 < _over < segment_budget:
+                        _budget_c = segment_budget - _over
+                    elif _over >= segment_budget:
+                        logging.getLogger(__name__).warning(
+                            "Prism: '%s' streamed on the unified %s: its load and what stays beside "
+                            "its segments fill the %.0f MB of host memory a phase has — cut against "
+                            "the rung alone", comp_name, target.device_string, _room)
+                part = _cutter.partition(_budget_c, max_arena_bytes=_arena_cap,
                                          parked_cap_bytes=_parked_cap)
+                if _budget_c < segment_budget and not part.fits:
+                    # The host room is narrower than the smallest cut this graph has (one op's own
+                    # weights — Wan2.1-I2V-14B's umt5 embedding, 4 006 MB, against a 3 155 MB cap on
+                    # the busy Mac): the room cannot be honoured by cutting finer, and a plan the rung
+                    # holds is not refused for it. Cut against the rung, said; `solve`'s descent
+                    # prices the host side of what is planned.
+                    logging.getLogger(__name__).warning(
+                        "Prism: '%s' streamed on the unified %s cannot be cut under the %.0f MB of host "
+                        "memory its phase has (%s) — cut against the rung alone", comp_name,
+                        target.device_string, _room, str(part.refusal or "").splitlines()[0][:160])
+                    _budget_c = segment_budget
+                    part = _cutter.partition(_budget_c, max_arena_bytes=_arena_cap,
+                                             parked_cap_bytes=_parked_cap)
                 if part.fits and len(part.segments) < 2 and comp_name not in promoted:
                     # ONE piece. A component is streamed because the whole rungs cannot hold it
                     # (`_whole_component_mb` over the usable rung — the arena's activation figure);
@@ -6391,7 +6541,7 @@ class PrismSolver:
                     _halves = _cutter.partition(int(part.peak_live_bytes + (part.total_weight_bytes + 1) // 2),
                                                 max_arena_bytes=_arena_cap, parked_cap_bytes=_parked_cap)
                     if not (_halves.fits and len(_halves.segments) >= 2):
-                        return _no(f"'{comp_name}' fits in ONE segment of {segment_budget / _mb:.0f} MB and "
+                        return _no(f"'{comp_name}' fits in ONE segment of {_budget_c / _mb:.0f} MB and "
                                    f"cannot be cut in two (" + (_halves.refusal or "one piece") + ")",
                                    comp=comp_name)
                     part = _halves
@@ -6399,7 +6549,7 @@ class PrismSolver:
                     # Crowded unless its own activations or one op's weights fill the whole usable
                     # rung — then nothing streamed beside it can make room.
                     return _no(
-                        f"'{comp_name}' cannot be cut into segments of {segment_budget / _mb:.0f} MB: "
+                        f"'{comp_name}' cannot be cut into segments of {_budget_c / _mb:.0f} MB: "
                         + part.refusal, crowded=part.peak_live_bytes < budget_bytes - constant_bytes,
                         comp=comp_name)
                 partitions[comp_name] = part
@@ -6475,6 +6625,8 @@ class PrismSolver:
         self._layer_stream_kv_reserve_bytes = int(kv_in_window)
         self._layer_stream_window_bytes = int(resident_beside + constant_bytes + flow_read_bytes + kv_bytes
                                               + max(p_.peak_resident_bytes for p_ in partitions.values()))
+        # What every phase holds beside its own components and segments (`_unified_device_phases`).
+        self._layer_stream_fixed_bytes = int(constant_bytes + flow_read_bytes + kv_bytes)
         return allocations, devices
 
     def _output_bytes(self, container) -> int:

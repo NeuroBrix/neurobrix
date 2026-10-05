@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On unified memory (Apple), a model whose components load one after another keeps the largest
+  one it can resident.** The memory plan counted the load of one component (such as a text
+  encoder's large embedding table) together with the memory of a component that runs at a different
+  time, and counted a tiled component at its untiled size. Both made the plan step down until it
+  re-read the main model from disk on every step. Wan2.1-T2V-1.3B at 480x832 with 14.7 GB free now
+  keeps its transformer loaded for the whole run and streams only its text encoder.
+
 - **A plan that splits an operation the engine cannot split now stops with a message naming it.**
   When a plan split an operation into bands and the engine had no split version of that operation,
   or when the selected engine mode does not run a planned residual chain, the full operation ran
