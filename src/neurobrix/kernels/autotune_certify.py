@@ -1828,8 +1828,17 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
             only_missing: bool = False, seed: int = 20260907, log=None,
             allow_off_protocol: bool = False, reprove_unclocked: bool = False,
-            reprove_generator: bool = False, working_set_mb: Optional[int] = None) -> Dict[str, Any]:
+            reprove_generator: bool = False, working_set_mb: Optional[int] = None,
+            reprove_keys: Optional[List[str]] = None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files.
+
+    `reprove_keys`: the lines of a named key list (`--reprove-keys FILE`), each a key as the
+    certifier's own log names it (`<kernel> <dtype> <described key>`, the `[certify] ` prefix
+    allowed). Those keys are swept again from scratch even when this class holds them — a timing
+    taken beside another job may have ranked the wrong configuration first — and every other key
+    is passed by when this class covers it (as under `--only-missing`, with the other flags' coverage
+    rules). A named key the census table does not hold is refused by name before
+    anything is timed.
 
     `working_set_mb`: the budget this run may hold — every key is priced by its phases before any
     draw and refused by name over it (`price_key`, `_refuse_unpriced`). It is the figure the run's
@@ -1884,6 +1893,13 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     if kernels:
         want = set(kernels)
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
+    named = named_key_set(reprove_keys) if reprove_keys is not None else None
+    if named is not None:
+        absent = sorted(named - census_identities(shapes, tuners))
+        if absent:
+            raise RuntimeError(f"--reprove-keys: {len(absent)} named key(s) are not in the census table "
+                               f"{vendor}/{profile} {certifying_class} GB (after --kernels): " + "; ".join(absent))
+        log(f"[certify] --reprove-keys: {len(named)} named key(s), each swept again from scratch")
     rng = np.random.default_rng(seed)
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
@@ -1896,9 +1912,47 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     try:
         return _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                              reprove_generator, certifying_device, certifying_class, budget_bytes,
-                             floor_bytes, rng, summary, log, writer, bench)
+                             floor_bytes, rng, summary, log, writer, bench, named=named)
     finally:
         writer.flush_all()
+
+
+_LOG_PREFIX = "[certify] "
+
+
+def key_identity(qual: str, dtype: str, tuner, key: tuple) -> str:
+    """A key as the certifier's log names it: `<kernel> <dtype> <described key>` — the one form an
+    operator copies out of a log, and the form `--reprove-keys` reads back."""
+    return f"{C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}"
+
+
+def named_key_set(lines: List[str]) -> set:
+    """The keys of a `--reprove-keys` file: one per line, as `key_identity` writes them, the log's
+    `[certify] ` prefix and anything after a `: ` (the log's verdict) dropped. An empty list is
+    refused by name: a re-prove that names nothing would certify nothing and say nothing."""
+    out = set()
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(_LOG_PREFIX):
+            line = line[len(_LOG_PREFIX):]
+        out.add(line.split(": ", 1)[0].strip())
+    if not out:
+        raise RuntimeError("--reprove-keys: the file names no key (empty, or only comments) — refused")
+    return out
+
+
+def census_identities(shapes: Dict[str, List[tuple]], tuners: Dict[str, Any]) -> set:
+    """Every key of the census table this run will walk, in `key_identity` form."""
+    return {key_identity(qual, C.output_dtype(tuners[qual], key), tuners[qual], key)
+            for qual, keys in shapes.items() if qual in tuners for key in keys}
+
+
+def skips_key(covered: bool, identity: str, named: Optional[set]) -> bool:
+    """Whether the loop passes a key by: covered for this class under the flags in force, and not
+    named for a re-prove. A named key is never passed by."""
+    return covered and not (named is not None and identity in named)
 
 
 _WRITE_SHARE = 0.10     # a certified file's rewrites may cost at most a tenth of the certifier's time
@@ -1943,7 +1997,7 @@ class _BoundedWriter:
 
 def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, reprove_unclocked,
                   reprove_generator, certifying_device, certifying_class, budget_bytes, floor_bytes,
-                  rng, summary, log, writer, bench):
+                  rng, summary, log, writer, bench, named: Optional[set] = None):
     done = 0
     attempts = 0
     for qual, keys in shapes.items():
@@ -1960,9 +2014,12 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             path = C.file_for(vendor, profile, qual, dtype, root=root)
             entries = _file_entries(per_dtype, dtype, path)
             ktext = C.key_repr(key)
-            if (only_missing or reprove_unclocked or reprove_generator) and C.entry_covers(
+            identity = key_identity(qual, dtype, tuner, key)
+            if skips_key((only_missing or reprove_unclocked or reprove_generator or named is not None)
+                         and C.entry_covers(
                     entries, ktext, certifying_class, need_clock=reprove_unclocked,
-                    need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None):
+                    need_generator=C.proof_backend({"backend": _backend()}) if reprove_generator else None),
+                         identity, named):
                 continue                      # certified FOR THIS CARD's memory class already (and, with
                                               # --reprove-unclocked, at a recorded clock; with
                                               # --reprove-generator, under the running code generator)
@@ -1973,7 +2030,8 @@ def _certify_loop(shapes, tuners, vendor, profile, root, limit, only_missing, re
             stored = C.entry_for_memory_class(entries.get(ktext), certifying_class) if reprove_generator else None
             stored_label = C.proof_backend(stored.get("proof")) if stored else None
             reprove = bool(stored and stored.get("config") and stored_label
-                           and stored_label != C.proof_backend({"backend": _backend()}))
+                           and stored_label != C.proof_backend({"backend": _backend()})
+                           and not (named is not None and identity in named))
             attempts += 1
             t0 = time.time()
             if budget_bytes is not None:

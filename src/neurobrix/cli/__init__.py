@@ -235,6 +235,11 @@ For more information: https://neurobrix.es
                            help='skip only the shapes certified for this card\'s class UNDER THE RUNNING code generator '
                                 '(the Triton version); a proof made under another one is re-ranked by this optimisation pass — '
                                 'it stays correct and served meanwhile')
+    certify_p.add_argument('--reprove-keys', default=None, metavar='FILE',
+                           help='sweep these keys again from scratch even when this class holds them: one per line as '
+                                'the certifier logs them ("<kernel> <dtype> <described key>", the "[certify] " prefix '
+                                'allowed); every other key is skipped when this class covers it, as under --only-missing; a named key the census table '
+                                'does not hold is refused by name')
     certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
                            help='certify even though a card is off this machine\'s protocol clock (the run says so, '
                                 'and its timings are not comparable with on-protocol ones)')
