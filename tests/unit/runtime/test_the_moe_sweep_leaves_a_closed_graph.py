@@ -27,7 +27,7 @@ import pytest
 from neurobrix.core.paths import cache_dir
 from neurobrix.core.runtime.graph import moe_fusion as MF
 
-from test_a_stacked_expert_block_routed_softmax_first_is_fused import qwen3vl_block
+from .test_a_stacked_expert_block_routed_softmax_first_is_fused import qwen3vl_block
 
 
 def _protected(op):
