@@ -106,6 +106,15 @@ sdpa_thresholds:
 # distinction needs a separate cdna3.yml when the picker actually
 # benefits from larger tiles on MI300.
 memory:
+  # The compiled engine's torch caching allocator (core/runtime/torch_allocator.py; the measured
+  # case is in nvidia/volta.yml). ROCm's build of that allocator implements expandable segments on
+  # HIP's virtual-memory API (hipMemCreate / hipMemMap: c10/cuda/CUDACachingAllocator.cpp, the
+  # `defined(USE_ROCM)` branch of Note [Expandable Segments], and CUDAAllocatorConfig.h, which
+  # enables it for ROCM_VERSION >= 70000 — https://github.com/pytorch/pytorch/blob/v2.14.0/c10/cuda/CUDAAllocatorConfig.h)
+  # and reads the same setting (PYTORCH_ALLOC_CONF / PYTORCH_HIP_ALLOC_CONF:
+  # https://github.com/pytorch/pytorch/blob/v2.14.0/c10/core/AllocatorConfig.cpp). Below ROCm 7.0
+  # torch warns "expandable_segments not supported on this platform" and keeps fixed segments.
+  compiled_allocator_settings: "expandable_segments:True"
   max_shared_memory_per_block: 65536    # 64 KB (CDNA1/2)
   max_registers_per_block: 65536
   # AMD schedules in 64-wide WAVEFRONTS where NVIDIA uses 32-wide warps.

@@ -13,11 +13,15 @@ Two cells reach it, and they reach different depths:
   CogVideoX-5b-I2V and Wan2.1-VACE-1.3B `vae_encoder`. Before the fix all three RAISED on
   entry, including the ones that should simply be declined. None is in the D2 class the tail
   was written for (measured 2026-09-24):
-    - Allegro: temporal map ((b*t + 1)//2 + 1)//2 — the batch symbol folded into time, because
-      its trace froze the batch at a literal 1 (`aten.view::1` sized [1, s0*s1, 128, s2, s3]).
-      No time map in one symbol to read: it was declined, and the decline named that expression.
-      Re-traced by Forge (2026-10-04 23:18) its map is ((t + 1)//2 + 1)//2 in s1 alone: a
-      down-map of one symbol, tiled in space with the whole clip in every tile, like Wan2.1-VACE.
+    - Allegro-TI2V: TILED, because its container was rewritten. The old trace froze the batch at
+      a literal 1 (`aten.view::1` sized [1, s0*s1, 128, s2, s3]), folding the batch symbol into
+      time — ((b*t + 1)//2 + 1)//2, no time map in one symbol — and the encoder was declined
+      with that expression named. Forge rewrote the container on 2026-10-04 23:20:41 (graph
+      c1861e72 -> f587fc4b, campaigns/2026_10_04_frozen_scan/STATE.md line 213): the cache's
+      vae_encoder graph holds no `s0*s1` any more, and its time map is ((s1 + 1)//2 + 1)//2 in s1
+      alone. A down-map of one symbol, tiled in space with the whole clip in every tile — the
+      same spec as Wan2.1-VACE (tile 264, overlap 40, t_axis_out 1, no t_tile, rung 16 384).
+      The time-map test below reads that from the container, so a stale container is named.
     - CogVideoX-5b-I2V: traced at t = 1, so it has no temporal ratio to read: declined.
     - Wan2.1-VACE: causal ((t - 1)//4 + 1). Since 2026-09-26 that class is tiled in space with
       the whole clip in every tile, and since 2026-10-04 at any frame count — 88 included,
@@ -61,8 +65,37 @@ def test_a_real_encoder_reaching_the_branch_gets_a_decision_not_a_crash(model, t
     if tiled:
         assert spec is not None and "t_tile" not in spec, (
             f"{model}'s encoder is tiled in space with the whole clip: {spec}")
+        assert {k: spec[k] for k in SPACE_TILED} == SPACE_TILED_AT_THE_RUNG, (model, spec)
     else:
         assert spec is None, f"{model}'s encoder has no time map the engine tiles: {spec}"
+
+
+#: The spec of a down-map encoder tiled in space with the whole clip in every tile, at 720 x 1280
+#: on the 16 GB rung: what Wan2.1-VACE and the rewritten Allegro-TI2V both receive.
+SPACE_TILED_AT_THE_RUNG = {"tile_size": 264, "overlap": 40, "t_axis_out": 1, "downscale": True,
+                           "budget_rung_mb": RUNG_MB}
+SPACE_TILED = tuple(SPACE_TILED_AT_THE_RUNG)
+
+
+def _symbols(expr):
+    if isinstance(expr, dict):
+        own = {expr["id"]} if expr.get("type") == "symbol" else set()
+        return own.union(*(_symbols(v) for k, v in expr.items() if k in ("left", "right")))
+    return set()
+
+
+@pytest.mark.parametrize("model", ["Allegro-TI2V", "Wan2.1-VACE-1.3B-diffusers"])
+def test_a_tiled_encoder_s_time_map_is_one_symbol_never_the_batch(model):
+    """The reason a tiled encoder is tiled, read from the container: its output's time axis
+    (`t_axis_out`) is a map of ONE symbol, and not the batch's. Allegro-TI2V's pre-23:20 graph
+    failed here (its time folded the batch: s0*s1)."""
+    graph = json.loads((container_root(model) / "components" / "vae_encoder" / "graph.json")
+                       .read_text())
+    (inp,), (out,) = graph["input_tensor_ids"], graph["output_tensor_ids"]
+    batch = _symbols(graph["tensors"][inp]["symbolic_shape"]["dims"][0])
+    t_axis = SPACE_TILED_AT_THE_RUNG["t_axis_out"]
+    time = _symbols(graph["tensors"][out]["symbolic_shape"]["dims"][t_axis])
+    assert len(time) == 1 and not time & batch, (model, time, batch)
 
 
 def _sym(i, trace):

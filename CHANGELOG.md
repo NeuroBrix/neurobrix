@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A plan that splits an operation the engine cannot split now stops with a message naming it.**
+  When a plan split an operation into bands and the engine had no split version of that operation,
+  or when the selected engine mode does not run a planned residual chain, the full operation ran
+  instead. It used the memory the plan had split it to save, and nothing reported it. The run now
+  stops with an error that names the operation and the engine mode.
+
+- **A sliced stretch of a model sums its partial results in float32.** When the engine runs part
+  of a component in slices along a token axis, the partial results of a contraction are summed in
+  float32 for half-precision models (in both engines) and stored once in the operation's own
+  precision. The memory plan includes the cost of that float32 buffer.
+
+- **AMD GPUs use PyTorch's expandable memory segments in the PyTorch engine.** On ROCm 7.0 and
+  later, the setting already applied to NVIDIA GPUs now also applies to AMD GPUs. It prevents
+  out-of-memory errors caused by fragmentation when free memory is available. `PYTORCH_HIP_ALLOC_CONF`,
+  like the other allocator variables, overrides it.
+
 - **A component's weights are freed when it is unloaded.** In the PyTorch engine, a component whose
   weight names needed matching to the graph kept every weight of its last run in memory after it was
   unloaded. On SANA-Video at 720p this left the transformer's 7.8 GB on the GPU during the video

@@ -429,6 +429,20 @@ class ActivationProfile:
 #: which sizes the same graph's activations and must not count what this one does not.
 ZERO_ALLOC_OP_TYPES = ("aten::expand", "aten::broadcast_to")
 
+#: ATen ops whose output is a VIEW of their first input (https://docs.pytorch.org/docs/2.14/tensor_view.html),
+#: in both engines for the contiguous tensors a graph hands them: the op allocates nothing WHILE it
+#: runs. ONE rule for every walk of a graph's activations — the placement estimate
+#: (`ActivationProfiler.estimate_peak_memory`: its peak and its overflow scan) and the layer
+#: partitioner's reserve (`LayerPartitioner.op_peak_curve`) — so a graph has one figure. The
+#: output is still counted once the op has run (both walks): a consumer that cannot read the
+#: strided view copies it, and that copy is not in the graph. Not `reshape` or `contiguous` (they
+#: copy a strided input), and not `expand` (allocation-free for its whole life, above).
+VIEW_OP_TYPES = frozenset({
+    "aten::view", "aten::_unsafe_view", "aten::t", "aten::transpose", "aten::permute",
+    "aten::unsqueeze", "aten::squeeze", "aten::slice", "aten::select", "aten::narrow",
+    "aten::as_strided", "aten::alias",
+})
+
 #: The prefixes of a tensor id that names a stored weight (a parameter or a buffer of the container).
 WEIGHT_TENSOR_PREFIXES = ("param::", "buffer::")
 
@@ -1072,9 +1086,12 @@ class ActivationProfiler:
                 live_tensors[out_tid] = size
                 current_bytes += size
 
-            # 2. PEAK: Track maximum
-            if current_bytes > peak_bytes:
-                peak_bytes = current_bytes
+            # 2. PEAK: Track maximum. A view (`VIEW_OP_TYPES`) allocates nothing WHILE it runs:
+            # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
+            in_op = (live_before_op[op_uid] if op.get("op_type") in VIEW_OP_TYPES
+                     else current_bytes)
+            if in_op > peak_bytes:
+                peak_bytes = in_op
                 peak_op_uid = op_uid
                 peak_step = step
                 peak_tensor_count = len(live_tensors)
@@ -1125,11 +1142,13 @@ class ActivationProfiler:
                     in_shapes.append(self._resolve_shape(meta, symbol_map))
                 out_shapes = []
                 out_bytes_total = 0
+                is_view = op_type in VIEW_OP_TYPES       # allocates nothing while it runs
                 for tid in out_tids:
                     meta = self.tensors.get(tid, {})
                     sh = self._resolve_shape(meta, symbol_map)
                     out_shapes.append(sh)
-                    out_bytes_total += self._compute_size(sh, meta, dtype_bytes)
+                    if not is_view:
+                        out_bytes_total += self._compute_size(sh, meta, dtype_bytes)
                 ws_bytes = estimate_op_workspace_bytes(
                     mode, op_type, in_shapes, out_shapes, dtype_bytes,
                     vram_per_gpu_bytes=vram_per_gpu_bytes,

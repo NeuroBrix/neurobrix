@@ -11,7 +11,8 @@ What each test would do if the code were wrong:
   * the flow tests run `_execute_negative_encoding` of BOTH engines' flows over stand-ins with the real
     finalizer: a flow that stores the tokenizer's mask leaves 519 (or 226) positions and fails the length;
   * the rule tests fail if a mask of another length is returned (or replaced) instead of refused;
-  * the site walk fails if any CFG site reads the negative mask without passing through the rule.
+  * the site walk fails if any CFG site reads the negative mask without passing through the rule,
+    or if a second read path appears beside the batched one the plan's guidance split reuses.
 Seen failing on each injection: see the commit message.
 """
 from __future__ import annotations

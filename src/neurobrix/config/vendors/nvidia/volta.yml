@@ -227,8 +227,10 @@ memory:
   # 8.52 GiB allocated (the plan's price, 11.0 GiB) and 6.76 GiB reserved-but-unallocated;
   # Allegro-TI2V compiled the same way with 5.93 GiB. The vendor's remedy for that case:
   # https://docs.pytorch.org/docs/2.14/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf
-  # It is the allocator's behaviour on CUDA, not this architecture's, so every NVIDIA profile
-  # declares it. An operator's PYTORCH_ALLOC_CONF wins and is logged.
+  # It is the allocator's behaviour, not this architecture's, so every profile whose vendor
+  # allocator implements it declares it: every NVIDIA profile and every AMD one (ROCm's build, see
+  # amd/cdna.yml); Apple's MPS allocator has no such setting. An operator's PYTORCH_ALLOC_CONF wins
+  # and is logged.
   compiled_allocator_settings: "expandable_segments:True"
   max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
   max_registers_per_block: 65536

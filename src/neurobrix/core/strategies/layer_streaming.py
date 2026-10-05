@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.core.runtime.graph_executor import output_key
 from neurobrix.core.strategies.base import ExecutionStrategy
@@ -253,12 +253,27 @@ class LayerStreamingStrategy(ExecutionStrategy):
         forward(dict(getattr(base, "_op_uid_interceptors", None) or {}),
                 list(getattr(base, "_op_uid_groups", None) or []),
                 set(getattr(base, "_op_uid_planned", None) or ()))
-        registered = getattr(base, "register_op_uid_interceptors", None)
-        if registered is not None:
-            def register_on_pieces(interceptors, groups=(), planned=(), _base=registered):
-                _base(interceptors, groups=groups, planned=planned)
-                forward(interceptors, groups, set(planned))
-            base.register_op_uid_interceptors = register_on_pieces
+        LayerStreamingStrategy._follow(
+            base, component_name, op_uid=lambda interceptors, groups=(), planned=(): forward(
+                interceptors, groups, set(planned)))
+
+    @staticmethod
+    def _follow(executor: Any, component_name: str, **followers: Callable) -> None:
+        """Subscribe `followers` to `executor`'s later interceptor registrations through its
+        explicit hook (`GraphExecutor.follow_interceptor_registrations`). An executor that takes
+        registrations without that hook is refused by name: a registration it could not forward
+        would run the pieces without it."""
+        hook = getattr(executor, "follow_interceptor_registrations", None)
+        if hook is not None:
+            hook(f"layer_streaming:{component_name}", **followers)
+            return
+        takes = [n for n in ("register_op_uid_interceptors", "register_triton_interceptors")
+                 if getattr(executor, n, None) is not None]
+        if takes:
+            raise RuntimeError(
+                f"layer_streaming: '{component_name}'s executor takes {takes} without the "
+                f"follow_interceptor_registrations hook — a later registration would never reach "
+                f"the executors that run its ops")
 
     def _slice_stretches(self, component_name: str, base: Any, dag: Dict[str, Any],
                          bounds: List[List[str]], executors: List[Any]) -> List[Any]:
@@ -553,20 +568,17 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # order inside one decode step continue the count instead of restarting it — the
         # segmenting is invisible to the cache, which is the property that makes a shared
         # instance correct rather than merely convenient.
-        _register = getattr(executor, "register_triton_interceptors", None)
-        if _register is not None:
-            def register_on_segments(interceptors, _base=_register, _segs=segments):
-                _base(interceptors)
-                for seg_exec in _segs:
-                    fn = getattr(seg_exec, "register_triton_interceptors", None)
-                    if fn is None:
-                        raise RuntimeError(
-                            "layer_streaming: a segment executor cannot take an "
-                            "interceptor registration. Its decode would silently run "
-                            "with no KV cache, which reads as a model defect and is not "
-                            "one — a refusal is the only honest answer.")
-                    fn(interceptors)
-            executor.register_triton_interceptors = register_on_segments
+        def register_on_segments(interceptors, _segs=segments):
+            for seg_exec in _segs:
+                fn = getattr(seg_exec, "register_triton_interceptors", None)
+                if fn is None:
+                    raise RuntimeError(
+                        "layer_streaming: a segment executor cannot take an "
+                        "interceptor registration. Its decode would silently run "
+                        "with no KV cache, which reads as a model defect and is not "
+                        "one — a refusal is the only honest answer.")
+                fn(interceptors)
+        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments)
 
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)

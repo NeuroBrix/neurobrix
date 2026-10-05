@@ -15,7 +15,10 @@ run, on the piece's own executor, and every pass borrows them (`GraphExecutor._b
 
 Both engines: the slicing is `reshape` / `narrow` / `contiguous` / `new_empty` / `copy_` / `+` on
 whatever tensor type the engine hands out — torch.Tensor in compiled, NBXTensor in the Triton
-modes. No import of either (R33), no conversion between them.
+modes. No import of either (R33), no conversion between them. A contraction's partials are summed
+in the dtype the pass executor's DtypeEngine names (`accumulation_dtype`) and stored once in the
+dtype the op's own output was given. None of these launches an autotuned kernel: the stitch holds
+no key of the census (tests/unit/prism/test_the_stitch_launches_no_autotuned_kernel.py).
 """
 
 from __future__ import annotations
@@ -23,8 +26,8 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from neurobrix.core.prism.chunked_region import (
-    TokenAxis, chunk_extents, dim_source, own, plan_region, put_slice, region_carriers, take_slice,
-    whole_shape)
+    TokenAxis, accumulate, chunk_extents, dim_source, own, plan_region, put_slice, region_carriers,
+    store, take_slice, whole_shape)
 from neurobrix.core.prism.layer_partition import Segment, build_segment_graph
 from neurobrix.core.runtime.graph_executor import output_key
 
@@ -208,6 +211,7 @@ class ChunkedPiece:
         # what is sliced on the way in: the stretch's inputs and the carriers of its symbols
         sliced_in = set(plan.inputs) | {t for t in plan.layouts if t not in plan.outputs}
         done: Dict[str, Any] = {}          # tid -> whole value (contraction sums, assembled outputs)
+        dtypes: Dict[str, Any] = {}        # contraction tid -> (accumulator dtype, store dtype)
         nbx_path, component = self._nbx
         for cp, ex in zip(plan.passes, self._passes):
             names = ex._dag.get("segment_input_names") or []
@@ -237,14 +241,22 @@ class ChunkedPiece:
                             raise RuntimeError(f"chunked piece: pass did not return {key!r}")
                         part = out[key]
                         lay = plan.layouts.get(tid)
-                        if tid in plan.contractions:
-                            done[tid] = own(part) if (tid not in done or not cp.chunked) else done[tid] + part
+                        if tid in plan.contractions and cp.chunked:
+                            # summed in the engine's accumulator, stored once in the op's own dtype
+                            if tid not in dtypes:
+                                dtypes[tid] = (ex.accumulation_dtype(part.dtype), part.dtype)
+                            done[tid] = accumulate(done.get(tid), part, dtypes[tid][0])
+                        elif tid in plan.contractions:
+                            done[tid] = own(part)
                         elif cp.chunked and lay is not None:
                             if start == 0:
                                 done[tid] = part.new_empty(whole_shape(part.shape, lay, total, length))
                             put_slice(done[tid], part, lay, total, inner[tid], start, length)
                         else:
                             done[tid] = own(part)
+                for tid in cp.targets:
+                    if tid in dtypes:
+                        done[tid] = store(done[tid], dtypes.pop(tid)[1])
             finally:
                 ex.unload_weights()
         self._last_run = {t: done[t] for t in plan.outputs if t in done}

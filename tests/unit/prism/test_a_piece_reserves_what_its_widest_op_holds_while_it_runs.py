@@ -74,8 +74,8 @@ def test_a_view_allocates_nothing_while_it_runs():
     figure at the view is the live set before it — not the product twice (Ming-Lite-Omni-1.5's
     vision tower on the busy Mac read 9 878 MB at such a view of a 4 420 MB bmm output).
 
-    Injection (seen red, then restored green): the `VIEW_OP_TYPES` test in `_walk_liveness` removed
-    -> the view's in-op figure is 80 MB."""
+    Injection (seen red, then restored green): the `profiler.VIEW_OP_TYPES` test in `_walk_liveness`
+    removed -> the view's in-op figure is 80 MB."""
     g = _ffn(1)
     g["tensors"]["v0"] = dict(g["tensors"]["h0"])
     g["ops"]["view0"] = {"op_type": "aten::_unsafe_view", "input_tensor_ids": ["h0"],
@@ -88,3 +88,37 @@ def test_a_view_allocates_nothing_while_it_runs():
     assert during[i] == after[i - 1], (during[i] / MB, after[i - 1] / MB)
     assert during[i] < 80 * MB
     assert during[lp.order.index("act0")] >= 80 * MB          # the activation still holds both
+
+
+def _peak_at_a_view() -> dict:
+    """One FFN block whose up-projection's 40 MB product is read through an `_unsafe_view` by an
+    activation that writes a narrow tensor: counted as a second buffer, the view is the peak."""
+    g = _ffn(1)
+    g["tensors"]["v0"] = dict(g["tensors"]["h0"])
+    g["tensors"]["g0"] = dict(g["tensors"]["x0"])
+    g["ops"]["view0"] = {"op_type": "aten::_unsafe_view", "input_tensor_ids": ["h0"],
+                         "output_tensor_ids": ["v0"]}
+    g["ops"]["act0"]["input_tensor_ids"] = ["v0"]
+    g["execution_order"].insert(1, "view0")
+    return g
+
+
+def test_the_placement_estimate_and_the_partitioner_hold_one_figure_for_a_graph():
+    """ONE view rule (`profiler.VIEW_OP_TYPES`) for every walk of a graph's activations: the
+    placement estimate's peak (`ActivationProfiler.estimate_peak_memory`) is the partitioner's
+    in-op maximum (`LayerPartitioner.op_peak_curve`), and the overflow scan that feeds op-level
+    tiling does not flag a view for the bytes it never allocates.
+
+    Injections (seen red, then restored green — STATE.md of the op_tiler campaign, 2026-10-05):
+      A. the profiler's peak back to `current_bytes` at a view -> the two figures differ;
+      B. the overflow scan counting a view's output -> the view is flagged."""
+    from neurobrix.core.prism.profiler import ActivationProfiler
+    g = _peak_at_a_view()
+    lp = LayerPartitioner(g)
+    figure = max(lp.op_peak_curve())
+    threshold = 60 * MB
+    ap = ActivationProfiler(g).estimate_peak_memory(vram_per_gpu_bytes=int(threshold / 0.85) + 1)
+    assert ap.peak_bytes == figure, (ap.peak_bytes / MB, figure / MB)
+    assert figure < 80 * MB                                   # not the product twice
+    flagged = [o[0] for o in ap.overflow_ops]
+    assert "view0" not in flagged, flagged

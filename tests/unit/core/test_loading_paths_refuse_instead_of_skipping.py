@@ -208,3 +208,19 @@ def test_every_strategy_that_loads_weights_routes_through_the_brick():
             bad.append(f"{f.name}:{fn.lineno}:{fn.name}")
     assert not bad, ("these load weights from a path of their own making:\n  "
                      + "\n  ".join(bad))
+
+
+def test_a_kept_path_is_only_the_one_load_weights_was_handed():
+    """The replayed-path rule is seen failing: a piece that keeps a path it made itself is refused."""
+    own = ast.parse(
+        "class P:\n"
+        "    def load_weights(self, nbx_path, component):\n"
+        "        self._nbx = ('/made/up.nbx', component)\n"
+        "    def run(self, ex):\n"
+        "        nbx_path, component = self._nbx\n"
+        "        ex.load_weights(nbx_path, component)\n")
+    run = next(n for n in ast.walk(own) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    assert _paths_kept_by_load_weights(own, run) == set()
+    handed = ast.parse(ast.unparse(own).replace("('/made/up.nbx', component)", "(nbx_path, component)"))
+    run = next(n for n in ast.walk(handed) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    assert _paths_kept_by_load_weights(handed, run) == {"nbx_path"}

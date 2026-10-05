@@ -27,6 +27,7 @@ Injections (seen red, then restored green — STATE.md of the op_tiler campaign)
 """
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -268,3 +269,61 @@ def test_drop_ops_removes_every_planned_entry_touching_the_stretch():
     assert [e[0] for e in p.fusion_pairs] == ["c"] and [e[0] for e in p.tiled_ops] == ["e"]
     assert [r["fork_uid"] for r in p.residual_chains] == ["h"] and p.conv3d_chunks == ["j"]
     assert p.drop_ops({"zzz"}) == 0
+
+
+@pytest.mark.parametrize("mode", ["sequential", "compiled"])
+def test_a_contraction_s_slices_are_summed_in_the_engine_s_accumulator(mode, monkeypatch):
+    """The partials of K^T V (bf16, as the pass computes them on a card) are summed in the dtype the pass
+    executor's DtypeEngine names (`accumulation_dtype`: float32 for a half partial) and stored once
+    in the partial's own dtype — never summed at the pass dtype, which rounds once per slice where
+    the whole op rounds once.
+
+    Injection (seen red, then restored green, 2026-10-05): `ChunkedPiece.run` takes the partial's
+    dtype as the accumulator instead of asking the executor -> the accumulator assertion red."""
+    from neurobrix.core.dtype import engine as DE
+    from neurobrix.core.strategies import chunked_piece as CP
+    # placed as on a card: the host's fp32 rule would leave no half partial to sum
+    monkeypatch.setattr(DE, "compute_dtype_for_placement", lambda device, dtype: dtype)
+    seen = {"acc": [], "store": []}
+    real_acc, real_store = CP.accumulate, CP.store
+
+    def acc(a, part, dtype):
+        seen["acc"].append((part.dtype, dtype))
+        return real_acc(a, part, dtype)
+
+    def store(a, dtype):
+        out = real_store(a, dtype)
+        seen["store"].append((a.dtype, out.dtype))
+        return out
+    monkeypatch.setattr(CP, "accumulate", acc)
+    monkeypatch.setattr(CP, "store", store)
+    half = "bfloat16"
+    weights = {w: v.to(torch.bfloat16) for w, v in WEIGHTS.items()}
+    monkeypatch.setitem(globals(), "WEIGHTS", weights)
+    monkeypatch.setattr(sys.modules[__name__], "_graph", lambda _g=_graph: _half_graph_of(_g, half))
+
+    def ex(m):
+        e = _CpuExecutor(family="image", vendor="nvidia", arch="volta", device="cpu",
+                         dtype=half, mode=m)
+        e.load_graph_from_dict(_graph())
+        return e
+    monkeypatch.setattr(sys.modules[__name__], "_executor", ex)
+    whole = ex(mode)
+    whole.load_weights(None, COMPONENT)
+    x = torch.randn(B, 4 * T_TRACE + 1, D).to(torch.bfloat16)
+    want = whole.run({"hidden_states": x})
+    got = _streamed(mode, _chunk(2)).execute_component(COMPONENT, "loop", {"hidden_states": x})
+    assert seen["acc"], "the stitch summed no contraction"
+    assert {p for p, _ in seen["acc"]} == {torch.bfloat16}, seen["acc"]
+    assert {d for _, d in seen["acc"]} == {torch.float32}, seen["acc"]
+    assert seen["store"] and {s for _, s in seen["store"]} == {torch.bfloat16}, seen["store"]
+    assert got["sample"].dtype == want["sample"].dtype == torch.bfloat16
+    torch.testing.assert_close(got["sample"].float(), want["sample"].float(), rtol=5e-2, atol=5e-2)
+
+
+def _half_graph_of(make, name):
+    g = make()
+    g["torch_dtype"] = name
+    for t in g["tensors"].values():
+        t["dtype"] = name
+    return g
