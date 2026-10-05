@@ -148,28 +148,6 @@ class ComponentHandler(ABC):
         """
         return inputs
 
-    def prepare_weights(
-        self,
-        weights: Dict[str, torch.Tensor],
-        runtime_height: int,
-        runtime_width: int
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Modify weights after loading.
-
-        Override in subclass for component-specific weight modifications.
-        For example, Transformer scales pos_embed for resolution mismatch.
-
-        Args:
-            weights: Loaded weight tensors
-            runtime_height: Runtime pixel height
-            runtime_width: Runtime pixel width
-
-        Returns:
-            Modified weights dictionary
-        """
-        return weights
-
     # =========================================================================
     # Metadata Getters (DATA-DRIVEN)
     # =========================================================================
