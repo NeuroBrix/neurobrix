@@ -11,6 +11,8 @@ CRITICAL: shift parameter differs between models:
 ZERO FALLBACK: shift MUST come from NBX config.
 """
 
+import math
+
 import torch
 from typing import Dict, Any, Union, Optional
 
@@ -54,6 +56,10 @@ class FlowEulerScheduler(FlowSchedulerBase):
         # on the scheduler component, merged into this config by the executor).
         # Read from the raw config: the validator keeps only scheduler keys.
         self.sigma_schedule = validate_sigma_schedule(config.get("sigma_schedule"))
+        # The LENGTH the pipeline's dynamic shift reads, when it is not the total
+        # token count (registry `dynamic_shift_length`, carried like sigma_schedule).
+        self.dynamic_shift_length = validate_dynamic_shift_length(config.get("dynamic_shift_length"))
+        self.shift_frames_pointer = (self.dynamic_shift_length or {}).get("frames")
 
         # State
         self.num_inference_steps: Optional[int] = None
@@ -78,7 +84,8 @@ class FlowEulerScheduler(FlowSchedulerBase):
         image_seq_len = kwargs.get("image_seq_len", None)
         if image_seq_len is not None:
             # Compute dynamic shift
-            mu = self._calculate_mu(image_seq_len)
+            mu = dynamic_shift_mu(self.dynamic_shift_length, self._calculate_mu,
+                                  image_seq_len, kwargs.get("frames"))
         else:
             mu = self.shift
 
@@ -375,6 +382,46 @@ def validate_sigma_schedule(decl):
         raise SchedulerConfigError(
             f"ZERO FALLBACK: sigma_schedule linear_quadratic needs a numeric threshold_noise, got {decl!r}.")
     return dict(decl)
+
+
+DYNAMIC_SHIFT_LENGTH_FAMILIES = ("total", "per_frame_sqrt_frames")
+
+
+def validate_dynamic_shift_length(decl):
+    """The length a pipeline's dynamic shift is computed from, as the container declares it.
+
+    total (absent): mu = lin(image_seq_len) — FluxPipeline's calculate_shift over every packed token.
+    per_frame_sqrt_frames: mu = lin(image_seq_len / frames) * sqrt(frames) — hpcai-tech Open-Sora v2,
+    opensora/utils/sampling.py get_schedule (`shift_alpha = get_res_lin_function(...)(image_seq_len)`
+    over ONE frame's tokens, then `shift_alpha *= math.sqrt(num_frames)` over the latent frames).
+    `frames` names the runtime pointer holding the latent frame count (e.g. runtime.latent_frames).
+    """
+    if decl is None:
+        return None
+    if not isinstance(decl, dict) or decl.get("family") not in DYNAMIC_SHIFT_LENGTH_FAMILIES:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: unknown dynamic_shift_length {decl!r}; families: {DYNAMIC_SHIFT_LENGTH_FAMILIES}.")
+    if decl["family"] == "per_frame_sqrt_frames" and not (
+            isinstance(decl.get("frames"), str) and decl["frames"].startswith("runtime.")):
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames needs `frames`, the runtime pointer "
+            f"of the latent frame count (e.g. runtime.latent_frames), got {decl!r}.")
+    return dict(decl)
+
+
+def dynamic_shift_mu(decl, calculate_mu, image_seq_len: int, frames) -> float:
+    if decl is None or decl["family"] == "total":
+        return calculate_mu(image_seq_len)
+    if frames is None:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames needs the latent frame count "
+            f"({decl['frames']}); the caller passed none.")
+    frames = int(frames)
+    if frames < 1 or image_seq_len % frames:
+        raise SchedulerConfigError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames: {image_seq_len} packed tokens do not "
+            f"split into {frames} frame(s) ({decl['frames']}).")
+    return calculate_mu(image_seq_len // frames) * math.sqrt(frames)
 
 
 def flow_sigma_schedule(decl, num_steps: int):
