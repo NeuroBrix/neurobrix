@@ -1993,24 +1993,15 @@ class GraphExecutor:
         # Must reload on every weight load since cleanup() clears _weights entirely.
         self._load_constants_from_graph()
 
-        # Compute runtime-resolved buffers (sincos 2D pos_embed, interpolated
-        # pos_embed). These are marked `is_computable=True` in graph.json —
-        # the safetensors shards do not contain them. Mirrored into both
-        # modes: previously only _load_weights_triton called this, which
-        # left `aten.add::0` (pos_embed add) with an undefined input on the
-        # native path for PixArt/Sana/any DiT with sincos pos_embed. The
-        # legacy component-handler `prepare_weights` fallback is kept for
-        # models that use learned positional embeddings scaled at load
-        # time (no computable_spec in graph).
+        # Compute runtime-resolved buffers (sincos 2D pos_embed). These are marked
+        # `is_computable=True` in graph.json — the safetensors shards do not contain them —
+        # and are built in both modes from the graph's own spec. A stored positional table
+        # (a learned one) is read by the graph symbolically and is NEVER resized at load:
+        # the legacy load-time rescale (component handler `prepare_weights`) reshaped any
+        # weight named `pos_embed` to the request's patch grid, in this mode only (R30), and
+        # broke a graph that indexes the table itself (CogVideoX-5b-I2V, 2026-10-05).
         if hasattr(self, "_computable_specs") and self._computable_specs:
             self._compute_computable_buffers()
-        elif self._component_handler is not None:
-            if self._runtime_height is not None and self._runtime_width is not None:
-                self._weights = self._component_handler.prepare_weights(
-                    self._weights,
-                    self._runtime_height,
-                    self._runtime_width,
-                )
 
         # The loader owns the fact that it loaded. Before, `_weights_loaded`
         # was set by whichever caller happened to remember (factory.py:439,
