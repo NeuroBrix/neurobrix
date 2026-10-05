@@ -149,8 +149,11 @@ class LayerPartitioner:
         self.ops: Dict[str, Any] = graph.get("ops") or {}
         self.order: List[str] = list(graph.get("execution_order") or [])
         # Authoritative sizes when the caller has the weights index; the
-        # graph's own shape/dtype otherwise. The index wins because it
-        # records what is STORED, which is what a load actually costs.
+        # graph's own shape/dtype otherwise. A segment's weights are one
+        # device arena, so the caller passes each weight at the width the
+        # engine HOLDS it at (`PrismSolver._held_sizes_by_component`), not
+        # its stored width: an fp32-stored encoder under a half compute
+        # holds half its file.
         self.weight_sizes = weight_sizes or {}
 
     def _activation_bytes(self, tid: str, t: Dict[str, Any]) -> int:
@@ -261,9 +264,19 @@ class LayerPartitioner:
     def _bytes_for(self, name: str, tid_hint: Optional[str] = None) -> int:
         if name in self.weight_sizes:
             return int(self.weight_sizes[name])
-        # fall back to the graph's own description of that parameter
+        # fall back to the graph's own description of that parameter — at the width the engine
+        # holds it (`widths`, runtime_widths' weight rule) when the caller gave one: a parameter the
+        # graph names under an alias of its index key (Wan2.1-T2V's umt5 `encoder.token_embed.weight`,
+        # indexed `token_embed.weight`) is the same arena, not its traced fp32 width.
         for tid, t in self.tensors.items():
             if t.get("is_parameter") and (t.get("weight_name") or tid) == name:
+                if tid in self._widths:
+                    numel = 1
+                    for d in t.get("shape") or []:
+                        if not isinstance(d, int):
+                            return tensor_bytes(t) or 0
+                        numel *= d
+                    return numel * int(self._widths[tid])
                 return tensor_bytes(t) or 0
         return 0
 

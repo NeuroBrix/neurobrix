@@ -13,17 +13,21 @@ where the rule lives, so a change there is a change to price here:
     compiled, a component whose shards Prism mapped to "cpu" (zero3): those weights at the plan's
         dtype, pinned, for the whole run (strategies/zero3.py `_pin_cpu_weights`);
     triton, a component with shards on "cpu" (zero3, or a "cpu" staging placement): its BLOCK weights
-        pinned; everything else and all compute stay on the card (triton/weight_loader.py
-        `_load_to_pinned_cpu`, graph_executor.py re-routes compute to a card);
+        pinned AT THE WIDTH THE CARD HOLDS THEM (`_load_to_pinned_cpu` decodes to the target dtype of
+        `stored_dtype_in_compute` before the pinned copy — an fp32-stored encoder under a half compute
+        pins half its file); everything else and all compute stay on the card (triton/weight_loader.py,
+        graph_executor.py re-routes compute to a card);
   transient — while a component loads:
     compiled: the component passes through the host whole — read at its stored width, and pinned at
-        the plan's width for the non-blocking upload (core/io/weight_loader.py `_load_with_pinned_dma`:
+        the width `_convert_weights_dtype` converts it to (each weight's held width) for the non-blocking upload (core/io/weight_loader.py `_load_with_pinned_dma`:
         load_file to cpu, `_convert_weights_dtype`, `_transfer_with_pinned_memory`). The pinned copies
         are not given back: PyTorch's caching host allocator keeps a freed pinned block on its free
         list and never calls cudaFreeHost (pytorch#134332; PyTorch DevLog 2026-08-09, "Pinned memory:
         what it is for, and why nobody gives it back"), so the worker count bounds the pace, not the
         bytes;
-    triton: one tensor at a time, as read and as converted (triton/weight_loader.py);
+    triton: one tensor at a time, as read and as converted (triton/weight_loader.py) — priced at twice
+        the largest STORED tensor: the read is at the stored width, and the fp32 -> bf16 conversion's
+        own temporaries (`float32_to_bf16_bits`, uint32) are as wide as the read;
   resident — what the planning process already holds when Prism prices: the interpreter, the CLI and
     the parsed container (NBXContainer.load keeps every component's graph and profile, 1.5-4.8x their
     JSON bytes, measured 2026-09-27 — not a constant, so it is read, not priced), passed in measured;
@@ -77,10 +81,14 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
                    resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
-                   device_phases: Optional[Sequence[Tuple[int, Collection[str]]]] = None) -> Dict:
+                   device_phases: Optional[Sequence[Tuple[int, Collection[str]]]] = None,
+                   held_sizes: Optional[Mapping[str, Mapping[str, int]]] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
-    key_sizes    {component: {weight key: stored bytes}}  (the weights index)
+    key_sizes    {component: {weight key: stored bytes}}  (the weights index): what a load READS
+    held_sizes   {component: {weight key: bytes at the width the engine holds it}}
+                 (`runtime_widths.held_index_sizes`): what a pinned copy HOLDS. None states the
+                 stored bytes are the held ones (a container stored at its compute width)
     shard_sizes  {component: {shard name: bytes}}         (the container's shards)
     stored_dtypes {component: {stored floating dtypes}}  (the weights index): what a load reads at, beside
                  the plan's dtype it pins at
@@ -118,13 +126,14 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 held = mem.weight_bytes * on_host // total if total else mem.weight_bytes
         else:
             if host_shards or _on_host(alloc.device):
-                held = sum(n for k, n in keys.items() if is_block_key(k))
+                pinned = keys if held_sizes is None else (held_sizes.get(name) or {})
+                held = sum(n for k, n in pinned.items() if is_block_key(k))
         if held:
             steady[name] = int(held)
     steady_bytes = (max(steady.values(), default=0) if plan.loading_mode == "lazy"
                     else sum(steady.values()))
     loads = component_loads(engine, {n: str(a.dtype) for n, a in plan.components.items()},
-                            key_sizes, shard_sizes, stored_dtypes, dtype_bytes)
+                            key_sizes, shard_sizes, stored_dtypes, dtype_bytes, held_sizes=held_sizes)
     transient = (sum(loads.values()) if engine == "compiled" and plan.loading_mode == "eager"
                  else max(loads.values(), default=0))
     base = int(base_mb) << 20 if base_mb is not None else 0
@@ -145,10 +154,13 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
 
 def component_loads(engine: str, plan_dtypes: Mapping[str, str], key_sizes: Mapping[str, Mapping[str, int]],
                     shard_sizes: Mapping[str, Mapping[str, int]], stored_dtypes: Optional[Mapping[str, set]],
-                    dtype_bytes: Mapping[str, int]) -> Dict[str, int]:
+                    dtype_bytes: Mapping[str, int],
+                    held_sizes: Optional[Mapping[str, Mapping[str, int]]] = None) -> Dict[str, int]:
     """{component: what LOADING it holds on the host beyond what it lands in}, per the engine's loader
     (module docstring, `transient`): compiled, the component's stored shards plus their pinned copy at
-    the plan's width (`plan_dtypes`); triton, one tensor at a time (`loading_transient_bytes`). One
+    each weight's held width (`held_sizes` over `key_sizes`; without them, the plan's width `plan_dtypes`
+    over the narrowest stored one); triton, one tensor at a time at its STORED width
+    (`loading_transient_bytes`). One
     figure for the host footprint and for the solver's unified host-room door, so the door holds a
     component to the load the footprint will price."""
     if engine not in ENGINES:
@@ -162,7 +174,10 @@ def component_loads(engine: str, plan_dtypes: Mapping[str, str], key_sizes: Mapp
         stored = sum(sh.values())
         widths = [dtype_bytes[d] for d in ((stored_dtypes or {}).get(name) or ()) if d in dtype_bytes]
         pinned = stored
-        if name in plan_dtypes and widths and str(plan_dtypes[name]) in dtype_bytes:
+        read, held = sum((key_sizes.get(name) or {}).values()), sum(((held_sizes or {}).get(name) or {}).values())
+        if held_sizes is not None and read and held:
+            pinned = stored * held // read
+        elif name in plan_dtypes and widths and str(plan_dtypes[name]) in dtype_bytes:
             pinned = stored * dtype_bytes[str(plan_dtypes[name])] // min(widths)
         loads[name] = stored + pinned
     return loads

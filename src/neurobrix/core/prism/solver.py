@@ -45,6 +45,7 @@ class PlanNotComputable(RuntimeError):
 
 
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
+from neurobrix.core.prism.runtime_widths import held_index_sizes, held_weight_bytes
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
 from neurobrix.core.config.system import PRISM_DEFAULTS
 
@@ -56,12 +57,19 @@ if TYPE_CHECKING:
 # DATACLASSES
 # =============================================================================
 
-def _consumed_weight_bytes(comp, dtype_mult: float):
-    """Bytes of the weights this component's graph actually reads, or None.
+def _consumed_weight_bytes(comp, compute_dtype: str, engine: str):
+    """Bytes the weights this component's graph actually reads take ON THE DEVICE, or None.
 
     Two sources, both already in hand at plan time: the graph names which
     parameters ops consume, and `weights_index.json` gives each one's size.
     Neither is re-read from disk here -- the container carries them.
+
+    Each weight is priced at the width `engine`'s loader HOLDS it at under the
+    component's `compute_dtype` (`runtime_widths.held_weight_bytes`), from its own
+    stored dtype — never the file's width scaled by one component-wide factor. That
+    factor was read from the component's dominant dtype (its profile's hint) and was
+    right only where every weight was stored at it: a mixed container (fp32 + bf16,
+    fp16 lm_head under a bf16 hint) was priced at the hint's width throughout.
 
     None means the question could not be answered from what is present, and
     the caller then sizes by the file, which over-estimates. Under-estimating
@@ -78,51 +86,53 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
     if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
         return None
 
-    total = 0
-    seen = set()
     sizes = None
     if isinstance(index, dict):
         sizes = index.get("tensors") if isinstance(index.get("tensors"), dict) else None
 
+    consumed = {}                                  # graph name -> its tensor record, first reader
     for op_uid in order:
         op = ops.get(op_uid) or {}
         for tid in (op.get("input_tensor_ids") or []):
             t = tensors.get(tid)
             if t is None or not t.get("is_parameter"):
                 continue
-            name = t.get("weight_name") or tid
-            if name in seen:
-                continue
-            seen.add(name)
-            if sizes is not None and name in sizes:
-                total += int(sizes[name].get("size_bytes", 0))
-            else:
-                # No index entry: compute from the graph's own shape/dtype.
-                n = 1
-                shape = t.get("shape") or []
-                for d in shape:
-                    if not isinstance(d, int) or d < 0:
-                        return None          # symbolic: cannot size honestly
-                    n *= d
-                width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
-                if width is None:
-                    return None
-                total += n * width
-    if not seen:
+            consumed.setdefault(t.get("weight_name") or tid, t)
+    if not consumed:
         return None
-    # What the engines LOAD is the consumed set plus every non-block weight
-    # (the token embedding, the head, the norms a flow reads by name outside
-    # the graph — GraphExecutor.consumed_in_loader_space). Budget the same
-    # set, or the plan under-estimates in the direction the docstring calls
-    # unsafe (review of 2026-09-13).
+
+    total = 0
+    unbound = consumed
     if sizes is not None:
-        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
-        for name, meta in sizes.items():
-            if name in seen or _BLOCK_RE.search(name):
-                continue
-            seen.add(name)
-            total += int((meta or {}).get("size_bytes", 0))
-    return int(total * dtype_mult)
+        # The loader's own key space, by the executor's own functions: the keys
+        # `GraphExecutor.consumed_in_loader_space` loads (every bound consumed name plus every
+        # non-block key the flow reads by name), each priced once. A graph name the
+        # reconciliation binds to an index key under another spelling (umt5's
+        # `encoder.token_embed.weight` filled by `token_embed.weight`) is that key, never a
+        # second weight.
+        from neurobrix.core.runtime.graph_executor import GraphExecutor   # torch-free at import
+        keys = list(sizes)
+        encodes = {k: v["encodes"] for k, v in sizes.items() if isinstance(v, dict) and v.get("encodes")}
+        params = {tid.split("::", 1)[1] for tid in tensors if tid.startswith(("param::", "buffer::"))}
+        wanted = GraphExecutor.consumed_in_loader_space(set(consumed), keys, params, encodes, True)
+        binding = GraphExecutor.binding_of_the_loaded(set(consumed), keys, params, encodes, True)
+        for wk in wanted:
+            meta = sizes[wk] or {}
+            total += held_weight_bytes(int(meta.get("size_bytes", 0)), meta.get("dtype"),
+                                       compute_dtype, engine)
+        unbound = {n: t for n, t in consumed.items() if binding.get(n) not in wanted}
+    for name, t in unbound.items():
+        # No index key fills it: priced from the graph's own shape and traced dtype.
+        n = 1
+        for d in (t.get("shape") or []):
+            if not isinstance(d, int) or d < 0:
+                return None          # symbolic: cannot size honestly
+            n *= d
+        width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
+        if width is None:
+            return None
+        total += held_weight_bytes(n * width, str(t.get("dtype")).lower(), compute_dtype, engine)
+    return int(total)
 
 
 _DTYPE_WIDTH = {
@@ -323,26 +333,8 @@ class DeviceState:
     def supports_dtypes(self) -> List[str]:
         return self.spec.supports_dtypes if self.spec else ["float32", "float16"]
 
-    def get_cost_multiplier(self, model_dtype: str) -> float:
-        """Contextual cost: BF16→FP32 = 2x on V100, native = 1x"""
-        supported = self.supports_dtypes
-        if model_dtype == "bfloat16" and "bfloat16" not in supported:
-            if "float16" in supported:
-                return 1.0  # bf16 → fp16 (Prism validates safety)
-            return 2.0  # bf16 → fp32
-        if model_dtype == "float16" and "float16" not in supported:
-            return 2.0
-        # Future: FP8 could return 0.5
-        return 1.0
-
-    def get_real_block_size(self, base_size_mb: float, model_dtype: str) -> float:
-        return base_size_mb * self.get_cost_multiplier(model_dtype)
-
     def can_fit(self, memory_mb: float) -> bool:
         return memory_mb <= self.free_mb
-
-    def can_fit_block(self, base_size_mb: float, model_dtype: str) -> bool:
-        return self.can_fit(self.get_real_block_size(base_size_mb, model_dtype))
 
     def allocate(self, component_name: str, memory_mb: float) -> None:
         if not self.can_fit(memory_mb):
@@ -350,10 +342,6 @@ class DeviceState:
         self.used_mb += memory_mb
         self.components.append(component_name)
 
-    def allocate_block(self, block_name: str, base_size_mb: float, model_dtype: str) -> float:
-        real_size = self.get_real_block_size(base_size_mb, model_dtype)
-        self.allocate(block_name, real_size)
-        return real_size
 
 
 @dataclass
@@ -965,7 +953,7 @@ class PrismSolver:
     def _arena_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState") -> float:
         """The arena `comp_name` asks held whole on `dev`: its weights at the device's cost for the
         component's dtype — the weight part of `_whole_component_mb`, and nothing else."""
-        return mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+        return mem.weight_mb
 
     def _arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
                                dev: "DeviceState") -> Optional[str]:
@@ -1076,7 +1064,8 @@ class PrismSolver:
                                     {comp_name: str(dtypes[comp_name])},
                                     {comp_name: self._weight_sizes_by_component(container).get(comp_name) or {}},
                                     {comp_name: (container.get_shard_sizes() or {}).get(comp_name) or {}},
-                                    self._stored_dtypes_by_component(container), get_dtype_bytes())
+                                    self._stored_dtypes_by_component(container), get_dtype_bytes(),
+                                    held_sizes={comp_name: self._held_sizes_by_component(container).get(comp_name) or {}})
             seen[comp_name] = loads.get(comp_name, 0) / (1024 * 1024)
         return seen[comp_name]
 
@@ -1132,7 +1121,7 @@ class PrismSolver:
         """What `comp_name` costs held whole on `dev`: its weights at the device's cost for the
         component's dtype, plus its activations as the arena holds them (`_live_activation_mb`).
         The figure `_usable_mb` is compared to."""
-        return (mem.weight_mb * dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+        return (mem.weight_mb
                 + self._live_activation_mb(mem))
 
     def _effective_capacity_mb(self, dev: "DeviceState") -> float:
@@ -2108,6 +2097,7 @@ class PrismSolver:
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
+            held_sizes=self._held_sizes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
             device_bytes=unified_device_bytes(plan, profile,
                                               max(b for b, _n in _phases) if _phases else None),
@@ -2843,8 +2833,10 @@ class PrismSolver:
             # Falls back to the file bytes when the graph cannot answer,
             # which over-estimates rather than under-estimates: the safe
             # direction, and it is the previous behaviour exactly.
+            # Each weight at the width this engine HOLDS it at under `comp_dtype_str`, from its own
+            # stored dtype (`_consumed_weight_bytes`); `dtype_mult` stays the shard-file fallback's.
             weight_bytes = _consumed_weight_bytes(
-                self._graph_as_executed(comp, container), dtype_mult)
+                self._graph_as_executed(comp, container), comp_dtype_str, getattr(self, "_mode", "compiled"))
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
@@ -4125,7 +4117,7 @@ class PrismSolver:
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
+                    real_size = blocks['non_block_mb'] * packing_overhead
                     if dev.can_fit(real_size + act_reserve_mb):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
@@ -4148,7 +4140,7 @@ class PrismSolver:
                 # never via fresh[0]. The reserve keeps forward headroom
                 # on every packed device.
                 def _block_cost(d):
-                    return (d.get_real_block_size(base_block, model_dtype)
+                    return (base_block
                             + act_per_block) * packing_overhead
 
                 fit_devs = [d for d in fresh
@@ -4284,7 +4276,7 @@ class PrismSolver:
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    real_size = dev.get_real_block_size(blocks['non_block_mb'] * _dtype_scale, model_dtype) * packing_overhead
+                    real_size = (blocks['non_block_mb'] * _dtype_scale) * packing_overhead
                     if dev.can_fit(real_size + act_reserve_mb):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
@@ -4316,7 +4308,7 @@ class PrismSolver:
             for block_num in sorted(blocks['blocks'].keys()):
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num] * _dtype_scale
-                real_block = fresh[0].get_real_block_size(base_block, model_dtype)
+                real_block = base_block
                 total_block = (real_block + act_per_block) * packing_overhead
 
                 while current_dev_idx < len(fresh):
@@ -4414,8 +4406,7 @@ class PrismSolver:
             # Find minimum GPUs needed (dtype-aware)
             n_gpus = 2
             for n in range(2, len(available) + 1):
-                cost_mult = available[0].get_cost_multiplier(model_dtype)
-                weight_per_gpu = (mem.weight_mb * cost_mult) / n
+                weight_per_gpu = mem.weight_mb / n
                 act_per_gpu = (attn_per_block_mb / n) if attn_per_block_mb > 0 else (mem.activation_mb / n)
                 overhead = (weight_per_gpu + act_per_gpu) * 0.1 if act_per_gpu > 0 else 0
                 per_gpu_total = weight_per_gpu + act_per_gpu + overhead
@@ -4426,7 +4417,7 @@ class PrismSolver:
             else:
                 return None
 
-            required = (mem.weight_mb * available[0].get_cost_multiplier(model_dtype)) + mem.activation_mb
+            required = mem.weight_mb + mem.activation_mb
 
             # Prefer NVLink-connected GPUs for TP (minimize cross-device transfer cost)
             if n_gpus <= len(available) and profile.topology:
@@ -5119,8 +5110,7 @@ class PrismSolver:
         """
         model_dtype = self._get_component_dtype(container, comp_name)
         largest = max(devices, key=lambda d: d.capacity_mb)
-        cost_mult = largest.get_cost_multiplier(model_dtype)
-        real_weight = mem.weight_mb * cost_mult
+        real_weight = mem.weight_mb
         required = self._whole_component_mb(container, comp_name, mem, largest)
         usable = self._usable_mb(largest)
 
@@ -5280,8 +5270,7 @@ class PrismSolver:
         ]
 
         # Check total FGP capacity
-        cost_mult = block_devices[0].get_cost_multiplier(model_dtype)
-        real_weight = mem.weight_mb * cost_mult
+        real_weight = mem.weight_mb
         total_capacity = sum(d.capacity_mb for d in block_devices)
         if real_weight + mem.activation_mb > total_capacity:
             return None
@@ -5293,7 +5282,7 @@ class PrismSolver:
 
         # Reserve non-block space on largest-capacity GPU BEFORE blocks
         primary = max(block_devices, key=lambda d: d.capacity_mb)
-        real_non_block = primary.get_real_block_size(non_block_mb, model_dtype) * 1.05
+        real_non_block = non_block_mb * 1.05
         primary.used_mb += real_non_block
 
         # Allocate blocks across GPUs (best-fit)
@@ -5301,7 +5290,7 @@ class PrismSolver:
         for block_num in sorted(blocks['blocks'].keys()):
             block_keys = blocks['blocks'][block_num]
             base_block = blocks['block_sizes'][block_num]
-            real_block = block_devices[0].get_real_block_size(base_block, model_dtype)
+            real_block = base_block
             total_block = (real_block + act_per_block) * 1.05
 
             # Try to fit entire block on one GPU
@@ -5373,7 +5362,7 @@ class PrismSolver:
         for key in sorted_keys:
             key_bytes = key_sizes.get(key, 0)
             key_mb = key_bytes / (1024 * 1024)
-            real_key = devices[0].get_real_block_size(key_mb, model_dtype)
+            real_key = key_mb
             total_key = (real_key + act_per_key) * 1.05
 
             candidates = [d for d in devices if d.can_fit(total_key)]
@@ -6019,8 +6008,7 @@ class PrismSolver:
     def _tiled_component_mb(self, container, comp_name, mem, dev, tiling) -> float:
         """A tiled component's cost on `dev`: its weights at the card's cost multiplier and one
         tile's activations — Strategy 3.5's figure, the one question asked once."""
-        cost_mult = dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
-        return mem.weight_mb * cost_mult + tiling["tiled_activation_bytes"] / (1024 * 1024)
+        return mem.weight_mb + tiling["tiled_activation_bytes"] / (1024 * 1024)
 
     def _try_op_level_tiling(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
@@ -6231,7 +6219,9 @@ class PrismSolver:
         if not graphs:
             return _decline("no component carries a graph to cut")
 
-        sizes_by_comp = self._weight_sizes_by_component(container)
+        # What each weight costs ON THE DEVICE — the pieces, the base's flow-read weights, the arena
+        # caps are all device bytes; the stored width is the host's (the loader's read).
+        sizes_by_comp = self._held_sizes_by_component(container)
 
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}
@@ -6272,7 +6262,7 @@ class PrismSolver:
                 container, name, mem, target.tile_rung_mb or rung_down_mb(target.free_mb))
                 if self._arena_over_allocation(container, name, mem, target) is None else None)
             if _t is not None:
-                _w = mem.weight_mb * target.get_cost_multiplier(self._get_component_dtype(container, name))
+                _w = mem.weight_mb
                 _tiled_bytes = int(_w * 1024 * 1024) + int(_t["tiled_activation_bytes"])
                 if _tiled_bytes <= budget_bytes:
                     tiled[name] = _t
@@ -6358,7 +6348,7 @@ class PrismSolver:
             # executor holds them resident beside every piece
             # (`LayerStreamingStrategy._ensure_flow_reads`), the way a whole executor holds them, and
             # a piece that consumes one BORROWS it — one copy, reserved here once, and the pieces
-            # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
+            # are sized without them below. Held bytes, as the partitioner sizes the pieces.
             # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
             # piece loaded all of them, in no budget.
             # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
@@ -6381,8 +6371,7 @@ class PrismSolver:
             if _cap_mb is not None:
                 for name in _read:
                     _base_mb = (sum(int(size) for key, size in sizes_by_comp[name].items()
-                                    if not is_block_key(key)) / _mb
-                                * target.get_cost_multiplier(self._get_component_dtype(container, name)))
+                                    if not is_block_key(key)) / _mb)
                     if _base_mb > _cap_mb:
                         return _no(f"'{name}' streamed holds the weights its flow reads by name as one "
                                    f"arena of {_base_mb:,.0f} MB beside its pieces, over the {_cap_mb:,} MB "
@@ -6487,12 +6476,12 @@ class PrismSolver:
                                            compute_dtype_bytes=_sizing[1], widths=_sizing[2],
                                            token_split=bool(getattr(self, "_token_split", False)))
                 # One piece's weights are one arena: bounded by the device's largest allocation, in
-                # the partitioner's stored bytes (the arena holds them at the device's cost multiplier).
+                # the partitioner's held bytes (already at the width the engine holds them: no cost
+                # multiplier on top, which would price the dtype twice).
                 # And a piece CHANGE holds the outgoing arena where the pool parks it beside the
                 # incoming one (`_parked_cap_mb`, a unified device under the Triton engine).
-                _mult = target.get_cost_multiplier(self._get_component_dtype(container, comp_name))
-                _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb / _mult)
-                _parked_cap = None if _parked_mb is None else _parked_mb * _mb / _mult
+                _arena_cap = None if _cap_mb is None else int(_cap_mb * _mb)
+                _parked_cap = None if _parked_mb is None else _parked_mb * _mb
                 # On a unified device the phase that streams this component also holds its LOAD on
                 # the host (`_over_host_room`): its segments are cut so the phase — what stays
                 # beside them, the segment, and the load — fits the room `solve` holds the plan to.
@@ -6747,14 +6736,11 @@ class PrismSolver:
         path = _P(base) / "topology.json"
         return _json.loads(path.read_text()) if path.exists() else {}
 
-    def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
-        """Per-component {weight_name: stored bytes} from the weights index.
-
-        The index records what is STORED, which is what a load costs. Missing
-        or unreadable means the partitioner sizes from the graph's own
-        shape/dtype instead, which it already knows how to do.
-        """
-        out: Dict[str, Dict[str, int]] = {}
+    def _index_tensors_by_component(self, container) -> Dict[str, Dict[str, Dict]]:
+        """Per-component weights index entries {weight_name: {dtype, size_bytes, ...}}. Missing or
+        unreadable means the partitioner sizes from the graph's own shape/dtype instead, which it
+        already knows how to do."""
+        out: Dict[str, Dict[str, Dict]] = {}
         base = getattr(container, "cache_path", None)
         if base is None:
             return out
@@ -6773,9 +6759,31 @@ class PrismSolver:
                 continue
             tensors = data.get("tensors")
             if isinstance(tensors, dict):
-                out[entry.name] = {
-                    k: int(v.get("size_bytes", 0))
-                    for k, v in tensors.items() if isinstance(v, dict)}
+                out[entry.name] = {k: v for k, v in tensors.items() if isinstance(v, dict)}
+        return out
+
+    def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
+        """Per-component {weight_name: STORED bytes} from the weights index — what a load READS
+        (the host side: a file read, the Triton loader's one tensor as read). Never what the device
+        holds: that is `_held_sizes_by_component`."""
+        return {name: {k: int(v.get("size_bytes", 0)) for k, v in tensors.items()}
+                for name, tensors in self._index_tensors_by_component(container).items()}
+
+    def _held_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
+        """Per-component {weight_name: bytes HELD on the device}: each weight of the index at the width
+        this plan's engine (`self._mode`) holds it at under the component's resolved compute dtype
+        (`runtime_widths.held_index_sizes`) — what its arena, a streamed piece, a pinned staging copy
+        cost. Wan2.1-T2V's umt5 encoder: 21 671 MB stored float32, 10 835 MB held fp16 on Volta; the
+        partitioner cut its pieces at the stored width and every segment held half what it was priced.
+        A component with an index and no resolved compute dtype is refused by name."""
+        dtypes = getattr(self, "_component_dtypes", None) or {}
+        engine = getattr(self, "_mode", "compiled")
+        out: Dict[str, Dict[str, int]] = {}
+        for name, tensors in self._index_tensors_by_component(container).items():
+            if name not in dtypes:
+                raise RuntimeError(f"ZERO FALLBACK: '{name}' has weights and no compute dtype was resolved "
+                                   f"for it: the width its weights are held at on the device is unknown")
+            out[name] = held_index_sizes(tensors, str(dtypes[name]), engine)
         return out
 
     def _try_cpu_streaming(
@@ -6826,10 +6834,11 @@ class PrismSolver:
         return allocations, self._fresh_devices(devices)
 
     # Dtype string to bytes-per-element for safetensors header parsing
-    _ST_DTYPE_BYTES = {
-        "F64": 8, "F32": 4, "F16": 2, "BF16": 2,
-        "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1,
-        "BOOL": 1,
+    #: The safetensors header's dtype codes, by name (the format's own spelling).
+    _ST_DTYPE_NAMES = {
+        "F64": "float64", "F32": "float32", "F16": "float16", "BF16": "bfloat16",
+        "I64": "int64", "I32": "int32", "I16": "int16", "I8": "int8", "U8": "uint8",
+        "BOOL": "bool",
     }
 
     def _parse_blocks(self, container: "NBXContainer", comp_name: str) -> Dict:
@@ -6839,7 +6848,16 @@ class PrismSolver:
         Uses safetensors HEADER METADATA (shape + dtype) to compute sizes
         without loading actual tensors. This avoids loading 32GB of weights
         just to determine block structure.
+
+        Every size is what the key HOLDS on the device — its stored width re-priced at the width
+        this plan's engine holds it under the component's compute dtype (`held_weight_bytes`): a
+        block is placed on a card, and Wan's F32 shards hold half their file at fp16 on Volta.
         """
+        dtypes = getattr(self, "_component_dtypes", None) or {}
+        if comp_name not in dtypes:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' is placed by blocks and no compute dtype was "
+                               f"resolved for it: the width its weights are held at is unknown")
+        compute, engine = str(dtypes[comp_name]), getattr(self, "_mode", "compiled")
         cache_path = container.cache_path
         if not cache_path:
             return {'blocks': {}, 'block_sizes': {}, 'non_block_keys': [], 'non_block_mb': 0}
@@ -6862,14 +6880,18 @@ class PrismSolver:
             for key, meta in header.items():
                 if key == "__metadata__":
                     continue
-                # Compute size from shape × dtype_bytes
+                # Compute size from shape × the held width
                 shape = meta.get("shape", [])
-                dtype_str = meta.get("dtype", "F32")
-                dtype_bytes = self._ST_DTYPE_BYTES.get(dtype_str, 4)
+                code = meta.get("dtype")
+                if code not in self._ST_DTYPE_NAMES:
+                    raise ValueError(f"ZERO FALLBACK: {shard.name} holds '{key}' as {code!r}, a safetensors "
+                                     f"dtype Prism has no width for (known: {sorted(self._ST_DTYPE_NAMES)})")
+                name = self._ST_DTYPE_NAMES[code]
                 numel = 1
                 for dim in shape:
                     numel *= dim
-                key_sizes[key] = numel * dtype_bytes
+                key_sizes[key] = held_weight_bytes(numel * get_dtype_bytes_per_element(name), name,
+                                                   compute, engine)
 
                 matched = False
                 for pattern in patterns:

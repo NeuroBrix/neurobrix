@@ -1047,12 +1047,10 @@ class WeightLoader:
         - Integer tensors (indices, attention masks) are preserved
         - bfloat16 → float16 uses safe clamping to avoid overflow
         """
-        # Early exit: check if first floating-point tensor already matches
-        for t in weights.values():
-            if t.is_floating_point():
-                if t.dtype == dtype:
-                    return weights  # No conversion needed
-                break  # Needs conversion
+        # Early exit only when EVERY floating tensor already matches: a shard holding fp32 and
+        # half tensors side by side is converted whole, as the docstring and Prism's pricing say.
+        if all(not t.is_floating_point() or t.dtype == dtype for t in weights.values()):
+            return weights
 
         converted = {}
         for name, tensor in weights.items():

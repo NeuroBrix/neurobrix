@@ -16,6 +16,6 @@ def test_non_block_weights_are_budgeted_and_unrouted_experts_are_not():
     tensors = {f"param::{n}": {"is_parameter": True, "weight_name": n} for n in params}
     graph = {"tensors": tensors, "ops": {"op0": {"input_tensor_ids": ["param::block.0.attn.key.weight"]}},
              "execution_order": ["op0"]}
-    index = {"tensors": {n: {"size_bytes": b} for n, b in params.items()}}
+    index = {"tensors": {n: {"size_bytes": b, "dtype": "float16"} for n, b in params.items()}}
     comp = SimpleNamespace(graph=graph, weights_index=index)
-    assert _consumed_weight_bytes(comp, 1.0) == 100 + 500 + 10
+    assert _consumed_weight_bytes(comp, "float16", "triton") == 100 + 500 + 10

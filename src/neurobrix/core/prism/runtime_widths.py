@@ -270,6 +270,53 @@ def _wider(a: str, b: str) -> str:
     return a if _RANK[a] >= _RANK[b] else b
 
 
+# ---------------------------------------------------------------------------
+# Stored weights: the width the engine HOLDS them at
+# ---------------------------------------------------------------------------
+
+def held_weight_dtype(stored, compute, engine: str) -> str:
+    """The dtype a weight STORED at `stored` is held at on the device by `engine`'s loader, under the
+    component's compute dtype `compute` — what its arena costs, which is not what its file costs.
+
+      triton engines: `stored_dtype_in_compute` (triton/weight_loader.py), the rule the loader applies
+          to every weight of a shard and sizes its arenas with (`_target_nbytes`): fp32 under a half
+          compute takes the half, a half takes the compute half, anything else keeps its stored dtype;
+      ATen engines: `WeightLoader._convert_weights_dtype` (core/io/weight_loader.py): every floating
+          tensor is converted to the plan dtype, integers are kept.
+
+    Wan2.1-T2V's umt5 encoder is stored float32 (21 671 MB) and runs fp16 on Volta, bf16 on the Mac:
+    its arena holds half its file. An unknown dtype or engine is refused by name."""
+    s, c = _name(stored), _name(compute)
+    if engine in TRITON_ENGINES:
+        return _nbx_name(stored_dtype_in_compute(_nbx(s), _nbx(c)))
+    if engine in ATEN_ENGINES:
+        return c if s in _FLOAT else s
+    raise ValueError(f"held_weight_dtype: unknown engine {engine!r} "
+                     f"(known: {sorted(TRITON_ENGINES | ATEN_ENGINES)})")
+
+
+def held_weight_bytes(stored_bytes: int, stored, compute, engine: str) -> int:
+    """`stored_bytes` of a weight stored at `stored`, re-priced at the width `held_weight_dtype` holds it."""
+    s = _name(stored)
+    return (int(stored_bytes) // get_dtype_bytes_per_element(s)
+            * get_dtype_bytes_per_element(held_weight_dtype(s, compute, engine)))
+
+
+def held_index_sizes(index_tensors: Mapping[str, Any], compute, engine: str) -> Dict[str, int]:
+    """{weight key: held bytes} for a component's weights index (`weights_index.json` "tensors": each
+    entry carries its stored `dtype` and `size_bytes`), under `compute` on `engine`. An entry with no
+    stored dtype is refused by name: its held width is unknown."""
+    out: Dict[str, int] = {}
+    for key, meta in index_tensors.items():
+        if not isinstance(meta, dict):
+            continue
+        if meta.get("dtype") is None:
+            raise ValueError(f"held_index_sizes: weight {key!r} has no stored dtype in its index — "
+                             f"the width its arena holds it at is unknown")
+        out[key] = held_weight_bytes(int(meta.get("size_bytes", 0)), meta["dtype"], compute, engine)
+    return out
+
+
 def _triton_remap(name: str, c: str) -> str:
     """An explicit dtype argument as the Triton branch resolves it —
     `TritonSequence._parse_dtype` (triton/sequence.py:2665-2691; `_compile_arg`
@@ -474,10 +521,11 @@ class _Rules:
         return self.first(fl)
 
     def weight_dtype(self, tid: str, traced: str) -> str:
-        """A param/buffer/constant: `stored_dtype_in_compute` (triton/weight_loader.py:609-627),
-        the loader's rule for every weight of a shard — the documented mirror of the ATen
-        branch's WeightLoader(torch_dtype=C)."""
-        return _nbx_name(stored_dtype_in_compute(_nbx(traced), _nbx(self.c)))
+        """A param/buffer/constant: the width its engine's loader holds it at (`held_weight_dtype`) —
+        `stored_dtype_in_compute` on the Triton engines, `_convert_weights_dtype` (every float to C)
+        on the ATen ones. The rule Prism prices weight arenas with, so a tensor's width and its
+        arena's are one answer."""
+        return held_weight_dtype(traced, self.c, self.engine)
 
     def mm_store(self, a: str, b: str, m: Optional[int]) -> str:
         """The Triton mm/addmm store dtype — `mm` operand alignment (wrappers.py:2178-2224)
@@ -734,6 +782,22 @@ class _AtenRules(_Rules):
 
     def remap_explicit(self, name: str) -> str:
         return _aten_kwarg_remap(name, self.c)
+
+    def weight_dtype(self, tid: str, traced: str) -> str:
+        # An embedded constant is bound by `GraphExecutor._load_constant_native`
+        # (graph_executor.py:2525-2535) through `DtypeEngine.convert_constant`
+        # (core/dtype/engine.py:1067-1085), not by the weight loader: a float constant moves to
+        # C only when it carries the graph's own dtype — an fp32 inv_freq in an fp16 graph stays
+        # fp32.
+        meta = self.tensors.get(tid) or {}
+        if meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"):
+            t = _name(traced)
+            if t not in _FLOAT or t == self.c:
+                return t
+            if self.graph_dtype is not None and t != self.graph_dtype:
+                return t
+            return self.c
+        return super().weight_dtype(tid, traced)
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c
