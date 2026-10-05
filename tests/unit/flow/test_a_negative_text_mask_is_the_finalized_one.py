@@ -11,7 +11,8 @@ What each test would do if the code were wrong:
   * the flow tests run `_execute_negative_encoding` of BOTH engines' flows over stand-ins with the real
     finalizer: a flow that stores the tokenizer's mask leaves 519 (or 226) positions and fails the length;
   * the rule tests fail if a mask of another length is returned (or replaced) instead of refused;
-  * the site walk fails if any CFG site reads the negative mask without passing through the rule.
+  * the site walk fails if any CFG site reads the negative mask without passing through the rule,
+    or if a second read path appears beside the batched one the plan's guidance split reuses.
 Seen failing on each injection: see the commit message.
 """
 from __future__ import annotations
@@ -174,8 +175,11 @@ def _negative_mask_reads(tree):
 
 @pytest.mark.parametrize("rel", CFG_ENGINES)
 def test_every_cfg_site_reads_the_negative_mask_through_the_rule(rel):
+    """One site since a8025743: the per-branch pass runs the batched site's prepared [uncond, cond]
+    batch half by half (`ExecutionPlan.cfg_split_components`), so the stale sequential site that
+    read the mask a second time is gone. A second read path is a second site to keep in step."""
     reads = _negative_mask_reads(ast.parse((SRC / rel).read_text()))
-    assert len(reads) == 2, f"{rel}: expected the batched and the sequential site, found {len(reads)}"
+    assert len(reads) == 1, f"{rel}: expected the one batched site the plan's split also runs, found {len(reads)}"
     unguarded = [node.lineno for node, guarded in reads if not guarded]
     assert not unguarded, f"{rel}: the negative mask is read outside negative_mask_for at line(s) {unguarded}"
 

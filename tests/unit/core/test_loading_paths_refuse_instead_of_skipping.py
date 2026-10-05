@@ -129,6 +129,45 @@ def test_no_strategy_reads_the_absent_name_by_hand_any_more():
         "ExecutionStrategy.resolve_artifact_path:\n  " + "\n  ".join(offenders))
 
 
+def _kept_from_load_weights(tree):
+    """{function node: attrs} — for every method of a class whose own `load_weights(path, ...)`
+    keeps its path argument on the instance (`self.X = path` or `self.X = (path, ...)`): the
+    attributes that hold a path the CALLER resolved. A piece that stands in for an executor
+    (chunked_piece) is handed the resolved path there and loads its passes from it later."""
+    out = {}
+    for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        methods = [m for m in cls.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        kept = set()
+        for m in methods:
+            if m.name != "load_weights" or len(m.args.args) < 2:
+                continue
+            path_arg = m.args.args[1].arg                      # (self, path, ...)
+            for a in (n for n in ast.walk(m) if isinstance(n, ast.Assign)):
+                v = a.value
+                first = v.elts[0] if isinstance(v, ast.Tuple) and v.elts else v
+                if not (isinstance(first, ast.Name) and first.id == path_arg):
+                    continue
+                kept |= {t.attr for t in a.targets if isinstance(t, ast.Attribute)
+                         and isinstance(t.value, ast.Name) and t.value.id == "self"}
+        for m in methods:
+            out[m] = kept
+    return out
+
+
+def _reads_a_kept_path(fn, kept):
+    """True if every `load_weights(p, ...)` in `fn` takes `p` from a name bound off `self.<kept>`."""
+    bound = set()
+    for a in (n for n in ast.walk(fn) if isinstance(n, ast.Assign)):
+        if (isinstance(a.value, ast.Attribute) and isinstance(a.value.value, ast.Name)
+                and a.value.value.id == "self" and a.value.attr in kept):
+            for t in a.targets:
+                names = t.elts if isinstance(t, ast.Tuple) else [t]
+                bound |= {x.id for x in names[:1] if isinstance(x, ast.Name)}
+    calls = [n for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == "load_weights" and n.args]
+    return bool(bound) and all(isinstance(c.args[0], ast.Name) and c.args[0].id in bound for c in calls)
+
+
 def test_every_strategy_that_loads_weights_routes_through_the_brick():
     """Any `executor.load_weights(p, ...)` must take `p` from the resolver."""
     bad = []
@@ -137,6 +176,7 @@ def test_every_strategy_that_loads_weights_routes_through_the_brick():
         tree = ast.parse(whole)
         funcs = [n for n in ast.walk(tree)
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        kept = _kept_from_load_weights(tree)
         for fn in funcs:
             calls = [n for n in ast.walk(fn)
                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -159,6 +199,27 @@ def test_every_strategy_that_loads_weights_routes_through_the_brick():
             if any(isinstance(c.args[0], ast.Name) and c.args[0].id in
                    {a.arg for a in fn.args.args} for c in calls):
                 continue
+            # or as the argument of the class's own load_weights, kept on the instance
+            if fn in kept and kept[fn] and _reads_a_kept_path(fn, kept[fn]):
+                continue
             bad.append(f"{f.name}:{fn.lineno}:{fn.name}")
     assert not bad, ("these load weights from a path of their own making:\n  "
                      + "\n  ".join(bad))
+
+
+def test_a_kept_path_is_only_the_one_load_weights_was_handed():
+    """The kept-path rule is seen failing: a piece that keeps a path it made itself is refused."""
+    own = ast.parse(
+        "class P:\n"
+        "    def load_weights(self, nbx_path, component):\n"
+        "        self._nbx = ('/made/up.nbx', component)\n"
+        "    def run(self, ex):\n"
+        "        nbx_path, component = self._nbx\n"
+        "        ex.load_weights(nbx_path, component)\n")
+    kept = _kept_from_load_weights(own)
+    run = next(n for n in ast.walk(own) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    assert not kept[run] and not _reads_a_kept_path(run, kept[run])
+    handed = ast.parse(ast.unparse(own).replace("('/made/up.nbx', component)", "(nbx_path, component)"))
+    kept = _kept_from_load_weights(handed)
+    run = next(n for n in ast.walk(handed) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    assert kept[run] == {"_nbx"} and _reads_a_kept_path(run, kept[run])
