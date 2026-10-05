@@ -571,7 +571,10 @@ class _TritonRules(_Rules):
         # inputs (triton/dtype.py `cast_back`, the fp16 contract held byte-identical by
         # decision 2026-09-28). Measured by the census walk: Kokoro's albert projections and
         # PixArt's VAE attention read the norm's output in fp32.
-        r = _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed)
+        # The op's traced output dtype is the floor of the cast back: the vendor's own fp32
+        # island in a half graph is narrowed by the narrow set only, never by the flag.
+        r = _tdt.amp_fp32_output_dtype(self.c, self.graph_dtype, self.contract.safe, narrowed,
+                                       _tdt.traced_output_dtype_name(op))
         if (self.c == "float16" and op is not None
                 and len(op.get("output_tensor_ids") or []) > 1):
             return "float32"

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A half-precision video model with a timestep embedding computed in full precision now
+  matches its reference output in the Triton engine.** The Triton engine rounded such
+  full-precision values back to half precision, which distorted the timestep signal of models
+  like CogVideoX. Both engines now keep those values in full precision.
+
 ### Changed
 
 - **Every model weight now carries a standard name, and a model installed with the earlier,
