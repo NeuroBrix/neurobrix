@@ -960,11 +960,27 @@ def whole_shape(part_shape: Sequence[int], lay: Layout, total: int, length: int)
     return tuple(s)
 
 
-def own(x: Any) -> Any:
-    """A copy the next run of the same executor cannot overwrite (an arena slot is reused)."""
-    o = x.new_empty(tuple(int(d) for d in x.shape))
+def own(x: Any, dtype: Any = None) -> Any:
+    """A copy the next run of the same executor cannot overwrite (an arena slot is reused), in
+    `dtype` when given (`copy_` converts on the store, in both engines)."""
+    shape = tuple(int(d) for d in x.shape)
+    o = x.new_empty(shape) if dtype is None else x.new_empty(shape, dtype=dtype)
     o.copy_(x)
     return o
+
+
+def accumulate(acc: Any, part: Any, dtype: Any) -> Any:
+    """The running sum of a contraction's partials over the slices: `part` added to `acc` (None at
+    the first slice) in `dtype` — the accumulator the executor's DtypeEngine names
+    (`accumulation_dtype`), never the pass dtype the partial arrives in."""
+    if acc is None:
+        return own(part, dtype)
+    return acc + (part if part.dtype == dtype else part.to(dtype))
+
+
+def store(acc: Any, dtype: Any) -> Any:
+    """A contraction's sum stored once in `dtype`, the dtype its own output was given."""
+    return acc if acc.dtype == dtype else own(acc, dtype)
 
 
 def ceil_div(a: int, b: int) -> int:
