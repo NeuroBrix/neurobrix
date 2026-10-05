@@ -9,9 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A component's weights are freed when it is unloaded.** In the PyTorch engine, a component whose
+  weight names needed matching to the graph kept every weight of its last run in memory after it was
+  unloaded. On SANA-Video at 720p this left the transformer's 7.8 GB on the GPU during the video
+  decode, which ran out of memory on a 16 GB card. A model streamed layer by layer kept each layer's
+  weights the same way. They are now released.
+
+- **The memory plan uses the VAE compression the model declares.** For SANA-Video 2B 720p, the plan
+  computed the latent size from the VAE's layer count, which gives 8, when the model declares 32. Its
+  transformer was planned at 16 times its real memory, which forced slower strategies on a 16 GB GPU.
+  The plan now reads the same value the run uses. No other model in the catalogue is affected.
+
+- **A model streamed layer by layer now runs the per-operation tiling its plan asks for.** When the
+  plan both streamed a component and split its largest operations into bands, the bands were not
+  applied. The full operation ran instead, and its memory and kernel keys did not match the plan.
+  Both engines now apply them.
+
+- **SANA-Video 2B 720p now runs on a 16 GB GPU with guidance on.** Guidance runs the model on the
+  conditional and unconditional inputs together, and at 720p that doubled batch needed more memory
+  than the card has, so the run was refused. When the doubled batch does not fit, the engine now runs
+  the two halves one after the other. The result is the same, it needs half the working memory, and
+  the plan says when it does this. Both engines, PyTorch and Triton, follow the same plan.
+
+- **The memory plan for Allegro and Allegro-TI2V at 720p on a 16 GB GPU counts what their layers
+  hold.** With guidance on, their transformer's feed-forward layers at the doubled batch needed more
+  memory than the plan counted: it priced the memory left after each operation, not the memory an
+  operation holds while it runs. The plan now counts both. When the doubled batch would force the engine to stream the transformer's weights to
+  the card on every step, it now runs the two guidance halves one after the other instead, which
+  keeps the weights on the card. Both engines, PyTorch and Triton, follow the same plan.
+
+- **The PyTorch engine uses PyTorch's expandable memory segments on NVIDIA GPUs.** On a 16 GB GPU,
+  Wan2.1-I2V-14B ran out of memory with 6.8 GB of GPU memory reserved but unusable, split into pieces
+  too small for the next request. Expandable segments are PyTorch's documented fix for this problem.
+  A `PYTORCH_ALLOC_CONF` (or `PYTORCH_CUDA_ALLOC_CONF`) you set yourself still takes precedence. The Triton engine manages its
+  own memory and is unchanged.
+
+- **A model whose attention alone is too large for the card is now run in slices of its tokens instead
+  of being refused.** Some video models hold every token of the clip at once in parts of their
+  attention. On a long or high-resolution SANA-Video request on a 16 GB GPU, even one guidance half
+  needed more working memory than the card has, so the request was refused. When that happens, the
+  engine now runs those parts a slice of frames at a time and adds up the few values that span the
+  whole clip. The result matches the unsliced run up to rounding. `--explain-plan` lists each sliced
+  part, its slice size and its memory. This is the last option the engine tries before running on the
+  CPU, because the later slices recompute some values. Both engines, PyTorch and Triton, follow the
+  same plan.
+
 - **Wan2.1-VACE plans its control encoder for the two clips it really encodes.** The memory plan and the
   certified kernel set priced the VACE control encoder at one clip, while a run encodes the inactive and
   reactive pair together. Its plan and its kernel keys now match what the run does.
+
+- **A half-precision video model with a timestep embedding computed in full precision now
+  matches its reference output in the Triton engine.** The Triton engine rounded such
+  full-precision values back to half precision, which distorted the timestep signal of models
+  like CogVideoX. Both engines now keep those values in full precision.
+
+- **A video model with a learned position table no longer fails to load at its own resolution.**
+  The engine used to resize any stored position table to the requested image grid when it loaded
+  the weights, which broke models that read the table themselves (CogVideoX-5b-I2V failed at load
+  in both `--compiled` and `--triton`). Stored tables now reach the model exactly as shipped.
 
 ### Changed
 
@@ -286,6 +341,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The first frame of a CogVideoX or Open-Sora video is decoded correctly in the Triton engine.**
+  Their video decoders enlarge the first frame on its own path, and the Triton enlargement read that
+  frame from the wrong place in memory: the first frame came out flat grey (Open-Sora-v2) or blocky
+  (CogVideoX-2b) while the later frames were right. It now reads its input as laid out in memory.
+
 - **A video model whose pipeline bins the request renders at its bin and is restored to the requested
   size.** The restore after a binned render (`flow.resolution_binning`, PixArt and Sana) handled an
   image and refused a video: a container of SANA-Video carrying the field would have stopped after the
@@ -302,6 +362,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image was scaled by the VAE's latent factor twice, so the model was conditioned on an image
   latent at 0.7x its intended magnitude, and the video drifted away from the picture it was given.
   It is now scaled once, in both engines.
+
+- **Open-Sora v2's guidance contrasts the prompt with the negative prompt through both text encoders.**
+  The unconditional half of each guided step received the negative prompt's T5 encoding but the PROMPT's
+  CLIP vector, so guidance pushed away from a half-prompted prediction instead of an unprompted one. The
+  negative prompt is now encoded through every text encoder whose output steers the denoiser, as the
+  reference pipeline does, in both engines. Models conditioned on an image embedding keep sharing it
+  between the two halves.
+
+- **Open-Sora v2 reads its prompt's CLIP vector correctly.** The built-in reader of `tokenizer.json`
+  ignored the word-end marker that CLIP tokenizers declare, so every word was split into mid-word pieces
+  (e.g. "a" became a different token than CLIP expects) and the pooled prompt vector that steers
+  Open-Sora v2 pointed elsewhere (cosine 0.57 to the reference). Tokens now match the reference
+  tokenizer exactly; every other installed model tokenizes as before.
+
+- **Open-Sora v2 denoises along the noise schedule its authors use.** Its schedule's time shift was
+  computed from the whole video's token count, where the reference sampler computes it from one frame's
+  tokens scaled by the square root of the latent frame count; at 4 steps the engine visited
+  t = 0.886, 0.721, 0.462 where the reference visits 0.915, 0.783, 0.545. The length the shift reads is
+  now carried by the model package and followed in both engines.
 
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty

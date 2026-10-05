@@ -171,6 +171,13 @@ _MAY_OMIT = {
         "(P-TRITON-MOE-DETERMINISM-RESIDUAL); the race does not transfer to "
         "other backends, and every other profile records that as 0 or absent",
     "memory.sdpa_math_scores_device_fraction": "same routing budget",
+    "memory.compiled_allocator_settings":
+        "optional by contract (core/runtime/torch_allocator.py): a profile that declares none "
+        "runs torch's own allocator default. The value is a fact proven on a stack, declared "
+        "where a plan was measured under it (NVIDIA). Apple's MPS allocator does not read the "
+        "caching-allocator settings at all; on ROCm expandable segments are vendor-gated per "
+        "release and architecture (pytorch/pytorch#192814 unskips its tests only on ROCm 10.0+, "
+        "pytorch/pytorch#184880), so CDNA declares it once a plan is proven under it",
 }
 
 

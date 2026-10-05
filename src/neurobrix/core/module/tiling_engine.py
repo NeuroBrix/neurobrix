@@ -887,6 +887,23 @@ class OpLevelTilingPlan:
         if op_uid not in self.conv3d_chunks:
             self.conv3d_chunks.append(op_uid)
 
+    def drop_ops(self, uids) -> int:
+        """Remove every PLANNED entry touching an op of `uids` (a fusion pair or a residual
+        chain as a whole: their interceptors hand each other a value); returns how many entries
+        went. Prism's coherence for a stretch run in slices of a token axis, whose ops it
+        budgeted per slice (`solver`, after the component-tiling coherence)."""
+        uids = set(uids)
+        before = (len(self.fusion_pairs) + len(self.tiled_ops) + len(self.residual_chains)
+                  + len(self.conv3d_chunks))
+        self.fusion_pairs = [e for e in self.fusion_pairs if e[0] not in uids and e[1] not in uids]
+        self.tiled_ops = [e for e in self.tiled_ops if e[0] not in uids]
+        self.residual_chains = [
+            sp for sp in self.residual_chains
+            if not ({sp["fork_uid"], sp["merge_uid"], *sp.get("chain_uids", ())} & uids)]
+        self.conv3d_chunks = [u for u in self.conv3d_chunks if u not in uids]
+        return before - (len(self.fusion_pairs) + len(self.tiled_ops) + len(self.residual_chains)
+                         + len(self.conv3d_chunks))
+
     def is_empty(self) -> bool:
         return (not self.fusion_pairs and not self.tiled_ops
                 and not self.inplace_adds and not self.inplace_unary
@@ -2339,7 +2356,32 @@ class OpLevelTilingEngine:
 
         if not interceptors:
             return 0
-        graph_executor.register_op_uid_interceptors(interceptors)
+        # What a streamed component's pieces (`LayerStreamingStrategy`) must be told:
+        #   groups  — interceptors that hand each other a value no executor knows (a fusion proxy,
+        #             a broadcast-clone proxy, a residual chain's stashed band result): one
+        #             executor runs all of a group, a group split across a seam is refused;
+        #   planned — the ops the PLAN tiles (`runtime_op_tiling`, priced by Prism): a piece
+        #             runs each of them banded, or the run is refused. The in-place reuses and
+        #             the proxy chain are detected HERE, on the whole graph's liveness, and are
+        #             not the plan's.
+        groups = [(u, c) for u, c, _tf in self.plan.fusion_pairs]
+        groups += [(sp['clone_uid'], sp['view_uid'], sp['pixel_shuffle_uid'])
+                   for sp in (chain_specs or ())]
+        planned = [u for g in groups[:len(self.plan.fusion_pairs)] for u in g]
+        planned += [t[0] for t in self.plan.tiled_ops]
+        planned += list(getattr(self.plan, "conv3d_chunks", ()))
+        if _residual_chains_active:
+            chains = [(sp["fork_uid"], *sp["chain_uids"], sp["merge_uid"])
+                      for sp in self.plan.residual_chains]
+            groups += chains
+            planned += [u for g in chains for u in g]
+        partial = [g for g in groups if not all(u in interceptors for u in g)]
+        if partial:
+            raise RuntimeError(
+                f"[OpLevelTilingEngine] '{self.plan.component_name}': the interceptor group(s) "
+                f"{partial[:3]} are wired in part — a proxy would reach an op that cannot read it")
+        graph_executor.register_op_uid_interceptors(
+            interceptors, groups=groups, planned=[u for u in planned if u in interceptors])
         logger.info(
             f"[OpLevelTilingEngine] Registered {len(interceptors)} op_uid "
             f"interceptors on component '{self.plan.component_name}': "

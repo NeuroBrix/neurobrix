@@ -281,8 +281,11 @@ def request_input_config(args, manifest: dict, family, cache_path):
                      extra=[("the request's single input item", _single)],
                      why="It is the batch Prism plans for.")
     _guidance = _rt("guidance_scale", args, cached_defaults, _fam_defaults, default=None)
+    guidance_passes = None
     if _guidance is not None and float(_guidance) > 1.0:
-        batch_size *= 2
+        # [uncond, cond]: the two branches the CFG engines concatenate on the batch axis.
+        guidance_passes = 2
+        batch_size *= guidance_passes
 
     # The dtype execution will resolve, not a literal. Every container on this
     # rack declares one (float32 for swin2SR, bfloat16 for TinyLlama, float16
@@ -326,6 +329,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
         width=width,
         seq_len=seq_len,
         flow=_flow,
+        guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),
         dtype=dtype,
         vae_scale=vae_scale,

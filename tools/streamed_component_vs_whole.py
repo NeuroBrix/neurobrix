@@ -173,7 +173,8 @@ def main():
                           runtime_package=SimpleNamespace(cache_path=root),
                           layer_segments={comp: bounds},
                           layer_graphs=dict(plan.layer_stream_graph),
-                          layer_moe=dict(plan.layer_stream_moe))
+                          layer_moe=dict(plan.layer_stream_moe),
+                          layer_chunks=dict(plan.layer_stream_chunks))
     strat = LayerStreamingStrategy(ctx, "layer_streaming")
     pieces = strat.execute_component(comp, "once", dict(inputs))
 

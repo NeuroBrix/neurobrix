@@ -175,7 +175,9 @@ def _negative_mask_reads(tree):
 @pytest.mark.parametrize("rel", CFG_ENGINES)
 def test_every_cfg_site_reads_the_negative_mask_through_the_rule(rel):
     reads = _negative_mask_reads(ast.parse((SRC / rel).read_text()))
-    assert len(reads) == 2, f"{rel}: expected the batched and the sequential site, found {len(reads)}"
+    # One site: the batched pass. The sequential CFG path is gone; a plan that cannot hold both branches splits the
+    # batched inputs into halves, and each half is fed through this same read.
+    assert len(reads) == 1, f"{rel}: expected the batched site only, found {len(reads)}"
     unguarded = [node.lineno for node, guarded in reads if not guarded]
     assert not unguarded, f"{rel}: the negative mask is read outside negative_mask_for at line(s) {unguarded}"
 

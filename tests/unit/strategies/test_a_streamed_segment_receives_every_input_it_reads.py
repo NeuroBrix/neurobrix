@@ -94,10 +94,7 @@ def _strategy():
     base.load_graph_from_dict(graph)
     base._component_name = COMPONENT
     # The factory attaches the handler to the COMPONENT's executor; nothing else gets one.
-    # `prepare_weights` as the base handler has it (identity): it rescales a LEARNED pos_embed,
-    # which this graph does not hold.
-    base._component_handler = types.SimpleNamespace(get_latent_scale=lambda: VAE_SCALE,
-                                                    prepare_weights=lambda w, h, wd: w)
+    base._component_handler = types.SimpleNamespace(get_latent_scale=lambda: VAE_SCALE)
     pkg = types.SimpleNamespace(cache_path="/nonexistent-container")
     ctx = types.SimpleNamespace(
         component_executors={COMPONENT: base},

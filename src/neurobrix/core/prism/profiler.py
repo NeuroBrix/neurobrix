@@ -54,6 +54,10 @@ class InputConfig:
     # diffusion encoder's tokenized length, the denoiser's finalized text axis, a FLUX denoiser's
     # packed inputs. None: the name-driven map alone.
     flow: Optional[Any] = None
+    # The branches classifier-free guidance batches together (`run.request_input_config`: 2 when the
+    # request's guidance is in force, so `batch_size` is already that multiple of the request's own
+    # batch). None: the request runs no guidance, and there is no guidance batch to split.
+    guidance_passes: Optional[int] = None
     # The request's output mode (`output_dispatch.resolve_mode`: "text", "audio", ...), which decides
     # the legs a flow runs (`core.flow.base.unloaded_by_request`: a VLM's speech components load only
     # for a speech request). None: not known — every leg the flow declares is priced.
