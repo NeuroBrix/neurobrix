@@ -39,6 +39,8 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
+from neurobrix.core.prism.host_footprint import engine_of
+from neurobrix.core.runtime.torch_allocator import configure_torch_allocator
 
 
 class RuntimeExecutor:
@@ -283,6 +285,9 @@ class RuntimeExecutor:
         if self._is_setup:
             return
         self._optimize_cpu_threading()
+        if engine_of(self.mode) == "compiled":
+            # before any executor loads a weight (core/runtime/torch_allocator.py)
+            configure_torch_allocator(self.plan)
         self._setup_modules()
         self._setup_executors()
         self._init_strategy()
@@ -922,10 +927,13 @@ class RuntimeExecutor:
                 # the scheduler's config for both engines; absent = the
                 # scheduler's own schedule.
                 from neurobrix.core.runtime.registry_flags import get_component_flag
-                _ss = get_component_flag(self.pkg.manifest.get("model_name"), mod_name,
-                                         "sigma_schedule", default=None)
-                if _ss is not None:
-                    config = dict(config, sigma_schedule=_ss)
+                # Same for the LENGTH its dynamic shift reads (Open-Sora v2: one
+                # frame's tokens times sqrt(frames), not the total token count).
+                for _flag in ("sigma_schedule", "dynamic_shift_length"):
+                    _val = get_component_flag(self.pkg.manifest.get("model_name"), mod_name,
+                                              _flag, default=None)
+                    if _val is not None:
+                        config = dict(config, **{_flag: _val})
                 # Two totally separate scheduler implementations; the orchestrator
                 # (this shared entry point) picks by mode. Triton gets the
                 # zero-torch NBXTensor scheduler; PyTorch gets the torch one.
@@ -1124,6 +1132,8 @@ class RuntimeExecutor:
                 getattr(self.plan, "layer_stream_graph", None) or {}),
             layer_moe=dict(
                 getattr(self.plan, "layer_stream_moe", None) or {}),
+            layer_chunks=dict(
+                getattr(self.plan, "layer_stream_chunks", None) or {}),
             mode=self.mode,
         )
 

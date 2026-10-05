@@ -129,6 +129,46 @@ def test_no_strategy_reads_the_absent_name_by_hand_any_more():
         "ExecutionStrategy.resolve_artifact_path:\n  " + "\n  ".join(offenders))
 
 
+def _paths_kept_by_load_weights(tree, fn):
+    """The local names in `fn` that hold the path its class's own `load_weights` received.
+
+    `load_weights(self, path, ...)` keeping `self.X = path` (or `self.X = (path, ...)`), and `fn`
+    reading `name = self.X` (or `name, ... = self.X`): `name` is the caller's resolved path,
+    replayed, not one of the strategy's making."""
+    cls = next((c for c in ast.walk(tree) if isinstance(c, ast.ClassDef)
+                and any(n is fn for n in c.body)), None)
+    loader = next((m for m in (cls.body if cls else ()) if isinstance(m, ast.FunctionDef)
+                   and m.name == "load_weights" and len(m.args.args) >= 2), None)
+    if loader is None or fn is loader:
+        return set()
+    path = loader.args.args[1].arg
+
+    def _self_attr(node):
+        return (node.attr if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "self" else None)
+
+    kept = set()
+    for a in ast.walk(loader):
+        if isinstance(a, ast.Assign) and len(a.targets) == 1 and _self_attr(a.targets[0]):
+            v = a.value
+            first = v.elts[0] if isinstance(v, ast.Tuple) and v.elts else v
+            if isinstance(first, ast.Name) and first.id == path:
+                kept.add((_self_attr(a.targets[0]), isinstance(v, ast.Tuple)))
+    names = set()
+    for a in ast.walk(fn):
+        if isinstance(a, ast.Assign) and len(a.targets) == 1:
+            attr = _self_attr(a.value)
+            for k, as_tuple in kept:
+                if attr != k:
+                    continue
+                t = a.targets[0]
+                if as_tuple and isinstance(t, ast.Tuple) and isinstance(t.elts[0], ast.Name):
+                    names.add(t.elts[0].id)
+                elif not as_tuple and isinstance(t, ast.Name):
+                    names.add(t.id)
+    return names
+
+
 def test_every_strategy_that_loads_weights_routes_through_the_brick():
     """Any `executor.load_weights(p, ...)` must take `p` from the resolver."""
     bad = []
@@ -158,6 +198,12 @@ def test_every_strategy_that_loads_weights_routes_through_the_brick():
             # the path may equally arrive as an argument or off the executor
             if any(isinstance(c.args[0], ast.Name) and c.args[0].id in
                    {a.arg for a in fn.args.args} for c in calls):
+                continue
+            # or as the path the class's OWN load_weights was handed by its caller and kept
+            # (a wrapper that replays it on its inner executors: chunked_piece's passes)
+            replayed = _paths_kept_by_load_weights(tree, fn)
+            if replayed and all(isinstance(c.args[0], ast.Name) and c.args[0].id in replayed
+                                for c in calls):
                 continue
             bad.append(f"{f.name}:{fn.lineno}:{fn.name}")
     assert not bad, ("these load weights from a path of their own making:\n  "

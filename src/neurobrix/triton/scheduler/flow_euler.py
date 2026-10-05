@@ -5,6 +5,8 @@ and each step is  prev = sample + (t_next - t) * model_output. numpy for the
 timestep schedule, Python float for the dt scalar, NBXTensor for the latent.
 No torch. Used by Sana/Flex/SD3-class flow-matching diffusion in triton mode.
 """
+import math
+
 import numpy as np
 from neurobrix.kernels.nbx_tensor import NBXTensor
 
@@ -26,6 +28,9 @@ class TritonFlowEulerScheduler:
         self.invert_sigmas = bool(config.get("invert_sigmas", False))
         # R30 mirror of core flow_euler.py: the pipeline's declared sigma schedule.
         self.sigma_schedule = _validate_sigma_schedule(config.get("sigma_schedule"))
+        # R30 mirror: the length the pipeline's dynamic shift reads.
+        self.dynamic_shift_length = _validate_dynamic_shift_length(config.get("dynamic_shift_length"))
+        self.shift_frames_pointer = (self.dynamic_shift_length or {}).get("frames")
         # Video flow-match denoisers (Mochi) consume RAW [0, num_train_timesteps]
         # timesteps; the loop scales the [0,1] sigma by this (R30 mirror of core
         # _get_component_timestep_scale, commit 3770103 part 2).
@@ -44,7 +49,8 @@ class TritonFlowEulerScheduler:
     def set_timesteps(self, num_inference_steps: int, device=None, **kwargs):
         self.num_inference_steps = num_inference_steps
         image_seq_len = kwargs.get("image_seq_len", None)
-        mu = self._calculate_mu(image_seq_len) if image_seq_len is not None else self.shift
+        mu = (_dynamic_shift_mu(self.dynamic_shift_length, self._calculate_mu, image_seq_len, kwargs.get("frames"))
+              if image_seq_len is not None else self.shift)
         ts = _flow_sigma_schedule(self.sigma_schedule, num_inference_steps)
         if mu != 1.0:
             ts = mu * ts / (1 + (mu - 1) * ts)
@@ -100,6 +106,38 @@ def _validate_sigma_schedule(decl):
         raise RuntimeError(
             f"ZERO FALLBACK: sigma_schedule linear_quadratic needs a numeric threshold_noise, got {decl!r}.")
     return dict(decl)
+
+
+_DYNAMIC_SHIFT_LENGTH_FAMILIES = ("total", "per_frame_sqrt_frames")
+
+
+def _validate_dynamic_shift_length(decl):
+    if decl is None:
+        return None
+    if not isinstance(decl, dict) or decl.get("family") not in _DYNAMIC_SHIFT_LENGTH_FAMILIES:
+        raise RuntimeError(
+            f"ZERO FALLBACK: unknown dynamic_shift_length {decl!r}; families: {_DYNAMIC_SHIFT_LENGTH_FAMILIES}.")
+    if decl["family"] == "per_frame_sqrt_frames" and not (
+            isinstance(decl.get("frames"), str) and decl["frames"].startswith("runtime.")):
+        raise RuntimeError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames needs `frames`, the runtime pointer "
+            f"of the latent frame count (e.g. runtime.latent_frames), got {decl!r}.")
+    return dict(decl)
+
+
+def _dynamic_shift_mu(decl, calculate_mu, image_seq_len, frames):
+    if decl is None or decl["family"] == "total":
+        return calculate_mu(image_seq_len)
+    if frames is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames needs the latent frame count "
+            f"({decl['frames']}); the caller passed none.")
+    frames = int(frames)
+    if frames < 1 or image_seq_len % frames:
+        raise RuntimeError(
+            f"ZERO FALLBACK: dynamic_shift_length per_frame_sqrt_frames: {image_seq_len} packed tokens do not "
+            f"split into {frames} frame(s) ({decl['frames']}).")
+    return calculate_mu(image_seq_len // frames) * math.sqrt(frames)
 
 
 def _flow_sigma_schedule(decl, num_steps: int):

@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.dtype.config import get_torch_dtype
 from neurobrix.core.runtime.resolution.negative_text_mask import negative_mask_for as _negative_mask_for
+from neurobrix.core.runtime.resolution.negative_pooled_condition import negative_swaps as _negative_swaps
 from neurobrix.core.runtime.resolution.i2v_conditioning import (
     CONDITION_VAR as _I2V_CONDITION_VAR,
     apply as _i2v_apply,
@@ -209,11 +210,9 @@ class CFGEngine:
         guidance_scale: float,
         encoder_dtype: Union[torch.dtype, str],
     ) -> Dict[str, torch.Tensor]:
-        """Execute component with CFG (batched or sequential)."""
-        if self._should_use_sequential_cfg(comp_name):
-            return self._execute_sequential_cfg(
-                comp_name, current_state, timestep, guidance_scale
-            )
+        """Execute component with CFG: the [uncond, cond] batch, in one pass or — when the plan
+        splits this component's guidance (`ExecutionPlan.cfg_split_components`) — one pass per
+        branch."""
         return self._execute_batched_cfg(
             comp_name, current_state, timestep, guidance_scale, encoder_dtype
         )
@@ -342,6 +341,10 @@ class CFGEngine:
         # Restored after the batched forward. Inert when there is no such input.
         extra_restore = {}
         _handled_from = {encoder_key, state_key}
+        # A text condition beside the hidden states (a pooled vector) has its own negative: [neg, pos],
+        # never [pos, pos] (`resolution.negative_pooled_condition`). A shared one stays [v, v].
+        _negatives = dict(_negative_swaps(self._ctx.pkg.topology, self._ctx.variable_resolver.resolved,
+                                          comp_name, skip=(encoder_key, state_key)))
         for conn in self._ctx.pkg.topology.get("connections", []):
             to_port = conn.get("to", "")
             from_port = conn.get("from", "")
@@ -358,15 +361,37 @@ class CFGEngine:
             if isinstance(_v, torch.Tensor) and _v.dim() >= 1 and _v.shape[0] == 1:
                 extra_restore[from_port] = _v
                 self._ctx.variable_resolver.set(
-                    from_port, torch.cat([_v, _v], dim=0))
+                    from_port, torch.cat([_negatives.get(from_port, _v), _v], dim=0))
 
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", batched_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = batched_timestep
 
-        # Execute once with batch=2
-        output = self._execute_component(comp_name, "loop_cfg_batched")
-        noise_pred_batched = self._extract_primary_output(comp_name, output)
+        if comp_name in self._split_components():
+            # The plan priced this component at ONE branch's batch (`ExecutionPlan.
+            # cfg_split_components`): run the same prepared batch half by half and join the halves
+            # where the single pass would have produced them. Every input set above is the
+            # [uncond, cond] concatenation on axis 0, so its halves are the branches' own inputs.
+            batched = {encoder_key: batched_hidden, state_key: batched_state}
+            if batched_mask is not None:
+                batched["global.encoder_attention_mask"] = batched_mask
+            if extra_restore_vace is not None:
+                batched[_VACE_CONTROL_VAR] = self._ctx.variable_resolver.resolved.get(_VACE_CONTROL_VAR)
+            for _k in extra_restore:
+                batched[_k] = self._ctx.variable_resolver.get(_k)
+            halves = []
+            for branch in range(2):
+                for _k, _t in batched.items():
+                    self._ctx.variable_resolver.set(_k, _t.chunk(2, dim=0)[branch])
+                self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = \
+                    batched_timestep.chunk(2, dim=0)[branch]
+                output = self._execute_component(comp_name, ("cfg_uncond", "cfg_cond")[branch])
+                halves.append(self._extract_primary_output(comp_name, output))
+            noise_pred_batched = torch.cat(halves, dim=0)
+        else:
+            # Execute once with batch=2
+            output = self._execute_component(comp_name, "loop_cfg_batched")
+            noise_pred_batched = self._extract_primary_output(comp_name, output)
 
         # CFG in float32 for stability
         if noise_pred_batched.dtype != torch.float32:
@@ -405,91 +430,13 @@ class CFGEngine:
         return {"output_0": noise_pred}
 
     # =========================================================================
-    # SEQUENTIAL CFG (TP strategy)
-    # =========================================================================
-
-    def _execute_sequential_cfg(
-        self,
-        comp_name: str,
-        current_state: torch.Tensor,
-        timestep: torch.Tensor,
-        guidance_scale: float,
-    ) -> Dict[str, torch.Tensor]:
-        """Sequential CFG: 2x batch=1 passes (for TP strategy)."""
-        encoder_key = self._get_encoder_hidden_states_key()
-        if encoder_key is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: Cannot determine encoder_hidden_states variable."
-            )
-
-        encoder_comp = encoder_key.split(".")[0]
-        negative_key = f"{encoder_comp}.negative_hidden_state"
-        state_key = self._ctx.pkg.topology.get("flow", {}).get("loop", {}).get("state_variable")
-        if state_key is None:
-            raise RuntimeError("ZERO FALLBACK: 'state_variable' not defined in topology.flow.loop.")
-
-        pos_hidden = self._ctx.variable_resolver.get(encoder_key)
-        neg_hidden = self._ctx.variable_resolver.get(negative_key)
-        if neg_hidden is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: CFG negative embeddings not found: '{negative_key}'."
-            )
-
-        pos_mask = self._ctx.variable_resolver.get("global.attention_mask")
-        neg_mask = _negative_mask_for(
-            self._ctx.variable_resolver.get(f"{encoder_comp}.negative_attention_mask", None),
-            neg_hidden, encoder_comp)
-        if neg_mask is None:
-            neg_mask = torch.ones(neg_hidden.shape[0], neg_hidden.shape[1],
-                                 dtype=pos_mask.dtype, device=pos_mask.device)
-        elif neg_mask.dtype != pos_mask.dtype:
-            neg_mask = neg_mask.to(dtype=pos_mask.dtype)
-
-        if timestep.dim() == 0:
-            timestep = timestep.unsqueeze(0)
-
-        # Pass 1: unconditional
-        self._ctx.variable_resolver.set(encoder_key, neg_hidden)
-        # I2V channel-concat conditioning (shared by both passes; batch=1 here).
-        _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
-        _seq_state = (_i2v_apply(current_state, _cond,
-                                 _i2v_channel_dim(self._ctx, comp_name))
-                      if isinstance(_cond, torch.Tensor) else current_state)
-        self._ctx.variable_resolver.set(state_key, _seq_state)
-        self._ctx.variable_resolver.set("global.encoder_attention_mask", neg_mask)
-        self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = timestep
-
-        output_uncond = self._execute_component(comp_name, "cfg_uncond")
-        noise_pred_uncond = self._extract_primary_output(comp_name, output_uncond)
-
-        # Pass 2: conditional
-        self._ctx.variable_resolver.set(encoder_key, pos_hidden)
-        self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
-
-        output_cond = self._execute_component(comp_name, "cfg_cond")
-        noise_pred_cond = self._extract_primary_output(comp_name, output_cond)
-
-        # Apply CFG
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
-
-        if DEBUG:
-            print(f"[CFG] Sequential guidance={guidance_scale}: "
-                  f"uncond={noise_pred_uncond.mean():.4f}, cond={noise_pred_cond.mean():.4f}")
-
-        self._ctx.variable_resolver.set(encoder_key, pos_hidden)
-        return {"output_0": noise_pred}
-
-    # =========================================================================
     # HELPERS
     # =========================================================================
 
-    def _should_use_sequential_cfg(self, comp_name: str) -> bool:
-        """Check if component needs sequential CFG (TP strategy)."""
-        strategy = self._ctx.strategy
-        if strategy and hasattr(strategy, 'tp_components'):
-            tp_components = getattr(strategy, 'tp_components', set())
-            return comp_name in tp_components
-        return False
+    def _split_components(self) -> frozenset:
+        """The loop components the plan runs one guidance branch at a time — the plan's decision
+        (`ExecutionPlan.cfg_split_components`), never this engine's."""
+        return frozenset(getattr(self._ctx.plan, "cfg_split_components", None) or ())
 
     def _get_encoder_hidden_states_key(self) -> Optional[str]:
         """Get encoder hidden states variable key from topology connections."""

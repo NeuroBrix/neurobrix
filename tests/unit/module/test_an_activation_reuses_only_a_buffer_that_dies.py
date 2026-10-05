@@ -125,7 +125,7 @@ class _CapturingExecutor(_Executor):
         self.captured = {}
         self._op_uid_interceptors = {}
 
-    def register_op_uid_interceptors(self, interceptors):
+    def register_op_uid_interceptors(self, interceptors, groups=(), planned=()):
         self.captured.update(interceptors)
         return len(interceptors)
 

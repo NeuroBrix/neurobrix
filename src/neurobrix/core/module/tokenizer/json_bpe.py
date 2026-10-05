@@ -551,7 +551,14 @@ class _BPE:
         cached = self._cache.get(token)
         if cached is not None:
             return cached
+        # tokenizers' BPE::merge_word (0.23.2, models/bpe/model.rs): every character
+        # after the first carries continuing_subword_prefix, the last one carries
+        # end_of_word_suffix (CLIP: "a" -> "a</w>", id 320, not the mid-word "a", 64).
         word = list(token)
+        if self.cont_prefix:
+            word = word[:1] + [self.cont_prefix + c for c in word[1:]]
+        if self.end_suffix:
+            word[-1] = word[-1] + self.end_suffix
         if len(word) <= 1:
             self._cache[token] = word
             return word
@@ -565,7 +572,9 @@ class _BPE:
                     best_idx = i
             if best_idx < 0:
                 break
-            word[best_idx:best_idx + 2] = [word[best_idx] + word[best_idx + 1]]
+            # the merged token drops the right side's continuing_subword_prefix
+            # (tokenizers' BpeBuilder::build: `&b[prefix_len..]`)
+            word[best_idx:best_idx + 2] = [word[best_idx] + word[best_idx + 1][len(self.cont_prefix):]]
         self._cache[token] = word
         return word
 

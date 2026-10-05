@@ -113,9 +113,10 @@ def test_the_two_engines_twins_are_one_rule():
     may import the other, so the rule has a twin. This door holds them equal everywhere."""
     pytest.importorskip("torch")
     from neurobrix.core.dtype import engine as E
-    for c, g, safe, narrowed in itertools.product(_HALF, _GRAPHS, (False, True), (False, True)):
-        assert (E.amp_fp32_output_dtype(c, g, safe, narrowed)
-                == T.amp_fp32_output_dtype(c, g, safe, narrowed)), (c, g, safe, narrowed)
+    for c, g, safe, narrowed, traced in itertools.product(
+            _HALF, _GRAPHS, (False, True), (False, True), (None,) + _GRAPHS):
+        assert (E.amp_fp32_output_dtype(c, g, safe, narrowed, traced)
+                == T.amp_fp32_output_dtype(c, g, safe, narrowed, traced)), (c, g, safe, narrowed, traced)
     for f in (E.amp_fp32_output_dtype, T.amp_fp32_output_dtype):
         assert f("float16", None, True, False) == "float16"
         for c, g in (("float32", "float32"), ("float64", "bfloat16"), ("bfloat16", None),

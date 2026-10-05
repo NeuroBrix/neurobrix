@@ -39,7 +39,7 @@ import time
 
 import os
 from pathlib import Path
-from typing import Callable, Dict, List, Any, Optional, Union, TYPE_CHECKING
+from typing import Callable, Dict, List, Any, Optional, Sequence, Union, TYPE_CHECKING
 
 from neurobrix.core.device_utils import device_empty_cache
 from neurobrix.core.dtype.config import get_torch_dtype
@@ -410,7 +410,9 @@ class GraphExecutor:
                 self._compile_execution_sequence()
                 self._interceptors_dirty = False
 
-    def register_op_uid_interceptors(self, interceptors: Dict[str, Callable]) -> None:
+    def register_op_uid_interceptors(self, interceptors: Dict[str, Callable],
+                                     groups: Sequence[Sequence[str]] = (),
+                                     planned: Sequence[str] = ()) -> None:
         """
         Register fine-grained per-op_uid interceptors on BOTH the compiled
         and triton sequences (R30: native + triton + triton_sequential).
@@ -422,9 +424,19 @@ class GraphExecutor:
 
         Hot-swaps if already compiled, otherwise marks dirty for next compile.
         Op_uid interceptors take priority over op_type interceptors.
+
+        What a streamed component's pieces are told by (`LayerStreamingStrategy`):
+        `groups`, op uids whose interceptors hand each other a value no executor knows (a
+        fusion proxy, a chain's stashed band) — one executor runs all of a group; `planned`,
+        the uids the PLAN tiles — a piece runs each of them intercepted, or refuses.
         """
         if not hasattr(self, '_op_uid_interceptors'):
             self._op_uid_interceptors = {}
+        if not hasattr(self, '_op_uid_groups'):
+            self._op_uid_groups = []
+            self._op_uid_planned = set()
+        self._op_uid_groups.extend(tuple(g) for g in groups)
+        self._op_uid_planned.update(planned)
         for op_uid, interceptor in interceptors.items():
             self._op_uid_interceptors[op_uid] = interceptor
         if self._compiled_seq is not None:
@@ -1981,24 +1993,15 @@ class GraphExecutor:
         # Must reload on every weight load since cleanup() clears _weights entirely.
         self._load_constants_from_graph()
 
-        # Compute runtime-resolved buffers (sincos 2D pos_embed, interpolated
-        # pos_embed). These are marked `is_computable=True` in graph.json —
-        # the safetensors shards do not contain them. Mirrored into both
-        # modes: previously only _load_weights_triton called this, which
-        # left `aten.add::0` (pos_embed add) with an undefined input on the
-        # native path for PixArt/Sana/any DiT with sincos pos_embed. The
-        # legacy component-handler `prepare_weights` fallback is kept for
-        # models that use learned positional embeddings scaled at load
-        # time (no computable_spec in graph).
+        # Compute runtime-resolved buffers (sincos 2D pos_embed). These are marked
+        # `is_computable=True` in graph.json — the safetensors shards do not contain them —
+        # and are built in both modes from the graph's own spec. A stored positional table
+        # (a learned one) is read by the graph symbolically and is NEVER resized at load:
+        # the legacy load-time rescale (component handler `prepare_weights`) reshaped any
+        # weight named `pos_embed` to the request's patch grid, in this mode only (R30), and
+        # broke a graph that indexes the table itself (CogVideoX-5b-I2V, 2026-10-05).
         if hasattr(self, "_computable_specs") and self._computable_specs:
             self._compute_computable_buffers()
-        elif self._component_handler is not None:
-            if self._runtime_height is not None and self._runtime_width is not None:
-                self._weights = self._component_handler.prepare_weights(
-                    self._weights,
-                    self._runtime_height,
-                    self._runtime_width,
-                )
 
         # The loader owns the fact that it loaded. Before, `_weights_loaded`
         # was set by whichever caller happened to remember (factory.py:439,
@@ -4554,6 +4557,11 @@ class GraphExecutor:
 
         # Reconcile weight key names with graph param names.
         self._reconcile_weight_keys()
+        # The reconciliation REBINDS `self._weights` to a new dict; the run context was built
+        # on the one before it (`_prepare_execution`). One dict, or `unload_weights` clears the
+        # new one and the context keeps every weight of the load alive (see unload_weights).
+        if self._ctx is not None:
+            self._ctx.weights = self._weights
         self._bind_fp32_constants()
 
         # Bind weights to arena slots (uses tensor IDs from DAG).
@@ -5755,6 +5763,17 @@ class GraphExecutor:
         # Step 2: Use centralized memory manager
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
+        # Step 3: the last run's context goes with them. It holds the weight dict the run was
+        # built on (`ExecutionContext.weights`), which `_reconcile_weight_keys` had replaced on
+        # the executor by the time the step above cleared it — so every weight of the load
+        # outlived the unload through `self._ctx` until the executor's NEXT run. Measured on
+        # SANA-Video (CPU, 2026-10-05): at post_loop the transformer's `_weights` held 0 tensors
+        # and its `_ctx.weights` 498 (7848 MB). On a 16 GB V100 that is the 14.40 GiB the VAE's
+        # tiled decode met at aten.convolution::33; under layer_streaming every piece kept its
+        # own, so "one resident at a time" held the whole component. No reader needs it after
+        # an unload: the last run's tensors were cleared above, and every reader checks None.
+        self._ctx = None
+        self._resolver = None
         self._weights_loaded = False
         self._weights_bound = False
         self._fp32_constants_bound = False

@@ -23,6 +23,7 @@ from neurobrix.triton import i2v_conditioning
 from neurobrix.triton import vace_control_conditioning
 from neurobrix.triton import flux_video_conditioning
 from neurobrix.core.runtime.progress import StepProgress
+from neurobrix.core.runtime.resolution.negative_pooled_condition import pooled_text_outputs
 
 _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
                      NBXDtype.float32, NBXDtype.float64)
@@ -364,9 +365,13 @@ class TritonIterativeProcessHandler:
 
             # CFG: If produces encoder hidden states, run negative encoding
             if do_cfg and self._output_extractor:
-                if self._output_extractor.produces_encoder_hidden_states(comp_name):
+                # Every text condition has its negative: the hidden states AND a pooled vector
+                # (`resolution.negative_pooled_condition`).
+                _pooled = pooled_text_outputs(self.ctx.pkg.topology, comp_name)
+                _hidden = self._output_extractor.produces_encoder_hidden_states(comp_name)
+                if _hidden or _pooled:
                     # Flow control for negative encoding belongs in the handler
-                    self._execute_negative_encoding(comp_name)
+                    self._execute_negative_encoding(comp_name, _pooled, hidden=_hidden)
 
             if DEBUG:
                 for suffix in ("output_0", "last_hidden_state"):
@@ -407,7 +412,7 @@ class TritonIterativeProcessHandler:
             pass
         return cfg
 
-    def _execute_negative_encoding(self, text_encoder_name: str) -> None:
+    def _execute_negative_encoding(self, text_encoder_name: str, pooled_outputs=(), hidden: bool = True) -> None:
         """
         Execute text encoder for negative/unconditional embedding (CFG).
 
@@ -417,7 +422,9 @@ class TritonIterativeProcessHandler:
         This creates the unconditional embedding that will be concatenated
         with the positive embedding for batch 2 execution.
 
-        Stores result in: text_encoder.negative_hidden_state
+        Stores result in: text_encoder.negative_hidden_state, and text_encoder.negative_<output>
+        for each pooled output in `pooled_outputs` (its positive restored after).
+        `hidden` False: the encoder conditions the loop only through pooled outputs.
 
         Args:
             text_encoder_name: Name of text encoder component
@@ -463,7 +470,8 @@ class TritonIterativeProcessHandler:
         # Save original inputs AND positive embeddings (per-encoder variables)
         orig_input_ids = self.ctx.variable_resolver.get(input_ids_var)
         orig_attention_mask = self.ctx.variable_resolver.get(attention_mask_var)
-        pos_hidden_state = self._resolve_as_nbx(f"{text_encoder_name}.last_hidden_state")
+        pos_hidden_state = self._resolve_as_nbx(f"{text_encoder_name}.last_hidden_state") if hidden else None
+        pos_pooled = {o: self.ctx.variable_resolver.get(f"{text_encoder_name}.{o}") for o in pooled_outputs}
 
         # Set negative inputs temporarily
         self.ctx.variable_resolver.set(input_ids_var, neg_input_ids)
@@ -471,6 +479,15 @@ class TritonIterativeProcessHandler:
 
         # Execute text encoder for negative
         self._execute_component(text_encoder_name, "cfg_negative", None)
+
+        for o in pooled_outputs:
+            self.ctx.variable_resolver.set(f"{text_encoder_name}.negative_{o}",
+                                           self.ctx.variable_resolver.get(f"{text_encoder_name}.{o}"))
+            self.ctx.variable_resolver.set(f"{text_encoder_name}.{o}", pos_pooled[o])
+        if not hidden:
+            self.ctx.variable_resolver.set(input_ids_var, orig_input_ids)
+            self.ctx.variable_resolver.set(attention_mask_var, orig_attention_mask)
+            return
 
         # Get negative embedding
         neg_hidden_state = self._resolve_as_nbx(f"{text_encoder_name}.last_hidden_state")
@@ -610,6 +627,11 @@ class TritonIterativeProcessHandler:
             if current_state.dim() == 3:
                 # Packed 3D: [B, seq_len, D] — seq_len is the image sequence length
                 kwargs["image_seq_len"] = current_state.shape[1]
+            # The latent frame count, when the scheduler's declared dynamic-shift
+            # length reads one (dynamic_shift_length per_frame_sqrt_frames).
+            _frames_ptr = getattr(driver, "shift_frames_pointer", None)
+            if _frames_ptr is not None:
+                kwargs["frames"] = self.ctx.variable_resolver.resolve_pointer(_frames_ptr)
             driver.set_timesteps(num_steps, **kwargs)
 
         # Scale initial noise
