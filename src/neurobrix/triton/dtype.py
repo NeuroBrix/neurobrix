@@ -176,6 +176,18 @@ _COMPLEX_DTYPE_NAMES = frozenset({
 })
 
 
+def traced_output_dtype_name(op_meta) -> Optional[str]:
+    """The plain name of the op's first traced output dtype (`output_dtypes[0]` at the
+    record's TOP level, as `traced_output_is_complex` reads it), or None when the record
+    states none."""
+    if not isinstance(op_meta, dict):
+        return None
+    dts = op_meta.get("output_dtypes") or ()
+    if not dts:
+        return None
+    return str(dts[0]).rsplit(".", 1)[-1]
+
+
 def traced_output_is_complex(op_meta) -> bool:
     """True when the CONTAINER types this op's output as complex.
 
@@ -213,10 +225,11 @@ def _get_nbx_dtype(a) -> NBXDtype:
 
 
 _GRAPH_FLOAT_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16", "float32", "float64"})
+_HALF_GRAPH_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16"})
 
 
 def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: bool,
-                          narrowed: bool) -> str:
+                          narrowed: bool, traced: Optional[str] = None) -> str:
     """The OUTPUT dtype (a name) of an op computed fp32-internal under the half compute
     dtype `compute_dtype` (a name: "bfloat16" or "float16") — THE cast-back rule of the
     AMP_FP32 class (see the doctrine above AMP_FP16_OPS).
@@ -234,7 +247,9 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
     cast back; `narrowed` says the op is in the record's narrow set (the compiled engine
     passes `safe=False`: its flag alone never narrows an fp32-class output). Both are read
     only under fp16 — the contract does not exist under bf16
-    (precision_contract.resolve returns (False, set(), set())).
+    (precision_contract.resolve returns (False, set(), set())). `traced` is the op's traced
+    output dtype name (its graph record's `output_dtypes[0]`): float32 on a half graph is
+    the vendor's own fp32 island, which `safe` never narrows — only `narrowed` does.
 
     Pure, torch-free and device-free: the Triton wrapper, its compiled twin
     (core/dtype/engine.py `amp_fp32_output_dtype`) and Prism's width pass
@@ -249,6 +264,13 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                 f"must state it")
         return "bfloat16" if graph_dtype == "bfloat16" else "float32"
     if compute_dtype == "float16":
+        if traced == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
+            # The vendor's own fp32 island inside a half forward (a timestep frequency table:
+            # exp(-log(10000) * arange / half) times t up to 999). The component's flag does
+            # not narrow it; only the record's per-op narrow set does, the compiled engine's
+            # rule. Narrowed to fp16 by the flag, CogVideoX-2b's frequency table moved
+            # sin(t * f) by 0.21 at t = 999 (drift walk, 2026-10-05).
+            return "float16" if narrowed else "float32"
         return "float16" if (safe or narrowed) else "float32"
     raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half "
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
@@ -541,6 +563,8 @@ class TritonDtypeEngine:
         # a traced complex128 to complex64 by levelling its float64 input.
         if traced_output_is_complex(op_record):
             return self._wrap_complex_output(func)
+        # The op's traced output dtype — the vendor's dtype for this op (the cast-back floor).
+        traced = traced_output_dtype_name(op_record)
 
         # The calibration record's islands come FIRST: a pinned op computes
         # in fp32 and keeps its fp32 output whatever its AMP class — a
@@ -549,7 +573,8 @@ class TritonDtypeEngine:
             if op_uid in getattr(self, "_fp32_op_uids", ()):
                 return self._wrap_fp32(func)
             if op_uid in getattr(self, "_narrow_op_uids", ()) and op_name in AMP_FP32_OPS:
-                return self._wrap_fp32_internal_compute_dtype_output(func, force_cast_back=True)
+                return self._wrap_fp32_internal_compute_dtype_output(func, force_cast_back=True,
+                                                                     traced=traced)
         # Self-managed wrappers are NEVER wrapped — universal hardware
         # (mm/bmm/addmm self-gate on _NBX_HAS_NATIVE_BF16 internally;
         # conv2d/upsample_nearest are dtype-tag-driven). See _SELF_MANAGED_OPS
@@ -576,7 +601,7 @@ class TritonDtypeEngine:
             # bf16 on a bf16 graph, fp32 on another; fp16: back to fp16 only
             # under the contract flag (read at call time via the _w global),
             # else fp32.
-            return self._wrap_fp32_internal_compute_dtype_output(func)
+            return self._wrap_fp32_internal_compute_dtype_output(func, traced=traced)
 
         if op_name in AMP_FP16_OPS:
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
@@ -584,7 +609,7 @@ class TritonDtypeEngine:
                 # on V100, epsilon underflow). Same uniform cast-back wrap —
                 # under fp16 only: under bf16 div is a plain AMP_FP16 op
                 # (inputs cast to bf16, output bf16) and never reaches it.
-                return self._wrap_fp32_internal_compute_dtype_output(func)
+                return self._wrap_fp32_internal_compute_dtype_output(func, traced=traced)
             return self._wrap_lower_precision(func)
 
         if op_name in AMP_PROMOTE_OPS:
@@ -707,7 +732,8 @@ class TritonDtypeEngine:
                 _w.set_compute_dtype(prev)
         return fp32_func
 
-    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False) -> Callable:
+    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False,
+                                                 traced: Optional[str] = None) -> Callable:
         """fp32 compute inside; the OUTPUT dtype is `amp_fp32_output_dtype`'s answer.
 
         The op's internal precision rationale (RMSNorm pow->mean->rsqrt overflow risk, div
@@ -735,7 +761,7 @@ class TritonDtypeEngine:
         def cast_back(result):
             from neurobrix.kernels import wrappers as _w
             if amp_fp32_output_dtype(cname, gname, _w._NBX_ACTIVATIONS_FP16_SAFE,
-                                     force_cast_back) != cname:
+                                     force_cast_back, traced) != cname:
                 return result          # fp16 without the contract, or a non-bf16 graph: fp32
             if compute == NBXDtype.bfloat16:
                 return _cast_floats_to(result, compute)

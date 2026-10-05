@@ -368,10 +368,11 @@ def traced_output_is_complex(op_meta: Optional[Dict[str, Any]]) -> bool:
 
 
 _GRAPH_FLOAT_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16", "float32", "float64"})
+_HALF_GRAPH_NAMES: FrozenSet[str] = frozenset({"float16", "bfloat16"})
 
 
 def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: bool,
-                          narrowed: bool) -> str:
+                          narrowed: bool, traced: Optional[str] = None) -> str:
     """The OUTPUT dtype (a name) of an op computed fp32-internal under the half compute
     dtype `compute_dtype` ("bfloat16" or "float16") — the cast-back rule of the AMP_FP32
     class, the SAME rule in both engines.
@@ -387,8 +388,9 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
       2026-09-28). An unstated graph dtype is refused by name.
     * float16: fp16 only under the precision contract — `safe` (the engine's flag, where
       the flag alone narrows: this engine passes False, its contract narrows per op) or
-      `narrowed` (the op is in the record's narrow set); fp32 otherwise. `graph_dtype` is
-      not read.
+      `narrowed` (the op is in the record's narrow set); fp32 otherwise. `traced` (the
+      op's traced output dtype name) at float32 on a half graph is the vendor's own fp32
+      island: only `narrowed` brings it to fp16, never `safe`.
 
     Torch-free twin of triton/dtype.py `amp_fp32_output_dtype` (that module imports
     triton, this one torch — neither may import the other); a unit test holds the two
@@ -402,6 +404,13 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                 f"must state it")
         return "bfloat16" if graph_dtype == "bfloat16" else "float32"
     if compute_dtype == "float16":
+        if traced == "float32" and graph_dtype in _HALF_GRAPH_NAMES:
+            # The vendor's own fp32 island inside a half forward (a timestep frequency table:
+            # exp(-log(10000) * arange / half) times t up to 999). The component's flag does
+            # not narrow it; only the record's per-op narrow set does, the compiled engine's
+            # rule. Narrowed to fp16 by the flag, CogVideoX-2b's frequency table moved
+            # sin(t * f) by 0.21 at t = 999 (drift walk, 2026-10-05).
+            return "float16" if narrowed else "float32"
         return "float16" if (safe or narrowed) else "float32"
     raise ValueError(f"amp_fp32_output_dtype: compute dtype {compute_dtype!r} is not a half "
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
