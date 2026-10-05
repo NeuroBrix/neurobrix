@@ -1065,6 +1065,14 @@ class CompiledSequence:
         # happen exactly once per DAG lifetime.
         for tid in pretranspose_tids:
             meta = tensors.setdefault(tid, {})
+            # A recompile over the same DAG (a streamed piece compiled again for the next pass)
+            # finds the same aten::t ops — they stay in ops_metadata, only their consumers are
+            # rewired — so the swap must key on the stamp, not on the discovery. Swapping again
+            # flipped the metadata back to the file's shape on every second compile (measured
+            # 2026-09-26: PixArt's T5 streamed in 29 pieces, the census shadow then shaped the
+            # weight from the flipped metadata and the bind's .t() handed mm (10240, 4096)).
+            if meta.get("pretransposed"):
+                continue
             meta["pretransposed"] = True
             shape = meta.get("shape", [])
             if len(shape) == 2:
