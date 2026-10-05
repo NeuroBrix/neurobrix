@@ -204,6 +204,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The first frame of a CogVideoX or Open-Sora video is decoded correctly in the Triton engine.**
+  Their video decoders enlarge the first frame on its own path, and the Triton enlargement read that
+  frame from the wrong place in memory: the first frame came out flat grey (Open-Sora-v2) or blocky
+  (CogVideoX-2b) while the later frames were right. It now reads its input as laid out in memory.
+
 - **A video model whose pipeline bins the request renders at its bin and is restored to the requested
   size.** The restore after a binned render (`flow.resolution_binning`, PixArt and Sana) handled an
   image and refused a video: a container of SANA-Video carrying the field would have stopped after the

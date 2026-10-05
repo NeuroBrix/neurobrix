@@ -18,6 +18,10 @@ def upsample_nearest2d_kernel(
     OW,
     IH,
     IW,
+    s_n,
+    s_c,
+    s_h,
+    s_w,
     reciprocal_scale_h,
     reciprocal_scale_w,
     BLOCK_SIZE: tl.constexpr,
@@ -33,13 +37,16 @@ def upsample_nearest2d_kernel(
     ih = tl.minimum((oh * reciprocal_scale_h).to(tl.int32), IH - 1)
     iw = tl.minimum((ow * reciprocal_scale_w).to(tl.int32), IW - 1)
 
+    # The input is read through its strides: a first-frame branch feeds this op `x[:, :, 0]` of a
+    # 5-D activation, a view whose channel stride spans every frame — flat indexing read another
+    # channel's frames there (CogVideoX / Open-Sora frame 0). The output is fresh and contiguous.
     offset_o = (nc_iter * OH + oh) * OW + ow
-    offset_i = (nc_iter * IH + ih) * IW + iw
-    src_index_stride = nc_stride * IH * IW
+    in_hw = ih.to(tl.int64) * s_h + iw.to(tl.int64) * s_w
     dst_index_stride = nc_stride * OH * OW
     while nc_iter < NC:
-        data = tl.load(ptr_i + offset_i)
+        n = nc_iter // C
+        c = nc_iter % C
+        data = tl.load(ptr_i + n.to(tl.int64) * s_n + c.to(tl.int64) * s_c + in_hw)
         tl.store(ptr_o + offset_o, data)
-        ptr_i += src_index_stride
         ptr_o += dst_index_stride
         nc_iter += nc_stride
