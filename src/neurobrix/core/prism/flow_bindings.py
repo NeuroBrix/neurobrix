@@ -5,7 +5,9 @@
 
 * **CFG batch** — the CFG engine runs the flow's LOOP components on [uncond, cond] in one batch
   (`CFGEngine._execute_batched_cfg`), and nothing else; a denoiser that takes a `guidance` input
-  embeds the scale and runs no batch-2 pass (`cfg.engine.guidance_embedding_component`).
+  embeds the scale and runs no batch-2 pass (`cfg.engine.guidance_embedding_component`). A loop
+  component the plan splits (`ExecutionPlan.cfg_split_components`) runs each branch on its own, at
+  one branch's batch (`InputConfig.guidance_passes`).
 * **A diffusion encoder's length** — the prompt is tokenized to the encoder's declared length
   (`text.processor.diffusion_max_length`): Open-Sora's T5 runs at 512 tokens, traced at 31.
 * **The denoiser's text axis** — a pre-loop encoder's hidden state is FINALIZED before the loop
@@ -52,7 +54,7 @@ class FlowBindings:
     topology (`run.request_input_config`), asked per component graph by `build_symbol_map`."""
 
     def __init__(self, topology: Dict[str, Any], cache_path, container_name: Optional[str] = None,
-                 tp_components=()):
+                 cfg_split_components=()):
         self.topology = topology or {}
         self.cache_path = Path(cache_path) if cache_path is not None else None
         # the name the container registers its flags under: its MANIFEST model_name, never the
@@ -66,7 +68,9 @@ class FlowBindings:
         if container_name:
             from neurobrix.nbx import component_flags
             component_flags.register(container_name, self.topology.get("extracted_values"))
-        self.tp_components = set(tp_components or ())
+        # The loop components whose guidance branches run one pass each (`ExecutionPlan.
+        # cfg_split_components`): their batch is ONE branch's, not the guidance batch.
+        self.cfg_split_components = frozenset(cfg_split_components or ())
         self.flow = self.topology.get("flow") or {}
         self._graphs: Dict[str, Dict[str, Any]] = {}
 
@@ -249,9 +253,26 @@ class FlowBindings:
                     if src == f"input::{inp}::dim_1" or ("mask" in src and src.endswith("::dim_1")):
                         out[sid] = n
         from neurobrix.triton.cfg.engine import guidance_embedding_component
-        if (comp not in self.tp_components and guidance_embedding_component(self.topology) is None
-                and input_config.batch_size):
+        if guidance_embedding_component(self.topology) is None and input_config.batch_size:
+            n = int(input_config.batch_size)
+            if comp in self.cfg_split_components:
+                passes = getattr(input_config, "guidance_passes", None)
+                if not passes:
+                    raise ValueError(
+                        f"ZERO FALLBACK: {comp} is planned to run its guidance branches one pass "
+                        f"each, but the request states no guidance batch to split "
+                        f"(guidance_passes={passes!r})")
+                n //= int(passes)
             for sid, info in table.items():
                 if info.get("name") == "batch":
-                    out[sid] = int(input_config.batch_size)
+                    out[sid] = n
         return out
+
+    def split_guidance(self, components) -> "FlowBindings":
+        """These bindings with `components` running their guidance branches one pass each — the
+        request the solver re-prices when the guidance batch does not fit (`_split_guidance_batch`).
+        The rest (graphs read, flags registered) is shared, not re-read."""
+        import copy
+        other = copy.copy(self)
+        other.cfg_split_components = frozenset(components)
+        return other

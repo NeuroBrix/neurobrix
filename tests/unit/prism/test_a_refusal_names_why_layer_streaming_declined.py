@@ -28,8 +28,13 @@ from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impo
 #: 15 073 usable at the 16 384 rung; its traced time axis is frozen, so no tile maps it — a Forge
 #: re-trace, test_a_component_over_the_rung_streams_inside_itself). When that encoder is re-traced
 #: these cells need another refusal, and say so by failing.
+#: They did (2026-10-05): the re-traced encoder is tiled and the model plans layer_streaming at
+#: 16 384. The same request still refuses at an imposed 4 096: its `transformer`'s activations alone
+#: peak at 5 215 MB against 3 768 usable, one op's working set that no cut between ops serves (probe,
+#: campaigns/2026_10_05_op_tiler/refusal_probe.py). When a token split of the attention region
+#: serves it, these cells need another refusal again, and say so by failing.
 REFUSED_MODEL = "Wan2.1-I2V-14B-480P-Diffusers"
-REFUSED_RUNG = 16384
+REFUSED_RUNG = 4096
 
 
 def _refused_request():

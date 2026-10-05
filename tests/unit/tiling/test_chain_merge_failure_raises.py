@@ -54,7 +54,7 @@ class _FakeGraphExecutor:
         self._weights = {}
         self.registered = {}
 
-    def register_op_uid_interceptors(self, interceptors):
+    def register_op_uid_interceptors(self, interceptors, groups=(), planned=()):
         self.registered.update(interceptors)
 
 
