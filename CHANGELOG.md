@@ -210,6 +210,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decode with "produced no 4-D output". Both `--compiled` and `--triton` now resize and crop every
   frame as the vendor's `VideoProcessor.resize_and_crop_tensor` does.
 
+- **Open-Sora v2's guidance contrasts the prompt with the negative prompt through both text encoders.**
+  The unconditional half of each guided step received the negative prompt's T5 encoding but the PROMPT's
+  CLIP vector, so guidance pushed away from a half-prompted prediction instead of an unprompted one. The
+  negative prompt is now encoded through every text encoder whose output steers the denoiser, as the
+  reference pipeline does, in both engines. Models conditioned on an image embedding keep sharing it
+  between the two halves.
+
+- **Open-Sora v2 reads its prompt's CLIP vector correctly.** The built-in reader of `tokenizer.json`
+  ignored the word-end marker that CLIP tokenizers declare, so every word was split into mid-word pieces
+  (e.g. "a" became a different token than CLIP expects) and the pooled prompt vector that steers
+  Open-Sora v2 pointed elsewhere (cosine 0.57 to the reference). Tokens now match the reference
+  tokenizer exactly; every other installed model tokenizes as before.
+
 - **SANA-Video and the Sana image models follow the prompt as the vendor's pipeline does.** With
   classifier-free guidance, the unconditional half of each step attended the padding of the empty
   negative prompt instead of ignoring it, which pulled every step away from the prompt. On
