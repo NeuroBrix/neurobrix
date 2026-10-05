@@ -1692,10 +1692,10 @@ class OpLevelTilingEngine:
                     return _tiled
                 interceptors[op_uid] = make_tiled_rms(tf)
             else:
-                logger.debug(
-                    f"[OpLevelTilingEngine] No tiled implementation for "
-                    f"op_type={op_type} (uid={op_uid}); skipping."
-                )
+                raise RuntimeError(
+                    f"[OpLevelTilingEngine] '{self.plan.component_name}': the plan tiles "
+                    f"{op_uid} ({op_type}) and no tiled implementation of {cl!r} exists — the "
+                    f"budget was accepted with it banded, so it is never run whole instead")
 
         # In-place residual adds (multi-branch fusion fix vector B).
         # See `_detect_inplace_add_candidates` for the safety contract.
@@ -2354,8 +2354,6 @@ class OpLevelTilingEngine:
                 f"on component '{self.plan.component_name}'"
             )
 
-        if not interceptors:
-            return 0
         # What a streamed component's pieces (`LayerStreamingStrategy`) must be told:
         #   groups  — interceptors that hand each other a value no executor knows (a fusion proxy,
         #             a broadcast-clone proxy, a residual chain's stashed band result): one
@@ -2370,18 +2368,28 @@ class OpLevelTilingEngine:
         planned = [u for g in groups[:len(self.plan.fusion_pairs)] for u in g]
         planned += [t[0] for t in self.plan.tiled_ops]
         planned += list(getattr(self.plan, "conv3d_chunks", ()))
+        chains = [(sp["fork_uid"], *sp["chain_uids"], sp["merge_uid"])
+                  for sp in self.plan.residual_chains]
+        planned += [u for g in chains for u in g]
         if _residual_chains_active:
-            chains = [(sp["fork_uid"], *sp["chain_uids"], sp["merge_uid"])
-                      for sp in self.plan.residual_chains]
             groups += chains
-            planned += [u for g in chains for u in g]
+        # Every op the plan tiles runs tiled, or the run is refused by name: the budget was
+        # accepted with each of them banded, and one left whole is the allocation it was cut for.
+        unwired = [u for u in dict.fromkeys(planned) if u not in interceptors]
+        if unwired:
+            raise RuntimeError(
+                f"[OpLevelTilingEngine] '{self.plan.component_name}': the plan tiles "
+                f"{len(unwired)} op(s) no interceptor runs in mode {_mode!r} — {unwired[:5]}"
+                f"{' (residual chains: NBX_TRITON_CHAIN_WRAPPER=0 or a mode without the chain wrapper)' if chains and not _residual_chains_active else ''}")
+        if not interceptors:
+            return 0
         partial = [g for g in groups if not all(u in interceptors for u in g)]
         if partial:
             raise RuntimeError(
                 f"[OpLevelTilingEngine] '{self.plan.component_name}': the interceptor group(s) "
                 f"{partial[:3]} are wired in part — a proxy would reach an op that cannot read it")
         graph_executor.register_op_uid_interceptors(
-            interceptors, groups=groups, planned=[u for u in planned if u in interceptors])
+            interceptors, groups=groups, planned=list(dict.fromkeys(planned)))
         logger.info(
             f"[OpLevelTilingEngine] Registered {len(interceptors)} op_uid "
             f"interceptors on component '{self.plan.component_name}': "

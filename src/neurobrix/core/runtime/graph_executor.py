@@ -285,6 +285,11 @@ class GraphExecutor:
 
         self._dag = None
         self._weights = {}
+        # Followers of the interceptor registrations (`follow_interceptor_registrations`): a
+        # strategy whose executors run this executor's ops (layer_streaming's pieces) is told
+        # every later registration through this explicit hook.
+        self._op_uid_followers: Dict[str, Callable] = {}
+        self._triton_followers: Dict[str, Callable] = {}
         self._last_stats = None
         self._last_symbols = {}  # For CFG batch inference
         self._component_name = "unknown"
@@ -452,6 +457,8 @@ class GraphExecutor:
             if not hasattr(self, '_pending_triton_uid_interceptors'):
                 self._pending_triton_uid_interceptors = {}
             self._pending_triton_uid_interceptors.update(interceptors)
+        for follow in list(self._op_uid_followers.values()):
+            follow(interceptors, groups=groups, planned=planned)
 
     def _execute_intercepted_op(
         self,
@@ -3774,6 +3781,23 @@ class GraphExecutor:
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
             for op_type, func in interceptors.items():
                 self._triton_seq.register_op_interceptor(op_type, func)
+        for follow in list(self._triton_followers.values()):
+            follow(interceptors)
+
+    def follow_interceptor_registrations(self, key: str, *, op_uid: Optional[Callable] = None,
+                                         triton: Optional[Callable] = None) -> None:
+        """The explicit hook a strategy whose executors run this executor's ops subscribes to:
+        `op_uid(interceptors, groups=, planned=)` after every later
+        `register_op_uid_interceptors`, `triton(interceptors)` after every later
+        `register_triton_interceptors`, in subscription order. A follower is held under its
+        `key`: subscribing again under the same key replaces it (a strategy re-installed on the
+        same executor forwards once, to its current executors). Registrations made before the
+        subscription are read by the follower itself (`_op_uid_interceptors`,
+        `_pending_triton_interceptors`). `LayerStreamingStrategy` forwards both to its pieces."""
+        if op_uid is not None:
+            self._op_uid_followers[key] = op_uid
+        if triton is not None:
+            self._triton_followers[key] = triton
 
     def _ensure_triton_compiled(self, device_idx: int):
         """Compile triton sequence and bind weights (once).
@@ -5464,6 +5488,25 @@ class GraphExecutor:
         self._persistent_tensor_ids.add(tid)
         if self._compiled_seq is not None:
             self._compiled_seq.protect_tensor(tid)
+
+    def accumulation_dtype(self, dtype):
+        """The dtype this executor's DtypeEngine sums the partials of a contraction in, for a
+        partial of `dtype` (`accumulation_dtype` of the engine the mode runs: the ATen
+        `DtypeEngine` in compiled and sequential, the `TritonDtypeEngine` in the Triton modes,
+        torch-free there — R33). Asked by a stretch run in slices of a token axis
+        (`core/strategies/chunked_piece`) where it joins the slices of a contraction."""
+        if self.mode in ("triton", "triton_sequential"):
+            eng = getattr(getattr(self, "_triton_seq", None), "_dtype_engine", None)
+            if eng is None:
+                from neurobrix.triton.dtype import TritonDtypeEngine
+                from neurobrix.kernels.nbx_tensor import parse_dtype
+                from neurobrix.kernels.wrappers import has_native_bf16
+                eng = TritonDtypeEngine(parse_dtype(self.dtype), has_native_bf16=has_native_bf16(),
+                                        graph_dtype=self._dag.get("torch_dtype"))
+            return eng.accumulation_dtype(dtype)
+        if self._dtype_engine is None:
+            raise RuntimeError(f"accumulation_dtype: the {self.mode} executor holds no DtypeEngine")
+        return self._dtype_engine.accumulation_dtype(dtype)
 
     def tensors_of_last_run(self, tids) -> Dict[str, Any]:
         """The tensors named by `tids` as this executor's LAST run left them, read where its

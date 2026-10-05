@@ -254,6 +254,38 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
 
 
+def contraction_accumulator_dtype(dtype: str) -> str:
+    """The dtype (a name) the partial results of a contraction split over the axis it reduces
+    are summed in, when a stretch runs in slices of that axis (`core/strategies/chunked_piece`):
+    the split contraction is the SAME contraction, so its partials are summed in the accumulator
+    its kernel keeps — float32 for a half dtype (every mm/bmm/conv kernel accumulates fp32, and
+    `sum` is an AMP_FP32 op), the dtype itself for float32 and float64 — and the sum is stored
+    once, in the dtype the contraction's own output was given. A partial summed at the pass
+    dtype rounds once per slice where the whole op rounds once. Any other dtype is refused by
+    name: a contraction over a token axis yields a floating value.
+
+    Torch-free; its twin is core/dtype/engine.py `contraction_accumulator_dtype` (a unit
+    test holds the two equal)."""
+    if dtype in ("float16", "bfloat16"):
+        return "float32"
+    if dtype in ("float32", "float64"):
+        return dtype
+    raise ValueError(f"contraction_accumulator_dtype: {dtype!r} is not a floating dtype a "
+                     f"contraction's partials are summed in")
+
+
+def contraction_accumulator_bytes(store_bytes: int) -> int:
+    """`contraction_accumulator_dtype` read on a WIDTH (bytes per element), for Prism, which prices
+    a plan in widths: a 2-byte store (fp16 or bf16 alike) accumulates in 4 bytes; 4 and 8 are their
+    own accumulator. The same rule (a unit test holds the two equal over every floating dtype)."""
+    if store_bytes == 2:
+        return 4
+    if store_bytes in (4, 8):
+        return store_bytes
+    raise ValueError(f"contraction_accumulator_bytes: a {store_bytes}-byte store is no floating "
+                     f"dtype a contraction's partials are summed in")
+
+
 def constant_load_dtype(traced: str, compute: str) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
@@ -504,6 +536,14 @@ class TritonDtypeEngine:
         if graph_dt in _FLOATING:
             return self.compute_dtype
         return graph_dt
+
+    def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
+        """The dtype the partials of a contraction split over its reduced axis are summed in
+        (`contraction_accumulator_dtype`), for a partial of `dtype` — the stitch of a stretch run
+        in slices (`core/strategies/chunked_piece`) asks the engine, never the pass dtype. The
+        twin of `DtypeEngine.accumulation_dtype` (R30)."""
+        from neurobrix.kernels.nbx_tensor import parse_dtype
+        return parse_dtype(contraction_accumulator_dtype(NBXDtype(dtype).name))
 
     def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
         """The component's precision contract (core/runtime/precision_contract):
