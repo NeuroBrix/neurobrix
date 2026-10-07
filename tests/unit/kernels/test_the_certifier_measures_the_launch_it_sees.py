@@ -66,7 +66,7 @@ def _cuda_free_bytes():
         return 0
 
 
-def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeypatch, tmp_path):
+def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeypatch, tmp_path, without_matrix_unit):
     """The band door lowered to 4096 output elements: a (256 x 32) product streams in two bands
     of 128 rows, each its own launch under the one census key. RED on main: the certifier
     refused it ('every config diverges'); GREEN: certified, two launches recorded."""
@@ -98,7 +98,7 @@ def test_a_key_the_wrapper_streams_in_bands_is_certified_on_its_launches(monkeyp
     assert float(proof.get("deviation", entry.get("deviation", 1.0))) <= 1e-4
 
 
-def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tmp_path):
+def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tmp_path, without_matrix_unit):
     """The chosen configuration must hold on every band: the second launch is measured against
     its own oracle. Injection: the second launch's kernel run is skipped (its band is left
     poisoned/unwritten) — the certifier must refuse the key, not count two launches."""
@@ -138,7 +138,7 @@ def test_a_later_band_that_writes_nothing_is_REFUSED_not_counted(monkeypatch, tm
         AC.certify_key(qual, tuner, key, 1e-4, np.random.default_rng(3))
 
 
-def test_a_batched_key_with_a_bias_is_certified_by_its_synthesized_oracle(monkeypatch, tmp_path):
+def test_a_batched_key_with_a_bias_is_certified_by_its_synthesized_oracle(monkeypatch, tmp_path, without_matrix_unit):
     """`baddbmm` is a single-launch family: its batch-aware synthesized oracle stands. The
     guardian's finding (2026-09-26): a launch oracle for it dropped the bias (a constexpr kwarg
     the positional arguments never carry) and every biased key would have been refused."""

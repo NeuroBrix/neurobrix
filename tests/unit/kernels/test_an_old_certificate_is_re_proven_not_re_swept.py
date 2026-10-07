@@ -18,7 +18,8 @@ from neurobrix.kernels import census_table as T
 
 from tests.unit.kernels.test_autotune_certify_first_light import _cuda_available, _recorded_key  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not _cuda_available(), reason="a card is needed to launch the kernel")
+pytestmark = [pytest.mark.skipif(not _cuda_available(), reason="a card is needed to launch the kernel"),
+              pytest.mark.usefixtures("without_matrix_unit")]   # GEMMs that carry an autotune key
 
 
 @pytest.fixture

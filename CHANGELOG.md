@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tensor cores on NVIDIA V100 in the Triton engine.** Matrix products, convolutions and attention
+  run on the V100's tensor cores, with tile sizes read from the hardware profile. Float32 and
+  bfloat16 matrix products are carried as two float16 halves with float32 accumulation. Their error
+  against float64 is 0.18 to 0.33 times that of the previous float32 path. Measured on a V100-SXM2:
+  a 1024x2304x2304 float32-by-float16 product runs at 15.7 TFLOP/s (was 4.7), a 4096x5120x5120 one
+  at 13.5 (was 7.9), and attention reaches 45.7, 48.2 and 42.9 TFLOP/s at head sizes 64, 96 and 128
+  (2.46 at head size 96 before). Float16 products run at 16 to 42 TFLOP/s (4096x5120x5120: 42.3)
+  and 3x3 float16 convolutions at 13.1 to 13.6.
+
+- **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
+  products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
+  attention now has its own kernel that drives the tensor cores directly. At a 79 200-token video
+  shape it runs about 17 times faster, and its output stays within 1e-5 of the previous kernel's.
+  The hardware profile turns it on: `matrix_unit` in `volta.yml`. Other GPUs are unchanged.
+- **Matrix products run on the V100's tensor cores in the Triton mode.** Where both operands are fp16,
+  `mm` and `addmm` (with the fused activations) now use the tensor cores on Volta: about 8 times faster
+  at 4096x4096x4096 and 17 times faster on 79 200-row video projections. Results stay within fp16
+  output rounding of an fp64 reference. The tile comes from the hardware profile (`matrix_unit.mm`
+  in `volta.yml`), so the route needs no autotuning. Other GPUs and fp32 operands are unchanged.
+
 ### Fixed
 
 - **Kernel tuning entries for bfloat16 attention match what the engine runs.** For a text encoder
