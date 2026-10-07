@@ -179,6 +179,10 @@ _MAY_OMIT = {
         "release and architecture (pytorch/pytorch#192814 unskips its tests only on ROCm 10.0+, "
         "pytorch/pytorch#184880), so CDNA declares it once a plan is proven under it",
 }
+_MAY_OMIT.update({f"matrix_unit.{k}": (
+    "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
+    "not lower `tl.dot` onto declares one (Volta, triton-lang/triton#5066); absent, every kernel keeps tl.dot")
+    for k in ("shape", "operand_dtype", "accumulator_dtype", "flash", "mm", "fp32_split.operands", "fp32_split.mm")})
 
 
 def _flatten(d, prefix=""):
