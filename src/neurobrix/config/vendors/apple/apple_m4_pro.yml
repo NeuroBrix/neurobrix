@@ -175,10 +175,12 @@ sdpa_thresholds:
     block_m: 16
     block_n: 16
     num_warps: 4
+  # MEASURED 2026-10-07 23:51 on adbf6e84 (flash tile probe, bf16, 2048-4608 tokens): 8 warps
+  # on this tile run at 4.18-4.32 TFLOP/s against 2.93-3.05 at 4, exact to fp64 within bf16.
   - head_dim_ge: 128
     block_m: 32
     block_n: 32
-    num_warps: 4
+    num_warps: 8
   # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
   # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
   # has no template and falls to a generic path that cannot lower an
