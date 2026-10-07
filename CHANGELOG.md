@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Writing a long video no longer stalls for minutes on a busy host.** The engine's process no
+  longer asks the kernel for 2 MB pages behind its large arrays, which on a host whose memory is
+  fragmented (and whose transparent-huge-page defrag is `madvise`) made every allocation wait for a
+  memory compaction: a decoded video's colour conversion took over 20 minutes while the GPU idled.
+  Set `NUMPY_MADVISE_HUGEPAGE=1` to restore the previous behaviour.
+
 ### Added
 
 - **Diffusion models trained on a table of sizes render any requested size the way their vendor

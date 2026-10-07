@@ -20,6 +20,15 @@ import os as _os_startup
 _cpu_count = _os_startup.cpu_count() or 1
 _os_startup.environ.setdefault("OMP_NUM_THREADS", str(_cpu_count))
 _os_startup.environ.setdefault("MKL_NUM_THREADS", str(_cpu_count))
+# numpy advises the kernel to back every large array with 2 MB pages
+# (madvise MADV_HUGEPAGE). On a host whose memory is fragmented by the
+# engine's own shared weight pools, a kernel with THP defrag "madvise"
+# then compacts memory synchronously on every 2 MB fault: measured
+# 2026-10-07 on the rack, one clip/subtract over a decoded video sat 20+
+# min in system time (kcompactd at 100 %, cgroup memory pressure 81 %)
+# while its card idled. Without the advice the same allocation faults
+# 4 KB pages and never stalls. Users who set the variable keep it.
+_os_startup.environ.setdefault("NUMPY_MADVISE_HUGEPAGE", "0")
 
 import sys
 import argparse
