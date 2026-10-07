@@ -54,6 +54,8 @@ import os
 import re
 import subprocess
 import sys
+
+import yaml
 import time
 from pathlib import Path
 
@@ -579,11 +581,34 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     return row
 
 
-def full_matrix(cache: Path = None) -> set:
+#: Where the data a gate's mode set is read from: the family profiles and the hardware profiles.
+CONFIG = REPO / "src" / "neurobrix" / "config"
+
+
+def whole_sequential(container: Path, hardware: str) -> bool:
+    """Whether a gate runs this container WHOLE in triton-sequential (the owner, 2026-10-05 23:16).
+    Sequential is the kernel oracle: run whole only on small models; video and heavy models are gated
+    compiled + Triton certified-only, and run sequential only to locate a defect (whole Allegro cells
+    at 720x1280 took 1.6 to 3 h each). Carried by the data, never by a name or a size in this code:
+    the family profile's `gate.whole_sequential` when it declares one (video declares false), else
+    the container's weights must fit the smallest card of the hardware profile the gate runs under."""
+    family = json.loads((container / "manifest.json").read_text())["family"]
+    declared = ((yaml.safe_load((CONFIG / "families" / f"{family}.yml").read_text()) or {})
+                .get("gate") or {}).get("whole_sequential")
+    if declared is not None:
+        return bool(declared)
+    devices = yaml.safe_load((CONFIG / "hardware" / f"{hardware}.yml").read_text())["devices"]
+    weights = sum(f.stat().st_size for f in container.glob("components/*/weights/*"))
+    return weights <= min(d["memory_mb"] for d in devices) * (1 << 20)
+
+
+def full_matrix(cache: Path = None, hardware: str = None) -> set:
     """Every cell the matrix holds: each container of the shared cache (a directory with a manifest)
-    in every mode — derived from the cache, never a hand-kept list."""
+    in every mode — derived from the cache, never a hand-kept list. Under a hardware profile, the
+    triton-sequential cell is held only where `whole_sequential` says the gate runs it whole."""
     cache = cache or CACHE
-    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in MODES}
+    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in MODES
+            if mode != "triton-sequential" or hardware is None or whole_sequential(d, hardware)}
 
 
 def cells_of_lists(paths) -> set:
@@ -597,12 +622,12 @@ def cells_of_lists(paths) -> set:
     return cells
 
 
-def refuse_a_partial_gate(lists, cache: Path = None) -> None:
+def refuse_a_partial_gate(lists, cache: Path = None, hardware: str = None) -> None:
     """A queue's gate covers EVERY cell of the matrix (the supervisor, 2026-09-27 16:25): queue-9's
     gate ran lists inherited from queue-8 and never ran Sana_1600M_4Kpx_BF16 native — a regression
     it would have seen landed on main. Refused by name when the union of the gate's lists is not
     the full matrix."""
-    full, named = full_matrix(cache), cells_of_lists(lists)
+    full, named = full_matrix(cache, hardware), cells_of_lists(lists)
     if not full:
         # An empty cache is an empty matrix, and empty lists "cover" it: a gate over no cell proves nothing.
         raise SystemExit(f"REFUSED: the cache {cache or CACHE} holds no container — a gate over an empty "
@@ -624,7 +649,10 @@ def refuse(why: str) -> int:
 
 def cmd_run(a) -> int:
     if getattr(a, "gate_lists", None):
-        refuse_a_partial_gate(a.gate_lists)
+        if not getattr(a, "gate_hardware", None):
+            raise SystemExit("REFUSED: a gate names the hardware profile it runs under (--gate-hardware): its "
+                             "mode set per container is read from that profile and the family profiles.")
+        refuse_a_partial_gate(a.gate_lists, hardware=a.gate_hardware)
     # The request, refused by name before any cell: an empty list is not a run, and a name the cache
     # does not hold is not a cell (it would be judged by its absence).
     models = [m.strip() for m in a.models.split(",")]
@@ -940,6 +968,8 @@ def main() -> int:
     r.add_argument("--modes", default=",".join(MODES))
     r.add_argument("--gate-lists", nargs="+", default=None,
                    help="this run is a queue gate: the card lists of the whole gate; refused unless together they name every cell of the matrix")
+    r.add_argument("--gate-hardware", default=None,
+                   help="the hardware profile id the gate runs under: with the family profiles, it decides which containers a gate runs whole in triton-sequential")
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
     r.add_argument("--timeout", type=int, default=900)
