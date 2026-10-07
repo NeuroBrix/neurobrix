@@ -123,11 +123,11 @@ matrix_unit:
       block_n: 32
       warps_m: 4
   mm:                    # GEMM tiles, largest first: the first whose block fits inside the M x N output
-    - block_m: 128
-      block_n: 128
+    - block_m: 128       # 2026-10-08, fp16 x fp16: 23-39 TFLOP/s mm, 13.1-13.7 conv 3x3, where 128x128 w2x2 gave 8-9
+      block_n: 64        # (two 128-register accumulators per thread: the tile sum and the RN one)
       block_k: 32
-      warps_m: 2
-      warps_n: 2
+      warps_m: 4
+      warps_n: 1
       group_m: 8
     - block_m: 64
       block_n: 64

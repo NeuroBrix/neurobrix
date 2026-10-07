@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against float64 is 0.18 to 0.33 times that of the previous float32 path. Measured on a V100-SXM2:
   a 1024x2304x2304 float32-by-float16 product runs at 15.7 TFLOP/s (was 4.7), a 4096x5120x5120 one
   at 13.5 (was 7.9), and attention reaches 45.7, 48.2 and 42.9 TFLOP/s at head sizes 64, 96 and 128
-  (2.46 at head size 96 before).
+  (2.46 at head size 96 before). Float16 products run at 16 to 42 TFLOP/s (4096x5120x5120: 42.3)
+  and 3x3 float16 convolutions at 13.1 to 13.6.
 
 - **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
   products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
