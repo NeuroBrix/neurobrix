@@ -87,3 +87,8 @@ confirmation:
   # tools/trace_request.model_confirmation — a key it names must be named here first.
   steps: 4
   size_fraction: 0.5
+
+# The anti-regression gate (tools/regression_matrix.py, whole_sequential): a video model is gated compiled
+# and Triton certified-only; triton-sequential runs on it only to locate a defect (the owner, 2026-10-05).
+gate:
+  whole_sequential: false
