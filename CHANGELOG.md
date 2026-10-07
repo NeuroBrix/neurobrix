@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
+  products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
+  attention now has its own kernel that drives the tensor cores directly. At a 79 200-token video
+  shape it runs about 17 times faster, and its output stays within 1e-5 of the previous kernel's.
+  The hardware profile turns it on: `matrix_unit` in `volta.yml`. Other GPUs are unchanged.
+
 ### Fixed
 
 - **A plan that splits an operation the engine cannot split now stops with a message naming it.**

@@ -415,7 +415,7 @@ class CudaDriver(Driver):
 
     def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
                 specialization=None, num_stages=None):
-        from triton.compiler import ASTSource, compile as triton_compile
+        from triton.compiler import compile as triton_compile
         from neurobrix.triton.launcher_contract import ArgSlot
         specialization = dict(specialization or {})
         params = list(jit_fn.params)
@@ -445,7 +445,7 @@ class CudaDriver(Driver):
         # `_pack_args` builds the compile options from its KWARGS argument (the
         # `options` one only feeds the cache key), so the same dict goes in both.
         options, sig, cexprs, attrs = jit_fn._pack_args(backend, options, bound, spec, options)
-        src = ASTSource(jit_fn, sig, cexprs, attrs)
+        src = _source(jit_fn, sig, cexprs, attrs)
         # A backend that cannot emit for the device may WARN and compute on the
         # CPU instead. Numbers come back, nothing raises, and the caller has an
         # answer from hardware it did not ask for. Correct-or-refuse applies to
@@ -791,6 +791,18 @@ def reset_caches() -> None:
     _TARGET = None
 
 
+def _source(kernel, signature, constexprs, attrs):
+    """The kernel's AST source in its own language: Triton's `create_binder`
+    picks `GluonASTSource` for a `@gluon.jit` kernel (the module carries
+    `ttg.num-warps` and its layouts before they are verified), and this
+    launcher, which binds without `create_binder`, must make the same choice."""
+    if kernel.is_gluon():
+        from triton.experimental.gluon._runtime import GluonASTSource
+        return GluonASTSource(kernel, signature, constexprs, attrs)
+    from triton.compiler import ASTSource
+    return ASTSource(kernel, signature, constexprs, attrs)
+
+
 def _binder(kernel):
     b = _binders.get(id(kernel))
     if b is None:
@@ -834,7 +846,7 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     runtime round trip per launch is what a launcher must not do (2026-09-08:
     the launcher held ten times the decode rate of the engine).
     """
-    from triton.compiler import ASTSource, compile as triton_compile
+    from triton.compiler import compile as triton_compile
     from triton.runtime.jit import compute_cache_key
     kernel_cache, key_cache, backend = _binder(kernel)
     kwargs = dict(kwargs)
@@ -851,7 +863,7 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
         prep = kernel_cache.get(key)
     if prep is None:
         options, signature, constexprs, attrs = kernel._pack_args(backend, kwargs, bound_args, specialization, options)
-        src = ASTSource(kernel, signature, constexprs, attrs)
+        src = _source(kernel, signature, constexprs, attrs)
         compiled = triton_compile(src, target=target(), options=options.__dict__)
         md = compiled.metadata
         if getattr(md, "num_ctas", 1) != 1:
