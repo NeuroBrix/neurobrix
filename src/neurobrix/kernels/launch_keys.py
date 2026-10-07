@@ -368,7 +368,12 @@ def conv_weight_krsc(w_shape, groups: int, transposed: bool, layout: str) -> boo
 def krsc_conv_weights(dag: dict, layout: str) -> set:
     """The tensor ids of the graph weights stored KRSC: every reader of the weight is a
     convolution that takes it (`conv_weight_krsc`); a weight any other op reads keeps the order
-    that op expects."""
+    that op expects.
+
+    Only the device load into the component arena relays these weights. A weight the plan keeps
+    pinned on the host or offloads (zero3, streamed pieces) stays KCRS: the wrapper reads its
+    strides, so it computes the same bytes, and its key is the same, because a key states the
+    logical (K, C, R, S) shape and never the layout."""
     tensors, ops = dag.get("tensors") or {}, dag.get("ops") or {}
     taken, refused = set(), set()
     for uid in dag.get("execution_order") or []:
