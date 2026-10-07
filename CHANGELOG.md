@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the engine ran them in bfloat16. The run then found no tuned entry for those products. The list
   now ignores empty inputs of a concatenation, as the engine does.
 
+- **Kernel certification on Apple Silicon no longer refuses a long tuning sweep.**
+  The stability check used to bracket the whole sweep, and the GPU clock, which macOS manages, moved
+  somewhere inside it. It now brackets each small group of candidates, retries a group that drifted,
+  and decides between the two best candidates in one bracket of its own.
 - **A plan that splits an operation the engine cannot split now stops with a message naming it.**
   When a plan split an operation into bands and the engine had no split version of that operation,
   or when the selected engine mode does not run a planned residual chain, the full operation ran
