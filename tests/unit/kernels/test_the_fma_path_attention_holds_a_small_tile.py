@@ -7,7 +7,8 @@ the arch profile, read by the wrapper; every other arch launches exactly as befo
 
 What would this file do if the code were wrong? The Volta rows without qk_chunk -> the first test RED
 and the chunked path never taken (the speed test RED); a qk_chunk row added to Ampere or Hopper ->
-the first test RED; the launch meta read from a row without qk_chunk -> the second RED; a chunk
+the first test RED; a row's stated warps dropped, or a chunk invented where none is stated -> the second RED; an unmeasured
+warps value back on Hopper, or the M4 Pro's head_dim-128 row back at 4 -> the third RED; a chunk
 loop that drops or misreads a chunk -> the oracle test RED.
 """
 from __future__ import annotations
@@ -36,14 +37,27 @@ def test_volta_states_its_fma_tile_and_matrix_archs_do_not():
         assert not any("qk_chunk" in r for r in _prefill_rows(arch)), arch
 
 
-def test_the_launch_meta_comes_only_from_a_chunk_row(monkeypatch):
+def test_only_measured_warps_are_stated():
+    """A stated num_warps is now launched, so a profile states only a measured one: Hopper's rows were
+    never calibrated; the M4 Pro's head_dim-128 row was measured at 8 (2026-10-07, +41-43 %, exact)."""
+    hopper = yaml.safe_load((VENDORS / "hopper.yml").read_text())["sdpa_thresholds"]
+    assert not any("num_warps" in r for r in hopper)
+    m4 = yaml.safe_load((VENDORS.parent / "apple" / "apple_m4_pro.yml").read_text())["sdpa_thresholds"]
+    assert [r["num_warps"] for r in m4 if r.get("head_dim_ge") == 128 and "seqlen_q_le" not in r] == [8]
+
+
+def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):
+    """Each field only where the row states it (2026-10-08: warps were read only beside a chunk, so the
+    M4 Pro's stated head_dim-128 warps never reached the launch)."""
     from neurobrix.kernels.ops import _configs as K
     rows = [{"seqlen_q_le": 16, "block_m": 16, "block_n": 64, "num_warps": 4},
-            {"head_dim_ge": 256, "block_m": 32, "block_n": 32, "num_warps": 4},
-            {"head_dim_lt": 256, "block_m": 64, "block_n": 32, "num_warps": 8, "qk_chunk": 32}]
+            {"head_dim_ge": 256, "block_m": 32, "block_n": 32},
+            {"head_dim_ge": 128, "block_m": 32, "block_n": 32, "num_warps": 8},
+            {"head_dim_lt": 128, "block_m": 64, "block_n": 32, "num_warps": 8, "qk_chunk": 32}]
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {"sdpa_thresholds": rows})
-    assert K.sdpa_launch_meta(1, 128) == {}                          # decode row: no chunk stated
-    assert K.sdpa_launch_meta(4096, 256) == {}
+    assert K.sdpa_launch_meta(1, 128) == {"num_warps": 4}            # decode row: warps, no chunk
+    assert K.sdpa_launch_meta(4096, 256) == {}                       # states neither: Triton's default
+    assert K.sdpa_launch_meta(4096, 128) == {"num_warps": 8}
     assert K.sdpa_launch_meta(4096, 96) == {"num_warps": 8, "qk_chunk": 32}
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {})
     assert K.sdpa_launch_meta(4096, 96) == {}

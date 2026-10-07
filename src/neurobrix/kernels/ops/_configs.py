@@ -558,10 +558,13 @@ def sdpa_block_ceiling(seqlen_q: int, head_dim: int):
 
 
 def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
-    """The flash launch's `num_warps` and `qk_chunk` the hardware profile states for this shape — only
-    on a row that states `qk_chunk` (the row of an arch whose dot lowers to scalar FMA, where the tile
-    and its warps were measured together); `{}` anywhere else, so every other arch launches exactly
-    as before. Same row order and match rule as `sdpa_block_ceiling`."""
+    """The flash launch's `num_warps` and `qk_chunk` the hardware profile states for this shape, each
+    only where the matching row states it (`qk_chunk` is stated by the row of an arch whose dot lowers
+    to scalar FMA); `{}` when the row states neither or no row matches, and Triton's default holds.
+    Same row order and match rule as `sdpa_block_ceiling`.
+
+    Until 2026-10-08 `num_warps` was read only beside `qk_chunk`: every other row's stated warps were
+    ignored, and the M4 Pro's head_dim-128 attention ran at 4 warps where 8 is 41-43 % faster."""
     profile = active_vendor_profile()
     for row in profile.get("sdpa_thresholds") or []:
         if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
@@ -570,9 +573,7 @@ def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
             continue
         if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
             continue
-        if "qk_chunk" not in row:
-            return {}
-        return {"num_warps": int(row["num_warps"]), "qk_chunk": int(row["qk_chunk"])}
+        return {k: int(row[k]) for k in ("num_warps", "qk_chunk") if k in row}
     return {}
 
 

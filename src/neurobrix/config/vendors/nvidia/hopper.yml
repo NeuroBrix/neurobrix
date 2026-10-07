@@ -68,31 +68,29 @@ block_sizes:
 # Scaled Dot-Product Attention block size thresholds.
 # Schema documented in volta.yml. Decode entries first.
 # Hopper values not yet empirically calibrated; tile sizes scaled
-# up for the larger SMEM budget (227 KB).
+# up for the larger SMEM budget (227 KB). No row states num_warps: since
+# 2026-10-08 the wrapper launches at a row's stated num_warps, and the 8 these
+# rows carried was never read nor measured, so the launch stays Triton's default
+# until a Hopper measurement states one.
 sdpa_thresholds:
   # Decode path (seqlen_q ≤ 16)
   - seqlen_q_le: 16
     head_dim_ge: 256
     block_m: 16
     block_n: 64
-    num_warps: 8
   - seqlen_q_le: 16
     block_m: 16
     block_n: 128
-    num_warps: 8
   # Prefill path (seqlen_q > 16)
   - head_dim_ge: 256
     block_m: 32
     block_n: 32
-    num_warps: 8
   - head_dim_ge: 128
     block_m: 64
     block_n: 64
-    num_warps: 8
   - head_dim_lt: 128
     block_m: 128
     block_n: 128
-    num_warps: 8
 
 # Memory constraints — H100 SXM5/PCIe.
 memory:
