@@ -8699,11 +8699,11 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # softmax reduction (the BLOCK_M=32 wrongness probe). NBX_FLASH_NUM_WARPS
     # / NBX_FLASH_NUM_STAGES let us pin them for diagnosis / per-arch tuning.
     _flash_launch_meta = {}
-    # The arch profile's row for this shape: its stated warps, and on an FMA-path row (Volta/Turing
+    # The arch profile's row for this shape: its stated warps (a row without them is an error), and on an FMA-path row (Volta/Turing
     # under Triton >= 3.3) the head-dim chunk the QK^T contraction is done in. No chunk: held Q.
     _fa_meta = _sdpa_launch_meta(seqlen_q, headdim)
     QK_CHUNK = min(_fa_meta["qk_chunk"], BLOCK_HEADDIM) if "qk_chunk" in _fa_meta else 0
-    if "num_warps" in _fa_meta:
+    if _fa_meta:
         _flash_launch_meta["num_warps"] = _fa_meta["num_warps"]
     _fnw = os.environ.get("NBX_FLASH_NUM_WARPS")
     if _fnw:

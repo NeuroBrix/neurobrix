@@ -37,18 +37,25 @@ def test_volta_states_its_fma_tile_and_matrix_archs_do_not():
         assert not any("qk_chunk" in r for r in _prefill_rows(arch)), arch
 
 
-def test_only_measured_warps_are_stated():
-    """A stated num_warps is now launched, so a profile states only a measured one: Hopper's rows were
-    never calibrated; the M4 Pro's head_dim-128 row was measured at 8 (2026-10-07, +41-43 %, exact)."""
+def test_every_sdpa_row_of_every_profile_states_its_warps():
+    """The launch reads a matching row's num_warps and refuses a row without one (supervisor 2026-10-08
+    00:05: never Triton's hidden default), so every row of every vendor profile states it. Hopper keeps
+    its declared 8 (not measured here); the M4 Pro's head_dim-128 row was measured at 8 (2026-10-07)."""
+    missing = [f"{y.relative_to(VENDORS.parent)}:{i}"
+               for y in sorted(VENDORS.parent.glob("*/*.yml"))
+               for i, r in enumerate(yaml.safe_load(y.read_text()).get("sdpa_thresholds") or [])
+               if "num_warps" not in r]
+    assert not missing, missing
     hopper = yaml.safe_load((VENDORS / "hopper.yml").read_text())["sdpa_thresholds"]
-    assert not any("num_warps" in r for r in hopper)
+    assert {r["num_warps"] for r in hopper} == {8}
     m4 = yaml.safe_load((VENDORS.parent / "apple" / "apple_m4_pro.yml").read_text())["sdpa_thresholds"]
     assert [r["num_warps"] for r in m4 if r.get("head_dim_ge") == 128 and "seqlen_q_le" not in r] == [8]
 
 
 def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):
-    """Each field only where the row states it (2026-10-08: warps were read only beside a chunk, so the
-    M4 Pro's stated head_dim-128 warps never reached the launch)."""
+    """The row's warps always, its chunk where it states one (2026-10-08: warps were read only beside a
+    chunk, so the M4 Pro's stated head_dim-128 warps never reached the launch). A matching row without
+    num_warps is an error naming the row, never Triton's default."""
     from neurobrix.kernels.ops import _configs as K
     rows = [{"seqlen_q_le": 16, "block_m": 16, "block_n": 64, "num_warps": 4},
             {"head_dim_ge": 256, "block_m": 32, "block_n": 32},
@@ -56,11 +63,12 @@ def test_the_launch_meta_is_what_the_matching_row_states(monkeypatch):
             {"head_dim_lt": 128, "block_m": 64, "block_n": 32, "num_warps": 8, "qk_chunk": 32}]
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {"sdpa_thresholds": rows})
     assert K.sdpa_launch_meta(1, 128) == {"num_warps": 4}            # decode row: warps, no chunk
-    assert K.sdpa_launch_meta(4096, 256) == {}                       # states neither: Triton's default
+    with pytest.raises(ValueError, match="num_warps"):
+        K.sdpa_launch_meta(4096, 256)                                # the row states no warps
     assert K.sdpa_launch_meta(4096, 128) == {"num_warps": 8}
     assert K.sdpa_launch_meta(4096, 96) == {"num_warps": 8, "qk_chunk": 32}
     monkeypatch.setattr(K, "active_vendor_profile", lambda: {})
-    assert K.sdpa_launch_meta(4096, 96) == {}
+    assert K.sdpa_launch_meta(4096, 96) == {}                        # no profile row: nothing stated
 
 
 def _cuda_cc():
