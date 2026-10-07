@@ -85,3 +85,27 @@ def test_m8n8k4_flash_matches_fp64(B, H, Hk, Tq, Tk, D, mask, monkeypatch):
     assert np.isfinite(got).all()
     err = np.abs(got - ref).max()
     assert err < 2e-3, f"max|diff| {err:.2e} vs fp64 ({mask}, D {D})"
+
+
+def test_over_the_scores_budget_the_route_is_the_units_flash_and_deterministic(monkeypatch):
+    """No route forced: once the fp32 scores exceed the device's budget, `sdpa_route` gives the unit's flash
+    (`unit_flash_takes`) instead of the chunked math — and the kernel is deterministic by construction (no atomics,
+    a fixed reduction order), the property the math route exists for on this arch: three runs, byte-identical.
+    The budget is set small so a test-sized call is over it (the data the route reads, not the route)."""
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    h = NBXDtype.float16
+    assert LK.unit_flash_takes(96, h, h, h) and not LK.unit_flash_takes(96, NBXDtype.float32, h, h)
+    calls = []
+    real = W._flash_m8n8k4
+    monkeypatch.setattr(W, "_flash_m8n8k4", lambda *a, **kw: (calls.append(a[0].shape), real(*a, **kw))[1])
+    monkeypatch.setattr(W, "_sdpa_math_scores_budget_bytes_for", lambda *_: 1 << 20)
+    rng = np.random.default_rng(5)
+    B, H, T, D = 1, 2, 1024, 96
+    q, k, v = ((rng.standard_normal((B, H, T, D)) * 0.5).astype(np.float16) for _ in range(3))
+    nb = lambda x: NBXTensor.from_numpy(np.ascontiguousarray(x)).to("cuda:0")
+    outs = [W.scaled_dot_product_attention_wrapper(nb(q), nb(k), nb(v)).numpy() for _ in range(3)]
+    assert len(calls) == 3, f"the unit's flash ran {len(calls)} of 3 times"
+    assert all(np.array_equal(o.view(np.uint8), outs[0].view(np.uint8)) for o in outs[1:])
+    ref = _oracle(q.astype(np.float64), k.astype(np.float64), v.astype(np.float64), 0.0, 1.0 / np.sqrt(D))
+    assert np.abs(outs[0].astype(np.float64) - ref).max() < 2e-3

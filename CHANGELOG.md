@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tensor cores on NVIDIA V100 in the Triton engine.** Matrix products, convolutions and attention
+  run on the V100's tensor cores, with tile sizes read from the hardware profile. Float32 and
+  bfloat16 matrix products are carried as two float16 halves with float32 accumulation. Their error
+  against float64 is 0.18 to 0.33 times that of the previous float32 path. Measured on a V100-SXM2:
+  a 1024x2304x2304 float32-by-float16 product runs at 15.7 TFLOP/s (was 4.7), a 4096x5120x5120 one
+  at 13.5 (was 7.9), and attention reaches 45.7, 48.2 and 42.9 TFLOP/s at head sizes 64, 96 and 128
+  (2.46 at head size 96 before).
+
+### Added
+
 - **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
   products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
   attention now has its own kernel that drives the tensor cores directly. At a 79 200-token video

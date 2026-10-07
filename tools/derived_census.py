@@ -798,7 +798,11 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 Hk = int(decode_kv.get("heads") or Hk)
                 q_round = kd if qd != kd else None
                 mask_n = mask_n if mask_n == Tk else None
-            route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks)
+            qd, kd, vd, _qr = LK.sdpa_operand_dtypes(qd, kd, vd, q_round)
+            if _qr is not None:
+                qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
+            route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows, sdpa_max_chunks,
+                                        unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash" and LK.flash_headdim_detour(D) != D:
                 # The wrapper's zero-pad detour: a power-of-two head dim >= 128 is padded by one
                 # (Q, K and V) and the call re-enters the wrapper, routed afresh at the padded dims
@@ -806,10 +810,7 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 # under its 2 GiB bound (PixArt's VAE attention at 512 -> 513 on Apple, 2026-09-29).
                 D, Dv = LK.flash_headdim_detour(D), Dv + (LK.flash_headdim_detour(D) - D)
                 route, rows = LK.sdpa_route(B, H, Tq, Tk, D, Dv, sdpa_budget_bytes, sdpa_min_rows,
-                                            sdpa_max_chunks)
-            qd, kd, vd, _qr = LK.sdpa_operand_dtypes(qd, kd, vd, q_round)
-            if _qr is not None:
-                qd = _qr          # every route but the vector kernel casts Q once to the cache dtype
+                                            sdpa_max_chunks, unit_flash=LK.unit_flash_takes(D, qd, kd, vd))
             if route == "flash":
                 launches = []
             elif route == "chunked":
@@ -825,7 +826,8 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
             M = 1
             for d in a_s[:-1]:
                 M *= d
-            launches = LK.addmm_launches(M, K, b_s[-1], dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16)
+            launches = LK.addmm_launches(M, K, b_s[-1], dt(ins[1]), dt(ins[2]), dt(ins[0]), has_native_bf16,
+                                         bias_row=len(bias_s) == 1 or (len(bias_s) == 2 and bias_s[0] == 1))
         elif kind in ("aten::convolution", "aten::conv1d"):
             at = o.get("attributes") or {}
             x_s, w_s = shape(ins[0]), shape(ins[1])

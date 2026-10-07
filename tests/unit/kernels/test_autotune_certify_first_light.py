@@ -28,7 +28,8 @@ def _cuda_available():
         return False
 
 
-pytestmark = pytest.mark.skipif(not _cuda_available(), reason="needs a CUDA card")
+pytestmark = [pytest.mark.skipif(not _cuda_available(), reason="needs a CUDA card"),
+              pytest.mark.usefixtures("without_matrix_unit")]   # the certifier's cells: GEMMs that carry a key
 
 
 def _recorded_key(tuner, call):
@@ -67,8 +68,9 @@ def test_one_matmul_shape_is_certified_gated_and_served(root, monkeypatch):
     assert prof is not None, "the launcher resolved no vendor profile on this card"
     vendor, profile = prof
     rng = np.random.default_rng(7)
-    a = (rng.standard_normal((96, 64)) * 0.1).astype(np.float16)
-    b = (rng.standard_normal((64, 80)) * 0.1).astype(np.float16)
+    dt = np.float16
+    a = (rng.standard_normal((96, 64)) * 0.1).astype(dt)
+    b = (rng.standard_normal((64, 80)) * 0.1).astype(dt)
     key = _recorded_key(matmul_kernel, lambda: W.mm(NBXTensor.from_numpy(a), NBXTensor.from_numpy(b)))
     matmul_kernel.cache.pop(key, None)
     dtype = C.output_dtype(matmul_kernel, key)
