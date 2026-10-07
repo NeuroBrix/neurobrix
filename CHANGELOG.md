@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Kernel tuning entries for bfloat16 attention match what the engine runs.** For a text encoder
+  that concatenates an empty key/value cache with its new keys and values (Gemma 2 in SANA-Video),
+  the precomputed list of kernel shapes widened the attention's matrix products to float32, while
+  the engine ran them in bfloat16. The run then found no tuned entry for those products. The list
+  now ignores empty inputs of a concatenation, as the engine does.
+
 - **A plan that splits an operation the engine cannot split now stops with a message naming it.**
   When a plan split an operation into bands and the engine had no split version of that operation,
   or when the selected engine mode does not run a planned residual chain, the full operation ran

@@ -548,3 +548,22 @@ def test_an_attention_over_disagreeing_operands_writes_fp32():
         assert w["o"] == "float32", eng
         d, k = dag(False)                             # all three fp16
         assert _w(d, eng, contract=k)["o"] == "float16", eng
+
+
+def test_cat_drops_an_empty_operand_before_it_takes_the_first():
+    """`_cat_inputs_or_refuse` drops the empty operands with the 0-dim ones, so an empty KV-cache
+    constant ahead of the new keys does not set the cat's dtype. Gemma's encoder in SANA-Video
+    (fp16 graph, bf16 compute): cat(the empty fp16 cache constant, the bf16 projection) — this
+    pass said fp16, the run kept bf16, and the SDPA's operands (bf16 q, fp16 k/v) widened to fp32
+    in the census while the run formed baddbmm keys in bf16 (the Mac's misses, 2026-10-07).
+    Injection: `first_nonempty` -> `first_dimensioned` in the cat rule, RED."""
+    T = {"input::x": _t([2, 4], "float16", is_input=True),
+         "param::cache": _t([0], "float16", constant=True, constant_data="AA=="),
+         "k": _t([2, 4], "float16"), "k2": _t([2, 4], "float16")}
+    O = [_op("cat::0", "aten::cat", ["param::cache", "input::x"], ["k"]),
+         _op("cat::1", "aten::cat", ["input::x", "param::cache"], ["k2"])]
+    g = _dag(T, O, ["input::x"], ["k", "k2"], graph="float16")
+    for eng in ("triton", "triton_sequential"):
+        w = _w(g, eng, c="bfloat16", bf16=True)
+        assert (w["param::cache"], w["input::x"]) == ("float16", "bfloat16"), eng
+        assert (w["k"], w["k2"]) == ("bfloat16", "bfloat16"), eng
