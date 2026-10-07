@@ -536,8 +536,11 @@ tiling:
 # tests/unit/config/test_config_yaml_has_no_duplicate_keys.py.
 # ---------------------------------------------------------------------------
 
-# The flash kernel at a power-of-two head dim >= 128 is NOT measured on this architecture: the zero-pad
-# detour stays (launch_keys.flash_headdim_detour). Declared, never left absent: true only where the
-# correctness oracle was run with the detour off on this arch and stack (Volta, Triton 3.8, 2026-10-03).
+# The flash kernel at a power-of-two head dim >= 128, MEASURED on this chip and stack (triton-ext adbf6e84,
+# Triton 3.8, 2026-10-08 00:05): the 33-case attention correctness oracle
+# (tests/unit/kernels/test_numeric_correctness_oracle.py) passes with NBX_D128_DETOUR=0, routed to the flash
+# kernel on the device; through the wrapper, bf16 against float64, D 128 at 2048-4608 tokens is 4.3-5.2e-03
+# with the detour off and 3.2-3.9e-03 with it on. The detour sent D 128 to the math path at 0.62-0.68 TFLOP/s;
+# the flash kernel runs it at 2.65-3.17 (D 256: 0.94 -> 1.39).
 flash:
-  pow2_head_dim_correct: false
+  pow2_head_dim_correct: true
