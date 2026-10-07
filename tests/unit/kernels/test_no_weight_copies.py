@@ -369,7 +369,13 @@ def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
     with _Count() as c:
         out = W.addmm(bias, a, w.t())
     assert c.copies == 0
-    ref = W.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
+    # the path that copies: all three widened, or, where the matrix unit takes two fp16 operands as they are in
+    # memory (launch_keys.matrix_unit_takes), the weight alone made contiguous (the unit's sums at fp16 operands)
+    from neurobrix.kernels import launch_keys as LK
+    if LK.matrix_unit_takes(NBXDtype.float16, NBXDtype.float16, M):
+        ref = W.addmm(bias, a, w.t().contiguous())
+    else:
+        ref = W.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
     assert out.nbx_dtype == ref.nbx_dtype
     assert np.array_equal(_d2h(out), _d2h(ref))
 

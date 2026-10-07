@@ -100,17 +100,28 @@ flash:
 # (triton-lang/triton#5066). Declared here, the kernels built for that unit run instead
 # (kernels/ops/mma_m8n8k4.py; method in docs/reference/tensor-cores-through-linear-layouts.md):
 # mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 (PTX ISA, sm_70; fragment from CUTLASS mma_traits_sm70.hpp).
-# The flash tile is MEASURED on V100-SXM2 at 1290 MHz: 64 query rows (one warp per 16), 32 keys per step,
-# 43.6 TFLOP/s at T 79 200 D 96 against 2.46 for the FMA flash (tools/tensor_cores_m8n8k4/step3_scan1.txt).
+# The flash tiles are MEASURED on V100-SXM2 at 1290 MHz, per head dim, the best of six (64|128 query rows x 32|64
+# keys per step x 4|8 warps) at T 79 200 D 96, T 32 760 D 128, T 16 384 D 64 (2026-10-07, flash_tiles4): D 64 at
+# 128 x 64 / 4 warps 45.7 TFLOP/s, D 96 at 128 x 32 / 4 warps 48.2, D 128 at 64 x 32 / 4 warps 42.9 — against
+# 2.46 for the FMA flash at D 96 (tools/tensor_cores_m8n8k4/step3_scan1.txt).
 # Absent on an arch = the unit is not declared and every kernel keeps tl.dot.
 matrix_unit:
   shape: m8n8k4
   operand_dtype: float16
   accumulator_dtype: float32
-  flash:                 # up to head dim 256 (the O accumulator's registers); beyond, tl.dot
+  flash:                 # the first row whose head_dim_le holds; up to 256 (the O accumulator's registers), beyond tl.dot
+    - head_dim_le: 64
+      block_m: 128
+      block_n: 64
+      warps_m: 4
+    - head_dim_le: 96
+      block_m: 128
+      block_n: 32
+      warps_m: 4
     - head_dim_le: 256
       block_m: 64
       block_n: 32
+      warps_m: 4
   mm:                    # GEMM tiles, largest first: the first whose block fits inside the M x N output
     - block_m: 128
       block_n: 128
@@ -124,6 +135,15 @@ matrix_unit:
       warps_m: 2
       warps_n: 2
       group_m: 8
+  fp32_split:            # an fp32 operand as hi + lo fp16, three MMAs, fp32 accumulation (owner, 2026-10-07 S1 = B):
+    operands: [float32, bfloat16]   # the vendor's fp32 arithmetic on the unit (triton/dtype.matrix_unit_representation)
+    mm:                  # three accumulators per thread: the tile is smaller than the native one
+      - block_m: 64
+        block_n: 64
+        block_k: 32
+        warps_m: 2
+        warps_n: 2
+        group_m: 8
 
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────

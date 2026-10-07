@@ -2135,32 +2135,52 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
 
 
 def _gemm_unit_tile(a, b, M: int, N: int):
-    """The `matrix_unit.mm` tile when the profile declares the unit and BOTH operands are its operand dtype in
-    memory (their products are then exact in the fp32 accumulator, as on the tl.dot path), else None."""
-    mu = _matrix_unit()
-    if not mu or not (a._dtype.name == b._dtype.name == mu["operand_dtype"]):
+    """The matrix unit's tile for this GEMM, with how it carries each operand (`split_a` / `split_b`: the
+    DtypeEngine's representation, `launch_keys.matrix_unit_operands`), else None. Two native operands take a
+    `matrix_unit.mm` row (their products are exact in the fp32 accumulator, as on the tl.dot path); a split one
+    takes a `matrix_unit.fp32_split.mm` row (its three terms hold three accumulators)."""
+    reps = _lk.matrix_unit_operands(a.nbx_dtype, b.nbx_dtype, M)   # the census keys with the same function
+    if reps is None:
         return None
-    return _matrix_unit_mm_tile(M, N, mu)
+    mu = _matrix_unit()
+    split = "split" in reps
+    tile = _matrix_unit_mm_tile(M, N, mu["fp32_split"] if split else mu)
+    tile["split_a"], tile["split_b"] = reps[0] == "split", reps[1] == "split"
+    return tile
 
 
-def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile):
-    """C = A @ B (+ beta * bias, alpha scaling) on the m8n8k4 matrix unit (ops/matmul_m8n8k4.py); `a` row-major,
-    `b` walked by its strides, `bias` a [N] (or [1, N]) row or None."""
+def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile, bias_strides=None):
+    """C = A @ B (+ beta * bias, alpha scaling) on the m8n8k4 matrix unit (ops/matmul_m8n8k4.py). 2-D or batched
+    3-D operands: `a` row-major per batch, `b` walked by its strides, `bias` None or broadcast by `bias_strides`
+    (batch, row, column; default a [N] / [1, N] row). The batch runs on grid axis 1, chunked at _GRID_Z_MAX."""
     from .ops.matmul_m8n8k4 import matmul_m8n8k4_kernel, mm_layouts
-    M, K = a.shape
-    N = b.shape[1]
+    batched = a.ndim == 3
+    Z = a.shape[0] if batched else 1
+    M, K = a.shape[-2:]
+    N = b.shape[-1]
+    sa = (a.stride(0) if batched else 0, a.stride(-2), a.stride(-1))
+    sb = (b.stride(0) if batched else 0, b.stride(-2), b.stride(-1))
+    sc = (c.stride(0) if batched else 0, c.stride(-2), c.stride(-1))
+    sx = (0, 0, bias.stride(-1)) if bias is not None and bias_strides is None else (bias_strides or (0, 0, 0))
     MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
-    b_k_contig = b.stride(0) == 1 and N > 1
+    b_k_contig = sb[1] == 1 and N > 1
+    lay = mm_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"], b_k_contig)
+    from neurobrix.triton.dtype import matrix_unit_split_scale
+    hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
     _set_device(a)
-    grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(N, tile["block_n"]),)
-    matmul_m8n8k4_kernel[grid](
-        a, b, c if bias is None else bias, c, M, N, K,
-        a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
-        float(alpha), float(beta),
-        HAS_BIAS=bias is not None, PROMOTE_BIAS=bool(promote_bias), EPILOGUE=int(epilogue),
-        B_K_CONTIG=b_k_contig, MB=MB, NB=NB, BK=tile["block_k"], GROUP_M=tile["group_m"],
-        num_warps=tile["warps_m"] * tile["warps_n"],
-        **mm_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"], b_k_contig))
+    for z0 in range(0, Z, _GRID_Z_MAX):
+        zb = min(_GRID_Z_MAX, Z - z0)
+        grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(N, tile["block_n"]), zb)
+        x = c if bias is None else bias
+        matmul_m8n8k4_kernel[grid](
+            a if z0 == 0 else a.narrow(0, z0, zb), b if z0 == 0 else b.narrow(0, z0, zb),
+            x if z0 == 0 or sx[0] == 0 else x.narrow(0, z0, zb), c if z0 == 0 else c.narrow(0, z0, zb),
+            M, N, K, *sa, *sb, *sc, *sx,
+            float(alpha), float(beta),
+            HAS_BIAS=bias is not None, PROMOTE_BIAS=bool(promote_bias), EPILOGUE=int(epilogue),
+            B_K_CONTIG=b_k_contig, SPLIT_A=tile["split_a"], SPLIT_B=tile["split_b"], HI_EXP=hi_exp,
+            LO_SHIFT=lo_shift, MB=MB, NB=NB, BK=tile["block_k"], GROUP_M=tile["group_m"],
+            num_warps=tile["warps_m"] * tile["warps_n"], **lay)
 
 
 def mm(a, b, _epilogue: int = 0) :
@@ -2375,6 +2395,20 @@ def bmm(a, b, allow_strided_b: bool = False) :
     b = _ensure_cuda(b)
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
+
+    # The matrix unit takes two operands of its operand dtype as they are in memory: the widening below exists
+    # because the tl.dot kernel has no PROMOTE_A, and an fp16 value is exact in fp32 with fp16 x fp16 products
+    # exact in the fp32 accumulator, so the unit computes the same sums (the store dtype is unchanged). Rows that
+    # do not fill the unit's smallest tile (decode) keep the batched kernel (launch_keys.matrix_unit_operands).
+    _mu_tile = _gemm_unit_tile(a, b, a.shape[1], b.shape[2])
+    if _mu_tile is not None:
+        a = a.contiguous()
+        if not allow_strided_b:
+            b = b.contiguous()
+        c = NBXTensor.empty((a.shape[0], a.shape[1], b.shape[2]), device=a.device,
+                            dtype=_matmul_out_dtype(a, a.shape[1], force_fp32=True))
+        _gemm_m8n8k4(a, b, None, c, 1.0, 0.0, False, 0, _mu_tile)
+        return c
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
@@ -4173,6 +4207,12 @@ def conv2d_wrapper(
 
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
+    if _lk.matrix_unit_native(x_c.nbx_dtype, w_c.nbx_dtype, N * out_h * out_w):
+        # The implicit GEMM on the profile's matrix unit (ops/conv2d_m8n8k4.py), bias fused; no autotune key.
+        _conv2d_m8n8k4(x_c, w_c, bias, output, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw,
+                       stride_h, stride_w, pad_h, pad_w, dil_h, dil_w, groups)
+        return output
+
     # The key's `fp16` flag names an fp16 INPUT. It compared `x.dtype` — the Triton element type —
     # to an NBXDtype member and was False for every launch (5 378 directory entries carried it).
     # The kernel's only use of the flag casts the loaded blocks to fp16 before tl.dot, a no-op on
@@ -4207,6 +4247,27 @@ def conv2d_wrapper(
         output = _conv_bias_inplace(output, bias)
 
     return output
+
+
+def _conv2d_m8n8k4(x, w, bias, out, N, in_c, in_h, in_w, out_c, out_h, out_w, kh, kw, sh, sw, ph, pw, dh, dw,
+                   groups):
+    """conv2d as an implicit GEMM on the m8n8k4 matrix unit: M = N*OH*OW, N = OC/groups, K = (IC/groups)*KH*KW in
+    the contiguous weight's own order (read in place); groups on grid axis 1; the profile's `mm` tile."""
+    from .ops.conv2d_m8n8k4 import conv2d_m8n8k4_kernel, conv_layouts
+    M, OG, CG = N * out_h * out_w, out_c // groups, in_c // groups
+    tile = _matrix_unit_mm_tile(M, OG, _matrix_unit())
+    MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
+    lay = conv_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"])
+    _set_device(x)
+    grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(OG, tile["block_n"]), groups)
+    conv2d_m8n8k4_kernel[grid](
+        x, w, out if bias is None else bias.contiguous(), out,
+        M, OG, CG * kh * kw, in_h, in_w, out_h, out_w,
+        *x.stride(), w.stride(0), out.stride(0), out.stride(1), out.stride(2), out.stride(3),
+        CG, OG,
+        KH=kh, KW=kw, SH_=sh, SW_=sw, PH=ph, PW=pw, DH=dh, DW=dw, HAS_BIAS=bias is not None,
+        MB=MB, NB=NB, BK=tile["block_k"], GROUP_M=tile["group_m"],
+        num_warps=tile["warps_m"] * tile["warps_n"], **lay)
 
 
 def _depthwise_conv2d_dispatch(
@@ -5103,6 +5164,12 @@ def baddbmm_wrapper(
         bias_batch_stride = input.stride(0) if input.shape[0] > 1 else 0
         bias_m_stride = input.stride(-2) if input.shape[-2] > 1 else 0
         bias_n_stride = input.stride(-1) if input.shape[-1] > 1 else 0
+
+    _mu_tile = _gemm_unit_tile(batch1, batch2, M, N)
+    if _mu_tile is not None:           # the matrix unit (same epilogue: alpha * acc + beta * bias, cast to output)
+        _gemm_m8n8k4(batch1, batch2, input, output, alpha, beta, False, 0, _mu_tile,
+                     bias_strides=(bias_batch_stride, bias_m_stride, bias_n_stride))
+        return output
 
     _set_device(batch1)
     # IEEE_PRECISION=True preserves the kernel's historical
@@ -8188,9 +8255,10 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     return out.reshape(batch, nheads, 1, headdim)
 
 
-def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile):
+def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias):
     """Flash forward on the m8n8k4 matrix unit (ops/flash_attention_m8n8k4.py); `bias` is the wrapper's
-    memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis)."""
+    memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis), not read when `has_bias` is False (the
+    zero bias of a call with neither mask nor causality)."""
     from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
@@ -8209,7 +8277,8 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile):
         bias.stride(0), bias.stride(1), bias.stride(-2),
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
-        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, num_warps=MB, **flash_layouts(MB, NS, DA, DB))
+        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias), num_warps=tile["warps_m"],
+        **flash_layouts(MB, NS, DA, DB, tile["warps_m"]))
     return o
 
 
@@ -8477,7 +8546,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     _route, _chunk_rows = _lk.sdpa_route(
         batch, nheads, seqlen_q, seqlen_k, headdim, headdim_v,
         _sdpa_math_scores_budget_bytes_for(_q_dev_idx), _sdpa_math_min_chunk_rows(),
-        _sdpa_math_max_chunks(), force_math=_use_math_forced)
+        _sdpa_math_max_chunks(), force_math=_use_math_forced,
+        unit_flash=_lk.unit_flash_takes(headdim, q._dtype if q_round is None else q_round, k._dtype, v._dtype))
     _use_math = {"math": True, "chunked": "chunked", "flash": False}[_route]
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1":
         # Print once PER DISTINCT EXECUTING DEVICE, not once per process:
@@ -8696,6 +8766,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # Three sub-cases below all converge to BIAS_TYPE="matrix" with a
     # memory-resident bias.
     device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
+    _bias_read = attn_mask is not None or bool(is_causal)     # else the zero base below: nothing to add
     if attn_mask is not None:
         if attn_mask.ndim == 2:
             attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(
@@ -8748,7 +8819,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     _mu = _matrix_unit()
     _mu_tile = _matrix_unit_flash_tile(headdim, _mu) if _mu else None
     if _mu_tile is not None and q._dtype.name == k._dtype.name == v._dtype.name == _mu["operand_dtype"]:
-        o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_tile)
+        o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_tile, _bias_read)
         if attn_mask is not None:
             o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
         return o

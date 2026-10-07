@@ -103,7 +103,7 @@ def _mk(B, H, H_kv, T, D, seed=7):
     return q, k, v
 
 
-def test_long_prefill_is_deterministic_through_the_chunked_route() -> None:
+def test_long_prefill_is_deterministic_through_the_chunked_route(without_matrix_unit) -> None:
     """The exact trigger: pow2 D, causal, scores just over budget.
     Three identical calls, identical bytes. The pre-fix flash route
     measured 3 distinct outputs in 5 at this shape class."""

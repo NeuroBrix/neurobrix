@@ -308,6 +308,36 @@ def contraction_accumulator_bytes(store_bytes: int) -> int:
                      f"dtype a contraction's partials are summed in")
 
 
+def matrix_unit_representation(dtype: str, unit: dict) -> Optional[str]:
+    """How the hardware profile's matrix unit (`matrix_unit`, kernels/ops/_configs.matrix_unit) carries one GEMM
+    operand whose dtype in memory is `dtype` (a name): "native" when it IS the unit's operand dtype (one MMA term
+    per operand), "split" when the profile declares `matrix_unit.fp32_split` with this dtype among its `operands`
+    (the value, widened to fp32, is carried as hi + lo of the operand dtype under a power-of-two scale, see
+    `matrix_unit_split_scale`; hi*hi + hi*lo + lo*hi with fp32 accumulation outside the unit, the vendor's fp32
+    arithmetic kept), else None (the GEMM keeps its tl.dot kernel). The ONE decision: the wrappers launch with it
+    and the derived census keys with it (kernels/launch_keys.matrix_unit_operands)."""
+    if not unit or not unit.get("mm"):
+        return None
+    if dtype == unit["operand_dtype"]:
+        return "native"
+    split = unit.get("fp32_split") or {}
+    if split.get("mm") and dtype in (split.get("operands") or ()):
+        return "split"
+    return None
+
+
+def matrix_unit_split_scale(unit: dict) -> tuple:
+    """(hi_exp, lo_shift) of the split representation, derived from the unit's operand dtype (never written in a
+    kernel): each operand tile is scaled by the power of two that brings its largest magnitude into
+    [2^hi_exp, 2^(hi_exp+1)) — the top binade below the operand dtype's overflow, so no hi overflows and every
+    value down to 2^-(hi_exp+1+|min exponent|) of the tile's largest stays normal — and lo, the residual
+    x - hi, is stored times 2^lo_shift (the operand dtype's significand width) so it does not underflow where hi
+    does not (Ootomo & Yokota 2022, arXiv 2203.03341, eq. 19-24)."""
+    import numpy as np
+    fi = np.finfo(np.dtype(unit["operand_dtype"]))
+    return int(fi.maxexp) - 2, int(fi.nmant) + 1
+
+
 def constant_load_dtype(traced: str, compute: str) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype

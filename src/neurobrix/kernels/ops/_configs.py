@@ -598,7 +598,20 @@ def matrix_unit() -> dict:
                 t = int(row[f])
                 if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
                     raise ValueError(f"hardware profile: matrix_unit.{sec} {f} {t} is not 16 x a power of two")
-    for row in mu.get("mm") or []:
+    for row in mu.get("flash") or []:
+        wm = int(row["warps_m"])
+        if wm < 1 or wm & (wm - 1) or (int(row["block_m"]) // 16) % wm:
+            raise ValueError(f"hardware profile: matrix_unit.flash warps_m {wm} does not divide the "
+                             f"{row['block_m']}-row tile's 16-row bands")
+    split = mu.get("fp32_split") or {}
+    if split and (not split.get("mm") or not split.get("operands")):
+        raise ValueError("hardware profile: matrix_unit.fp32_split declares no mm tiles or no operands")
+    for row in split.get("mm") or []:
+        for f in ("block_m", "block_n"):
+            t = int(row[f])
+            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                raise ValueError(f"hardware profile: matrix_unit.fp32_split.mm {f} {t} is not 16 x a power of two")
+    for row in (mu.get("mm") or []) + (split.get("mm") or []):
         bk, wm, wn = int(row["block_k"]), int(row["warps_m"]), int(row["warps_n"])
         if bk < 8 or bk & (bk - 1):
             raise ValueError(f"hardware profile: matrix_unit.mm block_k {bk} is not a power of two >= 8")
@@ -615,7 +628,7 @@ def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Option
     for row in (matrix_unit() if unit is None else unit).get("flash") or []:
         if "head_dim_le" in row and head_dim > row["head_dim_le"]:
             continue
-        return {"block_m": int(row["block_m"]), "block_n": int(row["block_n"])}
+        return {"block_m": int(row["block_m"]), "block_n": int(row["block_n"]), "warps_m": int(row["warps_m"])}
     return None
 
 
