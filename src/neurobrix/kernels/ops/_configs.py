@@ -576,6 +576,40 @@ def sdpa_launch_meta(seqlen_q: int, head_dim: int) -> dict:
     return {}
 
 
+def matrix_unit() -> dict:
+    """The matrix unit the hardware profile declares for kernels Triton cannot lower onto it (`matrix_unit`:
+    shape, operand and accumulator dtypes, measured tiles); `{}` when the profile declares none. A declared
+    unit this engine has no kernel for, dtypes its instruction does not compute in, or a flash row whose tile
+    the kernel cannot lay out is refused by name: a declared capability is never silently left unused."""
+    mu = dict(active_vendor_profile().get("matrix_unit") or {})
+    if not mu:
+        return mu
+    from .mma_m8n8k4 import UNIT
+    if mu.get("shape") != UNIT["shape"]:
+        raise ValueError(f"hardware profile: matrix_unit.shape {mu.get('shape')!r} has no kernel "
+                         f"(this engine builds {UNIT['shape']!r})")
+    for f in ("operand_dtype", "accumulator_dtype"):
+        if mu.get(f) != UNIT[f]:
+            raise ValueError(f"hardware profile: matrix_unit.{f} {mu.get(f)!r} is not what "
+                             f"{UNIT['shape']} computes in ({UNIT[f]!r})")
+    for row in mu.get("flash") or []:
+        for f in ("block_m", "block_n"):
+            t = int(row[f])
+            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                raise ValueError(f"hardware profile: matrix_unit.flash {f} {t} is not 16 x a power of two")
+    return mu
+
+
+def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Optional[dict]:
+    """The first `matrix_unit.flash` row matching `head_dim` (`head_dim_le` optional), or None (no unit
+    declared, or a head dim beyond its measured rows: the kernel keeps tl.dot)."""
+    for row in (matrix_unit() if unit is None else unit).get("flash") or []:
+        if "head_dim_le" in row and head_dim > row["head_dim_le"]:
+            continue
+        return {"block_m": int(row["block_m"]), "block_n": int(row["block_n"])}
+    return None
+
+
 def largest_tile_within_smem(candidates, cost, budget: Optional[int]):
     """The first candidate the hardware can hold, or the smallest if none fits.
 

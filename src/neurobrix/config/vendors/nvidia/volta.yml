@@ -96,6 +96,22 @@ block_sizes:
 flash:
   pow2_head_dim_correct: true
 
+# The matrix unit this arch HAS and Triton 3.8 does not generate: below sm_80 `tl.dot` lowers to scalar FMA
+# (triton-lang/triton#5066). Declared here, the kernels built for that unit run instead
+# (kernels/ops/mma_m8n8k4.py; method in docs/reference/tensor-cores-through-linear-layouts.md):
+# mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 (PTX ISA, sm_70; fragment from CUTLASS mma_traits_sm70.hpp).
+# The flash tile is MEASURED on V100-SXM2 at 1290 MHz: 64 query rows (one warp per 16), 32 keys per step,
+# 43.6 TFLOP/s at T 79 200 D 96 against 2.46 for the FMA flash (tools/tensor_cores_m8n8k4/step3_scan1.txt).
+# Absent on an arch = the unit is not declared and every kernel keeps tl.dot.
+matrix_unit:
+  shape: m8n8k4
+  operand_dtype: float16
+  accumulator_dtype: float32
+  flash:                 # up to head dim 256 (the O accumulator's registers); beyond, tl.dot
+    - head_dim_le: 256
+      block_m: 64
+      block_n: 32
+
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
   - seqlen_q_le: 16

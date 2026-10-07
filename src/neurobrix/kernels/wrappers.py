@@ -24,6 +24,7 @@ from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_cha
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from .ops._configs import sdpa_launch_meta as _sdpa_launch_meta
+from .ops._configs import matrix_unit as _matrix_unit, matrix_unit_flash_tile as _matrix_unit_flash_tile
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
 from . import launcher as _nbx_launcher
 
@@ -8149,6 +8150,31 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     return out.reshape(batch, nheads, 1, headdim)
 
 
+def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile):
+    """Flash forward on the m8n8k4 matrix unit (ops/flash_attention_m8n8k4.py); `bias` is the wrapper's
+    memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis)."""
+    from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
+    batch, nheads, seqlen_q, headdim = q.shape
+    seqlen_k = k.shape[2]
+    MB, NS = tile["block_m"] // 16, tile["block_n"] // 16
+    DA, DB = head_parts(headdim)
+    o = NBXTensor.empty_like(q)
+    seqlen_q_rounded = math.ceil(seqlen_q / (16 * MB)) * 16 * MB
+    lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
+                          device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
+    _set_device(q)
+    flash_attention_m8n8k4_kernel[(triton.cdiv(seqlen_q, 16 * MB), batch * nheads)](
+        q, k, v, bias, o, lse, softmax_scale,
+        q.stride(0), q.stride(1), q.stride(2),
+        k.stride(0), k.stride(1), k.stride(2),
+        v.stride(0), v.stride(1), v.stride(2),
+        bias.stride(0), bias.stride(1), bias.stride(-2),
+        o.stride(0), o.stride(1), o.stride(2),
+        nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
+        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, num_warps=MB, **flash_layouts(MB, NS, DA, DB))
+    return o
+
+
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, k_pre_transposed=None,
@@ -8625,14 +8651,6 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_N = max(BLOCK_N, _fa_floor)
         _announce_floor_over_ceiling(_clamped, (BLOCK_M, BLOCK_N), _fa_floor)
 
-    # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
-    o = NBXTensor.empty_like(q)
-    seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M
-    lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
-                          device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
-    tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
-                          device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
-
     # Bias handling — always memory-resident.
     # The kernel only accepts BIAS_TYPE in {"vector", "matrix"} and the
     # IS_CAUSAL constexpr is gone. Every tensor reaching tl.dot must
@@ -8684,6 +8702,26 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # signature (it no longer accepts one anyway, but we keep the local
     # variable for clarity).
     is_causal = False
+
+    # The arch's matrix unit, where the profile declares one Triton does not lower `tl.dot` onto
+    # (`matrix_unit`, volta.yml): the flash kernel built on that unit, for the operand dtype it takes and
+    # the head dims its measured rows cover. Same contract as the kernel below (bias, GQA, LSE, tails).
+    # Taken before the tl.dot kernel's own output, LSE and tile buffers are allocated.
+    _mu = _matrix_unit()
+    _mu_tile = _matrix_unit_flash_tile(headdim, _mu) if _mu else None
+    if _mu_tile is not None and q._dtype.name == k._dtype.name == v._dtype.name == _mu["operand_dtype"]:
+        o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_tile)
+        if attn_mask is not None:
+            o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
+        return o
+
+    # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
+    o = NBXTensor.empty_like(q)
+    seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M
+    lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
+                          device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
+    tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
+                          device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
 
     grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
