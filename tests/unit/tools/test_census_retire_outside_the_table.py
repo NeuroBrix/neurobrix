@@ -78,3 +78,20 @@ def test_it_refuses_an_empty_table_and_writes_nothing(tmp_path):
     assert r.returncode == 1 and "REFUSED" in r.stderr
     assert (d / "matmul_kernel.fp16.json").read_text() == before
     assert not (tmp_path / "doc.md").exists()
+
+
+def test_a_held_kernel_is_left_whole_and_named(tmp_path):
+    """A kernel whose table rows are known wrong (2026-10-07: the baddbmm dtype placement) is held:
+    its files are not touched, and the doc says it was held, so a later run retires it once fixed."""
+    d, table = _setup(tmp_path)
+    doc, rec = tmp_path / "retirements.md", tmp_path / "records"
+    (d / "baddbmm_kernel.fp16.json").write_text(json.dumps(
+        {"format": "nbx-autotune-certified/2", "entries": {IN: E(4), OUT: E(3)}}))
+    before = (d / "baddbmm_kernel.fp16.json").read_text()
+    r = subprocess.run([sys.executable, str(TOOL), "--certified-dir", str(d), "--table", str(table),
+                        "--record-dir", str(rec), "--record-doc", str(doc), "--hold-kernels", "baddbmm_kernel"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (d / "baddbmm_kernel.fp16.json").read_text() == before
+    assert json.loads((d / "matmul_kernel.fp16.json").read_text())["entries"] == {IN: E(1)}
+    assert "held: `baddbmm_kernel`" in doc.read_text()

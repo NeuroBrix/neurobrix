@@ -148,7 +148,8 @@ def main_outside_the_table(args) -> int:
         print(f"REFUSED: the table {args.table} names no key — nothing retired, nothing written.",
               file=sys.stderr)
         return 1
-    files = sorted(Path(args.certified_dir).glob("*.json"))
+    held = set(args.hold_kernels.split(",")) if args.hold_kernels else set()
+    files = [f for f in sorted(Path(args.certified_dir).glob("*.json")) if f.name.split(".")[0] not in held]
     plan, before, after = {}, 0, 0
     for f in files:
         doc = json.loads(f.read_text())
@@ -182,7 +183,9 @@ def main_outside_the_table(args) -> int:
     when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     para = (f"\n## {when} — {before - after} certified entries retired, engine `{_engine_sha()}`\n\n"
             f"Not named by the census table `{args.table}` ({len(keys)} keys): certificates for shapes no "
-            f"catalogue container forms. Directory `{args.certified_dir}`: {before} → {after} entries. "
+            f"catalogue container forms. Directory `{args.certified_dir}`: {before} → {after} entries"
+            + (f" (held: {', '.join(f'`{k}`' for k in sorted(held))}, rows known wrong, not judged)" if held else "")
+            + ". "
             f"Reversible record: `{record}`.\n\n| file | retired | kept |\n|---|---:|---:|\n"
             + "".join(f"| `{f.name}` | {len(r)} | {len(k)} |\n" for f, (_, k, r) in plan.items())
             + "\n<details><summary>retired keys</summary>\n\n"
@@ -213,6 +216,8 @@ def main() -> int:
     ap.add_argument("--record-dir", type=Path, default=None,
                     help="where the reversible JSON of retired entries goes (default: beside the census)")
     ap.add_argument("--record-doc", type=Path, default=RECORD_DOC)
+    ap.add_argument("--hold-kernels", default=None,
+                    help="with --table: comma-separated kernel short names left whole (their table rows are known wrong)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--retire-failed", action="store_true",
                     help="also retire keys the certifier named FAILED (inputs that cannot be synthesised)")
