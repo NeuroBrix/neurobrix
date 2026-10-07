@@ -66,6 +66,69 @@ def _contenders(results, factor=None):
     return keep
 
 
+def witnessed_bench(contenders, time_one, witness_ms, spec: Dict[str, Any], label: str):
+    """Time `contenders` ((cfg, deviation, run_s) rows) under the witness regime; returns (timed, record):
+    `timed` = [(cfg, deviation, ms)], best first, and the proof's `stability_witness` record.
+
+    The witness brackets each CHUNK of `spec["chunk"]` contenders, not the whole sweep: a sweep long
+    enough for the OS to move the GPU regime across it was refused every time, though every candidate
+    pair inside a short span was comparable (the M4 Pro's baddbmm (23,4096,1024) key: 16.5 / 27.1 /
+    17.4 / 25.3 % across its whole sweep, up and down, on a quiet host; the Mac, 2026-10-08). A chunk
+    whose bracket drifts past `drift_tolerance` is timed again, up to `chunk_attempts` times, then the
+    key is refused (WitnessDrift). Across chunks each time is ranked by its ratio to its own chunk's
+    witness; the ranking's two best are then timed again together inside ONE bracket, and that bracket
+    alone decides the winner and states best_ms and second_ms — the decision is never taken across two
+    regimes. A protocol that does not state `chunk` and `chunk_attempts` is refused by name."""
+    missing = [k for k in ("drift_tolerance", "chunk", "chunk_attempts") if k not in spec]
+    if missing:
+        raise ValueError(f"the witness protocol states no {', '.join(missing)}: the witness regime reads the "
+                         f"tolerance, the contenders per bracket and the attempts per bracket from it")
+    tol, size, attempts = float(spec["drift_tolerance"]), int(spec["chunk"]), int(spec["chunk_attempts"])
+    if size < 2 or attempts < 1:
+        raise ValueError(f"the witness protocol states chunk={size}, chunk_attempts={attempts}: a bracket "
+                         f"compares at least two contenders and is timed at least once")
+    brackets: List[Dict[str, Any]] = []
+
+    def bracket(rows, what):
+        drifts = []
+        for attempt in range(1, attempts + 1):
+            w_open = witness_ms()
+            times = [time_one(cfg) for cfg, _dev, _run_s in rows]
+            w_close = witness_ms()
+            drift = abs(w_close - w_open) / max(w_open, 1e-9)
+            drifts.append(round(drift, 4))
+            if drift <= tol:
+                rec = {"what": what, "open_ms": round(w_open, 4), "close_ms": round(w_close, 4),
+                       "drift": round(drift, 4), "attempt": attempt, "contenders": len(rows)}
+                brackets.append(rec)
+                return times, (w_open + w_close) / 2.0, rec
+        raise WitnessDrift(
+            f"{label}: the witness drifted past {tol*100:.0f}% on every one of {attempts} timings of "
+            f"{what} ({len(rows)} contenders; drifts {', '.join(f'{d*100:.1f}%' for d in drifts)}): the "
+            f"GPU regime moved while those candidates were being compared. Refused — not a measurement.")
+
+    rows = list(contenders)
+    ranked = []                                   # (ratio to the chunk's witness, cfg, dev, ms)
+    for i in range(0, len(rows), size):
+        chunk = rows[i:i + size]
+        times, w_mid, _rec = bracket(chunk, f"chunk {i // size + 1} of {-(-len(rows) // size)}")
+        ranked += [(ms / w_mid, cfg, dev, ms) for (cfg, dev, _run_s), ms in zip(chunk, times)]
+    ranked.sort(key=lambda r: r[0])
+    if len(rows) <= size:
+        decisive = brackets[-1]
+        timed = [(cfg, dev, ms) for _r, cfg, dev, ms in ranked]
+    else:
+        head = [(cfg, dev, None) for _r, cfg, dev, _ms in ranked[:2]]
+        times, _w_mid, decisive = bracket(head, "the final two")
+        final = sorted(((cfg, dev, ms) for (cfg, dev, _), ms in zip(head, times)), key=lambda t: t[2])
+        timed = final + [(cfg, dev, ms) for _r, cfg, dev, ms in ranked[2:]]
+    record = {"open_ms": decisive["open_ms"], "close_ms": decisive["close_ms"], "drift": decisive["drift"],
+              "tolerance": tol, "kernel": spec.get("kernel", "matmul"),
+              "shape": [int(spec["M"]), int(spec["N"]), int(spec["K"])],
+              "chunk": size, "brackets": brackets}
+    return timed, record
+
+
 # ---------------------------------------------------------------------------
 # the census: which shapes
 # ---------------------------------------------------------------------------
@@ -1444,31 +1507,16 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None,
             finally:
                 tuner.run = certifying_run
 
-        _w_open = _witness_ms() if _regime_kind == "witness" else None
-        for cfg, dev, _run_s in contenders:
-            ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
-            timed.append((cfg, dev, float(ms)))
+        def _time_one(cfg):
+            return float(bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})))
+
         if _regime_kind == "witness":
-            _w_close = _witness_ms()
-            _tol = float(_proto["witness"]["drift_tolerance"])
-            _drift = abs(_w_close - _w_open) / max(_w_open, 1e-9)
-            if _drift > _tol:
-                raise WitnessDrift(
-                    f"{qual} at {key!r}: the witness drifted {_drift*100:.1f}% "
-                    f"across the sweep ({_w_open:.4f} -> {_w_close:.4f} ms, "
-                    f"tolerance {_tol*100:.0f}%): the GPU regime moved while "
-                    f"candidates were being compared, so their times are not "
-                    f"comparable. Sweep refused — not a measurement.")
-            state["stability_witness"] = {"open_ms": round(_w_open, 4),
-                                          "close_ms": round(_w_close, 4),
-                                          "drift": round(_drift, 4),
-                                          "tolerance": _tol,
-                                          "kernel": _proto["witness"].get("kernel", "matmul"),
-                                          "shape": [int(_proto["witness"]["M"]),
-                                                    int(_proto["witness"]["N"]),
-                                                    int(_proto["witness"]["K"])]}
+            timed, state["stability_witness"] = witnessed_bench(
+                contenders, _time_one, _witness_ms, _proto["witness"], f"{qual} at {key!r}")
+        else:
+            timed = sorted(((cfg, dev, _time_one(cfg)) for cfg, dev, _run_s in contenders),
+                           key=lambda t: t[2])
         state["t_bench"] = round(time.time() - t_bench, 3)
-        timed.sort(key=lambda t: t[2])
         best, dev, ms = timed[0]
         state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
