@@ -592,11 +592,20 @@ def matrix_unit() -> dict:
         if mu.get(f) != UNIT[f]:
             raise ValueError(f"hardware profile: matrix_unit.{f} {mu.get(f)!r} is not what "
                              f"{UNIT['shape']} computes in ({UNIT[f]!r})")
-    for row in mu.get("flash") or []:
-        for f in ("block_m", "block_n"):
-            t = int(row[f])
-            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
-                raise ValueError(f"hardware profile: matrix_unit.flash {f} {t} is not 16 x a power of two")
+    for sec, fields in (("flash", ("block_m", "block_n")), ("mm", ("block_m", "block_n"))):
+        for row in mu.get(sec) or []:
+            for f in fields:
+                t = int(row[f])
+                if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                    raise ValueError(f"hardware profile: matrix_unit.{sec} {f} {t} is not 16 x a power of two")
+    for row in mu.get("mm") or []:
+        bk, wm, wn = int(row["block_k"]), int(row["warps_m"]), int(row["warps_n"])
+        if bk < 8 or bk & (bk - 1):
+            raise ValueError(f"hardware profile: matrix_unit.mm block_k {bk} is not a power of two >= 8")
+        if (int(row["block_m"]) // 16) % wm or (int(row["block_n"]) // 16) % wn:
+            raise ValueError(f"hardware profile: matrix_unit.mm warps {wm}x{wn} do not divide the "
+                             f"{row['block_m']}x{row['block_n']} tile's 16-blocks")
+        int(row["group_m"])
     return mu
 
 
@@ -608,6 +617,16 @@ def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Option
             continue
         return {"block_m": int(row["block_m"]), "block_n": int(row["block_n"])}
     return None
+
+
+def matrix_unit_mm_tile(M: int, N: int, unit: Optional[dict] = None) -> Optional[dict]:
+    """The first `matrix_unit.mm` row whose tile fits inside an M x N output (rows are listed largest
+    first), else the last row; None when the profile declares no mm rows (the GEMM keeps tl.dot)."""
+    rows = (matrix_unit() if unit is None else unit).get("mm") or []
+    for row in rows:
+        if int(row["block_m"]) <= M and int(row["block_n"]) <= N:
+            return {k: int(v) for k, v in row.items()}
+    return {k: int(v) for k, v in rows[-1].items()} if rows else None
 
 
 def largest_tile_within_smem(candidates, cost, budget: Optional[int]):

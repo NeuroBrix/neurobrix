@@ -24,7 +24,8 @@ from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_cha
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from .ops._configs import sdpa_launch_meta as _sdpa_launch_meta
-from .ops._configs import matrix_unit as _matrix_unit, matrix_unit_flash_tile as _matrix_unit_flash_tile
+from .ops._configs import (matrix_unit as _matrix_unit, matrix_unit_flash_tile as _matrix_unit_flash_tile,
+                           matrix_unit_mm_tile as _matrix_unit_mm_tile)
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
 from . import launcher as _nbx_launcher
 
@@ -2133,6 +2134,35 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
     return mm(a, dense, _epilogue)
 
 
+def _gemm_unit_tile(a, b, M: int, N: int):
+    """The `matrix_unit.mm` tile when the profile declares the unit and BOTH operands are its operand dtype in
+    memory (their products are then exact in the fp32 accumulator, as on the tl.dot path), else None."""
+    mu = _matrix_unit()
+    if not mu or not (a._dtype.name == b._dtype.name == mu["operand_dtype"]):
+        return None
+    return _matrix_unit_mm_tile(M, N, mu)
+
+
+def _gemm_m8n8k4(a, b, bias, c, alpha, beta, promote_bias, epilogue, tile):
+    """C = A @ B (+ beta * bias, alpha scaling) on the m8n8k4 matrix unit (ops/matmul_m8n8k4.py); `a` row-major,
+    `b` walked by its strides, `bias` a [N] (or [1, N]) row or None."""
+    from .ops.matmul_m8n8k4 import matmul_m8n8k4_kernel, mm_layouts
+    M, K = a.shape
+    N = b.shape[1]
+    MB, NB = tile["block_m"] // 16, tile["block_n"] // 16
+    b_k_contig = b.stride(0) == 1 and N > 1
+    _set_device(a)
+    grid = (triton.cdiv(M, tile["block_m"]) * triton.cdiv(N, tile["block_n"]),)
+    matmul_m8n8k4_kernel[grid](
+        a, b, c if bias is None else bias, c, M, N, K,
+        a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1),
+        float(alpha), float(beta),
+        HAS_BIAS=bias is not None, PROMOTE_BIAS=bool(promote_bias), EPILOGUE=int(epilogue),
+        B_K_CONTIG=b_k_contig, MB=MB, NB=NB, BK=tile["block_k"], GROUP_M=tile["group_m"],
+        num_warps=tile["warps_m"] * tile["warps_n"],
+        **mm_layouts(MB, NB, tile["warps_m"], tile["warps_n"], tile["block_k"], b_k_contig))
+
+
 def mm(a, b, _epilogue: int = 0) :
     """Matrix multiplication: C = A @ B.
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
@@ -2293,10 +2323,14 @@ def mm(a, b, _epilogue: int = 0) :
         per = max(1, _NBX_MM_MAX_OUTPUT_ELEMS // N)
         bands = [(r, min(r + per, M)) for r in range(0, M, per)]
     m_bucket = _bucket_of("M", M)
+    _mu_tile = _gemm_unit_tile(a, b, M, N)
     for r0, r1 in bands:
         rows = r1 - r0
         a_b = a[r0:r1] if len(bands) > 1 else a
         c_b = c[r0:r1] if len(bands) > 1 else c
+        if _mu_tile is not None:
+            _gemm_m8n8k4(a_b, b, None, c_b, 1.0, 0.0, False, _epilogue, _mu_tile)
+            continue
         grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
         _autotune_headroom_guard(matmul_kernel[grid])(
             a_b, b, c_b,
@@ -2622,10 +2656,14 @@ def addmm(bias, a, b,
         per = max(1, _NBX_MM_MAX_OUTPUT_ELEMS // N)
         bands = [(r, min(r + per, M)) for r in range(0, M, per)]
     m_bucket = _bucket_of("M", M)
+    _mu_tile = _gemm_unit_tile(a, b, M, N) if bias.ndim == 1 or (bias.ndim == 2 and bias.shape[0] == 1) else None
     for r0, r1 in bands:
         rows = r1 - r0
         a_b = a[r0:r1] if len(bands) > 1 else a
         c_b = c[r0:r1] if len(bands) > 1 else c
+        if _mu_tile is not None:
+            _gemm_m8n8k4(a_b, b, bias, c_b, alpha, beta, promote_bias, _epilogue, _mu_tile)
+            continue
         grid = (lambda META, _m=rows: (triton.cdiv(_m, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),))
         _autotune_headroom_guard(addmm_kernel[grid])(
             a_b, b, bias, c_b,

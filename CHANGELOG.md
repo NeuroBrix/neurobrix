@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attention now has its own kernel that drives the tensor cores directly. At a 79 200-token video
   shape it runs about 17 times faster, and its output stays within 1e-5 of the previous kernel's.
   The hardware profile turns it on: `matrix_unit` in `volta.yml`. Other GPUs are unchanged.
+- **Matrix products run on the V100's tensor cores in the Triton mode.** Where both operands are fp16,
+  `mm` and `addmm` (with the fused activations) now use the tensor cores on Volta: about 8 times faster
+  at 4096x4096x4096 and 17 times faster on 79 200-row video projections. Results stay within fp16
+  output rounding of an fp64 reference. The tile comes from the hardware profile (`matrix_unit.mm`
+  in `volta.yml`), so the route needs no autotuning. Other GPUs and fp32 operands are unchanged.
 
 ### Fixed
 
