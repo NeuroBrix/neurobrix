@@ -53,7 +53,7 @@ def _deviation(c, h, kh, sh, ph, dt):
     r = np.random.default_rng(SEED)                 # the same draws synthesize made
     x = AC._arr(r, (1, c, h, h), dt)
     wt = AC._arr(r, (c, 1, kh, kh), dt)
-    ref = _reference(np.asarray(x, dtype=np.float64), np.asarray(wt, dtype=np.float64), (sh, sh), (ph, ph))
+    ref = _reference(AC.values(x).astype(np.float64), AC.values(wt).astype(np.float64), (sh, sh), (ph, ph))
     scale = np.abs(ref).max()
     return float(np.abs(got - ref).max() / scale) if scale else 0.0
 

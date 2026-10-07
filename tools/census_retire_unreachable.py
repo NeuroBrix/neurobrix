@@ -118,6 +118,86 @@ def retire(census: dict, named: dict) -> tuple[dict, dict]:
     return kept, retired
 
 
+def table_keys(table: Path) -> set:
+    """{(kernel_short, key text)} every row of a profile's census table names."""
+    out = set()
+    for line in Path(table).read_text().splitlines():
+        if line.strip():
+            r = json.loads(line)
+            out.add((r["kernel"].split(".")[-1], r["key"]))
+    return out
+
+
+def retire_outside(kernel_short: str, entries: dict, keys: set) -> tuple[dict, dict]:
+    """(kept, retired) — retired holds the certified entries whose (kernel, key) the
+    census table does not name: a certificate for a shape no catalogue container forms
+    (the supervisor, 2026-10-07 17:37: the census is the single reference)."""
+    kept, retired = {}, {}
+    for ktext, entry in entries.items():
+        (kept if (kernel_short, ktext) in keys else retired)[ktext] = entry
+    return kept, retired
+
+
+def main_outside_the_table(args) -> int:
+    """`--certified-dir DIR --table T`: retire from every `<kernel>.<dtype>.json` of DIR
+    the entries T does not name. Writes each file in place (format re-claimed from what
+    its entries satisfy), one reversible JSON per run under `--record-dir`, and a dated
+    paragraph listing every retired key in `--record-doc`."""
+    keys = table_keys(args.table)
+    if not keys:
+        print(f"REFUSED: the table {args.table} names no key — nothing retired, nothing written.",
+              file=sys.stderr)
+        return 1
+    held = set(args.hold_kernels.split(",")) if args.hold_kernels else set()
+    files = [f for f in sorted(Path(args.certified_dir).glob("*.json")) if f.name.split(".")[0] not in held]
+    plan, before, after = {}, 0, 0
+    for f in files:
+        doc = json.loads(f.read_text())
+        kept, retired = retire_outside(f.name.split(".")[0], doc.get("entries") or {}, keys)
+        before += len(kept) + len(retired); after += len(kept)
+        if retired:
+            plan[f] = (doc, kept, retired)
+    print(f"certified {before} entries in {len(files)} files; table {len(keys)} keys; "
+          f"{before - after} outside the table in {len(plan)} files")
+    if not plan:
+        print("nothing outside the table — nothing written.")
+        return 0
+    if args.dry_run:
+        print("--dry-run: nothing written.")
+        return 0
+    sys.path.insert(0, str(REPO / "src"))
+    from neurobrix.kernels import autotune_certified as C
+    stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    rec_dir = args.record_dir or Path(args.certified_dir)
+    rec_dir.mkdir(parents=True, exist_ok=True)
+    record = rec_dir / f"certified_retired_{stamp}.json"
+    record.write_text(json.dumps({"retired_at": stamp, "engine": _engine_sha(), "table": str(args.table),
+                                  "certified_dir": str(args.certified_dir),
+                                  "entries": {f.name: r for f, (_, _, r) in plan.items()}}, indent=1))
+    for f, (doc, kept, _) in plan.items():
+        doc = {**doc, "entries": kept}
+        doc["format"] = C.format_for(kept)
+        tmp = f.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=1, default=str))
+        os.replace(tmp, f)
+    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    para = (f"\n## {when} — {before - after} certified entries retired, engine `{_engine_sha()}`\n\n"
+            f"Not named by the census table `{args.table}` ({len(keys)} keys): certificates for shapes no "
+            f"catalogue container forms. Directory `{args.certified_dir}`: {before} → {after} entries"
+            + (f" (held: {', '.join(f'`{k}`' for k in sorted(held))}, rows known wrong, not judged)" if held else "")
+            + ". "
+            f"Reversible record: `{record}`.\n\n| file | retired | kept |\n|---|---:|---:|\n"
+            + "".join(f"| `{f.name}` | {len(r)} | {len(k)} |\n" for f, (_, k, r) in plan.items())
+            + "\n<details><summary>retired keys</summary>\n\n"
+            + "".join(f"- `{f.name}` `{k}`\n" for f, (_, _, r) in plan.items() for k in r)
+            + "\n</details>\n")
+    args.record_doc.parent.mkdir(parents=True, exist_ok=True)
+    with args.record_doc.open("a") as fh:
+        fh.write(para)
+    print(f"retired {before - after}; directory now {after}; record {record}; doc {args.record_doc}")
+    return 0
+
+
 def _engine_sha() -> str:
     try:
         return subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
@@ -128,16 +208,26 @@ def _engine_sha() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--from-log", action="append", required=True)
+    ap.add_argument("--from-log", action="append")
+    ap.add_argument("--certified-dir", type=Path, default=None,
+                    help="with --table: retire the certified entries the census table does not name")
+    ap.add_argument("--table", type=Path, default=None, help="the profile's census table (jsonl)")
     ap.add_argument("--census", default=None, help="default: the machine's replay cache")
     ap.add_argument("--record-dir", type=Path, default=None,
                     help="where the reversible JSON of retired entries goes (default: beside the census)")
     ap.add_argument("--record-doc", type=Path, default=RECORD_DOC)
+    ap.add_argument("--hold-kernels", default=None,
+                    help="with --table: comma-separated kernel short names left whole (their table rows are known wrong)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--retire-failed", action="store_true",
                     help="also retire keys the certifier named FAILED (inputs that cannot be synthesised)")
     args = ap.parse_args()
-
+    if args.certified_dir or args.table:
+        if not (args.certified_dir and args.table) or args.from_log:
+            ap.error("--certified-dir and --table go together, without --from-log")
+        return main_outside_the_table(args)
+    if not args.from_log:
+        ap.error("--from-log is required (or --certified-dir with --table)")
     if args.census is None:
         sys.path.insert(0, str(REPO / "src"))
         from neurobrix.triton import autotune_cache as atc

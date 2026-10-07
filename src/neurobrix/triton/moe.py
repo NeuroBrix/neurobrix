@@ -389,12 +389,19 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
     _set_device(sorted_ids)
     BE = max(_tr.next_power_of_2(num_experts), 16)
     BLK = ((128 + bs - 1) // bs) * bs  # positions/program, multiple of bs
+    # stages 1 and 2 hold [BF, BT], [BE, BF] and [BLK, BF] blocks: on Metal (32 KB of
+    # threadgroup memory) each is kept to 16 KB, so 128 experts work in
+    # chunks of 32 (BT = BF = 128 asked 64 KB: Qwen3-30B-A3B triton,
+    # "Required: 65536, Hardware limit: 32768"); a chunk never exceeds BE
+    # (8 experts with BF 128 asked the same 64 KB); elsewhere one chunk.
+    _w = max(16, min(128, 4096 // BE))
+    _bt, _bf = (_w, min(BE, _w)) if _detect_gpu_backend() == "metal" else (128, BE)
     moe_align_stage1_kernel[(1,)](
         ids, offsets_ws, padded_ws, num_post_pad, n,
-        BS=bs, BE=BE, E=num_experts, BT=128, num_warps=4)
+        BS=bs, BE=BE, E=num_experts, BT=_bt, BF=_bf, num_warps=4)
     moe_align_stage2_kernel[(_tr.cdiv(max_total, BLK),)](
         offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total,
-        BS=bs, BE=BE, E=num_experts, BLK=BLK, num_warps=4)
+        BS=bs, BE=BE, E=num_experts, BLK=BLK, BF=_bf, num_warps=4)
     # stage 3's rank matrix is [BLKT, BN] int32 in threadgroup memory:
     # 128x128 = 64 KB fits CUDA's budget but is twice Metal's 32 KB limit
     # (measured: granite triton, "Required: 65536, Hardware limit: 32768").
