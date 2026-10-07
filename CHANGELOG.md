@@ -17,8 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 13.5 (was 7.9), and attention reaches 45.7, 48.2 and 42.9 TFLOP/s at head sizes 64, 96 and 128
   (2.46 at head size 96 before).
 
-### Added
-
 - **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
   products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
   attention now has its own kernel that drives the tensor cores directly. At a 79 200-token video
