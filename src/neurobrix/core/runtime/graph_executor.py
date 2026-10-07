@@ -1938,6 +1938,24 @@ class GraphExecutor:
                 taken[name] = lender[name]
         return keep, taken
 
+    def _krsc_loader_keys(self, loader_keys) -> Optional[set]:
+        """The loader keys whose weights are stored KRSC (`launch_keys.krsc_conv_weights` under
+        the profile's `conv.weight_layout`), joined to the loader's space by the binding this load
+        computed (`_pending_weight_binding`). A key bound to any graph name that is not such a
+        convolution weight keeps its file order. No binding (a load of everything, or a container
+        without an index): every weight keeps its file order, exact and unrelaid."""
+        from neurobrix.kernels import launch_keys as _lk
+        binding = getattr(self, "_pending_weight_binding", None)
+        if not isinstance(self._dag, dict) or not binding or loader_keys is None:
+            return None
+        names = {t.split("::", 1)[1] for t in _lk.krsc_conv_weights(self._dag, _lk.conv_weight_layout())}
+        if not names:
+            return None
+        by_key: dict = {}
+        for name, wk in binding.items():
+            by_key.setdefault(wk, set()).add(name)
+        return {wk for wk, bound in by_key.items() if wk in loader_keys and bound <= names}
+
     def _graph_param_names(self) -> set:
         """Every parameter and buffer the graph names — the set the
         reconciliation binds loader keys against."""
@@ -2115,7 +2133,8 @@ class GraphExecutor:
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
-            shard_map=shard_map, only=_only)
+            shard_map=shard_map, only=_only,
+            krsc=self._krsc_loader_keys(_only) if only is None else None)
         if only is not None:
             # A rewrite added readers: the new weights join the dict. Their
             # arenas JOIN too — `update` used to replace `_arenas` (the

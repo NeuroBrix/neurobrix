@@ -647,6 +647,21 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         if getattr(a, "_nbx_dtype", None) == "bf16":
             return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)), dtype=NBXDtype.bfloat16)
         return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)))
+
+    def to_conv_weight(a, groups):
+        """The convolution weight in the order the loader stores it on this arch
+        (`launch_keys.conv_weight_layout`): a KRSC weight is timed and checked as the run reads it,
+        the logical (K, C, R, S) tensor over channels-innermost memory."""
+        from neurobrix.kernels import launch_keys as _lk
+        if not _lk.conv_weight_krsc(tuple(a.shape), groups, False, _lk.conv_weight_layout()):
+            return to(a)
+        K, Cg, R, S = a.shape
+        if isinstance(a, _ArgSpec):
+            return NBXTensor.empty((K, R, S, Cg), dtype=_SPEC_NBX.get(a.dtype_name, a.dtype_name)).permute(0, 3, 1, 2)
+        bits = np.ascontiguousarray(np.asarray(a).transpose(0, 2, 3, 1))
+        if getattr(a, "_nbx_dtype", None) == "bf16":
+            return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16).permute(0, 3, 1, 2)
+        return NBXTensor.from_numpy(bits).permute(0, 3, 1, 2)
     out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
     if unified:
         _refuse_unified(qual, tuner, key, card_bytes)
@@ -686,7 +701,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((n, co, _oh, _ow), out_dt)], short)
         x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
+        return ((lambda: W.conv2d_wrapper(to(x), to_conv_weight(wt, groups), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
                 (_conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups) if values else None), "output_pointer")
     if short == "depthwise_conv2d_kernel":
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
