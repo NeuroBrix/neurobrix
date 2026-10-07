@@ -423,11 +423,13 @@ class _SpyHit(Exception):
     pass
 
 
-def test_16g_nonpow2_window_routes_chunked_on_device() -> None:
+def test_16g_nonpow2_window_routes_chunked_on_device(without_matrix_unit) -> None:
     """16G card, hd=112 (Sana class), scores in (device cap, 2 GiB]:
     must CHUNK — the pre-fix behaviour on this window was un-chunked
     math (OOM class); the un-capped non-pow2 fallthrough was silent
-    flash (band-risk class). Both are wrong answers here."""
+    flash (band-risk class). Both are wrong answers here. The FMA
+    routes' policy: on a profile with a matrix unit the unit's flash
+    takes this head size (its rows reach head_dim 256)."""
     import pytest
     small, _ = _rig_cards_or_skip()
     if small is None:
@@ -443,7 +445,7 @@ def test_16g_nonpow2_window_routes_chunked_on_device() -> None:
     assert route == "chunked", f"expected chunked on 16G window, got {route}"
 
 
-def test_32g_pow2_window_keeps_prefix_route_on_device() -> None:
+def test_32g_pow2_window_keeps_prefix_route_on_device(without_matrix_unit) -> None:
     """32G card, hd=128 pow2, scores ~1.5 GiB (inside the 16G cap
     window but under the 2 GiB base): route must stay plain math —
     byte-identical to the pre-fix decision. THE 32G no-change proof by
