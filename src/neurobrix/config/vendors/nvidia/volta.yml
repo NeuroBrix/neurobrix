@@ -111,6 +111,19 @@ matrix_unit:
     - head_dim_le: 256
       block_m: 64
       block_n: 32
+  mm:                    # GEMM tiles, largest first: the first whose block fits inside the M x N output
+    - block_m: 128
+      block_n: 128
+      block_k: 32
+      warps_m: 2
+      warps_n: 2
+      group_m: 8
+    - block_m: 64
+      block_n: 64
+      block_k: 32
+      warps_m: 2
+      warps_n: 2
+      group_m: 8
 
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
