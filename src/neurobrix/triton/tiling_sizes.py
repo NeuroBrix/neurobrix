@@ -1,9 +1,9 @@
 """The TilingEngine's sizing half — torch-free, imported by Prism, the launch keys, the Triton
 wrappers and the TilingEngine's executor.
 
-This copy serves the PyTorch branch (Prism, the core executors and the TilingEngine). Its twin
-`neurobrix/triton/tiling_sizes.py` serves the Triton branch (the wrappers, the launch keys and
-the derived census through them): the two engines share no compute code, so each carries its own
+This copy serves the Triton branch (the wrappers, the launch keys and the derived census through
+them). Its twin `neurobrix/core/module/tiling_sizes.py` serves the PyTorch branch (Prism, the core
+executors and the TilingEngine): the two engines share no compute code, so each carries its own
 copy, held equal function by function by `tests/unit/tiling/test_the_two_tiling_sizes_are_one.py`.
 
 Every size a memory split is cut by is computed here, from `config/tiling.yml` (engine-wide
@@ -205,10 +205,10 @@ def rms_norm_band_factor(out_bytes: int, card_bytes: int) -> int:
 
 def residual_chain_band_factor(bytes_fp32: int) -> int:
     """Bands a residual chain streams in: its half-width bytes (the fp32 estimate halved) over
-    `residual_chain.band_target_bytes`, at least `min_band_factor`, a power of two at most
+    `residual_chain.band_target_bytes`, at least `residual_chain.min_band_factor`, a power of two at most
     `residual_chain.max_band_factor`."""
     half_bytes = bytes_fp32 // 2
-    factor = max(int(_value("op_level", "min_band_factor")),
+    factor = max(int(_value("op_level", "residual_chain", "min_band_factor")),
                  math.ceil(half_bytes / int(_value("op_level", "residual_chain", "band_target_bytes"))))
     return _pow2_at_most(factor, int(_value("op_level", "residual_chain", "max_band_factor")))
 
@@ -216,16 +216,6 @@ def residual_chain_band_factor(bytes_fp32: int) -> int:
 def residual_chain_min_base_bytes_fp32() -> int:
     """The base-tensor size (fp32) from which a residual chain is detected."""
     return int(_value("op_level", "residual_chain", "min_base_bytes_fp32"))
-
-
-def residual_chain_default_tile_factor() -> int:
-    """The band factor of a chain spec that states none."""
-    return int(_value("op_level", "residual_chain", "default_tile_factor"))
-
-
-def residual_chain_default_halo() -> int:
-    """The halo of a chain spec that states none."""
-    return int(_value("op_level", "residual_chain", "default_halo"))
 
 
 # --- overlaps -------------------------------------------------------------------------------------

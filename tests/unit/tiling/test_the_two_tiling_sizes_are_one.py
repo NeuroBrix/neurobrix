@@ -70,8 +70,6 @@ GRID = {
     "rms_norm_band_factor": [(b, c) for b in _BYTES for c in _CARDS],
     "residual_chain_band_factor": [(b,) for b in _BYTES],
     "residual_chain_min_base_bytes_fp32": [()],
-    "residual_chain_default_tile_factor": [()],
-    "residual_chain_default_halo": [()],
     "spatial_halo": [(e,) for e in _EXTENTS],
     "spatial_overlap": [(e,) for e in _EXTENTS],
     "temporal_halo": [(e,) for e in _EXTENTS],
