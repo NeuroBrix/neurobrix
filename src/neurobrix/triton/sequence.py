@@ -359,7 +359,7 @@ class TritonSequence:
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
-                 config_constants=None):
+                 config_constants=None, *, has_fp64: bool):
         self.dag = dag
         # profile.json architectural ints — the seq_len promotion's collision set (R30 mirror)
         self._config_constants = set(config_constants or ())
@@ -388,7 +388,7 @@ class TritonSequence:
         # cast-back rule reads it under bf16 compute.
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16(),
-            graph_dtype=dag.get("torch_dtype"))
+            graph_dtype=dag.get("torch_dtype"), has_fp64=has_fp64)
         self._compute_dtype = compute_dtype
         # Per-component flag of the precision contract
         # `activations_fp16_safe` (the calibration record, resolved in
@@ -895,7 +895,8 @@ class TritonSequence:
             "output_tensor_ids": list(plan["frontier_tids"]),
             "torch_dtype": self.dag.get("torch_dtype", ""),
         }
-        seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype)
+        seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype,
+                             has_fp64=self._dtype_engine.has_fp64)
         seq.set_activations_fp16_safe(self._activations_fp16_safe)
         seq.compile()
         seq.bind_weights(weights)
@@ -2723,18 +2724,13 @@ class TritonSequence:
             return NBXDtype.float16
         if parsed == NBXDtype.float16 and self._compute_dtype == NBXDtype.bfloat16:
             return NBXDtype.bfloat16
-        # Narrow fp64/complex128 to the triton-supported fp32/complex64. The
-        # NeuroBrix triton kernels are fp32-max (no native fp64 on V100, and the
-        # elementwise/index kernels read at fp32 stride); an explicit fp64 cast
-        # in the graph (e.g. the Wan rotary-embedding chain, which the vendor
-        # runs in float64/complex128 for precision) must be honoured at fp32
-        # precision, which is numerically ample for RoPE. complex128 → complex64
-        # keeps the interleaved-pair invariant the complex kernels rely on.
-        if parsed == NBXDtype.float64:
-            return NBXDtype.float32
-        if parsed == NBXDtype.complex128:
-            return NBXDtype.complex64
-        return parsed
+        # fp64/complex128 as the branch holds them (`precision.kernels_carry_fp64.triton`):
+        # where the kernels are fp32-max (the elementwise/index kernels read at fp32
+        # stride) an explicit fp64 cast in the graph (e.g. the Wan rotary-embedding chain,
+        # which the vendor runs in float64/complex128 for precision) is honoured at fp32
+        # precision, numerically ample for RoPE; complex128 → complex64 keeps the
+        # interleaved-pair invariant the complex kernels rely on.
+        return self._dtype_engine.storage_dtype(parsed)
 
     # ========================================================================
     # CLOSURE GENERATORS — ported from compiled_sequence._make_*_resolver
