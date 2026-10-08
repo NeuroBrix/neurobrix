@@ -544,3 +544,11 @@ tiling:
 # the flash kernel runs it at 2.65-3.17 (D 256: 0.94 -> 1.39).
 flash:
   pow2_head_dim_correct: true
+
+# Convolution weight storage order (launch_keys.conv_weight_layout). KRSC: the loader writes every
+# 3x3-class conv weight channels-innermost, once, and the conv kernel reads it in place.
+# MEASURED 2026-10-07 on this chip (served adbf6e84, census 3x3 shapes, the certified configs):
+# +46-63 % on every 3x3 key (1024 ch at 256^2: 3.31 -> 5.38 TFLOP/s; 64->256 VAE convs 2.25 ->
+# 3.31); 1x1 is the same memory either way.
+conv:
+  weight_layout: KRSC

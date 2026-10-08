@@ -311,9 +311,13 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
     and buffer shapes, each in the dtype the loader would give it under the component's
     compute dtype (`weight_loader.stored_dtype_in_compute`, the loader's own rule).
     Nothing is opened."""
+    from neurobrix.kernels import launch_keys as _lk
     from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
     from neurobrix.triton.weight_loader import stored_dtype_in_compute
     tensors = (executor._dag or {}).get("tensors", {})
+    # The convolution weights the loader stores KRSC on this arch (`conv.weight_layout`): the
+    # shadow binds the view the run binds, the logical (K, C, R, S) over channels-innermost memory.
+    krsc = _lk.krsc_conv_weights(executor._dag or {}, _lk.conv_weight_layout())
     compute = parse_dtype(executor.dtype)
     # The device the executor loads on, read the way the loader reads it ("cuda:N").
     dev_s = str(getattr(executor, "device", "") or "")
@@ -335,7 +339,11 @@ def _shadow_params_for(executor, nbx_path, component) -> Dict[str, Any]:
                 f"ZERO FALLBACK: {component}: the graph states no dtype for {tid} — a container "
                 "defect; the census does not guess a weight's dtype.")
         dt = stored_dtype_in_compute(parse_dtype(spec["dtype"]), compute)
-        out[name] = NBXTensor.empty(shape, dtype=dt, device=f"cuda:{dev}")
+        if tid in krsc:
+            K, Cg, R, S = shape
+            out[name] = NBXTensor.empty((K, R, S, Cg), dtype=dt, device=f"cuda:{dev}").permute(0, 3, 1, 2)
+        else:
+            out[name] = NBXTensor.empty(shape, dtype=dt, device=f"cuda:{dev}")
     return out
 
 

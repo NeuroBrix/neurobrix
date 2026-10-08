@@ -4083,7 +4083,9 @@ def conv2d_wrapper(
         weight = weight.to(w_to)
 
     x_c = x.contiguous()
-    w_c = weight.contiguous()
+    # A weight the loader stored KRSC (`conv.weight_layout`) is read where it lies: the kernel
+    # takes the weight's four strides; copied back to KCRS it would lose what the layout gains.
+    w_c = weight if _lk.is_krsc_weight(weight) else weight.contiguous()
 
     # Step 4: output dtype = compute_dtype from per-component Prism context.
     # Falls back to x.dtype when no TritonSequence is active.

@@ -368,3 +368,8 @@ autotune_screen_rtol:
 # six unrelated tests in the same process. A skipped screen is announced, not
 # silent.
 autotune_screen_max_bytes: 33554432
+
+# Convolution weight storage order (launch_keys.conv_weight_layout): KCRS, the container's own,
+# until this arch measures KRSC (the M4 Pro measured +46-63 % on its 3x3 keys, 2026-10-07).
+conv:
+  weight_layout: KCRS

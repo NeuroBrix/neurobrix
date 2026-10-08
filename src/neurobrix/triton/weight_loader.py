@@ -109,6 +109,7 @@ def load_component_weights(
     upcast_fp16_to_fp32: bool = False,
     per_device_vram_budget: Optional[Dict[int, int]] = None,
     only: Optional[Set[str]] = None,
+    krsc: Optional[Set[str]] = None,
 ) -> Dict[str, NBXTensor]:
     """Load weights for a component as NBXTensor. Zero torch.
 
@@ -143,6 +144,9 @@ def load_component_weights(
             activations + KV cache). If the doubled fp32 footprint for a
             given device exceeds its budget, upcast is globally disabled
             to keep dtype consistency across the model.
+        krsc: loader keys of the convolution weights stored KRSC (`host_weight_layout`), from
+            the hardware profile's `conv.weight_layout` and the graph's readers
+            (`launch_keys.krsc_conv_weights`). None stores every weight in its file order.
     """
     comp_dir = Path(cache_path) / "components" / component
     weights_dir = comp_dir / "weights"
@@ -306,7 +310,7 @@ def load_component_weights(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
             weight_device, arenas, cpu_weights,
-            upcast_effective=upcast_effective, only=only)
+            upcast_effective=upcast_effective, only=only, krsc=krsc)
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore
@@ -485,6 +489,16 @@ def _load_to_pinned_cpu(
     return dst
 
 
+def host_weight_layout(arr: np.ndarray, krsc: bool):
+    """The host array to copy to the device and the element strides of the logical tensor over
+    it. A KRSC weight (`launch_keys.conv_weight_krsc`) is written channels-innermost, once, here,
+    and stays a logical (K, C, R, S) tensor: the original order is never on the device."""
+    if not krsc:
+        return arr, _contiguous_strides(arr.shape)
+    K, C, R, S = arr.shape
+    return np.ascontiguousarray(arr.transpose(0, 2, 3, 1)), (R * S * C, 1, S * C, C)
+
+
 def _load_shard_into_arenas(
     path: str,
     header: dict,
@@ -497,6 +511,7 @@ def _load_shard_into_arenas(
     cpu_weights: set,
     upcast_effective: bool = False,
     only: Optional[Set[str]] = None,
+    krsc: Optional[Set[str]] = None,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
 
@@ -563,10 +578,10 @@ def _load_shard_into_arenas(
                     and target_dtype == NBXDtype.float16
                     and not upcast_this):
                 ptr = arena.alloc(nbytes)
-                arr_u16 = np.frombuffer(raw, dtype=np.uint16)
+                arr_u16, strides = host_weight_layout(
+                    np.frombuffer(raw, dtype=np.uint16).reshape(shape), bool(krsc) and key in krsc)
                 DeviceAllocator.memcpy(ptr, arr_u16.ctypes.data, nbytes, kind=1)
-                _bf16_to_fp16_inplace(ptr, arr_u16.shape[0], target_dev)
-                strides = _contiguous_strides(shape)
+                _bf16_to_fp16_inplace(ptr, arr_u16.size, target_dev)
                 nbx = NBXTensor(ptr, shape, strides, NBXDtype.float16, 'cuda',
                                 owns_data=False, device_idx=target_dev)
                 weights[key] = nbx
@@ -615,12 +630,13 @@ def _load_shard_into_arenas(
                 else:
                     final_dtype = target_dtype
 
+            arr, strides = host_weight_layout(arr, bool(krsc) and key in krsc)
             arr_bytes = arr.nbytes
             ptr = arena.alloc(arr_bytes)
             DeviceAllocator.memcpy(ptr, arr.ctypes.data, arr_bytes, kind=1)  # H2D
 
-            # Create NBXTensor wrapping the arena sub-allocation
-            strides = _contiguous_strides(shape)
+            # Create NBXTensor wrapping the arena sub-allocation (KRSC: the logical shape over
+            # the channels-innermost memory)
             nbx = NBXTensor(ptr, shape, strides, final_dtype, 'cuda',
                             owns_data=False, device_idx=target_dev)
             weights[key] = nbx
