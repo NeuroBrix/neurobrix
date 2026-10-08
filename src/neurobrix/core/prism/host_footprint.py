@@ -76,7 +76,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
-                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0) -> Dict:
+                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
+                   streamed_pieces: Optional[Mapping[str, tuple]] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -87,6 +88,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
     resident_bytes what the planning process holds when it prices (the caller measures it)
     output_bytes   what the output boundary holds (the largest graph output x the family's save cost)
     device_bytes   the device plan's bytes when the device draws on host memory (unified), 0 otherwise
+    streamed_pieces {component: (dearest piece's weight bytes, all its pieces' weight bytes)} for the
+                 components the plan streams: the strategy loads them one piece at a time, so one load
+                 holds the dearest piece's share of the stored bytes, never the whole component
+                 (deepseek-moe-16b-chat, the Mac 2026-10-08: "loading 61 670 MB" priced, 3 606 MB peak)
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -122,7 +127,11 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             if alloc is not None and widths and str(alloc.dtype) in dtype_bytes:
                 pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
             return stored_bytes + pinned
-        passes = [_passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
+        def _one_load(name, stored_bytes):
+            dearest, total = (streamed_pieces or {}).get(name, (1, 1))
+            return stored_bytes * dearest // total
+        passes = [_passes_through(name, _one_load(name, sum(sh.values())))
+                  for name, sh in shard_sizes.items() if sh]
         transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
     else:
         transient = TRITON_COPIES_PER_TENSOR * max(
