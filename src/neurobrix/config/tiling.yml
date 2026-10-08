@@ -1,0 +1,92 @@
+# The TilingEngine's sizes — every engine-wide value a memory split is cut by.
+#
+# Read by `core/module/tiling_sizes.py` (the TilingEngine's sizing half) and nowhere else; a
+# missing key is refused by name. Values that belong to an ARCHITECTURE stay in its hardware
+# profile (config/vendors/<vendor>/<arch>.yml): memory.sdpa_math_max_scores_bytes,
+# memory.sdpa_math_scores_device_fraction, memory.sdpa_math_min_chunk_rows,
+# memory.sdpa_math_max_chunks, tiling.extent_lattice.
+#
+# Each value carries its SOURCE: the reasoning, measurement or workstream that set it.
+
+conv3d:
+  # 1 GiB. The per-transient bound of the chunked temporal path, and the fold size above which
+  # the one-shot path's peak is priced at all: small and validated convolutions never chunk
+  # (P-TRITON-LIVE-SET-AUDIT; Allegro-TI2V vae_encoder at 720x1280x12f fp32, 5.66 GB a plane ->
+  # 30.4 GB live on a 32 GB V100 in triton only; the decision made Prism's, 2026-09-29).
+  chunk_bytes: 1073741824
+  # 256 MiB. The fixed slack added to the one-shot path's priced peak (conv3d_need).
+  slack_bytes: 268435456
+
+conv2d:
+  # 4 GiB. A convolution whose output exceeds it streams in bands along H; it leaves headroom for
+  # weights, activations and arena overhead on a V100 32 GB (P-SANA-4KPX-RUNTIME Step 1). A
+  # one-shot conv3d whose conv2d output exceeds it holds one band's worth more.
+  band_bytes: 4294967296
+  # Bands of about half the band budget: the other half covers the transient input slice and the
+  # kernel's intermediate (P-SANA-4KPX-RUNTIME Step 1, `_conv2d_band_streamed`).
+  band_budget_divisor: 2
+
+sdpa:
+  # 2 GiB. The fp32 scores bound a non-power-of-two head dim routes on when the architecture
+  # declares no `memory.sdpa_math_max_scores_bytes` (the scores budget LLM-class prefills chunk
+  # under a handful of times: 4k context -> 2 chunks, 16k -> 16; P-NONDET-LONG-ROW).
+  non_pow2_head_scores_bytes: 2147483648
+
+op_level:
+  # 0.85 of the card, minus the component's resident weights: the budget an op's transient is
+  # measured against — overflow detection, the op-level plan and the conv3d chunk decision share
+  # it, or they disagree about which upsamples are free (`_tiling_aware_zero_alloc_uids`).
+  op_budget_card_fraction: 0.85
+  # 0.65 of the card, minus the conv output that stays full-resolution allocated: one band's
+  # budget for an upsample->conv fusion pair or a standalone convolution (S5, P-SANA-4KPX).
+  conv_band_card_fraction: 0.65
+  # 256 MB: the smallest per-band budget a band factor is computed against (a budget under it,
+  # "< 256 MB usable", is raised to it).
+  band_budget_floor_bytes: 268435456
+  # A tiled op runs in at least two bands.
+  min_band_factor: 2
+  # Band factors round up to a power of two for halo alignment, at most 64.
+  max_band_factor: 64
+  # An upsample whose output exceeds 25 % of the card is worth fusing into its conv even when the
+  # conv does not overflow (typical: 16 GB on a 32 GB card).
+  upsample_overflow_card_fraction: 0.25
+  rms_norm:
+    # 20 % of the card: an rms_norm whose output exceeds it runs in H bands — a stricter bound
+    # skipped the exactly-8 GB tensors of Sana 4Kpx on a 32 GB card.
+    overflow_card_fraction: 0.20
+    # One band's budget: 0.10 of the card (tightened from 0.65 because S5 chains carry 5-7 GiB of
+    # state into the rms_norm dispatch and each band's fp32 cast must fit beside it; the comment
+    # beside the code said 0.20, the code has carried 0.10).
+    band_card_fraction: 0.10
+    # At least four bands.
+    min_band_factor: 4
+    # At most eight: sixteen produced a numerically wrong output at Sana 4Kpx's rms_norm::27
+    # (post-chain wrapper, NHWC view of non-contiguous storage); eight was validated on 32 GB.
+    max_band_factor: 8
+  residual_chain:
+    # A residual chain (fork -> >=3 ops -> merge) streams in bands of at most 1 GiB at runtime
+    # (P-PRISM-NEVER-REFUSE v2 S5, 2026-05-13).
+    band_target_bytes: 1073741824
+    # Its band factor rounds up to a power of two, at most 32.
+    max_band_factor: 32
+    # 1.6 GB: a chain is detected only when its base tensor (fp32, conservative) reaches it —
+    # 1.6 GB at fp32, ~0.8 GB at bf16 (S5).
+    min_base_bytes_fp32: 1600000000
+    # The band factor and halo a chain spec without its own runs at (the chain interceptor's
+    # defaults; Prism's plan and the detector always write both).
+    default_tile_factor: 4
+    default_halo: 2
+
+overlap:
+  # A tile's overlap is its extent // 8, at least 4 to ensure some blending (TilingEngine's
+  # data-driven init; Prism's decode and encode tilings follow the same proportional law).
+  spatial_divisor: 8
+  spatial_min: 4
+  # A temporal tile overlaps its neighbour by t_tile // 4 frames (Prism's linear-class tiling).
+  temporal_divisor: 4
+
+inplace:
+  # 1 GiB. A residual add or an element-wise unary writes into the buffer of its dead input when
+  # its output reaches it (P-SANA-4KPX-RUNTIME 2026-05-05, multi-branch fusion fix vector B; the
+  # unary rewrite uses the same figure, real-esrgan-x8 at 1024x1024 on a 16 GB V100).
+  min_bytes: 1073741824

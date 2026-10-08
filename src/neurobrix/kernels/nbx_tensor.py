@@ -958,9 +958,9 @@ class ImpossibleExtentError(RuntimeError):
 class DeviceOOMError(RuntimeError):
     """The device allocator could not honor a request: the driver refused
     the allocation after the deferred-free drain and the single retry.
-    Typed so callers that can legitimately shrink their request (the
-    chunked SDPA prefill halves its row chunk) catch exactly this and
-    nothing else — every other RuntimeError keeps propagating.
+    Typed so a caller that names its own key in the refusal (the chunked
+    SDPA prefill re-raises it with op, shape, rows and bytes asked) catches
+    exactly this and nothing else — every other RuntimeError keeps propagating.
 
     It also CARRIES the figures it prints, as attributes. The refusal already
     computes requested / live / pool-cached / driver-free in order to write the

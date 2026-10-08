@@ -17,7 +17,7 @@ import inspect
 
 import pytest
 
-from neurobrix.core.prism import conv3d_chunk as C3
+from neurobrix.core.module import tiling_sizes as C3
 
 
 def test_the_wrapper_no_longer_reads_the_drivers_free_bytes():
@@ -60,7 +60,7 @@ def test_the_torch_chunked_path_equals_one_shot_conv3d(monkeypatch):
     torch = pytest.importorskip("torch")
     import torch.nn.functional as F
     from neurobrix.core.module.tiling_engine import conv3d_chunked
-    monkeypatch.setattr(C3, "CHUNK_BYTES", 1)          # one output frame per chunk: every seam tested
+    monkeypatch.setattr(C3, "conv3d_chunk_bytes", lambda: 1)          # one output frame per chunk: every seam tested
     g = torch.Generator().manual_seed(0)
     for (st, pt, dt, kt) in [(1, 1, 1, 3), (2, 1, 1, 3), (1, 0, 2, 3), (1, 2, 1, 5)]:
         x = torch.randn(1, 4, 11, 6, 7, generator=g, dtype=torch.float64)

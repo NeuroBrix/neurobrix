@@ -33,6 +33,8 @@ import sys
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
+from neurobrix.core.module import tiling_sizes as _tsz
+
 logger = logging.getLogger(__name__)
 
 
@@ -286,9 +288,8 @@ class TilingEngine:
         # Window alignment (for window-attention models)
         window_alignment = config.get("window_size", 1)
 
-        # Overlap: data-driven from config, fallback to trace_size // 8
-        # Minimum 4 to ensure some blending
-        overlap = max(4, trace_size // 8)
+        # Overlap: the TilingEngine's proportional law (`tiling_sizes.spatial_overlap`)
+        overlap = _tsz.spatial_overlap(trace_size)
 
         # Align overlap to window_alignment
         if window_alignment > 1:
@@ -786,7 +787,7 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
     """A rank-5 convolution Prism planned to chunk (`OpLevelTilingPlan.conv3d_chunks`), in either
     engine: NBXTensor -> `wrappers.conv3d_chunked_wrapper` (the kt-conv2d chunked path); a torch
     tensor -> F.conv3d over the same temporal output chunks, each chunk's input the frames its
-    receptive field reads. Chunks of `conv3d_chunk.chunk_frames(frame bytes)` output frames."""
+    receptive field reads. Chunks of `tiling_sizes.chunk_frames(frame bytes)` output frames."""
     try:
         from neurobrix.kernels.nbx_tensor import NBXTensor
         if isinstance(input_tensor, NBXTensor):
@@ -797,7 +798,6 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
         pass
     import torch
     import torch.nn.functional as F
-    from neurobrix.core.prism import conv3d_chunk as _c3
 
     def _t(v):
         return tuple(v) if isinstance(v, (list, tuple)) else (v, v, v)
@@ -806,9 +806,9 @@ def conv3d_chunked(input_tensor, weight, bias=None, stride=1, padding=0, dilatio
     dt, dh, dw = _t(dilation)
     kt = weight.shape[2]
     es = input_tensor.element_size()
-    _need, frame = _c3.conv3d_need(tuple(input_tensor.shape), tuple(weight.shape), (st, sh, sw),
+    _need, frame = _tsz.conv3d_need(tuple(input_tensor.shape), tuple(weight.shape), (st, sh, sw),
                                    (pt, ph, pw), (dt, dh, dw), es, es)
-    tc = _c3.chunk_frames(frame)
+    tc = _tsz.chunk_frames(frame)
     x = F.pad(input_tensor, (0, 0, 0, 0, pt, pt)) if pt > 0 else input_tensor
     t_out = (x.shape[2] - dt * (kt - 1) - 1) // st + 1
     outs = []
@@ -861,7 +861,7 @@ class OpLevelTilingPlan:
         # `_detect_inplace_unary_candidates`.
         self.inplace_unary: List[Tuple[str, str]] = []
         # Each entry: a rank-5 convolution's op_uid whose one-shot peak exceeds the op's planned
-        # budget (`core/prism/conv3d_chunk.py`): it streams its temporal output in chunks. A PLAN
+        # budget (`core/module/tiling_sizes.py`): it streams its temporal output in chunks. A PLAN
         # decision — it read the driver's free bytes inside the wrapper (decision 2, 2026-09-29).
         self.conv3d_chunks: List[str] = []
 
@@ -1170,7 +1170,7 @@ class OpLevelTilingEngine:
 
     @staticmethod
     def _detect_inplace_unary_candidates(
-        graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
+        graph_executor, threshold_bytes: Optional[int] = None,
     ) -> "List[Tuple[str, str]]":
         """Element-wise unary ops that can write into the buffer they consume.
 
@@ -1208,6 +1208,8 @@ class OpLevelTilingEngine:
         threshold has the same blind spot, unnoticed because Sana's trace
         extents were already over a gigabyte.
         """
+        if threshold_bytes is None:
+            threshold_bytes = _tsz.inplace_min_bytes()
         dag = getattr(graph_executor, '_dag', None)
         if dag is None:
             return []
@@ -1252,12 +1254,13 @@ class OpLevelTilingEngine:
 
     @staticmethod
     def _detect_inplace_add_candidates(
-        graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
+        graph_executor, threshold_bytes: Optional[int] = None,
     ) -> "List[Tuple[str, int]]":
         """Scan the GraphExecutor's DAG for residual aten::add ops where
         liveness analysis proves at least one input has its last use at
         this op. Returns a list of `(op_uid, reuse_input_index)` for adds
-        whose output exceeds `threshold_bytes` (default 1 GiB).
+        whose output exceeds `threshold_bytes` (default
+        `tiling_sizes.inplace_min_bytes()`).
 
         Detection is purely DAG-static (no Prism profile / no runtime
         info): builds a consumer map and checks whether each input's only
@@ -1271,6 +1274,8 @@ class OpLevelTilingEngine:
         resolution, etc.). On Sana 4Kpx VAE, returns 26 candidates
         (8 above 4 GiB at the 4096×4096 res, 4 above 4 GiB at 2048×2048).
         """
+        if threshold_bytes is None:
+            threshold_bytes = _tsz.inplace_min_bytes()
         dag = getattr(graph_executor, '_dag', None)
         if dag is None:
             return []
@@ -1354,7 +1359,7 @@ class OpLevelTilingEngine:
     @staticmethod
     def _detect_residual_chains(
         graph_executor,
-        threshold_bytes: int = 1_600_000_000,  # 1.6 GiB at fp32, ~0.8 GiB at bf16
+        threshold_bytes: Optional[int] = None,  # tiling_sizes.residual_chain_min_base_bytes_fp32()
     ) -> "List[Dict[str, Any]]":
         """Detect long residual chains (`fork → ≥3-op chain → merge`).
 
@@ -1388,6 +1393,8 @@ class OpLevelTilingEngine:
         block at 4096², 2048², 1024², 512²). Anti-pattern check:
         returns [] for Sana 1024 VAE, PixArt KL-AE, TinyLlama, etc.
         """
+        if threshold_bytes is None:
+            threshold_bytes = _tsz.residual_chain_min_base_bytes_fp32()
         dag = getattr(graph_executor, '_dag', None)
         if dag is None:
             return []
@@ -1762,11 +1769,12 @@ class OpLevelTilingEngine:
             from neurobrix.kernels import wrappers as _w
             from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
 
-            # One gigabyte, the same figure the in-place adds use. Read at call
+            # `tiling_sizes.inplace_min_bytes()`, the same figure the in-place adds
+            # use (NBX_INPLACE_MIN_BYTES overrides it for a diagnosis). Read at call
             # time from the tensor, never from the DAG -- see the detector's
             # docstring for what happens when it is read from the DAG.
             _MIN_INPLACE_BYTES = int(_os_iadd.environ.get(
-                "NBX_INPLACE_MIN_BYTES", 1024 * 1024 * 1024))
+                "NBX_INPLACE_MIN_BYTES", _tsz.inplace_min_bytes()))
 
             def make_inplace_unary_interceptor(_op_type):
                 return OpLevelTilingEngine.build_inplace_unary_interceptor(
@@ -2214,8 +2222,10 @@ class OpLevelTilingEngine:
                                     merge_out = _band_streamed_chain(
                                         t_base_pending, cw,
                                         tile_factor=int(spec_int.get(
-                                            "tile_factor", 4)),
-                                        halo=int(spec_int.get("halo", 2)),
+                                            "tile_factor",
+                                            _tsz.residual_chain_default_tile_factor())),
+                                        halo=int(spec_int.get(
+                                            "halo", _tsz.residual_chain_default_halo())),
                                     )
                                     if _is_triton_mode:
                                         from neurobrix.kernels.nbx_tensor import (

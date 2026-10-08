@@ -394,7 +394,7 @@ class ActivationProfile:
     #: 944 GB estimate stayed unexplained for two days.
     symbol_map: Optional[Dict[str, int]] = None
     #: Bytes ALREADY live on the card when each op begins, keyed by op_uid.
-    #: `overflow_ops` asks whether one op's own footprint clears 0.85 of the
+    #: `overflow_ops` asks whether one op's own footprint clears the op budget fraction (`tiling_sizes.op_budget_fraction()`) of the
     #: card, which is a question about an empty card; this is what the card is
     #: actually holding at that point in the schedule. Recorded by the
     #: simulation loop because only that loop applies the zero-alloc, stride-0
@@ -845,7 +845,7 @@ class ActivationProfiler:
         vram_per_gpu_bytes: Optional[int] = None,
         resident_bytes: int = 0,
         mode: str = "compiled",
-        safety: float = 0.85,
+        safety: Optional[float] = None,
         zero_alloc_uids: Optional[set] = None,
         inplace_adds: Optional[List] = None,
         widths: Optional[Dict[str, int]] = None,
@@ -859,6 +859,9 @@ class ActivationProfiler:
         Args:
             input_config: Runtime input configuration (batch, height, width)
             dtype_bytes: Bytes per element override (default: from input_config.dtype)
+            safety: the fraction of the card an op's footprint is measured against; None
+                is the TilingEngine's op budget (`tiling_sizes.op_budget_fraction()`), the
+                figure the op-level tiling detector uses.
             widths: {tensor_id: bytes per element} the runtime EXECUTES each tensor at
                 (`core.prism.runtime_widths.runtime_widths`). When given, every op output
                 the simulation allocates is sized at its runtime width — a tensor the
@@ -1113,7 +1116,7 @@ class ActivationProfiler:
             from neurobrix.core.prism.memory_estimator import estimate_op_workspace_bytes
             # WHAT THE FOOTPRINT IS MEASURED AGAINST.
             #
-            # `vram_per_gpu_bytes * safety` is 0.85 of an EMPTY card, and the
+            # `vram_per_gpu_bytes * safety` is a fraction of an EMPTY card, and the
             # card is not empty when the op runs. Two things are already on it:
             # the component's weights, resident for the whole of its execution
             # and known only to the caller, and the activations still live at
@@ -1130,6 +1133,9 @@ class ActivationProfiler:
             # motivated the rung: real-esrgan-x8 at 1024 has footprints of
             # 20-45 GB against the same line and clears it with or without the
             # resident term.
+            if safety is None:
+                from neurobrix.core.module.tiling_sizes import op_budget_fraction
+                safety = op_budget_fraction()
             threshold = int(vram_per_gpu_bytes * safety) - max(0, int(resident_bytes))
             for op_uid in self.execution_order:
                 op = self.ops.get(op_uid, {})

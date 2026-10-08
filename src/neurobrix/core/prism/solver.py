@@ -47,6 +47,7 @@ class PlanNotComputable(RuntimeError):
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
 from neurobrix.core.config.system import PRISM_DEFAULTS
+from neurobrix.core.module import tiling_sizes as _ts
 
 if TYPE_CHECKING:
     from nbx import NBXContainer, ComponentData
@@ -2059,10 +2060,10 @@ class PrismSolver:
                 dtype_bytes=dtype_bytes,
                 vram_per_gpu_bytes=comp_vram,
                 mode="compiled",
-                safety=0.85,
+                safety=_ts.op_budget_fraction(),
                 # The component's weights sit on this card for the whole of its
-                # execution, so an op's transient has 0.85 of the card MINUS
-                # them, not 0.85 of the card. Kept in step with the placement
+                # execution, so an op's transient has the op budget fraction of
+                # the card MINUS them, not that fraction of the card. Kept in step with the placement
                 # estimate below, which passes its own `weight_bytes`: these are
                 # the only two call sites that compute overflow_ops, and the
                 # tiling-aware estimator derives which upsamples become
@@ -2081,13 +2082,13 @@ class PrismSolver:
             # we keep going to build the plan; otherwise the legacy
             # short-circuit applies.
             # conv3d chunking is a PLAN decision (decision 2, 2026-09-29): a rank-5 convolution whose
-            # one-shot peak (`conv3d_chunk.conv3d_need`) exceeds the op budget — 0.85 of the card
-            # minus the component's resident weights, the budget above — streams its temporal
-            # output in chunks, registered as its op interceptor.
+            # one-shot peak (`tiling_sizes.conv3d_need`) exceeds the op budget — the op budget
+            # fraction of the card minus the component's resident weights, the budget above —
+            # streams its temporal output in chunks, registered as its op interceptor.
             _c3_resident = (int(getattr(alloc, "memory_mb", 0) * 1024 * 1024)
                             if not isinstance(alloc, tuple) else 0)
             _c3_uids = self._conv3d_chunk_uids(comp, profiler, input_config, dtype_bytes,
-                                               int(0.85 * comp_vram) - _c3_resident)
+                                               _ts.op_budget_bytes(comp_vram, _c3_resident))
             has_chains = bool(
                 self._identify_residual_chain_specs(comp.graph)
             )
@@ -2162,9 +2163,9 @@ class PrismSolver:
                     up_out_meta, comp_symbol_map
                 )
                 up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta, dtype_bytes)
-                # Threshold: upsample output that exceeds 25% of VRAM is
-                # worth fusing (typical: 16 GB on 32 GB GPU).
-                up_overflow = up_out_bytes > 0.25 * comp_vram
+                # Threshold: an upsample output over `op_level.upsample_overflow_card_fraction`
+                # of the card is worth fusing (config/tiling.yml).
+                up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram)
                 if not (conv_overflow or up_overflow):
                     continue
 
@@ -2195,19 +2196,10 @@ class PrismSolver:
                     conv_in_shapes, conv_out_shapes, dtype_bytes,
                     vram_per_gpu_bytes=comp_vram,
                 )
-                # Per-band budget: total VRAM × 0.65 (safety) minus the
-                # conv output that stays full-resolution allocated.
-                budget_per_band = int(0.65 * comp_vram) - conv_out_bytes
-                if budget_per_band < (256 * 1024 * 1024):  # < 256 MB usable
-                    budget_per_band = 256 * 1024 * 1024
-                total_to_tile = up_out_bytes + cudnn_ws_bytes + conv_out_bytes
-                import math
-                tile_factor = max(2, math.ceil(total_to_tile / budget_per_band))
-                # Round up to power-of-2 for halo alignment.
-                pow2 = 2
-                while pow2 < tile_factor and pow2 < 64:
-                    pow2 *= 2
-                tile_factor = pow2
+                # Per-band budget: the conv band fraction of the card minus the conv
+                # output that stays full-resolution allocated (`tiling_sizes.conv_band_factor`).
+                tile_factor = _ts.conv_band_factor(
+                    up_out_bytes + cudnn_ws_bytes + conv_out_bytes, conv_out_bytes, comp_vram)
 
                 plan.add_upsample_conv_fusion(uid, conv_uid, tile_factor)
                 seen_pair_convs.add(conv_uid)
@@ -2260,24 +2252,14 @@ class PrismSolver:
                     continue
                 # tile_factor: same formula as fusion path but without the
                 # upsample term (no intermediate to absorb).
-                budget_per_band = int(0.65 * comp_vram) - out_b
-                if budget_per_band < (256 * 1024 * 1024):
-                    budget_per_band = 256 * 1024 * 1024
-                total_to_tile = ws_b + out_b
-                import math
-                tf = max(2, math.ceil(total_to_tile / budget_per_band))
-                pow2 = 2
-                while pow2 < tf and pow2 < 64:
-                    pow2 *= 2
-                plan.add_tiled_op(op_uid, op_type, pow2)
+                plan.add_tiled_op(op_uid, op_type, _ts.conv_band_factor(ws_b + out_b, out_b, comp_vram))
 
             # Custom rms_norm tiling — rms_norm normalizes along the last
             # (channel) dim, so each H row is independent. Tile by H bands
             # to bound the per-band materialized output. Fires on rms_norm
-            # ops whose output size > 25% of VRAM (same threshold as fusion).
-            # 20% of VRAM — strict less-than-or-equal would skip exactly-8GB
-            # tensors on a 32GB GPU which is precisely Sana 4Kpx's pattern.
-            ovf_threshold = 0.20 * comp_vram
+            # ops whose output exceeds `op_level.rms_norm.overflow_card_fraction`
+            # of the card; the band factor is `tiling_sizes.rms_norm_band_factor`
+            # (config/tiling.yml carries each value's reason).
             for uid in order:
                 op = ops.get(uid, {})
                 if op.get("op_type", "") != "custom::rms_norm":
@@ -2290,40 +2272,9 @@ class PrismSolver:
                     out_meta, comp_symbol_map
                 )
                 out_b = profiler._compute_size(out_sh, out_meta, dtype_bytes)
-                if out_b <= ovf_threshold:
+                if not _ts.rms_norm_overflows(out_b, comp_vram):
                     continue
-                # Per-band budget tightened from 0.65× to 0.20× of
-                # comp_vram. The original 0.65× assumed the rms_norm
-                # wrapper ran in isolation (input + output ≈ full
-                # budget). With S5 chains active upstream, the
-                # pre-rms_norm baseline carries ~5-7 GiB of chain
-                # state into the rms_norm dispatch; we need each
-                # band's transient (fp32 cast of x_band) to fit
-                # alongside that residue. 0.20× → tile_factor at
-                # least ceil(out_b / 0.20×comp_vram), e.g. 4 GiB
-                # output on 16 GiB GPU → tile_factor=4 (band 1 GiB,
-                # fp32 cast 2 GiB transient, fits with chain
-                # residue). S5 follow-up: in-place rms_norm to
-                # eliminate the full output buffer entirely; for
-                # now the conservative tile_factor preserves
-                # numerical correctness over the in-place attempt
-                # that produced a black PNG.
-                budget_per_band = int(0.10 * comp_vram)
-                import math
-                tf = max(4, math.ceil(out_b / budget_per_band))
-                pow2 = 2
-                while pow2 < tf and pow2 < 64:
-                    pow2 *= 2
-                # Cap at tile_factor=8: empirically 16 produces a
-                # numerically wrong output on the Sana 4Kpx
-                # rms_norm::27 site (post-chain wrapper, NHWC view of
-                # non-contig storage). tile_factor=8 was validated
-                # coherent on 32g and is the largest viable value
-                # observed. S5 follow-up: identify whether the issue
-                # is the band_h=256 boundary stride math or some other
-                # PyTorch issue with non-contig views + small bands.
-                pow2 = min(pow2, 8)
-                plan.add_tiled_op(uid, "custom::rms_norm", pow2)
+                plan.add_tiled_op(uid, "custom::rms_norm", _ts.rms_norm_band_factor(out_b, comp_vram))
 
             # P-PRISM-NEVER-REFUSE v2 S5: residual chain detection.
             # Add specs of detected chains to the plan so the runtime's
@@ -2334,16 +2285,10 @@ class PrismSolver:
             # get any chain spec; cheaper models pay nothing.
             chain_specs = self._identify_residual_chain_specs(comp.graph)
             for spec in chain_specs:
-                # Tile factor: aim for band size ≤ 1 GiB at runtime.
-                # bytes_fp32 / 2 = bf16 estimate, divide by 1 GiB.
-                import math as _math
-                bf16_bytes = spec.get("bytes_fp32", 0) // 2
-                tf = max(2, _math.ceil(bf16_bytes / (1024 ** 3)))
-                pow2 = 2
-                while pow2 < tf and pow2 < 32:
-                    pow2 *= 2
+                # Tile factor: bands of at most `residual_chain.band_target_bytes`
+                # at runtime, from the bf16 estimate (bytes_fp32 / 2).
                 spec_with_tf = dict(spec)
-                spec_with_tf["tile_factor"] = pow2
+                spec_with_tf["tile_factor"] = _ts.residual_chain_band_factor(spec.get("bytes_fp32", 0))
                 plan.add_residual_chain(spec_with_tf)
 
             for _uid in _c3_uids:
@@ -2356,8 +2301,7 @@ class PrismSolver:
     def _conv3d_chunk_uids(self, comp, profiler, input_config, dtype_bytes: int,
                            budget_bytes: int) -> List[str]:
         """The component's rank-5 convolutions whose ONE-SHOT peak at this request exceeds the op
-        budget — the ones that stream their temporal output in chunks (`conv3d_chunk`)."""
-        from neurobrix.core.prism import conv3d_chunk as _c3
+        budget — the ones that stream their temporal output in chunks (`tiling_sizes.conv3d_need`)."""
         g = comp.graph or {}
         ops, tensors = g.get("ops", {}), g.get("tensors", {})
         symbols = profiler.build_symbol_map(input_config)
@@ -2376,7 +2320,7 @@ class PrismSolver:
             at = op.get("attributes") or {}
             if at.get("transposed"):
                 continue
-            need, _frame = _c3.conv3d_need(x, w, at.get("stride", 1), at.get("padding", 0),
+            need, _frame = _ts.conv3d_need(x, w, at.get("stride", 1), at.get("padding", 0),
                                            at.get("dilation", 1), dtype_bytes, dtype_bytes)
             if need and need > budget_bytes:
                 out.append(uid)
@@ -2405,7 +2349,7 @@ class PrismSolver:
     # =========================================================================
 
     def _identify_inplace_add_candidates_static(
-        self, graph: Dict, threshold_bytes: int = 1024 * 1024 * 1024,
+        self, graph: Dict, threshold_bytes: Optional[int] = None,
     ):
         """DAG-static replica of `OpLevelTilingEngine._detect_inplace_add_candidates`
         (`tiling_engine.py:613`) — returns the same list of `(op_uid,
@@ -2415,11 +2359,14 @@ class PrismSolver:
         canonical form) instead of the runtime version's
         `attributes.args` walk; both yield the same set on a
         well-formed graph (input_tensor_ids is built from args at import
-        time). Threshold default 1 GiB matches the runtime helper.
+        time). Threshold: `tiling_sizes.inplace_min_bytes()` unless stated, the
+        runtime helper's own.
         Same threshold formula MUST match — divergence would mean the
         estimator predicts an in-place that the runtime won't actually
         engage. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
         """
+        if threshold_bytes is None:
+            threshold_bytes = _ts.inplace_min_bytes()
         ops = graph.get("ops", {})
         order = graph.get("execution_order", [])
         output_ids = set(graph.get("output_tensor_ids", []))
@@ -2596,12 +2543,12 @@ class PrismSolver:
         """Identify upsample op_uids that will be fused with their consumer
         conv by `_detect_op_level_tiling_pairs` at runtime — replicates the
         same eligibility logic exactly (`conv_overflow OR up_overflow`,
-        same `0.25 * comp_vram` threshold) so the tiling-aware activation
+        same `tiling_sizes.upsample_overflows` threshold) so the tiling-aware activation
         estimate and the runtime tiling plan agree on which upsamples are
         materialized as `FusionUpsampleProxy` (size=0).
 
         P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE: critical to keep the
-        threshold formula synced with `_detect_op_level_tiling_pairs:819`.
+        threshold formula synced with `_detect_op_level_tiling_pairs` (one function now).
         Mismatch → estimator and runtime disagree about which upsamples
         are "free" → estimate says "fits" but runtime won't fuse.
         """
@@ -2635,15 +2582,15 @@ class PrismSolver:
             conv_op = ops.get(conv_uid, {})
             if "convolution" not in conv_op.get("op_type", ""):
                 continue
-            # Eligibility: conv would overflow OR upsample output > 25% VRAM.
-            # Same formula as solver.py:819 _detect_op_level_tiling_pairs.
+            # Eligibility: conv would overflow OR the upsample output overflows
+            # (`tiling_sizes.upsample_overflows`, as in _detect_op_level_tiling_pairs).
             conv_overflow = conv_uid in overflow_conv_uids
             up_out_meta = graph["tensors"].get(out_tids[0], {})
             up_out_shape = profiler._resolve_shape(up_out_meta, symbol_map)
             up_out_bytes = profiler._compute_size(
                 up_out_shape, up_out_meta, dtype_bytes
             )
-            up_overflow = up_out_bytes > 0.25 * comp_vram_bytes
+            up_overflow = _ts.upsample_overflows(up_out_bytes, comp_vram_bytes)
             if conv_overflow or up_overflow:
                 fusion_uids.add(uid)
         return fusion_uids
@@ -2661,7 +2608,7 @@ class PrismSolver:
 
         1. First pass with `vram_per_gpu_bytes = smallest_GPU_in_profile`
            (worst-case budget): identify overflow_ops at the standard
-           `safety=0.85` threshold.
+           op-budget threshold (`tiling_sizes.op_budget_fraction()`).
         2. Detect which upsample → conv adjacencies would be intercepted
            as fusion pairs by `_detect_op_level_tiling_pairs` at runtime.
         3. Second pass with `fusion_upsample_uids` set: re-estimate peak
@@ -4706,7 +4653,7 @@ class PrismSolver:
                 g = frac ** (1.0 / 3.0)
                 t_tile = max(2, int(t_lat * g))
                 if t_tile < t_lat:
-                    t_overlap = max(1, t_tile // 4)
+                    t_overlap = max(1, _ts.temporal_halo(t_tile))
                     # Spatial fraction left after the temporal shrink
                     sp_frac = frac / (t_tile / float(t_lat))
                     sp_tile = int(math.sqrt(latent_h * latent_w * min(1.0, sp_frac)))
@@ -4726,7 +4673,7 @@ class PrismSolver:
                         }
 
         overlap_src = t_spec["tile_size"] if t_spec else tile_size
-        overlap = max(4, overlap_src // 8)
+        overlap = _ts.spatial_overlap(overlap_src)
         if window_alignment > 1:
             overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
 
@@ -4906,10 +4853,10 @@ class PrismSolver:
 
         # Input-space halos on the ratio lattices (stride = tile - overlap
         # stays lattice-exact so every position maps to an integral latent
-        # position). Same proportional law as decode (extent // 8, min one
-        # lattice step).
+        # position). Same proportional law as decode (`tiling_sizes.spatial_halo`,
+        # min one lattice step).
         overlap = max(sp_ratio,
-                      ((sp_tile // 8 + sp_ratio - 1) // sp_ratio) * sp_ratio)
+                      ((_ts.spatial_halo(sp_tile) + sp_ratio - 1) // sp_ratio) * sp_ratio)
         if overlap >= sp_tile:
             overlap = sp_ratio
         spec: Dict[str, Any] = {
@@ -4924,7 +4871,7 @@ class PrismSolver:
             "t_axis_out": int(t_axis_out),
         }
         if t_tile < num_frames:
-            t_overlap = max(t_ratio, ((t_tile // 4) // t_ratio) * t_ratio)
+            t_overlap = max(t_ratio, (_ts.temporal_halo(t_tile) // t_ratio) * t_ratio)
             if t_overlap >= t_tile:
                 t_overlap = t_ratio
             spec.update({

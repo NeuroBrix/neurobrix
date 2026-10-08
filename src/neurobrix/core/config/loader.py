@@ -68,6 +68,18 @@ def get_precision_calibration_policy() -> Dict[str, Any]:
     return policy
 
 
+@lru_cache(maxsize=1)
+def get_tiling_policy() -> Dict[str, Any]:
+    """Load config/tiling.yml (the TilingEngine's engine-wide split sizes, read through
+    `core/module/tiling_sizes.py`). ZERO FALLBACK: a missing file raises — no split is ever cut
+    by a size the data does not state."""
+    config_path = CONFIG_ROOT / "tiling.yml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"ZERO FALLBACK: the tiling policy is not found: {config_path}")
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
 class UnsupportedArchitectureError(FileNotFoundError):
     """No hardware profile describes the detected GPU.
 

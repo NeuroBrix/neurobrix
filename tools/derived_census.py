@@ -234,8 +234,8 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
         unhandled[f"component not derivable, annotation contradicts its trace — {e}"] += 1
         return []
     dt0 = lambda tid: NBXDtype[rt[tid]] if rt.get(tid) in NBXDtype.__members__ else NBXDtype[{"float16": "float16", "float32": "float32", "bfloat16": "bfloat16"}[rt[tid]]]
-    from neurobrix.kernels import wrappers as _W
-    conv_band_bytes = _W._NBX_CONV2D_BAND_BYTES
+    from neurobrix.triton import tiling_sizes as _TS
+    conv_band_bytes = _TS.conv2d_band_bytes()
     out = []
     half = cdtype in ("float16", "bfloat16")
     for uid in g["execution_order"]:
