@@ -161,6 +161,10 @@ sdpa_smem_safety: 0.7
 
 # CDNA1 precision support
 precision:
+  # Attention operands that disagree in dtype (an fp16 GEMM stored fp32 feeding V) all take the
+  # narrowest of the three, the compiled engine's alignment: the half attention stays on the matrix
+  # unit (V100, 2026-10-08: 1.16 s/op aligned narrowest vs 22.0 s/op on the scalar flash aligned widest).
+  attention_operands: narrowest
   supports_fp16: true
   supports_bf16: true    # CDNA2+ supports BF16
   supports_tf32: false   # AMD does not have TF32

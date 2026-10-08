@@ -317,23 +317,19 @@ def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
 
 def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
                         q_round: Optional[NBXDtype] = None):
-    """The (q, k, v) dtypes `scaled_dot_product_attention_wrapper` computes attention with: the
-    kernels need matching operands, so three that disagree are all cast to the NARROWEST of them,
-    the first in (q, k, v) order on a tie — the compiled engine's own alignment
-    (`compiled_ops._align_qkv_dtypes`), so both modes attend over the same operands (R30). Q is
-    judged at its KV-cache rounding `q_round` when the cache asks for one. Returns
-    (q, k, v, q_round).
-
-    The fp32 alignment it replaces put a half-precision attention whose V alone came out of an
-    fp32-stored GEMM (Volta's matmul store policy) on the scalar-FMA flash kernel: Allegro's
-    self-attention ran 22.0 s/op at 2.6 TFLOP/s against 1.16 s/op on the matrix-unit flash, 9.7x
-    the native step (nbx/campaigns/2026_10_08_allegro_prof/probe, 2026-10-08)."""
+    """The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention
+    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under the active
+    hardware profile's `precision.attention_operands`. The wrapper, the derived census and
+    Prism's width estimate all ask this one function, so none of them holds a rule of its own."""
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from neurobrix.triton.dtype import attention_operand_alignment, attention_operand_dtypes
     qj = q_round if q_round is not None else q
     if qj == k == v:
         return q, k, v, q_round
-    from neurobrix.kernels.nbx_tensor import dtype_size
-    t = min((qj, k, v), key=dtype_size)
-    return t, t, t, None
+    out = attention_operand_dtypes(q.name, k.name, v.name,
+                                   attention_operand_alignment(active_vendor_profile()),
+                                   q_round.name if q_round is not None else None)
+    return tuple(None if d is None else NBXDtype[d] for d in out)
 
 
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int) -> bool:

@@ -132,6 +132,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Hardware profiles state how attention treats inputs of different precision.** A new
+  `precision.attention_operands` key (`narrowest` or `widest`) decides the precision an attention
+  computes in when its query, key and value arrive in different precisions, the same in both
+  engines. Every bundled profile declares `narrowest`; a custom profile without the key is refused
+  by name the first time such an attention runs.
+
 - **Mixture-of-experts models prepare faster.** Before a run, the engine replaces each layer's experts
   with one fused operation and removes the operations left unused. That cleanup rescanned the whole model
   once per layer; it now follows only the operations each removal touches. On Qwen3-30B-A3B it takes

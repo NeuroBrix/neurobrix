@@ -528,7 +528,21 @@ def test_under_fp16_a_tuple_norm_output_keeps_the_fp32_its_kernel_wrote():
         "r0"] == "float16"
 
 
-def test_an_attention_over_disagreeing_operands_writes_the_narrowest():
+
+@pytest.fixture
+def volta_profile(monkeypatch):
+    """The profile in force is volta.yml, whatever card (or none) the test host carries: the
+    alignment is the profile's (`precision.attention_operands`), read by the function the run calls."""
+    import os
+    import yaml
+    from neurobrix.kernels.ops import _configs
+    path = os.path.join(os.path.dirname(_configs.__file__), "..", "..", "config", "vendors", "nvidia", "volta.yml")
+    with open(path) as f:
+        prof = yaml.safe_load(f)
+    monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)
+    return prof
+
+def test_an_attention_over_disagreeing_operands_writes_the_narrowest(volta_profile):
     """`scaled_dot_product_attention_wrapper` casts q, k, v that disagree to the narrowest of them
     before any route (`launch_keys.sdpa_operand_dtypes`, the compiled engine's alignment), so Wan's
     cross-attention (fp16 q/k, fp32 v) writes fp16 — this pass reads the same function. Agreeing

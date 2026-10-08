@@ -15,6 +15,20 @@ from neurobrix.kernels.nbx_tensor import NBXDtype
 F16, F32 = NBXDtype.float16, NBXDtype.float32
 
 
+@pytest.fixture
+def volta_profile(monkeypatch):
+    """The profile in force is volta.yml, whatever card (or none) the test host carries: the
+    alignment is the profile's (`precision.attention_operands`), read by the function the run calls."""
+    import os
+    import yaml
+    from neurobrix.kernels.ops import _configs
+    path = os.path.join(os.path.dirname(_configs.__file__), "..", "..", "config", "vendors", "nvidia", "volta.yml")
+    with open(path) as f:
+        prof = yaml.safe_load(f)
+    monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)
+    return prof
+
+
 def test_the_text_axis_is_finalized_as_the_handler_finalizes_it():
     wan = {"max_sequence_length": 512, "zero_pad_embeddings": True}
     sana = {"max_sequence_length": 300, "complex_human_instruction": ["..."]}
@@ -41,7 +55,7 @@ def test_the_handler_produces_the_length_the_rule_names():
     assert out["hidden_state"].shape[1] == 512 and out["attention_mask"].shape[1] == 512
 
 
-def test_disagreeing_attention_operands_are_aligned_to_the_narrowest():
+def test_disagreeing_attention_operands_are_aligned_to_the_narrowest(volta_profile):
     BF16 = NBXDtype.bfloat16
     assert LK.sdpa_operand_dtypes(F16, F16, F32) == (F16, F16, F16, None)   # Allegro: fp32 V
     assert LK.sdpa_operand_dtypes(F32, F16, F16) == (F16, F16, F16, None)   # Sana: fp32 Q

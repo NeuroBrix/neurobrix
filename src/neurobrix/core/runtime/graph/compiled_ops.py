@@ -85,26 +85,6 @@ def _mask_axis_short(mask_extent: int, seq: int) -> bool:
     return 1 < mask_extent < seq
 
 
-def _align_qkv_dtypes(q, k, v):
-    """Align Q/K/V dtypes for SDPA. Required when upstream AMP ops produce mixed dtypes.
-
-    On fp16 hardware, _FP16_NEED_FP32 ops (bmm) upcast to fp32. If Q or K flows
-    through bmm but V doesn't, SDPA receives mixed fp32/fp16 → crash.
-    Cast all to the narrowest common dtype (prefer compute_dtype for performance).
-    """
-    if q.dtype == k.dtype == v.dtype:
-        return q, k, v
-    # Use the narrowest dtype (fp16/bf16 preferred over fp32 for SDPA performance)
-    target = min((q.dtype, k.dtype, v.dtype), key=lambda d: torch.tensor([], dtype=d).element_size())
-    if q.dtype != target:
-        q = q.to(target)
-    if k.dtype != target:
-        k = k.to(target)
-    if v.dtype != target:
-        v = v.to(target)
-    return q, k, v
-
-
 # Read-only placeholders for the side outputs of the ATen attention variants
 # (no consumer in an inference graph). Cached: a fresh torch.tensor(0, device=)
 # per call is a pageable host-to-device copy followed by a stream sync.
@@ -215,7 +195,7 @@ class CompiledOpResolver:
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, use_triton: bool = False,
                  activations_fp16_safe: bool = False, fp32_op_uids=None,
-                 narrow_op_uids=None):
+                 narrow_op_uids=None, hardware=None):
         self.device = device
         self.dtype = dtype
         self.use_triton = False  # triton mode now uses triton/ package directly
@@ -226,7 +206,8 @@ class CompiledOpResolver:
         self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled,
                                         activations_fp16_safe=activations_fp16_safe,
                                         fp32_op_uids=fp32_op_uids,
-                                        narrow_op_uids=narrow_op_uids)
+                                        narrow_op_uids=narrow_op_uids,
+                                        hardware=hardware)
 
     # ========================================================================
     # PUBLIC API
@@ -623,7 +604,7 @@ class CompiledOpResolver:
 
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
             def flash_cpu_attention(q, k, v, dropout_p=0.0, is_causal=False, **kwargs):
-                q, k, v = _align_qkv_dtypes(q, k, v)
+                q, k, v = self.dtype_engine.align_attention_operands(q, k, v)
                 if _k_is_pre_transposed(q, k, attrs, op_name):
                     k = k.transpose(-2, -1)
                 scale = kwargs.get("scale", None)
@@ -644,7 +625,7 @@ class CompiledOpResolver:
                          "_scaled_dot_product_flash_attention"):
             def efficient_attention(q, k, v, attn_bias=None, compute_lse=False,
                                    dropout_p=0.0, is_causal=False, scale=None, *args):
-                q, k, v = _align_qkv_dtypes(q, k, v)
+                q, k, v = self.dtype_engine.align_attention_operands(q, k, v)
                 if _k_is_pre_transposed(q, k, attrs, op_name):
                     k = k.transpose(-2, -1)
                 # The memory-efficient kernel takes strided [B, H, S, D]
@@ -683,7 +664,7 @@ class CompiledOpResolver:
 
         # Standard SDPA — handles pattern-reassembled ops + native SDPA
         def standard_attention(q, k, v, *args, **kwargs):
-            q, k, v = _align_qkv_dtypes(q, k, v)
+            q, k, v = self.dtype_engine.align_attention_operands(q, k, v)
             # K may be transposed [B,H,D,S] from pattern reassembly — fix to
             # [B,H,S,D]. The graph says which it is (GraphExecutor.
             # _mark_sdpa_k_layout walks the producer chain at load): a shape

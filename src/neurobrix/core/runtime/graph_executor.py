@@ -1096,7 +1096,8 @@ class GraphExecutor:
             self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
                 False, frozenset(), frozenset()
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
-                                             amp_enabled=amp_enabled)
+                                             amp_enabled=amp_enabled,
+                                             hardware=(self.vendor, self.arch))
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -1647,6 +1648,7 @@ class GraphExecutor:
             activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
+            hardware=self._dtype_engine.hardware,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -4992,7 +4994,8 @@ class GraphExecutor:
         from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
 
         if self._sequential_dispatcher is None:
-            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self._placement_torch_dtype())
+            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self._placement_torch_dtype(),
+                                                               dtype_engine=self._dtype_engine)
 
         # FUSED MoE OP: Execute via custom handler (bypasses TensorResolver)
         # Must be checked BEFORE resolve_args — fused op's args list contains 192+
