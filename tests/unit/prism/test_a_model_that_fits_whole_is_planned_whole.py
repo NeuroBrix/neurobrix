@@ -340,6 +340,7 @@ def test_a_plan_that_loads_on_demand_holds_its_dearest_phase_on_a_unified_device
     plan.loading_mode, plan.device_window_mb = "lazy", 4_000.0
     assert unified_device_bytes(plan, apple, 0) == 4_000 * MB                # a streamed plan: at least its window
     plan.layer_stream_plan = {"lm": object()}                                 # lm streamed: its phases hold the rest whole
+    s._layer_stream_cost = {n: int(m.total_bytes) for n, m in COMPS.items()}  # what that rung prices, none tiled
     streamed_peak = s._peak_loaded_bytes(c, plan)
     assert streamed_peak == (200 + 700 + 500 + 600) * MB                      # {head, dec} + the cache + the tower
     assert unified_device_bytes(plan, apple, 9_000 * MB) == 9_000 * MB        # and a dearer whole phase (2026-10-08)
