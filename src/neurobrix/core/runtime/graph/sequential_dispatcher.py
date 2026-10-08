@@ -52,7 +52,11 @@ class NativeATenDispatcher:
 
     # No local DTYPE_MAP — uses neurobrix.core.dtype.config.parse_dtype()
 
-    def __init__(self, device: Optional[str] = None, compute_dtype: Optional[torch.dtype] = None):
+    def __init__(self, device: Optional[str] = None, compute_dtype: Optional[torch.dtype] = None,
+                 dtype_engine=None):
+        # The executor's DtypeEngine: attention operands that disagree are aligned by ITS
+        # decision (`align_attention_operands`), the compiled engine's own.
+        self._dtype_engine = dtype_engine
         # Cache for resolved operations
         self._op_cache = {}
         # Runtime device from Prism - overrides hardcoded graph devices
@@ -346,14 +350,16 @@ class NativeATenDispatcher:
             # Fix K/V layout for standard SDPA path (Gemma-2 text encoder K transposition)
             if len(inputs) >= 3:
                 q, k, v = _fix_sdpa_kv_layout(inputs[0], inputs[1], inputs[2])
-                # Align Q/K/V dtypes (mirror the compiled _align_qkv_dtypes): upstream
-                # AMP upcasts (bmm→fp32 on fp16 hw) can leave V in fp16 while Q/K are
-                # fp32, which torch SDPA rejects. Cast to the narrowest common dtype.
-                if (hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype")
-                        and not (q.dtype == k.dtype == v.dtype)):
-                    _t = min((q.dtype, k.dtype, v.dtype),
-                             key=lambda d: torch.tensor([], dtype=d).element_size())
-                    q, k, v = q.to(_t), k.to(_t), v.to(_t)
+                # Align Q/K/V dtypes by the DtypeEngine's decision (the compiled engine's
+                # own): upstream AMP upcasts (bmm->fp32 on fp16 hw) can leave V in fp16
+                # while Q/K are fp32, which torch SDPA rejects.
+                if hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype"):
+                    if self._dtype_engine is None and not (q.dtype == k.dtype == v.dtype):
+                        raise RuntimeError(
+                            "ZERO FALLBACK: attention operands disagree and this dispatcher "
+                            "was given no DtypeEngine to align them")
+                    if self._dtype_engine is not None:
+                        q, k, v = self._dtype_engine.align_attention_operands(q, k, v)
                 inputs = [q, k, v] + list(inputs[3:])
                 # A FLOATING attn_mask must track the (possibly AMP-upcast)
                 # query dtype — torch SDPA rejects a half mask against a

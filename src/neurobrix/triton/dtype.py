@@ -326,6 +326,59 @@ def matrix_unit_representation(dtype: str, unit: dict) -> Optional[str]:
     return None
 
 
+#: The ways a hardware profile may align attention operands that disagree in dtype
+#: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
+ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
+_ATTENTION_OPERAND_BYTES = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8}
+
+
+def attention_operand_alignment(profile: dict) -> str:
+    """The alignment the hardware profile declares for attention operands that disagree in dtype
+    (`precision.attention_operands`, one of ATTENTION_OPERAND_ALIGNMENTS). A profile that declares
+    none, or another word, is refused by name: the choice moves a whole attention between the
+    matrix unit and the scalar units, so it is never guessed.
+
+    TWIN: core/dtype/engine.py `attention_operand_alignment` (neither module may import the
+    other; a unit test holds the two equal)."""
+    v = (profile.get("precision") or {}).get("attention_operands")
+    if v not in ATTENTION_OPERAND_ALIGNMENTS:
+        raise ValueError(f"hardware profile {profile.get('architecture')!r}: "
+                         f"precision.attention_operands is {v!r}, not one of "
+                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
+    return v
+
+
+def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
+                             q_round: Optional[str] = None) -> tuple:
+    """The (q, k, v, q_round) dtypes (names) an attention computes with — the ONE decision both
+    engines' attention reads (R30): the Triton wrapper (`launch_keys.sdpa_operand_dtypes`), the
+    derived census and Prism's width estimate through it, and the compiled engine through its
+    twin. The kernels need matching operands: three that already match (Q judged at its KV-cache
+    rounding `q_round` when the cache asks for one) are returned unchanged; three that disagree
+    all take the narrowest or the widest of them, as the profile's `alignment` declares
+    (`attention_operand_alignment`), the first in (q, k, v) order on a tie, and q_round is
+    dropped. A non-floating operand is refused by name.
+
+    Measured on V100 (2026-10-08, nbx/campaigns/2026_10_08_allegro_prof/probe): an fp16 attention
+    whose V alone came out of an fp32-stored GEMM ran 22.0 s/op on the scalar flash when aligned
+    to the widest, 1.16 s/op on the matrix-unit flash when aligned to the narrowest.
+
+    TWIN: core/dtype/engine.py `attention_operand_dtypes` (a unit test holds the two equal)."""
+    qj = q_round if q_round is not None else q
+    for d in (qj, k, v):
+        if d not in _ATTENTION_OPERAND_BYTES:
+            raise ValueError(f"attention_operand_dtypes: {d!r} is not a floating dtype an "
+                             f"attention computes in")
+    if qj == k == v:
+        return q, k, v, q_round
+    if alignment not in ATTENTION_OPERAND_ALIGNMENTS:
+        raise ValueError(f"attention_operand_dtypes: alignment {alignment!r} is not one of "
+                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
+    pick = min if alignment == "narrowest" else max
+    t = pick((qj, k, v), key=_ATTENTION_OPERAND_BYTES.__getitem__)
+    return t, t, t, None
+
+
 def matrix_unit_split_scale(unit: dict) -> tuple:
     """(hi_exp, lo_shift) of the split representation, derived from the unit's operand dtype (never written in a
     kernel): each operand tile is scaled by the power of two that brings its largest magnitude into

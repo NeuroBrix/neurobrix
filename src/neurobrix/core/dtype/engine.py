@@ -416,6 +416,59 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
                      f"dtype — the AMP_FP32 cast-back rule exists for bfloat16 and float16 only")
 
 
+#: The ways a hardware profile may align attention operands that disagree in dtype
+#: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
+ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
+_ATTENTION_OPERAND_BYTES = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8}
+
+
+def attention_operand_alignment(profile: dict) -> str:
+    """The alignment the hardware profile declares for attention operands that disagree in dtype
+    (`precision.attention_operands`, one of ATTENTION_OPERAND_ALIGNMENTS). A profile that declares
+    none, or another word, is refused by name: the choice moves a whole attention between the
+    matrix unit and the scalar units, so it is never guessed.
+
+    TWIN: triton/dtype.py `attention_operand_alignment` (neither module may import the
+    other; a unit test holds the two equal)."""
+    v = (profile.get("precision") or {}).get("attention_operands")
+    if v not in ATTENTION_OPERAND_ALIGNMENTS:
+        raise ValueError(f"hardware profile {profile.get('architecture')!r}: "
+                         f"precision.attention_operands is {v!r}, not one of "
+                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
+    return v
+
+
+def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
+                             q_round: Optional[str] = None) -> tuple:
+    """The (q, k, v, q_round) dtypes (names) an attention computes with — the ONE decision both
+    engines' attention reads (R30): the Triton wrapper (`launch_keys.sdpa_operand_dtypes`), the
+    derived census and Prism's width estimate through it, and the compiled engine through its
+    twin. The kernels need matching operands: three that already match (Q judged at its KV-cache
+    rounding `q_round` when the cache asks for one) are returned unchanged; three that disagree
+    all take the narrowest or the widest of them, as the profile's `alignment` declares
+    (`attention_operand_alignment`), the first in (q, k, v) order on a tie, and q_round is
+    dropped. A non-floating operand is refused by name.
+
+    Measured on V100 (2026-10-08, nbx/campaigns/2026_10_08_allegro_prof/probe): an fp16 attention
+    whose V alone came out of an fp32-stored GEMM ran 22.0 s/op on the scalar flash when aligned
+    to the widest, 1.16 s/op on the matrix-unit flash when aligned to the narrowest.
+
+    TWIN: triton/dtype.py `attention_operand_dtypes` (a unit test holds the two equal)."""
+    qj = q_round if q_round is not None else q
+    for d in (qj, k, v):
+        if d not in _ATTENTION_OPERAND_BYTES:
+            raise ValueError(f"attention_operand_dtypes: {d!r} is not a floating dtype an "
+                             f"attention computes in")
+    if qj == k == v:
+        return q, k, v, q_round
+    if alignment not in ATTENTION_OPERAND_ALIGNMENTS:
+        raise ValueError(f"attention_operand_dtypes: alignment {alignment!r} is not one of "
+                         f"{ATTENTION_OPERAND_ALIGNMENTS}")
+    pick = min if alignment == "narrowest" else max
+    t = pick((qj, k, v), key=_ATTENTION_OPERAND_BYTES.__getitem__)
+    return t, t, t, None
+
+
 def contraction_accumulator_dtype(dtype: str) -> str:
     """The dtype (a name) the partial results of a contraction split over the axis it reduces
     are summed in, when a stretch runs in slices of that axis (`core/strategies/chunked_piece`):
@@ -661,9 +714,13 @@ class DtypeEngine:
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, activations_fp16_safe: bool = False,
                  fp32_op_uids: Optional[FrozenSet[str]] = None,
-                 narrow_op_uids: Optional[FrozenSet[str]] = None):
+                 narrow_op_uids: Optional[FrozenSet[str]] = None,
+                 hardware: Optional[tuple] = None):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
+        # (vendor, architecture) of the profile the plan placed this engine on: the hardware
+        # profile carries the preferences the engine decides with (`precision.attention_operands`).
+        self.hardware: Optional[tuple] = tuple(hardware) if hardware else None
         self.amp_enabled = amp_enabled
         # Per-component precision contract (see the header). Default False
         # = the conservative fp32 upcasts on fp16 hardware, unchanged for
@@ -697,6 +754,23 @@ class DtypeEngine:
         (`contraction_accumulator_dtype`), for a partial of `dtype` — the stitch of a stretch run
         in slices (`core/strategies/chunked_piece`) asks the engine, never the pass dtype."""
         return getattr(torch, contraction_accumulator_dtype(_dtype_name(dtype)))
+
+    def align_attention_operands(self, q, k, v):
+        """q, k, v cast to the dtypes the attention computes with (`attention_operand_dtypes`,
+        the decision the Triton engine takes from the same profile key): unchanged when they
+        agree, else all to the dtype the hardware profile's `precision.attention_operands`
+        names. An engine placed on no hardware profile is refused by name when they disagree."""
+        if q.dtype == k.dtype == v.dtype:
+            return q, k, v
+        if self.hardware is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: attention operands disagree ({q.dtype}, {k.dtype}, {v.dtype}) and "
+                f"this DtypeEngine was given no hardware profile to read precision.attention_operands from")
+        from neurobrix.core.config.loader import get_vendor_config
+        t = getattr(torch, attention_operand_dtypes(
+            _dtype_name(q.dtype), _dtype_name(k.dtype), _dtype_name(v.dtype),
+            attention_operand_alignment(get_vendor_config(*self.hardware)))[0])
+        return q.to(t), k.to(t), v.to(t)
 
     def compile_op(self, op_type: str, func: Optional[Callable], attrs: Dict[str, Any],
                    op_uid: Optional[str] = None) -> Callable:
