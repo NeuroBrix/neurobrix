@@ -44,7 +44,7 @@ def _host(t):
 @pytest.mark.skipif(not _gpu(), reason="needs a device")
 def test_where_writes_the_half_extreme_not_minus_infinity():
     from neurobrix.kernels import wrappers as w
-    eng = TritonDtypeEngine(NBXDtype.bfloat16)
+    eng = TritonDtypeEngine(NBXDtype.bfloat16, has_fp64=False)
     where = eng.wrap_op("where", w.where_wrapper)
     cond = NBXTensor.from_numpy(np.array([[True, False], [False, True]]))
     x = NBXTensor.from_numpy(np.zeros((), dtype=np.uint16), dtype=NBXDtype.bfloat16)   # 0.0 in bf16, one element
@@ -58,7 +58,7 @@ def test_where_writes_the_half_extreme_not_minus_infinity():
 def test_masked_fill_and_full_saturate_in_half_dtypes():
     from neurobrix.kernels import wrappers as w
     from neurobrix.kernels.dispatch import dispatch
-    eng = TritonDtypeEngine(NBXDtype.float16)
+    eng = TritonDtypeEngine(NBXDtype.float16, has_fp64=False)
     x = NBXTensor.from_numpy(np.ones((2, 2), dtype=np.float16))
     mask = NBXTensor.from_numpy(np.array([[True, False], [False, False]]))
     filled = _host(eng.wrap_op("masked_fill", w.masked_fill)(x, mask, F32_MIN))

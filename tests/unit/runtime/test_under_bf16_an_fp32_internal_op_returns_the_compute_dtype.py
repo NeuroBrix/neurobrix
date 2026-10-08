@@ -178,7 +178,7 @@ def flag():
 def _out(c, op, func, x_dtype=None, graph="same", **contract):
     """`graph`: the component's graph dtype — by default the compute dtype's (a bf16
     graph run in bf16, an fp16 one in fp16)."""
-    eng = T.TritonDtypeEngine(c, graph_dtype=c.name if graph == "same" else graph)
+    eng = T.TritonDtypeEngine(c, graph_dtype=c.name if graph == "same" else graph, has_fp64=False)
     if contract:
         eng.set_precision_contract(**contract)
     return eng.wrap_op(op, func, op_uid="op::0")(_Fake(x_dtype or c))
@@ -217,7 +217,7 @@ def test_the_triton_wrapper_keeps_fp32_for_an_fp32_graph_under_bf16(flag):
 
 
 def test_the_triton_wrapper_refuses_an_unstated_graph_under_bf16_at_wrap_time():
-    eng = T.TritonDtypeEngine(NBXDtype.bfloat16)
+    eng = T.TritonDtypeEngine(NBXDtype.bfloat16, has_fp64=False)
     with pytest.raises(ValueError, match="graph dtype"):
         eng.wrap_op("rms_norm", _norm, op_uid="op::0")
     # an op the rule does not concern still wraps (the Triton engine is built before any op)
@@ -359,8 +359,8 @@ def test_every_engine_reads_the_graph_dtype_from_the_container_s_torch_dtype():
     from neurobrix.triton.sequential import TritonSequentialDispatcher
     for g in ("float32", "bfloat16"):
         dag = {"torch_dtype": g, "ops": {}, "tensors": {}, "execution_order": []}
-        assert TritonSequence(dag, 0, NBXDtype.bfloat16)._dtype_engine.graph_dtype == g
+        assert TritonSequence(dag, 0, NBXDtype.bfloat16, has_fp64=False)._dtype_engine.graph_dtype == g
         assert TritonSequentialDispatcher(0, NBXDtype.bfloat16,
-                                          graph_dtype=g)._dtype_engine.graph_dtype == g
+                                          graph_dtype=g, has_fp64=False)._dtype_engine.graph_dtype == g
         cs = CompiledSequence(dag, torch.device("cpu"), torch.bfloat16)
         assert cs.op_resolver.dtype_engine.graph_dtype == getattr(torch, g)

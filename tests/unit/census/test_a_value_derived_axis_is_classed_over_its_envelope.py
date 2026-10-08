@@ -124,6 +124,9 @@ def synthetic(monkeypatch):
     """The synthetic graph served as the component's runtime graph; the plan-time contract empty
     and every tensor at its traced dtype (fp32 throughout) — what is under test is the axis."""
     _census._bind_target("c4140-4xv100-16GB-nvlink", None)     # a committed V100 profile: its ladders
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.kernels import wrappers as W
+    monkeypatch.setattr(W, "_NBX_HW_PROFILE", load_profile("c4140-4xv100-16GB-nvlink"))  # as the census binds it
 
     def install(g):
         for cache in (D._RUNTIME_GRAPHS, D._VALUE_AXES, D._INERT_AXES):

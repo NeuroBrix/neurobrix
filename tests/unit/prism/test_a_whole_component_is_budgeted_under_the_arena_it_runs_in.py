@@ -101,7 +101,7 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
     g = comp.graph
     prof = ActivationProfiler(g)
     smap = prof.build_symbol_map(request, placement_floor=True)
-    widths = runtime_widths(g, "float16", "compiled", has_native_bf16=False,
+    widths = runtime_widths(g, "float16", "compiled", has_native_bf16=False, has_fp64=False,
                             contract=plan_time_contract(root, "vae", g, "float16"),
                             shape_of=lambda t: prof._resolve_shape(g["tensors"][t], smap))
     silu = g["ops"]["aten.silu::32"]["output_tensor_ids"][0]

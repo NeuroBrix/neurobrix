@@ -391,19 +391,51 @@ def matrix_unit_split_scale(unit: dict) -> tuple:
     return int(fi.maxexp) - 2, int(fi.nmant) + 1
 
 
-def constant_load_dtype(traced: str, compute: str) -> str:
+#: float64 / complex128 as the Triton branch holds them where its kernels carry no fp64.
+_NO_FP64_CEILING = {NBXDtype.float64: NBXDtype.float32, NBXDtype.complex128: NBXDtype.complex64}
+
+
+def triton_has_fp64(vendor: str, architecture: str) -> bool:
+    """Whether the Triton branch computes and stores float64 / complex128 on this hardware: the
+    device's (`precision.supports_fp64`) AND the NeuroBrix Triton kernels' there
+    (`precision.kernels_carry_fp64.triton`), both from the vendor profile, both required, a missing
+    key refused. The mirror of `core.dtype.config.device_supports_fp64`, which reads `.compiled`."""
+    from neurobrix.core.config import loader
+    precision = loader.get_vendor_config(vendor, architecture).get("precision") or {}
+    carry = (precision.get("kernels_carry_fp64") or {}).get("triton")
+    if not isinstance(precision.get("supports_fp64"), bool) or not isinstance(carry, bool):
+        raise ValueError(f"ZERO FALLBACK: the {vendor}/{architecture} profile does not declare "
+                         f"precision.supports_fp64 and precision.kernels_carry_fp64.triton "
+                         f"(found {precision!r}); a device's fp64 is never assumed")
+    return precision["supports_fp64"] and carry
+
+
+def profile_triton_has_fp64(profile) -> bool:
+    """`triton_has_fp64` of a hardware profile's first device (a PrismProfile)."""
+    if profile is None or not getattr(profile, "devices", None):
+        raise ValueError("ZERO FALLBACK: no hardware profile with a device; the Triton branch's "
+                         "fp64 is read from its vendor profile, never assumed")
+    dev = profile.devices[0]
+    return triton_has_fp64(getattr(dev.brand, "value", dev.brand), dev.architecture)
+
+
+def storage_dtype_name(name: str, has_fp64: bool) -> str:
+    """`TritonDtypeEngine.storage_dtype` on a dtype name."""
+    if has_fp64:
+        return name
+    return {"float64": "float32", "complex128": "complex64"}.get(name, name)
+
+
+def constant_load_dtype(traced: str, compute: str, has_fp64: bool) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
     when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
-    bf16), to float32 otherwise; float64 narrows to float32, complex128 to complex64; every other
-    dtype is kept as traced. The loader and Prism's width pass both ask it."""
+    bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
+    (`storage_dtype_name`); every other dtype is kept as traced. The loader and Prism's width
+    pass both ask it."""
     if traced == "bfloat16":
         return compute if compute in ("float16", "bfloat16") else "float32"
-    if traced == "float64":
-        return "float32"
-    if traced == "complex128":
-        return "complex64"
-    return traced
+    return storage_dtype_name(traced, has_fp64)
 
 
 def graph_dtype_name(graph_dtype) -> Optional[str]:
@@ -564,8 +596,11 @@ class TritonDtypeEngine:
     """
 
     def __init__(self, compute_dtype: NBXDtype, has_native_bf16: bool = True,
-                 graph_dtype=None):
+                 graph_dtype=None, *, has_fp64: bool):
         self.compute_dtype = compute_dtype
+        # Whether this branch computes and stores float64 / complex128 on its device
+        # (`triton_has_fp64`, from the vendor profile); False holds them in float32 / complex64.
+        self.has_fp64 = bool(has_fp64)
         # The component's GRAPH dtype — the container's traced `torch_dtype` — read by
         # the AMP_FP32 cast-back rule under bf16 (`amp_fp32_output_dtype`).
         self.graph_dtype: Optional[str] = graph_dtype_name(graph_dtype)
@@ -641,6 +676,11 @@ class TritonDtypeEngine:
         if graph_dt in _FLOATING:
             return self.compute_dtype
         return graph_dt
+
+    def storage_dtype(self, dtype: NBXDtype) -> NBXDtype:
+        """`dtype` as this branch holds it: float64 -> float32 and complex128 -> complex64 where it
+        carries no fp64, unchanged otherwise — `DtypeEngine.storage_dtype`'s mirror."""
+        return dtype if self.has_fp64 else _NO_FP64_CEILING.get(dtype, dtype)
 
     def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in

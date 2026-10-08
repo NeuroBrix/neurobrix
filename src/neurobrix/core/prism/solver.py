@@ -3011,11 +3011,14 @@ class PrismSolver:
         else:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
+        # The Triton branch's fp64, the profile's; with no profile fp64 is kept, the wider answer.
+        from neurobrix.triton.dtype import profile_triton_has_fp64
+        has_fp64 = profile_triton_has_fp64(profile) if profile is not None else True
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
-            contract=contract, tiling=None,
+            contract=contract, has_fp64=has_fp64, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
 
     def _graph_as_executed(self, comp, container):

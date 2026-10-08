@@ -150,6 +150,14 @@ precision:
   # IEEE-754 binary64 in hardware on every CUDA device (CUDA C++ Programming Guide, arithmetic instructions); torch.float64 is native on cuda. Read by the DtypeEngine (`device_supports_fp64`):
   # false narrows float64/complex128 to float32/complex64 as the vendor's own code does on MPS.
   supports_fp64: true
+  # Whether each engine branch's OWN kernels compute and store float64 / complex128, read with
+  # supports_fp64 (both must hold): `compiled` is ATen's, which carries both wherever the device does;
+  # `triton` is the NeuroBrix Triton kernels', fp32-max (the elementwise and index kernels read at fp32
+  # stride). Read by the DtypeEngine (`config.device_supports_fp64`) and the TritonDtypeEngine
+  # (`triton.dtype.triton_has_fp64`); false narrows float64/complex128 to float32/complex64.
+  kernels_carry_fp64:
+    compiled: true
+    triton: false
 
 # Software-pipelining budget — see volta.yml for the schema. Hopper
 # (sm_90) has cp.async and TMA; the cap never binds.

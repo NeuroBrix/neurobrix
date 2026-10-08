@@ -148,12 +148,12 @@ def test_an_embedded_constant_is_bound_by_the_loaders_rule():
     fp16 in the walk), an fp32 one stays fp32 (swin2SR's coordinates table). Injection: every
     constant cast to the compute dtype -> the fp32 case, RED."""
     from neurobrix.triton.dtype import constant_load_dtype
-    assert constant_load_dtype("bfloat16", "float16") == "float16"
-    assert constant_load_dtype("bfloat16", "bfloat16") == "bfloat16"
-    assert constant_load_dtype("bfloat16", "float32") == "float32"
-    assert constant_load_dtype("float32", "float16") == "float32"
-    assert constant_load_dtype("float64", "float16") == "float32"
-    assert constant_load_dtype("int64", "float16") == "int64"
+    assert constant_load_dtype("bfloat16", "float16", False) == "float16"
+    assert constant_load_dtype("bfloat16", "bfloat16", False) == "bfloat16"
+    assert constant_load_dtype("bfloat16", "float32", False) == "float32"
+    assert constant_load_dtype("float32", "float16", False) == "float32"
+    assert constant_load_dtype("float64", "float16", False) == "float32"
+    assert constant_load_dtype("int64", "float16", False) == "int64"
 
 
 def test_the_audio_towers_frames_are_pooled_to_the_projectors_width():

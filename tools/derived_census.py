@@ -206,6 +206,14 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
     return shape
 
 
+def _triton_fp64() -> bool:
+    """The Triton branch's fp64 on the hardware profile this census bound
+    (`wrappers.set_hardware_profile`; refused when none is bound)."""
+    from neurobrix.kernels.wrappers import get_hardware_profile
+    from neurobrix.triton.dtype import profile_triton_has_fp64
+    return profile_triton_has_fp64(get_hardware_profile())
+
+
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
                sdpa_max_chunks, unhandled, tiling=None, tiled_tf=None, decode_kv=None, skip=(),
                only=None, axis_values=None, axes=()):
@@ -227,7 +235,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-                               tiling=tiling, shape_of=shape)
+                               has_fp64=_triton_fp64(), tiling=tiling, shape_of=shape)
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.
