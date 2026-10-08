@@ -207,7 +207,7 @@ class CompiledOpResolver:
                                         activations_fp16_safe=activations_fp16_safe,
                                         fp32_op_uids=fp32_op_uids,
                                         narrow_op_uids=narrow_op_uids,
-                                        hardware=hardware)
+                                        hardware=hardware, device=device)
 
     # ========================================================================
     # PUBLIC API
