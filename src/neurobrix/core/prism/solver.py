@@ -132,10 +132,14 @@ _DTYPE_WIDTH = {
 }
 
 
-def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
+def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None, host_bytes: int = 0) -> int:
     """The plan's device bytes that are host bytes: all of them when the profile declares its device
     unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
-    ledger reserves what a unified run really takes (the Mac, 2026-10-03).
+    ledger reserves what a unified run really takes (the Mac, 2026-10-03). Never the components the
+    plan computes on the host (`host_bytes`, their totals; the lazy peak is passed without them): their
+    holding is the host footprint's steady term, and counting them here as well priced
+    PixArt-XL-2-1024-MS's text encoder twice (the Mac, 2026-10-08, cpu_streaming: 18 815 MB held plus a
+    9 732 MB device plan, every component on the host; max RSS 16 619 MiB).
 
     What a plan holds AT ONCE, not every component it ever loads: a streamed plan its window; a plan
     that loads on demand (`loading_mode == "lazy"`) the dearest of its flow's phases, which the solver
@@ -149,7 +153,7 @@ def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None)
             return int(window * 2**20)
         if peak_loaded_bytes is not None and plan.loading_mode == "lazy":
             return int(peak_loaded_bytes)
-        return int(plan.total_memory_mb * 2**20)
+        return max(0, int(plan.total_memory_mb * 2**20) - int(host_bytes))
     return 0
 
 
@@ -713,6 +717,8 @@ class PrismSolver:
         # (`_effective_capacity_mb`) under the 2026-09-21 memory law. No literal default here —
         # config/system.py is the single source (a missing key is a config regression and must crash).
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
+        #: Strategies whose host side overshot the free memory at the current rung (reset per solve).
+        self._host_declined: set = set()
         #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
         #: FIXED computation — the same op of the same request, refused three
         #: times, and what the driver said free each time:
@@ -874,7 +880,8 @@ class PrismSolver:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
         each component's total); the KV cache, priced inside its owner's total, stays allocated in
         the phases that no longer hold the owner."""
-        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()
+                  if not self._allocation_on_host(plan.components[n])}
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
         return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
@@ -1656,7 +1663,7 @@ class PrismSolver:
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
 
-            if strat_name in getattr(self, "_host_declined", ()):
+            if strat_name in self._host_declined:
                 self._rejected.append((strat_name, float(score), "its host side overshot the free memory"))
                 continue
 
@@ -2008,7 +2015,11 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
+            device_bytes=unified_device_bytes(
+                plan, profile, self._peak_loaded_bytes(container, plan),
+                host_bytes=sum(int(m.total_bytes) for n, m in plan.component_memory.items()
+                               if self._allocation_on_host(plan.components[n]))),
+            unified=any(d.has_unified_memory for d in profile.devices))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
