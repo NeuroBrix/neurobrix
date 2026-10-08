@@ -146,9 +146,14 @@ def locked(path: Path):
             fcntl.flock(lk, fcntl.LOCK_UN)
 
 
-def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, int]:
+def replace_model(path: Path, model: str, rows: Iterable[Dict], keyless_ops: int = 0) -> Tuple[int, int]:
     """The model's rows replaced by `rows` (a new census of that container), every other model's kept:
     a retrace replaces, never adds. Returns (rows removed, rows written for the model).
+
+    `keyless_ops` is the derivation's PROOF that a model forms no key: the count of kernel-bearing ops it
+    placed whose launcher key function returned no key (a profile's matrix unit carries its tile in the
+    profile, never in an autotune key: volta-tensor-cores, 2026-10-08). Only with that proof may the
+    rows be replaced by none.
 
     Under an exclusive lock beside the table: many census processes (one per model, the supervisor's
     2026-09-28 21:56) write one class table, and an unlocked read-modify-write lets the last writer
@@ -156,12 +161,13 @@ def replace_model(path: Path, model: str, rows: Iterable[Dict]) -> Tuple[int, in
     rows = list(rows)
     if any(r.get("model") != model for r in rows):
         raise ValueError(f"replace_model({model!r}) was handed rows of another model")
-    if not rows:
+    if not rows and keyless_ops <= 0:
         # A door, not a census: a census that formed no key (no mode asked, an empty key record, a
         # shadow that ran nothing) is not the knowledge that the model forms none — replacing its
         # rows by nothing unserved it silently (the tools audit, 2026-09-29).
         raise EmptyCensus(f"replace_model({model!r}): no rows — a census that formed no key is not the "
-                          f"knowledge that the model forms none; its rows in {path.name} are kept")
+                          f"knowledge that the model forms none (no keyless op placed); its rows in {path.name} "
+                          f"are kept")
     with locked(path):
         old = read(path)
         kept = [r for r in old if r["model"] != model]

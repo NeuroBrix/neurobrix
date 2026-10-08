@@ -161,7 +161,10 @@ def _attention_or_named_refusal(q, k, v, **kw):
 
 
 @pytest.mark.parametrize("B,H,H_kv,T_q,T_k,D", _SHAPES)
-def test_grouped_gqa_bit_identical(B, H, H_kv, T_q, T_k, D) -> None:
+def test_grouped_gqa_bit_identical(B, H, H_kv, T_q, T_k, D, without_matrix_unit) -> None:
+    """The identity is the regrouping's, on ONE GEMM route: a profile's matrix unit takes a GEMM from
+    its smallest tile's rows up (`launch_keys.matrix_unit_operands`), so the grouped `groups*T_q` rows
+    can reach it while the broadcast reference's `T_q` rows do not — two routes, two roundings."""
     if not _has_gpu():
         pytest.skip("no GPU")
     q = _rand((B, H, T_q, D), 1)

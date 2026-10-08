@@ -117,6 +117,34 @@ def bmm_dtypes(a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bool = 
     return a, b, promote_b
 
 
+def matrix_unit_operands(a: NBXDtype, b: NBXDtype, M: int):
+    """(rep_a, rep_b): how the profile's matrix unit carries each operand of a GEMM with M output rows, as they are
+    in memory — the DtypeEngine's `matrix_unit_representation` ("native", "split") — or None: either operand has
+    none, or M does not fill the smallest tile the profile lists for that representation (a row band mostly empty
+    leaves the unit idle; the GEMV / batched kernels own those rows, and a row's reduction order then never
+    depends on how many rows share its launch). The wrappers' `_gemm_unit_tile` asks this same function."""
+    from neurobrix.kernels.ops._configs import matrix_unit
+    from neurobrix.triton.dtype import matrix_unit_representation
+    mu = matrix_unit()
+    ra, rb = matrix_unit_representation(a.name, mu), matrix_unit_representation(b.name, mu)
+    if not (ra and rb):
+        return None
+    rows = (mu["fp32_split"] if "split" in (ra, rb) else mu)["mm"]
+    return (ra, rb) if M >= min(int(r["block_m"]) for r in rows) else None
+
+
+def matrix_unit_takes(a: NBXDtype, b: NBXDtype, M: int) -> bool:
+    """The profile's matrix unit runs this GEMM (`matrix_unit_operands`). Its tile is the profile's, so it has NO
+    autotune key: every `*_launches` below returns [] where it holds."""
+    return matrix_unit_operands(a, b, M) is not None
+
+
+def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
+    """Both operands are the unit's operand dtype in memory: what the convolution's implicit GEMM
+    (ops/conv2d_m8n8k4.py) carries until it takes the split representation too."""
+    return matrix_unit_operands(a, b, M) == ("native", "native")
+
+
 def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
                 force_accum: bool = False) -> List[Launch]:
     """`mm` (and `mm_epilogue`): M <= 4 runs per-row GEMV (no autotuned kernel); otherwise one
@@ -124,17 +152,19 @@ def mm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: b
     if M <= 4:
         return []
     a, b, promote_a, promote_b = mm_dtypes(a, b, native_bf16, force_accum)
+    if matrix_unit_takes(a, b, M):
+        return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
     ieee = (not native_bf16) and out == F32
     return [(MATMUL, (bucket_of("M", M), N, K, ieee, promote_b, tag(a), tag(b), tag(out)))]
 
 
 def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype,
-                   native_bf16: bool, force_accum: bool = False) -> List[Launch]:
+                   native_bf16: bool, force_accum: bool = False, bias_row: bool = True) -> List[Launch]:
     """`addmm` on a 2-D activation (an N-D one is flattened to (numel/K, K) first): M <= 4 runs
-    per-row addmv; otherwise one key."""
+    per-row addmv; a [N] / [1, N] bias (`bias_row`) on the matrix unit has no key; otherwise one key."""
     a, b, bias, promote_a, promote_b, _ = addmm_dtypes(a, b, bias, native_bf16, force_accum)
-    if M <= 4:
+    if M <= 4 or (bias_row and matrix_unit_takes(a, b, M)):
         return []
     out = matmul_out_dtype(a, M, promote_a, native_bf16, force_accum)
     ieee = (not native_bf16) and out == F32
@@ -144,7 +174,10 @@ def addmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDt
 def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: bool,
                  force_accum: bool = False) -> List[Launch]:
     """`bmm`: always one batched launch through `baddbmm_kernel` (HAS_BIAS False, the output
-    passed as the bias pointer), every dim bucketed, the output fp32 for any half input."""
+    passed as the bias pointer), every dim bucketed, the output fp32 for any half input; on the matrix unit
+    (M > 4, operands taken as they are in memory, before the widening) no key."""
+    if matrix_unit_takes(a, b, M):
+        return []
     a, b, promote_b = bmm_dtypes(a, b, native_bf16, force_accum)
     out = matmul_out_dtype(a, M, True, native_bf16, force_accum)
     ieee = (not native_bf16) and out == F32
@@ -155,7 +188,9 @@ def bmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, native_bf16: 
 def baddbmm_launches(M: int, K: int, N: int, a: NBXDtype, b: NBXDtype, bias: NBXDtype) -> List[Launch]:
     """`baddbmm_wrapper`: one batched launch at the operands' own dtypes (no promotion, no
     widened store: the output is batch1's dtype), IEEE_PRECISION and HAS_BIAS set, PROMOTE_B
-    off, every dim bucketed; the bias pointer keyed at its own dtype."""
+    off, every dim bucketed; the bias pointer keyed at its own dtype. On the matrix unit (M > 4) no key."""
+    if matrix_unit_takes(a, b, M):
+        return []
     return [(BADDBMM, (bucket_of("M", M), bucket_of("N", N), bucket_of("K", K),
                        True, False, True, tag(a), tag(b), tag(a), tag(bias)))]
 
@@ -395,18 +430,31 @@ def is_krsc_weight(w) -> bool:
     return tuple(w.stride()) == (R * S * C, 1, S * C, C)
 
 
+def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
+    """The profile's matrix unit runs this attention's flash (`matrix_unit.flash` has a row for head dim D and the
+    three operands are its operand dtype) — the wrappers' route asks this same function."""
+    from neurobrix.kernels.ops._configs import matrix_unit, matrix_unit_flash_tile
+    mu = matrix_unit()
+    return (matrix_unit_flash_tile(D, mu) is not None
+            and q.name == k.name == v.name == mu["operand_dtype"])
+
+
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
-               min_chunk_rows: int, max_chunks: int, force_math: bool = False) -> Tuple[str, int]:
+               min_chunk_rows: int, max_chunks: int, force_math: bool = False,
+               unit_flash: bool = False) -> Tuple[str, int]:
     """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
     when the value head dim differs; else by the fp32 scores' size against the executing device's
     budget — a non-power-of-two head dim falls back to a 2 GiB bound when the arch declares none;
-    over the bound, chunked when the rows fit the arch's ceiling; otherwise flash."""
+    over the bound, flash when the profile's matrix unit takes it (`unit_flash_takes`: the
+    deterministic m8n8k4 kernel), else chunked when the rows fit the arch's ceiling; otherwise flash."""
     if force_math or Dv != D:
         return ("math", 0)
     scores = batch * nheads * Tq * Tk * 4
     bound = budget_bytes if _pow2(D) else (budget_bytes or (2 << 30))
     if scores <= bound:
         return ("math", 0)
+    if unit_flash:
+        return ("flash", 0)
     if bound:
         rows = sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
         if rows:
@@ -536,6 +584,8 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
                 if l not in out_launches:
                     out_launches.append(l)
         return out_launches
+    if matrix_unit_native(x, w, N * out_h * out_w):  # the implicit GEMM on the profile's matrix unit: no key
+        return []
     iw_k, ow_k = conv_width_key(in_h, out_h, in_w, out_w, kw, sw, pw, dw)
     return [(CONV2D, (N, in_c, in_h, iw_k, out_c, out_h, ow_k, kh, kw, sh, sw, ph, pw, dh, dw, groups,
                       x == F16, tag(x), tag(w), tag(out)))]

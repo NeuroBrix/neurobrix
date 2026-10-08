@@ -49,6 +49,19 @@ def test_a_model_s_rows_are_never_replaced_by_none(tmp_path):
     assert p.read_bytes() == before
 
 
+def test_a_model_proven_keyless_loses_its_rows_and_only_then(tmp_path):
+    """A derivation that PLACED its kernel-bearing ops with no key (a matrix unit's launches) is the knowledge
+    that the model forms none: its stale rows go, every other model's stay. Without that proof the door holds.
+    Injection: the `keyless_ops` proof ignored -> the stale rows stay, RED; the door opened for 0 -> RED above."""
+    p = tmp_path / "16g.jsonl"
+    T.replace_model(p, "A", [_row("A")])
+    T.replace_model(p, "B", [_row("B")])
+    with pytest.raises(T.EmptyCensus, match="no keyless op placed"):
+        T.replace_model(p, "A", [], keyless_ops=0)
+    assert T.replace_model(p, "A", [], keyless_ops=3) == (1, 0)
+    assert {r["model"] for r in T.read(p)} == {"B"}
+
+
 def test_replacing_a_model_twice_with_the_same_rows_is_byte_identical(tmp_path):
     """Injection: rows written unsorted or ops un-canonicalised -> the bytes differ, RED."""
     p = tmp_path / "16g.jsonl"
