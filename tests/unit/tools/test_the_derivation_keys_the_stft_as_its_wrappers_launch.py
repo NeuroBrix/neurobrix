@@ -52,22 +52,22 @@ def _launches(kind, args, x_shape):
     return out, unhandled
 
 
-def test_the_istft_is_the_inverse_dft_over_its_frames():
+def test_the_istft_is_the_inverse_dft_over_its_frames(tl_dot_gemms):
     args = [T("x"), S(16), S(4), S(16), T("w")]
     out, unhandled = _launches("aten::istft", args, [1, 9, 4801])
-    assert not unhandled, unhandled
+    assert not D.unplaced(unhandled), unhandled
     b = LK.bucket_of
     assert out == [(LK.MATMUL, (b("M", 4801), 16, 9, True, False, "fp32", "fp32", "fp32"))]
     out2, _ = _launches("aten::istft", args, [9, 4801])              # a 2-D spectrum: one row
     assert out2 == out
 
 
-def test_a_power_of_two_stft_forms_no_key_and_another_forms_one():
+def test_a_power_of_two_stft_forms_no_key_and_another_forms_one(tl_dot_gemms):
     args = lambda n, hop, win: [T("x"), S(n), S(hop), S(win), T("w"), S(False), S(None), S(True)]
     out, unhandled = _launches("aten::stft", args(16, 4, 16), [1, 19216])
     assert (out, dict(unhandled)) == ([], {})                         # the butterfly: no key
     out, unhandled = _launches("aten::stft", args(20, 5, 20), [2, 22096])
-    assert not unhandled, unhandled
+    assert not D.unplaced(unhandled), unhandled
     frames = (22096 - 20) // 5 + 1
     b = LK.bucket_of
     assert out == [(LK.MATMUL, (b("M", 2 * frames), 11, 20, True, False, "fp32", "fp32", "fp32"))]

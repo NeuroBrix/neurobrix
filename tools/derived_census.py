@@ -260,9 +260,22 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
             continue
         if launches is None:
             continue
+        if not launches:
+            # A kernel-bearing op placed with no key (its launcher key function returned none): the proof
+            # that lets a model forming no key replace its rows by none (`census_table.replace_model`).
+            unhandled[f"{KEYLESS}{kind}"] += 1
         for q_, key in launches:
             out.append((uid, q_, key))
     return out
+
+
+KEYLESS = "KEYLESS "   # an `unhandled` item that is a placement, not a defect: an op placed with no key
+
+
+def unplaced(unhandled: collections.Counter) -> collections.Counter:
+    """What the derivation could NOT place: `unhandled` without its placements (KEYLESS) and its notes
+    (NOTE, an annotation defect named, the key the op's own contract's)."""
+    return collections.Counter({w: n for w, n in unhandled.items() if not w.startswith(("NOTE ", KEYLESS))})
 
 
 def _mask_numel(o: dict, shape):
@@ -1812,7 +1825,7 @@ def compare(a) -> int:
     for q_, k in sorted(d_keys - w_keys)[:20]:
         print(f"   EXTRA  {q_.split('.')[-1]} {k}")
     for why, n in unhandled.most_common():
-        print(f"   NOT YET: {n:4d} x {why}")
+        print(f"   {'PLACED' if why.startswith(KEYLESS) else 'NOT YET'}: {n:4d} x {why}")
     return 0
 
 
@@ -1857,7 +1870,7 @@ def table(a) -> int:
         if probe is not None:
             reqs.append(probe)
         container = CC._graph_sha(model)
-        rows, refused, notes = [], [], collections.Counter()
+        rows, refused, notes, keyless = [], [], collections.Counter(), 0
         for mode in modes:
             for ri, req in enumerate(reqs):
                 for rung in rungs:
@@ -1875,7 +1888,9 @@ def table(a) -> int:
                     for why, n in unhandled.items():
                         if why.startswith("NOTE "):
                             notes[why] += n
-                    hard = [(why, n) for why, n in unhandled.most_common() if not why.startswith("NOTE ")]
+                        elif why.startswith(KEYLESS):
+                            keyless += n
+                    hard = unplaced(unhandled).most_common()
                     if hard:
                         refused.extend(f"{mode} r{rung} request {ri}: {n} x {why}" for why, n in hard)
                         continue
@@ -1883,9 +1898,9 @@ def table(a) -> int:
                         rows.append({"model": model, "container": container, "mode": mode,
                                      "rungs_mb": [int(rung)], "ops": [uid], "kernel": q_, "key": key,
                                      "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
-        if not rows and not refused:
-            refused.append("every request, mode and rung derived no key — not the knowledge that the "
-                           "model forms none")
+        if not rows and not refused and not keyless:
+            refused.append("every request, mode and rung derived no key and placed no keyless op — not the "
+                           "knowledge that the model forms none")
         if refused:
             worst = 1
             kept = sorted({r.get("tool") for r in T.read(path) if r["model"] == model} - {None})
@@ -1894,9 +1909,10 @@ def table(a) -> int:
             for line in refused[:30]:
                 print(f"   {line}")
             continue
-        removed, _ = T.replace_model(path, model, rows)
+        removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else keyless)
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
-        print(f"[derived table] {model}: {written} row(s) written ({removed} replaced) into {path.name} "
+        print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
+              f"placed) into {path.name} "
               f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
         for why, n in notes.most_common():
             print(f"   derived from the op's contract, the annotation named: {n} x {why}")

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at 13.5 (was 7.9), and attention reaches 45.7, 48.2 and 42.9 TFLOP/s at head sizes 64, 96 and 128
   (2.46 at head size 96 before). Float16 products run at 16 to 42 TFLOP/s (4096x5120x5120: 42.3)
   and 3x3 float16 convolutions at 13.1 to 13.6.
+  The tensor-core routes take no autotune key: the V100 census holds 3 900 (16 GB) and 4 020 (32 GB)
+  fewer keys to certify, and none new.
 
 - **Attention runs on the V100's tensor cores in the Triton mode.** On Volta GPUs, Triton turns matrix
   products into ordinary arithmetic instructions and leaves the tensor cores unused. The Triton mode's
