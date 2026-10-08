@@ -69,6 +69,8 @@ block_sizes:
 # Schema documented in volta.yml. Decode entries first.
 # Hopper values not yet empirically calibrated; tile sizes scaled
 # up for the larger SMEM budget (227 KB).
+# num_warps: 8 on every row is the declared value, NOT measured here (no Hopper
+# card); since 2026-10-08 the flash launch reads it, and a row without one is an error.
 sdpa_thresholds:
   # Decode path (seqlen_q ≤ 16)
   - seqlen_q_le: 16

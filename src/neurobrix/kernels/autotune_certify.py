@@ -95,7 +95,7 @@ def census(vendor: str, profile: str, memory_class: int) -> Dict[str, List[tuple
 # ---------------------------------------------------------------------------
 # inputs from a key, and the fp64 oracle
 # ---------------------------------------------------------------------------
-_NP = {"fp16": np.float16, "bf16": np.float32, "fp32": np.float32, "fp64": np.float64,
+_NP = {"fp16": np.float16, "bf16": np.uint16, "fp32": np.float32, "fp64": np.float64,
        # The integer and boolean dtypes a real key carries. A batched GEMM's BIAS is an
        # attention MASK on some models — MiniCPM-o's is `uint8` — and without these entries
        # the lookup below fell back to float32, the wrapper recomputed the key as fp16, and
@@ -128,14 +128,18 @@ class _Synth(np.ndarray):
     key the runtime will never recompute is an entry nobody finds. What was
     needed was to be able to recompute the key.
 
-    bf16 is nothing but the top sixteen bits of an fp32, so its values are
-    carried EXACTLY in an fp32 array and this tag says what the kernel must
-    receive. The oracle then reads the same values and is exact rather than
-    merely close: a bf16 value is exactly representable in fp32 and in fp64.
-    No dependency is added — measured 2026-09-11, the integer conversion
-    below agrees with `torch.bfloat16` on 200 013 values with ZERO
-    divergence, exact halves, subnormals, infinities, NaN and the fp32
+    bf16 is nothing but the top sixteen bits of an fp32, so a bf16 operand is
+    carried as its BITS, in a uint16 array at the kernel's own width, and
+    this tag says what the kernel must receive. Its values are read through
+    `values()`, which is exact: a bf16 value is exactly representable in fp32
+    and in fp64. No dependency is added — measured 2026-09-11, the integer
+    conversion below agrees with `torch.bfloat16` on 200 013 values with
+    ZERO divergence, exact halves, subnormals, infinities, NaN and the fp32
     maximum included.
+
+    Carried until 2026-10-05 as float32 VALUES, twice the operand: with the
+    device copy beside it on a unified-memory machine, that is what made the
+    Mac's certifier refuse convolutions its plans form (see `_refuse_unified`).
     """
 
     def __new__(cls, arr, nbx_dtype):
@@ -146,6 +150,25 @@ class _Synth(np.ndarray):
     def __array_finalize__(self, obj):
         if obj is not None:
             self._nbx_dtype = getattr(obj, "_nbx_dtype", None)
+
+    def astype(self, dtype, *args, **kwargs):
+        # bf16 BITS cast to a float are integers, not values: refused by name, never read silently
+        if getattr(self, "_nbx_dtype", None) == "bf16" and np.dtype(dtype).kind == "f":
+            raise TypeError("a bf16 operand is carried as its bits: read its numbers through "
+                            "autotune_certify.values(), not astype")
+        return super().astype(dtype, *args, **kwargs)
+
+
+def values(a) -> np.ndarray:
+    """An operand's NUMBERS as a plain array: a bf16 operand's bits decoded exactly to float32,
+    any other operand as it is."""
+    if getattr(a, "_nbx_dtype", None) == "bf16":
+        return bf16_bits_to_f32(np.asarray(a))
+    return np.asarray(a)
+
+
+def _f64(a) -> np.ndarray:
+    return values(a).astype(np.float64)
 
 
 def f32_to_bf16_bits(a: np.ndarray) -> np.ndarray:
@@ -210,25 +233,39 @@ def _itemsize(dtype_name: str) -> int:
     return 2 if dtype_name == "bf16" else np.dtype(_NP[dtype_name]).itemsize
 
 
-def _unified_bytes_per_element(dt) -> int:
-    """What one element of a synthesized tensor costs on a device whose memory IS the host's:
-    the host draw (float32, float64 for an fp64 operand — `_arr`), the device copy at its own
-    width, and the float32 readback. For a half type 4 + 2 + 4 = 10, the Mac's measured
-    ceiling (2026-09-27: 6.4, 8.2 and >= 9.8 B/elem at 358M, 642M and 1 456M elements)."""
-    return (8 if str(dt) == "fp64" else 4) + _itemsize(dt) + 4
-
-
-def _refuse_oversize(card_bytes, specs, what: str, unified: bool = False) -> None:
-    """`specs`: (shape, dtype) of every operand AND the output. Checked before any draw.
-    On a unified-memory device the host copies live in the same pool as the device buffers,
-    so every copy is counted: a conv sized at 3 GB of device bytes took the Mac's certifier
-    past 14 GB and was killed by its guard (2026-09-27)."""
+def _refuse_oversize(card_bytes, specs, what: str) -> None:
+    """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against
+    a DISCRETE card. Checked before any draw. A unified-memory device is `_refuse_unified`'s."""
     if card_bytes is None:
         return
-    per = _unified_bytes_per_element if unified else _itemsize
-    asked = sum(int(np.prod(shape, dtype=np.int64)) * per(dt) for shape, dt in specs)
+    asked = sum(int(np.prod(shape, dtype=np.int64)) * _itemsize(dt) for shape, dt in specs)
     if asked > card_bytes:
         raise KeyTooLargeForClass(asked, int(card_bytes), what)
+
+
+def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
+    """On a device whose memory IS the host's, the host copies live in the same pool as the
+    device buffers (a conv sized at 3 GB of device bytes took the Mac's certifier past 14 GB,
+    2026-09-27), so the bound is the key's phase price — host draws, device copies, oracle —
+    against the card. Checked before any draw.
+
+    It was a constant, 10 bytes per element of every operand and of the output (a float32 host
+    draw, the device copy, a float32 readback). The draws are held at the kernel's width since
+    2026-10-05 and the output is read back on the oracle's windows only, and the constant refused
+    eight keys of the Apple table — convolutions at 4224-5120 px, a VAE conv at batch 162, an
+    fp32 addmm at M=163840 — that the planner places whole on the same 18 GB profile (the rack,
+    2026-10-05 13:40)."""
+    if card_bytes is None:
+        return
+    pr = price_key(qual, tuner, key)
+    if pr is None or pr["peak"] <= card_bytes:
+        return
+    mib = lambda b: f"{b / 2**20:.0f} MiB"                                 # noqa: E731
+    raise KeyTooLargeForClass(
+        int(pr["peak"]), int(card_bytes),
+        f"{C.kernel_short(qual)} on unified memory, priced at its peak phase: draws "
+        f"{mib(pr['draws'])} + device {mib(pr['device'])} + max(oracle {mib(pr['oracle'])}, "
+        f"deviation {mib(pr['deviation'])}) = {mib(pr['peak'])}")
 
 
 
@@ -288,11 +325,9 @@ def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_byte
             f"budget (the figure the run's guard kills at)")
 
 def _draw_bytes(dt: str) -> int:
-    """What one element of a drawn operand costs on the host for the whole key (`_arr`: float32,
-    float64 for an fp64 operand, the integral dtype's own width for a mask)."""
-    if dt in _INTEGRAL:
-        return np.dtype(_NP[dt]).itemsize
-    return 8 if dt == "fp64" else 4
+    """What one element of a drawn operand costs on the host for the whole key: its own width
+    (`_arr` draws through a bounded chunk into the kernel's dtype, bf16 as its bits)."""
+    return _itemsize(dt)
 
 
 def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Dict[str, int]]:
@@ -303,8 +338,8 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
     key's is its draws and the row-windowed launch oracle, and none of it is 10 bytes per element.
 
     Phases, each held in full while the next one is built:
-      draws     — every input drawn on the host at `_draw_bytes`, alive for the whole key (the
-                  oracle closures read them);
+      draws     — every input held on the host at its own width (`_draw_bytes`), alive for the
+                  whole key (the oracle closures read them);
       device    — every operand and the output on the device at the key's width, plus `do_bench`'s
                   256 MiB flush buffer; on a unified-memory device these bytes are the host's;
       oracle    — the fp64 reference: whole under ORACLE_MAX_MACS, windowed above it
@@ -391,26 +426,21 @@ def _arr(rng, shape, dtype_name, scale=0.1):
         # oracle can reproduce exactly.
         a = rng.integers(0, 2, size=shape, dtype=np.int8)
         return _Synth(a.astype(_NP[dtype_name], copy=False), dtype_name)
-    # Drawn in float32 (float64 only for an fp64 operand) and scaled IN PLACE: the float64 draw
-    # and its scaled copy held five times the operand's bytes on the host before its final cast.
+    # Drawn in float32 (float64 only for an fp64 operand), scaled, and written at the KERNEL'S
+    # width through a bounded chunk: the host holds the operand itself plus one chunk. The whole
+    # draw in float32 before its cast was three times a half operand; a bf16 operand carried as
+    # float32 values was twice its bits for the whole key (2026-10-05, `_refuse_unified`). The
+    # generator fills sequentially, so the chunks are the whole draw's values, bit for bit.
     draw = np.float64 if dtype_name == "fp64" else np.float32
-    a = rng.standard_normal(shape, dtype=draw)
-    a *= draw(scale)
-    if dtype_name == "bf16":
-        # The VALUES are made exactly representable in bf16 (round to nearest, ties to even —
-        # `f32_to_bf16_bits`' rule), in place, so the oracle reading this array reads what the
-        # kernel will receive.
-        flat = a.reshape(-1).view(np.uint32)
-        step = 1 << 18                                   # a 1 MB temporary, whatever the operand
-        for i in range(0, flat.size, step):
-            u = flat[i:i + step]
-            t = np.right_shift(u, np.uint32(16))
-            np.bitwise_and(t, np.uint32(1), out=t)
-            np.add(t, np.uint32(0x7FFF), out=t)
-            np.add(u, t, out=u)
-            np.bitwise_and(u, np.uint32(0xFFFF0000), out=u)
-        return _Synth(a, "bf16")
-    return _Synth(a.astype(_NP[dtype_name], copy=False), dtype_name)
+    out = np.empty(shape, dtype=_NP[dtype_name])
+    flat = out.reshape(-1)
+    step = 1 << 18                                       # a 1 MB float32 chunk, whatever the operand
+    for i in range(0, flat.size, step):
+        chunk = rng.standard_normal(min(step, flat.size - i), dtype=draw)
+        chunk *= draw(scale)
+        # bf16: the bits of the value rounded to nearest, ties to even (`f32_to_bf16_bits`)
+        flat[i:i + step] = f32_to_bf16_bits(chunk) if dtype_name == "bf16" else chunk
+    return _Synth(out, dtype_name)
 
 
 class _ArgSpec:
@@ -447,8 +477,10 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
     geometry is written once (a 1024²×256 input is 2 GB of float64 per window, 109 s of an
     oracle on 2026-09-07; the whole input in float64 was the Mac's 27.5 GB on 2026-09-25)."""
     from neurobrix.kernels.oracles.conv2d_fp64 import conv2d_reference_window
-    return conv2d_reference_window(x, w, stride=stride, padding=padding, dilation=dilation,
-                                   groups=groups, window=window)
+    # the input's numbers are read slab by slab, so a bf16 operand is decoded on the window only
+    return conv2d_reference_window(None, _f64(w), stride=stride, padding=padding, dilation=dilation,
+                                   groups=groups, window=window, shape=x.shape,
+                                   slab_of=lambda n0, n1, u0, u1, v0, v1: _f64(x[n0:n1, :, u0:u1, v0:v1]))
 
 
 def _conv_windows(n, oh, ow, ci_g, co, kh, kw, cap=None):
@@ -547,8 +579,8 @@ def _matmul_oracle_fn(a, b, bias=None):
     wins = _row_windows(m * batch, n, k)
 
     def whole():
-        r = a.astype(np.float64) @ b.astype(np.float64)
-        return r if bias is None else r + bias.astype(np.float64)
+        r = _f64(a) @ _f64(b)
+        return r if bias is None else r + _f64(bias)
     if wins is None:
         return whole
     rows = wins[0][1] - wins[0][0]
@@ -557,9 +589,9 @@ def _matmul_oracle_fn(a, b, bias=None):
     def windowed():
         blocks = []
         for (r0, r1) in wins:
-            r = a[..., r0:r1, :].astype(np.float64) @ b.astype(np.float64)
+            r = _f64(a[..., r0:r1, :]) @ _f64(b)
             if bias is not None:
-                bb = bias.astype(np.float64)
+                bb = _f64(bias)
                 r = r + (bb[..., r0:r1, :] if bb.ndim >= 2 and bb.shape[-2] == m else bb)
             blocks.append(((r0, r1), r))
         return RowWindowedOracle(blocks, m)
@@ -605,24 +637,26 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
     def to(a):
         """The NBXTensor the kernel must receive, with the dtype the key names.
 
-        A bf16 array travels in a uint16 container, which `from_numpy`'s
+        A bf16 operand IS its bits in a uint16 container, which `from_numpy`'s
         `dtype` argument exists for — it names the NBX dtype the BITS already
-        are. Passing the fp32 carrier instead is what made every bf16 shape
+        are. Passing an fp32 carrier instead is what made every bf16 shape
         uncertifiable.
         """
         if isinstance(a, _ArgSpec):
             return NBXTensor.empty(a.shape, dtype=_SPEC_NBX.get(a.dtype_name, a.dtype_name))
         if getattr(a, "_nbx_dtype", None) == "bf16":
-            bits = f32_to_bf16_bits(np.ascontiguousarray(np.asarray(a)))
-            return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
+            return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)), dtype=NBXDtype.bfloat16)
         return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)))
     out_dt = C.output_dtype(tuner, key) if card_bytes is not None else None   # sized only to refuse
+    if unified:
+        _refuse_unified(qual, tuner, key, card_bytes)
+        card_bytes = None                       # the phase price is the bound on a unified device
     if short in ("matmul_kernel", "addmm_kernel"):
         M, N, K = int(key[0]), int(key[1]), int(key[2])
         _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
                                       ((K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
-                                      ((M, N), out_dt)], short, unified=unified)
+                                      ((M, N), out_dt)], short)
         a = arr(rng, (M, K), dts[0] if dts else "fp16")
         b = arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
@@ -637,7 +671,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
                                       ((B, K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((B, M, N), out_dt)]
                          + ([((B, M, N), dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16"))]
-                            if has_bias else []), short, unified=unified)
+                            if has_bias else []), short)
         a = arr(rng, (B, M, K), dts[0] if dts else "fp16")
         b = arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
         if has_bias:
@@ -649,7 +683,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         _refuse_oversize(card_bytes, [((n, ci, h, w), dts[0] if dts else "fp16"),
                                       ((co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((n, co, _oh, _ow), out_dt)], short, unified=unified)
+                                      ((n, co, _oh, _ow), out_dt)], short)
         x = arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
@@ -658,7 +692,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
         _refuse_oversize(card_bytes, [((1, c, h, w), dts[0] if dts else "fp16"),
                                       ((c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16"),
-                                      ((1, c, _oh, _ow), out_dt)], short, unified=unified)
+                                      ((1, c, _oh, _ow), out_dt)], short)
         x = arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
