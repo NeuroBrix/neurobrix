@@ -29,15 +29,16 @@ def test_an_unmeasured_arch_keeps_the_detour(monkeypatch):
     assert LK.flash_headdim_detour(128, enabled=False) == 128
 
 
-def test_volta_states_its_measurement_and_every_other_arch_declares_it_unmeasured():
+def test_the_measured_archs_state_it_and_every_other_arch_declares_it_unmeasured():
     """Every arch profile DECLARES the flag (test_smem_budget's door: a key a sibling declares is declared
-    or its omission reasoned) — true only where the correctness oracle ran with the detour off (Volta), false
-    everywhere it was not measured. Until 2026-10-04 this cell asserted the flag ABSENT on the other NVIDIA
+    or its omission reasoned) — true only where the correctness oracle ran with the detour off (Volta,
+    2026-10-03; the M4 Pro, 2026-10-08), false everywhere it was not measured. Until 2026-10-04 this cell asserted the flag ABSENT on the other NVIDIA
     archs, against that door: the two tests could not both pass, and the kernels suite had not been run on
     a card."""
     vendors = REPO / "src" / "neurobrix" / "config" / "vendors"
     declared = {f"{p.parent.name}/{p.stem}": (yaml.safe_load(p.read_text()).get("flash") or {}).get("pow2_head_dim_correct")
                 for p in sorted(vendors.glob("*/*.yml"))}
-    assert declared["nvidia/volta"] is True
-    others = {k: v for k, v in declared.items() if k != "nvidia/volta"}
+    measured = {"nvidia/volta", "apple/apple_m4_pro"}
+    assert all(declared[k] is True for k in measured)
+    others = {k: v for k, v in declared.items() if k not in measured}
     assert others and all(v is False for v in others.values()), {k: v for k, v in others.items() if v is not False}

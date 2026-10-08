@@ -47,7 +47,9 @@ def test_a_dtype_the_table_does_not_know_is_refused_not_defaulted():
 
 
 def test_bf16_still_takes_its_exact_path():
+    from neurobrix.kernels.autotune_certify import values
     a = _arr(np.random.default_rng(37), (8,), "bf16")
-    assert np.asarray(a).dtype == np.float32          # numpy has no bfloat16
+    assert np.asarray(a).dtype == np.uint16           # numpy has no bfloat16: its bits
+    assert values(a).dtype == np.float32              # and its numbers, exactly
     assert getattr(a, "nbx", None) or True            # the wrapper reads the name, not the numpy dtype
     assert "bf16" in _NP

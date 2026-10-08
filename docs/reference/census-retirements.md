@@ -23,3 +23,2959 @@ Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a differ
 | `conv2d_forward_kernel` | 2 |
 
 Census 7131 → 7129 keys. Reversible record: `/home/mlops/nbx/campaigns/2026_09_12_night_catalogue/census_retired_20260913_012345.json`; backup: `autotune_configs_cuda-70.json.bak.20260913_012345`.
+
+## 2026-10-07 17:30 UTC — 2936 certified entries retired, engine `bdb7027c`
+
+Not named by the census table `src/neurobrix/config/census/apple/apple_m4_pro/18g.jsonl` (6178 keys): certificates for shapes no catalogue container forms. Directory `src/neurobrix/config/autotune/apple/apple_m4_pro`: 8113 → 5177 entries (held: `baddbmm_kernel`, rows known wrong, not judged). Reversible record: `/Users/hocine/Workspace/nbx-atelier/campagnes/2026_09_22_apple/results/certify_derived_2026_10_07/retired/certified_retired_20261007_173028.json`.
+
+| file | retired | kept |
+|---|---:|---:|
+| `addmm_kernel.bf16.json` | 10 | 70 |
+| `addmm_kernel.fp32.json` | 127 | 475 |
+| `conv2d_forward_kernel.bf16.json` | 1146 | 3244 |
+| `conv2d_forward_kernel.fp32.json` | 13 | 159 |
+| `depthwise_conv2d_kernel.bf16.json` | 25 | 380 |
+| `depthwise_conv2d_kernel.fp32.json` | 1 | 2 |
+| `matmul_kernel.bf16.json` | 235 | 749 |
+| `matmul_kernel.fp32.json` | 1379 | 98 |
+
+<details><summary>retired keys</summary>
+
+- `addmm_kernel.bf16.json` `(1024, 2304, 2304, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(1024, 2304, 4096, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(1024, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(2048, 3072, 12288, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(2048, 3072, 64, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(2048, 3072, 68, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(480, 3072, 4096, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(64, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(65536, 3072, 64, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.bf16.json` `(96, 512, 768, False, False, 'bf16', 'bf16', 'bf16', 'bf16')`
+- `addmm_kernel.fp32.json` `(10240, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(10240, 32, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1048576, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(114688, 2304, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(114688, 48, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1280, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(12800, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(131072, 1152, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(131072, 1152, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(131072, 32, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(131072, 4608, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1310720, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1536, 1152, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1536, 1152, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1536, 32, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1536, 4608, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 1024, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 1152, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 1152, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 32, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 4096, 1024, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(16384, 4608, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(163840, 16, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(163840, 2304, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(163840, 2304, 9216, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(163840, 9216, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1664, 64, 256, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1792, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1835008, 180, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1835008, 180, 360, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(1835008, 360, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(19456, 128, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(19456, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 1152, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 1152, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 12288, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 3072, 12288, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 32, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 4608, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(2048, 64, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(20480, 64, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(208, 2048, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(208, 256, 1024, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(208, 4608, 4608, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(21504, 12288, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(21504, 3072, 12288, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(21504, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(21504, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(22528, 1536, 1536, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(22528, 1536, 8960, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(22528, 8960, 1536, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(229376, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(24576, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(24576, 32, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(25600, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(262144, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(28672, 16, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(28672, 2304, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(28672, 2304, 9216, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(28672, 9216, 2304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(288, 256, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(288, 4096, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(3072, 15360, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(3072, 3072, 15360, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(3072, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(31744, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(320, 256, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(320, 4096, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(3200, 32, 128, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(32768, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(32768, 32, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(32768, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(327680, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(352, 256, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(352, 4096, 4096, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(3584, 128, 2240, False, False, 'fp32', 'fp32', 'fp32', 'fp32')`
+- `addmm_kernel.fp32.json` `(3584, 2240, 2240, False, False, 'fp32', 'fp32', 'fp32', 'fp32')`
+- `addmm_kernel.fp32.json` `(3584, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(384, 2048, 1024, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(393216, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(40, 512, 2048, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(4194304, 180, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(4194304, 180, 360, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(4194304, 360, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(45056, 48, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(45056, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(458752, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(48, 1536, 1536, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(48, 256, 1536, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(51200, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(524288, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(5248, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(5888, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(6144, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(6144, 32, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(65536, 12288, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(65536, 3072, 12288, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(65536, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(65536, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(65536, 64, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(655360, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(6656, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(704, 1024, 256, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(704, 256, 1024, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(7296, 48, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(786432, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(800, 1152, 4304, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(800, 128, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(800, 3456, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(800, 4304, 1152, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(81920, 12288, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(81920, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(8704, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(917504, 540, 180, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(9216, 512, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(96, 2048, 768, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(96, 50, 512, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(96, 768, 128, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(96, 768, 2048, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(96, 768, 768, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 1920, 1920, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 1920, 7680, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 3072, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 64, 1920, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 64, 3072, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `addmm_kernel.fp32.json` `(98304, 7680, 1920, False, False, 'fp32', 'fp32', 'bf16', 'fp32')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 1, 16384, 1536, 1, 16378, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 128, 160, 1024, 128, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 128, 160, 8192, 128, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 160, 160, 1024, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 160, 160, 8192, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 192, 256, 1024, 192, 256, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 192, 256, 8192, 192, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 256, 256, 1024, 256, 256, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 256, 256, 8192, 256, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 256, 320, 512, 256, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 320, 320, 512, 320, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 384, 512, 512, 384, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 512, 512, 512, 512, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 64, 80, 8192, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1024, 80, 80, 8192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 163840, 128, 1, 163840, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1, 7680, 128, 1, 7680, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1026, 4096, 128, 1026, 4096, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1027, 2562, 3, 1025, 2560, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1028, 4096, 128, 1028, 4096, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1152, 1152, 128, 1152, 1152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1152, 1152, 3, 1152, 1152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1280, 1280, 128, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1280, 1280, 3, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1408, 1408, 128, 1408, 1408, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1408, 1408, 3, 1408, 1408, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1539, 4098, 3, 1537, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1664, 1664, 128, 1664, 1664, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1664, 1664, 3, 1664, 1664, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1792, 1792, 128, 1792, 1792, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 1792, 1792, 3, 1792, 1792, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 2048, 1024, 128, 2048, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 2051, 4098, 3, 2049, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 224, 224, 256, 224, 224, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 226, 226, 256, 224, 224, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 2560, 2560, 128, 2560, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 2560, 2560, 3, 2560, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 360, 640, 256, 360, 640, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 362, 642, 256, 360, 640, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 386, 2048, 128, 386, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 388, 2048, 128, 388, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 432, 432, 32, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 448, 448, 128, 448, 448, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 448, 448, 128, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 449, 449, 128, 224, 224, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 450, 450, 128, 448, 448, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 514, 2560, 128, 514, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 516, 2560, 128, 516, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 608, 608, 32, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 720, 720, 32, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 721, 1281, 128, 360, 640, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 722, 1282, 128, 720, 1280, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 752, 752, 32, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 768, 768, 128, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 768, 768, 3, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 770, 4096, 128, 770, 4096, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 772, 4096, 128, 772, 4096, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 880, 880, 32, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 896, 896, 128, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 128, 896, 896, 3, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1536, 256, 320, 1536, 256, 320, 1, 1, 1, 1, 0, 0, 1, 1, 48, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1536, 320, 320, 1536, 320, 320, 1, 1, 1, 1, 0, 0, 1, 1, 48, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1536, 384, 512, 1536, 384, 512, 1, 1, 1, 1, 0, 0, 1, 1, 48, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 1536, 512, 512, 1536, 512, 512, 1, 1, 1, 1, 0, 0, 1, 1, 48, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 16, 96, 96, 512, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 160, 432, 432, 32, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 160, 608, 608, 32, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 160, 720, 720, 32, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 160, 752, 752, 32, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 160, 880, 880, 32, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 24576, 128, 1, 8191, 1, 6, 1, 3, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 24576, 256, 1, 1638, 1, 30, 1, 15, 0, 7, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 24576, 64, 1, 24576, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 524288, 128, 1, 174762, 1, 6, 1, 3, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 524288, 256, 1, 34952, 1, 30, 1, 15, 0, 7, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 18, 1, 524288, 64, 1, 524288, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1027, 2050, 180, 1025, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1027, 2050, 64, 1025, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1072, 1072, 180, 1072, 1072, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1072, 1072, 180, 1072, 1072, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1072, 1072, 64, 1072, 1072, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1104, 1104, 180, 1104, 1104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1104, 1104, 180, 1104, 1104, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1104, 1104, 64, 1104, 1104, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1120, 1120, 180, 1120, 1120, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1120, 1120, 180, 1120, 1120, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1120, 1120, 64, 1120, 1120, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1280, 1280, 180, 1280, 1280, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1280, 1280, 180, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 1280, 1280, 64, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 2048, 2048, 180, 2048, 2048, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 544, 544, 180, 544, 544, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 544, 544, 180, 544, 544, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 544, 544, 64, 544, 544, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 656, 656, 180, 656, 656, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 656, 656, 180, 656, 656, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 656, 656, 64, 656, 656, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 672, 672, 180, 672, 672, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 672, 672, 180, 672, 672, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 672, 672, 64, 672, 672, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 768, 768, 180, 768, 768, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 768, 768, 180, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 768, 768, 64, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 928, 928, 180, 928, 928, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 928, 928, 180, 928, 928, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 928, 928, 64, 928, 928, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 944, 944, 180, 944, 944, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 944, 944, 180, 944, 944, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 180, 944, 944, 64, 944, 944, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 1, 4194304, 192, 1, 4194250, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 1, 4194304, 192, 1, 4194286, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 1, 4194304, 192, 1, 4194298, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 1, 4194304, 192, 1, 4194304, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 112, 112, 384, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 114, 114, 384, 112, 112, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 225, 225, 192, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 226, 226, 192, 224, 224, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 26, 26, 384, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 34, 34, 384, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 38, 38, 384, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 40, 104, 384, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 40, 40, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 432, 432, 64, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 608, 608, 64, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 720, 720, 64, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 752, 752, 64, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 192, 880, 880, 64, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 2048, 256, 320, 512, 256, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 2048, 320, 320, 512, 320, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 2048, 384, 512, 512, 384, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 2048, 512, 512, 512, 512, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 1536, 256, 1, 1536, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 32768, 256, 1, 32768, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 80, 1, 1, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1, 80, 256, 1, 80, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1024, 512, 256, 1024, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1026, 2048, 256, 1026, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1027, 1026, 128, 1025, 1024, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1027, 1026, 256, 1025, 1024, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 113, 113, 256, 56, 56, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 114, 114, 256, 112, 112, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1152, 1152, 128, 1152, 1152, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1152, 1152, 128, 1152, 1152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1152, 1152, 256, 1152, 1152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1280, 1280, 128, 1280, 1280, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1280, 1280, 128, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1280, 1280, 256, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1408, 1408, 128, 1408, 1408, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1408, 1408, 128, 1408, 1408, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1408, 1408, 256, 1408, 1408, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1664, 1664, 128, 1664, 1664, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1664, 1664, 128, 1664, 1664, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1664, 1664, 256, 1664, 1664, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1792, 1792, 128, 1792, 1792, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1792, 1792, 128, 1792, 1792, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 1792, 1792, 256, 1792, 1792, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 181, 321, 256, 90, 160, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 182, 322, 256, 180, 320, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 2048, 2048, 128, 2048, 2048, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 2048, 2048, 256, 2048, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 225, 225, 256, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 226, 226, 256, 224, 224, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 2560, 2560, 128, 2560, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 259, 4098, 128, 257, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 260, 4098, 128, 258, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 361, 641, 256, 180, 320, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 362, 642, 256, 360, 640, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 384, 384, 256, 384, 384, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 386, 1024, 256, 386, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 387, 4098, 128, 385, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 388, 4098, 128, 386, 4096, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 448, 448, 256, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 514, 1280, 256, 514, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 515, 2562, 128, 513, 2560, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 516, 2562, 128, 514, 2560, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 56, 56, 512, 56, 56, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 576, 576, 256, 576, 576, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 58, 58, 512, 56, 56, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 704, 704, 256, 704, 704, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 768, 768, 128, 768, 768, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 768, 768, 128, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 770, 2048, 256, 770, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 832, 832, 256, 832, 832, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 896, 896, 128, 896, 896, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 896, 896, 128, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 896, 896, 256, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 90, 160, 512, 90, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 256, 92, 162, 512, 90, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 1072, 1072, 180, 1072, 1072, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 1104, 1104, 180, 1104, 1104, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 1120, 1120, 180, 1120, 1120, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 1280, 1280, 180, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 2048, 2048, 180, 2048, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 432, 432, 64, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 448, 448, 128, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 450, 450, 128, 448, 448, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 450, 450, 96, 448, 448, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 544, 544, 180, 544, 544, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 608, 608, 64, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 656, 656, 180, 656, 656, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 672, 672, 180, 672, 672, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 720, 720, 64, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 722, 1282, 128, 720, 1280, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 752, 752, 64, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 768, 768, 180, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 880, 880, 64, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 928, 928, 180, 928, 928, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3, 944, 944, 180, 944, 944, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 128, 160, 3072, 128, 160, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 160, 160, 3072, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 192, 256, 3072, 192, 256, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 256, 256, 3072, 256, 256, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 64, 80, 3072, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 3072, 80, 80, 3072, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 96, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 32, 128, 128, 1024, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 32, 64, 80, 1024, 64, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 32, 80, 80, 1024, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 32, 96, 128, 1024, 96, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 1, 1048576, 384, 1, 1048522, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 1, 1048576, 384, 1, 1048558, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 1, 1048576, 384, 1, 1048570, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 1, 1048576, 384, 1, 1048576, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 13, 13, 1152, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 13, 13, 384, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 15, 15, 32, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 15, 15, 384, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 17, 17, 1152, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 17, 17, 384, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 19, 19, 1152, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 19, 19, 32, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 19, 19, 384, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 19, 19, 384, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 20, 20, 1152, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 20, 20, 384, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 20, 52, 1152, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 20, 52, 384, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 21, 21, 32, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 21, 21, 384, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 22, 22, 32, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 22, 22, 384, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 22, 54, 32, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 27, 27, 384, 13, 13, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 35, 35, 384, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 39, 39, 384, 19, 19, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 41, 105, 384, 20, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 41, 41, 384, 20, 20, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 384, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 112, 112, 4, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 112, 112, 512, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 144, 144, 4, 144, 144, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 144, 144, 512, 144, 144, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 160, 160, 4, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 160, 160, 512, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 176, 176, 4, 176, 176, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 176, 176, 512, 176, 176, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 208, 208, 4, 208, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 208, 208, 512, 208, 208, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 224, 224, 4, 224, 224, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 224, 224, 512, 224, 224, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 256, 128, 4, 256, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 256, 128, 512, 256, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 256, 256, 4, 256, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 256, 256, 512, 256, 256, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 48, 64, 4, 48, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4, 48, 64, 512, 48, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 128, 160, 1024, 128, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 160, 160, 1024, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 192, 256, 1024, 192, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 256, 256, 1024, 256, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 64, 80, 1024, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 4096, 80, 80, 1024, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 2304, 512, 1, 2301, 1, 4, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 2304, 512, 1, 2302, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 288, 512, 1, 285, 1, 4, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 288, 512, 1, 286, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 34, 512, 1, 34, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 4096, 512, 1, 4096, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 4480, 512, 1, 4476, 1, 5, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 544, 512, 1, 540, 1, 5, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 80, 256, 1, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 80, 256, 1, 80, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1, 96, 512, 1, 96, 1, 5, 1, 1, 0, 2, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1024, 1024, 256, 1024, 1024, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1024, 1024, 512, 1024, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1024, 512, 256, 1024, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1024, 512, 256, 1024, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1024, 512, 512, 1024, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 112, 112, 512, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 1280, 1280, 256, 1280, 1280, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 144, 144, 512, 144, 144, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 176, 176, 512, 176, 176, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 192, 192, 512, 192, 192, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 194, 512, 512, 194, 512, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 208, 208, 512, 208, 208, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 224, 224, 512, 224, 224, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 256, 128, 512, 256, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 256, 320, 4096, 256, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 258, 640, 512, 258, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 288, 288, 512, 288, 288, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 320, 320, 4096, 320, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 352, 352, 512, 352, 352, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 384, 384, 256, 384, 384, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 384, 384, 256, 384, 384, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 384, 512, 4096, 384, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 386, 1024, 512, 386, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 387, 1026, 512, 385, 1024, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 387, 2050, 256, 385, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 388, 2050, 256, 386, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 416, 416, 512, 416, 416, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 448, 448, 256, 448, 448, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 448, 448, 256, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 448, 448, 512, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 512, 256, 512, 512, 256, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 512, 512, 4096, 512, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 512, 640, 512, 512, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 514, 1024, 512, 514, 1024, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 515, 1026, 512, 513, 1024, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 515, 1282, 256, 513, 1280, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 515, 2050, 256, 513, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 516, 2050, 256, 514, 2048, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 576, 576, 256, 576, 576, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 576, 576, 256, 576, 576, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 576, 576, 512, 576, 576, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 58, 58, 32, 56, 56, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 58, 58, 512, 56, 56, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 640, 640, 256, 640, 640, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 640, 640, 256, 640, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 640, 640, 512, 640, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 704, 704, 256, 704, 704, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 704, 704, 256, 704, 704, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 704, 704, 512, 704, 704, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 832, 832, 256, 832, 832, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 832, 832, 256, 832, 832, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 832, 832, 512, 832, 832, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 896, 896, 256, 896, 896, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 896, 896, 256, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 896, 896, 512, 896, 896, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 92, 162, 32, 90, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 92, 162, 512, 90, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 512, 96, 96, 512, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 18, 1, 24576, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 24576, 64, 1, 24576, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 18, 1, 524288, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1, 524288, 64, 1, 524288, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1072, 1072, 256, 1072, 1072, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1088, 1088, 256, 1088, 1088, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1088, 1088, 3, 1088, 1088, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1088, 1088, 64, 1088, 1088, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1104, 1104, 256, 1104, 1104, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1216, 1216, 64, 1216, 1216, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1312, 1312, 3, 1312, 1312, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1344, 1344, 256, 1344, 1344, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1344, 1344, 3, 1344, 1344, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1344, 1344, 64, 1344, 1344, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1440, 1440, 64, 1440, 1440, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1504, 1504, 3, 1504, 1504, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1536, 1536, 256, 1536, 1536, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1536, 1536, 3, 1536, 1536, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1760, 1760, 64, 1760, 1760, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1856, 1856, 3, 1856, 1856, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1888, 1888, 256, 1888, 1888, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1888, 1888, 3, 1888, 1888, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 1888, 1888, 64, 1888, 1888, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2048, 2048, 256, 2048, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2144, 2144, 256, 2144, 2144, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2144, 2144, 3, 2144, 2144, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2176, 2176, 3, 2176, 2176, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2176, 2176, 64, 2176, 2176, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2208, 2208, 256, 2208, 2208, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2208, 2208, 3, 2208, 2208, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2208, 2208, 64, 2208, 2208, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2240, 2240, 256, 2240, 2240, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2432, 2432, 3, 2432, 2432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2432, 2432, 64, 2432, 2432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2560, 2560, 256, 2560, 2560, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2688, 2688, 3, 2688, 2688, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2688, 2688, 64, 2688, 2688, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2880, 2880, 3, 2880, 2880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 2880, 2880, 64, 2880, 2880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 3520, 3520, 3, 3520, 3520, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 3520, 3520, 64, 3520, 3520, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 3776, 3776, 3, 3776, 3776, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 3776, 3776, 64, 3776, 3776, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 432, 432, 32, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 432, 432, 64, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 4416, 4416, 3, 4416, 4416, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 544, 544, 256, 544, 544, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 608, 608, 32, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 608, 608, 64, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 656, 656, 256, 656, 656, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 672, 672, 256, 672, 672, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 720, 720, 32, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 720, 720, 64, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 752, 752, 32, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 752, 752, 64, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 768, 768, 256, 768, 768, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 864, 864, 64, 864, 864, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 880, 880, 32, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 880, 880, 64, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 928, 928, 256, 928, 928, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 64, 944, 944, 256, 944, 944, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 768, 1, 131072, 768, 1, 131018, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 768, 1, 131072, 768, 1, 131054, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 768, 1, 131072, 768, 1, 131066, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 768, 1, 131072, 768, 1, 131072, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 8, 1, 4096, 1024, 1, 4096, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 80, 1, 192, 512, 1, 192, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 80, 1, 192, 512, 1, 192, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 80, 1, 4096, 512, 1, 4096, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 80, 1, 4096, 512, 1, 4096, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 1, 8257536, 1, 1, 8257530, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 1, 8257536, 96, 1, 8257482, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 1, 8257536, 96, 1, 8257518, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 1, 8257536, 96, 1, 8257530, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 1, 8257536, 96, 1, 8257536, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 224, 224, 192, 224, 224, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 226, 226, 192, 224, 224, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 432, 432, 32, 432, 432, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 449, 449, 96, 224, 224, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 450, 450, 96, 448, 448, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 608, 608, 32, 608, 608, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 720, 720, 32, 720, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 752, 752, 32, 752, 752, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(1, 96, 880, 880, 32, 880, 880, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 256, 136, 136, 256, 136, 136, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 256, 136, 136, 256, 136, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 256, 136, 136, 512, 136, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 512, 136, 136, 256, 136, 136, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 512, 136, 136, 256, 136, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 512, 136, 136, 512, 136, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(10, 512, 68, 68, 512, 68, 68, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 132, 132, 256, 132, 132, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 132, 132, 256, 132, 132, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 132, 132, 512, 132, 132, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 152, 152, 256, 152, 152, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 152, 152, 256, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 152, 152, 512, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 56, 56, 256, 56, 56, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 56, 56, 256, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 256, 56, 56, 512, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 132, 132, 256, 132, 132, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 132, 132, 256, 132, 132, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 132, 132, 512, 132, 132, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 152, 152, 256, 152, 152, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 152, 152, 256, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 152, 152, 512, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 28, 28, 512, 28, 28, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 56, 56, 256, 56, 56, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 56, 56, 256, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 56, 56, 512, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 66, 66, 512, 66, 66, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(12, 512, 76, 76, 512, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 14, 22, 16, 14, 22, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 16, 24, 512, 14, 22, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 56, 56, 512, 56, 56, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 58, 58, 512, 56, 56, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 60, 90, 512, 60, 90, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 62, 92, 512, 60, 90, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 90, 160, 512, 90, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 16, 92, 162, 512, 90, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 32, 56, 56, 3072, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 32, 90, 160, 3072, 45, 80, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 512, 16, 24, 512, 14, 22, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 512, 30, 46, 512, 28, 44, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 512, 58, 58, 512, 56, 56, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 512, 62, 92, 512, 60, 90, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(13, 512, 92, 162, 512, 90, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(136, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 12, 11, 11, 768, 11, 11, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 12, 13, 13, 768, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 12, 15, 15, 768, 15, 15, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 12, 16, 16, 768, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 64, 64, 256, 64, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 64, 64, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 64, 64, 512, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 76, 76, 256, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 76, 76, 256, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 256, 76, 76, 512, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 32, 32, 512, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 38, 38, 512, 38, 38, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 64, 64, 256, 64, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 64, 64, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 64, 64, 512, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 76, 76, 256, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 76, 76, 256, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 512, 76, 76, 512, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 768, 13, 13, 768, 11, 11, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 768, 15, 15, 768, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 768, 17, 17, 768, 15, 15, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(14, 768, 18, 18, 768, 16, 16, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 256, 84, 84, 256, 84, 84, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 256, 84, 84, 256, 84, 84, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 256, 84, 84, 512, 84, 84, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 512, 42, 42, 512, 42, 42, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 512, 84, 84, 256, 84, 84, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 512, 84, 84, 256, 84, 84, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(16, 512, 84, 84, 512, 84, 84, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 13, 13, 384, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 15, 15, 32, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 15, 15, 384, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 17, 17, 384, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 19, 19, 32, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 19, 19, 384, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 19, 19, 384, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 20, 20, 384, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 20, 52, 384, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 21, 21, 32, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 21, 21, 384, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 22, 22, 32, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 22, 22, 384, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 22, 54, 32, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(17, 384, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 80, 80, 256, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 80, 80, 256, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 80, 80, 512, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 96, 96, 256, 96, 96, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 96, 96, 256, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 256, 96, 96, 512, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 40, 40, 512, 40, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 48, 48, 512, 48, 48, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 80, 80, 256, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 80, 80, 256, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 80, 80, 512, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 96, 96, 256, 96, 96, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 96, 96, 256, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(18, 512, 96, 96, 512, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 26, 26, 192, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 26, 26, 384, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 34, 34, 192, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 34, 34, 384, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 38, 38, 192, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 38, 38, 384, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 40, 104, 192, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 40, 104, 384, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 40, 40, 192, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 40, 40, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 2240, 11, 880, 2240, 11, 880, 3, 1, 1, 1, 1, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 2240, 128, 128, 11200, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 2240, 48, 64, 11200, 48, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 2240, 64, 80, 11200, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 2240, 96, 128, 11200, 96, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 4480, 256, 1, 4478, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 4480, 256, 1, 4480, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 4480, 80, 1, 4480, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 512, 256, 1, 510, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 512, 256, 1, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 256, 1, 512, 80, 1, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 32, 128, 128, 2240, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 32, 48, 64, 2240, 48, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 32, 64, 80, 2240, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 32, 96, 128, 2240, 96, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 320, 1, 4480, 256, 1, 4478, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 320, 1, 4480, 256, 1, 4480, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 320, 1, 512, 256, 1, 510, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 320, 1, 512, 256, 1, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 13, 13, 1152, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 13, 13, 384, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 15, 15, 32, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 15, 15, 384, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 17, 17, 1152, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 17, 17, 384, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 19, 19, 1152, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 19, 19, 32, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 19, 19, 384, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 19, 19, 384, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 20, 20, 1152, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 20, 20, 384, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 20, 52, 1152, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 20, 52, 384, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 21, 21, 32, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 21, 21, 384, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 22, 22, 32, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 22, 22, 384, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 22, 54, 32, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 27, 27, 384, 13, 13, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 35, 35, 384, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 39, 39, 384, 19, 19, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 41, 105, 384, 20, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 41, 41, 384, 20, 20, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 384, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 4, 256, 128, 1152, 128, 64, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 4, 48, 64, 1152, 24, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 4, 512, 512, 1152, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 4, 64, 64, 1152, 32, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 512, 1, 4480, 256, 1, 4478, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 512, 1, 4480, 256, 1, 4480, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 512, 1, 512, 256, 1, 510, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 512, 1, 512, 256, 1, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 5600, 128, 128, 2240, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 5600, 48, 64, 2240, 48, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 5600, 64, 80, 2240, 64, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 5600, 96, 128, 2240, 96, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(2, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 128, 272, 272, 128, 272, 272, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 128, 272, 272, 128, 272, 272, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 128, 272, 272, 3, 272, 272, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 256, 136, 136, 256, 136, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 256, 272, 272, 128, 272, 272, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 256, 272, 272, 128, 272, 272, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(20, 256, 272, 272, 256, 272, 272, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(21, 32, 13, 13, 32, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(21, 32, 17, 17, 32, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(21, 32, 19, 19, 32, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(21, 32, 20, 52, 32, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(22, 128, 22, 40, 2240, 22, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(22, 2240, 22, 40, 13440, 22, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(22, 6720, 22, 40, 2240, 22, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 112, 112, 128, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 112, 112, 128, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 112, 112, 3, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 264, 264, 128, 264, 264, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 264, 264, 128, 264, 264, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 264, 264, 3, 264, 264, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 304, 304, 128, 304, 304, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 304, 304, 128, 304, 304, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 128, 304, 304, 3, 304, 304, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 112, 112, 128, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 112, 112, 128, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 112, 112, 256, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 132, 132, 256, 132, 132, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 152, 152, 256, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 264, 264, 128, 264, 264, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 264, 264, 128, 264, 264, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 264, 264, 256, 264, 264, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 304, 304, 128, 304, 304, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 304, 304, 128, 304, 304, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 304, 304, 256, 304, 304, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(24, 256, 56, 56, 256, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 112, 112, 256, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 112, 112, 512, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 120, 180, 256, 120, 180, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 120, 180, 512, 120, 180, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 180, 320, 256, 180, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 16, 180, 320, 512, 180, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 256, 114, 114, 256, 112, 112, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 256, 122, 182, 256, 120, 180, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 256, 182, 322, 256, 180, 320, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 256, 58, 90, 256, 56, 88, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 112, 112, 256, 112, 112, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 112, 112, 512, 112, 112, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 114, 114, 256, 112, 112, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 120, 180, 256, 120, 180, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 120, 180, 512, 120, 180, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 122, 182, 256, 120, 180, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 180, 320, 256, 180, 320, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 180, 320, 512, 180, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 182, 322, 256, 180, 320, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 56, 88, 256, 56, 88, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 58, 90, 256, 56, 88, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(25, 512, 58, 90, 512, 56, 88, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(26, 16, 90, 160, 1920, 45, 80, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 12, 20, 52, 3072, 10, 26, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 12, 60, 106, 3072, 30, 53, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 12, 90, 160, 3072, 45, 80, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 128, 128, 128, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 128, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 128, 128, 3, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 152, 152, 128, 152, 152, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 152, 152, 128, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 128, 152, 152, 3, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 128, 128, 128, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 128, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 128, 128, 256, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 152, 152, 128, 152, 152, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 152, 152, 128, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 152, 152, 256, 152, 152, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 64, 64, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(28, 256, 76, 76, 256, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 128, 168, 168, 128, 168, 168, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 128, 168, 168, 128, 168, 168, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 128, 168, 168, 3, 168, 168, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 256, 168, 168, 128, 168, 168, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 256, 168, 168, 128, 168, 168, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 256, 168, 168, 256, 168, 168, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(32, 256, 84, 84, 256, 84, 84, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 26, 26, 192, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 26, 26, 384, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 34, 34, 192, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 34, 34, 384, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 38, 38, 192, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 38, 38, 384, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 40, 104, 192, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 40, 104, 384, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 40, 40, 192, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 40, 40, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 192, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 13, 13, 384, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 15, 15, 32, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 15, 15, 384, 13, 13, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 17, 17, 384, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 19, 19, 32, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 19, 19, 384, 17, 17, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 19, 19, 384, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 20, 20, 384, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 20, 52, 384, 20, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 21, 21, 32, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 21, 21, 384, 19, 19, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 22, 22, 32, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 22, 22, 384, 20, 20, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 22, 54, 32, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 22, 54, 384, 20, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 27, 27, 384, 13, 13, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 35, 35, 384, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 39, 39, 384, 19, 19, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 41, 105, 384, 20, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 41, 41, 384, 20, 20, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(34, 384, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 160, 160, 128, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 160, 160, 128, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 160, 160, 3, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 192, 192, 128, 192, 192, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 192, 192, 128, 192, 192, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 128, 192, 192, 3, 192, 192, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 160, 160, 128, 160, 160, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 160, 160, 128, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 160, 160, 256, 160, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 192, 192, 128, 192, 192, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 192, 192, 128, 192, 192, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 192, 192, 256, 192, 192, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 80, 80, 256, 80, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(36, 256, 96, 96, 256, 96, 96, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 26, 26, 192, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 26, 26, 384, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 34, 34, 192, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 34, 34, 384, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 38, 38, 192, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 38, 38, 384, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 40, 104, 192, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 40, 104, 384, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 40, 40, 192, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 40, 40, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 27, 27, 384, 13, 13, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 35, 35, 384, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 39, 39, 384, 19, 19, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 41, 105, 384, 20, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 41, 41, 384, 20, 20, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 384, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(4, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 32, 13, 13, 32, 13, 13, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 32, 17, 17, 32, 17, 17, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 512, 24, 24, 512, 22, 22, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 512, 28, 28, 512, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 512, 32, 32, 512, 30, 30, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(42, 512, 34, 34, 512, 32, 32, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(44, 4, 32, 80, 2304, 16, 40, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(44, 4, 90, 160, 2304, 45, 80, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 128, 114, 178, 128, 112, 176, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 128, 114, 178, 3, 112, 176, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 128, 162, 722, 128, 160, 720, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 128, 450, 450, 3, 448, 448, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 16, 160, 720, 128, 160, 720, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 16, 224, 224, 256, 224, 224, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 16, 240, 360, 256, 240, 360, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 16, 96, 720, 256, 96, 720, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 256, 112, 176, 128, 112, 176, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 256, 114, 178, 128, 112, 176, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 256, 114, 178, 256, 112, 176, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 256, 97, 720, 256, 97, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(49, 256, 98, 720, 256, 98, 720, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 4, 34, 34, 4, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 4, 34, 34, 512, 34, 34, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 512, 34, 34, 512, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 512, 34, 34, 512, 34, 34, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 512, 68, 68, 1024, 68, 68, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 512, 68, 68, 512, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(5, 512, 68, 68, 512, 68, 68, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 14, 14, 4, 14, 14, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 14, 14, 512, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 33, 33, 4, 33, 33, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 33, 33, 512, 33, 33, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 38, 38, 4, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 4, 38, 38, 512, 38, 38, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 14, 14, 512, 14, 14, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 14, 14, 512, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 28, 28, 1024, 28, 28, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 28, 28, 512, 28, 28, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 28, 28, 512, 28, 28, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 33, 33, 512, 33, 33, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 33, 33, 512, 33, 33, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 38, 38, 512, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 38, 38, 512, 38, 38, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 66, 66, 1024, 66, 66, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 66, 66, 512, 66, 66, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 66, 66, 512, 66, 66, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 76, 76, 1024, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 76, 76, 512, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(6, 512, 76, 76, 512, 76, 76, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 26, 26, 192, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 26, 26, 384, 26, 26, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 34, 34, 192, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 34, 34, 384, 34, 34, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 38, 38, 192, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 38, 38, 384, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 40, 104, 192, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 40, 104, 384, 40, 104, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 40, 40, 192, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 40, 40, 384, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 27, 27, 384, 13, 13, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 28, 28, 384, 26, 26, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 35, 35, 384, 17, 17, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 36, 36, 384, 34, 34, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 39, 39, 384, 19, 19, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 40, 40, 384, 38, 38, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 41, 105, 384, 20, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 41, 41, 384, 20, 20, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 42, 106, 384, 40, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 384, 42, 42, 384, 40, 40, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(68, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 4, 16, 16, 4, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 4, 16, 16, 512, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 4, 19, 19, 4, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 4, 19, 19, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 16, 16, 512, 16, 16, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 16, 16, 512, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 19, 19, 512, 19, 19, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 19, 19, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 32, 32, 1024, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 32, 32, 512, 32, 32, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 32, 32, 512, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 38, 38, 1024, 38, 38, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 38, 38, 512, 38, 38, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(7, 512, 38, 38, 512, 38, 38, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 53, 53, 192, 26, 26, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 69, 69, 192, 34, 34, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 77, 77, 192, 38, 38, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 81, 209, 192, 40, 104, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 81, 81, 192, 40, 40, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 192, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 3, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 3, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 3, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 3, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 3, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 4, 21, 21, 4, 21, 21, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 4, 21, 21, 512, 21, 21, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 512, 21, 21, 512, 21, 21, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 512, 21, 21, 512, 21, 21, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 512, 42, 42, 1024, 42, 42, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 512, 42, 42, 512, 42, 42, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 512, 42, 42, 512, 42, 42, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 105, 105, 96, 52, 52, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 106, 106, 96, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 137, 137, 96, 68, 68, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 138, 138, 96, 136, 136, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 153, 153, 96, 76, 76, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 154, 154, 96, 152, 152, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 161, 161, 96, 80, 80, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 161, 417, 96, 80, 208, 3, 3, 2, 2, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 162, 162, 96, 160, 160, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 162, 418, 96, 160, 416, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 52, 52, 192, 52, 52, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 54, 54, 192, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 68, 68, 192, 68, 68, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 70, 70, 192, 68, 68, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 76, 76, 192, 76, 76, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 78, 78, 192, 76, 76, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 80, 208, 192, 80, 208, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 80, 80, 192, 80, 80, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 82, 210, 192, 80, 208, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(8, 96, 82, 82, 192, 80, 80, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 128, 106, 106, 128, 104, 104, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 128, 122, 122, 128, 120, 120, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 128, 130, 130, 128, 128, 128, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 128, 90, 90, 128, 88, 88, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 256, 46, 46, 256, 44, 44, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 256, 54, 54, 256, 52, 52, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 256, 62, 62, 256, 60, 60, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(84, 256, 66, 66, 256, 64, 64, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 4, 20, 20, 4, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 4, 20, 20, 512, 20, 20, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 4, 24, 24, 4, 24, 24, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 4, 24, 24, 512, 24, 24, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 20, 20, 512, 20, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 20, 20, 512, 20, 20, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 24, 24, 512, 24, 24, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 24, 24, 512, 24, 24, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 40, 40, 1024, 40, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 40, 40, 512, 40, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 40, 40, 512, 40, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 48, 48, 1024, 48, 48, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 48, 48, 512, 48, 48, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.bf16.json` `(9, 512, 48, 48, 512, 48, 48, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `conv2d_forward_kernel.fp32.json` `(2, 2240, 11, 160, 2240, 11, 160, 3, 1, 1, 1, 1, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(2, 2240, 8, 880, 2240, 6, 880, 3, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(2, 2240, 8, 882, 2240, 6, 882, 3, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(2, 2240, 9, 880, 2240, 7, 880, 3, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(2, 2240, 9, 882, 2240, 7, 882, 3, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 128, 8, 20, 2240, 8, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 2240, 1, 40, 13440, 1, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 2240, 1, 42, 13440, 1, 42, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 2240, 8, 20, 13440, 8, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 6720, 10, 42, 2240, 10, 42, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 6720, 11, 40, 2240, 11, 40, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 6720, 11, 42, 2240, 11, 42, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `conv2d_forward_kernel.fp32.json` `(22, 6720, 8, 20, 2240, 8, 20, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `depthwise_conv2d_kernel.bf16.json` `(1, 1, 56, 1, 28, 1, 2, 1, 2, 0, 0, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(1024, 1, 16384, 1, 16378, 1, 7, 1, 1, 0, 0, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(11200, 64, 80, 64, 80, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(11200, 96, 128, 96, 128, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(13440, 22, 40, 22, 40, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(1536, 256, 320, 256, 320, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(1536, 320, 320, 320, 320, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(1536, 384, 512, 384, 512, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(1536, 512, 512, 512, 512, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 128, 160, 128, 160, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 160, 160, 160, 160, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 192, 256, 192, 256, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 256, 256, 256, 256, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 64, 80, 64, 80, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(3072, 80, 80, 80, 80, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(4096, 256, 320, 256, 320, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(4096, 320, 320, 320, 320, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(4096, 384, 512, 384, 512, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(4096, 512, 512, 512, 512, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 128, 160, 128, 160, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 160, 160, 160, 160, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 192, 256, 192, 256, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 256, 256, 256, 256, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 64, 80, 64, 80, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.bf16.json` `(8192, 80, 80, 80, 80, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16')`
+- `depthwise_conv2d_kernel.fp32.json` `(13440, 8, 20, 8, 20, 3, 3, 1, 1, 1, 1, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.bf16.json` `(10240, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(114688, 512, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(1152, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(12288, 1024, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(1280, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(144, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(160, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(16384, 1024, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(176, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(1792, 6144, 768, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(192, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(196608, 512, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(20480, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(20480, 2048, 512, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(208, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(22, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(229376, 512, 256, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(23, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2304, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2304, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2304, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2304, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(24, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(24, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2432, 6144, 768, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(24576, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(25, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2560, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2560, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2560, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2560, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2560, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(25600, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(26, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(26, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(262144, 512, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2688, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2688, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2688, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2688, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2688, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(27, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(27, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(28, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(28, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2816, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2816, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2816, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2816, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2816, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(28672, 2048, 512, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(288, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(29, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(29, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2944, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2944, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2944, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2944, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(2944, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(30, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(30, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3072, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3072, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3072, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3072, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(31, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(31, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(32, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(32, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(32, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3200, 6144, 768, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(32768, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(33, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3328, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3328, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3328, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3328, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3328, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(34, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(34, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(34, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3456, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3456, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3456, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3456, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3456, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(34816, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(35, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(35, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(352, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3584, 6144, 768, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(36, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(36, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(36, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(37, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(37, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3712, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3712, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3712, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3712, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3712, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(38, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(38, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(38, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(384, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3840, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3840, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3840, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3840, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(38912, 2048, 512, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(39, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(39, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3968, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3968, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3968, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3968, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(3968, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(40, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(40, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(40, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(4096, 1024, 3072, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(4096, 155776, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(4096, 3072, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(4096, 4096, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(41, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(41, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(416, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(42, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(42, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(42, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(43, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(43, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(43008, 2048, 512, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(44, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(44, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(44, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(448, 3072, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(448, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(45, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(45, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(46, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(46, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(46, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(47, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(47, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(48, 1536, 1536, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(48, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(48, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(48, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(480, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(480, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(49, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(49, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(49152, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(50, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(50, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(50, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(51, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(51, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(5120, 1024, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(5120, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(52, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(52, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(52, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(53, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(53, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(54, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(54, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(54, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(544, 2304, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(544, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(55, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(55, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(56, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(56, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(56, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(57, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(57, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(576, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(58, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(58, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(58, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(59, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(59, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(60, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(60, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(60, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(608, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(61, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(61, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(6144, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(62, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(62, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(62, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(63, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(63, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(64, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(64, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(640, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(6400, 1024, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(6400, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(65536, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(672, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(704, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(736, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(768, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(80, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(80, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(80, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(800, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(81920, 512, 1024, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(832, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(864, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(896, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(917504, 3, 128, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(928, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(96, 2048, 2048, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(96, 2048, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(960, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.bf16.json` `(992, 4096, 4096, False, False, 'bf16', 'bf16', 'bf16')`
+- `matmul_kernel.fp32.json` `(1024, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 1536, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 4096, 1536, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 4608, 1536, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1024, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(10240, 2240, 2240, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 32, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 512, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(112, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(114688, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1152, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 32, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 512, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(128, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1280, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(12800, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 32, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 512, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(144, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(160, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1664, 256, 64, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(176, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1792, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(18, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(18, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(18, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(18, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1835008, 180, 180, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(1835008, 360, 180, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(19, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(19, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(19, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(19, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(192, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(19456, 2240, 2240, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(196608, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(20, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(20, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(20, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(20, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(20480, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 1024, 256, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(208, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(21504, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(22, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 1024, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 12800, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 4096, 12800, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 49160, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(224, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(23552, 16, 9, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 1024, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 12800, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 4096, 12800, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 49160, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(240, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(24576, 2240, 2240, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 1024, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 12800, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 13696, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 4096, 12800, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 4096, 13696, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 49160, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(256, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25600, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(25600, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(26, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(262144, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(27, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(28, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 1024, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 12800, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 27392, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 4096, 12800, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 4096, 13696, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 49160, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(288, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(29, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(30, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(31744, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 27392, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 4096, 13696, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(320, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(3200, 128, 32, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32768, 2240, 2240, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(32768, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(33, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(34, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(35, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 27392, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 4096, 13696, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(352, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(3584, 2240, 2240, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(3584, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(36, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(37, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(38, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 131072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 4096, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(384, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(39, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2048, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(40, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(41, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 1024, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 131072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 151936, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 2048, 6144, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 4096, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 6144, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(416, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(4194304, 180, 180, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(4194304, 360, 180, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(42, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(43, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(44, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 1024, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 131072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 151936, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 2048, 6144, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 4096, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 6144, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(448, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45056, 16384, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45056, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45056, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(45056, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(46, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(47, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 1536, 8960, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(48, 8960, 1536, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 1024, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 151936, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 2048, 6144, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 6144, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(480, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(49152, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(50, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(512, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(5120, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(51200, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(52, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(524288, 16, 9, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(5248, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(53, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(54, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(544, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(55, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(56, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(57, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(576, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(58, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(5888, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(59, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(60, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(608, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(61, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(6144, 2240, 2240, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(62, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(63, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(64, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(640, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(6400, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(65536, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(6656, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(672, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(704, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(7296, 16384, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(7296, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(7296, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(736, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(768, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(8, 4096, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 32, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 512, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(80, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 2048, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 512, 128, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(800, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(81920, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(832, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(864, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(8704, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(896, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(9216, 512, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(928, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 1024, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 10944, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 128, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 2048, 10944, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 2048, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 2048, 2816, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 2048, 5632, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 256, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 2816, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 3072, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 32, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 4096, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 4096, 512, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 512, 1024, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 512, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 5632, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 576, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 64, 2048, False, False, 'fp32', 'fp32', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 64, 2048, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(96, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(960, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 1024, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 102400, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 11008, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 3072, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 3072, 8192, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 4096, 11008, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 4096, 4096, False, True, 'fp32', 'bf16', 'fp32')`
+- `matmul_kernel.fp32.json` `(992, 8192, 3072, False, True, 'fp32', 'bf16', 'fp32')`
+
+</details>
