@@ -157,10 +157,11 @@ class InferenceEngine:
         self._pkg = loader.load(str(nbx_path))
 
         # 6. Create RuntimeExecutor and run one-time setup
-        # Data-driven hardware capability surface for Triton kernel wrappers. Gated on the mode,
-        # as `cli/commands/run.py` does: the ATen path never touches it, and it reads the Triton
+        # Data-driven hardware capability surface for Triton kernel wrappers. Gated on the Triton
+        # engines (the solver's own set), as `cli/commands/run.py` gates on the mode: the ATen path never touches it, and it reads the Triton
         # branch's fp64 key, which refuses a device-less or mixed profile.
-        if self.mode != "compiled":
+        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        if self.mode in TRITON_ENGINES:
             from neurobrix.kernels.wrappers import set_hardware_profile
             set_hardware_profile(hw_profile)
         self._executor = RuntimeExecutor(self._pkg, self._plan, mode=self.mode)

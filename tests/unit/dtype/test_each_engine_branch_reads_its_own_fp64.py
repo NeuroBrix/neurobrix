@@ -263,12 +263,25 @@ def test_the_solver_prices_a_cpu_only_profile_in_every_mode(mode):
 def test_a_compiled_serve_does_not_read_the_triton_surface():
     """`serving/engine.py` declares the Triton wrappers' profile (and with it the Triton branch's
     fp64 key, which refuses a device-less or mixed profile) only off the compiled mode, as
-    `cli/commands/run.py` does."""
+    `cli/commands/run.py` does — by the solver's own set of Triton engines, so the gates cannot drift."""
     import inspect
     from neurobrix.serving import engine
     src = inspect.getsource(engine)
     site = src.index("set_hardware_profile(hw_profile)")
-    assert re.search(r'if self\.mode != "compiled":\s*\n\s*from neurobrix\.kernels\.wrappers import '
+    assert re.search(r'if self\.mode in TRITON_ENGINES:\s*\n\s*from neurobrix\.kernels\.wrappers import '
                      r'set_hardware_profile\s*\n\s*set_hardware_profile\(hw_profile\)', src), \
         "the serving engine declares the Triton surface in every mode"
     assert src.count("set_hardware_profile(") == 1 and site
+
+
+def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch):
+    """The ATen rules narrow through `core.dtype.engine._NO_FP64_CEILING`, the compiled branch's own
+    table, never the Triton branch's (Dell 22:43, R30): a change to the compiled table moves the
+    compiled price and only it."""
+    from neurobrix.core.dtype import engine as E
+    from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
+    kw = dict(has_native_bf16=False, contract=conservative_contract("test: no contract"), stores_fp64=False)
+    dag = {"ops": {}, "tensors": {"w": {"dtype": "float64", "shape": [4]}}, "execution_order": []}
+    assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float32"
+    monkeypatch.setattr(E, "_NO_FP64_CEILING", {torch.float64: torch.float16})
+    assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float16"

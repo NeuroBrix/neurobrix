@@ -398,7 +398,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                 result = rule.op_dtype(uid, op, ins, out)
             out[tid] = result
     if engine in ATEN_ENGINES and not stores_fp64:
-        out = {tid: _tdt.storage_dtype_name(name, False) for tid, name in out.items()}
+        out = {tid: rule.storage_dtype_name(name) for tid, name in out.items()}
     return out
 
 
@@ -742,6 +742,14 @@ class _TritonRules(_Rules):
 class _AtenRules(_Rules):
     """`DtypeEngine.compile_op` (core/dtype/engine.py:665-817) in its order, then torch's own
     promotion for what it leaves unwrapped."""
+
+    def storage_dtype_name(self, name: str) -> str:
+        # The compiled branch's OWN ceiling on a device without fp64 (`DtypeEngine.storage_dtype`'s
+        # `_NO_FP64_CEILING`), read here by name; torch is this branch's (R33 binds the Triton one).
+        from neurobrix.core.dtype.engine import _NO_FP64_CEILING
+        ceiling = {str(k).replace("torch.", ""): str(v).replace("torch.", "")
+                   for k, v in _NO_FP64_CEILING.items()}
+        return ceiling.get(name, name)
 
     def complex_dtype(self, name: str) -> str:
         # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:859-887):
