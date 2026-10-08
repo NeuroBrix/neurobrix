@@ -141,7 +141,7 @@ from .ops.copy import copy_forward_kernel
 from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
 from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel, add_scalar_strided_nd_kernel, mul_scalar_strided_nd_kernel
 from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
-from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel
+from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel, int_div_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
 from .ops.where import where_forward_kernel
 from .ops.maximum import maximum_forward_kernel
@@ -1159,12 +1159,12 @@ def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0,
 def floor_divide_wrapper(a, b):
     """aten::floor_divide — floor(a / b), result in a's dtype.
 
-    Wrapper-layer composition of the existing div + floor kernels (the
-    kernels themselves stay pure). Integer operands round-trip through
-    float64 — exact for |values| < 2^53, covering every representable
-    index/count in practice (a float32 round-trip would silently corrupt
-    above 2^24). Float operands use their native dtype (floor(a/b) is
-    the ATen semantic, no exactness cliff involved)."""
+    Two integer operands divide in the integers (`_int_divide`), exact at every magnitude. A
+    float operand uses the float division (floor(a/b) is the ATen semantic, no exactness cliff
+    involved); an integer tensor beside it widens through the backend's float
+    (`_int_division_widening_dtype`)."""
+    if _both_integer(a, b):
+        return _int_divide(a, b, floor=True)
     a_dtype = a.dtype
     _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
     if _is_int:
@@ -1176,6 +1176,40 @@ def floor_divide_wrapper(a, b):
         b_f = b
     out = floor_wrapper(div(a_f, b_f))
     return out.to(a_dtype) if out.dtype != a_dtype else out
+
+
+def _is_integer_operand(x):
+    if isinstance(x, bool):
+        return False
+    if isinstance(x, int):
+        return True
+    dt = getattr(x, "dtype", None)
+    return hasattr(dt, "is_floating") and not dt.is_floating() and dt != NBXDtype.bool_
+
+
+def _both_integer(a, b):
+    return _is_integer_operand(a) and _is_integer_operand(b) and (isinstance(a, NBXTensor) or isinstance(b, NBXTensor))
+
+
+def _int_divide(a, b, floor):
+    """Integer // integer in the integers (`int_div_kernel`): truncated, or floored when `floor`.
+    A Python int operand takes the tensor's dtype; two tensors take the wider; both broadcast."""
+    import numpy as np
+    ref = a if isinstance(a, NBXTensor) else b
+    dtype = _wider_dtype(a.dtype, b.dtype) if isinstance(a, NBXTensor) and isinstance(b, NBXTensor) else ref.dtype
+    a, b = (x if isinstance(x, NBXTensor) else NBXTensor.from_numpy(np.array(x, dtype=np.dtype(dtype.name)))
+            for x in (a, b))
+    if hasattr(a, "_device_idx") and hasattr(b, "_device_idx") and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
+    a, b = (x if x.dtype == dtype else x.to(dtype) for x in (a, b))
+    shape = _broadcast_shapes(a.shape, b.shape)
+    a, b = (x.expand(shape).contiguous() if tuple(x.shape) != tuple(shape) else x.contiguous() for x in (a, b))
+    _set_device(a)
+    output = NBXTensor.empty_like(a)
+    n = output.numel()
+    if n:
+        int_div_kernel[_1d_grid(n)](a, b, output, n, FLOOR=floor, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return output
 
 
 def _int_division_widening_dtype(a, b):
@@ -1466,6 +1500,8 @@ def div(a, b, rounding_mode=None) :
     if rounding_mode == "floor":
         return floor_divide_wrapper(a, b)
     if rounding_mode == "trunc":
+        if _both_integer(a, b):
+            return _int_divide(a, b, floor=False)
         a_dtype = a.dtype
         _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
         if _is_int:
