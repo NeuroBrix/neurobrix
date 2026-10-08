@@ -120,3 +120,38 @@ def test_an_executor_without_the_hook_is_refused_by_name():
     ex = SimpleNamespace(register_op_uid_interceptors=lambda *a, **k: None)
     with pytest.raises(RuntimeError, match=r"'c'.*follow_interceptor_registrations"):
         LayerStreamingStrategy._follow(ex, "c", op_uid=lambda *a, **k: None)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_op_type_interceptor_registered_after_the_install_reaches_the_pieces(mode):
+    """The autoregressive flow registers its KV cache by op TYPE (`register_op_interceptors`,
+    `core/flow/autoregressive.py`) on the component's executor, after the strategy is installed.
+    Only the op_uid and triton registrations followed the base to its pieces, so a streamed
+    decode on the compiled engine ran with no KV cache. MEASURED 2026-10-08 on the M4 Pro,
+    TinyLlama-1.1B native, greedy, 'The capital of France is': whole -> ' Paris.', forced
+    layer_streaming -> 'The' and eleven newlines, and ' Paris.' again with NBX_KV_RECOMPUTE=1.
+    canary-qwen-2.5b, GLM-4.1V-9B and MiniCPM-o-4_5 streamed native gave garbage the same way."""
+    calls = []
+    base = _streamed_base(mode)
+    base.register_op_interceptors({"aten::mm": _recording_mm(calls)})
+    base.run({"inputs_embeds": torch.randn(W.B, 3, W.D)})
+    assert calls == [(W.B * 3, W.D)], calls
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_op_type_interceptor_registered_before_the_install_runs_in_the_pieces(mode):
+    calls = []
+    base = W._executor(mode)
+    base.register_op_interceptors({"aten::mm": _recording_mm(calls)})
+    from types import SimpleNamespace
+    from neurobrix.core.optim.passes.normalize import graph_fingerprint, normalize_for_branch
+    cut = normalize_for_branch(base._dag, base.mode, base.family, declared_moe=None)
+    order = cut["execution_order"]
+    split = order.index("aten.view::0")
+    ctx = SimpleNamespace(
+        component_executors={W.COMPONENT: base},
+        layer_segments={W.COMPONENT: [[order[0], order[split - 1]], [order[split], order[-1]]]},
+        layer_graphs={W.COMPONENT: graph_fingerprint(cut)}, layer_moe={})
+    assert W._Strategy(ctx, "layer_streaming").install_for_executor(W.COMPONENT, base) is True
+    base.run({"inputs_embeds": torch.randn(W.B, 4, W.D)})
+    assert calls == [(W.B * 4, W.D)], calls

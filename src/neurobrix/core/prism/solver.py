@@ -713,6 +713,8 @@ class PrismSolver:
         # (`_effective_capacity_mb`) under the 2026-09-21 memory law. No literal default here —
         # config/system.py is the single source (a missing key is a config regression and must crash).
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
+        #: Strategies whose host side overshot the free memory at the current rung (reset per solve).
+        self._host_declined: set = set()
         #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
         #: FIXED computation — the same op of the same request, refused three
         #: times, and what the driver said free each time:
@@ -1167,6 +1169,7 @@ class PrismSolver:
         """
         from neurobrix.core.prism.memory_budget import memory_ladder_mb
         self._unified_rung_cap_mb = None
+        self._host_declined = set()      # strategies whose host side overshot the reading at this rung
         host = memory_state()
         unified = [d for d in profile.devices if d.has_unified_memory]
         descends = bool(unified and host.measured and not _census_shadow_active()
@@ -1211,6 +1214,19 @@ class PrismSolver:
             tried.append((int(rung), plan.strategy, int(need_mb)))
             if need_mb <= float(host.available_mb):
                 break
+            # The SAME rung first, without this strategy: a lower rung shrinks the device window, never
+            # an eager load, so an eager plan overshot by its loading overshoots at every rung (VibeVoice-
+            # 1.5B on the Mac, 2026-10-08: single_gpu's 15 066 MB at 12 288 down to 6 144, then
+            # layer_streaming at 4 096 reloading its language model every step). A strategy that loads
+            # lazily holds one component's load at a time.
+            self._host_declined = set(self._host_declined) | {plan.strategy}
+            try:
+                plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
+                log.info("unified memory: %s's host side (%.0f MB) is over %.0f MB free at rung %s — %s",
+                         tried[-1][1], need_mb, host.available_mb, int(rung), plan.strategy)
+                continue
+            except RuntimeError:
+                self._host_declined = set()
             lower = [r for r in memory_ladder_mb() if r < rung]
             if not lower:
                 log.warning("unified memory: the plan's host side (%.0f MB) exceeds the %.0f MB free even at "
@@ -1641,6 +1657,10 @@ class PrismSolver:
 
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
+
+            if strat_name in self._host_declined:
+                self._rejected.append((strat_name, float(score), "its host side overshot the free memory"))
+                continue
 
             # THE ARENA DOOR, one for every strategy: a component held whole on one accelerator
             # loads its weights as ONE allocation there (`ComponentArena`), and a device grants a
@@ -6240,13 +6260,15 @@ class PrismSolver:
             # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
             # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
             # piece loaded all of them, in no budget.
-            # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
-            # `inputs_embeds`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
+            # Only for a component a flow reads by name (`flow_reads_by_name`: its graph takes
+            # `inputs_embeds`, or it is the VLM's `head_component`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
             # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
             # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
-            from neurobrix.core.prism.layer_partition import flow_embeds_into
+            from neurobrix.core.prism.layer_partition import flow_reads_by_name
             from neurobrix.triton.weight_loader import is_block_key   # torch-free
-            _read = [name for name in streamed if flow_embeds_into(graphs.get(name))]
+            _topology = self._flow_topology(container)
+            _read = [name for name in streamed
+                     if flow_reads_by_name(name, graphs.get(name), _topology)]
             _unsized = [name for name in _read if not sizes_by_comp.get(name)]
             if _unsized:
                 return _no(
