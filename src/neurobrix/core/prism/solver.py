@@ -137,7 +137,8 @@ def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None)
     unified (one pool for both), none on a discrete card. The host footprint adds them, so a host
     ledger reserves what a unified run really takes (the Mac, 2026-10-03).
 
-    What a plan holds AT ONCE, not every component it ever loads: a streamed plan its window; a plan
+    What a plan holds AT ONCE, not every component it ever loads: a streamed plan the larger of its
+    window and the dearest phase its whole components hold (`peak_loaded_bytes`); a plan
     that loads on demand (`loading_mode == "lazy"`) the dearest of its flow's phases, which the solver
     passes as `peak_loaded_bytes` (`PrismSolver._peak_loaded_bytes`); an eager plan, or a caller with
     no phases to give, the plan's total. Janus-Pro-7B on the Mac's idle reading planned
@@ -146,7 +147,7 @@ def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None)
     if any(d.has_unified_memory for d in profile.devices):
         window = getattr(plan, "device_window_mb", None)
         if window is not None:
-            return int(window * 2**20)
+            return max(int(window * 2**20), int(peak_loaded_bytes or 0))
         if peak_loaded_bytes is not None and plan.loading_mode == "lazy":
             return int(peak_loaded_bytes)
         return int(plan.total_memory_mb * 2**20)
@@ -875,8 +876,17 @@ class PrismSolver:
     def _peak_loaded_bytes(self, container, plan) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
         each component's total); the KV cache, priced inside its owner's total, stays allocated in
-        the phases that no longer hold the owner."""
+        the phases that no longer hold the owner.
+
+        A streamed plan: its components held WHOLE, each at what it holds under that rung (a tiled
+        one its tiled figure, `_layer_stream_cost`); the streamed ones are the window's
+        (`unified_device_bytes` takes the larger). CogVideoX-2b on the Mac: text_encoder streamed in
+        a 4 610 MB window, then the transformer whole at 4 622 MB and the tiled VAE at 4 436 MB."""
         totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
+        streamed = getattr(plan, "layer_stream_plan", None)
+        if streamed:
+            cost = getattr(self, "_layer_stream_cost", None) or {}
+            totals = {n: int(cost.get(n, t)) for n, t in totals.items() if n not in streamed}
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
         return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
@@ -5360,7 +5370,7 @@ class PrismSolver:
         "_layer_stream_partitions", "_layer_stream_graphs", "_layer_stream_moe",
         "_layer_stream_tilings", "_layer_stream_window_bytes", "_layer_stream_kv_reserve_bytes",
         "_layer_stream_constant_bytes", "_lifecycle_transient", "_request_sizing",
-        "_unified_rung_cap_mb", "_layer_stream_orders",
+        "_unified_rung_cap_mb", "_layer_stream_orders", "_layer_stream_cost",
     )
 
     def _split_guidance_batch(self, candidates, container, neural_components, input_config,
@@ -6187,6 +6197,9 @@ class PrismSolver:
                 self._record_rung_tiling_decline("layer_streaming", target.device_string,
                                                  budget_bytes / 2 ** 20, name)
         self._layer_stream_tilings = tiled
+        # What each component holds while it runs under this rung — its tiled figure where tiling
+        # keeps it resident — read by the plan's peak across phases (`_peak_loaded_bytes`).
+        self._layer_stream_cost = dict(cost)
         streamed = {name for name, _ in sorted_comps if name not in tiled and name not in held_whole}
         _lm_kv = None
         if getattr(self, "_needs_kv_cache", False):
