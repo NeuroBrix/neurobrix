@@ -713,6 +713,8 @@ class PrismSolver:
         # (`_effective_capacity_mb`) under the 2026-09-21 memory law. No literal default here —
         # config/system.py is the single source (a missing key is a config regression and must crash).
         self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
+        #: Strategies whose host side overshot the free memory at the current rung (reset per solve).
+        self._host_declined: set = set()
         #: THE SPREAD OF THE DEVICE READING, measured, at a FIXED point in a
         #: FIXED computation — the same op of the same request, refused three
         #: times, and what the driver said free each time:
@@ -1656,7 +1658,7 @@ class PrismSolver:
         for best in ranked:
             score, strat_name, strat_allocs, strat_devices = best
 
-            if strat_name in getattr(self, "_host_declined", ()):
+            if strat_name in self._host_declined:
                 self._rejected.append((strat_name, float(score), "its host side overshot the free memory"))
                 continue
 
