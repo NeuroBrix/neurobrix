@@ -3011,14 +3011,24 @@ class PrismSolver:
         else:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
-        # The Triton branch's fp64, the profile's; with no profile fp64 is kept, the wider answer.
-        from neurobrix.triton.dtype import profile_triton_has_fp64
-        has_fp64 = profile_triton_has_fp64(profile) if profile is not None else True
+        # Whether the engine priced holds float64 / complex128: its OWN branch's reader over the
+        # profile (Triton: `triton_stores_fp64`; compiled: `device_supports_fp64`). No profile is a
+        # legacy structure-only caller (see the tiling budget above): there is no vendor to read,
+        # so fp64 is priced HELD — the wider answer, the same rule as `has_native_bf16`.
+        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        if profile is None:
+            stores_fp64 = True
+        elif self._mode in TRITON_ENGINES:
+            from neurobrix.triton.dtype import profile_triton_stores_fp64
+            stores_fp64 = profile_triton_stores_fp64(profile)
+        else:
+            from neurobrix.core.dtype.config import profile_device_supports_fp64
+            stores_fp64 = profile_device_supports_fp64(profile)
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
-            contract=contract, has_fp64=has_fp64, tiling=None,
+            contract=contract, stores_fp64=stores_fp64, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
 
     def _graph_as_executed(self, comp, container):

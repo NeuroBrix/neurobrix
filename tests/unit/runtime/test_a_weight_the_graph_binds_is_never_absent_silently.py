@@ -339,7 +339,7 @@ def test_triton_bind_refuses_a_weight_the_graph_binds_and_nothing_fills(monkeypa
     class _W:          # a weight handle: the bind reads `.ndim` only for pre-transposed weights
         ndim = 4
     full = {"post_quant_conv.weight": _W(), "post_quant_conv.bias": _W()}
-    seq = TritonSequence(_dag(), 0, has_fp64=False)
+    seq = TritonSequence(_dag(), 0, stores_fp64=False)
     seq.compile()
     monkeypatch.setattr(seq, "compute_op_devices", lambda: None)   # placement, after the door
     seq.bind_weights(full)                                                          # clean

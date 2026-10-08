@@ -9,6 +9,11 @@ from neurobrix.kernels import wrappers as W
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator, _detect_gpu_backend, backend_has_fp64
 
 
+@pytest.fixture(autouse=True)
+def _declared(host_backend_fp64):
+    """The capability as a run declares it, from this host's profile."""
+
+
 def _dev():
     if _detect_gpu_backend() is None:
         pytest.skip("no device")

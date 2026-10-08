@@ -206,17 +206,38 @@ def device_supports_fp64(device: str, vendor: str, architecture: str) -> bool:
     """Whether the compiled branch computes and stores float64 / complex128 on `device` — the host's
     from this module's own table (`HARDWARE_DTYPE_SUPPORT["cpu"]`), an accelerator's from its vendor
     profile: the device's (`precision.supports_fp64`) AND ATen's kernels' there
-    (`precision.kernels_carry_fp64.compiled`), both required, a missing key refused. False on Apple
-    GPUs: MPS refuses a float64 tensor outright, and the vendor's own code narrows to float32 there
-    (diffusers' RoPE, 2026-10-08). The Triton branch reads its own key the same way
-    (`triton.dtype.triton_has_fp64`)."""
+    (`precision.kernels_carry_fp64.compiled`, a capability) AND the compiled branch's storage policy
+    (`precision.stores_fp64.compiled`), all required, a missing key refused. False on Apple GPUs:
+    MPS refuses a float64 tensor outright, and the vendor's own code narrows to float32 there
+    (diffusers' RoPE, 2026-10-08). The Triton branch reads its own keys the same way
+    (`triton.dtype.triton_stores_fp64`)."""
     if str(device).split(":")[0] == "cpu":
         return architecture_supports_dtype("cpu", "float64")
     from neurobrix.core.config import loader
     precision = loader.get_vendor_config(vendor, architecture).get("precision") or {}
     carry = (precision.get("kernels_carry_fp64") or {}).get("compiled")
-    if not isinstance(precision.get("supports_fp64"), bool) or not isinstance(carry, bool):
+    stores = (precision.get("stores_fp64") or {}).get("compiled")
+    if not all(isinstance(v, bool) for v in (precision.get("supports_fp64"), carry, stores)):
         raise ValueError(f"ZERO FALLBACK: the {vendor}/{architecture} profile does not declare "
-                         f"precision.supports_fp64 and precision.kernels_carry_fp64.compiled "
-                         f"(found {precision!r}); a device's fp64 is never assumed")
-    return precision["supports_fp64"] and carry
+                         f"precision.supports_fp64, precision.kernels_carry_fp64.compiled and "
+                         f"precision.stores_fp64.compiled (found {precision!r}); a device's fp64 "
+                         f"is never assumed")
+    return precision["supports_fp64"] and carry and stores
+
+
+def profile_device_supports_fp64(profile) -> bool:
+    """`device_supports_fp64` of a hardware profile (a PrismProfile) for the compiled branch: every
+    device's, refused if they disagree (one plan prices one answer). The mirror of
+    `triton.dtype.profile_triton_stores_fp64`."""
+    if profile is None or not getattr(profile, "devices", None):
+        raise ValueError("ZERO FALLBACK: no hardware profile with a device; the compiled branch's "
+                         "fp64 is read from its vendor profile, never assumed")
+    answers = {}
+    for dev in profile.devices:
+        key = (getattr(dev.brand, "value", dev.brand), dev.architecture)
+        answers[key] = device_supports_fp64("gpu", *key)
+    if len(set(answers.values())) > 1:
+        raise ValueError(f"ZERO FALLBACK: the profile's devices disagree on the compiled branch's "
+                         f"fp64 ({answers!r}); one plan prices one answer, so a mixed profile is "
+                         f"refused rather than decided by its first device")
+    return next(iter(answers.values()))

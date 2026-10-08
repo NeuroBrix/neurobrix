@@ -2573,11 +2573,11 @@ class GraphExecutor:
             tensor = self._dtype_engine.convert_constant(tensor)
         self._weights[weight_name] = tensor
 
-    def _triton_has_fp64(self) -> bool:
+    def _triton_stores_fp64(self) -> bool:
         """Whether the Triton branch holds float64 / complex128 on this executor's hardware
-        (`triton.dtype.triton_has_fp64`, the vendor profile's)."""
-        from neurobrix.triton.dtype import triton_has_fp64
-        return triton_has_fp64(self.vendor, self.arch)
+        (`triton.dtype.triton_stores_fp64`, the vendor profile's)."""
+        from neurobrix.triton.dtype import triton_stores_fp64
+        return triton_stores_fp64(self.vendor, self.arch)
 
     def _load_constant_triton(self, b64_data: str, weight_name: str,
                                tdata: dict):
@@ -2709,7 +2709,7 @@ class GraphExecutor:
         # (complex128 [seq, head_dim/2]).
         if arr.dtype in (np.complex128, np.float64):
             from neurobrix.triton.dtype import constant_load_dtype
-            arr = arr.astype(constant_load_dtype(arr.dtype.name, self.dtype, self._triton_has_fp64()))
+            arr = arr.astype(constant_load_dtype(arr.dtype.name, self.dtype, self._triton_stores_fp64()))
 
         DeviceAllocator.set_device(device_idx)
         # bf16 bits travel in a uint16 container numpy cannot label: the
@@ -3081,7 +3081,7 @@ class GraphExecutor:
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
             activations_fp16_safe=bool(_seq_safe),
             precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow),
-            graph_dtype=self._dag.get("torch_dtype"), has_fp64=self._triton_has_fp64())
+            graph_dtype=self._dag.get("torch_dtype"), stores_fp64=self._triton_stores_fp64())
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
@@ -3875,7 +3875,7 @@ class GraphExecutor:
             dag_for_triton, device_idx=device_idx,
             compute_dtype=parse_dtype(self.dtype),
             config_constants=self._resolve_config_constants(),
-            has_fp64=self._triton_has_fp64())
+            stores_fp64=self._triton_stores_fp64())
 
         # Precision contract of THIS component for the triton engine: the
         # same resolver as the compiled path, flag AND per-op islands — the
@@ -5546,7 +5546,7 @@ class GraphExecutor:
                 from neurobrix.kernels.wrappers import has_native_bf16
                 eng = TritonDtypeEngine(parse_dtype(self.dtype), has_native_bf16=has_native_bf16(),
                                         graph_dtype=self._dag.get("torch_dtype"),
-                                        has_fp64=self._triton_has_fp64())
+                                        stores_fp64=self._triton_stores_fp64())
             return eng.accumulation_dtype(dtype)
         if self._dtype_engine is None:
             raise RuntimeError(f"accumulation_dtype: the {self.mode} executor holds no DtypeEngine")

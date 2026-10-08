@@ -210,8 +210,8 @@ def _triton_fp64() -> bool:
     """The Triton branch's fp64 on the hardware profile this census bound
     (`wrappers.set_hardware_profile`; refused when none is bound)."""
     from neurobrix.kernels.wrappers import get_hardware_profile
-    from neurobrix.triton.dtype import profile_triton_has_fp64
-    return profile_triton_has_fp64(get_hardware_profile())
+    from neurobrix.triton.dtype import profile_triton_stores_fp64
+    return profile_triton_stores_fp64(get_hardware_profile())
 
 
 def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_bytes, sdpa_min_rows,
@@ -235,7 +235,7 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
         rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-                               has_fp64=_triton_fp64(), tiling=tiling, shape_of=shape)
+                               stores_fp64=_triton_fp64(), tiling=tiling, shape_of=shape)
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.

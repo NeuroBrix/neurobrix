@@ -359,7 +359,7 @@ class TritonSequence:
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
-                 config_constants=None, *, has_fp64: bool):
+                 config_constants=None, *, stores_fp64: bool):
         self.dag = dag
         # profile.json architectural ints — the seq_len promotion's collision set (R30 mirror)
         self._config_constants = set(config_constants or ())
@@ -388,7 +388,7 @@ class TritonSequence:
         # cast-back rule reads it under bf16 compute.
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16(),
-            graph_dtype=dag.get("torch_dtype"), has_fp64=has_fp64)
+            graph_dtype=dag.get("torch_dtype"), stores_fp64=stores_fp64)
         self._compute_dtype = compute_dtype
         # Per-component flag of the precision contract
         # `activations_fp16_safe` (the calibration record, resolved in
@@ -896,7 +896,7 @@ class TritonSequence:
             "torch_dtype": self.dag.get("torch_dtype", ""),
         }
         seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype,
-                             has_fp64=self._dtype_engine.has_fp64)
+                             stores_fp64=self._dtype_engine.stores_fp64)
         seq.set_activations_fp16_safe(self._activations_fp16_safe)
         seq.compile()
         seq.bind_weights(weights)
