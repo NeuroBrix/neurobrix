@@ -33,7 +33,8 @@ class _Device:
 
 class _Profile:
     """Duck-typed stand-in — `set_hardware_profile` accepts any object
-    carrying `has_native_bf16`, and `_arch_param` reads `devices[0]`."""
+    carrying `has_native_bf16` and `devices` (their vendor profiles give the kernels' float64),
+    and `_arch_param` reads `devices[0]`."""
 
     def __init__(self, brand, architecture, has_native_bf16=False):
         self.devices = [_Device(brand, architecture)]
@@ -42,9 +43,11 @@ class _Profile:
 
 @pytest.fixture
 def restore_profile():
-    saved = wrappers.get_hardware_profile()
+    from neurobrix.kernels import nbx_tensor as T
+    saved = wrappers.get_hardware_profile(), T._BACKEND_HAS_FP64
     yield
-    setattr(wrappers, "_NBX_HW_PROFILE", saved)
+    setattr(wrappers, "_NBX_HW_PROFILE", saved[0])
+    T._BACKEND_HAS_FP64 = saved[1]
 
 
 # --- the YAMLs carry the key at all, on every shipped architecture ----------
@@ -136,5 +139,7 @@ def test_unknown_architecture_falls_back_rather_than_crashing(restore_profile):
     """`_arch_param` swallows loader failures by contract. An architecture
     with no YAML must not take the autotune path down with it — the
     fallback decides, and the run continues."""
-    wrappers.set_hardware_profile(_Profile("amd", "rdna9000"))
+    # Set as the active profile, not bound: binding reads the vendor profile (the kernels'
+    # float64) and refuses an architecture with none — this cell is about `_arch_param`'s fallback.
+    wrappers._NBX_HW_PROFILE = _Profile("amd", "rdna9000")
     assert _configs._safe_num_stages(3) in (2, 3)

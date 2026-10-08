@@ -406,12 +406,31 @@ _BACKEND_MEMORY_IS_HOST_READABLE = {"cuda": False, "hip": False, "metal": True}
 # M4 Pro gave 1 139 of 143 360 bits right and 3 255 non-finite values (the Sana 4K sincos
 # positional embedding, every off-trace size). A census says "not this time"; the door in
 # `NBXTensor.to` says "never": a cast from or to such a dtype is refused BY NAME there.
-_BACKEND_HAS_FP64 = {"cuda": True, "hip": True, "metal": False}
+#
+# The answer is the CALLER's to give (`set_backend_has_fp64`), not a table here: it is a fact
+# about the hardware the caller declares once (NeuroBrix: the vendor profile's
+# `precision.kernels_carry_fp64.triton`, bound by `kernels.wrappers.set_hardware_profile`).
+# Unset, a question that needs it is refused — a float64 element is never assumed readable.
+_BACKEND_HAS_FP64 = None
+
+
+def set_backend_has_fp64(value: bool) -> None:
+    """Declare whether this process's backend kernels compute float64 / complex128 elements."""
+    global _BACKEND_HAS_FP64
+    if not isinstance(value, bool):
+        raise TypeError(f"set_backend_has_fp64 takes a bool, got {value!r}")
+    _BACKEND_HAS_FP64 = value
 
 
 def backend_has_fp64() -> bool:
-    """Whether the detected backend's kernels handle float64 elements (see `_BACKEND_HAS_FP64`)."""
-    return _BACKEND_HAS_FP64.get(_detect_gpu_backend(), True)
+    """Whether the backend's kernels handle float64 elements, as declared by
+    `set_backend_has_fp64`; refused while undeclared."""
+    if _BACKEND_HAS_FP64 is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: whether the '{_detect_gpu_backend()}' backend's kernels compute "
+            f"float64 was never declared (`set_backend_has_fp64`); it is the hardware's fact, "
+            f"never assumed")
+    return _BACKEND_HAS_FP64
 
 
 # The smallest `tl.dot` tile dimension a backend's attention lowering handles
@@ -4186,10 +4205,10 @@ class NBXTensor:
         if self.is_complex() and target not in _COMPLEX_DTYPES:
             return self
         # A float64 element on a backend whose kernels have none is not cast, it is misread:
-        # refused by name (`_BACKEND_HAS_FP64`). The caller places the array at a dtype the
+        # refused by name (`backend_has_fp64`, asked only when fp64 is in play). The caller places the array at a dtype the
         # backend has (a float64 formula result is cast on the host first).
-        if not backend_has_fp64() and (self._dtype in (NBXDtype.float64, NBXDtype.complex128)
-                                       or target in (NBXDtype.float64, NBXDtype.complex128)):
+        if (self._dtype in (NBXDtype.float64, NBXDtype.complex128)
+                or target in (NBXDtype.float64, NBXDtype.complex128)) and not backend_has_fp64():
             raise RuntimeError(
                 f"ZERO FALLBACK: a cast from {self._dtype.name} to {target.name} on the "
                 f"'{_detect_gpu_backend()}' backend, whose kernels have no float64: its lowering "

@@ -58,12 +58,14 @@ def _one_16g_card():
     a launch that does not name its card — that case has its own file
     (`test_an_entry_serves_only_the_memory_class_it_covered.py`)."""
     from neurobrix.kernels import wrappers as W
-    before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16)
-    dev = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384})()
+    from neurobrix.kernels import nbx_tensor as T
+    before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, T._BACKEND_HAS_FP64)
+    dev = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
+                           "brand": "nvidia", "architecture": "volta"})()
     prof = type("Prof", (), {"devices": [dev], "has_native_bf16": False, "id": "auto-v100-16gb-16g"})()
     W.set_hardware_profile(prof)
     yield
-    W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16 = before
+    W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16, T._BACKEND_HAS_FP64 = before
 
 
 def _write(root: Path, entries, vendor="nvidia", profile="volta", dtype="fp32", kernel=KERNEL, fmt=C.FORMAT):

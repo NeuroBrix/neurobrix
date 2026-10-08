@@ -18,3 +18,14 @@ def without_matrix_unit(monkeypatch):
     from neurobrix.kernels.ops import _configs as C
     monkeypatch.setattr(C, "matrix_unit", lambda: {})
     monkeypatch.setattr(W, "_matrix_unit", lambda: {})
+
+
+@pytest.fixture
+def host_backend_fp64(monkeypatch):
+    """nbx_tensor's float64 capability declared as a run declares it (`set_hardware_profile`): from
+    this host's hardware profile (`precision.kernels_carry_fp64.triton`), restored after the cell."""
+    from neurobrix.core.prism.autodetect import load_default_profile
+    from neurobrix.kernels import nbx_tensor as T
+    from neurobrix.triton.dtype import profile_triton_has_fp64
+    monkeypatch.setattr(T, "_BACKEND_HAS_FP64", None)
+    T.set_backend_has_fp64(profile_triton_has_fp64(load_default_profile()))

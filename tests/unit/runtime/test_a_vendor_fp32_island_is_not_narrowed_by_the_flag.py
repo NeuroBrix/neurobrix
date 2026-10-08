@@ -86,7 +86,7 @@ def flag():
 
 
 def _out(op, traced, narrow=()):
-    eng = T.TritonDtypeEngine(NBXDtype.float16, graph_dtype="float16", has_fp64=False)
+    eng = T.TritonDtypeEngine(NBXDtype.float16, graph_dtype="float16", stores_fp64=False)
     eng.set_precision_contract(True, (), narrow)
     rec = {"output_dtypes": [traced]}
     return eng.wrap_op(op, _same, op_uid="op::0", op_record=rec)(_Fake(NBXDtype.float32)).nbx_dtype
