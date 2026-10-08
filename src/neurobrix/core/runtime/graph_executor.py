@@ -1879,7 +1879,13 @@ class GraphExecutor:
             return None
         encodes = {k: v["encodes"] for k, v in tensors.items()
                    if isinstance(v, dict) and v.get("encodes")}
-        keys = list(tensors.keys()); params = self._graph_param_names()
+        keys = list(tensors.keys())
+        # A piece binds over its COMPONENT's parameters, as the reconcile's suffix index requires
+        # (`consumed_in_loader_space`). Over a piece's own set a lone `head.weight` the index lacks
+        # (a tied head, put on the base by the flow) found the bare suffix `weight` unique and was
+        # bound to the last key walked: canary-qwen streamed, a value projection as its head.
+        src = self._component_from if self._component_from is not None else self
+        params = src._graph_param_names()
         self._pending_weight_binding = self.binding_of_the_loaded(
             consumed, keys, params, encodes, self._flow_reads_weights)
         return self.consumed_in_loader_space(consumed, keys, params, encodes,
@@ -1947,6 +1953,13 @@ class GraphExecutor:
             if name is None:
                 keep.add(k)
             else:
+                taken[name] = lender[name]
+        # A parameter no loaded key fills, held by the lender under the graph's own name: what
+        # the flow put on the base (a tied head, `audio_llm`), taken as the whole run reads it.
+        bound = set(getattr(self, "_pending_weight_binding", None) or ())
+        for tid in (getattr(self, "_dag", None) or {}).get("tensors", {}):
+            name = tid[7:] if tid.startswith("param::") else None
+            if name and name not in bound and name not in taken and name in lender:
                 taken[name] = lender[name]
         return keep, taken
 
