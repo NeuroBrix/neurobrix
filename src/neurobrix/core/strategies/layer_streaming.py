@@ -267,7 +267,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if hook is not None:
             hook(f"layer_streaming:{component_name}", **followers)
             return
-        takes = [n for n in ("register_op_uid_interceptors", "register_triton_interceptors")
+        takes = [n for n in ("register_op_uid_interceptors", "register_op_interceptors",
+                             "register_triton_interceptors")
                  if getattr(executor, n, None) is not None]
         if takes:
             raise RuntimeError(
@@ -578,7 +579,27 @@ class LayerStreamingStrategy(ExecutionStrategy):
                         "with no KV cache, which reads as a model defect and is not "
                         "one — a refusal is the only honest answer.")
                 fn(interceptors)
-        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments)
+
+        # The compiled engine's KV cache is registered by op TYPE (`register_op_interceptors`),
+        # and it must reach the segments for the same reason. Only the triton registration was
+        # forwarded, so a streamed compiled decode ran with no cache. Measured 2026-10-08 on the
+        # M4 Pro, TinyLlama-1.1B native greedy: whole ' Paris.', streamed 'The' and eleven
+        # newlines, ' Paris.' again with NBX_KV_RECOMPUTE=1. One instance for all segments,
+        # for the reason given above.
+        def register_op_types_on_segments(interceptors, _segs=segments):
+            for seg_exec in _segs:
+                fn = getattr(seg_exec, "register_op_interceptors", None)
+                if fn is None:
+                    raise RuntimeError(
+                        "layer_streaming: a segment executor cannot take an op-type "
+                        "interceptor registration. Its compiled decode would silently run "
+                        "with no KV cache, which reads as a model defect and is not one.")
+                fn(interceptors)
+        before = dict(getattr(executor, "_op_interceptors", None) or {})
+        if before:
+            register_op_types_on_segments(before)
+        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments,
+                                       op=register_op_types_on_segments)
 
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)

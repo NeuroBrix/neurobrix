@@ -289,6 +289,7 @@ class GraphExecutor:
         # strategy whose executors run this executor's ops (layer_streaming's pieces) is told
         # every later registration through this explicit hook.
         self._op_uid_followers: Dict[str, Callable] = {}
+        self._op_followers: Dict[str, Callable] = {}
         self._triton_followers: Dict[str, Callable] = {}
         self._last_stats = None
         self._last_symbols = {}  # For CFG batch inference
@@ -380,6 +381,8 @@ class GraphExecutor:
         if self._compiled_seq is not None:
             self._compile_execution_sequence()
             self._interceptors_dirty = False
+        for follow in list(self._op_followers.values()):
+            follow({op_type: interceptor})
 
     def register_op_interceptors(self, interceptors: Dict[str, Callable]) -> None:
         """
@@ -399,6 +402,8 @@ class GraphExecutor:
             self._interceptors_dirty = False
         else:
             self._interceptors_dirty = True
+        for follow in list(self._op_followers.values()):
+            follow(interceptors)
 
     def unregister_op_interceptor(self, op_type: str) -> None:
         """
@@ -3776,17 +3781,22 @@ class GraphExecutor:
             follow(interceptors)
 
     def follow_interceptor_registrations(self, key: str, *, op_uid: Optional[Callable] = None,
+                                         op: Optional[Callable] = None,
                                          triton: Optional[Callable] = None) -> None:
         """The explicit hook a strategy whose executors run this executor's ops subscribes to:
         `op_uid(interceptors, groups=, planned=)` after every later
-        `register_op_uid_interceptors`, `triton(interceptors)` after every later
+        `register_op_uid_interceptors`, `op(interceptors)` after every later
+        `register_op_interceptors` / `register_op_interceptor` (the compiled engine's KV cache,
+        keyed by op type), `triton(interceptors)` after every later
         `register_triton_interceptors`, in subscription order. A follower is held under its
         `key`: subscribing again under the same key replaces it (a strategy re-installed on the
         same executor forwards once, to its current executors). Registrations made before the
-        subscription are read by the follower itself (`_op_uid_interceptors`,
-        `_pending_triton_interceptors`). `LayerStreamingStrategy` forwards both to its pieces."""
+        subscription are read by the follower itself (`_op_uid_interceptors`, `_op_interceptors`,
+        `_pending_triton_interceptors`). `LayerStreamingStrategy` forwards all three to its pieces."""
         if op_uid is not None:
             self._op_uid_followers[key] = op_uid
+        if op is not None:
+            self._op_followers[key] = op
         if triton is not None:
             self._triton_followers[key] = triton
 
