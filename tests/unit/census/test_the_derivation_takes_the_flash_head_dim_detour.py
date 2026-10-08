@@ -68,17 +68,17 @@ def _sdpa_launches(D_, budget):
     return out or [], unhandled
 
 
-def test_no_scores_budget_routes_the_padded_call_to_math(unmeasured_arch):
+def test_no_scores_budget_routes_the_padded_call_to_math(unmeasured_arch, tl_dot_gemms):
     launches, unhandled = _sdpa_launches(512, 0)
     keys = [k for _, k in launches]
     assert len(keys) == 2, keys
     b = LK.bucket_of
     assert keys[0][:3] == (b("M", 3072), b("N", 3072), b("K", 513))
     assert keys[1][:3] == (b("M", 3072), b("N", 513), b("K", 3072))
-    assert not unhandled
+    assert not D.unplaced(unhandled)
 
 
-def test_a_budget_that_admits_the_scores_keeps_the_true_head_dim():
+def test_a_budget_that_admits_the_scores_keeps_the_true_head_dim(tl_dot_gemms):
     launches, _ = _sdpa_launches(512, 2 << 30)
     assert [k[:3] for _, k in launches][0] == (LK.bucket_of("M", 3072), LK.bucket_of("N", 3072),
                                                LK.bucket_of("K", 512))

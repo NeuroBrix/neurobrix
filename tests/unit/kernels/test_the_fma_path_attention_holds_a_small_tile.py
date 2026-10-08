@@ -90,18 +90,22 @@ volta = pytest.mark.skipif(_cuda_cc() != 70, reason="needs a Volta card (the FMA
 
 
 def _attn(q, k, v):
+    """The FMA-path flash kernel itself: the route forced to flash and the profile's matrix unit withheld (where
+    the unit is declared it takes these operands — tests/unit/kernels/test_flash_m8n8k4.py; this kernel still
+    serves every call the unit does not take)."""
     from neurobrix.kernels import wrappers as W
-    real = W._lk.sdpa_route
+    real, real_mu = W._lk.sdpa_route, W._matrix_unit
     W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
+    W._matrix_unit = lambda: {}
     try:
         return W.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
     finally:
-        W._lk.sdpa_route = real
+        W._lk.sdpa_route, W._matrix_unit = real, real_mu
 
 
 @volta
 @pytest.mark.parametrize("D", [64, 96, 128])
-def test_the_chunked_kernel_agrees_with_float64(D):
+def test_the_chunked_kernel_agrees_with_float64(D, without_matrix_unit):
     from neurobrix.kernels.nbx_tensor import NBXTensor
     rng = np.random.default_rng(D)
     a = [(rng.standard_normal((1, 2, 333, D)) * 0.5).astype(np.float16) for _ in range(3)]
@@ -113,7 +117,7 @@ def test_the_chunked_kernel_agrees_with_float64(D):
 
 
 @volta
-def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypatch):
+def test_the_chunked_launch_is_several_times_the_held_one_on_this_card(monkeypatch, without_matrix_unit):
     """Same process, same inputs: the profile's chunk row against the same call with the row's
     launch meta withheld (the held form). Measured 14x at T 4096, D 96 (2026-10-03)."""
     from neurobrix.kernels import wrappers as W

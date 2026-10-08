@@ -473,6 +473,16 @@ class _Rules:
                 return d
         return self.first(fl)
 
+    def first_nonempty(self, fl) -> Optional[str]:
+        """The first operand `_cat_inputs_or_refuse` keeps: 0-dim AND empty operands dropped, the
+        extent read at the binding (`shape_of`). An empty fp16 KV-cache constant concatenated with
+        a bf16 projection made K and V fp16 here while the run kept them bf16 (Gemma's encoder in
+        SANA-Video under bf16 compute; the SDPA's operands then widened to fp32 in the census)."""
+        for t, d, z in fl:
+            if not z and all(int(e) != 0 for e in self.shape_of(t)):
+                return d
+        return self.first_dimensioned(fl)
+
     def weight_dtype(self, tid: str, traced: str) -> str:
         """A param/buffer/constant: `stored_dtype_in_compute` (triton/weight_loader.py:609-627),
         the loader's rule for every weight of a shard — the documented mirror of the ATen
@@ -709,7 +719,7 @@ class _TritonRules(_Rules):
             # NBXTensor.cat aligns every operand to the FIRST one's dtype
             # (kernels/nbx_tensor.py:4251-4253), after the empty and 0-dim operands are
             # dropped (triton/sequential.py `_cat_inputs_or_refuse`).
-            return self.first_dimensioned(fl) or self.default(op, fl)
+            return self.first_nonempty(fl) or self.default(op, fl)
         if name in _SDPA:
             # The flash path allocates `empty_like(q)`, the math path casts its result to q's
             # dtype — q AFTER the wrapper's operand alignment (`launch_keys.sdpa_operand_dtypes`:

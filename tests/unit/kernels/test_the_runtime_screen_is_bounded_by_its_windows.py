@@ -169,13 +169,21 @@ def _cuda_free_bytes():
         return 0
 
 
-def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monkeypatch, tmp_path):
+def test_the_macs_key_is_screened_on_windows_with_a_bounded_host_footprint(monkeypatch, tmp_path, without_matrix_unit):
     triton = pytest.importorskip("triton")            # noqa: F841
     # A fresh replay cache: a sweep persisted by an earlier run of this key would serve it
     # without a screen, and this cell would then measure nothing (seen 2026-09-26).
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay_cache"))
     from neurobrix.kernels import launcher as L, wrappers as W
     from neurobrix.kernels import screen_oracle as S
+    from neurobrix.triton import autotune_cache as atc
+    # The fresh directory alone does not make the sweep fresh: an earlier cell's first launch in
+    # this PROCESS seeds the Autotuners' memory from the default replay cache, which holds this key
+    # once any run on the machine swept it — the key was then served with no screen (red after
+    # test_attention_gqa_grouped.py, on 9d060716 too, 2026-10-07).
+    for qual, at in atc._autotuners():
+        if qual.rsplit(".", 1)[-1] == "conv2d_forward_kernel":
+            monkeypatch.setattr(at, "cache", {})
     from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
     try:
         DeviceAllocator.empty_cache_pool()

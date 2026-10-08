@@ -75,7 +75,7 @@ def test_a_vlm_request_runs_its_contracts_components_only():
         assert D.vlm_runs(model, topo) == want
 
 
-def test_baddbmm_is_keyed_as_its_wrapper_launches():
+def test_baddbmm_is_keyed_as_its_wrapper_launches(tl_dot_gemms):
     """`baddbmm_wrapper` launches IEEE_PRECISION True, PROMOTE_B False, HAS_BIAS True, its output
     batch1's dtype; the walk's key (64, 1024, 128, True, False, True, fp16, fp16, fp16, <bias>)."""
     from neurobrix.kernels import launch_keys as LK
