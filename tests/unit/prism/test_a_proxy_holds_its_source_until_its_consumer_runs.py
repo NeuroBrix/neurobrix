@@ -120,9 +120,14 @@ def test_the_sana_4k_decoder_is_priced_at_what_it_held():
                               component_dtypes={"vae": "float16"})["vae"]
         got[mode] = (m.activation_bytes / 2**20, m.peak_op_uid)
     print(f"Sana_1600M_4Kpx_BF16 vae at 3072x4096, float16, v100-32g: {got}")
-    # The Triton engine is the one the 15 360 MB was measured on.
-    assert got["triton"][0] >= 15_000, got
-    assert got["triton"][1] == "aten.pixel_shuffle::4", got
+    # The Triton engine is the one the 15 360 MB was measured on (held when it ran out of memory,
+    # a floor). CHANGED 2026-10-09 (an op is priced with what it holds while it runs): the peak
+    # moved to the conv whose 4 GiB-plus output the Triton wrapper bands (`conv2d_band_transient_bytes`),
+    # 21 512 MB. MEASURED on a V100-32GB (card 2, Triton, this request, 2026-10-09): the vae held
+    # 30 383 MB above its weights (/home/mlops/nbx/campaigns/2026_10_09_transient_proof/
+    # run_B_sana4k_vae.log) — the transient moves the price toward the card; it is still under.
+    assert got["triton"][0] >= 21_000, got
+    assert got["triton"][1] == "aten.convolution::62", got
     # The ATen engine keeps the norms at the weight's width and prices a fresh
     # fp32 buffer at the residual add whose in-place target is fp16: a different
     # composition, recorded here, not asserted against the Triton measurement.

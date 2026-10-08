@@ -73,10 +73,21 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
 
     The COMPILED half is INFERRED from the ATen engine's table (group_norm is AMP_FP32 without a
     calibration record, the silu that follows keeps its input's width); no card has run this
-    request under the compiled engine. That measurement is owed."""
+    request under the compiled engine. That measurement is owed.
+
+    CHANGED 2026-10-09 (an op is priced with what it holds while it runs): the plan's figure is
+    the walk WITH each op's transient (core/prism/op_transients — here the fp32 copies the
+    compiled group_norm makes of its fp16 input and result), so the identity below is read
+    through the same walk. Measured at the smallest request of the same peak class (7 frames,
+    320x576, compiled, V100-32GB card 2): the vae held 4 706 MB above its weights; the walk
+    prices 3 432 MB bare and 3 780 MB with transients — the transient moves it toward the card
+    (/home/mlops/nbx/campaigns/2026_10_09_transient_proof/run_A_mochi_vae.log). The solver's
+    7 560 MB there is that walk scaled to the guidance batch (2), which the decode does not run
+    at — a request-scaling question, not a transient one."""
     import math
     from neurobrix.core.prism.profiler import ActivationProfiler
-    from neurobrix.core.prism.runtime_widths import plan_time_contract, runtime_widths
+    from neurobrix.core.prism.op_transients import context_for
+    from neurobrix.core.prism.runtime_widths import plan_time_contract, runtime_dtypes, runtime_widths
     pin_dedicated_card(monkeypatch, 32501, 267, "the rack's card 2, 2026-09-25")
     impose_rung(monkeypatch, 32768)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
@@ -108,8 +119,13 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
     numel = math.prod(prof._resolve_shape(g["tensors"][silu], smap))
     assert numel * widths[silu] == 8_493_465_600, (numel, widths[silu])       # the card's malloc
 
-    peak = prof.estimate_peak_memory(request, dtype_bytes=2, widths=widths,
-                                     placement_floor=True).peak_bytes
+    contract = plan_time_contract(root, "vae", g, "float16")
+    dtypes = runtime_dtypes(g, "float16", "compiled", has_native_bf16=False, contract=contract,
+                            shape_of=lambda t: prof._resolve_shape(g["tensors"][t], smap))
+    peak = prof.estimate_peak_memory(request, dtype_bytes=2, widths=widths, placement_floor=True,
+                                     transients=context_for(profile(V100_32GB), "compiled", "float16",
+                                                            contract=contract),
+                                     dtypes=dtypes).peak_bytes
     assert seen["vae"].activation_bytes == s._scale_activations_to_request(comp, peak, request), (
         seen["vae"].activation_bytes / 2 ** 20, peak / 2 ** 20)
     assert "vae" in (getattr(plan, "component_tiling", None) or {}), plan.component_tiling

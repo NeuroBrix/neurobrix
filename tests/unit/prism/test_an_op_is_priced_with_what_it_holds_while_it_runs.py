@@ -135,6 +135,40 @@ def test_the_compiled_engine_prices_casts_and_no_tiling_split():
                               ["float16"], "float16", ctx) == 2 * representation_bytes("float32", n)
 
 
+def _contract(safe, fp32=(), narrow=()):
+    from neurobrix.core.prism.runtime_widths import PrecisionContract
+    return PrecisionContract(safe, frozenset(fp32), frozenset(narrow), "test")
+
+
+def test_the_execution_dtype_reads_the_component_s_precision_contract():
+    # The engines' own contract rules (core/dtype/engine.py `_resolve_args`, triton/dtype.py
+    # `wrap_op`), on the record `runtime_dtypes` reads: a component with a safe fp16 contract
+    # runs its matmuls and fp16-IO norms at fp16 under the compiled engine — no fp32 copy of a
+    # weight (Allegro's transformer, DeepSeek-Coder-V2-Lite's lm_head, 2026-10-09).
+    n = 2048 * 102400
+    mm = ({"op_type": "aten::mm"}, [[23, 2048], [2048, 102400]], [[23, 102400]], ["float16", "float16"])
+    ln = ({"op_type": "aten::native_layer_norm"}, [[2, 4096, 1536]], [[2, 4096, 1536]], ["float16"])
+
+    def price(case, ctx, uid="u"):
+        op, ins, outs, dts = case
+        return op_transient_bytes(uid, op, ins, outs, dts, "float16", ctx)
+
+    unsafe = _ctx(engine="compiled", contract=_contract(False))
+    safe = _ctx(engine="compiled", contract=_contract(True))
+    # compiled, no contract: the V100 fp32 upcast copies both operands and holds the fp32 result
+    assert price(mm, unsafe) == (representation_bytes("float32", 23 * 2048) + representation_bytes("float32", n)
+                                 + representation_bytes("float32", 23 * 102400))
+    assert price(mm, safe) == 0 and price(ln, safe) == 0
+    assert price(ln, unsafe) == 2 * representation_bytes("float32", 2 * 4096 * 1536)
+    # an island computes in fp32 under any contract, either engine
+    island = _contract(True, fp32={"isl"})
+    assert price(mm, _ctx(engine="compiled", contract=island), uid="isl") == price(mm, unsafe)
+    assert price(mm, _ctx(contract=island), uid="isl") == price(mm, unsafe)
+    # Triton: the contract moves no compute but the islands (mm is self-managed, the norm is fp32)
+    assert price(mm, _ctx(contract=_contract(True))) == 0
+    assert price(ln, _ctx(contract=_contract(True))) == price(ln, unsafe)
+
+
 def test_the_context_reads_the_attention_keys_the_wrapper_reads():
     from neurobrix.core.config.loader import get_vendor_config
     from neurobrix.core.prism.structure import DeviceBrand, DeviceSpec

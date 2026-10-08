@@ -58,16 +58,21 @@ class TransientContext:
     band_bytes: int = 0
     conv3d_chunks: FrozenSet[str] = field(default_factory=frozenset)
     tiled_ops: Mapping[str, int] = field(default_factory=dict)
+    # the component's precision contract (`runtime_widths.PrecisionContract`): the SAME object
+    # `runtime_dtypes` reads, so the dtypes the walk holds and the dtype each op executes at come
+    # from one record. None = no record: nothing safe, no island, nothing narrowed.
+    contract: Optional[Any] = None
 
 
-def context_for(profile, engine: str, compute_dtype: str) -> TransientContext:
+def context_for(profile, engine: str, compute_dtype: str, contract=None) -> TransientContext:
     """The context of `profile`'s first device under `engine` at `compute_dtype` — the keys the
-    wrappers read."""
+    wrappers read — for a component under `contract` (its plan-time precision contract)."""
     compute_dtype = str(compute_dtype).replace("torch.", "")
     devices = getattr(profile, "devices", None) or []
     band = _ts.conv2d_band_bytes()
     if not devices:
-        return TransientContext(engine=engine, compute_dtype=compute_dtype, band_bytes=band)
+        return TransientContext(engine=engine, compute_dtype=compute_dtype, band_bytes=band,
+                                contract=contract)
     dev = devices[0]
     from neurobrix.core.config.loader import UnsupportedArchitectureError, get_vendor_config
     vendor = getattr(dev.brand, "value", dev.brand)
@@ -75,7 +80,8 @@ def context_for(profile, engine: str, compute_dtype: str) -> TransientContext:
         cfg = get_vendor_config(vendor, dev.architecture)
     except UnsupportedArchitectureError:
         # The wrapper's own answer with no vendor file: no budget, no chunk, no unit.
-        return TransientContext(engine=engine, compute_dtype=compute_dtype, band_bytes=band)
+        return TransientContext(engine=engine, compute_dtype=compute_dtype, band_bytes=band,
+                                contract=contract)
     mem = cfg.get("memory") or {}
     base = int(mem.get("sdpa_math_max_scores_bytes", 0) or 0)
     budget = _ts.sdpa_device_scores_budget(
@@ -85,7 +91,7 @@ def context_for(profile, engine: str, compute_dtype: str) -> TransientContext:
         sdpa_min_chunk_rows=int(mem.get("sdpa_math_min_chunk_rows", 0) or 0),
         sdpa_max_chunks=int(mem.get("sdpa_math_max_chunks", 0) or 0),
         matrix_unit=dict(cfg.get("matrix_unit") or {}),
-        band_bytes=band)
+        band_bytes=band, contract=contract)
 
 
 def _unit_flash(ctx: TransientContext, D: int, dtypes: Sequence[Optional[str]]) -> bool:
@@ -166,41 +172,61 @@ def tiling_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[in
     return 0
 
 
-def execution_dtype(op: Dict[str, Any], in_dtypes: Sequence[Optional[str]], ctx: TransientContext) -> Optional[str]:
-    """The dtype the DtypeEngine's wrap makes an op compute in, or None when it wraps none (a
+def execution_dtype(uid: str, op: Dict[str, Any], in_dtypes: Sequence[Optional[str]],
+                    ctx: TransientContext) -> Optional[str]:
+    """The dtype the DtypeEngine's wrap makes op `uid` compute in, or None when it wraps none (a
     self-managed wrapper, a full-precision compute dtype, an op of no AMP class). The engines'
-    own class sets, in `wrap_op`'s order: an fp32 op (and, under fp16, `div`) computes in fp32;
-    a half op in the compute dtype; a promote op in its widest floating input.
-      * Triton engines: `triton/dtype.TritonDtypeEngine.wrap_op` (`AMP_FP32_OPS`,
-        `_FP16_NEED_FP32`, `AMP_FP16_OPS`, `AMP_PROMOTE_OPS`; `_SELF_MANAGED_OPS` unwrapped);
-      * compiled: `core/dtype/engine.py`'s sets, as `runtime_widths` mirrors them.
-    The calibration record's per-op islands are not visible here; an island op of no fp32 class
-    is priced at its class."""
+    own rules, in their order, under the component's precision contract (`ctx.contract`):
+      * both engines: a calibration island (`fp32_op_uids`) computes in fp32 whatever its class;
+      * Triton engines (`triton/dtype.TritonDtypeEngine.wrap_op`): a narrowed fp32-class op
+        computes in fp32 (only its store narrows); `_SELF_MANAGED_OPS` are unwrapped; an fp32 op
+        (and, under fp16, `div`) computes in fp32; a half op in the compute dtype; a promote op in
+        its widest floating input. The contract moves no other op's compute;
+      * compiled (`core/dtype/engine.py` `_resolve_args`, as `runtime_widths` mirrors it): under a
+        safe fp16 contract the fp16-IO norms/softmax (`_FP32_OPS_HALF_IO`) and the matmuls
+        (`_FP16_GEMM_OPS`) take the compute dtype, and so does a narrowed `div`; otherwise as
+        the Triton classes with the engine's `_FP16_NEED_FP32` (mm, bmm, addmm, div)."""
     c = ctx.compute_dtype
     if c not in ("float16", "bfloat16"):
         return None
     from neurobrix.core.prism import runtime_widths as _rw
     from neurobrix.kernels.classification import canonical_aten
+    k = ctx.contract
+    islands = frozenset(getattr(k, "fp32_op_uids", ()) or ())
+    narrow = frozenset(getattr(k, "narrow_op_uids", ()) or ())
+    if uid in islands:
+        return "float32"
     name = canonical_aten(str(op.get("op_type", "")).split("::")[-1].split(".")[0])
     if ctx.engine == "triton":
         from neurobrix.triton import dtype as _tdt
+        if uid in narrow and name in _tdt.AMP_FP32_OPS:
+            return "float32"
         if name in _tdt._SELF_MANAGED_OPS:
             return None
-        fp32, half, need, promote = _tdt.AMP_FP32_OPS, _tdt.AMP_FP16_OPS, _tdt._FP16_NEED_FP32, _tdt.AMP_PROMOTE_OPS
+        if name in _tdt.AMP_FP32_OPS or (c == "float16" and name in _tdt._FP16_NEED_FP32
+                                          and name in _tdt.AMP_FP16_OPS):
+            return "float32"
+        if name in _tdt.AMP_FP16_OPS:
+            return c
+        promote = _tdt.AMP_PROMOTE_OPS
     else:
-        fp32, half, need, promote = (_rw.ATEN_AMP_FP32_OPS, _rw.ATEN_AMP_FP16_OPS, _rw.ATEN_FP16_NEED_FP32,
-                                     _rw.ATEN_AMP_PROMOTE_OPS)
-    if name in fp32 or (c == "float16" and name in need and name in half):
-        return "float32"
-    if name in half:
-        return c
+        safe = bool(getattr(k, "safe", False)) and c == "float16"
+        if name in _rw.ATEN_AMP_FP32_OPS:
+            return c if safe and name in _rw.ATEN_FP32_OPS_HALF_IO else "float32"
+        if name in _rw.ATEN_AMP_FP16_OPS:
+            if c == "float16" and name in _rw.ATEN_FP16_NEED_FP32:
+                if safe and (name in _rw.ATEN_FP16_GEMM_OPS or uid in narrow):
+                    return c
+                return "float32"
+            return c
+        promote = _rw.ATEN_AMP_PROMOTE_OPS
     if name in promote:
         floats = [d for d in in_dtypes if d in _FLOATS]
         return max(floats, key=itemsize) if floats else None
     return None
 
 
-def cast_transient_bytes(op: Dict[str, Any], in_shapes: List[List[int]], out_shapes: List[List[int]],
+def cast_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[int]], out_shapes: List[List[int]],
                          in_dtypes: List[Optional[str]], out_dtype: Optional[str],
                          ctx: TransientContext) -> int:
     """The DtypeEngine's half: each floating input held at another dtype than the op's execution
@@ -209,7 +235,7 @@ def cast_transient_bytes(op: Dict[str, Any], in_shapes: List[List[int]], out_sha
     execution dtype before the cast. An explicit cast's copy is its output, already live."""
     if str(op.get("op_type", "")) in _CAST_OPS:
         return 0
-    ex = execution_dtype(op, in_dtypes, ctx)
+    ex = execution_dtype(uid, op, in_dtypes, ctx)
     if ex is None:
         return 0
     total = 0
@@ -226,4 +252,4 @@ def op_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[int]],
     """ONE op's transient on top of its output: the TilingEngine's split bytes (Triton engines)
     plus the DtypeEngine's cast copies (both engines)."""
     return (tiling_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx)
-            + cast_transient_bytes(op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx))
+            + cast_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx))

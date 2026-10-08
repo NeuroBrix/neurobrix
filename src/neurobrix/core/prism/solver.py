@@ -2713,8 +2713,9 @@ class PrismSolver:
                     # activations when it ran out of memory (2026-09-28). The
                     # widths come from the engine's own rules
                     # (core/prism/runtime_widths).
+                    _contract = self._plan_contract(comp, container, comp_dtype_str)
                     dtypes = self._activation_dtypes(
-                        comp, container, profiler, input_config, comp_dtype_str, profile)
+                        comp, profiler, input_config, comp_dtype_str, profile, _contract)
                     widths = {tid: get_dtype_bytes_per_element(n) for tid, n in dtypes.items()}
                     # The Triton engines read a transposed weight in place; the compiled engine's
                     # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why).
@@ -2728,7 +2729,7 @@ class PrismSolver:
                     # at zero workspace: mochi-1-preview's VAE at 7 frames planned 2 564 MB
                     # and peaked at 11 039 MB on the Mac (2026-10-08).
                     from neurobrix.core.prism.op_transients import context_for as _transient_ctx
-                    _tctx = _transient_ctx(profile, _engine, comp_dtype_str)
+                    _tctx = _transient_ctx(profile, _engine, comp_dtype_str, contract=_contract)
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -2932,8 +2933,8 @@ class PrismSolver:
         with open(p) as f:
             return json.load(f)
 
-    def _activation_dtypes(self, comp, container, profiler, input_config,
-                           compute_dtype: str, profile) -> Dict[str, str]:
+    def _activation_dtypes(self, comp, profiler, input_config,
+                           compute_dtype: str, profile, contract) -> Dict[str, str]:
         """{tensor_id: dtype name} this component's activations are EXECUTED at,
         under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
 
@@ -2950,13 +2951,7 @@ class PrismSolver:
             fused / tiled op is priced at the wider of its tiled and untiled width;
           * the request's shapes, for the matmul store's M <= 4 rule: the profiler's own
             resolution under the placement-floored symbol map this estimate uses."""
-        from neurobrix.core.prism.runtime_widths import (
-            conservative_contract, plan_time_contract, runtime_dtypes)
-        cache_path = getattr(container, "cache_path", None)
-        if cache_path:
-            contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype)
-        else:
-            contract = conservative_contract("the container has no cache path to read a record from")
+        from neurobrix.core.prism.runtime_widths import runtime_dtypes
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
@@ -2964,6 +2959,17 @@ class PrismSolver:
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
             contract=contract, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
+
+    @staticmethod
+    def _plan_contract(comp, container, compute_dtype: str):
+        """The component's plan-time precision contract — the one record both the runtime dtypes
+        (`_activation_dtypes`) and each op's execution dtype (`op_transients.execution_dtype`)
+        are read under."""
+        from neurobrix.core.prism.runtime_widths import conservative_contract, plan_time_contract
+        cache_path = getattr(container, "cache_path", None)
+        if cache_path:
+            return plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype)
+        return conservative_contract("the container has no cache path to read a record from")
 
     def _graph_as_executed(self, comp, container):
         """The component as the engines will run it: with the declared-MoE
