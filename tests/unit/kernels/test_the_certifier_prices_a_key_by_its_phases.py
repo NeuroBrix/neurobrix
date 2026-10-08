@@ -15,8 +15,15 @@ depthwise points predict 0.48 x, 0.66 x and 0.82 x their measured peaks: red, se
 (2) the refusal test fails if a key priced over the budget is drawn or is refused without its
 phases and the budget in the message.
 
-Points: (kernel, key, measured peak MiB). The floor is the process before the key: 445 MiB,
+Points: (kernel, key, measured peak MiB). The floor is the process before the key: 457 MiB,
 the peak of a 0-element key on this machine (p_baddbmm_0).
+
+RE-MEASURED 2026-10-09 00:38-01:34 (supervisor 00:38), same method and census files, on ec8a54bc and,
+for the 3x3 convs and p_matmul_0 (refused or witness-drifted there), on 111699f6, the fix that lets a
+KRSC conv weight be certified: `results/certifier_price/remeasure_2026_10_09/{,round2/}summary.log`.
+The 2026-09-28 table had gone stale with 0fee9a2d (a key held at the kernel's width): the matmul
+peaks fell 1139 -> 640 and 2414 -> 1734 MiB, and the 3x3/1x1 per-element ratio 1.63 -> 1.35, so the
+ratio test now reads the measured ratio instead of a constant 1.5.
 """
 from __future__ import annotations
 
@@ -26,29 +33,29 @@ import pytest
 from neurobrix.kernels import autotune_certify as AC
 from neurobrix.triton import autotune_cache as atc
 
-FLOOR_MIB = 445
+FLOOR_MIB = 457
 MM = "neurobrix.kernels.ops.matmul.matmul_kernel"
 ADDMM = "neurobrix.kernels.ops.matmul.addmm_kernel"
 BADD = "neurobrix.kernels.ops.baddbmm_op.baddbmm_kernel"
 CONV = "neurobrix.kernels.ops.conv2d.conv2d_forward_kernel"
 DW = "neurobrix.kernels.ops.depthwise_conv2d.depthwise_conv2d_kernel"
 MEASURED = [
-    (DW, (4096, 256, 320, 256, 320, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 6840),
-    (DW, (4096, 384, 512, 384, 512, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 10423),
-    (DW, (3072, 64, 80, 64, 80, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16'), 1009),
-    (DW, (3072, 192, 256, 192, 256, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16'), 3081),
-    (CONV, (1, 256, 770, 2048, 256, 770, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 3562),
-    (CONV, (1, 32, 64, 80, 1024, 64, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 556),
-    (CONV, (1, 128, 1027, 2562, 3, 1025, 2560, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 2933),
-    (CONV, (1, 512, 512, 512, 4096, 512, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 3307),
-    (ADDMM, (608, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16', 'bf16'), 549),
-    (ADDMM, (10240, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32'), 972),
-    (ADDMM, (32768, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32'), 1326),
-    (BADD, (5120, 320, 112, False, False, False, 'fp32', 'fp32', 'fp32', 'fp32'), 550),
-    (BADD, (33, 32, 262144, False, False, False, 'fp32', 'fp32', 'fp32', 'fp32'), 948),
-    (MM, (512, 1024, 2304, False, False, 'bf16', 'bf16', 'bf16'), 474),
-    (MM, (16384, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16'), 1139),
-    (MM, (262144, 512, 1024, False, False, 'bf16', 'bf16', 'bf16'), 2414),
+    (DW, (4096, 256, 320, 256, 320, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 6193),
+    (DW, (4096, 384, 512, 384, 512, 3, 3, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 8886),
+    (DW, (3072, 64, 80, 64, 80, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16'), 964),
+    (DW, (3072, 192, 256, 192, 256, 5, 5, 1, 1, 2, 2, False, 'bf16', 'bf16', 'bf16'), 2800),
+    (CONV, (1, 256, 770, 2048, 256, 770, 2048, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 2806),
+    (CONV, (1, 32, 64, 80, 1024, 64, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 565),
+    (CONV, (1, 128, 1027, 2562, 3, 1025, 2560, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 2240),
+    (CONV, (1, 512, 512, 512, 4096, 512, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'bf16', 'bf16', 'bf16'), 3057),
+    (ADDMM, (608, 2240, 2240, False, False, 'bf16', 'bf16', 'bf16', 'bf16'), 548),
+    (ADDMM, (10240, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32'), 759),
+    (ADDMM, (32768, 2240, 2240, False, False, 'fp32', 'fp32', 'bf16', 'fp32'), 1336),
+    (BADD, (5120, 320, 112, False, False, False, 'fp32', 'fp32', 'fp32', 'fp32'), 565),
+    (BADD, (33, 32, 262144, False, False, False, 'fp32', 'fp32', 'fp32', 'fp32'), 960),
+    (MM, (512, 1024, 2304, False, False, 'bf16', 'bf16', 'bf16'), 491),
+    (MM, (16384, 1024, 2048, False, False, 'bf16', 'bf16', 'bf16'), 640),
+    (MM, (262144, 512, 1024, False, False, 'bf16', 'bf16', 'bf16'), 1734),
 ]
 
 
@@ -81,7 +88,10 @@ def test_the_price_is_the_phases_not_a_constant(tuners):
     conv_in = AC.price_key(CONV, tuners[CONV], MEASURED[4][1])
     conv_out = AC.price_key(CONV, tuners[CONV], MEASURED[7][1])
     e_in = 2 * 256 * 770 * 2048; e_out = 512 * 512 * 512 + 4096 * 512 * 512
-    assert conv_in["peak"] / e_in > 1.5 * conv_out["peak"] / e_out
+    priced = (conv_in["peak"] / e_in) / (conv_out["peak"] / e_out)
+    measured = ((MEASURED[4][2] - FLOOR_MIB) / e_in) / ((MEASURED[7][2] - FLOOR_MIB) / e_out)
+    assert priced > 1.2, f"the two balances price alike per element ({priced:.2f}x): a constant"
+    assert abs(priced / measured - 1) < 0.15, f"priced {priced:.2f}x per element vs measured {measured:.2f}x"
     dw = AC.price_key(DW, tuners[DW], MEASURED[0][1])
     assert dw["oracle"] > dw["draws"], "the windowed conv oracle is the depthwise key's cost, not its draws"
 
@@ -90,13 +100,13 @@ def test_a_key_priced_over_the_budget_is_refused_by_name_before_any_draw(tuners)
     class _NoDraw:
         def __getattr__(self, name):
             raise AssertionError(f"a value was drawn ({name}) for a key refused by its price")
-    key = MEASURED[1][1]                                       # 10 423 MiB measured
+    key = MEASURED[1][1]                                       # 8 886 MiB measured
     with pytest.raises(AC.KeyTooLargeForClass) as e:
-        AC.synthesize(DW, tuners[DW], key, _NoDraw(), budget_bytes=8000 * 2 ** 20, floor_bytes=445 * 2 ** 20)
+        AC.synthesize(DW, tuners[DW], key, _NoDraw(), budget_bytes=8000 * 2 ** 20, floor_bytes=FLOOR_MIB * 2 ** 20)
     msg = str(e.value)
     for word in ("oracle", "draws", "budget", "8000"):
         assert word in msg, f"the refusal does not name {word!r}: {msg}"
     # and the same key under a budget it fits is drawn
     made = AC.synthesize(DW, tuners[DW], key, np.random.default_rng(0), values=False,
-                         budget_bytes=16000 * 2 ** 20, floor_bytes=445 * 2 ** 20)
+                         budget_bytes=16000 * 2 ** 20, floor_bytes=FLOOR_MIB * 2 ** 20)
     assert made is not None
