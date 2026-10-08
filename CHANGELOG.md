@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Faster 3x3 convolutions on Apple M4 Pro in the Triton mode.** The hardware profile can store
+  3x3 convolution weights channels-innermost (`conv.weight_layout: KRSC`); the loader relays them
+  once and the kernel reads them in place. On an M4 Pro every 3x3 key runs 46-63 % faster (1024
+  channels at 256x256: 3.31 -> 5.38 TFLOP/s). Profiles that do not declare it are unchanged.
+
 - **Tensor cores on NVIDIA V100 in the Triton engine.** Matrix products, convolutions and attention
   run on the V100's tensor cores, with tile sizes read from the hardware profile. Float32 and
   bfloat16 matrix products are carried as two float16 halves with float32 accumulation. Their error
@@ -38,6 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the precomputed list of kernel shapes widened the attention's matrix products to float32, while
   the engine ran them in bfloat16. The run then found no tuned entry for those products. The list
   now ignores empty inputs of a concatenation, as the engine does.
+
+- **Kernel certification on Apple Silicon no longer refuses a long tuning sweep.**
+  The stability check used to bracket the whole sweep, and the GPU clock, which macOS manages, moved
+  somewhere inside it. It now brackets each small group of candidates, retries a group that drifted,
+  and decides between the two best candidates in one bracket of its own.
 
 - **A plan that splits an operation the engine cannot split now stops with a message naming it.**
   When a plan split an operation into bands and the engine had no split version of that operation,
@@ -322,10 +332,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Faster 3x3 convolutions on Apple M4 Pro in the Triton mode.** The hardware profile can store
-  3x3 convolution weights channels-innermost (`conv.weight_layout: KRSC`); the loader relays them
-  once and the kernel reads them in place. On an M4 Pro every 3x3 key runs 46-63 % faster (1024
-  channels at 256x256: 3.31 -> 5.38 TFLOP/s). Profiles that do not declare it are unchanged.
 - The regression matrix's host ledger reads a reservation's process liveness with `os.kill(pid, 0)` instead of `/proc/<pid>`, which macOS does not have: on the Mac every reservation was pruned as dead and two cells over half the host budget both reserved (`test_the_matrix_budgets_the_host`, red 2026-09-28, green after). `test_the_suite_skips_where_there_is_no_card`'s closed-door half skips where `CUDA_VISIBLE_DEVICES=''` hides no device (a Metal host): the hook is CUDA's door and stays disarmed there, as its other half shows.
 - The certifier prices a key by its phases before any draw (`autotune_certify.price_key`: the host draws, the device copies, the fp64 oracle whole or windowed per `_row_windows`/`_conv_windows`, the readback) and refuses it by name over a working-set budget (`neurobrix autotune certify --working-set-mb`, the figure the run's guard kills at); the 10 B/elem constant stood 12 % under a small depthwise key and 40 % over a large one on the Mac (2026-09-28, 20 keys measured one per process, `results/certifier_price`). `NBX_CERTIFY_PHASES=1` prints the process's memory at each phase of a key. Test: `tests/unit/kernels/test_the_certifier_prices_a_key_by_its_phases.py` (16 measured peaks, injection: conv windows shrunk to 1x1 -> 0.48x/0.66x/0.82x, red).
 - The row-windowed matmul oracle (`screen_oracle._mm`, the certifier's launch oracle and the runtime screen's) cuts the rows on the device before the operand crosses: it read the whole operand to the host and cast it whole to float64 once per window (4 096 MiB on the host for 64 rows of a 1 048 576 x 256 operand, measured 2026-09-28 on the Mac), so a matmul key cost the certifier 16 bytes per element where its draws and copies account for 8. A per-row bias follows the window. Test: `tests/unit/kernels/test_the_screen_oracle_reads_only_the_rows_it_windows.py` (red on the whole read, green after).
