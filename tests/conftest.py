@@ -62,3 +62,17 @@ def pytest_runtest_call(item):
                         f"first allocation, which is the absence of a card and not a "
                         f"result: {str(exc)[:160]}")
         raise
+
+
+@pytest.fixture
+def tl_dot_gemms(monkeypatch):
+    """The bound profile with its matrix unit undeclared: every GEMM keeps its tl.dot kernel and its key.
+
+    A cell that asserts a GEMM's or a flash call's autotune KEY speaks of that path. On a profile that declares
+    `matrix_unit` (Volta's m8n8k4, its fp32 split included) the unit takes those launches with no key
+    (`launch_keys.matrix_unit_takes`), so such a cell bound to the V100 profile went red the day the unit
+    was declared — the key it asserts is still the one an arch without the unit launches. The ONE decision
+    point, `_configs.matrix_unit`, answers `{}` (what it answers for a profile that declares none); the
+    unit's own placement is asserted by the cells that leave it declared."""
+    from neurobrix.kernels.ops import _configs
+    monkeypatch.setattr(_configs, "matrix_unit", lambda: {})

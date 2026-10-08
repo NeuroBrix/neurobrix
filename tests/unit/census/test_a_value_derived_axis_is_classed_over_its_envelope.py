@@ -159,12 +159,12 @@ def test_the_axis_is_found_bounded_and_carried(synthetic):
 
 
 @pytest.mark.parametrize("L", [23, 94])
-def test_the_bisection_meets_every_class_the_envelope_holds(synthetic, L):
+def test_the_bisection_meets_every_class_the_envelope_holds(synthetic, tl_dot_gemms, L):
     """The derived keys equal the exhaustive derivation at EVERY extent of the envelope."""
     g = synthetic(graph())
     u = collections.Counter()
     got = set(_derive(L, u))
-    assert not u, u
+    assert not D.unplaced(u), u
     (grp,) = D.value_axes(MODEL, COMP)
     lo, hi = grp[0].extent_range(g, D._shape_fn(g, COMP, {"s1": L}, {}, {}))
     want = set()
@@ -177,13 +177,26 @@ def test_the_bisection_meets_every_class_the_envelope_holds(synthetic, L):
     assert (34 in bmm) == (lo <= 34)                     # the trace's draw only where the envelope holds it
 
 
-def test_the_run_extents_of_kokoro_land_in_a_derived_class(synthetic):
+def test_the_run_extents_of_kokoro_land_in_a_derived_class(synthetic, tl_dot_gemms):
     """(640, 240, 96) at 94 phonemes (this rack's census request) and (640, 160, 55) at 55 (the
     Mac's VALIDATE request) are derived classes."""
     synthetic(graph())
     keys = {(L, k[:3]) for L in (94, 55) for uid, _q, k in _derive(L, collections.Counter())
             if uid == "aten.bmm::0"}
     assert (94, (640, 240, 96)) in keys and (55, (640, 160, 55)) in keys
+
+
+def test_the_matrix_unit_places_the_gemms_keyless_and_the_derivation_says_so(synthetic):
+    """The V100 profile as committed (its m8n8k4 unit, fp32 split): the fp32 bmm runs on the unit with no
+    autotune key. The derivation forms none for it and records it as PLACED (`KEYLESS aten::bmm`), never as
+    unhandled: a model of such ops alone is proven keyless, not refused. The fp32 convolution keeps its key
+    (the unit's implicit GEMM takes native operands only, `launch_keys.matrix_unit_native`)."""
+    synthetic(graph())
+    u = collections.Counter()
+    got = {uid for uid, _q, _k in _derive(94, u)}
+    assert "aten.bmm::0" not in got and "aten.convolution::1" in got, got
+    assert u[f"{D.KEYLESS}aten::bmm"] > 0, u
+    assert not D.unplaced(u), u
 
 
 def test_an_unbounded_axis_is_refused_by_name(synthetic):
@@ -236,7 +249,7 @@ def test_an_axis_no_kernel_reads_is_inert_not_refused(synthetic):
     assert ax.inert and ax.refused is None
     u = collections.Counter()
     _derive(94, u)
-    assert not u, u
+    assert not D.unplaced(u), u
 
 
 def test_an_extent_carried_through_padding_and_slicing_but_reaching_no_kernel_is_inert(synthetic):
@@ -274,4 +287,4 @@ def test_an_extent_carried_through_padding_and_slicing_but_reaching_no_kernel_is
     assert ax.carry[p][0](229) == 230 and ax.carry[s][0](229) == 229
     u = collections.Counter()
     _derive(94, u)
-    assert not u, u
+    assert not D.unplaced(u), u
