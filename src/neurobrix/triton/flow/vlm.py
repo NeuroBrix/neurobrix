@@ -1817,9 +1817,17 @@ class TritonVLMEngine:
                 and head_name in self.ctx.executors):
             self._ensure_weights_loaded(head_name)
             executor = self.ctx.executors[head_name]
-            for _key, tensor in executor._weights.items():
+            for _key, tensor in (executor._weights or {}).items():
                 if tensor is not None and tensor.ndim == 2:
                     return _proj(tensor)
+            # ZERO FALLBACK: the flow names this head as the logits' source; a head executor that
+            # holds no 2-D weight is a load defect, not a tied model. Falling through to the token
+            # embedding decoded garbage with GLM-4.1V and MiniCPM-o streamed (2026-10-08: the head's
+            # streamed base held nothing; `flow_reads_by_name`).
+            raise RuntimeError(
+                f"ZERO FALLBACK: logits_source is '{logits_source}' and head component "
+                f"'{head_name}' holds no 2-D weight (held: {sorted(executor._weights or {})}); "
+                f"projecting with the token embedding instead would decode another model's logits.")
         if embed_weight is not None:
             return _proj(embed_weight)
         raise RuntimeError(

@@ -851,6 +851,21 @@ def flow_embeds_into(graph: Optional[Dict[str, Any]]) -> bool:
     return "input::inputs_embeds" in ((graph or {}).get("input_tensor_ids") or [])
 
 
+def flow_reads_by_name(component: str, graph: Optional[Dict[str, Any]],
+                       topology: Optional[Dict[str, Any]]) -> bool:
+    """Whether a flow reads `component`'s weights BY NAME, outside its graph — the ONE rule a
+    streamed base's resident set (`LayerStreamingStrategy._ensure_flow_reads`) and Prism's reserve
+    for it (`PrismSolver._try_layer_streaming`) both read. Two readers: the component whose
+    embeddings the flow supplies (`flow_embeds_into`), and the VLM handlers' `head_component`,
+    whose 2-D weight both engines' `_compute_logits` project with directly — its graph takes hidden
+    states, so the first rule never saw it, and a streamed head's base held nothing (GLM-4.1V and
+    MiniCPM-o streamed, 2026-10-08: the logits came from the token embedding instead)."""
+    if flow_embeds_into(graph):
+        return True
+    vlm = ((topology or {}).get("flow") or {}).get("vlm") or {}
+    return bool(component) and component == vlm.get("head_component")
+
+
 def is_seam_tensor(meta: Optional[Dict[str, Any]]) -> bool:
     """A streamed piece's SEAM input: an intermediate the previous piece produced, aliased to
     `input::<tid>` by `build_segment_graph`. It enters a piece in the dtype its producing op gave it

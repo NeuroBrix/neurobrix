@@ -133,13 +133,15 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
     def _ensure_flow_reads(self, component_name: str, base: Any) -> None:
         """Hold the component's non-block weights on its BASE executor, once, when a flow reads
-        it by name (`flow_embeds_into`: the flow embeds its tokens from this executor's table) —
+        it by name (`flow_reads_by_name`: the flow embeds its tokens from this executor's table, or
+        projects its logits with this head's weight) —
         what a whole executor holds and a streamed base did not: the Mac's 30 "requires
         embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
         key is not reloaded), and called on every entry, so a base unloaded between phases gets
         them back."""
-        from neurobrix.core.prism.layer_partition import flow_embeds_into
-        if not flow_embeds_into(getattr(base, "_dag", None)):
+        from neurobrix.core.prism.layer_partition import flow_reads_by_name
+        if not flow_reads_by_name(component_name, getattr(base, "_dag", None),
+                                  getattr(self.context, "topology", None)):
             return                    # no flow reads this component by name: nothing to hold
         nbx_path = self._nbx_path(component_name)
         if component_name not in self._non_block:            # read once, not per step
@@ -267,7 +269,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if hook is not None:
             hook(f"layer_streaming:{component_name}", **followers)
             return
-        takes = [n for n in ("register_op_uid_interceptors", "register_triton_interceptors")
+        takes = [n for n in ("register_op_uid_interceptors", "register_op_interceptors",
+                             "register_triton_interceptors")
                  if getattr(executor, n, None) is not None]
         if takes:
             raise RuntimeError(
@@ -578,7 +581,27 @@ class LayerStreamingStrategy(ExecutionStrategy):
                         "with no KV cache, which reads as a model defect and is not "
                         "one — a refusal is the only honest answer.")
                 fn(interceptors)
-        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments)
+
+        # The compiled engine's KV cache is registered by op TYPE (`register_op_interceptors`),
+        # and it must reach the segments for the same reason. Only the triton registration was
+        # forwarded, so a streamed compiled decode ran with no cache. Measured 2026-10-08 on the
+        # M4 Pro, TinyLlama-1.1B native greedy: whole ' Paris.', streamed 'The' and eleven
+        # newlines, ' Paris.' again with NBX_KV_RECOMPUTE=1. One instance for all segments,
+        # for the reason given above.
+        def register_op_types_on_segments(interceptors, _segs=segments):
+            for seg_exec in _segs:
+                fn = getattr(seg_exec, "register_op_interceptors", None)
+                if fn is None:
+                    raise RuntimeError(
+                        "layer_streaming: a segment executor cannot take an op-type "
+                        "interceptor registration. Its compiled decode would silently run "
+                        "with no KV cache, which reads as a model defect and is not one.")
+                fn(interceptors)
+        before = dict(getattr(executor, "_op_interceptors", None) or {})
+        if before:
+            register_op_types_on_segments(before)
+        LayerStreamingStrategy._follow(executor, component_name, triton=register_on_segments,
+                                       op=register_op_types_on_segments)
 
         print(f"   [layer_streaming] '{component_name}': {len(segments)} "
               f"segments, one resident at a time", flush=True)
