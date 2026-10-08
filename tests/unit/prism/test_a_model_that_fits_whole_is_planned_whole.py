@@ -338,7 +338,12 @@ def test_a_plan_that_loads_on_demand_holds_its_dearest_phase_on_a_unified_device
     plan.loading_mode = "eager"
     assert unified_device_bytes(plan, apple, peak) == 11_500 * MB            # eager keeps them all
     plan.loading_mode, plan.device_window_mb = "lazy", 4_000.0
-    assert unified_device_bytes(plan, apple, peak) == 4_000 * MB             # a streamed plan: its window
+    assert unified_device_bytes(plan, apple, 0) == 4_000 * MB                # a streamed plan: at least its window
+    plan.layer_stream_plan = {"lm": object()}                                 # lm streamed: its phases hold the rest whole
+    streamed_peak = s._peak_loaded_bytes(c, plan)
+    assert streamed_peak == (200 + 700 + 500 + 600) * MB                      # {head, dec} + the cache + the tower
+    assert unified_device_bytes(plan, apple, 9_000 * MB) == 9_000 * MB        # and a dearer whole phase (2026-10-08)
+    del plan.layer_stream_plan
     # the decoder's phase carries the cache the model left behind
     monkeypatch.setitem(COMPS, "dec", _mem(9_800))
     assert s._peak_loaded_bytes(c, plan) == (200 + 9_800 + 500 + 600) * MB
