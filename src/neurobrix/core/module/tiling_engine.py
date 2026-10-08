@@ -1123,13 +1123,13 @@ class OpLevelTilingEngine:
         fn = getattr(_w, fn_name)
 
         def _inplace_unary(x, *args, **kwargs):
-            try:
-                _n = 1
-                for _d in x.shape:
-                    _n *= int(_d)
-                _bytes = _n * getattr(x, "itemsize", 2)
-            except Exception:
-                _bytes = 0
+            # Bytes at the tensor's own width (torch and NBXTensor both answer
+            # `element_size()`; NBXTensor's reads triton/itemsize.py) — no
+            # guessed width, no swallowed error.
+            _n = 1
+            for _d in x.shape:
+                _n *= int(_d)
+            _bytes = _n * x.element_size()
             big = _bytes >= min_bytes
 
             if isinstance(x, _NBXT):

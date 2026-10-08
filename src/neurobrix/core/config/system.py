@@ -4,14 +4,10 @@ NeuroBrix System Configuration
 Universal constants for memory and dtype calculations.
 These are mathematical constants, not configuration that varies.
 
-NOTE: Dtype constants imported from neurobrix.core.dtype (single source of truth).
-NO YAML FILE NEEDED - these values are universal facts.
+Dtype widths are NOT here: they are config/dtypes.yml, read through core/dtype/itemsize.py.
 """
 
 from typing import Dict, Any
-
-# Import dtype constants from single source of truth
-from neurobrix.core.dtype import BYTES_MAP as DTYPE_BYTES
 
 
 # =============================================================================
@@ -104,16 +100,6 @@ def get_prism_defaults() -> Dict[str, Any]:
     return PRISM_DEFAULTS.copy()
 
 
-def get_dtype_bytes() -> Dict[str, int]:
-    """
-    Get bytes per element for each dtype.
-
-    Returns:
-        {"float16": 2, "bfloat16": 2, "float32": 4, ...}
-    """
-    return DTYPE_BYTES.copy()
-
-
 def get_precision_config() -> Dict[str, bool]:
     """
     Get numerical precision configuration.
@@ -133,7 +119,6 @@ def load_system_config() -> Dict[str, Any]:
     return {
         "memory": get_memory_constants(),
         "prism": get_prism_defaults(),
-        "dtype_bytes": get_dtype_bytes(),
         "precision": get_precision_config(),
     }
 

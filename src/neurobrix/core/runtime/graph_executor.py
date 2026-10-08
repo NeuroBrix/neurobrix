@@ -2579,6 +2579,8 @@ class GraphExecutor:
         import base64, io, zipfile
         import numpy as np
         from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+        from neurobrix.triton import itemsize as _isz
+        from neurobrix.triton.dtype import storage_dtype as _triton_storage_dtype
 
         shape = tuple(tdata.get("shape", []))
         dtype_str = tdata.get("dtype", "float32").replace("torch.", "")
@@ -2600,10 +2602,7 @@ class GraphExecutor:
         # head_dim)). The native path gets the trace shape for free via
         # torch.load's pickled metadata; we have to derive it from bytes.
         # Find the dim to shrink so that the shape matches byte count.
-        dtype_bytes = {"float16": 2, "bfloat16": 2, "float32": 4,
-                       "float64": 8, "int32": 4, "int64": 8,
-                       "int8": 1, "uint8": 1, "bool": 1,
-                       "complex64": 8, "complex128": 16}.get(dtype_str, 4)
+        dtype_bytes = _isz.itemsize(dtype_str)     # config/dtypes.yml; an unknown dtype is refused
         declared_elems = 1
         for d in shape:
             declared_elems *= d
@@ -2686,25 +2685,25 @@ class GraphExecutor:
             else:
                 arr = np.ascontiguousarray(fp32)
         else:
-            np_dt = {"float16": np.float16, "float32": np.float32,
-                     "float64": np.float64, "int32": np.int32,
-                     "int64": np.int64, "int8": np.int8,
-                     "uint8": np.uint8, "bool": np.bool_,
-                     "complex64": np.complex64, "complex128": np.complex128,
-                     }.get(dtype_str, np.float32)
+            # numpy names every dense dtype of the table but bfloat16 (above); one it cannot name
+            # (float8) is refused by numpy itself, never read as float32 bytes.
+            np_dt = np.dtype(dtype_str)
+            if np_dt.itemsize != dtype_bytes:
+                raise RuntimeError(f"Constant '{weight_name}': numpy's {dtype_str} is {np_dt.itemsize} "
+                                   f"bytes, config/dtypes.yml says {dtype_bytes}")
             arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
             arr = np.ascontiguousarray(arr)
 
-        # Narrow fp64/complex128 constants to fp32/complex64 — the triton kernels
-        # are fp32-max (see TritonSequence._parse_dtype). Loading the constant
-        # already-narrowed makes the graph's explicit fp64/complex128 _to_copy
-        # (which _parse_dtype also narrows) an identity, avoiding a fragile
-        # complex128→complex64 kernel cast. e.g. the Wan rotary-embedding freqs
-        # constant (complex128 [seq, head_dim/2]).
-        if arr.dtype == np.complex128:
-            arr = arr.astype(np.complex64)
-        elif arr.dtype == np.float64:
-            arr = arr.astype(np.float32)
+        # Narrow fp64/complex128 constants to what the Triton engine stores
+        # (fp32/complex64: `triton.dtype.storage_dtype`, the one owner, which
+        # TritonSequence._parse_dtype and Prism's pricing read too). Loading the
+        # constant already-narrowed makes the graph's explicit fp64/complex128
+        # _to_copy an identity, avoiding a fragile complex128→complex64 kernel
+        # cast. e.g. the Wan rotary-embedding freqs constant (complex128 [seq, head_dim/2]).
+        if arr.dtype.kind in "fc":
+            stored = _triton_storage_dtype(arr.dtype.name)
+            if stored != arr.dtype.name:
+                arr = arr.astype(np.dtype(stored))
 
         DeviceAllocator.set_device(device_idx)
         # bf16 bits travel in a uint16 container numpy cannot label: the

@@ -54,7 +54,10 @@ def test_the_plan_reserves_the_weights_of_a_streamed_head(monkeypatch):
     for c in read:
         tensors = json.loads((root / "components" / c / "weights_index.json").read_text())["tensors"]
         expected += sum(int(v["size_bytes"]) for k, v in tensors.items() if not is_block_key(k))
-    reserved = s._layer_stream_constant_bytes - sum(_graph_constant_bytes(g) for g in graphs.values())
+    # mode="compiled" on an Apple GPU: the DtypeEngine stores no fp64 there (the profile's
+    # precision.supports_fp64), the answer the solver priced its constants by.
+    reserved = s._layer_stream_constant_bytes - sum(_graph_constant_bytes(g, stores_fp64=False)
+                                                    for g in graphs.values())
     assert reserved == expected, (
         f"{reserved / 2**20:.1f} MB reserved beside the pieces, {expected / 2**20:.1f} MB the flow "
         f"reads by name from {read}")

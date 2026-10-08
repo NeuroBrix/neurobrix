@@ -13,6 +13,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
 from typing import Callable, FrozenSet, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
+from neurobrix.triton import itemsize as _itemsize
 
 
 # ============================================================================
@@ -329,7 +330,8 @@ def matrix_unit_representation(dtype: str, unit: dict) -> Optional[str]:
 #: The ways a hardware profile may align attention operands that disagree in dtype
 #: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
 ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
-_ATTENTION_OPERAND_BYTES = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8}
+#: The operand dtypes the alignment chooses among; their widths are the dtype table's.
+_ATTENTION_OPERAND_DTYPES = ("float16", "bfloat16", "float32", "float64")
 
 
 def attention_operand_alignment(profile: dict) -> str:
@@ -366,7 +368,7 @@ def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
     TWIN: core/dtype/engine.py `attention_operand_dtypes` (a unit test holds the two equal)."""
     qj = q_round if q_round is not None else q
     for d in (qj, k, v):
-        if d not in _ATTENTION_OPERAND_BYTES:
+        if d not in _ATTENTION_OPERAND_DTYPES:
             raise ValueError(f"attention_operand_dtypes: {d!r} is not a floating dtype an "
                              f"attention computes in")
     if qj == k == v:
@@ -375,7 +377,7 @@ def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
         raise ValueError(f"attention_operand_dtypes: alignment {alignment!r} is not one of "
                          f"{ATTENTION_OPERAND_ALIGNMENTS}")
     pick = min if alignment == "narrowest" else max
-    t = pick((qj, k, v), key=_ATTENTION_OPERAND_BYTES.__getitem__)
+    t = pick((qj, k, v), key=_itemsize.itemsize)
     return t, t, t, None
 
 
@@ -943,3 +945,26 @@ class TritonDtypeEngine:
                 return func(*new_args, **kwargs)
             return func(*args, **kwargs)
         return promote_func
+
+
+# ============================================================================
+# STORAGE — what the Triton engine holds a 64-bit float in
+# ============================================================================
+
+def stores_fp64() -> bool:
+    """Whether the Triton engine stores float64 / complex128 as such: no. Its kernels are fp32-max
+    (no native fp64 on V100, and the elementwise/index kernels read at fp32 stride), so a float64
+    is held as float32 and a complex128 as complex64 — on every backend, today.
+
+    THE ONE SITE where the Mac's `stores_fp64` hardware-profile key (merge-queue-23) plugs in: the
+    constant loader (`GraphExecutor._load_constant_triton`), the graph's dtype casts
+    (`TritonSequence._parse_dtype`) and Prism's pricing of a Triton plan's constants
+    (`solver._graph_constant_bytes`) all read the answer through `storage_dtype` below."""
+    return False
+
+
+def storage_dtype(dtype) -> str:
+    """The dtype name a tensor of `dtype` is STORED in by the Triton engine (config/dtypes.yml
+    `without_fp64` when the engine stores no fp64). The ONE owner of the Triton branch's storage
+    narrowing; a dtype the table does not carry is refused by name."""
+    return _itemsize.storage_dtype(dtype, stores_fp64())

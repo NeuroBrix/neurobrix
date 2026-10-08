@@ -2,22 +2,14 @@
 NeuroBrix Prism - Memory Estimator
 Tensor memory calculation utilities.
 
-Uses core.dtype for dtype constants (single source of truth).
+Dtype widths come from config/dtypes.yml through core/dtype/itemsize.py (one table).
 """
 
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-# Import from single source of truth
-from neurobrix.core.dtype import BYTES_MAP as DTYPE_BYTES
-
-
 from neurobrix.core.config.system import bytes_to_mb, bytes_to_gb
-
-
-def _get_dtype_bytes() -> Dict[str, int]:
-    """Get dtype bytes mapping."""
-    return DTYPE_BYTES
+from neurobrix.core.dtype.itemsize import itemsize, known_dtypes
 
 
 def estimate_op_workspace_bytes(
@@ -107,7 +99,7 @@ def compute_tensor_bytes(shape: List[int], dtype: str) -> int:
     """
     Compute memory for a tensor in bytes.
 
-    ZERO HARDCODE: dtype_bytes from config/system.yml
+    ZERO HARDCODE: the width from config/dtypes.yml; an unknown dtype is refused by name.
 
     Args:
         shape: Tensor shape as list of integers
@@ -116,8 +108,7 @@ def compute_tensor_bytes(shape: List[int], dtype: str) -> int:
     Returns:
         Size in bytes
     """
-    dtype_bytes = _get_dtype_bytes()
-    bytes_per_element = dtype_bytes.get(dtype, 4)  # Default to float32
+    bytes_per_element = itemsize(dtype)
 
     numel = 1
     for dim in shape:
@@ -156,7 +147,6 @@ def _bytes_of(dtype, role: str) -> int:
     no plan that works today reaches this refusal. A short name arriving later is a real
     defect at its source, and it now says so instead of halving itself.
     """
-    table = _get_dtype_bytes()
     if dtype is None:
         # ABSENCE is not an unrecognised name, and this refusal is only about names.
         # A request that names no dtype has always been planned at the widest width, and
@@ -165,12 +155,12 @@ def _bytes_of(dtype, role: str) -> int:
         # pass None: `InputConfig()` with no dtype (profiler.py:686).
         return _UNSPECIFIED_WIDTH
     try:
-        return table[dtype]
-    except (KeyError, TypeError):
+        return itemsize(dtype)
+    except (ValueError, TypeError):
         raise ValueError(
             f"compute_dtype_factor/get_dtype_bytes_per_element: unknown {role} dtype "
             f"{dtype!r}.\n"
-            f"  Known: {', '.join(sorted(table))}.\n"
+            f"  Known: {', '.join(known_dtypes())}.\n"
             f"  This used to default silently (source=2, target=4), which returns a "
             f"factor of 2.0 for any pair including identity and misreports every plan "
             f"that touches it by exactly 2x. Give the full dtype name at its source."

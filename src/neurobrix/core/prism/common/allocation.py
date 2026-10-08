@@ -9,7 +9,7 @@ Common allocation helpers used by the Prism solver.
 from typing import Dict, List, Tuple, Optional
 
 # Use consolidated dtype module (eliminates code duplication)
-from neurobrix.core.dtype import calculate_dtype_multiplier, get_dtype_bytes
+from neurobrix.core.dtype import calculate_dtype_multiplier
 
 
 def get_device_index(device_string: str) -> int:

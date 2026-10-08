@@ -106,7 +106,10 @@ def test_weight_sizes_from_the_index_win_over_the_graph():
 
 def test_tensor_bytes_refuses_to_guess():
     assert tensor_bytes({"shape": [4], "dtype": "float32"}) == 16
-    assert tensor_bytes({"shape": [4], "dtype": "who knows"}) is None
+    # A dtype the table does not carry is REFUSED by name (config/dtypes.yml), never a silent
+    # None the partition then counts as zero bytes.
+    with pytest.raises(ValueError, match=r"'who knows'.*config/dtypes.yml"):
+        tensor_bytes({"shape": [4], "dtype": "who knows"})
     assert tensor_bytes({"shape": ["s0", 4], "dtype": "float32"}) is None
 
 

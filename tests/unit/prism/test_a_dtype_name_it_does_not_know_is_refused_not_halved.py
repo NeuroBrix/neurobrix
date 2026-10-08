@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import pytest
 
-from neurobrix.core.dtype import BYTES_MAP
+from neurobrix.core.dtype.itemsize import itemsize_table
+
+BYTES_MAP = itemsize_table()   # the one table (config/dtypes.yml), read through the PyTorch reader
 from neurobrix.core.prism.memory_estimator import (
     compute_dtype_factor, get_dtype_bytes_per_element)
 
 
 # ─────────────────────────── the defect, as it was ───────────────────────────
 
-@pytest.mark.parametrize("name", ["bf16", "fp16", "fp32", "half", "", "torch.float16"])
+@pytest.mark.parametrize("name", ["bf16", "fp16", "fp32", "half", "", "float4"])
 def test_a_name_the_map_does_not_carry_is_REFUSED(name):
     with pytest.raises(ValueError) as e:
         compute_dtype_factor(name, name)
@@ -53,6 +55,13 @@ def test_the_refusal_says_what_would_satisfy_it():
 def test_every_name_the_map_carries_still_resolves(name):
     assert get_dtype_bytes_per_element(name) == BYTES_MAP[name]
     assert compute_dtype_factor(name, name) == 1.0, "identity must be 1.0, it was 2.0"
+
+
+def test_a_torch_spelling_resolves_to_its_name():
+    """The one table reads a dtype as the code passes it: "torch.float16" IS float16 (the
+    old private map refused it; the readers strip the torch spelling, never guess a width)."""
+    assert get_dtype_bytes_per_element("torch.float16") == 2
+    assert compute_dtype_factor("torch.float16", "float32") == 2.0
 
 
 @pytest.mark.parametrize("src,dst,want", [

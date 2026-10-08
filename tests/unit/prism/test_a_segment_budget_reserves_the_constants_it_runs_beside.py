@@ -65,7 +65,7 @@ def _graph(model: str = MODEL, component: str = "model"):
 
 def test_the_constants_are_measured_and_they_are_not_small():
     """The figure the budget now subtracts, read from the container itself."""
-    n = _graph_constant_bytes(_graph())
+    n = _graph_constant_bytes(_graph(), stores_fp64=False)
     assert n > 0, "no constants measured — the budget would be unchanged and the fix inert"
     assert n / 2**20 > 512, (
         f"{n / 2**20:.0f} MB of constants; the recorded measurement was 1080 MB. A figure "
@@ -81,7 +81,7 @@ def test_the_measurement_matches_the_blocks_the_allocator_actually_took():
     if not rope:
         pytest.skip("this container no longer carries the [163840, 64] constants")
     assert len(rope) == 54
-    assert _graph_constant_bytes(g) >= len(rope) * 163840 * 64 * 2
+    assert _graph_constant_bytes(g, stores_fp64=False) >= len(rope) * 163840 * 64 * 2
 
 
 # ───────────────────── the refusals that keep the figure honest ─────────────────────
@@ -89,10 +89,11 @@ def test_the_measurement_matches_the_blocks_the_allocator_actually_took():
 def test_an_unknown_constant_dtype_is_REFUSED_not_assumed():
     """ZERO FALLBACK. A dtype assumed at 4 bytes under-reserves by exactly the amount that
     matters, and silently — the failure mode this whole file exists to remove."""
-    with pytest.raises(ValueError, match="unknown constant dtype"):
-        _graph_constant_bytes({"tensors": {"t": {
-            "constant": True, "constant_data": "eA==", "shape": [4, 4],
-            "dtype": "float8_e4m3fn"}}})
+    for stores_fp64 in (False, True):
+        with pytest.raises(ValueError, match=r"unknown dtype .*float4.*config/dtypes.yml"):
+            _graph_constant_bytes({"tensors": {"t": {
+                "constant": True, "constant_data": "eA==", "shape": [4, 4],
+                "dtype": "float4"}}}, stores_fp64)
 
 
 def test_a_computable_buffer_is_NOT_counted():
@@ -101,13 +102,13 @@ def test_a_computable_buffer_is_NOT_counted():
     t = {"constant": True, "constant_data": "eA==", "shape": [1024, 1024],
          "dtype": "float32", "is_computable": True, "weight_name": "w",
          "computation_spec": {}}
-    assert _graph_constant_bytes({"tensors": {"t": t}}) == 0
+    assert _graph_constant_bytes({"tensors": {"t": t}}, stores_fp64=False) == 0
 
 
 def test_a_symbolic_dim_is_skipped_rather_than_guessed():
     assert _graph_constant_bytes({"tensors": {"t": {
         "constant": True, "constant_data": "eA==", "shape": ["s0", 64],
-        "dtype": "float16"}}}) == 0
+        "dtype": "float16"}}}, stores_fp64=False) == 0
 
 
 def test_the_narrowing_the_loader_performs_is_mirrored():
@@ -115,13 +116,25 @@ def test_the_narrowing_the_loader_performs_is_mirrored():
     (the kernels are fp32-max). Counting the declared width would over-reserve by half."""
     mk = lambda dt: {"tensors": {"t": {"constant": True, "constant_data": "eA==",
                                        "shape": [1024], "dtype": dt}}}
-    assert _graph_constant_bytes(mk("float64")) == _graph_constant_bytes(mk("float32"))
-    assert _graph_constant_bytes(mk("complex128")) == _graph_constant_bytes(mk("complex64"))
+    assert _graph_constant_bytes(mk("float64"), False) == _graph_constant_bytes(mk("float32"), False)
+    assert _graph_constant_bytes(mk("complex128"), False) == _graph_constant_bytes(mk("complex64"), False)
+
+
+def test_a_store_that_holds_fp64_is_priced_at_the_true_width():
+    """The DtypeEngine on a device whose profile declares fp64 (NVIDIA) keeps a float64 /
+    complex128 constant as such (`DtypeEngine.storage_dtype`), so it is priced at 8 / 16."""
+    mk = lambda dt: {"tensors": {"t": {"constant": True, "constant_data": "eA==",
+                                       "shape": [1024], "dtype": dt}}}
+    assert _graph_constant_bytes(mk("float64"), True) == 1024 * 8
+    assert _graph_constant_bytes(mk("complex128"), True) == 1024 * 16
+    assert _graph_constant_bytes(mk("float64"), False) == 1024 * 4
+    assert _graph_constant_bytes(mk("complex128"), False) == 1024 * 8
 
 
 def test_a_graph_without_constants_reserves_nothing():
     """The pass must be INERT where there is nothing to reserve, or every other model's
     budget shrinks for no reason."""
-    assert _graph_constant_bytes({"tensors": {"t": {"shape": [8, 8], "dtype": "float16"}}}) == 0
-    assert _graph_constant_bytes(None) == 0
-    assert _graph_constant_bytes({}) == 0
+    for f in (False, True):
+        assert _graph_constant_bytes({"tensors": {"t": {"shape": [8, 8], "dtype": "float16"}}}, f) == 0
+        assert _graph_constant_bytes(None, f) == 0
+        assert _graph_constant_bytes({}, f) == 0

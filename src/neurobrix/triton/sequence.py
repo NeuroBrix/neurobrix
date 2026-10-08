@@ -31,7 +31,7 @@ from neurobrix.kernels.wrappers import (
 
 from .arena import Arena
 from .symbols import SymbolResolver, impossible_extent_context
-from .dtype import TritonDtypeEngine
+from .dtype import TritonDtypeEngine, storage_dtype as _triton_storage_dtype
 from . import replay as _replay
 
 
@@ -2723,18 +2723,13 @@ class TritonSequence:
             return NBXDtype.float16
         if parsed == NBXDtype.float16 and self._compute_dtype == NBXDtype.bfloat16:
             return NBXDtype.bfloat16
-        # Narrow fp64/complex128 to the triton-supported fp32/complex64. The
-        # NeuroBrix triton kernels are fp32-max (no native fp64 on V100, and the
-        # elementwise/index kernels read at fp32 stride); an explicit fp64 cast
-        # in the graph (e.g. the Wan rotary-embedding chain, which the vendor
-        # runs in float64/complex128 for precision) must be honoured at fp32
-        # precision, which is numerically ample for RoPE. complex128 → complex64
-        # keeps the interleaved-pair invariant the complex kernels rely on.
-        if parsed == NBXDtype.float64:
-            return NBXDtype.float32
-        if parsed == NBXDtype.complex128:
-            return NBXDtype.complex64
-        return parsed
+        # Narrow fp64/complex128 to what the Triton engine stores (fp32/complex64:
+        # the kernels are fp32-max, `triton.dtype.stores_fp64`); an explicit fp64
+        # cast in the graph (e.g. the Wan rotary-embedding chain, which the vendor
+        # runs in float64/complex128 for precision) is honoured at fp32 precision,
+        # which is numerically ample for RoPE. complex128 → complex64 keeps the
+        # interleaved-pair invariant the complex kernels rely on.
+        return parse_dtype(_triton_storage_dtype(parsed))
 
     # ========================================================================
     # CLOSURE GENERATORS — ported from compiled_sequence._make_*_resolver

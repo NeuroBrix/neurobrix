@@ -17,7 +17,7 @@ if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from typing import Dict
 
-from neurobrix.core.dtype.config import get_dtype_bytes
+from neurobrix.core.dtype.itemsize import itemsize
 
 
 def safe_dtype_convert(
@@ -85,8 +85,8 @@ def calculate_dtype_multiplier(source_dtype: str, target_dtype: str) -> float:
     Returns:
         Multiplier (e.g., 2.0 for fp16->fp32)
     """
-    source_bytes = get_dtype_bytes(source_dtype)
-    target_bytes = get_dtype_bytes(target_dtype)
+    source_bytes = itemsize(source_dtype)      # an unknown name is refused by name, never 4
+    target_bytes = itemsize(target_dtype)
     return target_bytes / source_bytes
 
 
