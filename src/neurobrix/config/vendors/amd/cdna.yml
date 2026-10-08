@@ -165,6 +165,9 @@ precision:
   supports_bf16: true    # CDNA2+ supports BF16
   supports_tf32: false   # AMD does not have TF32
   supports_fp8: false    # FP8 arrives with CDNA3 (MI300)
+  # IEEE-754 binary64 in hardware on every CDNA part (AMD Instinct ISA reference, FP64 vector and matrix ops); torch.float64 is native on HIP. Read by the DtypeEngine (`device_supports_fp64`):
+  # false narrows float64/complex128 to float32/complex64 as the vendor's own code does on MPS.
+  supports_fp64: true
 
 # Software-pipelining budget — see nvidia/volta.yml for the schema.
 #

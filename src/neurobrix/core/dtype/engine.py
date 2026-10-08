@@ -604,6 +604,16 @@ AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
 # finite range at call time — numerically inert for mask sentinels (masked
 # positions are ~0 after softmax either way). Surfaced by the MiniCPM-o
 # speech-AR LlamaModel causal mask (aten::full, 2026-08-02).
+# What a device without fp64 holds in place of the 64-bit floats (the vendor's own choice on MPS).
+_NO_FP64_CEILING = {torch.float64: torch.float32, torch.complex128: torch.complex64}
+_WIDE_NAMES: FrozenSet[str] = frozenset({"float64", "complex128", "double", "cdouble"})
+
+
+def _dtype_name_of(d) -> str:
+    """A traced dtype's bare name ("torch.float64" -> "float64")."""
+    return str(d).replace("torch.", "")
+
+
 AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({
     "full", "new_full", "full_like",
 })
@@ -661,7 +671,7 @@ class DtypeEngine:
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, activations_fp16_safe: bool = False,
                  fp32_op_uids: Optional[FrozenSet[str]] = None,
-                 narrow_op_uids: Optional[FrozenSet[str]] = None):
+                 narrow_op_uids: Optional[FrozenSet[str]] = None, device_has_fp64: bool = True):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
         self.amp_enabled = amp_enabled
@@ -678,6 +688,11 @@ class DtypeEngine:
         # narrow nothing but the half-IO kernels (the conservative choice
         # when the executor cannot see the graph).
         self.narrow_op_uids: FrozenSet[str] = frozenset(narrow_op_uids or ())
+        # Whether the device computes and stores float64 / complex128 (`config.device_supports_fp64`,
+        # the vendor profile's `precision.supports_fp64`). False: every float64 / complex128 the
+        # trace asks for lands in float32 / complex64, as the vendor's own code does on MPS. The
+        # default is the LOUD side: a device without fp64 refuses the tensor, nothing is narrowed.
+        self.device_has_fp64 = bool(device_has_fp64)
 
     # ========================================================================
     # PUBLIC API
@@ -691,6 +706,11 @@ class DtypeEngine:
         self.activations_fp16_safe = bool(activations_fp16_safe)
         self.fp32_op_uids = frozenset(fp32_op_uids or ())
         self.narrow_op_uids = frozenset(narrow_op_uids or ())
+
+    def storage_dtype(self, dtype: torch.dtype) -> torch.dtype:
+        """`dtype` as this device holds it: float64 -> float32 and complex128 -> complex64 where the
+        device has no fp64, unchanged otherwise."""
+        return dtype if self.device_has_fp64 else _NO_FP64_CEILING.get(dtype, dtype)
 
     def accumulation_dtype(self, dtype: torch.dtype) -> torch.dtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
@@ -711,6 +731,12 @@ class DtypeEngine:
         5. Everything else: pass through unchanged
         """
         op_name = strip_aten_prefix(op_type)
+
+        # A device without fp64: an op the trace saw produce float64 / complex128 receives its dtype
+        # request narrowed (Flex.1-alpha's `arange(dtype=float64)`, 2026-10-08), under every rule below.
+        if (not self.device_has_fp64 and func is not None
+                and any(_dtype_name_of(d) in _WIDE_NAMES for d in attrs.get("output_dtypes") or ())):
+            func = self._make_fp64_ceiling(func)
 
         # _to_copy always handled (required for dtype conversion)
         if op_type == "aten::_to_copy":
@@ -849,6 +875,14 @@ class DtypeEngine:
     # ========================================================================
     # AMP WRAPPERS
     # ========================================================================
+
+    def _make_fp64_ceiling(self, func: Callable) -> Callable:
+        """Narrow a float64 / complex128 `dtype` request to what this device holds."""
+        def ceiling(*args, **kwargs):
+            if kwargs.get("dtype") in _NO_FP64_CEILING:
+                kwargs["dtype"] = _NO_FP64_CEILING[kwargs["dtype"]]
+            return func(*args, **kwargs)
+        return ceiling
 
     def _make_creation_fill_guard(self, func: Callable) -> Callable:
         """Clamp the Python-scalar fill of full/new_full/full_like to the
@@ -1073,6 +1107,8 @@ class DtypeEngine:
         in an fp16 graph) are intentional and feed fp32 computation chains
         (RoPE, etc.) — these must be preserved.
         """
+        if self.storage_dtype(tensor.dtype) != tensor.dtype:
+            tensor = tensor.to(self.storage_dtype(tensor.dtype))
         if not tensor.is_floating_point():
             return tensor
         if self.compute_dtype is None:
@@ -1100,6 +1136,8 @@ class DtypeEngine:
         output_dtypes = attrs.get("output_dtypes", [])
         target_dtype_str = output_dtypes[0] if output_dtypes else None
         target_dtype = parse_dtype(target_dtype_str) if target_dtype_str else None
+        if target_dtype is not None:
+            target_dtype = self.storage_dtype(target_dtype)
 
         # Prism override: remap half-precision targets to compute_dtype
         if target_dtype in (torch.float16, torch.bfloat16):
@@ -1145,6 +1183,7 @@ class DtypeEngine:
                 return inp
             dtype = kwargs.get('dtype')
             if dtype is not None:
+                dtype = self.storage_dtype(dtype)
                 # Same rule: only remap fp16/bf16, never fp32
                 if prism_dtype is not None and dtype in (torch.float16, torch.bfloat16) and dtype != prism_dtype:
                     dtype = prism_dtype

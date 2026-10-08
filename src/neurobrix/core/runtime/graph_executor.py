@@ -1100,8 +1100,11 @@ class GraphExecutor:
             # the engines execute (see the block below the passes).
             self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
                 False, frozenset(), frozenset()
+            from neurobrix.core.dtype.config import device_supports_fp64
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
-                                             amp_enabled=amp_enabled)
+                                             amp_enabled=amp_enabled,
+                                             device_has_fp64=device_supports_fp64(self.device, self.vendor,
+                                                                                  self.arch))
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -1652,6 +1655,7 @@ class GraphExecutor:
             activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
+            device_has_fp64=self._dtype_engine.device_has_fp64,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -2546,7 +2550,8 @@ class GraphExecutor:
         import base64, io
         buffer = io.BytesIO(base64.b64decode(b64_data))
         tensor = torch.load(buffer, map_location='cpu', weights_only=True)
-        tensor = tensor.to(self.device)
+        # narrowed on the host first: a device without fp64 refuses the float64 tensor itself
+        tensor = tensor.to(self._dtype_engine.storage_dtype(tensor.dtype)).to(self.device)
         if tensor.is_floating_point() and tensor.dtype != self._placement_torch_dtype():
             tensor = self._dtype_engine.convert_constant(tensor)
         self._weights[weight_name] = tensor

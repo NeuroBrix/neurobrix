@@ -374,6 +374,7 @@ class CompiledSequence:
         activations_fp16_safe: bool = False,
         fp32_op_uids=None,
         narrow_op_uids=None,
+        device_has_fp64: bool = True,
     ):
         """
         Initialize CompiledSequence.
@@ -409,7 +410,8 @@ class CompiledSequence:
                                               use_triton=use_triton,
                                               activations_fp16_safe=activations_fp16_safe,
                                               fp32_op_uids=fp32_op_uids,
-                                              narrow_op_uids=narrow_op_uids)
+                                              narrow_op_uids=narrow_op_uids,
+                                              device_has_fp64=device_has_fp64)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -943,6 +945,7 @@ class CompiledSequence:
         seq = CompiledSequence(
             sub_dag, self.device, self.dtype,
             amp_enabled=self.op_resolver.dtype_engine.amp_enabled,
+            device_has_fp64=self.op_resolver.dtype_engine.device_has_fp64,
         )
         seq.compile()
         seq.bind_weights(weights)

@@ -141,6 +141,9 @@ precision:
   supports_bf16: true
   supports_tf32: true
   supports_fp8: true     # Hopper supports FP8
+  # IEEE-754 binary64 in hardware on every CUDA device (CUDA C++ Programming Guide, arithmetic instructions); torch.float64 is native on cuda. Read by the DtypeEngine (`device_supports_fp64`):
+  # false narrows float64/complex128 to float32/complex64 as the vendor's own code does on MPS.
+  supports_fp64: true
 
 # Software-pipelining budget — see volta.yml for the schema. Hopper
 # (sm_90) has cp.async and TMA; the cap never binds.
