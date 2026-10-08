@@ -17,8 +17,8 @@ if TYPE_CHECKING:  # R33: torch is the ATen branch's; this table is shared
     import torch
 
 # The torch views of the dtype table are built on first use, by the ATen
-# branch. A --triton process reads BYTES_MAP and the string helpers only and
-# never imports torch (R33); `DTYPE_MAP` / `DTYPE_TO_STR` stay importable
+# branch. A --triton process reads the string helpers only and never imports
+# torch (R33). Widths live in config/dtypes.yml, read through core/dtype/itemsize.py; `DTYPE_MAP` / `DTYPE_TO_STR` stay importable
 # through the module __getattr__ below.
 _DTYPE_NAMES = ("bfloat16", "float16", "float32", "float64",
                 "int8", "int16", "int32", "int64", "uint8", "bool")
@@ -40,50 +40,6 @@ def __getattr__(name):
     if name == "DTYPE_TO_STR":
         return _torch_maps()[1]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-BYTES_MAP: Dict[str, int] = {
-    "float64": 8,
-    "float32": 4,
-    "float16": 2,
-    "bfloat16": 2,
-    "int64": 8,
-    "int32": 4,
-    "int16": 2,
-    "int8": 1,
-    "uint8": 1,
-    "bool": 1,
-    # COMPLEX — measured, not guessed. complex64 is two fp32 (8 bytes), complex128 two
-    # fp64 (16). Absent until 2026-09-22, when the refusal added that day for unrecognised
-    # dtype NAMES turned the absence into a hard stop: Kokoro-82M could no longer be
-    # PLANNED at all —
-    #     activation profiling failed for component 'decoder'
-    #     (ValueError: unknown dtype dtype 'complex64')
-    # — because its iSTFT vocoder carries complex spectra. The refusal was right; the map
-    # was incomplete, and the silent `.get(dtype, 4)` default had been hiding that by
-    # sizing a complex64 tensor at 4 bytes instead of 8, i.e. HALF.
-    #
-    # Counted across every graph in this cache: complex128 338 tensors, complex64 10;
-    # every other dtype present already resolved. The safety census taken with the refusal
-    # asked `get_dominant_dtype()`, which is a COMPONENT's dtype — the profiler asks
-    # per-TENSOR, and that is where these live. Checking the wrong granularity is what let
-    # this through.
-    "complex64": 8,
-    "complex128": 16,
-}
-
-
-def get_dtype_bytes(dtype_str: str) -> int:
-    """
-    Get bytes per element for a dtype string.
-
-    Args:
-        dtype_str: Dtype string (e.g., "float16", "bfloat16")
-
-    Returns:
-        Bytes per element (defaults to 4 if unknown)
-    """
-    return BYTES_MAP.get(dtype_str, 4)
 
 
 def get_torch_dtype(dtype_str: str) -> torch.dtype:

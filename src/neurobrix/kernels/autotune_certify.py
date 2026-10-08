@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 from neurobrix.kernels import autotune_certified as C
+from neurobrix.triton import itemsize as _isz
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
 # The whole oracle of a convolution is computed when it costs at most this many multiply-adds;
@@ -292,16 +293,12 @@ class KeyTooLargeForClass(RuntimeError):
         self.asked, self.card = asked, card
 
 
-def _itemsize(dtype_name: str) -> int:
-    return 2 if dtype_name == "bf16" else np.dtype(_NP[dtype_name]).itemsize
-
-
 def _refuse_oversize(card_bytes, specs, what: str) -> None:
     """`specs`: (shape, dtype) of every operand AND the output, at their device widths, against
     a DISCRETE card. Checked before any draw. A unified-memory device is `_refuse_unified`'s."""
     if card_bytes is None:
         return
-    asked = sum(int(np.prod(shape, dtype=np.int64)) * _itemsize(dt) for shape, dt in specs)
+    asked = sum(int(np.prod(shape, dtype=np.int64)) * _isz.itemsize(_isz.from_autotune_key(dt)) for shape, dt in specs)
     if asked > card_bytes:
         raise KeyTooLargeForClass(asked, int(card_bytes), what)
 
@@ -390,7 +387,7 @@ def _refuse_unpriced(qual: str, tuner, key: tuple, budget_bytes: int, floor_byte
 def _draw_bytes(dt: str) -> int:
     """What one element of a drawn operand costs on the host for the whole key: its own width
     (`_arr` draws through a bounded chunk into the kernel's dtype, bf16 as its bits)."""
-    return _itemsize(dt)
+    return _isz.itemsize(_isz.from_autotune_key(dt))
 
 
 def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Dict[str, int]]:
@@ -418,7 +415,7 @@ def price_key(qual: str, tuner, key: tuple, unified: bool = True) -> Optional[Di
     E = lambda shape: int(np.prod(shape, dtype=np.int64))                # noqa: E731
     draws = sum(E(shape) * _draw_bytes(dt) for _, shape, dt in ops["inputs"])
     out_shape, out_dt = ops["out"]
-    device = sum(E(shape) * _itemsize(dt) for _, shape, dt in ops["inputs"]) + E(out_shape) * _itemsize(out_dt)
+    device = sum(E(shape) * _isz.itemsize(_isz.from_autotune_key(dt)) for _, shape, dt in ops["inputs"]) + E(out_shape) * _isz.itemsize(_isz.from_autotune_key(out_dt))
     device += 256 * 2 ** 20                                              # do_bench's flush buffer
     e_out = E(out_shape)
     if ops["family"] == "mm":

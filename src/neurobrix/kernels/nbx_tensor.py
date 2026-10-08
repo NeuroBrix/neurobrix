@@ -186,13 +186,10 @@ class NBXDtype(IntEnum):
     complex128 = 11
 
 
-_DTYPE_SIZES = {
-    NBXDtype.float16: 2, NBXDtype.bfloat16: 2,
-    NBXDtype.float32: 4, NBXDtype.float64: 8,
-    NBXDtype.int8: 1, NBXDtype.int16: 2, NBXDtype.int32: 4, NBXDtype.int64: 8,
-    NBXDtype.uint8: 1, NBXDtype.bool_: 1,
-    NBXDtype.complex64: 8, NBXDtype.complex128: 16,
-}
+# Bytes per element of every NBXDtype, read once from the dtype table (config/dtypes.yml) through
+# the Triton branch's reader; a member the table does not carry fails the import by name.
+from neurobrix.triton import itemsize as _itemsize
+_DTYPE_SIZES = {member: _itemsize.itemsize(member) for member in NBXDtype}
 
 _DTYPE_FROM_STR = {
     'float16': NBXDtype.float16, 'fp16': NBXDtype.float16, 'half': NBXDtype.float16,

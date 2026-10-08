@@ -45,7 +45,8 @@ class PlanNotComputable(RuntimeError):
 
 
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
-from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
+from neurobrix.core.config import get_prism_defaults
+from neurobrix.core.dtype import itemsize as _itemsize
 from neurobrix.core.config.system import PRISM_DEFAULTS
 from neurobrix.core.module import tiling_sizes as _ts
 
@@ -105,10 +106,7 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
                     if not isinstance(d, int) or d < 0:
                         return None          # symbolic: cannot size honestly
                     n *= d
-                width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
-                if width is None:
-                    return None
-                total += n * width
+                total += n * _itemsize.itemsize(t.get("dtype"))   # an unknown dtype is refused by name
     if not seen:
         return None
     # What the engines LOAD is the consumed set plus every non-block weight
@@ -124,13 +122,6 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
             seen.add(name)
             total += int((meta or {}).get("size_bytes", 0))
     return int(total * dtype_mult)
-
-
-_DTYPE_WIDTH = {
-    "float64": 8, "float32": 4, "bfloat16": 2, "float16": 2,
-    "int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1, "bool": 1,
-    "float8_e4m3fn": 1, "float8_e5m2": 1,
-}
 
 
 def unified_device_bytes(plan, profile, peak_loaded_bytes: Optional[int] = None) -> int:
@@ -641,14 +632,18 @@ def _census_shadow_active() -> bool:
     except Exception:  # noqa: BLE001 — no census module means no shadow
         return False
 
-def _graph_constant_bytes(graph: Optional[Dict]) -> int:
+def _graph_constant_bytes(graph: Optional[Dict], stores_fp64: bool) -> int:
     """Resident bytes of the constants baked into `graph`, as the EXECUTOR holds them.
 
     `GraphExecutor._load_constants_from_graph` loads every tensor carrying
-    `constant: True` and a `constant_data` payload, and `_load_constant_triton`
-    narrows two of them on the way in — fp64 to fp32, complex128 to complex64,
-    because the Triton kernels are fp32-max. This mirrors that narrowing, so the
-    figure is what stays resident rather than what the graph declares.
+    `constant: True` and a `constant_data` payload, each in the dtype its branch
+    STORES it in: a store without fp64 (`stores_fp64` False — the Triton engine,
+    `triton.dtype.stores_fp64`; a device whose profile declares no fp64 under the
+    DtypeEngine) holds a float64 as float32 and a complex128 as complex64. The
+    width priced is the dtype table's for that stored dtype
+    (`core/dtype/itemsize.storage_dtype`), so the figure is what stays resident
+    rather than what the graph declares. The caller answers `stores_fp64` from
+    `PrismSolver._constants_store_fp64`.
 
     A computable buffer (`is_computable`) is deliberately NOT counted: the loader
     skips its constant_data and recomputes it at runtime resolution, so its traced
@@ -659,9 +654,6 @@ def _graph_constant_bytes(graph: Optional[Dict]) -> int:
     """
     if not isinstance(graph, dict):
         return 0
-    widths = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 4,
-              "int32": 4, "int64": 8, "int8": 1, "uint8": 1, "bool": 1,
-              "complex64": 8, "complex128": 8}
     total = 0
     for tdata in (graph.get("tensors") or {}).values():
         if not isinstance(tdata, dict):
@@ -673,15 +665,9 @@ def _graph_constant_bytes(graph: Optional[Dict]) -> int:
         shape = tdata.get("shape") or []
         if not shape or not all(isinstance(d, int) and d > 0 for d in shape):
             continue
-        dtype = str(tdata.get("dtype", "float32")).replace("torch.", "")
-        width = widths.get(dtype)
-        if width is None:
-            # ZERO FALLBACK: a dtype this table does not know is not silently
-            # halved or assumed 4 bytes — the caller gets a refusal it can read.
-            raise ValueError(
-                f"_graph_constant_bytes: unknown constant dtype {dtype!r}. "
-                f"Add its resident width to this table — guessing one would "
-                f"under-reserve the budget by exactly the amount that matters.")
+        # ZERO FALLBACK: a dtype the table does not know is not silently halved or
+        # assumed 4 bytes — the caller gets a refusal naming it (config/dtypes.yml).
+        width = _itemsize.itemsize(_itemsize.storage_dtype(tdata.get("dtype"), stores_fp64))
         n = 1
         for d in shape:
             n *= d
@@ -1052,7 +1038,6 @@ class PrismSolver:
         # dedicated when nothing external holds it, shared otherwise.
         return float(_budget_mb(DeviceReading(kind="device", capacity_mb=dev.capacity_mb, free_mb=dev.free_mb,
                                               held_by_others_mb=dev.external_used_mb)))
-        self._dtype_bytes = get_dtype_bytes()
 
     # =========================================================================
     # TOPOLOGY INTELLIGENCE
@@ -2009,7 +1994,7 @@ class PrismSolver:
         _base = (getattr(profile.cpu, "runtime_base_mb", None) or {}).get(_engine) if profile.cpu else None
         plan.host_footprint = host_footprint(
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
-            _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
+            _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
             device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
 
@@ -2664,8 +2649,8 @@ class PrismSolver:
             if os.environ.get("NBX_DTYPE_RESOLVE_DIAG"):
                 # Default-off diagnostic (rules/debugging-and-known-issues.md): the two
                 # strings that decide the weight multiplier, printed where they are USED.
-                # `compute_dtype_factor` defaults a miss to source=2/target=4, so a name the
-                # DTYPE_BYTES map does not carry returns 2.0 for ANY pair, identity included.
+                # `compute_dtype_factor` once defaulted a miss to source=2/target=4 (2.0 for ANY
+                # pair); a name config/dtypes.yml does not carry is now refused by name.
                 print(f"[DTYPE_RESOLVE] {comp.name}: source_dtype={source_dtype!r} "
                       f"comp_dtype_str={comp_dtype_str!r} -> dtype_mult={dtype_mult} "
                       f"| target_dtype_str={target_dtype_str!r} "
@@ -3294,7 +3279,7 @@ class PrismSolver:
         head_dim = lm_config.get("head_dim", 0) or (hidden_size // max(num_heads, 1))
         k_head_dim = lm_config.get("k_head_dim", head_dim)
         v_head_dim = lm_config.get("v_head_dim", head_dim)
-        width = get_dtype_bytes()[dtype_str]          # an unknown dtype is a KeyError, never a guess
+        width = _itemsize.itemsize(dtype_str)          # an unknown dtype is refused by name, never a guess
         return lm_config.get("num_layers", 0) * num_kv_heads * (k_head_dim + v_head_dim) * width
 
     def _kv_min_tokens(self, container) -> int:
@@ -6197,7 +6182,8 @@ class PrismSolver:
             # against 15 539 MB while execution offered 13 680 MB; the segment asked
             # 13 966 MB and missed by 286 MB. Subtracting the constants cuts smaller
             # segments that fit, instead of a plan that cannot run.
-            constant_bytes = sum(_graph_constant_bytes(graphs.get(name))
+            _stores_fp64 = self._constants_store_fp64(target)
+            constant_bytes = sum(_graph_constant_bytes(graphs.get(name), _stores_fp64)
                                  for name in streamed)
             # And the weights a FLOW reads by name outside the graph — every non-block weight of a
             # streamed component (the token embedding, a head, the norms, `is_block_key`): its base
@@ -6642,12 +6628,20 @@ class PrismSolver:
 
         return allocations, self._fresh_devices(devices)
 
-    # Dtype string to bytes-per-element for safetensors header parsing
-    _ST_DTYPE_BYTES = {
-        "F64": 8, "F32": 4, "F16": 2, "BF16": 2,
-        "I64": 8, "I32": 4, "I16": 2, "I8": 1, "U8": 1,
-        "BOOL": 1,
-    }
+    def _constants_store_fp64(self, dev) -> bool:
+        """Whether the engine this plan runs under stores a float64 / complex128 graph constant as
+        such on `dev` — the question `_graph_constant_bytes` prices by. The Triton engine answers
+        from `triton.dtype.stores_fp64` (where the Mac's `stores_fp64` profile key plugs in); the
+        DtypeEngine from the device's profile (`device_supports_fp64`, what
+        `DtypeEngine.storage_dtype` narrows by in `_load_constant_native`)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from neurobrix.triton.dtype import stores_fp64
+            return stores_fp64()
+        from neurobrix.core.dtype.config import device_supports_fp64
+        spec = dev.spec
+        return device_supports_fp64(dev.device_string, getattr(spec.brand, "value", spec.brand),
+                                    spec.architecture)
 
     def _parse_blocks(self, container: "NBXContainer", comp_name: str) -> Dict:
         """
@@ -6681,8 +6675,8 @@ class PrismSolver:
                     continue
                 # Compute size from shape × dtype_bytes
                 shape = meta.get("shape", [])
-                dtype_str = meta.get("dtype", "F32")
-                dtype_bytes = self._ST_DTYPE_BYTES.get(dtype_str, 4)
+                # the header's code -> the table's dtype -> its width; an unknown code is refused
+                dtype_bytes = _itemsize.itemsize(_itemsize.from_safetensors(meta["dtype"]))
                 numel = 1
                 for dim in shape:
                     numel *= dim

@@ -21,6 +21,7 @@ import torch
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import device_supports_fp64, parse_dtype, strip_aten_prefix
+from neurobrix.core.dtype import itemsize as _itemsize
 
 
 def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -419,7 +420,8 @@ def amp_fp32_output_dtype(compute_dtype: str, graph_dtype: Optional[str], safe: 
 #: The ways a hardware profile may align attention operands that disagree in dtype
 #: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
 ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")
-_ATTENTION_OPERAND_BYTES = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8}
+#: The operand dtypes the alignment chooses among; their widths are the dtype table's.
+_ATTENTION_OPERAND_DTYPES = ("float16", "bfloat16", "float32", "float64")
 
 
 def attention_operand_alignment(profile: dict) -> str:
@@ -456,7 +458,7 @@ def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
     TWIN: triton/dtype.py `attention_operand_dtypes` (a unit test holds the two equal)."""
     qj = q_round if q_round is not None else q
     for d in (qj, k, v):
-        if d not in _ATTENTION_OPERAND_BYTES:
+        if d not in _ATTENTION_OPERAND_DTYPES:
             raise ValueError(f"attention_operand_dtypes: {d!r} is not a floating dtype an "
                              f"attention computes in")
     if qj == k == v:
@@ -465,7 +467,7 @@ def attention_operand_dtypes(q: str, k: str, v: str, alignment: str,
         raise ValueError(f"attention_operand_dtypes: alignment {alignment!r} is not one of "
                          f"{ATTENTION_OPERAND_ALIGNMENTS}")
     pick = min if alignment == "narrowest" else max
-    t = pick((qj, k, v), key=_ATTENTION_OPERAND_BYTES.__getitem__)
+    t = pick((qj, k, v), key=_itemsize.itemsize)
     return t, t, t, None
 
 
@@ -657,8 +659,8 @@ AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
 # finite range at call time — numerically inert for mask sentinels (masked
 # positions are ~0 after softmax either way). Surfaced by the MiniCPM-o
 # speech-AR LlamaModel causal mask (aten::full, 2026-08-02).
-# What a device without fp64 holds in place of the 64-bit floats (the vendor's own choice on MPS).
-_NO_FP64_CEILING = {torch.float64: torch.float32, torch.complex128: torch.complex64}
+# What a device without fp64 holds in place of the 64-bit floats (the vendor's own choice on MPS) is
+# the dtype table's `without_fp64` (config/dtypes.yml), read by `DtypeEngine.storage_dtype` alone.
 _WIDE_NAMES: FrozenSet[str] = frozenset({"float64", "complex128", "double", "cdouble"})
 
 
@@ -768,8 +770,11 @@ class DtypeEngine:
 
     def storage_dtype(self, dtype: torch.dtype) -> torch.dtype:
         """`dtype` as this device holds it: float64 -> float32 and complex128 -> complex64 where the
-        device has no fp64, unchanged otherwise."""
-        return dtype if self.device_has_fp64 else _NO_FP64_CEILING.get(dtype, dtype)
+        device has no fp64, unchanged otherwise (config/dtypes.yml `without_fp64`). The ONE owner of
+        the PyTorch branch's storage narrowing: the constant loader and the fp64 ceiling ask it, and
+        Prism prices a compiled plan's constants with the same rule (`_itemsize.storage_dtype`). A
+        dtype the table does not carry is refused by name."""
+        return getattr(torch, _itemsize.storage_dtype(dtype, self.device_has_fp64))
 
     def accumulation_dtype(self, dtype: torch.dtype) -> torch.dtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
@@ -955,8 +960,8 @@ class DtypeEngine:
     def _make_fp64_ceiling(self, func: Callable) -> Callable:
         """Narrow a float64 / complex128 `dtype` request to what this device holds."""
         def ceiling(*args, **kwargs):
-            if kwargs.get("dtype") in _NO_FP64_CEILING:
-                kwargs["dtype"] = _NO_FP64_CEILING[kwargs["dtype"]]
+            if isinstance(kwargs.get("dtype"), torch.dtype):
+                kwargs["dtype"] = self.storage_dtype(kwargs["dtype"])
             return func(*args, **kwargs)
         return ceiling
 

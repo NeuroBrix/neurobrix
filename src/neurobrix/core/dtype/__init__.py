@@ -3,7 +3,7 @@
 NeuroBrix Dtype Module - Single Source of Truth
 
 Consolidates all dtype-related code:
-1. config.py - DTYPE_MAP, BYTES_MAP, HARDWARE_SUPPORT
+1. config.py - DTYPE_MAP, HARDWARE_SUPPORT (widths: itemsize.py, from config/dtypes.yml)
 2. converter.py - safe_dtype_convert(), calculate_dtype_multiplier()
 3. engine.py - DtypeEngine (single dtype decision engine)
 
@@ -17,9 +17,7 @@ ZERO HARDCODE: Import from here for all dtype operations.
 
 # Config - constants and mappings
 from neurobrix.core.dtype.config import (
-    BYTES_MAP,
     HARDWARE_DTYPE_SUPPORT,
-    get_dtype_bytes,
     get_torch_dtype,
     dtype_to_str,
     architecture_supports_dtype,
@@ -36,8 +34,8 @@ from neurobrix.core.dtype.converter import (
 )
 
 # DtypeEngine (the ATen branch's engine) and the torch dtype maps resolve
-# on request: a --triton process imports this package for BYTES_MAP and the
-# string helpers and must not load torch (R33).
+# on request: a --triton process imports this package for the string
+# helpers and must not load torch (R33).
 _LAZY = {"DtypeEngine": "neurobrix.core.dtype.engine",
          "DTYPE_MAP": "neurobrix.core.dtype.config",
          "DTYPE_TO_STR": "neurobrix.core.dtype.config"}
@@ -54,9 +52,7 @@ __all__ = [
     # Config
     "DTYPE_MAP",
     "DTYPE_TO_STR",
-    "BYTES_MAP",
     "HARDWARE_DTYPE_SUPPORT",
-    "get_dtype_bytes",
     "get_torch_dtype",
     "dtype_to_str",
     "architecture_supports_dtype",

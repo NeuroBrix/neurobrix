@@ -51,8 +51,9 @@ def test_the_plan_reserves_the_flow_read_weights_beside_the_pieces(monkeypatch, 
     assert p.strategy == "layer_streaming" and p.layer_stream_plan, (
         f"{model} at {rung} MB planned {p.strategy!r}: the Mac's row is not reproduced")
     streamed = list(p.layer_stream_plan)
+    # mode="triton": the Triton engine stores no fp64 (`triton.dtype.stores_fp64`).
     graphs = {c: json.loads((root / "components" / c / "graph.json").read_text()) for c in streamed}
-    constants = sum(_graph_constant_bytes(graphs[c]) for c in streamed)
+    constants = sum(_graph_constant_bytes(graphs[c], stores_fp64=False) for c in streamed)
     # A flow reads a component by name when its graph takes `inputs_embeds` (the flows'
     # `uses_embeds`), read here from the graph file.
     read = [c for c in streamed if "input::inputs_embeds" in graphs[c]["input_tensor_ids"]]
@@ -80,6 +81,6 @@ def test_a_component_no_flow_reads_reserves_nothing(monkeypatch):
     graphs = {c: json.loads((root / "components" / c / "graph.json").read_text())
               for c in p.layer_stream_plan}
     assert not any("input::inputs_embeds" in g["input_tensor_ids"] for g in graphs.values())
-    constants = sum(_graph_constant_bytes(g) for g in graphs.values())
+    constants = sum(_graph_constant_bytes(g, stores_fp64=False) for g in graphs.values())
     assert s._layer_stream_constant_bytes == constants, (
         s._layer_stream_constant_bytes / 2**20, constants / 2**20)

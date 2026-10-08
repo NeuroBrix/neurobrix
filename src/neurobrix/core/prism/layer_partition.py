@@ -39,28 +39,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-_DTYPE_WIDTH = {
-    "float64": 8, "float32": 4, "bfloat16": 2, "float16": 2,
-    "int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1, "bool": 1,
-    "float8_e4m3fn": 1, "float8_e5m2": 1,
-}
+from neurobrix.core.dtype import itemsize as _itemsize
 
 
 def tensor_bytes(tensor: Dict[str, Any]) -> Optional[int]:
     """Bytes for one tensor, or None when the graph does not say.
 
-    A symbolic or negative dimension, or a dtype with no known width, means
-    the size is not known. None says so; it never guesses a width.
+    A symbolic or negative dimension means the size is not known: None says
+    so. The width is the dtype table's (config/dtypes.yml); a dtype it does
+    not carry is refused by name, never guessed.
     """
     n = 1
     for dim in (tensor.get("shape") or []):
         if not isinstance(dim, int) or dim < 0:
             return None
         n *= dim
-    width = _DTYPE_WIDTH.get(str(tensor.get("dtype", "")).lower())
-    if width is None:
-        return None
-    return n * width
+    return n * _itemsize.itemsize(tensor.get("dtype"))
 
 
 @dataclass

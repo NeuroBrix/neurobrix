@@ -30,12 +30,7 @@ import numpy as np
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "src"))
 
-_DTYPE_BYTES = {"float16": 2, "bfloat16": 2, "float32": 4, "float64": 8, "int32": 4,
-                "int64": 8, "int8": 1, "uint8": 1, "bool": 1, "complex64": 8,
-                "complex128": 16}
-_NP = {"float16": np.float16, "float32": np.float32, "float64": np.float64,
-       "int32": np.int32, "int64": np.int64, "int8": np.int8, "uint8": np.uint8,
-       "bool": np.bool_, "complex64": np.complex64, "complex128": np.complex128}
+from neurobrix.triton import itemsize as _isz   # the Triton branch's reader of config/dtypes.yml
 
 
 def triton_side(b64: str, tdata: dict, dag: dict):
@@ -49,7 +44,7 @@ def triton_side(b64: str, tdata: dict, dag: dict):
             return None, "no data file in the archive (the engine returns, binding nothing)"
         n_files = len(names)
         tensor_bytes = zf.read(sorted(names)[0])
-    dtype_bytes = _DTYPE_BYTES.get(dtype_str, 4)
+    dtype_bytes = _isz.itemsize(dtype_str)      # an unknown dtype is refused by name
     declared = int(np.prod(shape)) if shape else 1
     actual = len(tensor_bytes) // dtype_bytes
     note = f"{n_files} storage(s)" if n_files > 1 else ""
@@ -77,7 +72,7 @@ def triton_side(b64: str, tdata: dict, dag: dict):
     if dtype_str == "bfloat16":
         arr = np.frombuffer(tensor_bytes, dtype=np.uint16).reshape(shape)
         return ("bf16", arr), note
-    np_dt = _NP.get(dtype_str, np.float32)
+    np_dt = np.dtype(dtype_str)                 # as `_load_constant_triton` reads it
     try:
         arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
     except ValueError as e:

@@ -1,0 +1,62 @@
+# The dtype table: the width of every dtype the engine knows, one entry each.
+#
+# Read through its two mirror readers and nowhere else: `core/dtype/itemsize.py` (PyTorch branch,
+# Prism, the core executors) and `triton/itemsize.py` (Triton branch: NBXTensor, the wrappers,
+# the launch keys, the certifier). The two are held equal entry by entry by
+# `tests/unit/dtype/test_the_two_itemsize_readers_are_one.py`. A dtype absent from this file is
+# refused BY NAME by both readers: no width is ever guessed (the silent `.get(dtype, 4)` sized a
+# complex64 at half its bytes until 2026-09-22, Kokoro-82M's vocoder).
+#
+# Per entry:
+#   bits           storage bits per element (bytes = bits / 8 for every dense dtype)
+#   safetensors    the dtype code a safetensors header writes for it (spec:
+#                  https://github.com/huggingface/safetensors — `Dtype`), when it has one
+#   autotune_keys  the spellings a launch key / certified directory carries for it
+#                  (`kernels/autotune_certified._DTYPES`)
+#   without_fp64   what a store with no float64 holds in its place (the device's or the engine's
+#                  fp64 ceiling: MPS refuses a float64 tensor and the vendors' own code narrows to
+#                  float32 there; the Triton kernels are fp32-max, `TritonSequence._parse_dtype`)
+#
+# A hi+lo split operand is TWO tensors of the low dtype: that is a representation, computed by
+# the readers' `representation_bytes(dtype, numel, split=True)`, never an entry here.
+
+dtypes:
+  # IEEE 754-2008 binary64.
+  float64: {bits: 64, safetensors: F64, autotune_keys: [fp64], without_fp64: float32}
+  # IEEE 754-2008 binary32.
+  float32: {bits: 32, safetensors: F32, autotune_keys: [fp32]}
+  # NVIDIA TF32 (A100 architecture whitepaper): a tensor-core COMPUTE format of 19 significant
+  # bits, stored and moved in a full 32-bit fp32 word.
+  tfloat32: {bits: 32}
+  # Google Brain bfloat16: the top 16 bits of a binary32.
+  bfloat16: {bits: 16, safetensors: BF16, autotune_keys: [bf16]}
+  # IEEE 754-2008 binary16.
+  float16: {bits: 16, safetensors: F16, autotune_keys: [fp16]}
+  # OCP 8-bit Floating Point Specification (OFP8) v1.0, E4M3 (finite, no inf) and E5M2;
+  # torch.float8_e4m3fn / torch.float8_e5m2. The fnuz variants appear nowhere in this code.
+  float8_e4m3fn: {bits: 8, safetensors: F8_E4M3}
+  float8_e5m2: {bits: 8, safetensors: F8_E5M2}
+  # Two's-complement integers of the stated width (C99 <stdint.h>, numpy, torch).
+  int64: {bits: 64, safetensors: I64, autotune_keys: [int64]}
+  int32: {bits: 32, safetensors: I32, autotune_keys: [int32]}
+  int16: {bits: 16, safetensors: I16, autotune_keys: [int16]}
+  int8: {bits: 8, safetensors: I8, autotune_keys: [int8]}
+  # Unsigned integers of the stated width; uint16/32/64 are carried by launch keys (a bf16 bit
+  # carrier, sort and RNG kernels), not by any container.
+  uint64: {bits: 64, autotune_keys: [uint64]}
+  uint32: {bits: 32, autotune_keys: [uint32]}
+  uint16: {bits: 16, autotune_keys: [uint16]}
+  uint8: {bits: 8, safetensors: U8, autotune_keys: [uint8]}
+  # One byte per element in torch and numpy (no bit packing); `int1` is Triton's spelling.
+  bool: {bits: 8, safetensors: BOOL, autotune_keys: [int1, bool]}
+  # Two binary32 / two binary64, interleaved [real, imag] (numpy and torch layout).
+  complex64: {bits: 64}
+  complex128: {bits: 128, without_fp64: complex64}
+
+# Packed weight encodings: bits per element is a fraction of a byte and the group scales live
+# beside the packed values. Only the encodings this engine executes
+# (`core/runtime/weight_encoding.SUPPORTED_WEIGHT_ENCODINGS`).
+packed:
+  # Weight-only int4, groups of 128 along in_features, asymmetric: one float16 scale and one
+  # float16 minimum per group; 8 nibbles per int32 (core/runtime/weight_encoding.py).
+  int4-g128-asym: {bits: 4, group_size: 128, scale_dtype: float16, min_dtype: float16}

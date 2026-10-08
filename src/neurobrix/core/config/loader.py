@@ -69,6 +69,22 @@ def get_precision_calibration_policy() -> Dict[str, Any]:
 
 
 @lru_cache(maxsize=1)
+def get_dtype_table() -> Dict[str, Any]:
+    """Load config/dtypes.yml (the width of every dtype the engine knows, read through its two
+    mirror readers `core/dtype/itemsize.py` and `triton/itemsize.py`). ZERO FALLBACK: a missing
+    file or section raises — no width is ever guessed."""
+    config_path = CONFIG_ROOT / "dtypes.yml"
+    if not config_path.exists():
+        raise FileNotFoundError(f"ZERO FALLBACK: the dtype table is not found: {config_path}")
+    with open(config_path) as f:
+        table = yaml.safe_load(f) or {}
+    for section in ("dtypes", "packed"):
+        if not isinstance(table.get(section), dict):
+            raise KeyError(f"ZERO FALLBACK: {config_path} carries no {section!r} section")
+    return table
+
+
+@lru_cache(maxsize=1)
 def get_tiling_policy() -> Dict[str, Any]:
     """Load config/tiling.yml (the TilingEngine's engine-wide split sizes, read through its two
     mirror copies `core/module/tiling_sizes.py` and `triton/tiling_sizes.py`). ZERO FALLBACK: a missing file raises — no split is ever cut
