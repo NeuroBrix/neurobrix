@@ -885,8 +885,11 @@ class PrismSolver:
         totals = {n: int(m.total_bytes) for n, m in plan.component_memory.items()}
         streamed = getattr(plan, "layer_stream_plan", None)
         if streamed:
-            cost = getattr(self, "_layer_stream_cost", None) or {}
-            totals = {n: int(cost.get(n, t)) for n, t in totals.items() if n not in streamed}
+            cost = self._layer_stream_cost              # the rung that streamed prices every component
+            missing = sorted(n for n in totals if n not in streamed and n not in cost)
+            if missing:
+                raise KeyError(f"layer_streaming rung priced no cost for {missing}")
+            totals = {n: int(cost[n]) for n in totals if n not in streamed}
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
         return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
