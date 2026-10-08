@@ -1170,7 +1170,7 @@ class OpLevelTilingEngine:
 
     @staticmethod
     def _detect_inplace_unary_candidates(
-        graph_executor, threshold_bytes: Optional[int] = None,
+        graph_executor,
     ) -> "List[Tuple[str, str]]":
         """Element-wise unary ops that can write into the buffer they consume.
 
@@ -1203,13 +1203,11 @@ class OpLevelTilingEngine:
 
         So: liveness is a property of the GRAPH and is settled here; size is a
         property of the REQUEST and is settled in the interceptor, which holds
-        the real tensor. `threshold_bytes` is accepted and ignored, kept so the
-        signature matches `_detect_inplace_add_candidates` -- whose own
-        threshold has the same blind spot, unnoticed because Sana's trace
-        extents were already over a gigabyte.
+        the real tensor, so this detector takes no byte threshold.
+        `_detect_inplace_add_candidates`' own threshold has the same blind
+        spot, unnoticed because Sana's trace extents were already over a
+        gigabyte.
         """
-        if threshold_bytes is None:
-            threshold_bytes = _tsz.inplace_min_bytes()
         dag = getattr(graph_executor, '_dag', None)
         if dag is None:
             return []
@@ -2221,11 +2219,10 @@ class OpLevelTilingEngine:
                                                 flush=True)
                                     merge_out = _band_streamed_chain(
                                         t_base_pending, cw,
-                                        tile_factor=int(spec_int.get(
-                                            "tile_factor",
-                                            _tsz.residual_chain_default_tile_factor())),
-                                        halo=int(spec_int.get(
-                                            "halo", _tsz.residual_chain_default_halo())),
+                                        # Both are the plan's: the detector writes the halo,
+                                        # Prism the band factor (`residual_chain_band_factor`).
+                                        tile_factor=int(spec_int["tile_factor"]),
+                                        halo=int(spec_int["halo"]),
                                     )
                                     if _is_triton_mode:
                                         from neurobrix.kernels.nbx_tensor import (

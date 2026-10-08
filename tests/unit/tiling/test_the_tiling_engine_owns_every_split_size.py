@@ -304,9 +304,6 @@ def test_the_tiling_engine_overlap_is_unchanged(tmp_path, trace, window, expecte
 def test_the_in_place_and_chain_sizes_are_unchanged():
     assert TS.inplace_min_bytes() == 1073741824
     assert TS.residual_chain_min_base_bytes_fp32() == 1600000000
-    assert TS.residual_chain_default_tile_factor() == 4
-    assert TS.residual_chain_default_halo() == 2
-
 
 
 def test_a_refused_attention_chunk_is_an_error_naming_its_key_never_a_smaller_retry(monkeypatch):

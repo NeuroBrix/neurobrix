@@ -1,6 +1,7 @@
 # The TilingEngine's sizes — every engine-wide value a memory split is cut by.
 #
-# Read by `core/module/tiling_sizes.py` (the TilingEngine's sizing half) and nowhere else; a
+# Read by the TilingEngine's sizing half and nowhere else — its two mirror copies,
+# `core/module/tiling_sizes.py` (PyTorch branch) and `triton/tiling_sizes.py` (Triton branch); a
 # missing key is refused by name. Values that belong to an ARCHITECTURE stay in its hardware
 # profile (config/vendors/<vendor>/<arch>.yml): memory.sdpa_math_max_scores_bytes,
 # memory.sdpa_math_scores_device_fraction, memory.sdpa_math_min_chunk_rows,
@@ -67,15 +68,14 @@ op_level:
     # A residual chain (fork -> >=3 ops -> merge) streams in bands of at most 1 GiB at runtime
     # (P-PRISM-NEVER-REFUSE v2 S5, 2026-05-13).
     band_target_bytes: 1073741824
+    # A chain streams in at least two bands (the solver's chain rule carried the conv band floor,
+    # 2, so a change of that floor moved this one silently; it is its own value now).
+    min_band_factor: 2
     # Its band factor rounds up to a power of two, at most 32.
     max_band_factor: 32
     # 1.6 GB: a chain is detected only when its base tensor (fp32, conservative) reaches it —
     # 1.6 GB at fp32, ~0.8 GB at bf16 (S5).
     min_base_bytes_fp32: 1600000000
-    # The band factor and halo a chain spec without its own runs at (the chain interceptor's
-    # defaults; Prism's plan and the detector always write both).
-    default_tile_factor: 4
-    default_halo: 2
 
 overlap:
   # A tile's overlap is its extent // 8, at least 4 to ensure some blending (TilingEngine's

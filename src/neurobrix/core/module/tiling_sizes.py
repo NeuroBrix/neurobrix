@@ -205,10 +205,10 @@ def rms_norm_band_factor(out_bytes: int, card_bytes: int) -> int:
 
 def residual_chain_band_factor(bytes_fp32: int) -> int:
     """Bands a residual chain streams in: its half-width bytes (the fp32 estimate halved) over
-    `residual_chain.band_target_bytes`, at least `min_band_factor`, a power of two at most
+    `residual_chain.band_target_bytes`, at least `residual_chain.min_band_factor`, a power of two at most
     `residual_chain.max_band_factor`."""
     half_bytes = bytes_fp32 // 2
-    factor = max(int(_value("op_level", "min_band_factor")),
+    factor = max(int(_value("op_level", "residual_chain", "min_band_factor")),
                  math.ceil(half_bytes / int(_value("op_level", "residual_chain", "band_target_bytes"))))
     return _pow2_at_most(factor, int(_value("op_level", "residual_chain", "max_band_factor")))
 
@@ -216,16 +216,6 @@ def residual_chain_band_factor(bytes_fp32: int) -> int:
 def residual_chain_min_base_bytes_fp32() -> int:
     """The base-tensor size (fp32) from which a residual chain is detected."""
     return int(_value("op_level", "residual_chain", "min_base_bytes_fp32"))
-
-
-def residual_chain_default_tile_factor() -> int:
-    """The band factor of a chain spec that states none."""
-    return int(_value("op_level", "residual_chain", "default_tile_factor"))
-
-
-def residual_chain_default_halo() -> int:
-    """The halo of a chain spec that states none."""
-    return int(_value("op_level", "residual_chain", "default_halo"))
 
 
 # --- overlaps -------------------------------------------------------------------------------------
