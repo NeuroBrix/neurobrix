@@ -200,3 +200,19 @@ def architecture_supports_dtype(arch: str, dtype_str: str) -> bool:
     """
     supported = HARDWARE_DTYPE_SUPPORT.get(arch.lower(), ["float32"])
     return dtype_str in supported
+
+
+def device_supports_fp64(device: str, vendor: str, architecture: str) -> bool:
+    """Whether `device` computes and stores float64 / complex128 — the host's from this module's own
+    table (`HARDWARE_DTYPE_SUPPORT["cpu"]`), an accelerator's from its vendor profile
+    (`precision.supports_fp64`, required: every profile declares it, a missing key is refused).
+    False on Apple GPUs: MPS refuses a float64 tensor outright, and the vendor's own code narrows
+    to float32 there (diffusers' RoPE, 2026-10-08)."""
+    if str(device).split(":")[0] == "cpu":
+        return architecture_supports_dtype("cpu", "float64")
+    from neurobrix.core.config.loader import get_vendor_config
+    precision = get_vendor_config(vendor, architecture).get("precision") or {}
+    if not isinstance(precision.get("supports_fp64"), bool):
+        raise ValueError(f"ZERO FALLBACK: the {vendor}/{architecture} profile does not declare "
+                         f"precision.supports_fp64 (found {precision!r}); a device's fp64 is never assumed")
+    return precision["supports_fp64"]

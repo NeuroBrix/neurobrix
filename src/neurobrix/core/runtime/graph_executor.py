@@ -1102,7 +1102,7 @@ class GraphExecutor:
                 False, frozenset(), frozenset()
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
                                              amp_enabled=amp_enabled,
-                                             hardware=(self.vendor, self.arch))
+                                             hardware=(self.vendor, self.arch), device=self.device)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -2567,7 +2567,8 @@ class GraphExecutor:
         import base64, io
         buffer = io.BytesIO(base64.b64decode(b64_data))
         tensor = torch.load(buffer, map_location='cpu', weights_only=True)
-        tensor = tensor.to(self.device)
+        # narrowed on the host first: a device without fp64 refuses the float64 tensor itself
+        tensor = tensor.to(self._dtype_engine.storage_dtype(tensor.dtype)).to(self.device)
         if tensor.is_floating_point() and tensor.dtype != self._placement_torch_dtype():
             tensor = self._dtype_engine.convert_constant(tensor)
         self._weights[weight_name] = tensor

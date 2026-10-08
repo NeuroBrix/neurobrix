@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Models carrying double-precision constants run on Apple GPUs.** A device whose hardware
+  profile declares no float64 support now receives those constants in float32, as the models'
+  own reference code does there, instead of failing on the transfer.
+
 - **Attention on V100 in the Triton engine reaches the tensor cores when its inputs differ in
   precision.** Query, key and value of different precisions were all widened to float32, which
   sent the attention to a scalar kernel; they now take the narrowest precision among them, as
