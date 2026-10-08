@@ -133,13 +133,15 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
     def _ensure_flow_reads(self, component_name: str, base: Any) -> None:
         """Hold the component's non-block weights on its BASE executor, once, when a flow reads
-        it by name (`flow_embeds_into`: the flow embeds its tokens from this executor's table) —
+        it by name (`flow_reads_by_name`: the flow embeds its tokens from this executor's table, or
+        projects its logits with this head's weight) —
         what a whole executor holds and a streamed base did not: the Mac's 30 "requires
         embed_tokens weight" refusals. Prism budgets these bytes as resident beside the pieces. Idempotent (a held
         key is not reloaded), and called on every entry, so a base unloaded between phases gets
         them back."""
-        from neurobrix.core.prism.layer_partition import flow_embeds_into
-        if not flow_embeds_into(getattr(base, "_dag", None)):
+        from neurobrix.core.prism.layer_partition import flow_reads_by_name
+        if not flow_reads_by_name(component_name, getattr(base, "_dag", None),
+                                  getattr(self.context, "topology", None)):
             return                    # no flow reads this component by name: nothing to hold
         nbx_path = self._nbx_path(component_name)
         if component_name not in self._non_block:            # read once, not per step

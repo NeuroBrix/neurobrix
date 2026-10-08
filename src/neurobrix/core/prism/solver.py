@@ -6260,13 +6260,15 @@ class PrismSolver:
             # are sized without them below. Stored bytes, as the partitioner sizes the pieces.
             # Before, the base held none (the Mac's 30 "requires embed_tokens weight") and every
             # piece loaded all of them, in no budget.
-            # Only for a component a flow reads by name (`flow_embeds_into`: its graph takes
-            # `inputs_embeds`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
+            # Only for a component a flow reads by name (`flow_reads_by_name`: its graph takes
+            # `inputs_embeds`, or it is the VLM's `head_component`) — a VAE, a DiT, an encoder fed token ids is read by no flow, and
             # holding their non-block weights (most of a VAE: `mid_block.resnets.N` is not a block
             # key) would pin the component the rung exists to stream (SANA-Video's VAE, 4 663 MB).
-            from neurobrix.core.prism.layer_partition import flow_embeds_into
+            from neurobrix.core.prism.layer_partition import flow_reads_by_name
             from neurobrix.triton.weight_loader import is_block_key   # torch-free
-            _read = [name for name in streamed if flow_embeds_into(graphs.get(name))]
+            _topology = self._flow_topology(container)
+            _read = [name for name in streamed
+                     if flow_reads_by_name(name, graphs.get(name), _topology)]
             _unsized = [name for name in _read if not sizes_by_comp.get(name)]
             if _unsized:
                 return _no(
