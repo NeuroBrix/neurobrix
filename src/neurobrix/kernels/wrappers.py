@@ -8488,11 +8488,10 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                  _fd_bias, softmax_scale,
                                  batch, nheads, nheads_k, seqlen_k, headdim)
 
-    # tl.dot on V100 TensorCores requires matching operand dtypes; our
-    # conditional fp32-output matmul (M<=4 decode) can leave q/k/v mixed
-    # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
-    # to fp32. For the common LLM case where all three match, this is a
-    # no-op — zero overhead.
+    # The kernels require matching operand dtypes; the fp32-stored GEMMs (Volta's store policy,
+    # M<=4 decode) can leave q/k/v mixed (Sana: fp32 Q vs fp16 K; Allegro: fp32 V). If they
+    # disagree, all three take the narrowest — the compiled engine's alignment (R30). For the
+    # common case where all three match, this is a no-op — zero overhead.
     _qd, _kd, _vd, q_round = _lk.sdpa_operand_dtypes(q._dtype, k._dtype, v._dtype, q_round)
     if _qd != q._dtype or _kd != k._dtype or _vd != v._dtype:
         q, k, v = q.to(_qd), k.to(_kd), v.to(_vd)

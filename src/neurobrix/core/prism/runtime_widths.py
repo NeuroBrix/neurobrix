@@ -722,11 +722,13 @@ class _TritonRules(_Rules):
             return self.first_nonempty(fl) or self.default(op, fl)
         if name in _SDPA:
             # The flash path allocates `empty_like(q)`, the math path casts its result to q's
-            # dtype — q AFTER the wrapper's operand alignment (`launch_keys.sdpa_operand_dtypes`:
-            # q, k, v that disagree are all cast to fp32 before any route), so an fp32 V makes
-            # an fp32 output (measured: Wan's cross-attention, fp16 q/k and fp32 v, 2026-09-29).
+            # dtype — q AFTER the wrapper's operand alignment, read from the one function the
+            # wrapper calls (`launch_keys.sdpa_operand_dtypes`: q, k, v that disagree all take the
+            # narrowest), so Wan's cross-attention (fp16 q/k, fp32 v) writes fp16.
             if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
-                return "float32"
+                from neurobrix.kernels import launch_keys as _lk
+                from neurobrix.kernels.nbx_tensor import NBXDtype
+                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]))[0].name
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)
