@@ -289,6 +289,7 @@ class GraphExecutor:
         # strategy whose executors run this executor's ops (layer_streaming's pieces) is told
         # every later registration through this explicit hook.
         self._op_uid_followers: Dict[str, Callable] = {}
+        self._op_followers: Dict[str, Callable] = {}
         self._triton_followers: Dict[str, Callable] = {}
         self._last_stats = None
         self._last_symbols = {}  # For CFG batch inference
@@ -380,6 +381,8 @@ class GraphExecutor:
         if self._compiled_seq is not None:
             self._compile_execution_sequence()
             self._interceptors_dirty = False
+        for follow in list(self._op_followers.values()):
+            follow({op_type: interceptor})
 
     def register_op_interceptors(self, interceptors: Dict[str, Callable]) -> None:
         """
@@ -399,6 +402,8 @@ class GraphExecutor:
             self._interceptors_dirty = False
         else:
             self._interceptors_dirty = True
+        for follow in list(self._op_followers.values()):
+            follow(interceptors)
 
     def unregister_op_interceptor(self, op_type: str) -> None:
         """
@@ -1095,8 +1100,11 @@ class GraphExecutor:
             # the engines execute (see the block below the passes).
             self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
                 False, frozenset(), frozenset()
+            from neurobrix.core.dtype.config import device_supports_fp64
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
                                              amp_enabled=amp_enabled,
+                                             device_has_fp64=device_supports_fp64(self.device, self.vendor,
+                                                                                  self.arch),
                                              hardware=(self.vendor, self.arch))
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
@@ -1648,6 +1656,7 @@ class GraphExecutor:
             activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
+            device_has_fp64=self._dtype_engine.device_has_fp64,
             hardware=self._dtype_engine.hardware,
         )
 
@@ -1876,7 +1885,13 @@ class GraphExecutor:
             return None
         encodes = {k: v["encodes"] for k, v in tensors.items()
                    if isinstance(v, dict) and v.get("encodes")}
-        keys = list(tensors.keys()); params = self._graph_param_names()
+        keys = list(tensors.keys())
+        # A piece binds over its COMPONENT's parameters, as the reconcile's suffix index requires
+        # (`consumed_in_loader_space`). Over a piece's own set a lone `head.weight` the index lacks
+        # (a tied head, put on the base by the flow) found the bare suffix `weight` unique and was
+        # bound to the last key walked: canary-qwen streamed, a value projection as its head.
+        src = self._component_from if self._component_from is not None else self
+        params = src._graph_param_names()
         self._pending_weight_binding = self.binding_of_the_loaded(
             consumed, keys, params, encodes, self._flow_reads_weights)
         return self.consumed_in_loader_space(consumed, keys, params, encodes,
@@ -1944,6 +1959,13 @@ class GraphExecutor:
             if name is None:
                 keep.add(k)
             else:
+                taken[name] = lender[name]
+        # A parameter no loaded key fills, held by the lender under the graph's own name: what
+        # the flow put on the base (a tied head, `audio_llm`), taken as the whole run reads it.
+        bound = set(getattr(self, "_pending_weight_binding", None) or ())
+        for tid in (getattr(self, "_dag", None) or {}).get("tensors", {}):
+            name = tid[7:] if tid.startswith("param::") else None
+            if name and name not in bound and name not in taken and name in lender:
                 taken[name] = lender[name]
         return keep, taken
 
@@ -2549,7 +2571,8 @@ class GraphExecutor:
         import base64, io
         buffer = io.BytesIO(base64.b64decode(b64_data))
         tensor = torch.load(buffer, map_location='cpu', weights_only=True)
-        tensor = tensor.to(self.device)
+        # narrowed on the host first: a device without fp64 refuses the float64 tensor itself
+        tensor = tensor.to(self._dtype_engine.storage_dtype(tensor.dtype)).to(self.device)
         if tensor.is_floating_point() and tensor.dtype != self._placement_torch_dtype():
             tensor = self._dtype_engine.convert_constant(tensor)
         self._weights[weight_name] = tensor
@@ -3797,17 +3820,22 @@ class GraphExecutor:
             follow(interceptors)
 
     def follow_interceptor_registrations(self, key: str, *, op_uid: Optional[Callable] = None,
+                                         op: Optional[Callable] = None,
                                          triton: Optional[Callable] = None) -> None:
         """The explicit hook a strategy whose executors run this executor's ops subscribes to:
         `op_uid(interceptors, groups=, planned=)` after every later
-        `register_op_uid_interceptors`, `triton(interceptors)` after every later
+        `register_op_uid_interceptors`, `op(interceptors)` after every later
+        `register_op_interceptors` / `register_op_interceptor` (the compiled engine's KV cache,
+        keyed by op type), `triton(interceptors)` after every later
         `register_triton_interceptors`, in subscription order. A follower is held under its
         `key`: subscribing again under the same key replaces it (a strategy re-installed on the
         same executor forwards once, to its current executors). Registrations made before the
-        subscription are read by the follower itself (`_op_uid_interceptors`,
-        `_pending_triton_interceptors`). `LayerStreamingStrategy` forwards both to its pieces."""
+        subscription are read by the follower itself (`_op_uid_interceptors`, `_op_interceptors`,
+        `_pending_triton_interceptors`). `LayerStreamingStrategy` forwards all three to its pieces."""
         if op_uid is not None:
             self._op_uid_followers[key] = op_uid
+        if op is not None:
+            self._op_followers[key] = op
         if triton is not None:
             self._triton_followers[key] = triton
 

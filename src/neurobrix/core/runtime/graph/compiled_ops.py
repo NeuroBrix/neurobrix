@@ -195,7 +195,7 @@ class CompiledOpResolver:
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, use_triton: bool = False,
                  activations_fp16_safe: bool = False, fp32_op_uids=None,
-                 narrow_op_uids=None, hardware=None):
+                 narrow_op_uids=None, device_has_fp64: bool = True, hardware=None):
         self.device = device
         self.dtype = dtype
         self.use_triton = False  # triton mode now uses triton/ package directly
@@ -207,6 +207,7 @@ class CompiledOpResolver:
                                         activations_fp16_safe=activations_fp16_safe,
                                         fp32_op_uids=fp32_op_uids,
                                         narrow_op_uids=narrow_op_uids,
+                                        device_has_fp64=device_has_fp64,
                                         hardware=hardware)
 
     # ========================================================================

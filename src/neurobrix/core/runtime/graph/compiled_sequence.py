@@ -374,6 +374,7 @@ class CompiledSequence:
         activations_fp16_safe: bool = False,
         fp32_op_uids=None,
         narrow_op_uids=None,
+        device_has_fp64: bool = True,
         hardware=None,
     ):
         """
@@ -411,6 +412,7 @@ class CompiledSequence:
                                               activations_fp16_safe=activations_fp16_safe,
                                               fp32_op_uids=fp32_op_uids,
                                               narrow_op_uids=narrow_op_uids,
+                                              device_has_fp64=device_has_fp64,
                                               hardware=hardware)
 
         # Compilation outputs
@@ -945,6 +947,7 @@ class CompiledSequence:
         seq = CompiledSequence(
             sub_dag, self.device, self.dtype,
             amp_enabled=self.op_resolver.dtype_engine.amp_enabled,
+            device_has_fp64=self.op_resolver.dtype_engine.device_has_fp64,
             hardware=self.op_resolver.dtype_engine.hardware,
         )
         seq.compile()

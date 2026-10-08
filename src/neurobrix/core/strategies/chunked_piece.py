@@ -100,6 +100,18 @@ class ChunkedPiece:
         for ex in self._passes or ():
             ex.register_triton_interceptors(interceptors)
 
+    def register_op_interceptors(self, interceptors: Dict[str, Any]) -> None:
+        """The compiled engine's op-type interceptors (its KV cache): refused inside the sliced
+        stretch for the reason `register_triton_interceptors` gives; the holder runs the rest."""
+        inside = {(self._axis.ops.get(u) or {}).get("op_type") for u in self._axis.order[self._first:self._last + 1]}
+        hit = sorted(t for t in interceptors if t in inside)
+        if hit:
+            raise RuntimeError(
+                f"chunked piece: an interceptor for {hit} would run on slices of {self._sym} inside "
+                f"the stretch {self._chunk['first_op']}..{self._chunk['last_op']}; an interceptor "
+                f"keeps its own state across calls, and a slice is not the call it was written for")
+        self._holder.register_op_interceptors(interceptors)
+
     def register_op_uid_interceptors(self, interceptors: Dict[str, Any], groups=(),
                                      planned=()) -> None:
         """Op-level interceptors for ops of the stretch, which runs in PASSES over slices.
