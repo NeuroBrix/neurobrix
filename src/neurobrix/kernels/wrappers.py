@@ -3723,14 +3723,13 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # ===========================================================================
 
 # Spatial band-streaming threshold for conv2d. When the per-launch output
-# tensor would exceed this many bytes, conv2d_wrapper transparently splits
-# along the H dimension and streams band-by-band. This is the kernel-level
-# tiling lever (P-SANA-4KPX-RUNTIME, Step 1 — internal to the wrapper, not
-# a Prism op-level interceptor). 4 GiB default leaves headroom for weights,
-# activations and arena overhead on V100 32 GB. Override via env var
-# NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
-from neurobrix.core.prism import conv3d_chunk as _c3
-_NBX_CONV2D_BAND_BYTES = _c3.BAND_BYTES     # one definition, Prism's and the wrapper's
+# tensor would exceed `tiling_sizes.conv2d_band_bytes()` (`conv2d.band_bytes` in
+# config/tiling.yml), conv2d_wrapper transparently splits along the H dimension
+# and streams band-by-band. This is the kernel-level tiling lever
+# (P-SANA-4KPX-RUNTIME, Step 1 — internal to the wrapper, not a Prism op-level
+# interceptor). The TilingEngine's sizing half is the one definition Prism, the
+# launch keys and this wrapper share.
+from neurobrix.triton import tiling_sizes as _ts
 #: A matmul launch whose OUTPUT holds more than this many elements is split along M. The
 #: boundary is 2^31 because that is where an int32 element offset wraps; the margin below it
 #: is deliberate, so a tile that straddles the boundary is never the last one.
@@ -3763,18 +3762,19 @@ _NBX_CONV3D_EAGER_FREE_BYTES = int(
 # Prism correctly sized as "fits" for compiled can OOM in triton only
 # (Allegro-TI2V vae_encoder at 720x1280x12f fp32: 5.66 GB per plane →
 # 30.4 GB live at aten.convolution::1 on a 32 GB V100). Gate, two stages:
-#   1. deterministic floor — the folded transient must exceed this many
-#      bytes, so small/validated convs never even query the driver;
+#   1. deterministic floor — the folded transient must exceed
+#      `tiling_sizes.conv3d_chunk_bytes()` (`conv3d.chunk_bytes`), so
+#      small/validated convs never even query the driver;
 #   2. exact-fit check — the one-shot path's real allocation peak is
 #      compared to driver-free bytes; when it fits, the EXACT one-shot
 #      path runs (byte-identical behavior for every config that is green
 #      today, on any hardware — R23), when it cannot fit (guaranteed OOM)
 #      the wrapper streams over temporal output chunks whose per-transient
-#      size is bounded by this same value.
+#      size is bounded by this same value. (Stage 2 is now Prism's PLAN
+#      decision, `tiling_sizes.conv3d_need` against the op budget.)
 # Chunking splits the folded batch axis (B*T frames): spatial conv2d is
 # independent per frame and the per-frame kt accumulation order is
 # preserved, so the math is unchanged.
-_NBX_CONV3D_CHUNK_BYTES = _c3.CHUNK_BYTES   # one definition, Prism's and the wrapper's
 
 # Diagnostic trace — when set, every conv2d_wrapper call prints the
 # (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
@@ -3894,7 +3894,7 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
             f"{tuple(weight.shape)}, temporal stride {st}, padding {pt}, dilation {dt} -> "
             f"T_out={_t_out}")
 
-    # The chunked variant is a PLAN decision (`core/prism/conv3d_chunk.py`; the supervisor's
+    # The chunked variant is a PLAN decision (`core/module/tiling_sizes.py`; the supervisor's
     # decision 2, 2026-09-29): Prism registers `conv3d_chunked_wrapper` as this op's interceptor
     # when the one-shot peak exceeds the op's planned budget. It read the driver's free bytes here,
     # so a key a live run formed depended on the memory free at that instant.
@@ -3945,7 +3945,7 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
 def conv3d_chunked_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1,
                            transposed=False, output_padding=0, groups=1, *args, **kwargs):
     """A 3-D convolution Prism planned to chunk (op-level tiling, `conv3d_chunks`): the chunked
-    path, the chunk sized from the folded bytes per output frame (`conv3d_chunk`)."""
+    path, the chunk sized from the folded bytes per output frame (`tiling_sizes.chunk_frames`)."""
     def _triple(v):
         return (v[0], v[1], v[2]) if isinstance(v, (list, tuple)) else (v, v, v)
     st, sh, sw = _triple(stride)
@@ -3953,7 +3953,7 @@ def conv3d_chunked_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1
     dt, dh, dw = _triple(dilation)
     ds_in = dtype_size(x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype)
     ds_out = dtype_size(_NBX_COMPUTE_DTYPE) if _NBX_COMPUTE_DTYPE is not None else ds_in
-    _need, frame = _c3.conv3d_need(x.shape, weight.shape, (st, sh, sw), (pt, ph, pw), (dt, dh, dw),
+    _need, frame = _ts.conv3d_need(x.shape, weight.shape, (st, sh, sw), (pt, ph, pw), (dt, dh, dw),
                                    ds_in, ds_out)
     return _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw, dt, dh, dw, groups, frame)
 
@@ -3961,10 +3961,10 @@ def conv3d_chunked_wrapper(x, weight, bias=None, stride=1, padding=0, dilation=1
 def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
                                dt, dh, dw, groups, frame_bytes):
     """Temporal chunk-streaming variant of _conv3d_via_conv2d — identical
-    math, bounded live set (see _NBX_CONV3D_CHUNK_BYTES for the gate).
+    math, bounded live set (`tiling_sizes.conv3d_need` is the gate).
 
     Streams the folded batch axis (B*T_out frames) in chunks sized so each
-    transient stays under _NBX_CONV3D_CHUNK_BYTES. Per output frame the
+    transient stays under `tiling_sizes.conv3d_chunk_bytes()`. Per output frame the
     spatial conv2d is independent and the kt accumulation runs in the same
     kti order with the same operand values as the one-shot path, so the
     result is numerically equivalent (launch shapes differ, which may pick
@@ -3983,7 +3983,7 @@ def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
-    tc = _c3.chunk_frames(frame_bytes)
+    tc = _ts.chunk_frames(frame_bytes)
     # Per-kt 2D weight slices, materialised once (tiny; contiguous-guard on
     # the non-contiguous dim-2 slice, same as the one-shot path).
     w2s = [weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
@@ -4059,7 +4059,7 @@ def conv2d_wrapper(
     transposed=True (1D or 2D).
 
     Spatial band-streaming (P-SANA-4KPX-RUNTIME Step 1): when the output
-    tensor would exceed _NBX_CONV2D_BAND_BYTES (default 4 GiB), the wrapper
+    tensor would exceed `tiling_sizes.conv2d_band_bytes()` (`conv2d.band_bytes`), the wrapper
     splits along the H output dimension and streams band-by-band. Each band
     re-enters this same wrapper with a smaller H, so the recursion bottoms
     out automatically. The full output stays allocated for downstream
@@ -4185,7 +4185,7 @@ def conv2d_wrapper(
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
     # ~1800x gap. Route to the dedicated stencil kernel instead.
     _route = _lk.conv2d_route(N, in_c, out_c, out_h, out_w, dil_h, dil_w, groups, out_nbx_dtype,
-                              _NBX_CONV2D_BAND_BYTES,
+                              _ts.conv2d_band_bytes(),
                               depthwise_enabled=os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1")
     if _route == "depthwise":
         if _NBX_CONV2D_TRACE:
@@ -4199,7 +4199,7 @@ def conv2d_wrapper(
 
     if _route == "band":
         if _NBX_CONV2D_TRACE:
-            print(f"[CONV2D] BAND-STREAM triggered (out > {_NBX_CONV2D_BAND_BYTES/1024/1024/1024:.1f}GiB)", flush=True)
+            print(f"[CONV2D] BAND-STREAM triggered (out > {_ts.conv2d_band_bytes()/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
             x_c, w_c, bias,
             N, in_c, in_h, in_w, out_c, out_h, out_w,
@@ -4331,9 +4331,9 @@ def _conv2d_band_streamed(
     used by `_tiled_conv2d_spatial_nbx` for compiled mode (faint seam at
     band frontiers, accepted as a follow-up halo-correctness workstream).
     """
-    # Choose tile_factor so each band's output bytes <= half the threshold;
+    # The TilingEngine sizes each band (`conv2d.band_budget_divisor` of the threshold);
     # the headroom covers transient input slice + kernel intermediate.
-    band_oh = _lk.conv2d_band_rows(N, out_c, out_h, out_w, out_dtype_bytes, _NBX_CONV2D_BAND_BYTES)
+    band_oh = _lk.conv2d_band_rows(N, out_c, out_h, out_w, out_dtype_bytes, _ts.conv2d_band_bytes())
 
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x_c.device, dtype=out_dtype)
 
@@ -7676,23 +7676,7 @@ def _sdpa_math_scores_budget_bytes_for(device_idx) -> int:
                 if getattr(d, "index", None) == int(device_idx)), None)
     if dev is None:
         return base
-    return min(base, int(dev.memory_mb * 1024 * 1024 * frac))
-
-
-def _sdpa_chunked_rows_within(bound, batch, nheads, seqlen_q, seqlen_k) -> int:
-    """Rows per chunk that keep each chunk's fp32 scores inside `bound`,
-    aligned to the arch's row block (memory.sdpa_math_min_chunk_rows); 0
-    when the shape cannot chunk within the per-arch chunk
-    ceiling (video-scale shapes keep their existing path). Shared by the
-    pow2 and non-pow2 routing branches — one ladder, two callers."""
-    row_bytes = batch * nheads * seqlen_k * 4
-    floor = _sdpa_math_min_chunk_rows()
-    if not floor:
-        return 0
-    chunk_rows = (bound // row_bytes) // floor * floor
-    if chunk_rows >= floor and -(-seqlen_q // chunk_rows) <= _sdpa_math_max_chunks():
-        return chunk_rows
-    return 0
+    return _ts.sdpa_device_scores_budget(base, frac, dev.memory_mb)
 
 
 def _arch_param(section: str, key: str, default):
@@ -8024,14 +8008,11 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
     if is_causal and attn_mask is None:
         bias_full = _get_causal_bias(device_idx, T_q, T_k,
                                      NBXDtype.float32)
-    # Headroom-aware retry (2026-09-02, D-OPENSORA-TRITON-SDPA): the
-    # per-device budget is a STATIC profile read and cannot see the
-    # LIVE watermark — a 42 GB model single-carded leaves 1.87 GB free
-    # and the 1.9 GiB budget chunk fails at malloc. On that failure the
-    # chunk halves (floor 128 rows) and the loop resumes at the same
-    # row: byte-safe by construction (each query row's softmax is
-    # independent of the chunking), query-free (no driver call in the
-    # hot path), loud (one line names the shortfall), bounded.
+    # ZERO FALLBACK: `chunk_rows` is the TilingEngine's size
+    # (`tiling_sizes.sdpa_chunk_rows`), fixed BEFORE the launch. An allocation
+    # the driver refuses is an error naming the key (op, shape, rows, bytes
+    # asked) and is re-raised — never a smaller retry, which would run a chunk
+    # count the plan and the launch key never saw.
     q0 = 0
     while q0 < T_q:
         c = min(chunk_rows, T_q - q0)
@@ -8052,19 +8033,15 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
             o = _math_attention(q_c, k, v, attn_mask=mask_c,
                                 is_causal=False, scale=scale)
         except DeviceOOMError as _oom:
-            _floor = _sdpa_math_min_chunk_rows()
-            if not _floor or chunk_rows <= _floor:
-                raise
-            _prev = chunk_rows
-            chunk_rows = max(_floor, (chunk_rows // 2) // _floor * _floor)
-            print(f"[SDPA chunked] malloc refused a {_prev}-row chunk on "
-                  f"cuda:{device_idx} (live headroom below the static "
-                  f"budget) — retrying at {chunk_rows} rows; the chunk "
-                  f"count may now exceed the arch ceiling "
-                  f"(memory.sdpa_math_max_chunks). Allocator: "
-                  f"{str(_oom).split('[', 1)[-1].rstrip(']')}", flush=True)
-            del q_c
-            continue
+            _asked = _ts.sdpa_scores_bytes(B, H, c, T_k)
+            raise DeviceOOMError(
+                f"chunked SDPA: q [{B}, {H}, {T_q}, {_D}] k/v [{B}, {k.shape[1]}, {T_k}, {D_v}], "
+                f"{chunk_rows} rows a chunk (tiling_sizes.sdpa_chunk_rows), chunk at row {q0}: "
+                f"{_asked} bytes of fp32 scores asked on cuda:{device_idx}, refused by the "
+                f"allocator ({_oom}). The row count is the plan's; it is not retried smaller.",
+                requested=_oom.requested, device_idx=_oom.device_idx, live=_oom.live,
+                pool_cached=_oom.pool_cached, pool_blocks=_oom.pool_blocks,
+                driver_free=_oom.driver_free, driver_total=_oom.driver_total) from _oom
         out[:, :, q0:q0 + c, :] = o
         q0 += c
     return out
@@ -8548,8 +8525,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     headdim_v = v.shape[3]
     # The route is `launch_keys.sdpa_route` — the function the derived census keys with: math
     # when forced or when the value head dim differs; else by the fp32 scores' size against this
-    # device's budget (a non-power-of-two head dim falls back to 2 GiB when the arch declares no
-    # budget); over it, chunked when the rows fit the arch's ceiling; otherwise flash.
+    # device's budget (a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes`
+    # when the arch declares no budget); over it, chunked when the rows fit the arch's ceiling; otherwise flash.
     _q_dev_idx = getattr(q, "_device_idx", None)
     _route, _chunk_rows = _lk.sdpa_route(
         batch, nheads, seqlen_q, seqlen_k, headdim, headdim_v,

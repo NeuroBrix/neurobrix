@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
+from neurobrix.triton import tiling_sizes as _ts
 from neurobrix.kernels.autotune_bucket import bucket_of
 from neurobrix.kernels.nbx_tensor import NBXDtype, _get_tl_dtype
 
@@ -349,13 +350,9 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
                     min_chunk_rows: int, max_chunks: int) -> int:
     """Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the
     arch's row block (`memory.sdpa_math_min_chunk_rows`); 0 when the shape cannot chunk within
-    the arch's chunk ceiling (`memory.sdpa_math_max_chunks`)."""
-    if not min_chunk_rows:
-        return 0
-    rows = (bound // (batch * nheads * Tk * 4)) // min_chunk_rows * min_chunk_rows
-    if rows >= min_chunk_rows and -(-Tq // rows) <= max_chunks:
-        return rows
-    return 0
+    the arch's chunk ceiling (`memory.sdpa_math_max_chunks`). The TilingEngine sizes it
+    (`tiling_sizes.sdpa_chunk_rows`)."""
+    return _ts.sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
 
 
 def flash_headdim_detour(D: int, enabled: bool = True) -> int:
@@ -451,13 +448,14 @@ def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budge
                unit_flash: bool = False) -> Tuple[str, int]:
     """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
     when the value head dim differs; else by the fp32 scores' size against the executing device's
-    budget — a non-power-of-two head dim falls back to a 2 GiB bound when the arch declares none;
+    budget — a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes` (config/
+    tiling.yml) when the arch declares none;
     over the bound, flash when the profile's matrix unit takes it (`unit_flash_takes`: the
     deterministic m8n8k4 kernel), else chunked when the rows fit the arch's ceiling; otherwise flash."""
     if force_math or Dv != D:
         return ("math", 0)
-    scores = batch * nheads * Tq * Tk * 4
-    bound = budget_bytes if _pow2(D) else (budget_bytes or (2 << 30))
+    scores = _ts.sdpa_scores_bytes(batch, nheads, Tq, Tk)
+    bound = _ts.sdpa_scores_bound(budget_bytes, _pow2(D))
     if scores <= bound:
         return ("math", 0)
     if unit_flash:
@@ -540,14 +538,11 @@ class ConvRowOverBand(ValueError):
 
 def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int, band_bytes: int) -> int:
     """The output rows of one band of `conv2d_wrapper`'s band streaming (`_conv2d_band_streamed`):
-    bands of about half the budget, evenly cut. A band that cannot be smaller than the output —
+    bands of about `conv2d.band_budget_divisor` of the budget, evenly cut, sized by the
+    TilingEngine (`tiling_sizes.conv2d_band_rows`). A band that cannot be smaller than the output —
     one row already over the budget — is refused by name: the recursion it would start calls the
     same row forever (a 1-row codec conv, found by the derived census 2026-09-29)."""
-    band_target = max(1, band_bytes // 2)
-    row_bytes = N * out_c * out_w * out_bytes
-    rows_per_band = max(1, band_target // max(1, row_bytes))
-    tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
-    band_oh = (out_h + tile_factor - 1) // tile_factor
+    band_oh, row_bytes = _ts.conv2d_band_rows(N, out_c, out_h, out_w, out_bytes, band_bytes)
     if band_oh >= out_h:
         raise ConvRowOverBand(
             f"conv2d output [{N}, {out_c}, {out_h}, {out_w}]: one row is {row_bytes} bytes, over "

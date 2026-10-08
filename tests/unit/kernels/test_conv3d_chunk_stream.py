@@ -100,8 +100,9 @@ def _run_case(xs, ws, stride, padding, dilation, groups, with_bias, tc_forced):
         _nbx(b_np) if b_np is not None else None,
         (st, sh, sw), (pt, ph, pw), (dt, dh, dw), groups)).float().cpu()
 
-    # Chunked path, forced chunk size: tc = _NBX_CONV3D_CHUNK_BYTES // frame_bytes.
-    frame_bytes = max(1, wrappers._NBX_CONV3D_CHUNK_BYTES // tc_forced)
+    # Chunked path, forced chunk size: tc = tiling_sizes.conv3d_chunk_bytes() // frame_bytes.
+    from neurobrix.triton import tiling_sizes as _TS
+    frame_bytes = max(1, _TS.conv3d_chunk_bytes() // tc_forced)
     got = nbx_to_torch(wrappers._conv3d_via_conv2d_chunked(
         _nbx(x_np), _nbx(w_np),
         _nbx(b_np) if b_np is not None else None,
