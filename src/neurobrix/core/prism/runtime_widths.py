@@ -329,8 +329,10 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     request (the matmul store rule reads M); absent, the traced shape answers. `stores_fp64`:
     whether the engine priced holds float64 / complex128 on the profile, read by its OWN branch
     (`triton.dtype.triton_stores_fp64` for the Triton engines, `core.dtype.config.
-    device_supports_fp64` for ATen). The ATen rules do not narrow on it yet: complex128 is priced
-    wide where the compiled branch narrows on a device without fp64 (Apple) — named, not hidden."""
+    device_supports_fp64` for ATen). Where it is False the compiled branch holds no float64 /
+    complex128 tensor at all — it narrows every op traced wide (`DtypeEngine._make_fp64_ceiling`),
+    every `_to_copy` target and every constant (`storage_dtype`), and MPS refuses a float64 tensor
+    outright — so the ATen rules price that ceiling over every tensor."""
     c = str(compute_dtype).replace("torch.", "")
     if c not in _FLOAT:
         raise ValueError(f"runtime_widths: compute dtype {compute_dtype!r} is not a float dtype")
@@ -395,6 +397,8 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             if result is None:
                 result = rule.op_dtype(uid, op, ins, out)
             out[tid] = result
+    if engine in ATEN_ENGINES and not stores_fp64:
+        out = {tid: _tdt.storage_dtype_name(name, False) for tid, name in out.items()}
     return out
 
 

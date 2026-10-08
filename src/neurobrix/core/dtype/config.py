@@ -227,11 +227,15 @@ def device_supports_fp64(device: str, vendor: str, architecture: str) -> bool:
 
 def profile_device_supports_fp64(profile) -> bool:
     """`device_supports_fp64` of a hardware profile (a PrismProfile) for the compiled branch: every
-    device's, refused if they disagree (one plan prices one answer). The mirror of
-    `triton.dtype.profile_triton_stores_fp64`."""
-    if profile is None or not getattr(profile, "devices", None):
-        raise ValueError("ZERO FALLBACK: no hardware profile with a device; the compiled branch's "
-                         "fp64 is read from its vendor profile, never assumed")
+    device's, refused if they disagree (one plan prices one answer). A profile with NO device
+    (`config/hardware/cpu-only-x86.yml`, `devices: []`) runs every component on the host
+    (`cpu_execution`), so it answers the host's own (`device_supports_fp64("cpu", ...)`); no profile
+    at all is refused. The mirror of `triton.dtype.profile_triton_stores_fp64`."""
+    if profile is None:
+        raise ValueError("ZERO FALLBACK: no hardware profile; the compiled branch's fp64 is read "
+                         "from its vendor profile, never assumed")
+    if not getattr(profile, "devices", None):
+        return device_supports_fp64("cpu", None, None)
     answers = {}
     for dev in profile.devices:
         key = (getattr(dev.brand, "value", dev.brand), dev.architecture)
