@@ -1,7 +1,8 @@
 """The derived census binds a run's extents and dtypes through the functions the run itself
 calls — never through copies. These are the rules measured against the census walk
 (2026-09-29): Wan's denoiser reads its text at the FINALIZED length (512, not the encoder's
-226), and the attention wrapper aligns disagreeing operands to fp32 before it launches.
+226), and the attention wrapper aligns disagreeing operands to the narrowest before it launches
+(the compiled engine's alignment, 2026-10-08).
 
 Injections, each seen RED: `finalized_text_length` returning `encoded` -> the Wan and Sana
 cases fail; `sdpa_operand_dtypes` returning its inputs unchanged -> the mixed case fails."""
@@ -40,8 +41,12 @@ def test_the_handler_produces_the_length_the_rule_names():
     assert out["hidden_state"].shape[1] == 512 and out["attention_mask"].shape[1] == 512
 
 
-def test_disagreeing_attention_operands_are_aligned_to_fp32():
-    assert LK.sdpa_operand_dtypes(F16, F16, F32) == (F32, F32, F32, None)
+def test_disagreeing_attention_operands_are_aligned_to_the_narrowest():
+    BF16 = NBXDtype.bfloat16
+    assert LK.sdpa_operand_dtypes(F16, F16, F32) == (F16, F16, F16, None)   # Allegro: fp32 V
+    assert LK.sdpa_operand_dtypes(F32, F16, F16) == (F16, F16, F16, None)   # Sana: fp32 Q
+    assert LK.sdpa_operand_dtypes(BF16, F16, F32) == (BF16, BF16, BF16, None)  # a tie: q's first
+    assert LK.sdpa_operand_dtypes(F32, F32, F32) == (F32, F32, F32, None)
     assert LK.sdpa_operand_dtypes(F16, F16, F16) == (F16, F16, F16, None)
     # a KV-cache rounding judges Q at the cache's dtype, and survives agreement
     assert LK.sdpa_operand_dtypes(F32, F16, F16, F16) == (F32, F16, F16, F16)

@@ -317,12 +317,23 @@ def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
 
 def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
                         q_round: Optional[NBXDtype] = None):
-    """The (q, k, v) dtypes `scaled_dot_product_attention_wrapper` computes attention with: tl.dot
-    on V100 needs matching operands, so three that disagree are all cast to fp32 (Q judged at its
-    KV-cache rounding `q_round` when the cache asks for one). Returns (q, k, v, q_round)."""
-    if not ((k if q_round is not None else q) == k == v):
-        return F32, F32, F32, None
-    return q, k, v, q_round
+    """The (q, k, v) dtypes `scaled_dot_product_attention_wrapper` computes attention with: the
+    kernels need matching operands, so three that disagree are all cast to the NARROWEST of them,
+    the first in (q, k, v) order on a tie — the compiled engine's own alignment
+    (`compiled_ops._align_qkv_dtypes`), so both modes attend over the same operands (R30). Q is
+    judged at its KV-cache rounding `q_round` when the cache asks for one. Returns
+    (q, k, v, q_round).
+
+    The fp32 alignment it replaces put a half-precision attention whose V alone came out of an
+    fp32-stored GEMM (Volta's matmul store policy) on the scalar-FMA flash kernel: Allegro's
+    self-attention ran 22.0 s/op at 2.6 TFLOP/s against 1.16 s/op on the matrix-unit flash, 9.7x
+    the native step (nbx/campaigns/2026_10_08_allegro_prof/probe, 2026-10-08)."""
+    qj = q_round if q_round is not None else q
+    if qj == k == v:
+        return q, k, v, q_round
+    from neurobrix.kernels.nbx_tensor import dtype_size
+    t = min((qj, k, v), key=dtype_size)
+    return t, t, t, None
 
 
 def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], seqlen_k: int) -> bool:

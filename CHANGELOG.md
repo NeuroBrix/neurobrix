@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Attention on V100 in the Triton engine reaches the tensor cores when its inputs differ in
+  precision.** Query, key and value of different precisions were all widened to float32, which
+  sent the attention to a scalar kernel; they now take the narrowest precision among them, as
+  the PyTorch engine does. One video self-attention of 79 200 tokens (head size 96) on a
+  V100-SXM2: 22.0 s -> 1.16 s.
+
 - **Kernel tuning entries for bfloat16 attention match what the engine runs.** For a text encoder
   that concatenates an empty key/value cache with its new keys and values (Gemma 2 in SANA-Video),
   the precomputed list of kernel shapes widened the attention's matrix products to float32, while
