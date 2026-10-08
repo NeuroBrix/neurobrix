@@ -201,3 +201,74 @@ def test_every_triton_site_asks_its_engine(stores_fp64):
         got = runtime_dtypes(dag, "float16", engine, has_native_bf16=False, contract=conservative_contract("test: no contract"),
                              stores_fp64=stores_fp64)
         assert got["y"] == wide["float64"], engine
+    got = runtime_dtypes(dag, "float16", "compiled", has_native_bf16=False,
+                         contract=conservative_contract("test: no contract"), stores_fp64=stores_fp64)
+    assert got["y"] == wide["float64"], "compiled"
+
+
+def test_a_device_less_profile_answers_the_host_s_own_and_no_profile_is_refused():
+    """`config/hardware/cpu-only-x86.yml` (`devices: []`) runs every component on the host: the
+    compiled reader answers the host's own; the Triton readers keep their refusal (Triton has no
+    host compute backend), and the solver routes that profile by name (next test). Red on c4fd00d6:
+    the compiled reader refused it, and every component's plan with it (Dell re-review 22:13)."""
+    from neurobrix.core.dtype.config import architecture_supports_dtype, profile_device_supports_fp64
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.triton.dtype import profile_triton_has_fp64, profile_triton_stores_fp64
+    cpu_only = load_profile("cpu-only-x86")
+    assert not cpu_only.devices
+    assert profile_device_supports_fp64(cpu_only) is architecture_supports_dtype("cpu", "float64")
+    for reader in (profile_triton_has_fp64, profile_triton_stores_fp64):
+        with pytest.raises(ValueError, match="ZERO FALLBACK"):
+            reader(cpu_only)
+    with pytest.raises(ValueError, match="ZERO FALLBACK"):
+        profile_device_supports_fp64(None)
+
+
+_ONE_CAST = {"ops": {"a::0": {"op_type": "aten::_to_copy", "input_tensor_ids": ["x"],
+                              "output_tensor_ids": ["y"], "output_dtypes": ["torch.float64"],
+                              "attributes": {"kwargs": {"dtype": {"type": "dtype",
+                                                                  "value": "torch.float64"}}}}},
+             "tensors": {"x": {"dtype": "float32", "shape": [4], "is_input": True},
+                         "y": {"dtype": "float64", "shape": [4]}},
+             "execution_order": ["a::0"]}
+
+
+class _Profiler:
+    def build_symbol_map(self, input_config, placement_floor=False):
+        return {}
+
+    def _resolve_shape(self, tensor, symbol_map):
+        return tuple(tensor["shape"])
+
+
+@pytest.mark.parametrize("mode", ["compiled", "triton", "triton_sequential"])
+def test_the_solver_prices_a_cpu_only_profile_in_every_mode(mode):
+    """The solver's width pass (`PrismSolver._activation_widths`, run by `_compute_memory` before the
+    CPU-only cascade) on the device-less profile: priced at the host's answer, never refused; and a
+    missing profile is refused, not priced wide by a branch of its own."""
+    from neurobrix.core.dtype.config import architecture_supports_dtype
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.core.prism.solver import PrismSolver
+    solver = PrismSolver()
+    solver._mode = mode
+    comp = types.SimpleNamespace(name="c", graph=_ONE_CAST)
+    container = types.SimpleNamespace(cache_path=None)
+    widths = solver._activation_widths(comp, container, _Profiler(), None, "float32",
+                                       load_profile("cpu-only-x86"))
+    assert widths["y"] == (8 if architecture_supports_dtype("cpu", "float64") else 4)
+    with pytest.raises(ValueError, match="ZERO FALLBACK"):
+        solver._activation_widths(comp, container, _Profiler(), None, "float32", None)
+
+
+def test_a_compiled_serve_does_not_read_the_triton_surface():
+    """`serving/engine.py` declares the Triton wrappers' profile (and with it the Triton branch's
+    fp64 key, which refuses a device-less or mixed profile) only off the compiled mode, as
+    `cli/commands/run.py` does."""
+    import inspect
+    from neurobrix.serving import engine
+    src = inspect.getsource(engine)
+    site = src.index("set_hardware_profile(hw_profile)")
+    assert re.search(r'if self\.mode != "compiled":\s*\n\s*from neurobrix\.kernels\.wrappers import '
+                     r'set_hardware_profile\s*\n\s*set_hardware_profile\(hw_profile\)', src), \
+        "the serving engine declares the Triton surface in every mode"
+    assert src.count("set_hardware_profile(") == 1 and site

@@ -3012,13 +3012,12 @@ class PrismSolver:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
         # Whether the engine priced holds float64 / complex128: its OWN branch's reader over the
-        # profile (Triton: `triton_stores_fp64`; compiled: `device_supports_fp64`). No profile is a
-        # legacy structure-only caller (see the tiling budget above): there is no vendor to read,
-        # so fp64 is priced HELD — the wider answer, the same rule as `has_native_bf16`.
+        # profile (Triton: `triton_stores_fp64`; compiled: `device_supports_fp64`), which refuses
+        # no profile. A profile with no device places every component on the host
+        # (`cpu_execution`) and Triton has no host compute backend
+        # (`strategies/triton/cpu_execution.py`): the host's own answer is priced, on either branch.
         from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
-        if profile is None:
-            stores_fp64 = True
-        elif self._mode in TRITON_ENGINES:
+        if self._mode in TRITON_ENGINES and profile is not None and profile.devices:
             from neurobrix.triton.dtype import profile_triton_stores_fp64
             stores_fp64 = profile_triton_stores_fp64(profile)
         else:
