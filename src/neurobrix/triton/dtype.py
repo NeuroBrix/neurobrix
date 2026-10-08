@@ -455,7 +455,7 @@ def storage_dtype_name(name: str, stores_fp64: bool) -> str:
     """`TritonDtypeEngine.storage_dtype` on a dtype name."""
     if stores_fp64:
         return name
-    return {"float64": "float32", "complex128": "complex64"}.get(name, name)
+    return {k.name: v.name for k, v in _NO_FP64_CEILING.items()}.get(name, name)
 
 
 def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
