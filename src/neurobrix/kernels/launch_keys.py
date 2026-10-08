@@ -334,6 +334,67 @@ def flash_headdim_detour(D: int, enabled: bool = True) -> int:
     return D + 1
 
 
+CONV_WEIGHT_LAYOUTS = ("KCRS", "KRSC")
+
+
+def conv_weight_layout() -> str:
+    """The order a convolution weight is stored in on this arch: the hardware profile's
+    `conv.weight_layout`, "KCRS" (the container's own) or "KRSC" (channels innermost: the 3x3
+    taps of one output read one contiguous channel run; +46-63 % on the M4 Pro, 2026-10-07). A
+    profile that does not state it is refused by name; with no profile in force (no device) the
+    weights stay in the container's order."""
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    profile = active_vendor_profile()
+    if not profile:
+        return "KCRS"
+    layout = (profile.get("conv") or {}).get("weight_layout")
+    if layout not in CONV_WEIGHT_LAYOUTS:
+        raise ValueError(f"the hardware profile states conv.weight_layout={layout!r}; every profile "
+                         f"states one of {CONV_WEIGHT_LAYOUTS}")
+    return layout
+
+
+def conv_weight_krsc(w_shape, groups: int, transposed: bool, layout: str) -> bool:
+    """Whether a convolution weight of this shape is stored KRSC under `layout`: a 2-D, not
+    transposed convolution with a spatial extent (a 1x1 weight is the same memory in both
+    orders) that is not depthwise (one channel a group and a group per output: its kernel reads
+    no channel stride)."""
+    if layout != "KRSC" or transposed or len(w_shape) != 4:
+        return False
+    K, Cg, kh, kw = w_shape
+    return kh * kw > 1 and not (Cg == 1 and groups == K)
+
+
+def krsc_conv_weights(dag: dict, layout: str) -> set:
+    """The tensor ids of the graph weights stored KRSC: every reader of the weight is a
+    convolution that takes it (`conv_weight_krsc`); a weight any other op reads keeps the order
+    that op expects."""
+    tensors, ops = dag.get("tensors") or {}, dag.get("ops") or {}
+    taken, refused = set(), set()
+    for uid in dag.get("execution_order") or []:
+        o = ops.get(uid) or {}
+        ins = o.get("input_tensor_ids") or []
+        if o.get("op_type") == "aten::convolution" and len(ins) > 1:
+            at = o.get("attributes") or {}
+            meta = tensors.get(ins[1]) or {}
+            ok = conv_weight_krsc(meta.get("shape") or [], int(at.get("groups", 1)),
+                                  bool(at.get("transposed", False)), layout)
+            (taken if ok else refused).add(ins[1])
+            rest = ins[:1] + ins[2:]
+        else:
+            rest = ins
+        refused.update(rest)
+    return {t for t in taken - refused if t.startswith(("param::", "buffer::"))}
+
+
+def is_krsc_weight(w) -> bool:
+    """A logical (K, C, R, S) weight whose memory is (K, R, S, C), contiguous."""
+    if len(w.shape) != 4:
+        return False
+    K, C, R, S = w.shape
+    return tuple(w.stride()) == (R * S * C, 1, S * C, C)
+
+
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
                min_chunk_rows: int, max_chunks: int, force_math: bool = False) -> Tuple[str, int]:
     """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
