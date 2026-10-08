@@ -2010,7 +2010,10 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
+            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)),
+            streamed_pieces={name: (max(g.weight_bytes for g in part.segments), part.total_weight_bytes)
+                             for name, part in (getattr(self, "_layer_stream_partitions", None) or {}).items()
+                             if name in (plan.layer_stream_plan or {}) and part.total_weight_bytes})
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
