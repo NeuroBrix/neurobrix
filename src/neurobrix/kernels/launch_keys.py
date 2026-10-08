@@ -342,10 +342,6 @@ def decode_vec_takes(headdim: int, headdim_v: int, mask_numel: Optional[int], se
     return mask_numel is None or mask_numel == seqlen_k
 
 
-def _pow2(n: int) -> bool:
-    return n > 0 and (n & (n - 1)) == 0
-
-
 def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
                     min_chunk_rows: int, max_chunks: int) -> int:
     """Query rows per chunk that keep each chunk's fp32 scores within `bound`, aligned to the
@@ -446,25 +442,11 @@ def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
                min_chunk_rows: int, max_chunks: int, force_math: bool = False,
                unit_flash: bool = False) -> Tuple[str, int]:
-    """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
-    when the value head dim differs; else by the fp32 scores' size against the executing device's
-    budget — a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes` (config/
-    tiling.yml) when the arch declares none;
-    over the bound, flash when the profile's matrix unit takes it (`unit_flash_takes`: the
-    deterministic m8n8k4 kernel), else chunked when the rows fit the arch's ceiling; otherwise flash."""
-    if force_math or Dv != D:
-        return ("math", 0)
-    scores = _ts.sdpa_scores_bytes(batch, nheads, Tq, Tk)
-    bound = _ts.sdpa_scores_bound(budget_bytes, _pow2(D))
-    if scores <= bound:
-        return ("math", 0)
-    if unit_flash:
-        return ("flash", 0)
-    if bound:
-        rows = sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
-        if rows:
-            return ("chunked", rows)
-    return ("flash", 0)
+    """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0) — the TilingEngine's
+    `tiling_sizes.sdpa_route`, the one function the wrapper, the derived census and Prism's price
+    ask (over the bound, flash when the profile's matrix unit takes it: `unit_flash_takes`)."""
+    return _ts.sdpa_route(batch, nheads, Tq, Tk, D, Dv, budget_bytes, min_chunk_rows, max_chunks,
+                          force_math=force_math, unit_flash=unit_flash)
 
 
 def math_attention_launches(B: int, H: int, Hk: int, Tq: int, Tk: int, D: int, Dv: int,
@@ -594,32 +576,9 @@ def conv2d_launches(N: int, in_c: int, in_h: int, in_w: int, out_c: int, kh: int
 
 
 def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
-    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo): per band
-    (oh_start, oh_end, in_start, in_end, pad_top, pad_bot, skip) — the output rows, the input
-    rows read (clamped), the image-edge padding added, the band's leading conv rows to skip.
-    The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries -pad_h
-    (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14 — adding pad_h again on the edge bands shifted the
-    first and last bands by pad_h rows, cos near 0 against F.conv2d at kh >= 3, pad_h >= 1)."""
-    tf = max(1, int(tile_factor))
-    band_oh = (out_h + tf - 1) // tf
-    # The halo in input rows, rounded up to a whole number of strides: the band's first conv row
-    # must be an output row, so the rows skipped on the read side are halo // stride. At stride 1
-    # this is the halo it always was; at stride 2 a 1-row halo misaligned every internal band by
-    # half an output row (found by this function's test, 2026-09-29 — Prism tiles strided convs).
-    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
-    bands = []
-    for oh_start in range(0, out_h, band_oh):
-        oh_end = min(oh_start + band_oh, out_h)
-        halo_top = 0 if oh_start == 0 else halo_h
-        halo_bot = 0 if oh_end == out_h else halo_h
-        read_start = oh_start * sh - pad_h - halo_top
-        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
-        start, end = max(0, read_start), min(IH, read_end)
-        if end <= start:
-            continue
-        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
-                      halo_top // sh))
-    return bands
+    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo) — the
+    TilingEngine's `tiling_sizes.tiled_conv2d_bands`, the cut Prism prices and the census keys with."""
+    return _ts.tiled_conv2d_bands(IH, out_h, kh, sh, dh, pad_h, tile_factor)
 
 
 def tiled_conv2d_launches(N: int, in_c: int, IH: int, IW: int, out_c: int, kh: int, kw: int,

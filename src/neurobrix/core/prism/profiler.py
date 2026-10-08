@@ -405,6 +405,9 @@ class ActivationProfile:
     #: Elements of the graph's output tensors at this binding — what the component hands on; the host
     #: estimate prices the run's output boundary from the largest of them.
     output_elements: int = 0
+    #: Bytes each op holds WHILE it runs on top of its output, when the estimate priced them
+    #: (`op_transients.op_transient_bytes`; only the non-zero ones), keyed by op_uid.
+    transient_by_op: Optional[Dict[str, int]] = None
 
     @property
     def peak_mb(self) -> float:
@@ -852,6 +855,8 @@ class ActivationProfiler:
         source_holding_uids: Optional[set] = None,
         placement_floor: bool = False,
         in_place_weight_reads: bool = False,
+        transients=None,
+        dtypes: Optional[Dict[str, str]] = None,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -874,6 +879,13 @@ class ActivationProfiler:
                 keeps sizing at the traced dtype either way — the op-level tiling
                 detector (`PrismSolver._detect_op_level_tiling_pairs`) derives the same
                 set from the same scan, and the two must agree on which ops overflow.
+            transients: a `core.prism.op_transients.TransientContext`. When given (with `dtypes`,
+                {tensor_id: runtime dtype name}, `runtime_widths.runtime_dtypes`), every op's
+                in-op figure adds what it holds WHILE it runs on top of its output —
+                `op_transients.op_transient_bytes`, the TilingEngine's route / band / chunk
+                bytes and the DtypeEngine's cast copies — and the profile records each
+                non-zero one in `transient_by_op`. None: outputs only (the detector and
+                per-request callers, whose overflow scan prices its own workspace).
             source_holding_uids: zero-alloc op_uids whose output is a proxy or view
                 CARRYING its first input (the fused-upsample proxy, the
                 pixel-shuffle broadcast chain's expand / clone / view): their
@@ -1047,6 +1059,11 @@ class ActivationProfiler:
         # none of it. The overflow scan below needs the number, so it is recorded
         # here rather than recomputed there.
         live_before_op: Dict[str, int] = {}
+        transient_by_op: Dict[str, int] = {}
+        if transients is not None:
+            if dtypes is None:
+                raise ValueError("estimate_peak_memory: transients need the runtime dtypes (`dtypes`)")
+            from neurobrix.core.prism.op_transients import op_transient_bytes
 
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
@@ -1091,8 +1108,21 @@ class ActivationProfiler:
 
             # 2. PEAK: Track maximum. A view (`VIEW_OP_TYPES`) allocates nothing WHILE it runs:
             # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
-            in_op = (live_before_op[op_uid] if op.get("op_type") in VIEW_OP_TYPES
-                     else current_bytes)
+            # A real op adds its transient (`op_transients.op_transient_bytes`) when one is priced.
+            if op.get("op_type") in VIEW_OP_TYPES:
+                in_op = live_before_op[op_uid]
+            else:
+                in_op = current_bytes
+                if transients is not None and not op_is_zero_alloc and output_tids:
+                    in_tids = op.get("input_tensor_ids", [])
+                    t_bytes = op_transient_bytes(
+                        op_uid, op,
+                        [self._resolve_shape(self.tensors.get(t, {}), symbol_map) for t in in_tids],
+                        [self._resolve_shape(self.tensors.get(t, {}), symbol_map) for t in output_tids],
+                        [dtypes.get(t) for t in in_tids], dtypes.get(output_tids[0]), transients)
+                    if t_bytes:
+                        transient_by_op[op_uid] = t_bytes
+                        in_op += t_bytes
             if in_op > peak_bytes:
                 peak_bytes = in_op
                 peak_op_uid = op_uid
@@ -1198,6 +1228,7 @@ class ActivationProfiler:
             binding=binding,
             symbol_map=dict(symbol_map),
             live_before_op=live_before_op,
+            transient_by_op=transient_by_op,
         )
 
     def _resolve_shape(

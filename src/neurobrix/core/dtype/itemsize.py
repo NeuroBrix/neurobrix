@@ -127,3 +127,12 @@ def representation_bytes(dtype: Any, numel: int, split: bool = False) -> int:
         groups = -(-numel // int(e["group_size"]))
         return -(-numel * int(e["bits"]) // 8) + groups * (itemsize(e["scale_dtype"]) + itemsize(e["min_dtype"]))
     return numel * itemsize(dtype) * (2 if split else 1)
+
+
+def cast_copy_bytes(from_dtype: Any, to_dtype: Any, numel: int) -> int:
+    """Bytes the copy an op makes of an input when it executes it at another dtype (an AMP fp32
+    island over a half input, a half op over an fp32 one): the input re-represented at
+    `to_dtype` (`representation_bytes`); 0 when the two dtypes are one."""
+    if canonical_name(from_dtype) == canonical_name(to_dtype):
+        return 0
+    return representation_bytes(to_dtype, numel)

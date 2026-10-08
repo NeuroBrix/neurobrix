@@ -9,6 +9,17 @@
 #
 # Each value carries its SOURCE: the reasoning, measurement or workstream that set it.
 
+memory_tiers:
+  # The commercial memory ladder in GB (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
+  # reading rounds DOWN onto on a shared pool (unified memory, a display, host RAM), the nominal
+  # rung of a dedicated card, and the tiers a tile is sized from (memory_budget.tile_rung_mb). It
+  # lives HERE, not in the hardware profiles: it is one list for every device kind AND for host
+  # RAM, which no profile describes, and it is what the TilingEngine cuts a split to — a copy per
+  # profile would be one list written N times. Moved unchanged from core/config/system.py
+  # PRISM_DEFAULTS["memory_ladder_gb"] (2026-10-08), so no rung, and no census key, moves.
+  # Read by core/prism/memory_budget.memory_ladder_mb and nowhere else.
+  ladder_gb: [4, 6, 8, 11, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 192, 256, 384, 512]
+
 conv3d:
   # 1 GiB. The per-transient bound of the chunked temporal path, and the fold size above which
   # the one-shot path's peak is priced at all: small and validated convolutions never chunk
@@ -17,6 +28,10 @@ conv3d:
   chunk_bytes: 1073741824
   # 256 MiB. The fixed slack added to the one-shot path's priced peak (conv3d_need).
   slack_bytes: 268435456
+  # The chunked path holds three chunk-sized transients beside the temporal pad copy and the
+  # final output: the folded input copy, the conv2d output and the kt accumulator
+  # (`_conv3d_via_conv2d_chunked`, kernels/wrappers.py: "~3 chunk-sized transients").
+  chunk_live_transients: 3
 
 conv2d:
   # 4 GiB. A convolution whose output exceeds it streams in bands along H; it leaves headroom for
@@ -32,6 +47,11 @@ sdpa:
   # declares no `memory.sdpa_math_max_scores_bytes` (the scores budget LLM-class prefills chunk
   # under a handful of times: 4k context -> 2 chunks, 16k -> 16; P-NONDET-LONG-ROW).
   non_pow2_head_scores_bytes: 2147483648
+  # The math route holds two scores-sized buffers at once: every step of
+  # `_math_attention` (bmm -> mul -> add mask -> softmax -> nan_to_num) allocates its output
+  # while its input is still live (kernels/wrappers.py `_math_attention`); the chunked route
+  # holds the same two per chunk.
+  math_live_scores: 2
 
 op_level:
   # 0.85 of the card, minus the component's resident weights: the budget an op's transient is

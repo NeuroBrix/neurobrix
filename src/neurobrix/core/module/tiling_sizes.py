@@ -19,7 +19,11 @@ What it owns:
   * the attention scores bound and its chunk rows;
   * Prism's op budget and its op-level band factors (conv, fusion pair, rms_norm, residual chain);
   * the tile overlaps (spatial and temporal);
-  * the in-place and residual-chain thresholds.
+  * the in-place and residual-chain thresholds;
+  * the TRANSIENT each split leaves on the card — the attention route's scores, the conv2d band,
+    the tiled conv2d's band, the conv3d one-shot or chunked peak, the component tile's output
+    canvas and blend weight — the bytes Prism adds to an op's in-op peak, from the same
+    arithmetic the runtime cuts with (`core/prism/op_transients.py` asks these and nothing else).
 """
 from __future__ import annotations
 
@@ -89,13 +93,49 @@ def conv3d_need(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding,
     frame = max(fold_in, fold_out) // max(1, t_out)
     if max(fold_in, fold_out) <= conv3d_chunk_bytes():
         return 0, frame
+    return _conv3d_one_shot_peak(B, Cin, T, H, W, pt, kt, fold_in, fold_out, in_bytes), frame
+
+
+def _conv3d_one_shot_peak(B, Cin, T, H, W, pt, kt, fold_in, fold_out, in_bytes) -> int:
+    """The one-shot path's peak (`conv3d_need`'s figure, ungated)."""
     band = conv2d_band_bytes()
     pad_bytes = B * Cin * (T + 2 * pt) * H * W * in_bytes if pt > 0 else 0
     band_extra = band if fold_out > band else 0
     acc_extra = fold_out if kt >= 2 else 0
-    need = (pad_bytes + max(fold_out + fold_in + band_extra + acc_extra, 2 * fold_out + acc_extra)
+    return (pad_bytes + max(fold_out + fold_in + band_extra + acc_extra, 2 * fold_out + acc_extra)
             + int(_value("conv3d", "slack_bytes")))
-    return need, frame
+
+
+def _conv3d_geometry(x_shape, w_shape, stride, padding, dilation, in_bytes, out_bytes):
+    B, Cin, T, H, W = (int(d) for d in x_shape)
+    Cout, _Cg, kt, kh, kw = (int(d) for d in w_shape)
+    st, sh, sw = _triple(stride)
+    pt, ph, pw = _triple(padding)
+    dt, dh, dw = _triple(dilation)
+    t_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
+    oh = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    ow = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    fold_in = B * max(0, t_out) * Cin * H * W * in_bytes
+    fold_out = B * max(0, t_out) * Cout * oh * ow * out_bytes
+    return B, Cin, T, H, W, pt, kt, t_out, fold_in, fold_out
+
+
+def conv3d_transient_bytes(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation,
+                           in_bytes: int, out_bytes: int, chunked: bool) -> int:
+    """Bytes a rank-5 convolution holds on top of its output while it runs. One-shot: the one-shot
+    peak (`conv3d_need`'s arithmetic, priced whether or not a fold crosses `conv3d.chunk_bytes`).
+    Chunked (`conv3d_chunks` in the plan): the temporal pad copy plus `conv3d.chunk_live_transients`
+    chunks of `chunk_frames(frame)` output frames (`_conv3d_via_conv2d_chunked`)."""
+    B, Cin, T, H, W, pt, kt, t_out, fold_in, fold_out = _conv3d_geometry(
+        x_shape, w_shape, stride, padding, dilation, in_bytes, out_bytes)
+    if t_out <= 0:
+        return 0
+    if not chunked:
+        return _conv3d_one_shot_peak(B, Cin, T, H, W, pt, kt, fold_in, fold_out, in_bytes)
+    frame = max(fold_in, fold_out) // max(1, t_out)
+    pad_bytes = B * Cin * (T + 2 * pt) * H * W * in_bytes if pt > 0 else 0
+    tc = min(t_out, chunk_frames(frame))
+    return pad_bytes + int(_value("conv3d", "chunk_live_transients")) * tc * frame
 
 
 def chunk_frames(frame_bytes: int) -> int:
@@ -115,6 +155,70 @@ def conv2d_band_rows(N: int, out_c: int, out_h: int, out_w: int, out_bytes: int,
     rows_per_band = max(1, band_target // max(1, row_bytes))
     tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
     return (out_h + tile_factor - 1) // tile_factor, row_bytes
+
+
+def conv2d_band_transient_bytes(N: int, in_c: int, in_w: int, in_bytes: int, out_c: int, out_h: int,
+                                out_w: int, out_bytes: int, kh: int, stride_h: int, dil_h: int,
+                                band_bytes: int) -> int:
+    """Bytes the conv2d wrapper's own band streaming (`_conv2d_band_streamed`, taken when the
+    output at the input's width exceeds `band_bytes`) holds on top of the full output: one band's
+    input rows, copied contiguous by the recursive call, and that band's conv2d output. 0 when the
+    output is under `band_bytes` (one launch writes the output directly)."""
+    if N * out_c * out_h * out_w * in_bytes <= band_bytes:
+        return 0
+    band_oh, row_bytes = conv2d_band_rows(N, out_c, out_h, out_w, out_bytes, band_bytes)
+    in_rows = (band_oh - 1) * stride_h + dil_h * (kh - 1) + 1
+    return in_rows * N * in_c * in_w * in_bytes + band_oh * row_bytes
+
+
+def tiled_conv2d_bands(IH: int, out_h: int, kh: int, sh: int, dh: int, pad_h: int, tile_factor: int):
+    """The bands of Prism's op-level tiled conv (`_tiled_conv2d_spatial_nbx`, real halo): per band
+    (oh_start, oh_end, in_start, in_end, pad_top, pad_bot, skip) — the output rows, the input
+    rows read (clamped), the image-edge padding added, the band's leading conv rows to skip.
+    The image-edge padding is `max(0, -read_start)` alone: `read_start` already carries -pad_h
+    (P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14 — adding pad_h again on the edge bands shifted the
+    first and last bands by pad_h rows, cos near 0 against F.conv2d at kh >= 3, pad_h >= 1)."""
+    tf = max(1, int(tile_factor))
+    band_oh = (out_h + tf - 1) // tf
+    # The halo in input rows, rounded up to a whole number of strides: the band's first conv row
+    # must be an output row, so the rows skipped on the read side are halo // stride. At stride 1
+    # this is the halo it always was; at stride 2 a 1-row halo misaligned every internal band by
+    # half an output row (found by this function's test, 2026-09-29 — Prism tiles strided convs).
+    halo_h = -(-((kh - 1) * dh // 2) // sh) * sh
+    bands = []
+    for oh_start in range(0, out_h, band_oh):
+        oh_end = min(oh_start + band_oh, out_h)
+        halo_top = 0 if oh_start == 0 else halo_h
+        halo_bot = 0 if oh_end == out_h else halo_h
+        read_start = oh_start * sh - pad_h - halo_top
+        read_end = (oh_end - 1) * sh + dh * (kh - 1) + 1 - pad_h + halo_bot
+        start, end = max(0, read_start), min(IH, read_end)
+        if end <= start:
+            continue
+        bands.append((oh_start, oh_end, start, end, max(0, -read_start), max(0, read_end - IH),
+                      halo_top // sh))
+    return bands
+
+
+def tiled_conv2d_transient_bytes(N: int, in_c: int, IH: int, IW: int, in_bytes: int, out_c: int,
+                                 out_h: int, out_w: int, out_bytes: int, kh: int, sh: int, dh: int,
+                                 pad_h: int, pad_w: int, has_bias: bool, tile_factor: int) -> int:
+    """Bytes Prism's tiled conv (a `tiled_ops` entry, `_tiled_conv2d_spatial_nbx`) holds on top of
+    the full output, at its largest band: the band's input rows copied contiguous, their padded
+    copy when the band carries padding, the band's conv2d output, and its bias sum when the conv
+    has a bias (each band adds it out of place)."""
+    worst = 0
+    for (_o0, _o1, i0, i1, ptop, pbot, _skip) in tiled_conv2d_bands(IH, out_h, kh, sh, dh, pad_h, tile_factor):
+        rows = i1 - i0
+        held = rows * N * in_c * IW * in_bytes
+        padded_rows = rows + ptop + pbot
+        if ptop or pbot or pad_w:
+            held += padded_rows * N * in_c * (IW + 2 * pad_w) * in_bytes
+        conv_rows = max(0, (padded_rows - dh * (kh - 1) - 1) // sh + 1)
+        band_out = conv_rows * N * out_c * out_w * out_bytes
+        held += band_out * (2 if has_bias else 1)
+        worst = max(worst, held)
+    return worst
 
 
 # --- attention: the scores bound, the chunk rows, the device budget -------------------------------
@@ -147,6 +251,47 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
     if rows >= min_chunk_rows and -(-Tq // rows) <= max_chunks:
         return rows
     return 0
+
+
+def _pow2(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,
+               min_chunk_rows: int, max_chunks: int, force_math: bool = False,
+               unit_flash: bool = False) -> Tuple[str, int]:
+    """The attention route: ("math", 0), ("chunked", rows) or ("flash", 0). Math when forced or
+    when the value head dim differs; else by the fp32 scores' size against the executing device's
+    budget — a non-power-of-two head dim routes on `sdpa.non_pow2_head_scores_bytes` when the arch
+    declares none; over the bound, flash when the profile's matrix unit takes it (`unit_flash`),
+    else chunked when the rows fit the arch's ceiling; otherwise flash. The launch keys
+    (`kernels/launch_keys.sdpa_route`) and Prism's price both ask this one function."""
+    if force_math or Dv != D:
+        return ("math", 0)
+    scores = sdpa_scores_bytes(batch, nheads, Tq, Tk)
+    bound = sdpa_scores_bound(budget_bytes, _pow2(D))
+    if scores <= bound:
+        return ("math", 0)
+    if unit_flash:
+        return ("flash", 0)
+    if bound:
+        rows = sdpa_chunk_rows(bound, batch, nheads, Tq, Tk, min_chunk_rows, max_chunks)
+        if rows:
+            return ("chunked", rows)
+    return ("flash", 0)
+
+
+def sdpa_transient_bytes(route: str, rows: int, batch: int, nheads: int, Tq: int, Tk: int) -> int:
+    """Bytes an attention holds on top of its output on `route` (`sdpa_route`'s answer): the math
+    route `sdpa.math_live_scores` fp32 scores tensors at once, the chunked route the same per
+    chunk of `rows` query rows, flash its fp32 row statistics (one per query row and head)."""
+    if route == "math":
+        return int(_value("sdpa", "math_live_scores")) * sdpa_scores_bytes(batch, nheads, Tq, Tk)
+    if route == "chunked":
+        return int(_value("sdpa", "math_live_scores")) * sdpa_scores_bytes(batch, nheads, min(rows, Tq), Tk)
+    if route == "flash":
+        return batch * nheads * Tq * _SCORES_BYTES
+    raise ValueError(f"ZERO FALLBACK: attention route {route!r} is not math, chunked or flash")
 
 
 def sdpa_device_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb) -> int:

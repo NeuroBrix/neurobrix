@@ -62,6 +62,33 @@ GRID = {
                         for mr in (0, 128) for mc in (0, 16, 64)],
     "sdpa_device_scores_budget": [(b, f, m) for b in (0, GiB, 2 * GiB) for f in (0.0, 0.07, 0.5)
                                   for m in (None, 16384, 32768)],
+    "conv3d_transient_bytes": [(x, w, s, p, 1, ib, ob, ch)
+                               for x in _CONV3D_X for w in _CONV3D_W if w[1] == x[1]
+                               for s in (1, [1, 2, 2]) for p in (0, [0, 1, 1])
+                               for ib, ob in ((2, 2), (2, 4)) for ch in (False, True)],
+    "conv2d_band_transient_bytes": [(n, ci, iw, ib, co, oh, ow, ob, kh, sh, dh, band)
+                                    for n in (1, 2) for ci, co in ((3, 64), (512, 512))
+                                    for iw, oh, ow in ((64, 64, 64), (2048, 1024, 1024), (8192, 8192, 8192))
+                                    for ib, ob in ((2, 2), (4, 4)) for kh, sh, dh in ((1, 1, 1), (3, 1, 1), (3, 2, 1))
+                                    for band in (GiB, 4 * GiB)],
+    "tiled_conv2d_bands": [(ih, oh, kh, sh, 1, ph, tf)
+                           for ih, oh, kh, sh, ph in ((64, 64, 3, 1, 1), (1024, 512, 3, 2, 1), (8, 8, 1, 1, 0),
+                                                      (4096, 4096, 7, 1, 3))
+                           for tf in (1, 2, 4, 16, 64)],
+    "tiled_conv2d_transient_bytes": [(n, ci, ih, iw, ib, co, oh, ow, ob, kh, sh, 1, ph, pw, hb, tf)
+                                     for n in (1, 2) for ci, co in ((3, 64), (512, 256))
+                                     for ih, iw, oh, ow, kh, sh, ph, pw in ((1024, 1024, 1024, 1024, 3, 1, 1, 1),
+                                                                            (2048, 2048, 1024, 1024, 3, 2, 1, 1),
+                                                                            (512, 512, 512, 512, 1, 1, 0, 0))
+                                     for ib, ob in ((2, 2), (4, 4)) for hb in (False, True) for tf in (1, 4, 16)],
+    "sdpa_route": [(b, h, tq, tk, d, dv, bud, mr, mc, fm, uf)
+                   for b in (1, 2) for h in (8, 24) for tq, tk in ((1, 4096), (4096, 4096), (16156, 16156))
+                   for d, dv in ((64, 64), (128, 128), (80, 80), (64, 128))
+                   for bud in (0, 2 * GiB) for mr, mc in ((0, 0), (128, 16))
+                   for fm in (False, True) for uf in (False, True)],
+    "sdpa_transient_bytes": [(r, rows, b, h, tq, tk) for r in ("math", "chunked", "flash")
+                             for rows in (0, 128, 1024) for b in (1, 2) for h in (8, 24)
+                             for tq in (1, 4096, 16156) for tk in (4096, 16156)],
     "op_budget_fraction": [()],
     "op_budget_bytes": [(c, r) for c in _CARDS for r in (0, 300 * MB, 9 * GiB)],
     "conv_band_factor": [(t, k, c) for t in _BYTES for k in (0, GiB, 9 * GiB) for c in _CARDS],

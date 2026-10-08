@@ -56,10 +56,8 @@ PRISM_DEFAULTS = {
     # `PrismSolver._whole_component_mb` for the triton modes only; the compiled engine runs
     # under the allocator the profile measured.
     "triton_arena_activation_factor": 1.3,
-    # The commercial memory ladder (Hocine's memory doctrine, 2026-09-21): the rungs a FREE
-    # reading rounds DOWN onto on a shared pool, and the nominal rung of a dedicated card. Data,
-    # 4 GB to 512 GB, read by `core/prism/memory_budget.py`; never a literal in the solver.
-    "memory_ladder_gb": [4, 6, 8, 11, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 128, 192, 256, 384, 512],
+    # The commercial memory ladder lives in config/tiling.yml `memory_tiers.ladder_gb` (moved
+    # 2026-10-08, values unchanged), read by `core/prism/memory_budget.memory_ladder_mb`.
     # FGP (Fine-Grained Pipeline) settings
     "fgp_utilization_target": 0.85,  # Use 85% of GPU memory for FGP
     "fgp_max_blocks_per_stage": 7,   # Max transformer blocks per GPU (7 for 32GB, ~4 for 16GB)

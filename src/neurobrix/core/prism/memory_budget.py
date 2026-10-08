@@ -12,8 +12,8 @@ CPU-only host, all of them:
   (the second rule again: a card someone else holds is shared).
 * The same law governs host RAM, which is always shared with the operating system.
 
-The ladder is DATA (`PRISM_DEFAULTS["memory_ladder_gb"]`, 4 GB to 512 GB), never a literal
-here. The dedicated-or-shared decision is read from the DEVICE — its display activity, the
+The ladder is DATA (config/tiling.yml `memory_tiers.ladder_gb`, 4 GB to 512 GB), never a
+literal here. The dedicated-or-shared decision is read from the DEVICE — its display activity, the
 memory other processes hold, whether its memory is unified — never from a brand or a model
 name. A reading that cannot be taken is answered as SHARED: rounding the free figure down is
 the safe side, and the plan says which side it took.
@@ -39,7 +39,6 @@ import os
 from dataclasses import dataclass
 from typing import List, Optional
 
-from neurobrix.core.config.system import PRISM_DEFAULTS
 
 
 @dataclass(frozen=True)
@@ -57,10 +56,12 @@ class DeviceReading:
 
 
 def memory_ladder_mb() -> List[int]:
-    """The commercial ladder in MB, ascending, from configuration — never a literal here."""
-    rungs = PRISM_DEFAULTS.get("memory_ladder_gb")
+    """The commercial ladder in MB, ascending, from config/tiling.yml `memory_tiers.ladder_gb` —
+    the ONE reader of the ladder, never a literal here."""
+    from neurobrix.core.config.loader import get_tiling_policy
+    rungs = (get_tiling_policy().get("memory_tiers") or {}).get("ladder_gb")
     if not rungs:
-        raise RuntimeError("ZERO HARDCODE: PRISM_DEFAULTS['memory_ladder_gb'] declares no memory ladder")
+        raise RuntimeError("ZERO FALLBACK: config/tiling.yml states no memory_tiers.ladder_gb")
     out = sorted({int(g) * 1024 for g in rungs})
     if out[0] <= 0:
         raise RuntimeError("the memory ladder's lowest rung must be positive")

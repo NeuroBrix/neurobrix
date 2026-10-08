@@ -583,7 +583,7 @@ PipelineExecutionPlan = ExecutionPlan
 #: the 4096 MB floor is the lowest USABLE rung.
 def memory_ladder_rung_mb(free_mb) -> int:
     """A reading rounded DOWN onto the commercial ladder — the ladder is configuration
-    (`PRISM_DEFAULTS["memory_ladder_gb"]`, 4 GB to 512 GB) and the law is
+    (config/tiling.yml `memory_tiers.ladder_gb`, 4 GB to 512 GB) and the law is
     `core/prism/memory_budget.py`. Never a value off the ladder: a reading under the lowest
     rung answers 0, and the caller refuses or streams in its own words. (Until 2026-09-21 the
     ladder was a literal here that stopped at 128 GB and any reading under 4 GB passed through
@@ -2713,12 +2713,22 @@ class PrismSolver:
                     # activations when it ran out of memory (2026-09-28). The
                     # widths come from the engine's own rules
                     # (core/prism/runtime_widths).
-                    widths = self._activation_widths(
+                    dtypes = self._activation_dtypes(
                         comp, container, profiler, input_config, comp_dtype_str, profile)
+                    widths = {tid: get_dtype_bytes_per_element(n) for tid, n in dtypes.items()}
                     # The Triton engines read a transposed weight in place; the compiled engine's
                     # estimate keeps its bytes (profiler.weight_transposes_read_in_place says why).
                     from neurobrix.core.prism.host_footprint import engine_of as _engine_of
-                    _in_place = _engine_of(getattr(self, "_mode", "compiled")) == "triton"
+                    _engine = _engine_of(getattr(self, "_mode", "compiled"))
+                    _in_place = _engine == "triton"
+                    # WHAT EACH OP HOLDS WHILE IT RUNS. Every op's in-op figure adds its
+                    # transient on top of its output (core/prism/op_transients: the
+                    # TilingEngine's attention scores, conv2d band, conv3d fold and the
+                    # DtypeEngine's cast copies). Without it the Triton engines were priced
+                    # at zero workspace: mochi-1-preview's VAE at 7 frames planned 2 564 MB
+                    # and peaked at 11 039 MB on the Mac (2026-10-08).
+                    from neurobrix.core.prism.op_transients import context_for as _transient_ctx
+                    _tctx = _transient_ctx(profile, _engine, comp_dtype_str)
                     ap = profiler.estimate_peak_memory(
                         input_config=input_config,
                         dtype_bytes=dtype_bytes,
@@ -2736,6 +2746,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
+                        transients=_tctx, dtypes=dtypes,
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -2777,7 +2788,7 @@ class PrismSolver:
                             comp.graph
                         )
                         if zero_uids or inplace_adds:
-                            ap_tiled = profiler.estimate_peak_memory(
+                            _final = dict(
                                 input_config=input_config,
                                 dtype_bytes=dtype_bytes,
                                 zero_alloc_uids=zero_uids,
@@ -2789,7 +2800,9 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
+                                dtypes=dtypes,
                             )
+                            ap_tiled = profiler.estimate_peak_memory(transients=_tctx, **_final)
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
@@ -2805,13 +2818,15 @@ class PrismSolver:
                             comp.graph
                         )
                         if inplace_adds:
-                            ap_tiled = profiler.estimate_peak_memory(
+                            _final = dict(
                                 input_config=input_config,
                                 dtype_bytes=dtype_bytes,
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
+                                dtypes=dtypes,
                             )
+                            ap_tiled = profiler.estimate_peak_memory(transients=_tctx, **_final)
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
                             peak_step = ap_tiled.peak_step
@@ -2917,9 +2932,9 @@ class PrismSolver:
         with open(p) as f:
             return json.load(f)
 
-    def _activation_widths(self, comp, container, profiler, input_config,
-                           compute_dtype: str, profile) -> Dict[str, int]:
-        """{tensor_id: bytes per element} this component's activations are EXECUTED at,
+    def _activation_dtypes(self, comp, container, profiler, input_config,
+                           compute_dtype: str, profile) -> Dict[str, str]:
+        """{tensor_id: dtype name} this component's activations are EXECUTED at,
         under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
 
         What the pass needs and where it comes from here:
@@ -2936,7 +2951,7 @@ class PrismSolver:
           * the request's shapes, for the matmul store's M <= 4 rule: the profiler's own
             resolution under the placement-floored symbol map this estimate uses."""
         from neurobrix.core.prism.runtime_widths import (
-            conservative_contract, plan_time_contract, runtime_widths)
+            conservative_contract, plan_time_contract, runtime_dtypes)
         cache_path = getattr(container, "cache_path", None)
         if cache_path:
             contract = plan_time_contract(cache_path, comp.name, comp.graph, compute_dtype)
@@ -2945,7 +2960,7 @@ class PrismSolver:
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
-        return runtime_widths(
+        return runtime_dtypes(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
             contract=contract, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
