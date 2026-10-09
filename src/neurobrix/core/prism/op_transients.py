@@ -19,9 +19,23 @@ functions and nothing else:
     input held at another dtype than the op executes in (`execution_dtype`, the engines' own AMP
     class sets), and the result held at the execution dtype before a cast back, at the dtypes
     `core/prism/runtime_widths.runtime_dtypes` says the engine runs;
-The compiled engine's library workspace (cuDNN im2col, the mem-efficient logsumexp) is not a
-TilingEngine split and stays where it was, in the overflow scan's
-`memory_estimator.estimate_op_workspace_bytes`; only its cast copies are priced here.
+  * the compiled engine's vendor library (`library_layout_transient_bytes`): a convolution its
+    library runs on the matrix unit in the channels-last layout while the graph holds it
+    channels-first is transposed in and out — the input and the weight at the execution dtype,
+    the result before its transpose back — at the dtypes the vendor file declares
+    (`conv.library_layout_copy_dtypes`). NVIDIA: "NCHW ... incur[s] automatic transposes" on
+    Tensor Cores (https://docs.nvidia.com/deeplearning/performance/dl-performance-convolutional).
+    MEASURED (cards 2/3, 2026-10-09): mochi-1-preview's VAE `aten.convolution::33` at
+    [1,128,14,322,578] fp32 -> fp16 held 1 177 MB above its output and cast copy = fp16 input
+    636 + output 540 + weight 0.8;
+  * the Triton wrappers' contiguity guard (`contiguous_copy_bytes`): a reader that copies its
+    input contiguous before its kernel (`CONTIGUOUS_COPY_READERS`) holds that copy when the input
+    is a strided view (`strided_view_tensors`: a permute, a transpose). MEASURED (card 2,
+    2026-10-09, pool off): Sana_1600M_4Kpx_BF16's VAE `aten.relu::18` on the [0,3,1,2] permute of a
+    [1,3072,4096,128] fp32 tensor held 6 144 MB above its output — the copy, at the component's peak;
+The compiled engine's library workspace proper (cuDNN im2col, the mem-efficient logsumexp) is not
+a TilingEngine split and stays where it was, in the overflow scan's
+`memory_estimator.estimate_op_workspace_bytes`.
 
 What it reads from the hardware profile: the attention budget the wrapper routes on
 (`memory.sdpa_math_max_scores_bytes`, `memory.sdpa_math_scores_device_fraction` of the device,
@@ -45,6 +59,44 @@ _CAST_OPS = frozenset({"aten::_to_copy", "aten::to", "aten::type_as"})
 _FLOATS = frozenset({"float16", "bfloat16", "float32", "float64"})
 
 
+#: The ops whose TRITON wrapper copies a strided input contiguous before its kernel runs, by the
+#: canonical ATen name: every elementwise unary wrapper of kernels/wrappers.py that opens on
+#: `x = x.contiguous()` (relu ... logical_not), `conv2d_wrapper` (`x_c = x.contiguous()`) and
+#: `NBXTensor.cat` (`tensors = [t.contiguous() for t in tensors]`). The binary elementwise
+#: wrappers, the norms and the contractions read a strided operand by its strides and are not
+#: here (measured: Sana 4K VAE's add, rms_norm and mm on permuted inputs held no copy).
+#: Held to the wrappers' source by tests/unit/prism/test_a_strided_input_is_copied_where_its_reader_copies_it.py.
+CONTIGUOUS_COPY_READERS = frozenset({
+    "relu", "silu", "gelu", "sigmoid", "tanh", "hardsigmoid", "hardswish", "leaky_relu", "elu",
+    "mish", "selu", "neg", "sin", "cos", "rsqrt", "sqrt", "log", "reciprocal", "erf", "floor",
+    "ceil", "round", "trunc", "softplus", "exp2", "tan", "celu", "log_sigmoid", "isfinite",
+    "isinf", "isnan", "threshold", "logical_not",
+    "convolution", "cat",
+})
+
+
+def strided_view_tensors(ops: Mapping[str, Dict[str, Any]]) -> FrozenSet[str]:
+    """The tensor ids a graph's views leave strided: the output of a permute that moves an axis and
+    of a transpose of two distinct axes (`aten::t` included). A weight's transpose read in place by
+    a contraction is no reader of `CONTIGUOUS_COPY_READERS`, so it costs nothing here."""
+    out = set()
+    for op in ops.values():
+        t = str(op.get("op_type", ""))
+        at = op.get("attributes") or {}
+        if t == "aten::permute":
+            dims = at.get("dims")
+            if dims is None or list(dims) == sorted(dims):
+                continue
+        elif t == "aten::transpose":
+            d0, d1 = at.get("dim0"), at.get("dim1")
+            if d0 is not None and d1 is not None and d0 == d1:
+                continue
+        elif t != "aten::t":
+            continue
+        out.update(op.get("output_tensor_ids") or ())
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class TransientContext:
     """What one component's ops are priced under: the engine, the attention route's arch inputs on
@@ -62,6 +114,11 @@ class TransientContext:
     # `runtime_dtypes` reads, so the dtypes the walk holds and the dtype each op executes at come
     # from one record. None = no record: nothing safe, no island, nothing narrowed.
     contract: Optional[Any] = None
+    # the compiled engine's vendor library: the execution dtypes at which it runs a channels-first
+    # convolution through channels-last copies (the vendor file's `conv.library_layout_copy_dtypes`).
+    conv_layout_copy_dtypes: FrozenSet[str] = field(default_factory=frozenset)
+    # the component's strided views (`strided_view_tensors`), bound by the walk from its graph.
+    strided_views: FrozenSet[str] = field(default_factory=frozenset)
 
 
 def context_for(profile, engine: str, compute_dtype: str, contract=None) -> TransientContext:
@@ -91,7 +148,8 @@ def context_for(profile, engine: str, compute_dtype: str, contract=None) -> Tran
         sdpa_min_chunk_rows=int(mem.get("sdpa_math_min_chunk_rows", 0) or 0),
         sdpa_max_chunks=int(mem.get("sdpa_math_max_chunks", 0) or 0),
         matrix_unit=dict(cfg.get("matrix_unit") or {}),
-        band_bytes=band, contract=contract)
+        band_bytes=band, contract=contract,
+        conv_layout_copy_dtypes=frozenset((cfg.get("conv") or {}).get("library_layout_copy_dtypes") or ()))
 
 
 def _unit_flash(ctx: TransientContext, D: int, dtypes: Sequence[Optional[str]]) -> bool:
@@ -247,9 +305,47 @@ def cast_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[int]
     return total
 
 
+def library_layout_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[int]],
+                                   out_shapes: List[List[int]], in_dtypes: List[Optional[str]],
+                                   ctx: TransientContext) -> int:
+    """The compiled engine's vendor-library half: a convolution executing at a dtype the vendor file
+    declares in `conv.library_layout_copy_dtypes` holds its input, its weight and its result
+    transposed to the library's layout, at the execution dtype, while it runs (0 on the Triton
+    engines, which run the graph's layout, and on an arch whose file declares none)."""
+    if ctx.engine == "triton" or not ctx.conv_layout_copy_dtypes:
+        return 0
+    if "convolution" not in str(op.get("op_type", "")) or len(in_shapes) < 2 or not out_shapes:
+        return 0
+    ex = execution_dtype(uid, op, in_dtypes, ctx) or (in_dtypes[0] if in_dtypes else None)
+    if ex not in ctx.conv_layout_copy_dtypes:
+        return 0
+    return itemsize(ex) * (_num(in_shapes[0]) + _num(in_shapes[1]) + _num(out_shapes[0]))
+
+
+def contiguous_copy_bytes(op: Dict[str, Any], in_shapes: List[List[int]],
+                          in_dtypes: List[Optional[str]], ctx: TransientContext) -> int:
+    """The Triton wrappers' contiguity guard: a reader of `CONTIGUOUS_COPY_READERS` holds a dense
+    copy of each input that is a strided view (`ctx.strided_views`) at that input's dtype (0 on the
+    compiled engine, whose library reads by strides)."""
+    if ctx.engine != "triton" or not ctx.strided_views:
+        return 0
+    from neurobrix.kernels.classification import canonical_aten
+    name = canonical_aten(str(op.get("op_type", "")).split("::")[-1].split(".")[0])
+    if name not in CONTIGUOUS_COPY_READERS:
+        return 0
+    total = 0
+    for tid, sh, dt in zip(op.get("input_tensor_ids") or (), in_shapes, in_dtypes):
+        if tid in ctx.strided_views and dt is not None:
+            total += _num(sh) * itemsize(dt)
+    return total
+
+
 def op_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List[List[int]], out_shapes: List[List[int]],
                        in_dtypes: List[Optional[str]], out_dtype: Optional[str], ctx: TransientContext) -> int:
     """ONE op's transient on top of its output: the TilingEngine's split bytes (Triton engines)
-    plus the DtypeEngine's cast copies (both engines)."""
+    plus the DtypeEngine's cast copies (both engines) plus the compiled library's layout copies
+    plus the Triton wrappers' contiguous copies of strided inputs."""
     return (tiling_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx)
-            + cast_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx))
+            + cast_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, out_dtype, ctx)
+            + library_layout_transient_bytes(uid, op, in_shapes, out_shapes, in_dtypes, ctx)
+            + contiguous_copy_bytes(op, in_shapes, in_dtypes, ctx))

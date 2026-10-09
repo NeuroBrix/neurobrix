@@ -3186,6 +3186,12 @@ class PrismSolver:
                 "Prism: could not read the profiler's symbol map for %s (%s: %s); "
                 "the estimate may be scaled for dimensions it already follows",
                 getattr(comp, "name", "?"), type(_e).__name__, _e)
+        # WHAT THE FLOW BINDS IS THE EXTENT THE COMPONENT RUNS AT, whatever it equals: the loop
+        # denoiser's CFG batch, an encoder's length (`flow_bindings.FlowBindings.overrides`). The
+        # profiler priced it there; scaling it again by the request counts it twice.
+        flow = getattr(input_config, "flow", None)
+        if flow is not None:
+            bound_to_request |= set(flow.overrides(graph, input_config))
 
         ratio = 1.0
         followed = []
@@ -3223,6 +3229,14 @@ class PrismSolver:
             actual = getattr(input_config, attr, None)
             if actual in (None, 0):
                 continue
+            if attr == "batch_size" and getattr(input_config, "guidance_passes", None):
+                # `batch_size` is the guidance batch (`run.request_input_config` multiplies the
+                # request's own batch by `guidance_passes`), and only the loop components run it —
+                # the flow binds theirs above. Every other component runs the request's own batch:
+                # the VAE decodes the guided latent once, the negative prompt is a second encoder
+                # pass (`iterative_process._execute_negative_encoding`). Scaled to the guidance
+                # batch, mochi-1-preview's VAE priced 7 560 MB for a 4 706 MB decode (2026-10-09).
+                actual = int(actual) // int(input_config.guidance_passes)
             # Put the request into the SYMBOL's unit before dividing. A model
             # with a VAE declares its spatial symbols in latent rows/columns:
             # measured 2026-09-17, Sana-1600M declares height/width with a trace

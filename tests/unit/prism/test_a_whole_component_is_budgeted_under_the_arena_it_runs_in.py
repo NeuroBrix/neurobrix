@@ -78,12 +78,9 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
     CHANGED 2026-10-09 (an op is priced with what it holds while it runs): the plan's figure is
     the walk WITH each op's transient (core/prism/op_transients — here the fp32 copies the
     compiled group_norm makes of its fp16 input and result), so the identity below is read
-    through the same walk. Measured at the smallest request of the same peak class (7 frames,
-    320x576, compiled, V100-32GB card 2): the vae held 4 706 MB above its weights; the walk
-    prices 3 432 MB bare and 3 780 MB with transients — the transient moves it toward the card
-    (/home/mlops/nbx/campaigns/2026_10_09_transient_proof/run_A_mochi_vae.log). The solver's
-    7 560 MB there is that walk scaled to the guidance batch (2), which the decode does not run
-    at — a request-scaling question, not a transient one."""
+    through the same walk. The plan's figure against the card (7 frames, 320x576, compiled,
+    V100-32GB card 3, 2026-10-09: 4 706 MB held above the weights, priced 4 705 + 253 MB overhead
+    at `aten.convolution::33`) is held in test_a_decode_is_priced_at_or_above_what_the_card_held.py."""
     import math
     from neurobrix.core.prism.profiler import ActivationProfiler
     from neurobrix.core.prism.op_transients import context_for

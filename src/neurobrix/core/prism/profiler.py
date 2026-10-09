@@ -996,6 +996,41 @@ class ActivationProfiler:
             op_uid_inp, reuse_idx = entry
             inplace_reuse[op_uid_inp] = reuse_idx
         holders = set(source_holding_uids or ())
+        # A buffer that does not exist cannot be reused. A zero-alloc op that holds no source (a
+        # residual chain's band-streamed intermediate, `OpLevelTilingEngine._detect_residual_chains`)
+        # leaves a sentinel, not a buffer: the chain's merge add, whose reused input is that
+        # sentinel or a view of it, writes a NEW full buffer. Aliased to the sentinel it was priced
+        # at zero while the runtime held it: Sana_1600M_4Kpx_BF16's VAE held each chain's T_base
+        # (6 144 MB fp32 at 3072x4096) beside the next chain, priced 0 (measured, card 2,
+        # 2026-10-09, `aten.add::89` -> `aten.convolution::65`).
+        sentinel_uids = zero_set - holders
+        producer_of = {}
+        if inplace_reuse and sentinel_uids:
+            for _u, _o in self.ops.items():
+                for _t in _o.get("output_tensor_ids", []) or ():
+                    producer_of[_t] = _u
+
+        def _no_buffer(tid):
+            seen_v = set()
+            while tid not in seen_v:
+                seen_v.add(tid)
+                p = producer_of.get(tid)
+                if p is None:
+                    return False
+                if p in sentinel_uids:
+                    return True
+                po = self.ops.get(p, {})
+                if po.get("op_type") not in VIEW_OP_TYPES or not po.get("input_tensor_ids"):
+                    return False
+                tid = po["input_tensor_ids"][0]
+            return False
+
+        if inplace_reuse and sentinel_uids:
+            for op_uid_s in list(inplace_reuse):
+                in_tids_s = self.ops.get(op_uid_s, {}).get("input_tensor_ids", [])
+                idx_s = inplace_reuse[op_uid_s]
+                if idx_s < len(in_tids_s) and _no_buffer(in_tids_s[idx_s]):
+                    del inplace_reuse[op_uid_s]
         if inplace_reuse or holders:
             for op_uid_a in self.execution_order:
                 if op_uid_a in inplace_reuse:
@@ -1063,7 +1098,10 @@ class ActivationProfiler:
         if transients is not None:
             if dtypes is None:
                 raise ValueError("estimate_peak_memory: transients need the runtime dtypes (`dtypes`)")
-            from neurobrix.core.prism.op_transients import op_transient_bytes
+            from dataclasses import replace as _replace
+            from neurobrix.core.prism.op_transients import op_transient_bytes, strided_view_tensors
+            # The strided views are this graph's: bound here, where the graph is.
+            transients = _replace(transients, strided_views=strided_view_tensors(self.ops))
 
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):

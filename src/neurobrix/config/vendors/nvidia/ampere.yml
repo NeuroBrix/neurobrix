@@ -274,3 +274,8 @@ flash:
 # until this arch measures KRSC (the M4 Pro measured +46-63 % on its 3x3 keys, 2026-10-07).
 conv:
   weight_layout: KCRS
+  # The execution dtypes at which the vendor library (cuDNN) runs a channels-first convolution on the
+  # Tensor Cores through channels-last copies of its input, weight and result (Ampere Tensor Cores take fp16, bf16 and, under the TF32 mode cuDNN convolutions run by default, fp32).
+  # Source: https://docs.nvidia.com/deeplearning/performance/dl-performance-convolutional ("NCHW ... incur[s] automatic transposes").
+  # Priced by core/prism/op_transients.library_layout_transient_bytes; measured on Volta 2026-10-09.
+  library_layout_copy_dtypes: [float16, bfloat16, float32]

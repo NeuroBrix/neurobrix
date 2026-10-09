@@ -95,3 +95,43 @@ def test_the_gate_carries_no_per_model_table():
     src = (tools / "apple_matrix_percell.py").read_text()
     assert "measured_peak" not in src
     assert "measured_peaks.json" not in src
+
+
+def _batch_graph():
+    return {"symbolic_context": {"symbols": {"s0": {"name": "batch", "trace_value": 1}}},
+            "tensors": {"t": {"symbolic_shape": {"dims": [{"type": "symbol", "id": "s0", "trace": 1}]}}}}
+
+
+def test_a_component_outside_the_loop_is_scaled_to_the_request_s_own_batch():
+    """`batch_size` is the guidance batch (the request's batch times `guidance_passes`); only the
+    loop runs it. mochi-1-preview's VAE, traced at batch 1, priced 7 560 MB for a 4 706 MB decode
+    scaled to the guidance batch of 2 (campaigns/2026_10_09_transient_proof/run_A_mochi_vae.log)."""
+    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.core.prism.solver import PrismSolver
+
+    class _Comp:
+        graph = _batch_graph()
+
+    s, base = PrismSolver(), 100_000_000
+    assert s._scale_activations_to_request(_Comp(), base, InputConfig(batch_size=2, guidance_passes=2)) == base
+    # the request's OWN batch of two still scales: two latents decoded
+    assert s._scale_activations_to_request(_Comp(), base, InputConfig(batch_size=4, guidance_passes=2)) == 2 * base
+    assert s._scale_activations_to_request(_Comp(), base, InputConfig(batch_size=2)) == 2 * base
+
+
+def test_a_symbol_the_flow_binds_is_not_scaled_again():
+    """The flow binds the loop denoiser's CFG batch (`FlowBindings.overrides`); the profiler priced
+    it there, so the scaler leaves it — even when it equals the trace value."""
+    from neurobrix.core.prism.profiler import InputConfig
+    from neurobrix.core.prism.solver import PrismSolver
+
+    class _Flow:
+        def overrides(self, dag, ic):
+            return {"s0": 1}
+
+    class _Comp:
+        graph = _batch_graph()
+
+    base = 100_000_000
+    assert PrismSolver()._scale_activations_to_request(
+        _Comp(), base, InputConfig(batch_size=2, flow=_Flow())) == base
