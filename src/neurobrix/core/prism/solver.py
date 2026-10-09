@@ -201,6 +201,10 @@ class ComponentAllocation:
     sharded: bool = False
     shard_map: Dict[str, str] = field(default_factory=dict)
     strategy: str = "single_gpu"
+    # zero3 only: the MB of this component's weights its card keeps resident across passes, the room
+    # the plan leaves beside everything it holds with the component (`_zero3_resident_budgets`). The
+    # ratchet streams only the blocks beyond it. 0 streams every block on every pass.
+    resident_weight_mb: float = 0.0
 
     @property
     def device(self) -> str:
@@ -486,6 +490,7 @@ class ExecutionPlan:
                     "vendor": alloc.vendor,
                     "sharded": alloc.sharded,
                     "shard_map": alloc.shard_map,
+                    "resident_weight_mb": alloc.resident_weight_mb,
                 }
                 for name, alloc in self.components.items()
             },
@@ -535,6 +540,8 @@ class ExecutionPlan:
                 vendor=comp.get("vendor", ""),
                 sharded=comp["sharded"],
                 shard_map=comp.get("shard_map", {}),
+                # a plan saved before the field streamed every zero3 block: 0 is that plan's meaning
+                resident_weight_mb=float(comp.get("resident_weight_mb", 0.0)),
             )
             for name, comp in data.get("components", {}).items()
         }
@@ -854,12 +861,14 @@ class PrismSolver:
                                    getattr(getattr(self, "_input_config", None), "mode", None),
                                    served=bool(getattr(self, "_serve_requested", False)))
 
-    def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None) -> int:
+    def _phase_peak(self, container, costs: Dict[str, int], outliving: int = 0, owner: Optional[str] = None,
+                    holding: Optional[str] = None) -> int:
         """The most a plan that loads on demand holds at one moment, from a cost per component: the
         dearest of the flow's phases, each with every component no phase names (nothing says it is
         unloaded); the SUM when the flow declares no phases. `outliving` bytes that `owner` carries
         in its own cost but that outlive it (a KV cache's buffers) are added to every phase that
-        does not hold `owner`."""
+        does not hold `owner`. With `holding`, only the phases that hold that component are read —
+        what is on the device WHILE it is loaded (every phase when none names it)."""
         unloaded = self._unloaded_by_request(container)
         costs = {n: c for n, c in costs.items() if n not in unloaded}
         phases = self._flow_phases(container)
@@ -867,8 +876,66 @@ class PrismSolver:
             return sum(costs.values())
         named = set().union(*phases)
         loose = sum(c for n, c in costs.items() if n not in named)
+        if holding is not None and holding in named:
+            phases = [ph for ph in phases if holding in ph]
         return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
                            for ph in phases)
+
+    def _zero3_resident_budgets(self, container, plan, devices, profile) -> None:
+        """How many MB of each zero3 component's weights its card keeps RESIDENT across passes
+        (`ComponentAllocation.resident_weight_mb`), set on the plan.
+
+        zero3 streams a component's blocks from host memory through a two-block window and, at the
+        end of a pass, released every block — so an autoregressive decode streamed EVERY block on
+        EVERY token, with the card otherwise empty. Janus-Pro-7B on a 16 GB V100: 12.4 GB over PCIe
+        per image token, 2.64 s a step against a 1.84 s floor at 7.07 GB/s pinned, 576 steps, 1 520 s;
+        the zero3 ratchet's peak was 2 152 MB of the 16 GB (2026-10-09).
+
+        The room is what the plan already priced, read through the same authorities and nothing
+        else: the usable part of the card for a component held on it (`_usable_mb`), less what the
+        device holds while the component is loaded — every component of the phases that hold it at
+        its plan cost (`_phase_peak(holding=)`; a zero3 component at its activations and overhead,
+        its earlier grant added), the KV cache as planned in place of the estimate priced inside
+        the language model — less the streaming window (two of its largest blocks, `_parse_blocks`,
+        at the device's cost for its dtype). The components are granted in name order, each grant
+        added to its cost before the next is read. A unified device is never zero3 (`_place_component`)."""
+        z3 = [n for n, a in sorted(plan.components.items()) if a.strategy == "zero3"]
+        if not z3:
+            return
+        by_name = {d.device_string: d for d in (devices or [])}
+        lm = self._lm_component_name
+        kv_planned = int(getattr(plan.kv_cache_plan, "memory_bytes", 0) or 0)
+        kv_priced = (self._estimate_kv_cache_bytes(container, self._target_dtype_str)
+                     if (plan.kv_cache_plan is not None and lm is not None) else 0)
+        granted: Dict[str, int] = {}
+        mib = 1024 * 1024
+        for name in z3:
+            alloc = plan.components[name]
+            dev = by_name.get(alloc.device)
+            if dev is None or _device_is_unified(alloc.device, profile):
+                continue
+            costs: Dict[str, int] = {}
+            for n, m in plan.component_memory.items():
+                a = plan.components.get(n)
+                if a is not None and a.strategy == "zero3":
+                    c = int(self._live_activation_mb(m) * mib) + int(m.overhead_bytes) + granted.get(n, 0)
+                else:
+                    c = int(m.total_bytes)
+                if n == lm:
+                    c = max(c - kv_priced, 0) + kv_planned
+                costs[n] = c
+            held_mb = (self._phase_peak(container, costs, outliving=kv_planned, owner=lm, holding=name)
+                       if self._loads_on_demand(plan.strategy) else sum(costs.values())) / mib
+            blocks = self._parse_blocks(container, name)
+            mult = dev.get_cost_multiplier(self._get_component_dtype(container, name))
+            window_mb = 2.0 * max(blocks.get("block_sizes", {}).values(), default=0.0) * mult
+            room_mb = self._usable_mb(dev) - held_mb - window_mb
+            weight_mb = plan.component_memory[name].weight_mb * mult
+            resident_mb = max(0.0, min(room_mb, weight_mb))
+            alloc.resident_weight_mb = float(int(resident_mb))
+            granted[name] = int(alloc.resident_weight_mb * mib)
+            self.__dict__.setdefault("_zero3_residency", {})[name] = (
+                f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB - window {window_mb:.0f} MB")
 
     def _peak_loaded_bytes(self, container, plan) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
@@ -1827,6 +1894,7 @@ class PrismSolver:
         # Step 7: Build plan
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
+        self._zero3_resident_budgets(container, plan, devices, profile)
         # The guidance split the cascade was re-run under (`_split_guidance_batch`): the CFG engines
         # run these components' branches one pass each, the batch every figure above was priced at.
         plan.cfg_split_components = list(self._cfg_split)
@@ -7380,6 +7448,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         mem = plan.component_memory.get(name)
         entry = {"name": name, "devices": list(getattr(alloc, "devices", None) or [str(getattr(alloc, "device", ""))]),
                  "dtype": getattr(alloc, "dtype", None), "sharded": bool(getattr(alloc, "sharded", False))}
+        if getattr(alloc, "strategy", None) == "zero3":
+            entry["zero3_resident_weight_mb"] = float(alloc.resident_weight_mb)
         if mem is not None:
             entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
                           "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,
@@ -7454,6 +7524,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
                       + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
         shard = "  sharded" if getattr(alloc, "sharded", False) else ""
         lines.append(f"  {name:<20} -> {where}{shard}{detail}")
+        if getattr(alloc, "strategy", None) == "zero3":
+            lines.append(f"  {'':<20}    zero3: weights on the host, {alloc.resident_weight_mb:.0f} MB of them "
+                         f"kept resident on {alloc.device} across passes, the rest streamed per pass")
     if plan.cfg_split_components:
         lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
                      f"each (the reason is the plan's why)")

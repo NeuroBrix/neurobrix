@@ -495,8 +495,10 @@ class Zero3Strategy(ExecutionStrategy):
             torch.cuda.synchronize()
 
     def _reset_ratchet(self, component_name: str) -> None:
-        """Drop every GPU-cached block. Fired by _post_run_hook so
-        multi-pass decode stays flat-VRAM."""
+        """Drop every GPU-cached STREAMED block — the resident ones
+        (`state['resident']`, the plan's `resident_weight_mb`) stay for
+        the next pass. Fired by _post_run_hook so multi-pass decode
+        stays flat-VRAM."""
         state = self._ratchet.get(component_name)
         if state is None:
             return
@@ -528,8 +530,10 @@ class Zero3Strategy(ExecutionStrategy):
                     f"blocks_cached={len(state['gpu_cache'])}"
                 )
                 torch.cuda.reset_peak_memory_stats(dev_idx)
+        resident = state['resident']
         for bidx in list(state['gpu_cache'].keys()):
-            self._evict_block(state, bidx, is_triton)
+            if bidx not in resident:
+                self._evict_block(state, bidx, is_triton)
         # Also drop any unwaited readiness events.
         if is_triton:
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
@@ -537,6 +541,7 @@ class Zero3Strategy(ExecutionStrategy):
                 DA.destroy_event(ev)
         state['block_events'].clear()
         state['current_block'] = -1
+        state['fresh_pass'] = True
 
     def _build_ratchet_state(
         self, component_name: str, executor: Any
@@ -637,11 +642,35 @@ class Zero3Strategy(ExecutionStrategy):
             except Exception:
                 transfer_stream_torch = None
 
+        # The weights Prism keeps RESIDENT across passes (`resident_weight_mb`, the room its plan
+        # leaves on the card beside everything it holds with this component): the non-block
+        # weights first — every pass reads them, op by op — then the blocks in execution order,
+        # each whole, while its bytes fit. Only the rest streams through the window.
+        state_blocks = dict(real_blocks)
+        nonblock = blocks.get(-1)
+        if nonblock is not None and nonblock.get('weight_tensor_ids'):
+            cpu_originals.update(self._snapshot_cpu_originals(executor, {-1: nonblock}))
+        budget = int(self._resident_budget_mb(component_name) * 1024 * 1024)
+        resident: Set[int] = set()
+        resident_bytes = 0
+        order = ([-1] if nonblock is not None else []) + sorted(real_blocks)
+        for bidx in order:
+            entry = nonblock if bidx == -1 else real_blocks[bidx]
+            nbytes = self._host_bytes(entry, cpu_originals)
+            if nbytes == 0 or resident_bytes + nbytes > budget:
+                if bidx == -1:
+                    continue
+                break
+            resident.add(bidx)
+            resident_bytes += nbytes
+            if bidx == -1:
+                state_blocks[-1] = nonblock
+
         state: Dict[str, Any] = {
             'seq': seq,
             'is_triton': is_triton,
             'exec_dev_idx': dev_idx,
-            'blocks': real_blocks,
+            'blocks': state_blocks,
             'op_to_block': op_to_block,
             'cpu_originals': cpu_originals,
             'gpu_cache': {},
@@ -651,15 +680,52 @@ class Zero3Strategy(ExecutionStrategy):
             'transfer_stream_torch': transfer_stream_torch,
             'primed': False,
             'executor': executor,
+            'resident': resident,
+            'streamed': [b for b in sorted(real_blocks) if b not in resident],
+            'fresh_pass': False,
         }
         self._ratchet[component_name] = state
-        logger.info(
-            f"[Zero3] {component_name}: ratchet built — "
-            f"{len(real_blocks)} blocks, window=2, "
+        if -1 in resident:
+            # Bound before the priming sweep, so the ops reading them are not flipped to the
+            # per-op host transfer that sweep gives a weight left on the host.
+            self._prefetch_block(state, -1, is_triton)
+            self._wait_for_block(state, -1, is_triton)
+            self._install_block_on_arena(state, -1)
+        n_res = len([b for b in resident if b >= 0])
+        print(
+            f"[Zero3] {component_name}: ratchet built — {len(real_blocks)} blocks, "
+            f"{n_res} resident + {'non-block weights + ' if -1 in resident else ''}"
+            f"{resident_bytes / 2**20:.0f} MB kept on the card (plan: "
+            f"{self._resident_budget_mb(component_name):.0f} MB), "
+            f"{len(state['streamed'])} streamed per pass through a 2-block window, "
             f"path={'triton' if is_triton else 'native'}, "
-            f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}"
+            f"stream={'async' if (transfer_stream or transfer_stream_torch) else 'sync'}",
+            flush=True,
         )
         return state
+
+    def _resident_budget_mb(self, component_name: str) -> float:
+        """The MB of `component_name`'s weights the plan keeps resident on the card across
+        passes (`ComponentAllocation.resident_weight_mb`, passed through the allocations)."""
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict):
+            return float(alloc.get('resident_weight_mb', 0.0))
+        return 0.0
+
+    @staticmethod
+    def _host_bytes(entry: Dict[str, Any], cpu_originals: Dict[str, Any]) -> int:
+        """The bytes a block's host weights occupy once on the card (each tensor once)."""
+        total = 0
+        for tid in dict.fromkeys(entry.get('weight_tensor_ids', [])):
+            t = cpu_originals.get(tid)
+            if t is None:
+                continue
+            if is_torch_tensor(t):
+                if t.device.type == 'cpu':
+                    total += t.numel() * t.element_size()
+            elif getattr(t, '_device', None) == 'cpu':
+                total += int(t._nbytes)
+        return total
 
     def _prime_only_state(
         self, component_name: str, seq: Any, is_triton: bool, executor: Any
@@ -681,6 +747,9 @@ class Zero3Strategy(ExecutionStrategy):
             'transfer_stream_torch': None,
             'primed': False,
             'executor': executor,
+            'resident': set(),
+            'streamed': [],
+            'fresh_pass': False,
         }
         self._ratchet[component_name] = state
         return state
@@ -724,6 +793,15 @@ class Zero3Strategy(ExecutionStrategy):
         nothing to do. Slow path: transition into a new block,
         prefetch/evict/rebind as needed.
         """
+        if state['fresh_pass']:
+            # Both engines re-bind every weight slot from the executor's
+            # host weights at the start of a run (`bind_weights`), so the
+            # resident non-block weights are bound again here, before the
+            # pass's first op reads them. The blocks are re-bound at their
+            # transitions below, resident or streamed.
+            state['fresh_pass'] = False
+            if -1 in state['resident']:
+                self._install_block_on_arena(state, -1)
         bidx = state['op_to_block'].get(op_idx)
         if bidx is None:
             # Op belongs to a non-block weight group (embed, head, norm).
@@ -745,14 +823,17 @@ class Zero3Strategy(ExecutionStrategy):
         # Bind arena to this block's GPU copy.
         self._install_block_on_arena(state, bidx)
 
-        # Step 2: evict the block we just left (current_block), if any.
+        # Step 2: evict the block we just left (current_block), if any — never a resident one.
         prev = state['current_block']
-        if prev >= 0 and prev != bidx and prev in state['gpu_cache']:
+        resident = state['resident']
+        if (prev >= 0 and prev != bidx and prev in state['gpu_cache']
+                and prev not in resident):
             self._evict_block(state, prev, is_triton)
 
-        # Step 3: kick off prefetch of block bidx+1 for overlap.
-        next_bidx = bidx + 1
-        if next_bidx in state['blocks'] and next_bidx not in state['gpu_cache']:
+        # Step 3: kick off the prefetch of the next STREAMED block for overlap (a resident
+        # block is already on the card).
+        next_bidx = next((b for b in state['streamed'] if b > bidx), None)
+        if next_bidx is not None and next_bidx not in state['gpu_cache']:
             self._prefetch_block(state, next_bidx, is_triton)
 
         state['current_block'] = bidx
