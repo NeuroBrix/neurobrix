@@ -197,6 +197,11 @@ def _shape_fn(g: dict, comp: str, symbols: dict, carried: dict, axis_values: dic
                     raise AnnotationContradiction(f"{comp}: {tid} dim {i} ({d.get('type')}) records "
                                                   f"trace {d['trace']} for an extent of {conc[i]}")
             out = [res.resolve(d) for d in ss["dims"]]
+            if min(out, default=0) < 0:
+                # a binding outside the request range the graph's own algebra admits: a key
+                # derived from it names a launch that can never happen (chatterbox's vocoder
+                # at 1..3 speech tokens, M = -1920) — refused, never recorded
+                raise NegativeExtent(f"{comp}: {tid} resolves to {out} at {dict(symbols)}")
         else:
             out = list(T[tid]["shape"])
         for dim, (ax, fn) in (carried.get(tid) or {}).items():
@@ -386,6 +391,39 @@ def declared_moe_lm(model: str):
 
 class AnnotationContradiction(ValueError):
     """A container's symbolic dim contradicts its own trace extent (a Forge annotation defect)."""
+
+
+class NegativeExtent(ValueError):
+    """A symbolic dim resolves below zero at a binding: the binding lies outside the range the
+    graph admits, so a census site that reaches it starts too low (a tool defect, by name)."""
+
+
+def first_full_binding(model: str, comp: str, lo: int, hi: int, inputs_of) -> int:
+    """The smallest n in lo..hi at which `comp` fed `inputs_of(n)` ({input name: shape}) holds
+    every tensor the top of the range holds: the same set of empty tensors as at `hi` (a buffer
+    empty at every length stays legitimate) and none negative. Below it a dim of the graph's own
+    algebra is empty or negative — a request that produces nothing, never a launch to key."""
+    from neurobrix.triton.symbols import SymbolResolver
+    g = raw_graph(model, comp)
+    T = g.get("tensors") or {}
+    fixed = _fixed_tensors(g)
+
+    def empty(n):
+        res = SymbolResolver(g.get("symbolic_context") or {})
+        feed = {f"input::{k}": _Shape(v) for k, v in inputs_of(n).items()}
+        res.bind_from_inputs(feed, list(feed), T)
+        out = set()
+        for tid, t in T.items():
+            ss = t.get("symbolic_shape")
+            if tid not in fixed and isinstance(ss, dict) and ss.get("dims"):
+                if min((res.resolve(d) for d in ss["dims"]), default=1) < 1:
+                    out.add(tid)
+        return out
+    top = empty(hi)
+    for n in range(lo, hi + 1):
+        if empty(n) == top:
+            return n
+    raise NegativeExtent(f"{model}: {comp} holds no binding in {lo}..{hi} as full as its top")
 
 
 # ── Value-derived axes ─────────────────────────────────────────────────────────────────────────
@@ -1335,7 +1373,8 @@ def _tts_llm_sites(model, topo, defaults, plan, prompt, max_tokens_req):
         def vocode(n, voc=voc, tensors=tensors, conds=conds):
             return [(voc, {k: list(v.shape) for k, v in
                            tts_llm_vocoder_inputs(tensors, [0] * n, conds).items()})]
-        sites.append((f"{voc} speech tokens", 1, mt, vocode))
+        start = first_full_binding(model, voc, 1, mt, lambda n: vocode(n)[0][1])
+        sites.append((f"{voc} speech tokens", start, mt, vocode))
     return sites
 
 
