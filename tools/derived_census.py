@@ -1264,6 +1264,14 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             sites.append((f"{lm} negative prefill", 1, 1, prefill))
             lo = 2
         sites.append((f"{lm} decode KV length", lo, P + mt, decode))
+    # tts_llm (triton/flow/tts_llm.py): no KV cache — every step runs the speech LM on the WHOLE
+    # context [cond, text, speech] at batch 1 (CFG runs its uncond context as a second batch-1
+    # forward of the same length): from L0 = cond + text + 1 (the conditioning encoder's output
+    # length, the flow's own `tts_llm_text_ids`, the BOS speech token) to L0 + max_tokens - 1.
+    # Then the vocoder on the n surviving speech tokens, 1 .. max_tokens, its inputs from the
+    # flow's own `tts_llm_vocoder_inputs` over the embedded default-voice conditioning.
+    if flow.get("type") == "tts_llm" and prompt:
+        sites.extend(_tts_llm_sites(model, topo, defaults, plan, prompt, max_tokens_req))
     # vlm (triton/flow/vlm.py, the splice path): the image through the request's own preprocessing,
     # the vision tower on its patch grid (value-bound symbols from the grid itself), then the LM
     # over the WHOLE context every step — the chat-templated prompt around the modality span
@@ -1282,6 +1290,52 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # length from L0 to L0 + max_tokens - 1.
     if flow.get("type") == "audio_llm" and audio_path:
         sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req))
+    return sites
+
+
+def _tts_llm_sites(model, topo, defaults, plan, prompt, max_tokens_req):
+    from neurobrix.core.runtime.decode_bound import decode_bound
+    from neurobrix.core.runtime_values import require_max_tokens
+    from neurobrix.triton.flow.tts_llm import (COND_ENCODER, tts_llm_stages, tts_llm_text_ids,
+                                               tts_llm_vocoder_inputs)
+    flow = topo.get("flow") or {}
+    stages = (flow.get("audio") or flow).get("stages") or []
+    _ve, lm_stage, voc_stage = tts_llm_stages(stages)
+    if lm_stage is None:
+        raise SystemExit(f"{model}: tts_llm flow with no speech-LM stage")
+    comps = {c["name"] for c in plan["components"]}
+    lm = lm_stage["component"]
+    mt = int(decode_bound(max_tokens_req if max_tokens_req is not None else require_max_tokens(defaults)))
+    root = CACHE / model
+    # the conditioning encoder's output length: its graph's output, which must not be symbolic
+    gc = raw_graph(model, COND_ENCODER)
+    out = gc["tensors"][gc["output_tensor_ids"][0]]
+    ss = out.get("symbolic_shape") or {}
+    if isinstance(ss, dict) and ss.get("dims") and not isinstance(ss["dims"][1], int):
+        raise SystemExit(f"{model}: {COND_ENCODER}'s output length is symbolic ({ss['dims'][1]!r}) — "
+                         f"the census cannot read the speech LM's context start from its graph")
+    cond_len = int(out["shape"][1])
+    text_len = len(tts_llm_text_ids(container_tokenizer(model), prompt, defaults))
+    L0 = cond_len + text_len + 1
+    gl = raw_graph(model, lm)
+    dim = gl["tensors"]["input::inputs_embeds"]["shape"][-1]
+
+    def context(n, lm=lm, dim=dim):
+        return [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})]
+    sites = [(f"{lm} context length", L0, L0 + mt - 1, context)]
+    if voc_stage is not None and voc_stage["component"] in comps:
+        voc = voc_stage["component"]
+        conds_p = root / "runtime" / "default_conditioning.safetensors"
+        conds = None
+        if conds_p.exists():
+            from safetensors.numpy import load_file
+            conds = load_file(str(conds_p))
+        tensors = raw_graph(model, voc).get("tensors") or {}
+
+        def vocode(n, voc=voc, tensors=tensors, conds=conds):
+            return [(voc, {k: list(v.shape) for k, v in
+                           tts_llm_vocoder_inputs(tensors, [0] * n, conds).items()})]
+        sites.append((f"{voc} speech tokens", 1, mt, vocode))
     return sites
 
 
