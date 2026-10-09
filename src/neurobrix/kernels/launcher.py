@@ -1264,8 +1264,10 @@ def _screen_rtol(dtype_name: str):
 def _writable_buffers(values):
     """Every device buffer among these arguments, with its byte length.
 
-    Returns None when any of them is a NON-CONTIGUOUS view, and the caller
-    then skips screening rather than guessing.
+    Returns None when any of them is a view WITH GAPS, and the caller
+    then skips screening rather than guessing. A permutation of a dense
+    buffer (a KRSC conv weight read as K, C, R, S since 9c2ab78e) has none:
+    its span from `data_ptr()` is exactly its bytes, so it is kept.
 
     The snapshot and restore below copy a CONTIGUOUS span from `data_ptr()`.
     For a strided view that span is not the tensor: it covers the gaps
@@ -1279,11 +1281,23 @@ def _writable_buffers(values):
         if not (hasattr(value, "data_ptr") and hasattr(value, "_nbytes")):
             continue
         contiguous = getattr(value, "is_contiguous", None)
-        if callable(contiguous) and not contiguous():
+        if callable(contiguous) and not contiguous() and not _dense(value):
             return None
         out.append((int(value.data_ptr()), int(value._nbytes),
                     getattr(getattr(value, "dtype", None), "name", "?")))
     return out
+
+
+def _dense(value):
+    """Whether a view's elements fill a span with no gap and no overlap: its
+    strides, smallest first (size-1 axes aside), are 1 then the running
+    product of the sizes — a permutation of a contiguous layout."""
+    expected = 1
+    for st, sh in sorted((st, sh) for sh, st in zip(value.shape, value.stride()) if sh != 1):
+        if st != expected:
+            return False
+        expected *= sh
+    return True
 
 
 
