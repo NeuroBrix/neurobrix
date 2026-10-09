@@ -22,12 +22,14 @@ functions and nothing else:
   * the compiled engine's vendor library (`library_layout_transient_bytes`): a convolution its
     library runs on the matrix unit in the channels-last layout while the graph holds it
     channels-first is transposed in and out — the input and the weight at the execution dtype,
-    the result before its transpose back — at the dtypes the vendor file declares
-    (`conv.library_layout_copy_dtypes`). NVIDIA: "NCHW ... incur[s] automatic transposes" on
-    Tensor Cores (https://docs.nvidia.com/deeplearning/performance/dl-performance-convolutional).
-    MEASURED (cards 2/3, 2026-10-09): mochi-1-preview's VAE `aten.convolution::33` at
-    [1,128,14,322,578] fp32 -> fp16 held 1 177 MB above its output and cast copy = fp16 input
-    636 + output 540 + weight 0.8;
+    the result before its transpose back — at the dtypes and, per spatial rank, the buffers the
+    vendor file declares (`conv.library_layout_copies`: `dtypes`, `conv<N>d` = the buffers among
+    input / weight / output). NVIDIA: "NCHW ... incur[s] automatic transposes" on Tensor Cores
+    (https://docs.nvidia.com/deeplearning/performance/dl-performance-convolutional). MEASURED
+    (cards 2/3, 2026-10-09): mochi-1-preview's VAE `aten.convolution::33` at [1,128,14,322,578]
+    fp32 -> fp16 held 1 177 MB above its output and cast copy = fp16 input 636 + output 540 +
+    weight 0.8. Apple MPS (M4 Pro, 2026-10-09, the Mac's differential probe): a 2D convolution
+    holds nothing, a 3D one holds one input-sized copy at fp16, bf16 and fp32;
   * the Triton wrappers' contiguity guard (`contiguous_copy_bytes`): a reader that copies its
     input contiguous before its kernel (`CONTIGUOUS_COPY_READERS`) holds that copy when the input
     is a strided view (`strided_view_tensors`: a permute, a transpose). MEASURED (card 2,
@@ -47,6 +49,7 @@ wrapper runs without one: no budget, no chunk, no unit.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence
 
@@ -114,9 +117,11 @@ class TransientContext:
     # `runtime_dtypes` reads, so the dtypes the walk holds and the dtype each op executes at come
     # from one record. None = no record: nothing safe, no island, nothing narrowed.
     contract: Optional[Any] = None
-    # the compiled engine's vendor library: the execution dtypes at which it runs a channels-first
-    # convolution through channels-last copies (the vendor file's `conv.library_layout_copy_dtypes`).
+    # the compiled engine's vendor library: the execution dtypes at which it copies a convolution's
+    # buffers to its own layout, and which buffers per spatial rank (the vendor file's
+    # `conv.library_layout_copies`: `dtypes`, `conv<N>d`).
     conv_layout_copy_dtypes: FrozenSet[str] = field(default_factory=frozenset)
+    conv_layout_copy_buffers: Mapping[int, FrozenSet[str]] = field(default_factory=dict)
     # the component's strided views (`strided_view_tensors`), bound by the walk from its graph.
     strided_views: FrozenSet[str] = field(default_factory=frozenset)
 
@@ -140,6 +145,7 @@ def context_for(profile, engine: str, compute_dtype: str, contract=None) -> Tran
         return TransientContext(engine=engine, compute_dtype=compute_dtype, band_bytes=band,
                                 contract=contract)
     mem = cfg.get("memory") or {}
+    copies = (cfg.get("conv") or {}).get("library_layout_copies") or {}
     base = int(mem.get("sdpa_math_max_scores_bytes", 0) or 0)
     budget = _ts.sdpa_device_scores_budget(
         base, float(mem.get("sdpa_math_scores_device_fraction", 0.0) or 0.0), dev.memory_mb)
@@ -149,7 +155,28 @@ def context_for(profile, engine: str, compute_dtype: str, contract=None) -> Tran
         sdpa_max_chunks=int(mem.get("sdpa_math_max_chunks", 0) or 0),
         matrix_unit=dict(cfg.get("matrix_unit") or {}),
         band_bytes=band, contract=contract,
-        conv_layout_copy_dtypes=frozenset((cfg.get("conv") or {}).get("library_layout_copy_dtypes") or ()))
+        conv_layout_copy_dtypes=frozenset(copies.get("dtypes") or ()),
+        conv_layout_copy_buffers=layout_copy_buffers(copies))
+
+
+_CONV_BUFFERS = ("input", "weight", "output")
+
+
+def layout_copy_buffers(copies: Mapping[str, Any]) -> Dict[int, FrozenSet[str]]:
+    """`conv.library_layout_copies`' `conv<N>d` entries as {spatial rank: buffers}; a buffer name
+    outside input / weight / output is refused by name."""
+    out: Dict[int, FrozenSet[str]] = {}
+    for key, bufs in copies.items():
+        m = re.fullmatch(r"conv(\d)d", str(key))
+        if m is None:
+            if key != "dtypes":
+                raise ValueError(f"conv.library_layout_copies: unknown key {key!r}")
+            continue
+        bad = sorted(set(bufs or ()) - set(_CONV_BUFFERS))
+        if bad:
+            raise ValueError(f"conv.library_layout_copies.{key}: unknown buffers {bad}")
+        out[int(m.group(1))] = frozenset(bufs or ())
+    return out
 
 
 def _unit_flash(ctx: TransientContext, D: int, dtypes: Sequence[Optional[str]]) -> bool:
@@ -309,9 +336,9 @@ def library_layout_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List
                                    out_shapes: List[List[int]], in_dtypes: List[Optional[str]],
                                    ctx: TransientContext) -> int:
     """The compiled engine's vendor-library half: a convolution executing at a dtype the vendor file
-    declares in `conv.library_layout_copy_dtypes` holds its input, its weight and its result
-    transposed to the library's layout, at the execution dtype, while it runs (0 on the Triton
-    engines, which run the graph's layout, and on an arch whose file declares none)."""
+    declares in `conv.library_layout_copies.dtypes` holds, at the execution dtype, the copies of
+    the buffers its `conv<N>d` entry names for its spatial rank N while it runs (0 on the Triton
+    engines, which run the graph's layout, and on an arch or rank whose file declares none)."""
     if ctx.engine == "triton" or not ctx.conv_layout_copy_dtypes:
         return 0
     if "convolution" not in str(op.get("op_type", "")) or len(in_shapes) < 2 or not out_shapes:
@@ -319,7 +346,9 @@ def library_layout_transient_bytes(uid: str, op: Dict[str, Any], in_shapes: List
     ex = execution_dtype(uid, op, in_dtypes, ctx) or (in_dtypes[0] if in_dtypes else None)
     if ex not in ctx.conv_layout_copy_dtypes:
         return 0
-    return itemsize(ex) * (_num(in_shapes[0]) + _num(in_shapes[1]) + _num(out_shapes[0]))
+    bufs = ctx.conv_layout_copy_buffers.get(len(in_shapes[1]) - 2, frozenset())
+    sizes = {"input": _num(in_shapes[0]), "weight": _num(in_shapes[1]), "output": _num(out_shapes[0])}
+    return itemsize(ex) * sum(sizes[b] for b in bufs)
 
 
 def contiguous_copy_bytes(op: Dict[str, Any], in_shapes: List[List[int]],

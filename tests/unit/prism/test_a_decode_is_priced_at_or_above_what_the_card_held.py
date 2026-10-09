@@ -9,7 +9,7 @@ figure under test is the one placement reads.
   weights (campaigns/2026_10_09_transient_proof/run_A2_mochi_vae.log). The peak is
   `aten.convolution::33`, where cuDNN's tensor-core path holds NHWC copies of the fp16 input
   (636 MB), output (540 MB) and weight — priced by `op_transients.library_layout_transient_bytes`
-  from the profile's `conv.library_layout_copy_dtypes`. Before it the plan said 3 780 MB (and
+  from the profile's `conv.library_layout_copies`. Before it the plan said 3 780 MB (and
   7 560 MB at the guidance batch, which the decode does not run).
 * Sana_1600M_4Kpx_BF16, Triton, 3072x4096 (card 2, 2026-10-09): the vae held 18 434 MB above its
   weights with the allocator's pool off (run_B2np_sana4k_vae.log). With the pool on the reading is

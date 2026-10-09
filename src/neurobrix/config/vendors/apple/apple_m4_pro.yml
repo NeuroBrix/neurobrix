@@ -556,3 +556,13 @@ flash:
 # 3.31); 1x1 is the same memory either way.
 conv:
   weight_layout: KRSC
+  # The compiled engine's vendor library (MPS) holds, per spatial rank, the buffer copies below at
+  # these execution dtypes while a convolution runs. MEASURED (M4 Pro, torch 2.14.0 MPS, 2026-10-09,
+  # fresh-process differential conv vs same-output reference): a 2D convolution holds nothing beyond
+  # its output (7 cases); a 3D one holds one copy the size of its input (636 MiB input -> 664 held,
+  # 1 272 -> 1 304, fp32 2 545 -> 2 576). Mechanism not read in Convolution.mm; measured only.
+  # Priced by core/prism/op_transients.library_layout_transient_bytes.
+  library_layout_copies:
+    dtypes: [float16, bfloat16, float32]
+    conv2d: []
+    conv3d: [input]

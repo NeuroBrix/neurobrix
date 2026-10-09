@@ -179,13 +179,15 @@ _MAY_OMIT = {
         "release and architecture (pytorch/pytorch#192814 unskips its tests only on ROCm 10.0+, "
         "pytorch/pytorch#184880), so CDNA declares it once a plan is proven under it",
 }
-_MAY_OMIT["conv.library_layout_copy_dtypes"] = (
+_MAY_OMIT.update({f"conv.library_layout_copies.{k}": (
     "optional by contract (core/prism/op_transients.library_layout_transient_bytes): absent, the "
-    "compiled engine's convolution library is priced as running the graph's layout. Declared where "
-    "the vendor documents the transposes its matrix-unit path makes of a channels-first tensor and "
-    "a card measured them (NVIDIA cuDNN, docs.nvidia.com/deeplearning/performance/"
-    "dl-performance-convolutional; mochi-1-preview VAE, V100, 2026-10-09). MIOpen and MPS have no "
-    "such measurement on record: their figure is owed by a card of that vendor, not assumed")
+    "compiled engine's convolution library is priced as holding no copy at that rank or dtype. "
+    "Declared where a card measured the copies its library holds: NVIDIA cuDNN (docs.nvidia.com/"
+    "deeplearning/performance/dl-performance-convolutional; mochi-1-preview VAE, V100, 2026-10-09) "
+    "and Apple MPS on the M4 Pro (2D holds 0, 3D one input-sized copy; the Mac's differential probe "
+    "2026-10-09; 1D not measured). MIOpen and the other Apple chips have no measurement on record: "
+    "their figure is owed by a card of that vendor, not assumed")
+    for k in ("dtypes", "conv1d", "conv2d", "conv3d")})
 _MAY_OMIT.update({f"matrix_unit.{k}": (
     "optional by contract (kernels/ops/_configs.matrix_unit): only an arch whose matrix unit Triton does "
     "not lower `tl.dot` onto declares one (Volta, triton-lang/triton#5066); absent, every kernel keeps tl.dot")
