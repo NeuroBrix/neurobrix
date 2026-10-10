@@ -61,7 +61,7 @@ WEIGHTS_INDEX_PATTERNS = [
 # PARALLEL LOADING: Number of concurrent shard loads
 # safetensors loading is I/O-bound, threading helps significantly
 # The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
-from neurobrix.core.workspace import io_workers as _io_workers
+from neurobrix.core.workspace import io_workers as _io_workers, apply_host_mmap_threshold
 PARALLEL_SHARD_WORKERS = _io_workers()
 
 # Centralized dtype conversion — single source of truth
@@ -100,6 +100,8 @@ class WeightLoader:
         Raises:
             FileNotFoundError: If nbx_path does not exist
         """
+        # Each tensor's host temporaries are freed as the next is read: they must go back to the OS.
+        apply_host_mmap_threshold()
         self.nbx_path = Path(nbx_path)
         if not self.nbx_path.exists():
             raise FileNotFoundError(
