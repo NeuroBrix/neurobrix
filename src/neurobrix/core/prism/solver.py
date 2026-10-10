@@ -1276,6 +1276,9 @@ class PrismSolver:
         # transform the graph differently before running it and a boundary must name an op the
         # executor will still have. Default "compiled" keeps every existing caller's behaviour.
         self._mode = str(mode or "compiled")
+        # THE PROFILE THE PLAN IS FOR — what every hardware-dependent price reads (the tile
+        # lattice), never the planning process's active profile (stage B P3).
+        self._planned_profile = profile
         self._serve_mode = serve_mode
         # {component: elements of its graph outputs at the request} — the host estimate's output term.
         self._output_elements: Dict[str, int] = {}
@@ -4414,19 +4417,15 @@ class PrismSolver:
     # RECURSIVE CASCADE — Component & Block Level
     # =========================================================================
 
-    @staticmethod
-    def _tile_extent_lattice() -> int:
+    def _tile_extent_lattice(self) -> int:
         """The unit a tiled spatial extent is snapped down onto before the kernels see it:
-        the vendor profile's `tiling.extent_lattice` (data, R7/R24), or the
+        the PLANNED profile's `tiling.extent_lattice` (`Profile.tile_extent_lattice` — the
+        hardware the plan is for, never the planning process's, stage B P3), or the
         NBX_PRISM_TILE_ALIGN override for a measurement; 0 when neither says."""
         env = os.environ.get("NBX_PRISM_TILE_ALIGN")
         if env:
             return int(env)
-        try:
-            from neurobrix.kernels.ops._configs import active_vendor_profile
-            return int(((active_vendor_profile() or {}).get("tiling") or {}).get("extent_lattice") or 0)
-        except Exception:
-            return 0
+        return self._planned_profile.tile_extent_lattice
 
     def _tiling_decline(self, comp_name: str, why: str) -> None:
         """Record WHY the tiling engine gave `comp_name` no tile, and return None. Read by the refusal
