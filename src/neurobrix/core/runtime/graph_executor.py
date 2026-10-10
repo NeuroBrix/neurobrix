@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
     import torch
 from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+from neurobrix.core.runtime import liveness as _liveness
 import json
 import time
 
@@ -3179,52 +3180,10 @@ class GraphExecutor:
         for tid in self._persistent_tensor_ids:
             protected.add(tid)
 
-        def _collect_arg_tids(arg, out_set):
-            if not isinstance(arg, dict):
-                return
-            atype = arg.get("type")
-            if atype in ("tensor", "tensor_ref"):
-                t = arg.get("tensor_id")
-                if t:
-                    out_set.add(t)
-            elif atype == "tensor_tuple":
-                for t in arg.get("tensor_ids", []):
-                    out_set.add(t)
-            elif atype == "list":
-                for item in arg.get("value", []):
-                    _collect_arg_tids(item, out_set)
-
-        last_use: Dict[str, int] = {}
-        for op_idx, op_uid in enumerate(exec_order):
-            op_data = ops_meta.get(op_uid)
-            if op_data is None:
-                continue
-            seen: set = set()
-            attrs = op_data.get("attributes", {})
-            for arg in attrs.get("args", []):
-                _collect_arg_tids(arg, seen)
-            for arg in attrs.get("kwargs", {}).values():
-                _collect_arg_tids(arg, seen)
-            for t in seen:
-                last_use[t] = op_idx
-        # Dead outputs — tids produced but never referenced by any later op
-        # have no entry above and were never freed (R30 mirror of the native
-        # sequential and compiled dead-output rules; the CogVideoX VAE
-        # all-at-once decode accumulates ~27 GB of never-consumed conv-cache
-        # clones at full pixel resolution otherwise). Their last use is the
-        # producing op.
-        for op_idx, op_uid in enumerate(exec_order):
-            op_data = ops_meta.get(op_uid)
-            if op_data is None:
-                continue
-            for out_tid in op_data.get("output_tensor_ids", []):
-                if out_tid not in last_use:
-                    last_use[out_tid] = op_idx
-        dead_at_op: Dict[int, list] = {}
-        for tid, li in last_use.items():
-            if tid in protected:
-                continue
-            dead_at_op.setdefault(li, []).append(tid)
+        # The graph's liveness (core/runtime/liveness.py — the rule Prism prices and the arena
+        # engines free by), dead outputs freed at their producer (the CogVideoX VAE all-at-once
+        # decode accumulates ~27 GB of never-consumed conv-cache clones otherwise).
+        dead_at_op = _liveness.dead_at_op(_liveness.last_uses(exec_order, ops_meta), protected)
 
         # Execute ops sequentially. Thread pre_op_callback here for
         # the same reason as _run_triton_compiled — zero3 (and any other
