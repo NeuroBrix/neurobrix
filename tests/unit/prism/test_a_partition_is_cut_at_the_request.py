@@ -6,6 +6,7 @@ the run: SANA-Video's VAE (input [1,128,9,14,22] traced, 21x64x160 at a 1280x512
 on 16 GB, 2026-09-27). The profiler already resolved `symbolic_shape` at the request: the same bug
 written twice. Before this branch the partitioner takes no symbol map: these fail.
 """
+from tests.unit.prism._graph import as_graph
 import pytest
 
 from neurobrix.core.prism.layer_partition import LayerPartitioner
@@ -15,10 +16,10 @@ def _graph():
     sym = {"type": "symbol", "id": "s1", "trace": 10}
     t = lambda d: {"shape": [1, 10, 10], "dtype": "float32",
                    "symbolic_shape": {"dims": [1, sym, sym], "concrete": [1, 10, 10]}}
-    return {"tensors": {"x": t(0), "a": t(1), "b": t(2)},
+    return as_graph({"tensors": {"x": t(0), "a": t(1), "b": t(2)},
             "ops": {"op1": {"input_tensor_ids": ["x"], "output_tensor_ids": ["a"]},
                     "op2": {"input_tensor_ids": ["a"], "output_tensor_ids": ["b"]}},
-            "execution_order": ["op1", "op2"]}
+            "execution_order": ["op1", "op2"]})
 
 
 def test_the_trace_is_what_it_sizes_without_a_request():

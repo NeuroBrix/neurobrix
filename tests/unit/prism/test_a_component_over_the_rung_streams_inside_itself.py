@@ -45,6 +45,7 @@ Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src:. python -m pytest -q \\
 """
 from __future__ import annotations
 
+
 import sys
 from pathlib import Path
 
@@ -54,6 +55,7 @@ from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.core.prism.solver import ComponentMemory
 from neurobrix.nbx import NBXContainer
+from tests.unit.prism._graph import as_graph
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, container_root, impose_rung, no_door,
                                               pin_host, profile)
 
@@ -173,7 +175,7 @@ def test_an_output_no_op_reads_is_dead_at_its_producer():
                        "output_tensor_ids": ["x", "stat"]},
                  "b": {"op_type": "aten::relu", "input_tensor_ids": ["x"], "output_tensor_ids": ["y"]}},
          "execution_order": ["a", "b"], "output_tensor_ids": ["y"]}
-    assert LayerPartitioner(g).live_activation_curve() == [100, 100]
+    assert LayerPartitioner(as_graph(g)).live_activation_curve() == [100, 100]
 
 
 def test_another_phase_reserves_nothing_beside_the_segments(monkeypatch):

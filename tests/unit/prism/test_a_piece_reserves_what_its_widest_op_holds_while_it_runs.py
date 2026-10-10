@@ -13,6 +13,8 @@ argument ignored) -> the reserve is one FFN tensor, not two, and a budget under 
 """
 from __future__ import annotations
 
+from tests.unit.prism._graph import as_graph
+
 from neurobrix.core.prism.layer_partition import LayerPartitioner
 
 MB = 1024 * 1024
@@ -45,7 +47,7 @@ def _ffn(n_blocks: int, weight_mb: int = 10, wide_mb: int = 40, narrow_mb: int =
 
 
 def test_the_reserve_is_the_activation_ops_input_and_output_together():
-    lp = LayerPartitioner(_ffn(4))
+    lp = LayerPartitioner(as_graph(_ffn(4)))
     after, during = lp.live_activation_curve(), lp.op_peak_curve()
     i = lp.order.index("act1")
     assert during[i] >= 80 * MB, during[i]                 # h and g alive while it runs
@@ -59,7 +61,7 @@ def test_a_budget_under_the_in_op_peak_does_not_fit_on_the_after_op_figure():
     """Weights of the widest piece (two projections) + the after-op figure fit in 72 MB; the in-op
     figure does not: the honest partition refuses or announces a peak under the budget that
     includes the in-op reserve."""
-    lp = LayerPartitioner(_ffn(4))
+    lp = LayerPartitioner(as_graph(_ffn(4)))
     budget = 72 * MB
     part = lp.partition(budget)
     if part.fits:
@@ -82,7 +84,7 @@ def test_a_view_allocates_nothing_while_it_runs():
                          "output_tensor_ids": ["v0"]}
     g["ops"]["act0"]["input_tensor_ids"] = ["v0"]
     g["execution_order"].insert(1, "view0")
-    lp = LayerPartitioner(g)
+    lp = LayerPartitioner(as_graph(g))
     during, after = lp.op_peak_curve(), lp.live_activation_curve()
     i = lp.order.index("view0")
     assert during[i] == after[i - 1], (during[i] / MB, after[i - 1] / MB)
@@ -100,7 +102,7 @@ def _peak_at_a_view() -> dict:
                          "output_tensor_ids": ["v0"]}
     g["ops"]["act0"]["input_tensor_ids"] = ["v0"]
     g["execution_order"].insert(1, "view0")
-    return g
+    return as_graph(g)
 
 
 def test_the_placement_estimate_and_the_partitioner_hold_one_figure_for_a_graph():
@@ -114,7 +116,7 @@ def test_the_placement_estimate_and_the_partitioner_hold_one_figure_for_a_graph(
       B. the overflow scan counting a view's output -> the view is flagged."""
     from neurobrix.core.prism.profiler import ActivationProfiler
     g = _peak_at_a_view()
-    lp = LayerPartitioner(g)
+    lp = LayerPartitioner(as_graph(g))
     figure = max(lp.op_peak_curve())
     threshold = 60 * MB
     ap = ActivationProfiler(g).estimate_peak_memory(vram_per_gpu_bytes=int(threshold / 0.85) + 1)
