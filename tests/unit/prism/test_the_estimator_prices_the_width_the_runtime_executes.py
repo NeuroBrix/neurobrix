@@ -67,6 +67,9 @@ def _t(shape, dtype="float32", **kw):
 
 
 def _op(uid, op_type, ins, outs, **attrs):
+    """An op as graph.json writes it: its operands both listed and passed as its args (the
+    liveness rule reads the args, core/runtime/liveness.py)."""
+    attrs.setdefault("args", [{"type": "tensor", "tensor_id": t} for t in ins])
     return {"op_uid": uid, "op_type": op_type, "input_tensor_ids": list(ins),
             "output_tensor_ids": list(outs), "attributes": attrs}
 
@@ -84,8 +87,9 @@ def _graph(dag, g):
     return {**dag, "torch_dtype": g}
 
 
-def _w(dag, engine="triton", c="float16", bf16=False, contract=NONE, tiling=None):
-    return runtime_dtypes(dag, c, engine, has_native_bf16=bf16, contract=contract, tiling=tiling)
+def _w(dag, engine="triton", c="float16", bf16=False, contract=NONE, tiling=None, operands="narrowest"):
+    return runtime_dtypes(dag, c, engine, attention_operands=operands, has_native_bf16=bf16,
+                          contract=contract, tiling=tiling)
 
 
 # A decoder block's tail: conv -> NHWC -> rms_norm -> NCHW -> residual add -> conv -> add.
@@ -295,14 +299,14 @@ def test_the_estimate_sizes_an_fp32_activation_at_four_bytes():
     needed (c0 freed at permute, r0 at permute::1, p1 at add::0)."""
     g = _block()
     ap_old = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2)   # traced (fp32) sizing
-    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)
+    w = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, contract=NONE)
     ap = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
     level = {t: (2 if b in (2, 4) else b) for t, b in w.items()}      # the former levelling to C
     ap_c = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=level)
     # the peak op holds an fp32 128-element tensor beside another: priced wider than at C
     assert ap.peak_bytes > ap_c.peak_bytes
     assert ap_c.peak_bytes * 2 == ap_old.peak_bytes          # all-fp32 trace, all-C level
-    w_ = runtime_widths(g, "float16", "triton", has_native_bf16=False,
+    w_ = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False,
                         contract=PrecisionContract(True, frozenset(), frozenset({"rms::0"})))
     assert ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w_).peak_bytes == ap_c.peak_bytes
 
@@ -317,7 +321,7 @@ def test_an_in_place_add_into_a_narrower_buffer_is_a_new_buffer():
          _op("add::0", "aten::add", ["c", "e"], ["a"]),
          _op("neg::0", "aten::neg", ["a"], ["n"])]
     g = _dag(T, O, ["input::x"], ["n"])
-    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)
+    w = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, contract=NONE)
     assert (w["c"], w["e"], w["a"]) == (2, 4, 4)
     p = ActivationProfiler(g)
     into_narrow = p.estimate_peak_memory(dtype_bytes=2, widths=w, inplace_adds=[("add::0", 0)])
@@ -411,15 +415,15 @@ def test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes():
     for eng in ("triton", "triton_sequential"):
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert [w[t] for t in ("r0", "p1", "a0", "c1", "a1")] == ["bfloat16"] * 5, eng
-        b = runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)
+        b = runtime_widths(g, "bfloat16", eng, attention_operands="narrowest", has_native_bf16=True, contract=NONE)
         assert b["r0"] == 2 and b["a1"] == 2
     for eng in ("compiled", "sequential"):
         assert _w(_one("aten::layer_norm"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
-        assert runtime_widths(_one("aten::exp"), "bfloat16", eng, has_native_bf16=True,
+        assert runtime_widths(_one("aten::exp"), "bfloat16", eng, attention_operands="narrowest", has_native_bf16=True,
                               contract=NONE)["y"] == 2
     # fp16 unchanged: no contract -> fp32 (4 bytes) on both engines
-    assert runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)["r0"] == 4
-    assert runtime_widths(_one("aten::exp"), "float16", "compiled", has_native_bf16=False,
+    assert runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, contract=NONE)["r0"] == 4
+    assert runtime_widths(_one("aten::exp"), "float16", "compiled", attention_operands="narrowest", has_native_bf16=False,
                           contract=NONE)["y"] == 4
 
 
@@ -432,7 +436,7 @@ def test_an_fp32_graph_coerced_to_bf16_keeps_its_fp32_norm_output():
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert [w[t] for t in ("r0", "a0", "c1", "a1")] == [
             "float32", "float32", "bfloat16", "float32"], eng
-        assert runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)["r0"] == 4
+        assert runtime_widths(g, "bfloat16", eng, attention_operands="narrowest", has_native_bf16=True, contract=NONE)["r0"] == 4
     for eng in ("compiled", "sequential"):
         assert _w(_one("aten::layer_norm", graph="float32"), eng, c="bfloat16",
                   bf16=True)["y"] == "float32"
@@ -561,6 +565,30 @@ def test_an_attention_over_disagreeing_operands_writes_the_narrowest(volta_profi
         assert w["o"] == "float16", eng
         d, k = dag(False)                             # all three fp16
         assert _w(d, eng, contract=k)["o"] == "float16", eng
+
+
+def test_an_attention_is_priced_with_the_profile_the_plan_is_for(monkeypatch):
+    """Stage B P3: the alignment is the PLANNED profile's (`Profile.attention_operands`, passed
+    as an argument), never the planning process's active profile — which a plan for the Mac
+    computed on the rack, or on a CPU-only process (no profile at all: six over-the-rung cells
+    refused, 2026-10-10), does not hold. Both engines align (the compiled one through
+    `DtypeEngine.align_attention_operands`). Injections, each seen RED: the SDPA rule reading
+    `active_vendor_profile()` again (raises below); the ATen rule back to q's own dtype
+    ('float16' under widest on compiled)."""
+    from neurobrix.kernels.ops import _configs
+
+    def no_process_profile():
+        raise AssertionError("Prism read the process's profile, not the one it plans for")
+    monkeypatch.setattr(_configs, "active_vendor_profile", no_process_profile)
+    T = {"input::q": _t([1, 2, 8, 4], is_input=True), "input::k": _t([1, 2, 8, 4], is_input=True),
+         "input::x": _t([1, 2, 8, 4], is_input=True), "v": _t([1, 2, 8, 4]), "o": _t([1, 2, 8, 4])}
+    ops = [_op("exp::0", "aten::exp", ["input::x"], ["v"]),
+           _op("sdpa::0", "aten::scaled_dot_product_attention", ["input::q", "input::k", "v"], ["o"])]
+    d = _dag(T, ops, ["input::q", "input::k", "input::x"], ["o"])
+    k = PrecisionContract(True, frozenset({"exp::0"}), frozenset())     # v from an fp32 island
+    for eng in ("triton", "triton_sequential", "compiled"):
+        assert _w(d, eng, contract=k, operands="narrowest")["o"] == "float16", eng
+        assert _w(d, eng, contract=k, operands="widest")["o"] == "float32", eng
 
 
 def test_cat_drops_an_empty_operand_before_it_takes_the_first():

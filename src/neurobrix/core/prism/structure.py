@@ -525,6 +525,24 @@ class PrismProfile:
             return False
         return self.devices_support_dtype("bfloat16")
 
+    @property
+    def attention_operands(self) -> str:
+        """The alignment every device's vendor profile declares for attention operands that
+        disagree in dtype (`precision.attention_operands`, read by the one reader
+        `triton/dtype.attention_operand_alignment`). Prism prices a plan's attention widths with
+        THIS profile's answer — the profile it plans for, never the one the planning process
+        happens to run on (stage B P3). Devices that declare different alignments, or no
+        device, are refused by name."""
+        from neurobrix.core.config.loader import get_vendor_config
+        from neurobrix.triton.dtype import attention_operand_alignment
+        said = {attention_operand_alignment(get_vendor_config(getattr(d.brand, "value", d.brand),
+                                                               d.architecture))
+                for d in self.devices}
+        if len(said) != 1:
+            raise ValueError(f"hardware profile {self.id!r}: its devices declare attention "
+                             f"operand alignments {sorted(said)} — one plan prices one")
+        return said.pop()
+
     def get_supported_dtypes(self) -> Set[str]:
         """Get dtypes supported by ALL devices."""
         if not self.devices:
