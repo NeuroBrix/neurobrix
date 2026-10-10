@@ -2013,11 +2013,24 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, get_dtype_bytes(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)))
+            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)),
+            **self._streamed_loads(plan))
 
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
         return plan
+
+    def _streamed_loads(self, plan) -> Dict:
+        """The host estimate's view of what a streamed plan loads at a time: each streamed component's
+        segments as weight-key sets (only the partitions this plan WON — `plan.layer_stream_plan`), and the
+        loader's workers and pinned uploads in flight (core.workspace, the loader's own source)."""
+        if not plan.layer_stream_plan:
+            return {}
+        from neurobrix.core.workspace import io_workers, pinned_uploads_in_flight
+        parts = getattr(self, "_layer_stream_partitions", None) or {}
+        return {"streamed_loads": {name: [set(seg.weight_names) for seg in parts[name].segments]
+                                   for name in plan.layer_stream_plan},
+                "load_workers": io_workers(), "pinned_in_flight": pinned_uploads_in_flight()}
 
     def _detect_op_level_tiling_pairs(
         self, container, components, allocations, profile, input_config,
