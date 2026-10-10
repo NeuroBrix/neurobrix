@@ -393,19 +393,71 @@ def matrix_unit_split_scale(unit: dict) -> tuple:
     return int(fi.maxexp) - 2, int(fi.nmant) + 1
 
 
-def constant_load_dtype(traced: str, compute: str) -> str:
+def _triton_fp64_keys(vendor: str, architecture: str, keys) -> bool:
+    from neurobrix.core.config import loader
+    precision = loader.get_vendor_config(vendor, architecture).get("precision") or {}
+    values = [precision.get("supports_fp64")] + [(precision.get(k) or {}).get("triton") for k in keys]
+    if not all(isinstance(v, bool) for v in values):
+        names = ", ".join(["precision.supports_fp64"] + [f"precision.{k}.triton" for k in keys])
+        raise ValueError(f"ZERO FALLBACK: the {vendor}/{architecture} profile does not declare "
+                         f"{names} (found {precision!r}); a device's fp64 is never assumed")
+    return all(values)
+
+
+def triton_has_fp64(vendor: str, architecture: str) -> bool:
+    """Whether the NeuroBrix Triton kernels COMPUTE float64 / complex128 elements on this hardware —
+    a capability: the device's (`precision.supports_fp64`) AND the kernels' there
+    (`precision.kernels_carry_fp64.triton`), both from the vendor profile, a missing key refused.
+    Bound into nbx_tensor's backend by `kernels.wrappers.set_hardware_profile`
+    (`nbx_tensor.set_backend_has_fp64`): the integer-division widening and the cast door ask it."""
+    return _triton_fp64_keys(vendor, architecture, ("kernels_carry_fp64",))
+
+
+def triton_stores_fp64(vendor: str, architecture: str) -> bool:
+    """Whether the Triton branch HOLDS float64 / complex128 tensors at that width: its kernels'
+    capability (`triton_has_fp64`) AND the branch's storage policy (`precision.stores_fp64.triton`),
+    a missing key refused. The mirror of `core.dtype.config.device_supports_fp64`, which reads the
+    `.compiled` keys. Every Triton storage site narrows through `storage_dtype` with this answer."""
+    return _triton_fp64_keys(vendor, architecture, ("kernels_carry_fp64", "stores_fp64"))
+
+
+def _profile_fp64(profile, reader) -> bool:
+    if profile is None or not getattr(profile, "devices", None):
+        raise ValueError("ZERO FALLBACK: no hardware profile with a device; the Triton branch's "
+                         "fp64 is read from its vendor profile, never assumed")
+    answers = {}
+    for dev in profile.devices:
+        key = (getattr(dev.brand, "value", dev.brand), dev.architecture)
+        answers[key] = reader(*key)
+    if len(set(answers.values())) > 1:
+        raise ValueError(f"ZERO FALLBACK: the profile's devices disagree on the Triton branch's "
+                         f"fp64 ({answers!r}); one process binds one answer, so a mixed profile "
+                         f"is refused rather than decided by its first device")
+    return next(iter(answers.values()))
+
+
+def profile_triton_has_fp64(profile) -> bool:
+    """`triton_has_fp64` of a hardware profile (a PrismProfile): every device's, refused if they
+    disagree."""
+    return _profile_fp64(profile, triton_has_fp64)
+
+
+def profile_triton_stores_fp64(profile) -> bool:
+    """`triton_stores_fp64` of a hardware profile (a PrismProfile): every device's, refused if they
+    disagree."""
+    return _profile_fp64(profile, triton_stores_fp64)
+
+
+def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype
     when that is half (fp16 bits from bf16 on hardware computing fp16, the bf16 bits kept under
-    bf16), to float32 otherwise; float64 narrows to float32, complex128 to complex64; every other
-    dtype is kept as traced. The loader and Prism's width pass both ask it."""
+    bf16), to float32 otherwise; float64 / complex128 are held as the branch holds them
+    (`storage_dtype`); every other dtype is kept as traced. The loader and Prism's width
+    pass both ask it."""
     if traced == "bfloat16":
         return compute if compute in ("float16", "bfloat16") else "float32"
-    if traced == "float64":
-        return "float32"
-    if traced == "complex128":
-        return "complex64"
-    return traced
+    return storage_dtype(traced, stores_fp64)
 
 
 def graph_dtype_name(graph_dtype) -> Optional[str]:
@@ -566,8 +618,11 @@ class TritonDtypeEngine:
     """
 
     def __init__(self, compute_dtype: NBXDtype, has_native_bf16: bool = True,
-                 graph_dtype=None):
+                 graph_dtype=None, *, stores_fp64: bool):
         self.compute_dtype = compute_dtype
+        # Whether this branch computes and stores float64 / complex128 on its device
+        # (`triton_has_fp64`, from the vendor profile); False holds them in float32 / complex64.
+        self.stores_fp64 = bool(stores_fp64)
         # The component's GRAPH dtype — the container's traced `torch_dtype` — read by
         # the AMP_FP32 cast-back rule under bf16 (`amp_fp32_output_dtype`).
         self.graph_dtype: Optional[str] = graph_dtype_name(graph_dtype)
@@ -643,6 +698,12 @@ class TritonDtypeEngine:
         if graph_dt in _FLOATING:
             return self.compute_dtype
         return graph_dt
+
+    def storage_dtype(self, dtype: NBXDtype) -> NBXDtype:
+        """`dtype` as this branch holds it: float64 -> float32 and complex128 -> complex64 where it
+        carries no fp64, unchanged otherwise — `DtypeEngine.storage_dtype`'s mirror, through the
+        module's `storage_dtype` (the one Triton narrowing)."""
+        return NBXDtype[storage_dtype(dtype.name, self.stores_fp64)]
 
     def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
@@ -951,20 +1012,12 @@ class TritonDtypeEngine:
 # STORAGE — what the Triton engine holds a 64-bit float in
 # ============================================================================
 
-def stores_fp64() -> bool:
-    """Whether the Triton engine stores float64 / complex128 as such: no. Its kernels are fp32-max
-    (no native fp64 on V100, and the elementwise/index kernels read at fp32 stride), so a float64
-    is held as float32 and a complex128 as complex64 — on every backend, today.
-
-    THE ONE SITE where the Mac's `stores_fp64` hardware-profile key (merge-queue-23) plugs in: the
-    constant loader (`GraphExecutor._load_constant_triton`), the graph's dtype casts
-    (`TritonSequence._parse_dtype`) and Prism's pricing of a Triton plan's constants
-    (`solver._graph_constant_bytes`) all read the answer through `storage_dtype` below."""
-    return False
-
-
-def storage_dtype(dtype) -> str:
+def storage_dtype(dtype, stores_fp64: bool) -> str:
     """The dtype name a tensor of `dtype` is STORED in by the Triton engine (config/dtypes.yml
     `without_fp64` when the engine stores no fp64). The ONE owner of the Triton branch's storage
-    narrowing; a dtype the table does not carry is refused by name."""
-    return _itemsize.storage_dtype(dtype, stores_fp64())
+    narrowing; a dtype the table does not carry is refused by name. `stores_fp64` is the vendor
+    profile's answer (`triton_stores_fp64`, `precision.stores_fp64.triton`), read by the caller
+    from the hardware it runs on: the constant loader (`GraphExecutor._load_constant_triton`), the
+    graph's dtype casts (`TritonDtypeEngine.storage_dtype`, `TritonSequence._parse_dtype`), the
+    width pass (`runtime_widths`) and Prism's pricing (`solver._constants_store_fp64`)."""
+    return _itemsize.storage_dtype(dtype, stores_fp64)

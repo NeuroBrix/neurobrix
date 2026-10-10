@@ -2943,11 +2943,23 @@ class PrismSolver:
         else:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
+        # Whether the engine priced holds float64 / complex128: its OWN branch's reader over the
+        # profile (Triton: `triton_stores_fp64`; compiled: `device_supports_fp64`), which refuses
+        # no profile. A profile with no device places every component on the host
+        # (`cpu_execution`) and Triton has no host compute backend
+        # (`strategies/triton/cpu_execution.py`): the host's own answer is priced, on either branch.
+        from neurobrix.core.prism.runtime_widths import TRITON_ENGINES
+        if self._mode in TRITON_ENGINES and profile is not None and profile.devices:
+            from neurobrix.triton.dtype import profile_triton_stores_fp64
+            stores_fp64 = profile_triton_stores_fp64(profile)
+        else:
+            from neurobrix.core.dtype.config import profile_device_supports_fp64
+            stores_fp64 = profile_device_supports_fp64(profile)
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
-            contract=contract, tiling=None,
+            contract=contract, stores_fp64=stores_fp64, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
 
     def _graph_as_executed(self, comp, container):
@@ -6630,16 +6642,17 @@ class PrismSolver:
 
     def _constants_store_fp64(self, dev) -> bool:
         """Whether the engine this plan runs under stores a float64 / complex128 graph constant as
-        such on `dev` — the question `_graph_constant_bytes` prices by. The Triton engine answers
-        from `triton.dtype.stores_fp64` (where the Mac's `stores_fp64` profile key plugs in); the
-        DtypeEngine from the device's profile (`device_supports_fp64`, what
+        such on `dev` — the question `_graph_constant_bytes` prices by. Each engine answers from
+        the device's vendor profile through its OWN branch's reader: the Triton engine
+        `triton_stores_fp64` (`precision.stores_fp64.triton`, what `triton.dtype.storage_dtype`
+        narrows by in `_load_constant_triton`); the DtypeEngine `device_supports_fp64` (what
         `DtypeEngine.storage_dtype` narrows by in `_load_constant_native`)."""
         from neurobrix.core.prism.host_footprint import engine_of
-        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
-            from neurobrix.triton.dtype import stores_fp64
-            return stores_fp64()
-        from neurobrix.core.dtype.config import device_supports_fp64
         spec = dev.spec
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from neurobrix.triton.dtype import triton_stores_fp64
+            return triton_stores_fp64(getattr(spec.brand, "value", spec.brand), spec.architecture)
+        from neurobrix.core.dtype.config import device_supports_fp64
         return device_supports_fp64(dev.device_string, getattr(spec.brand, "value", spec.brand),
                                     spec.architecture)
 

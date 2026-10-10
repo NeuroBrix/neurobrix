@@ -50,8 +50,8 @@ def test_the_device_s_fp64_is_read_from_its_profile(device, vendor, arch, expect
 _PLACED = {True: (("nvidia", "volta"), "cuda:0"), False: (("apple", "apple_m4_pro"), "mps:0")}
 
 
-def _engine(has_fp64):
-    hardware, device = _PLACED[has_fp64]
+def _engine(stores_fp64):
+    hardware, device = _PLACED[stores_fp64]
     return DtypeEngine(torch.float16, graph_dtype=torch.float16, hardware=hardware, device=device)
 
 
@@ -66,26 +66,26 @@ def test_the_engine_reads_its_device_s_fp64_from_the_profile_it_was_placed_on(ha
     assert DtypeEngine(torch.float32, hardware=hardware, device=device).device_has_fp64 is expected
 
 
-@pytest.mark.parametrize("has_fp64,real,cplx", [(False, torch.float32, torch.complex64),
+@pytest.mark.parametrize("stores_fp64,real,cplx", [(False, torch.float32, torch.complex64),
                                                 (True, torch.float64, torch.complex128)])
-def test_a_wide_constant_is_narrowed_only_where_the_device_lacks_fp64(has_fp64, real, cplx):
-    e = _engine(has_fp64)
+def test_a_wide_constant_is_narrowed_only_where_the_device_lacks_fp64(stores_fp64, real, cplx):
+    e = _engine(stores_fp64)
     assert e.storage_dtype(torch.float64) == real
     assert e.storage_dtype(torch.complex128) == cplx
     assert e.storage_dtype(torch.float16) == torch.float16
     assert e.convert_constant(torch.arange(4, dtype=torch.float64)).dtype == real
 
 
-@pytest.mark.parametrize("has_fp64,expected", [(False, torch.float32), (True, torch.float64)])
-def test_a_traced_float64_creation_lands_in_the_device_s_widest(has_fp64, expected):
-    fn = _engine(has_fp64).compile_op("aten::arange", torch.ops.aten.arange.start,
+@pytest.mark.parametrize("stores_fp64,expected", [(False, torch.float32), (True, torch.float64)])
+def test_a_traced_float64_creation_lands_in_the_device_s_widest(stores_fp64, expected):
+    fn = _engine(stores_fp64).compile_op("aten::arange", torch.ops.aten.arange.start,
                                       {"output_dtypes": ["float64"]})
     assert fn(0, 8, dtype=torch.float64).dtype == expected
 
 
-@pytest.mark.parametrize("has_fp64,expected", [(False, torch.float32), (True, torch.float64)])
-def test_a_float64_to_copy_target_lands_in_the_device_s_widest(has_fp64, expected):
-    fn = _engine(has_fp64).compile_op("aten::_to_copy", None, {"output_dtypes": ["float64"]})
+@pytest.mark.parametrize("stores_fp64,expected", [(False, torch.float32), (True, torch.float64)])
+def test_a_float64_to_copy_target_lands_in_the_device_s_widest(stores_fp64, expected):
+    fn = _engine(stores_fp64).compile_op("aten::_to_copy", None, {"output_dtypes": ["float64"]})
     assert fn(torch.ones(3, dtype=torch.float32)).dtype == expected
 
 

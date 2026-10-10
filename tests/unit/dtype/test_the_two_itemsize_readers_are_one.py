@@ -162,8 +162,11 @@ def test_the_old_narrowed_constant_widths_are_reproduced(reader):
 def test_the_live_readers_answer_from_the_table():
     """The re-pointed readers, read live: NBXTensor's sizes and the engines' attention widths."""
     from neurobrix.kernels.nbx_tensor import NBXDtype, dtype_size
+    from neurobrix.triton import itemsize as triton_itemsize
     for m in NBXDtype:
         assert dtype_size(m) == OLD_TABLES["kernels.nbx_tensor._DTYPE_SIZES"][m.name], m
+        # nbx_tensor keeps its own widths (library boundary); the table is held equal to them.
+        assert dtype_size(m) == triton_itemsize.itemsize(m), m
 
 
 def test_the_packed_encoding_is_its_bits_plus_its_group_scales():

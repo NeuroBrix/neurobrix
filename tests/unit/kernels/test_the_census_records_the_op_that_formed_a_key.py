@@ -28,7 +28,7 @@ from neurobrix.kernels import wrappers as W
 from neurobrix.triton.sequential import TritonSequentialDispatcher
 a = NBXTensor.empty((19, 2048), "float16", 0)
 b = NBXTensor.empty((2048, 2048), "float16", 0)
-d = TritonSequentialDispatcher(device_idx=0)
+d = TritonSequentialDispatcher(device_idx=0, stores_fp64=False)
 d.dispatch("aten::mm", [a, b], {}, op_uid="aten.mm::7")
 c = NBXTensor.empty((23, 2048), "float16", 0)
 W.mm(c, b)                            # a flow's own call, after the op returned: no op

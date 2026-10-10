@@ -339,7 +339,7 @@ def test_triton_bind_refuses_a_weight_the_graph_binds_and_nothing_fills(monkeypa
     class _W:          # a weight handle: the bind reads `.ndim` only for pre-transposed weights
         ndim = 4
     full = {"post_quant_conv.weight": _W(), "post_quant_conv.bias": _W()}
-    seq = TritonSequence(_dag(), 0)
+    seq = TritonSequence(_dag(), 0, stores_fp64=False)
     seq.compile()
     monkeypatch.setattr(seq, "compute_op_devices", lambda: None)   # placement, after the door
     seq.bind_weights(full)                                                          # clean
@@ -386,6 +386,7 @@ def test_triton_sequential_refuses_a_weight_the_graph_binds_and_the_store_lacks(
     def _run(weights):
         ex = GraphExecutor.__new__(GraphExecutor)
         ex.mode, ex.dtype, ex._dag, ex._weights = "triton_sequential", "float32", _dag(), weights
+        ex.vendor, ex.arch = "nvidia", "volta"      # every executor is built on a vendor profile
         ex.precision_contract = lambda d: (False, (), ())
         ex._resolve_config_constants = lambda: set()
         ex._run_triton_sequential({}, 0)

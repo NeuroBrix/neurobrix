@@ -232,7 +232,7 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
             from neurobrix.kernels.nbx_tensor import NBXDtype as _NBXD
             std_disp = TritonSequentialDispatcher(
                 device_idx=int(target_dev.split(":")[-1]) if isinstance(target_dev, str) and ":" in target_dev else 0,
-                compute_dtype=_NBXD.float16)
+                compute_dtype=_NBXD.float16, stores_fp64=vae_exec._triton_stores_fp64())
         except Exception as _e:
             std_disp = None
             print(f"[VAE_ISO_CAPTURE] could not build dispatcher: {_e}", flush=True)

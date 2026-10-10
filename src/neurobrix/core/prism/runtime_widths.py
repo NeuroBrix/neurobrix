@@ -270,20 +270,15 @@ def _wider(a: str, b: str) -> str:
     return a if _RANK[a] >= _RANK[b] else b
 
 
-def _triton_remap(name: str, c: str) -> str:
+def _triton_remap(name: str, c: str, stores_fp64: bool) -> str:
     """An explicit dtype argument as the Triton branch resolves it —
-    `TritonSequence._parse_dtype` (triton/sequence.py:2665-2691; `_compile_arg`
-    :2580-2582): the half dtypes follow the compute half, fp64 -> fp32,
-    complex128 -> complex64."""
+    `TritonSequence._parse_dtype` (`_compile_arg`): the half dtypes follow the compute half,
+    fp64 / complex128 are held as the branch holds them (`storage_dtype`)."""
     if name == "bfloat16" and c == "float16":
         return "float16"
     if name == "float16" and c == "bfloat16":
         return "bfloat16"
-    if name == "float64":
-        return "float32"
-    if name == "complex128":
-        return "complex64"
-    return name
+    return _tdt.storage_dtype(name, stores_fp64)
 
 
 def _aten_kwarg_remap(name: str, c: str) -> str:
@@ -316,29 +311,35 @@ def _explicit_dtype(op: Dict[str, Any]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def runtime_widths(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
-                   has_native_bf16: bool, contract: PrecisionContract,
+                   has_native_bf16: bool, contract: PrecisionContract, stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
                    shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, int]:
     """{tensor_id: bytes per element at runtime} for every tensor of `dag` — see
     `runtime_dtypes`."""
     return {tid: get_dtype_bytes_per_element(n) for tid, n in runtime_dtypes(
         dag, compute_dtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-        tiling=tiling, shape_of=shape_of).items()}
+        stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of).items()}
 
 
 def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
-                   has_native_bf16: bool, contract: PrecisionContract,
+                   has_native_bf16: bool, contract: PrecisionContract, stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
                    shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, str]:
     """{tensor_id: dtype name at runtime}. `shape_of(tid)` answers a tensor's shape at the
-    request (the matmul store rule reads M); absent, the traced shape answers."""
+    request (the matmul store rule reads M); absent, the traced shape answers. `stores_fp64`:
+    whether the engine priced holds float64 / complex128 on the profile, read by its OWN branch
+    (`triton.dtype.triton_stores_fp64` for the Triton engines, `core.dtype.config.
+    device_supports_fp64` for ATen). Where it is False the compiled branch holds no float64 /
+    complex128 tensor at all — it narrows every op traced wide (`DtypeEngine._make_fp64_ceiling`),
+    every `_to_copy` target and every constant (`storage_dtype`), and MPS refuses a float64 tensor
+    outright — so the ATen rules price that ceiling over every tensor."""
     c = str(compute_dtype).replace("torch.", "")
     if c not in _FLOAT:
         raise ValueError(f"runtime_widths: compute dtype {compute_dtype!r} is not a float dtype")
     if engine in TRITON_ENGINES:
-        rule = _TritonRules(dag, c, engine, has_native_bf16, contract, tiling)
+        rule = _TritonRules(dag, c, engine, has_native_bf16, contract, tiling, stores_fp64)
     elif engine in ATEN_ENGINES:
-        rule = _AtenRules(dag, c, engine, has_native_bf16, contract, tiling)
+        rule = _AtenRules(dag, c, engine, has_native_bf16, contract, tiling, stores_fp64)
     else:
         raise ValueError(f"runtime_widths: engine {engine!r} is none of "
                          f"{sorted(TRITON_ENGINES | ATEN_ENGINES)}")
@@ -396,14 +397,17 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             if result is None:
                 result = rule.op_dtype(uid, op, ins, out)
             out[tid] = result
+    if engine in ATEN_ENGINES and not stores_fp64:
+        out = {tid: rule.storage_dtype_name(name) for tid, name in out.items()}
     return out
 
 
 class _Rules:
     """What both engines share: the operand views every rule reads."""
 
-    def __init__(self, dag, c, engine, has_native_bf16, contract, tiling):
+    def __init__(self, dag, c, engine, has_native_bf16, contract, tiling, stores_fp64):
         self.dag, self.c, self.engine = dag, c, engine
+        self.stores_fp64 = bool(stores_fp64)
         self.half = c in _HALF
         # The component's GRAPH dtype — the container's traced `torch_dtype`, the source
         # both engines read (TritonSequence / TritonSequentialDispatcher / DtypeEngine
@@ -550,10 +554,10 @@ class _TritonRules(_Rules):
     def complex_dtype(self, name: str) -> str:
         # A complex output keeps the traced complex type; NBX complex is complex64 at most
         # (sequence.py:2688-2689; `_wrap_complex_output`, dtype.py:527-528, 624-654).
-        return _triton_remap(name, self.c)
+        return _triton_remap(name, self.c, self.stores_fp64)
 
     def remap_explicit(self, name: str) -> str:
-        return _triton_remap(name, self.c)
+        return _triton_remap(name, self.c, self.stores_fp64)
 
     def weight_dtype(self, tid: str, traced: str) -> str:
         # GraphExecutor._bind_fp32_constants (graph_executor.py:2063-2107) binds the
@@ -567,7 +571,7 @@ class _TritonRules(_Rules):
             # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
             # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
             # positional table became fp16 (the census walk).
-            return _tdt.constant_load_dtype(traced, self.c)
+            return _tdt.constant_load_dtype(traced, self.c, self.stores_fp64)
         return super().weight_dtype(tid, traced)
 
     def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
@@ -738,6 +742,12 @@ class _TritonRules(_Rules):
 class _AtenRules(_Rules):
     """`DtypeEngine.compile_op` (core/dtype/engine.py:665-817) in its order, then torch's own
     promotion for what it leaves unwrapped."""
+
+    def storage_dtype_name(self, name: str) -> str:
+        # The compiled branch's OWN ceiling on a device without fp64 (`DtypeEngine.storage_dtype`'s
+        # reader, `core.dtype.itemsize`), read here by name; R33 binds the Triton one.
+        from neurobrix.core.dtype import itemsize as _core_itemsize
+        return _core_itemsize.storage_dtype(name, False)
 
     def complex_dtype(self, name: str) -> str:
         # `_make_complex_output_wrapper` is a floor, never a leveller (engine.py:859-887):

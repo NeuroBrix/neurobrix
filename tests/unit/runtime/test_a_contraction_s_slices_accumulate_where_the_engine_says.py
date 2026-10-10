@@ -48,7 +48,7 @@ def test_the_two_engines_hold_one_rule():
 
 def test_each_engine_answers_in_its_own_dtype_type():
     aten = DE.DtypeEngine(torch.float16)
-    tri = TD.TritonDtypeEngine(NBXDtype.float16, has_native_bf16=False)
+    tri = TD.TritonDtypeEngine(NBXDtype.float16, has_native_bf16=False, stores_fp64=False)
     for name in FLOATS:
         a = aten.accumulation_dtype(getattr(torch, name))
         t = tri.accumulation_dtype(getattr(NBXDtype, name))

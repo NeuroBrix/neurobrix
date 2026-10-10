@@ -10,12 +10,12 @@ import pytest
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, _detect_gpu_backend
 
 
-def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64():
+def test_a_float64_cast_is_refused_by_name_where_the_backend_has_no_float64(host_backend_fp64):
     from neurobrix.kernels import nbx_tensor as T
     name = _detect_gpu_backend()
     if name is None:
         pytest.skip("no device")
-    if getattr(T, "_BACKEND_HAS_FP64", {}).get(name, True):
+    if T.backend_has_fp64():
         pytest.skip(f"backend {name} has float64: the door is not on its path")
     x = NBXTensor.from_numpy(np.linspace(-1.0, 1.0, 4096, dtype=np.float64))
     with pytest.raises(RuntimeError, match="float64"):
