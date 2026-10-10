@@ -226,8 +226,12 @@ def _derive_at(model, comp, cdtype, mode, symbols, has_native_bf16, sdpa_budget_
     contract = _contract(model, comp, g, cdtype)
     engine = "triton" if mode == "triton" else "triton_sequential"
     try:
-        rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-                               tiling=tiling, shape_of=shape)
+        # The census is bound to its target's profile (the active one): its alignment is that profile's.
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        from neurobrix.triton.dtype import attention_operand_alignment
+        rt = RW.runtime_dtypes(g, cdtype, engine, has_native_bf16=has_native_bf16,
+                               attention_operands=attention_operand_alignment(active_vendor_profile()),
+                               contract=contract, tiling=tiling, shape_of=shape)
     except AnnotationContradiction as e:
         # The width pass reads the shapes too (the matmul store rule reads M): a component whose
         # annotation contradicts itself is not derivable as a whole — named, never guessed.

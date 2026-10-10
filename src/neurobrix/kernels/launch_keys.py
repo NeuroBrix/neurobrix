@@ -316,18 +316,22 @@ def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
 # ---------------------------------------------------------------------------------------------
 
 def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
-                        q_round: Optional[NBXDtype] = None):
+                        q_round: Optional[NBXDtype] = None, *, alignment: Optional[str] = None):
     """The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention
-    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under the active
-    hardware profile's `precision.attention_operands`. The wrapper, the derived census and
-    Prism's width estimate all ask this one function, so none of them holds a rule of its own."""
+    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under
+    `alignment` — `precision.attention_operands` of the hardware the attention runs on. The
+    wrapper and the derived census run ON that hardware and leave it None (the active profile);
+    Prism plans for a profile that need not be the process's and passes that profile's answer
+    (`Profile.attention_operands`). All three ask this one function, so none holds a rule of
+    its own."""
     from neurobrix.kernels.ops._configs import active_vendor_profile
     from neurobrix.triton.dtype import attention_operand_alignment, attention_operand_dtypes
     qj = q_round if q_round is not None else q
     if qj == k == v:
         return q, k, v, q_round
     out = attention_operand_dtypes(q.name, k.name, v.name,
-                                   attention_operand_alignment(active_vendor_profile()),
+                                   alignment if alignment is not None
+                                   else attention_operand_alignment(active_vendor_profile()),
                                    q_round.name if q_round is not None else None)
     return tuple(None if d is None else NBXDtype[d] for d in out)
 

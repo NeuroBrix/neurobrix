@@ -2995,6 +2995,9 @@ class PrismSolver:
           * the engine: `self._mode`, recorded by `solve` before any rung runs;
           * `has_native_bf16`: the profile's (the Triton matmul store reads it). With no
             profile it is taken False — fp16 matmuls then store fp32, the WIDER answer;
+          * `attention_operands`: the profile's devices' declaration (an SDPA whose operands
+            disagree stores in the aligned q's dtype). With no profile, "widest" — the WIDER
+            answer, as above;
           * the precision contract: `plan_time_contract`, the runtime's own functions over
             the container's record (see there for what the plan cannot read and prices
             wider). A container with no cache path has no record to read: conservative;
@@ -3011,11 +3014,12 @@ class PrismSolver:
         else:
             contract = conservative_contract("the container has no cache path to read a record from")
         native_bf16 = bool(profile.has_native_bf16) if profile is not None else False
+        operands = profile.attention_operands if profile is not None else "widest"
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
-            contract=contract, tiling=None,
+            attention_operands=operands, contract=contract, tiling=None,
             shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
 
     def _graph_as_executed(self, comp, container):

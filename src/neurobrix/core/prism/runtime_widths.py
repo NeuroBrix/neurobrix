@@ -316,29 +316,34 @@ def _explicit_dtype(op: Dict[str, Any]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 def runtime_widths(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
-                   has_native_bf16: bool, contract: PrecisionContract,
+                   has_native_bf16: bool, attention_operands: str, contract: PrecisionContract,
                    tiling: Optional[TilingView] = None,
                    shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, int]:
     """{tensor_id: bytes per element at runtime} for every tensor of `dag` — see
     `runtime_dtypes`."""
     return {tid: get_dtype_bytes_per_element(n) for tid, n in runtime_dtypes(
-        dag, compute_dtype, engine, has_native_bf16=has_native_bf16, contract=contract,
+        dag, compute_dtype, engine, has_native_bf16=has_native_bf16,
+        attention_operands=attention_operands, contract=contract,
         tiling=tiling, shape_of=shape_of).items()}
 
 
 def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
-                   has_native_bf16: bool, contract: PrecisionContract,
+                   has_native_bf16: bool, attention_operands: str, contract: PrecisionContract,
                    tiling: Optional[TilingView] = None,
                    shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, str]:
     """{tensor_id: dtype name at runtime}. `shape_of(tid)` answers a tensor's shape at the
-    request (the matmul store rule reads M); absent, the traced shape answers."""
+    request (the matmul store rule reads M); absent, the traced shape answers.
+    `attention_operands` is the planned hardware's `precision.attention_operands` (an SDPA whose
+    q, k, v disagree stores in the aligned q's dtype) — an argument, never the process's profile."""
     c = str(compute_dtype).replace("torch.", "")
     if c not in _FLOAT:
         raise ValueError(f"runtime_widths: compute dtype {compute_dtype!r} is not a float dtype")
     if engine in TRITON_ENGINES:
         rule = _TritonRules(dag, c, engine, has_native_bf16, contract, tiling)
+        rule.attention_operands = attention_operands
     elif engine in ATEN_ENGINES:
         rule = _AtenRules(dag, c, engine, has_native_bf16, contract, tiling)
+        rule.attention_operands = attention_operands
     else:
         raise ValueError(f"runtime_widths: engine {engine!r} is none of "
                          f"{sorted(TRITON_ENGINES | ATEN_ENGINES)}")
@@ -728,7 +733,8 @@ class _TritonRules(_Rules):
             if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
                 from neurobrix.kernels import launch_keys as _lk
                 from neurobrix.kernels.nbx_tensor import NBXDtype
-                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]))[0].name
+                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
+                                               alignment=self.attention_operands)[0].name
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)
@@ -810,7 +816,14 @@ class _AtenRules(_Rules):
                 if len(a) >= 2 and a[0] == a[1] and fl and fl[0][1] == "float16":
                     return "float32"
         if name in _SDPA:
-            # compiled_ops `_make_attention` hands q, k, v to F.sdpa: the output is q's.
+            # compiled_ops `_make_attention` aligns q, k, v first (`DtypeEngine.
+            # align_attention_operands`, the same decision as the Triton wrapper's) and hands them
+            # to F.sdpa: the output is the ALIGNED q's.
+            if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
+                from neurobrix.kernels import launch_keys as _lk
+                from neurobrix.kernels.nbx_tensor import NBXDtype
+                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
+                                               alignment=self.attention_operands)[0].name
             return self.first(fl) or self.default(op, fl)
         # Everything else is unwrapped: torch's promotion (the widest operand; cat promotes).
         return self.default(op, fl)
