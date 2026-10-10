@@ -1096,21 +1096,26 @@ class RuntimeExecutor:
                     dtype = getattr(alloc, 'dtype', None)
                     # FIX: Get strategy from allocation
                     strategy = getattr(alloc, 'strategy', 'single_gpu')
+                    # zero3: the weights Prism keeps resident on the card across passes
+                    resident_weight_mb = float(getattr(alloc, 'resident_weight_mb', 0.0))
                 elif isinstance(alloc, tuple) and len(alloc) >= 2:
                     device, shard_map = alloc[0], alloc[1]
                     dtype = alloc[2] if len(alloc) > 2 else None
                     strategy = alloc[3] if len(alloc) > 3 else 'single_gpu'
+                    resident_weight_mb = 0.0
                 else:
                     device = str(alloc)
                     shard_map = {}
                     dtype = None
                     strategy = 'single_gpu'
+                    resident_weight_mb = 0.0
                 # Store all allocation info including dtype and strategy
                 allocations[comp_name] = {
                     'device': device,
                     'shard_map': shard_map,
                     'dtype': dtype,
                     'strategy': strategy,
+                    'resident_weight_mb': resident_weight_mb,
                 }
 
         # Get loading_mode from Prism plan (DATA-DRIVEN)
