@@ -898,47 +898,41 @@ class WeightLoader:
         is_cuda: bool,
     ) -> Dict[str, torch.Tensor]:
         """
-        Load weights using CPU mmap + pinned memory DMA transfer.
+        Load a shard's weights by streaming each tensor from the file to the device.
 
-        Architecture:
-        1. CPU load via safetensors mmap (single large read, ~10 GB/s)
-        2. CPU dtype conversion (AVX/SSE vectorized, fast for bf16→fp16)
-        3. Pinned memory non-blocking DMA to GPU (~12 GB/s PCIe Gen3)
-        4. Synchronization handled by caller (batch sync after all shards)
-
-        This outperforms safetensors direct GPU loading because:
-        - Single mmap read vs many small per-tensor PCIe transfers
-        - CPU AVX conversion faster than V100 GPU bf16→fp16
-        - Non-blocking DMA enables overlap between shards
+        Per tensor: read on the host, converted to the plan's dtype on the CPU
+        (faster than a V100's bf16->fp16), pinned, and sent by non-blocking DMA.
+        The caller synchronises once, after every shard.
         """
         if not HAS_SAFETENSORS or safetensors_load_file is None:
             raise ImportError("safetensors library is required")
 
-        # Step 1: CPU load via mmap (single large read)
+        # One tensor at a time: read, converted, pinned, uploaded, dropped — the host holds the tensors in
+        # flight, not the shard. Reading the whole shard, then converting it into a second dict, then
+        # pinning it into a third held three copies of every shard the workers had open: deepseek-moe
+        # layer_streaming peaked at 75-87 GB of RSS against 62 GB priced (2026-10-10). The dtype decision
+        # is the one `_convert_weights_dtype` makes for a shard, taken on the shard's first floating
+        # tensor in file order, so the bytes are the same.
+        from safetensors import safe_open
         only = getattr(self, "_only", None)
-        if only is None:
-            weights = safetensors_load_file(file_path, device="cpu")
-        else:
-            # Read the wanted keys and nothing else: a key the plan did not
-            # budget is never materialised, on the host or on the card.
-            from safetensors import safe_open
-            weights = {}
-            with safe_open(file_path, framework="pt", device="cpu") as f:
-                for k in f.keys():
-                    if k in only:
-                        weights[k] = f.get_tensor(k)
-
-        # Step 2: CPU dtype conversion (AVX/SSE, fast for bf16→fp16)
-        if dtype is not None:
-            weights = self._convert_weights_dtype(weights, dtype)
-
-        # Step 3: Transfer to GPU
-        if is_cuda:
-            # CUDA/HIP: pinned memory DMA (~2x faster than regular .to())
-            weights = self._transfer_with_pinned_memory(weights, device)
-        elif device != "cpu":
-            # MPS/XPU: direct .to() transfer (no pinned DMA — unified memory)
-            weights = {k: v.to(device) for k, v in weights.items()}
+        weights: Dict[str, torch.Tensor] = {}
+        convert: Optional[bool] = None if dtype is not None else False
+        with safe_open(file_path, framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if only is not None and k not in only:
+                    continue
+                t = f.get_tensor(k)
+                if convert is None and t.is_floating_point():
+                    convert = t.dtype != dtype
+                if convert and t.is_floating_point() and t.dtype != dtype:
+                    t = safe_dtype_convert(t, dtype)
+                if is_cuda:
+                    # Pinned for the non-blocking DMA; the caller syncs once after every shard.
+                    t = t.pin_memory().to(device, non_blocking=True)
+                elif device != "cpu":
+                    # MPS/XPU: direct .to() transfer (no pinned DMA — unified memory)
+                    t = t.to(device)
+                weights[k] = t
 
         return weights
 
