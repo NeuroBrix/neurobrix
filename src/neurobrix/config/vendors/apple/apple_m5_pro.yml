@@ -286,6 +286,22 @@ precision:
   # bit-identical — so no host-sync route is needed. What to expect from any
   # FUTURE f64 expression is silent narrowing, not a loud refusal.
   supports_fp64: false
+  # Whether each engine branch's OWN kernels compute float64 / complex128 elements, read with
+  # supports_fp64 (both must hold) -- a CAPABILITY: `compiled` is ATen's, which carries both wherever
+  # the device does; `triton` is the NeuroBrix Triton kernels' (cuda/hip lower double; Metal's
+  # lowering narrows it in silence, measured 2026-09-28 on the Sana 4K positional embedding). Read
+  # by the DtypeEngine (`config.device_supports_fp64`) and by the Triton wrappers' binding
+  # (`triton.dtype.triton_has_fp64` -> `nbx_tensor.set_backend_has_fp64`).
+  kernels_carry_fp64:
+    compiled: true
+    triton: false
+  # Whether each engine branch HOLDS float64 / complex128 tensors at that width where its kernels can
+  # -- a DtypeEngine POLICY, not a capability: the Triton branch is fp32-max (its elementwise and
+  # index kernels read at fp32 stride) and narrows them to float32 / complex64. Read by
+  # `config.device_supports_fp64` and `triton.dtype.triton_stores_fp64`; false narrows.
+  stores_fp64:
+    compiled: true
+    triton: false
 
 # Software-pipelining budget — see nvidia/volta.yml for the schema.
 #

@@ -85,7 +85,7 @@ def _graph(dag, g):
 
 
 def _w(dag, engine="triton", c="float16", bf16=False, contract=NONE, tiling=None):
-    return runtime_dtypes(dag, c, engine, has_native_bf16=bf16, contract=contract, tiling=tiling)
+    return runtime_dtypes(dag, c, engine, has_native_bf16=bf16, stores_fp64=False, contract=contract, tiling=tiling)
 
 
 # A decoder block's tail: conv -> NHWC -> rms_norm -> NCHW -> residual add -> conv -> add.
@@ -295,14 +295,14 @@ def test_the_estimate_sizes_an_fp32_activation_at_four_bytes():
     needed (c0 freed at permute, r0 at permute::1, p1 at add::0)."""
     g = _block()
     ap_old = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2)   # traced (fp32) sizing
-    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)
+    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, stores_fp64=False, contract=NONE)
     ap = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
     level = {t: (2 if b in (2, 4) else b) for t, b in w.items()}      # the former levelling to C
     ap_c = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=level)
     # the peak op holds an fp32 128-element tensor beside another: priced wider than at C
     assert ap.peak_bytes > ap_c.peak_bytes
     assert ap_c.peak_bytes * 2 == ap_old.peak_bytes          # all-fp32 trace, all-C level
-    w_ = runtime_widths(g, "float16", "triton", has_native_bf16=False,
+    w_ = runtime_widths(g, "float16", "triton", has_native_bf16=False, stores_fp64=False,
                         contract=PrecisionContract(True, frozenset(), frozenset({"rms::0"})))
     assert ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w_).peak_bytes == ap_c.peak_bytes
 
@@ -317,7 +317,7 @@ def test_an_in_place_add_into_a_narrower_buffer_is_a_new_buffer():
          _op("add::0", "aten::add", ["c", "e"], ["a"]),
          _op("neg::0", "aten::neg", ["a"], ["n"])]
     g = _dag(T, O, ["input::x"], ["n"])
-    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)
+    w = runtime_widths(g, "float16", "triton", has_native_bf16=False, stores_fp64=False, contract=NONE)
     assert (w["c"], w["e"], w["a"]) == (2, 4, 4)
     p = ActivationProfiler(g)
     into_narrow = p.estimate_peak_memory(dtype_bytes=2, widths=w, inplace_adds=[("add::0", 0)])
@@ -411,15 +411,15 @@ def test_under_bf16_an_amp_fp32_output_is_priced_at_two_bytes():
     for eng in ("triton", "triton_sequential"):
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert [w[t] for t in ("r0", "p1", "a0", "c1", "a1")] == ["bfloat16"] * 5, eng
-        b = runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)
+        b = runtime_widths(g, "bfloat16", eng, has_native_bf16=True, stores_fp64=False, contract=NONE)
         assert b["r0"] == 2 and b["a1"] == 2
     for eng in ("compiled", "sequential"):
         assert _w(_one("aten::layer_norm"), eng, c="bfloat16", bf16=True)["y"] == "bfloat16"
-        assert runtime_widths(_one("aten::exp"), "bfloat16", eng, has_native_bf16=True,
+        assert runtime_widths(_one("aten::exp"), "bfloat16", eng, has_native_bf16=True, stores_fp64=False,
                               contract=NONE)["y"] == 2
     # fp16 unchanged: no contract -> fp32 (4 bytes) on both engines
-    assert runtime_widths(g, "float16", "triton", has_native_bf16=False, contract=NONE)["r0"] == 4
-    assert runtime_widths(_one("aten::exp"), "float16", "compiled", has_native_bf16=False,
+    assert runtime_widths(g, "float16", "triton", has_native_bf16=False, stores_fp64=False, contract=NONE)["r0"] == 4
+    assert runtime_widths(_one("aten::exp"), "float16", "compiled", has_native_bf16=False, stores_fp64=False,
                           contract=NONE)["y"] == 4
 
 
@@ -432,7 +432,7 @@ def test_an_fp32_graph_coerced_to_bf16_keeps_its_fp32_norm_output():
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert [w[t] for t in ("r0", "a0", "c1", "a1")] == [
             "float32", "float32", "bfloat16", "float32"], eng
-        assert runtime_widths(g, "bfloat16", eng, has_native_bf16=True, contract=NONE)["r0"] == 4
+        assert runtime_widths(g, "bfloat16", eng, has_native_bf16=True, stores_fp64=False, contract=NONE)["r0"] == 4
     for eng in ("compiled", "sequential"):
         assert _w(_one("aten::layer_norm", graph="float32"), eng, c="bfloat16",
                   bf16=True)["y"] == "float32"
@@ -490,7 +490,7 @@ def test_the_mirrors_answer_what_the_engines_execute():
             prev = _wr.get_activations_fp16_safe()
             _wr.set_activations_fp16_safe(k.safe)
             try:
-                teng = TritonDtypeEngine(getattr(NBXDtype, c), graph_dtype=graph)
+                teng = TritonDtypeEngine(getattr(NBXDtype, c), graph_dtype=graph, stores_fp64=False)
                 teng.set_precision_contract(k.safe, k.fp32_op_uids, k.narrow_op_uids)
                 name = op_type.split("::")[-1]
                 got = teng.wrap_op(name, lambda x, *a, **kw: Fake(x.nbx_dtype),
