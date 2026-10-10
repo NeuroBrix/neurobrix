@@ -342,14 +342,21 @@ def set_hardware_profile(profile) -> None:
     loader can query per-device VRAM when deciding whether to
     bind-time upcast fp16 weights to fp32 on pre-Ampere hardware.
 
-    Accepts any object with a `has_native_bf16` attribute (duck-typed
-    so tests can pass a mock without importing the full Prism stack).
+    Accepts any object with `has_native_bf16` and `devices` (each with `brand` and
+    `architecture`), duck-typed so tests can pass a mock without importing the full Prism
+    stack; the devices' vendor profiles give the kernels' float64 capability, declared to
+    nbx_tensor (`set_backend_has_fp64`).
     """
     global _NBX_HAS_NATIVE_BF16, _NBX_HW_PROFILE
     if profile is None:
         return
     _NBX_HW_PROFILE = profile
     _NBX_HAS_NATIVE_BF16 = bool(getattr(profile, "has_native_bf16", True))
+    # The kernels' float64 capability, the profile's (`precision.kernels_carry_fp64.triton`):
+    # declared to nbx_tensor, whose integer-division widening and cast door ask it.
+    from neurobrix.triton.dtype import profile_triton_has_fp64
+    from .nbx_tensor import set_backend_has_fp64
+    set_backend_has_fp64(profile_triton_has_fp64(profile))
 
 
 def has_native_bf16() -> bool:

@@ -184,9 +184,13 @@ def two_class_rig(tmp_path, monkeypatch):
     """A profile with a 16 GB card at ordinal 0 and a 32 GB card at ordinal 1,
     and a directory whose only entry was proven on the 16 GB card."""
     from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels import nbx_tensor as T
+    monkeypatch.setattr(T, "_BACKEND_HAS_FP64", T._BACKEND_HAS_FP64)   # restored after the cell
     before = (W._NBX_HW_PROFILE, W._NBX_HAS_NATIVE_BF16)
-    d16 = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384})()
-    d32 = type("Dev", (), {"index": 1, "name": "Tesla V100-SXM2-32GB", "memory_mb": 32768})()
+    d16 = type("Dev", (), {"index": 0, "name": "Tesla V100-SXM2-16GB", "memory_mb": 16384,
+                           "brand": "nvidia", "architecture": "volta"})()
+    d32 = type("Dev", (), {"index": 1, "name": "Tesla V100-SXM2-32GB", "memory_mb": 32768,
+                           "brand": "nvidia", "architecture": "volta"})()
     W.set_hardware_profile(type("Prof", (), {"devices": [d16, d32], "has_native_bf16": False})())
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
     monkeypatch.setattr(C, "active_profile", lambda: ("nvidia", "volta"))
