@@ -301,6 +301,10 @@ class Zero3Strategy(ExecutionStrategy):
         cseq = getattr(executor, '_compiled_seq', None)
         if cseq is not None:
             return cseq, False
+        # triton-sequential: no arena, its weight store seen through the same six calls.
+        view = getattr(executor, '_triton_seq_view', None)
+        if view is not None:
+            return view[1], True
         return None, None
 
     def _snapshot_cpu_originals(
