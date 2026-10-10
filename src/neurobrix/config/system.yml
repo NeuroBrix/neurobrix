@@ -63,6 +63,13 @@ io:
   # nbx/campaigns/2026_10_10_stageb_peak loadexp/stepexp; MALLOC_ARENA_MAX 1 or 2 changed nothing).
   host_mmap_threshold_bytes: 1048576
 
+  # Non-blocking uploads one compiled-loader worker keeps outstanding before it waits for the oldest
+  # (core/io/weight_loader.py `_load_with_pinned_dma`). A pinned block goes back to PyTorch's host cache
+  # only once its copy is done, and that cache never gives memory back: unbounded, deepseek-moe
+  # layer_streaming grew RssShmem 1.0 -> 3.7 GB over one run (2026-10-10). Two overlap the next read
+  # with the previous copy; Prism prices the pinned bytes as workers x this x the largest tensor.
+  pinned_uploads_in_flight: 2
+
   # Use pinned memory for PCIe DMA transfers
   # Enables 16GB/s transfer vs ~8GB/s CPU copy
   use_pinned_memory: true

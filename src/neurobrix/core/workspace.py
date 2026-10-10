@@ -39,6 +39,19 @@ def io_workers() -> int:
     return n
 
 
+def pinned_uploads_in_flight() -> int:
+    """How many non-blocking uploads one loader worker keeps outstanding (`io.pinned_uploads_in_flight`
+    in config/system.yml) — read by the compiled loader AND by Prism's host estimate, which prices the
+    pinned bytes of a load as workers x this x the largest tensor."""
+    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
+    n = (cfg.get("io") or {}).get("pinned_uploads_in_flight")
+    if not isinstance(n, int) or n < 1:
+        raise RuntimeError(
+            f"ZERO FALLBACK: no pinned upload depth is configured: looked at {SYSTEM_YML} under "
+            f"`io.pinned_uploads_in_flight` (got {n!r}).")
+    return n
+
+
 _mmap_threshold_set = False
 
 
