@@ -55,6 +55,14 @@ io:
   # Optimal: 8 for NVMe, 4 for SATA SSD, 2 for HDD
   num_workers: 8
 
+  # glibc only: a host allocation at or above this size is its own mmap, given back to the OS when freed.
+  # glibc's DYNAMIC threshold rises to the largest block freed (up to 32 MiB), so a weight loader's
+  # read-convert-upload temporaries then come from the heap and stay there: 6 deepseek-moe shards
+  # (12.3 GB) streamed to a V100 left 22.7 GB of anonymous RSS at the end; pinned at 1 MiB, 1.07 GB
+  # peak and 0.27 GB after, at 7.1 s against 7.2 s for the whole-shard loader (2026-10-10,
+  # nbx/campaigns/2026_10_10_stageb_peak loadexp/stepexp; MALLOC_ARENA_MAX 1 or 2 changed nothing).
+  host_mmap_threshold_bytes: 1048576
+
   # Use pinned memory for PCIe DMA transfers
   # Enables 16GB/s transfer vs ~8GB/s CPU copy
   use_pinned_memory: true
