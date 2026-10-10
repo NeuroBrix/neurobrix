@@ -9,11 +9,11 @@ Zero torch dependency in the hot loop.
 
 import os
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.core.runtime import symexpr as _symexpr
+from neurobrix.core.runtime import liveness as _liveness
 from neurobrix.kernels.dispatch import dispatch
 # When the cause is the allocator refusing, say what would have made it fit.
 # "Out of memory" alone costs the reader the whole diagnosis, and the numbers
@@ -1832,65 +1832,16 @@ class TritonSequence:
                 slot += 1
 
     # ========================================================================
-    # LIVENESS ANALYSIS — ported from compiled_sequence._compute_liveness
+    # LIVENESS ANALYSIS — core/runtime/liveness.py, mapped to arena slots
     # ========================================================================
-
-    def _extract_input_slots(self, op_data: dict) -> List[int]:
-        """Extract input tensor slots from op data for liveness analysis."""
-        slots = []
-        attrs = op_data.get("attributes", {})
-
-        def extract(arg):
-            if not isinstance(arg, dict):
-                return
-            arg_type = arg.get("type")
-            if arg_type == "tensor":
-                tid = arg.get("tensor_id")
-                if tid:
-                    s = self._tid_to_slot.get(tid)
-                    if s is not None:
-                        slots.append(s)
-            elif arg_type == "tensor_tuple":
-                for tid in arg.get("tensor_ids", []):
-                    s = self._tid_to_slot.get(tid)
-                    if s is not None:
-                        slots.append(s)
-            elif arg_type == "list":
-                for item in arg.get("value", []):
-                    extract(item)
-
-        for arg in attrs.get("args", []):
-            extract(arg)
-        for arg in attrs.get("kwargs", {}).values():
-            extract(arg)
-        return slots
 
     def _compute_liveness(self, exec_order: list, ops_meta: dict) -> Dict[int, List[int]]:
         """Compute dead tensor analysis — O(N) algorithm."""
-        # Step 1: Find last usage of each slot
-        slot_last_use: Dict[int, int] = {}
-        for op_idx, op_uid in enumerate(exec_order):
-            op_data = ops_meta.get(op_uid)
-            if op_data is None:
-                continue
-            for s in self._extract_input_slots(op_data):
-                slot_last_use[s] = op_idx
-
-        # Step 1b: Dead outputs — slots produced but never read by any op
-        # have no entry above and were NEVER killed, surviving in the arena
-        # for the whole pass (R30 mirror of the other engines' dead-output
-        # rules; the CogVideoX VAE all-at-once decode accumulates ~27 GB of
-        # never-consumed conv-cache clones at full pixel resolution, and the
-        # same class plausibly contributes to the long-standing triton
-        # live-watermark gap vs compiled). Their last use is the producing op.
-        for op_idx, op_uid in enumerate(exec_order):
-            op_data = ops_meta.get(op_uid)
-            if op_data is None:
-                continue
-            for tid in op_data.get("output_tensor_ids", []):
-                s = self._tid_to_slot.get(tid)
-                if s is not None and s not in slot_last_use:
-                    slot_last_use[s] = op_idx
+        # Step 1: the graph's liveness (core/runtime/liveness.py — the rule Prism prices and the
+        # compiled sequential executor frees by), mapped onto the arena's slots.
+        # Its dead-output rule frees a never-read output at its producer (the CogVideoX VAE's
+        # ~27 GB of never-consumed conv-cache clones survived the whole pass without it).
+        slot_last_use = _liveness.slot_last_uses(_liveness.last_uses(exec_order, ops_meta), self._tid_to_slot)
 
         # Step 2: Protected slots (never freed)
         protected = set()
@@ -1912,11 +1863,7 @@ class TritonSequence:
         # (last_use > op_idx).
         self._slot_last_use = dict(slot_last_use)
         # Step 3: Build dead_at_op
-        dead_at_op: Dict[int, List[int]] = defaultdict(list)
-        for s, last_idx in slot_last_use.items():
-            if s not in protected:
-                dead_at_op[last_idx].append(s)
-        return dict(dead_at_op)
+        return _liveness.dead_at_op(slot_last_use, protected)
 
     # ========================================================================
     # OP COMPILATION

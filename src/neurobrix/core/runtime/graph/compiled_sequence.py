@@ -17,7 +17,6 @@ Based on:
 - TorchDynamo (graph mode)
 """
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import copy
@@ -27,6 +26,7 @@ import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
 from neurobrix.core.runtime import symexpr as _symexpr
+from neurobrix.core.runtime import liveness as _liveness
 from .compiled_ops import CompiledOpResolver
 # R30: the same "what would have fit" sentence as the triton sequence. It fires on
 # a DeviceOOMError, which this path raises wherever an NBXTensor allocation sits in
@@ -1779,34 +1779,13 @@ class CompiledSequence:
         Returns:
             Dict[int, List[int]]: op_idx → list of slots to free after this op
         """
-        # Step 1: Find last usage of each slot (O(N) scan)
-        slot_last_use: Dict[int, int] = {}  # slot → last op_idx that reads it
-
-        for op_idx, op_uid in enumerate(execution_order):
-            op_data = ops_metadata.get(op_uid)
-            if op_data is None:
-                continue
-
-            # Get all input slots this op reads
-            input_slots = self._extract_input_slots_from_dag(op_data)
-            for slot in input_slots:
-                slot_last_use[slot] = op_idx  # Update to latest usage
-
-        # Step 1b: Dead outputs — slots produced but never read by any op
-        # have no entry above and were NEVER killed. Their last use IS the
-        # producing op (freed right after production). R30 mirror of the
-        # sequential paths' dead-output liveness: the CogVideoX VAE
-        # all-at-once decode captures a never-consumed conv-cache clone per
-        # causal conv at full pixel resolution — ~28 GiB of dead arena slots
-        # accumulated and OOM'd the compiled f9 decode.
-        for op_idx, op_uid in enumerate(execution_order):
-            op_data = ops_metadata.get(op_uid)
-            if op_data is None:
-                continue
-            for out_tid in op_data.get("output_tensor_ids", []):
-                slot = self._tensor_id_to_slot.get(out_tid)
-                if slot is not None and slot not in slot_last_use:
-                    slot_last_use[slot] = op_idx
+        # Step 1: the graph's liveness (core/runtime/liveness.py — the rule Prism prices and the
+        # Triton sequence frees by), mapped onto the arena's slots. Its dead-output rule frees a
+        # never-read output at its producer: the CogVideoX VAE all-at-once decode captures a
+        # never-consumed conv-cache clone per causal conv at full pixel resolution — ~28 GiB of
+        # dead arena slots accumulated and OOM'd the compiled f9 decode without it.
+        slot_last_use = _liveness.slot_last_uses(
+            _liveness.last_uses(execution_order, ops_metadata), self._tensor_id_to_slot)
 
         # Step 2: Define protected slots (never freed)
         # - Weight slots: needed across executions
@@ -1835,17 +1814,8 @@ class CompiledSequence:
             if slot is not None:
                 protected_slots.add(slot)
 
-        # Step 3: Build dead_at_op mapping using defaultdict (O(1) append)
-        dead_at_op: Dict[int, List[int]] = defaultdict(list)
-
-        for slot, last_op_idx in slot_last_use.items():
-            # Skip protected slots
-            if slot in protected_slots:
-                continue
-            # This slot dies AFTER last_op_idx executes
-            dead_at_op[last_op_idx].append(slot)
-
-        return dict(dead_at_op)
+        # Step 3: op_idx -> the slots that die after it
+        return _liveness.dead_at_op(slot_last_use, protected_slots)
 
     def _compile_op(
         self,

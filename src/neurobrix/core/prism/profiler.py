@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.runtime_values import MissingRuntimeValue
 from neurobrix.core.runtime import symexpr as _symexpr
+from neurobrix.core.runtime import liveness as _liveness
 
 
 @dataclass
@@ -514,35 +515,12 @@ def dag_last_uses(dag: Dict[str, Any]) -> Dict[str, str]:
     log-sum-exps, RoPE `copy_` results) stayed alive to the last op: 108 800 MB
     of "activations alone" at 480x832x81 where this rule prices 7 737 (the Mac,
     2026-10-04).
+
+    The rule itself is `core/runtime/liveness.py`, the one the Triton sequence and
+    the compiled sequential executor free by (stage B P1, 2026-10-10).
     """
-    execution_order = dag.get("execution_order", [])
-    ops = dag.get("ops", {})
-    last_use = {}
-
-    # Step 1: Collect ALL tensors used as inputs anywhere
-    used_as_input = set()
-    for op_uid in execution_order:
-        op = ops.get(op_uid, {})
-        used_as_input.update(op.get("input_tensor_ids", []))
-
-    # Step 2: Standard last-use tracking (input tensors)
-    for op_uid in execution_order:
-        op = ops.get(op_uid, {})
-        for tid in op.get("input_tensor_ids", []):
-            # Overwrite = last use wins
-            last_use[tid] = op_uid
-
-    # Step 3: Dead outputs — free immediately after producing op
-    # Output tensors that are never consumed as inputs AND are not
-    # graph outputs would otherwise accumulate forever in live_tensors.
-    graph_outputs = set(dag.get("output_tensor_ids", []))
-    for op_uid in execution_order:
-        op = ops.get(op_uid, {})
-        for out_tid in op.get("output_tensor_ids", []):
-            if out_tid not in used_as_input and out_tid not in graph_outputs:
-                last_use[out_tid] = op_uid  # Free immediately
-
-    return last_use
+    order = dag.get("execution_order", [])
+    return {tid: order[idx] for tid, idx in _liveness.last_uses(order, dag.get("ops", {})).items()}
 
 
 class ActivationProfiler:
