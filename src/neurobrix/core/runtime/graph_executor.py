@@ -3151,6 +3151,15 @@ class GraphExecutor:
         for tid, tensor in cast_input_map.items():
             store[tid] = tensor
 
+        # The store as the sequence surface a weight-pipelining strategy drives (zero3): one
+        # view per graph, handed this pass's store, so its ratchet rebinds the weights the
+        # dispatcher reads below instead of every host weight crossing at every use.
+        _view = getattr(self, "_triton_seq_view", None)
+        if _view is None or _view[0] != _key:
+            from neurobrix.triton.sequential import SequentialWeightView
+            _view = self._triton_seq_view = (_key, SequentialWeightView(exec_order, ops_meta))
+        _view[1].bind_store(store)
+
         # Liveness analysis: mirror TritonSequence._compute_liveness
         # (triton/sequence.py:1394-1421) so the sequential dispatcher
         # reclaims intermediate VRAM after an op's last consumer.

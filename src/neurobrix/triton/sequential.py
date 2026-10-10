@@ -359,3 +359,113 @@ class TritonSequentialDispatcher:
                     NBXDtype.float16, NBXDtype.float32, NBXDtype.bfloat16):
                 result[idx] = inp.to(NBXDtype.int64)
         return result
+
+
+class SequentialWeightView:
+    """The op-by-op engine's weight store seen as the sequence surface zero3 drives.
+
+    Zero3 pipelines a component's host-resident blocks through six sequence calls
+    (get_op_blocks, rebind_partial, recompute_op_devices_for_slots,
+    override_weightless_op_devices, mark_cpu_weighted_ops_for_transfer,
+    materialize_slots_depending_on). The arena engines answer them over arena slots;
+    triton-sequential has no arena, so the ratchet never built there and every host
+    weight crossed to the card at every use (Janus-Pro-7B on a 16 GB card, stage B).
+    Here a "slot" is the tensor id itself and the arena is the forward's `store`, which
+    the executor hands over before each pass (`bind_store`).
+
+    The three device calls change nothing: the dispatcher derives every op's device from
+    the weight it reads at that op, so a rebound weight moves its op by construction.
+    """
+
+    def __init__(self, execution_order: List[str], ops: Dict[str, Any]):
+        from neurobrix.core.runtime import liveness as _liveness
+        from .sequence import _BLOCK_RE
+        self.store: Dict[str, Any] = {}
+        self._op_weights: List[List[str]] = []
+        for uid in execution_order:
+            op = ops.get(uid) or {}
+            self._op_weights.append([
+                t for t in _liveness.op_tensor_refs(op)
+                if t.startswith("param::") or t.startswith("buffer::")])
+        self._tid_to_slot: Dict[str, str] = {
+            t: t for tids in self._op_weights for t in tids}
+        self._block_re = _BLOCK_RE
+        self._op_blocks_cache: Optional[Dict[int, Dict[str, Any]]] = None
+
+    def bind_store(self, store: Dict[str, Any]) -> None:
+        self.store = store
+
+    def get_op_blocks(self) -> Dict[int, Dict[str, Any]]:
+        """Ops grouped by transformer block, indexed by position in the execution order
+        (the index the dispatcher hands the pre-op callback). Same rule as the arena
+        engines: an op's block is its first weight's, a weightless op inherits its
+        predecessor's, a non-block weight goes to block -1."""
+        if self._op_blocks_cache is not None:
+            return self._op_blocks_cache
+        blocks: Dict[int, Dict[str, Any]] = {}
+        last_assigned = -1
+        for op_idx, tids in enumerate(self._op_weights):
+            block_idx = None
+            if tids:
+                name = tids[0].split("::", 1)[1]
+                m = self._block_re.search(name)
+                block_idx = int(m.group(1)) if m else -1
+            if block_idx is None:
+                block_idx = last_assigned
+            last_assigned = block_idx
+            entry = blocks.get(block_idx)
+            if entry is None:
+                entry = blocks[block_idx] = {
+                    'first_op': op_idx, 'last_op': op_idx, 'weight_tensor_ids': []}
+            else:
+                entry['last_op'] = op_idx
+            entry['weight_tensor_ids'].extend(tids)
+        for entry in blocks.values():
+            entry['weight_tensor_ids'] = list(dict.fromkeys(entry['weight_tensor_ids']))
+        self._op_blocks_cache = blocks
+        return blocks
+
+    def rebind_partial(self, partial_map: Dict[str, Any]) -> List[str]:
+        modified: List[str] = []
+        for tid, tensor in partial_map.items():
+            if tid in self._tid_to_slot:
+                self.store[tid] = tensor
+                modified.append(tid)
+        return modified
+
+    def recompute_op_devices_for_slots(self, modified_slots: List[str]) -> None:
+        return None
+
+    def override_weightless_op_devices(self, device_idx: int) -> None:
+        return None
+
+    def mark_cpu_weighted_ops_for_transfer(self, exec_device_idx: int) -> int:
+        """The count of ops reading a host weight (the dispatcher moves those per use)."""
+        store = self.store
+        return sum(1 for tids in self._op_weights
+                   if any(getattr(store.get(t), '_device', None) == 'cpu' for t in tids))
+
+    def materialize_slots_depending_on(self, weight_slot_ids) -> int:
+        """Copy out every live store entry that views one of the weights about to be
+        evicted (mirror of TritonSequence.materialize_slots_depending_on)."""
+        store = self.store
+        roots = set()
+        for tid in weight_slot_ids:
+            t = store.get(tid)
+            if t is not None:
+                roots.add(id(getattr(t, '_base', None) or t))
+        if not roots:
+            return 0
+        evicted = set(weight_slot_ids)
+        n = 0
+        for tid, t in list(store.items()):
+            if tid in evicted or t is None:
+                continue
+            node = getattr(t, '_base', None)
+            while node is not None and id(node) not in roots:
+                node = getattr(node, '_base', None)
+            if node is None:
+                continue
+            store[tid] = t.contiguous()
+            n += 1
+        return n
