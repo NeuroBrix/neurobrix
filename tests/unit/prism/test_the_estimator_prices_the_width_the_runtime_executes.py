@@ -608,3 +608,17 @@ def test_cat_drops_an_empty_operand_before_it_takes_the_first():
         w = _w(g, eng, c="bfloat16", bf16=True)
         assert (w["param::cache"], w["input::x"]) == ("float16", "bfloat16"), eng
         assert (w["k"], w["k2"]) == ("bfloat16", "bfloat16"), eng
+
+
+def test_a_profile_with_no_device_prices_agreeing_operands_and_refuses_disagreeing_ones():
+    """A CPU plan's profile declares no attention alignment. Operands that agree need none and are
+    priced unchanged; operands that disagree are refused by name, as the compiled DtypeEngine
+    refuses with no hardware — never aligned by a guess."""
+    import pytest as _pt
+    from neurobrix.core.prism import load_profile
+    from neurobrix.kernels.launch_keys import sdpa_operand_dtypes
+    from neurobrix.kernels.nbx_tensor import NBXDtype as D
+    word = load_profile("cpu-only-x86").attention_operands
+    assert sdpa_operand_dtypes(D.float16, D.float16, D.float16, alignment=word)[0] == D.float16
+    with _pt.raises(ValueError, match="has no device"):
+        sdpa_operand_dtypes(D.float16, D.float16, D.float32, alignment=word)

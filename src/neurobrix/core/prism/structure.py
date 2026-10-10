@@ -531,16 +531,39 @@ class PrismProfile:
         disagree in dtype (`precision.attention_operands`, read by the one reader
         `triton/dtype.attention_operand_alignment`). Prism prices a plan's attention widths with
         THIS profile's answer — the profile it plans for, never the one the planning process
-        happens to run on (stage B P3). Devices that declare different alignments, or no
-        device, are refused by name."""
+        happens to run on (stage B P3). Devices that declare different alignments are refused
+        by name. A profile with no device (a CPU plan) declares none: its answer is a word that
+        is no alignment, so an attention whose operands agree is priced unchanged and one whose
+        operands disagree is refused by name at the decision — as the compiled DtypeEngine
+        refuses when it was given no hardware."""
         from neurobrix.core.config.loader import get_vendor_config
         from neurobrix.triton.dtype import attention_operand_alignment
         said = {attention_operand_alignment(get_vendor_config(getattr(d.brand, "value", d.brand),
                                                                d.architecture))
                 for d in self.devices}
+        if not said:
+            return f"undeclared (hardware profile {self.id!r} has no device)"
         if len(said) != 1:
             raise ValueError(f"hardware profile {self.id!r}: its devices declare attention "
                              f"operand alignments {sorted(said)} — one plan prices one")
+        return said.pop()
+
+    @property
+    def tile_extent_lattice(self) -> int:
+        """The unit a tiled spatial extent is snapped down onto: every device's vendor profile
+        `tiling.extent_lattice` (data, R7/R24), 0 when none declares one. Read from the profile
+        the plan is FOR, never the planning process's active one (stage B P3). Devices that
+        declare different units are refused by name — one plan tiles on one lattice; a profile with
+        no device (a CPU plan) declares none, 0."""
+        from neurobrix.core.config.loader import get_vendor_config
+        said = {int(((get_vendor_config(getattr(d.brand, "value", d.brand), d.architecture) or {})
+                     .get("tiling") or {}).get("extent_lattice") or 0)
+                for d in self.devices}
+        if not said:
+            return 0
+        if len(said) != 1:
+            raise ValueError(f"hardware profile {self.id!r}: its devices declare tile extent "
+                             f"lattices {sorted(said)} — one plan tiles on one")
         return said.pop()
 
     def get_supported_dtypes(self) -> Set[str]:
