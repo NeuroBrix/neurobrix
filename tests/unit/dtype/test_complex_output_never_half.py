@@ -150,7 +150,7 @@ def test_triton_wrap_op_upcasts_half_at_a_complex_output_op():
         def contiguous(self): return self
         def to(self, dt): return _T(dt)
 
-    eng = TritonDtypeEngine(NBXDtype.float16)
+    eng = TritonDtypeEngine(NBXDtype.float16, stores_fp64=False)
     seen = {}
     def _kernel(a, b):
         seen["a"] = a.nbx_dtype
@@ -174,7 +174,7 @@ def test_triton_wrap_op_keeps_float64_at_a_complex128_op():
         def contiguous(self): return self
         def to(self, dt): return _T(dt)
 
-    eng = TritonDtypeEngine(NBXDtype.float16)
+    eng = TritonDtypeEngine(NBXDtype.float16, stores_fp64=False)
     seen = {}
     def _kernel(a):
         seen["a"] = a.nbx_dtype
@@ -361,7 +361,7 @@ def test_triton_pin_does_not_retype_a_complex_op():
         def contiguous(self): return self
         def to(self, dt): return _T(dt)
 
-    eng = TritonDtypeEngine(NBXDtype.float16)
+    eng = TritonDtypeEngine(NBXDtype.float16, stores_fp64=False)
     eng.set_precision_contract(True, fp32_op_uids={"vac::3"}, narrow_op_uids=())
     seen = {}
     wrapped = eng.wrap_op("view_as_complex", lambda a: seen.setdefault("a", a.nbx_dtype),
