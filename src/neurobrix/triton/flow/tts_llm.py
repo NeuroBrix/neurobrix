@@ -89,21 +89,7 @@ class TritonTTSLLMEngine:
         device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        # Separate stages by role
-        ve_stage = None
-        lm_stage = None
-        vocoder_stage = None
-        for s in stages:
-            role = s.get("role", s.get("execution", ""))
-            if role == "speaker_embedding" or s.get("execution") == "forward" and ve_stage is None:
-                if s.get("role") == "speaker_embedding":
-                    ve_stage = s
-                elif vocoder_stage is None and s.get("role") != "vocoder":
-                    ve_stage = s
-            if s.get("execution") == "autoregressive" or role == "speech_lm":
-                lm_stage = s
-            if role == "vocoder" or (s.get("execution") == "forward" and lm_stage is not None):
-                vocoder_stage = s
+        ve_stage, lm_stage, vocoder_stage = tts_llm_stages(stages)
 
         if lm_stage is None:
             raise RuntimeError(
@@ -126,28 +112,7 @@ class TritonTTSLLMEngine:
         # marker so spaces survive BPE, then wrap the text with sot/eot. Models
         # without those keys keep the plain encode path. Without this the t3
         # backbone is fed a different (shorter) text prefix than the oracle.
-        def _norm_ids(_x):
-            # Tokenizer may return list / np / torch — flatten to a python list
-            # of ints with NO torch import (tolist() returns plain python).
-            if hasattr(_x, "tolist"):
-                _x = _x.tolist()
-            if not isinstance(_x, list):
-                _x = list(_x)
-            if _x and isinstance(_x[0], (list, tuple)):
-                _x = list(_x[0])
-            return [int(t) for t in _x]
-
-        sot = defaults.get("start_text_token")
-        eot = defaults.get("stop_text_token")
-        space_marker = defaults.get("text_space_marker")
-        if sot is not None and eot is not None:
-            _txt = prompt.replace(" ", space_marker) if space_marker else prompt
-            _ids = _norm_ids(tokenizer.encode(
-                _txt, padding=False, add_special_tokens=False))
-            ids = [int(sot)] + _ids + [int(eot)]
-        else:
-            ids = _norm_ids(tokenizer.encode(
-                prompt, padding=False, add_special_tokens=True))
+        ids = tts_llm_text_ids(tokenizer, prompt, defaults)
         input_ids_np = np.array([ids], dtype=np.int64)
         input_ids = NBXTensor.from_numpy(input_ids_np)
 
@@ -447,32 +412,9 @@ class TritonTTSLLMEngine:
                 conds = _load_default_conditioning_np(self.ctx)
 
                 def _run_vocoder(ids):
-                    _tok = NBXTensor.from_numpy(np.array([list(ids)], dtype=np.int64))
-                    _len = np.array([len(ids)], dtype=np.int64)
-                    comp_inputs: Dict[str, Any] = {}
                     voc_dag = getattr(voc_executor, '_dag', None) if voc_executor is not None else None
-                    if voc_dag:
-                        for _tid, tspec in voc_dag.get("tensors", {}).items():
-                            iname = tspec.get("input_name")
-                            if not iname:
-                                continue
-                            if iname == "speech_tokens":
-                                comp_inputs[iname] = _tok
-                            elif iname == "speech_token_lens":
-                                comp_inputs[iname] = NBXTensor.from_numpy(_len)
-                            elif iname.startswith("ref_dict.") and conds is not None \
-                                    and f"gen.{iname[len('ref_dict.'):]}" in conds:
-                                _ref = conds[f"gen.{iname[len('ref_dict.'):]}"]
-                                comp_inputs[iname] = NBXTensor.from_numpy(
-                                    np.ascontiguousarray(_ref))
-                            else:
-                                shape = tspec.get("shape", [1])
-                                dtype_str = tspec.get("dtype", "float32")
-                                if "int" in dtype_str:
-                                    dummy = np.zeros(shape, dtype=np.int64)
-                                else:
-                                    dummy = np.zeros(shape, dtype=np.float32)
-                                comp_inputs[iname] = NBXTensor.from_numpy(dummy)
+                    comp_inputs = {k: NBXTensor.from_numpy(v) for k, v in
+                                   tts_llm_vocoder_inputs((voc_dag or {}).get("tensors", {}), ids, conds).items()}
                     return voc_executor.run(comp_inputs)
 
                 from neurobrix.kernels import census as _census
@@ -519,7 +461,7 @@ class TritonTTSLLMEngine:
         is_gpt=False — omitting it flattens the t3 distribution). ZERO FALLBACK:
         no hand-rolled perceiver, no zero-conditioning path.
         """
-        cond_name = "cond_enc"
+        cond_name = COND_ENCODER
         cond_executor = self.ctx.executors.get(cond_name)
         if cond_executor is None:
             raise RuntimeError(
@@ -571,6 +513,83 @@ class TritonTTSLLMEngine:
 # -----------------------------------------------------------------
 # Module-level helpers (zero torch)
 # -----------------------------------------------------------------
+
+# The conditioning encoder component the flow runs (T3CondEnc, traced as its own graph).
+COND_ENCODER = "cond_enc"
+
+
+def tts_llm_stages(stages):
+    """(speaker-embedding, speech-LM, vocoder) stages of a tts_llm flow, by role and execution —
+    the ONE reading the flow and the census share (either may be None)."""
+    ve_stage = None
+    lm_stage = None
+    vocoder_stage = None
+    for s in stages:
+        role = s.get("role", s.get("execution", ""))
+        if role == "speaker_embedding" or s.get("execution") == "forward" and ve_stage is None:
+            if s.get("role") == "speaker_embedding":
+                ve_stage = s
+            elif vocoder_stage is None and s.get("role") != "vocoder":
+                ve_stage = s
+        if s.get("execution") == "autoregressive" or role == "speech_lm":
+            lm_stage = s
+        if role == "vocoder" or (s.get("execution") == "forward" and lm_stage is not None):
+            vocoder_stage = s
+    return ve_stage, lm_stage, vocoder_stage
+
+
+def tts_llm_text_ids(tokenizer, prompt: str, defaults) -> List[int]:
+    """The text token ids the speech LM is fed — the ONE function the flow and the census share.
+    Models whose config declares start_text_token/stop_text_token (chatterbox's t3) reproduce the
+    vendor EnTokenizer.text_to_tokens contract (spaces substituted by the marker so they survive
+    BPE, the text wrapped with sot/eot); the others keep the plain encode path."""
+    def _norm_ids(_x):
+        # Tokenizer may return list / np / torch — flatten to a python list
+        # of ints with NO torch import (tolist() returns plain python).
+        if hasattr(_x, "tolist"):
+            _x = _x.tolist()
+        if not isinstance(_x, list):
+            _x = list(_x)
+        if _x and isinstance(_x[0], (list, tuple)):
+            _x = list(_x[0])
+        return [int(t) for t in _x]
+
+    sot = defaults.get("start_text_token")
+    eot = defaults.get("stop_text_token")
+    space_marker = defaults.get("text_space_marker")
+    if sot is not None and eot is not None:
+        _txt = prompt.replace(" ", space_marker) if space_marker else prompt
+        _ids = _norm_ids(tokenizer.encode(
+            _txt, padding=False, add_special_tokens=False))
+        ids = [int(sot)] + _ids + [int(eot)]
+    else:
+        ids = _norm_ids(tokenizer.encode(
+            prompt, padding=False, add_special_tokens=True))
+    return ids
+
+
+def tts_llm_vocoder_inputs(tensors, ids, conds) -> Dict[str, np.ndarray]:
+    """The vocoder's inputs for speech token ids `ids`, as numpy — the ONE function the flow and
+    the census share: speech_tokens [1, n], speech_token_lens [1] holding n, each ref_dict.* from the
+    embedded default-voice conditioning (gen.*), any other input zeros at its graph shape."""
+    comp_inputs: Dict[str, np.ndarray] = {}
+    for _tid, tspec in tensors.items():
+        iname = tspec.get("input_name")
+        if not iname:
+            continue
+        if iname == "speech_tokens":
+            comp_inputs[iname] = np.array([list(ids)], dtype=np.int64)
+        elif iname == "speech_token_lens":
+            comp_inputs[iname] = np.array([len(ids)], dtype=np.int64)
+        elif iname.startswith("ref_dict.") and conds is not None \
+                and f"gen.{iname[len('ref_dict.'):]}" in conds:
+            comp_inputs[iname] = np.ascontiguousarray(conds[f"gen.{iname[len('ref_dict.'):]}"])
+        else:
+            shape = tspec.get("shape", [1])
+            dtype_str = tspec.get("dtype", "float32")
+            comp_inputs[iname] = np.zeros(shape, dtype=np.int64 if "int" in dtype_str else np.float32)
+    return comp_inputs
+
 
 def _load_default_conditioning_np(ctx) -> Optional[Dict[str, np.ndarray]]:
     """Load the embedded default-voice conditioning as numpy (zero torch).
