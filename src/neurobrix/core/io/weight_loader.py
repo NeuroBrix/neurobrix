@@ -61,8 +61,12 @@ WEIGHTS_INDEX_PATTERNS = [
 # PARALLEL LOADING: Number of concurrent shard loads
 # safetensors loading is I/O-bound, threading helps significantly
 # The configured count (core.workspace.io_workers: $NBX_IO_WORKERS, else system.yml io.num_workers)
-from neurobrix.core.workspace import io_workers as _io_workers, apply_host_mmap_threshold
+from neurobrix.core.workspace import (
+    io_workers as _io_workers, apply_host_mmap_threshold, pinned_uploads_in_flight as _pinned_in_flight)
 PARALLEL_SHARD_WORKERS = _io_workers()
+#: Non-blocking uploads one loader worker keeps outstanding (`_load_with_pinned_dma`, system.yml
+#: io.pinned_uploads_in_flight): the pinned host bytes of a load are bounded by workers x this.
+PINNED_IN_FLIGHT = _pinned_in_flight()
 
 # Centralized dtype conversion — single source of truth
 from neurobrix.core.dtype.converter import safe_dtype_convert
@@ -458,6 +462,9 @@ class WeightLoader:
         # Batch sync: ensure all GPU transfers complete before returning
         if device.startswith("cuda") or device.startswith("hip"):
             torch.cuda.synchronize()
+            # Every upload is done: the pinned blocks back in PyTorch's host cache go back to the OS, so a
+            # streamed plan's next load starts from none (that cache never frees on its own).
+            torch.accelerator.empty_host_cache()
         self._refuse_undelivered(component_name, index_tensors, only, weights)
 
 
@@ -740,6 +747,9 @@ class WeightLoader:
         devices_used = set(d for _, d in shard_items)
         if any(d.startswith("cuda") or d.startswith("hip") for d in devices_used):
             torch.cuda.synchronize()
+            # Every upload is done: the pinned blocks back in PyTorch's host cache go back to the OS, so a
+            # streamed plan's next load starts from none (that cache never frees on its own).
+            torch.accelerator.empty_host_cache()
         self._refuse_undelivered(component_name, index_tensors, only, weights)
 
 
@@ -919,6 +929,10 @@ class WeightLoader:
         only = getattr(self, "_only", None)
         weights: Dict[str, torch.Tensor] = {}
         convert: Optional[bool] = None if dtype is not None else False
+        # At most PINNED_IN_FLIGHT uploads outstanding per worker: a pinned block returns to PyTorch's host
+        # cache only once its copy is done, so unbounded non-blocking uploads let the cache grow with the
+        # disk-vs-PCIe race (deepseek-moe layer_streaming: RssShmem 1.0 -> 3.7 GB over one run, 2026-10-10).
+        in_flight: List[torch.cuda.Event] = []
         with safe_open(file_path, framework="pt", device="cpu") as f:
             for k in f.keys():
                 if only is not None and k not in only:
@@ -930,7 +944,12 @@ class WeightLoader:
                     t = safe_dtype_convert(t, dtype)
                 if is_cuda:
                     # Pinned for the non-blocking DMA; the caller syncs once after every shard.
+                    if len(in_flight) >= PINNED_IN_FLIGHT:
+                        in_flight.pop(0).synchronize()
                     t = t.pin_memory().to(device, non_blocking=True)
+                    ev = torch.cuda.Event()
+                    ev.record()
+                    in_flight.append(ev)
                 elif device != "cpu":
                     # MPS/XPU: direct .to() transfer (no pinned DMA — unified memory)
                     t = t.to(device)
