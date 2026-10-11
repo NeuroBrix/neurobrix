@@ -1,57 +1,47 @@
 # NeuroBrix
 
-**Universal Deep Learning Inference Engine**
-
-Execute any AI model — image generation, language models, audio, video — without model-specific code. One engine, any model.
-
----
-
-## What is NeuroBrix?
-
-NeuroBrix is an inference runtime that loads any deep learning model from a single `.nbx` container and executes it on any supported GPU. No framework code, no model-specific adapters, no integration work.
+NeuroBrix is an open-source inference engine that runs language models, vision-language and
+omni models, speech recognition, speech synthesis, image and video generation, and image
+upscaling from one container format (`.nbx`) and one command-line tool. It runs published
+models; it does not train them.
 
 ```bash
 pip install neurobrix
 ```
 
+Install PyTorch for your hardware first; see [Installation](getting-started/installation.md).
+
 ```bash
-# Import a model from the hub
-neurobrix import sana/1600m-1024
+# Download a model from the hub
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0
 
-# Start serving (auto-detects your hardware)
-neurobrix serve --model 1600m-1024
-
-# Generate
-neurobrix run --prompt "A photograph of a mountain lake at sunset"
+# Run it (hardware is detected automatically)
+neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion."
 ```
 
-## Key Features
+## Key features
 
 | Feature | Description |
 |---------|-------------|
-| **Universal Runtime** | Same engine for diffusion, LLM, audio, video models |
-| **NBX Format** | Self-contained model archive with graph, weights, and topology |
-| **Prism Solver** | Automatic hardware allocation across single/multi-GPU setups |
-| **Serve Mode** | Persistent daemon keeps weights in VRAM for instant inference |
-| **ZERO Philosophy** | No hardcoded values, no silent defaults, no domain assumptions |
+| **One runtime** | The same engine runs language, speech, image, video and multimodal models, with no per-model pipeline |
+| **NBX format** | Self-contained archive with graph, weights, topology and runtime defaults |
+| **Automatic placement** | Plans each component onto one GPU, several GPUs, or host memory from the detected hardware |
+| **Two compute branches** | PyTorch (default) and NeuroBrix's own Triton kernels, over the same container |
+| **Serve mode** | A daemon keeps weights loaded between requests |
 
-## Supported Model Families
+## Status
 
-| Family | Models | Count | Status |
-|--------|--------|------:|--------|
-| **Image** | PixArt, Sana, Flex.1, Janus-Pro | 6 | Production |
-| **LLM** | DeepSeek-MoE, Qwen3, TinyLlama | 3 | Production |
-| **Audio** | Whisper (x2), Parakeet, Canary-Qwen, Voxtral, Granite-Speech, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 11 | Production |
-| **Upscalers** | HAT, Real-ESRGAN, SwinIR, Swin2SR | 4 | Production |
-| **Video** | Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video | 10 | Production |
+The current release is **0.5.4**, for **NVIDIA GPUs (CUDA) and CPU**. Apple Silicon is being
+integrated on `main` and is not in a release yet. The hub lists the downloadable models; each
+release's notes on [GitHub](https://github.com/NeuroBrix/neurobrix/releases) list what is known
+not to work.
 
-Every supported model runs in four execution modes — PyTorch sequential and compiled, Triton sequential and compiled — and the modes are cross-checked for numerical agreement.
+All models are the work of their respective authors and stay under their own licenses. See the
+[Model Hub](getting-started/hub.md).
 
-All models are the work of their respective authors. See the [Model Hub](getting-started/hub.md) for license details and for which models are downloadable from the hub today.
+## Quick links
 
-## Quick Links
-
-- [Getting Started](getting-started/index.md) — Install and run your first model
-- [CLI Reference](reference/cli.md) — Full command documentation
-- [Architecture](architecture/index.md) — How the runtime works
-- [NBX Format](architecture/nbx-format.md) — The universal model container
+- [Getting Started](getting-started/index.md): install and run a first model
+- [CLI Reference](reference/cli.md): command documentation
+- [Architecture](architecture/index.md): how the runtime works
+- [NBX Format](architecture/nbx-format.md): the model container

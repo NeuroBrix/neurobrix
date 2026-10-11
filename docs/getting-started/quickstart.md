@@ -1,97 +1,76 @@
 # Quick Start
 
-## 1. Import a Model
+## 1. Import a model
 
 Browse available models:
 
 ```bash
 neurobrix hub
+neurobrix hub --category LLM
 ```
 
-Import one:
+Import one by its hub identifier (`<org>/<name>`):
 
 ```bash
-neurobrix import sana/1600m-1024
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
-This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to the local cache.
+This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to
+`~/.neurobrix/cache/TinyLlama-1.1B-Chat-v1.0`. The `<name>` part is what `--model` takes.
 
-## 2. Serve the Model (Recommended)
-
-Serve mode loads weights into VRAM once and keeps them resident for fast repeated inference:
+## 2. Single-shot run
 
 ```bash
-neurobrix serve --model 1600m-1024
+neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --max-tokens 256
 ```
 
-Then generate:
+Hardware is detected automatically. To see where each component will run without loading
+anything:
 
 ```bash
-neurobrix run --prompt "A cyberpunk cityscape at night"
-```
-
-Stop when done:
-
-```bash
-neurobrix stop
-```
-
-!!! tip "Targeting specific hardware"
-    By default, NeuroBrix auto-detects your full machine. To target a specific GPU profile:
-    ```bash
-    neurobrix serve --model 1600m-1024 --hardware v100-32g
-    ```
-
-## 3. Single-Shot Mode
-
-For one-off inference without a persistent daemon:
-
-```bash
-neurobrix run --model 1600m-1024 --prompt "A mountain lake at sunset"
+neurobrix run --model TinyLlama-1.1B-Chat-v1.0 --prompt "Explain recursion." --explain-plan
 ```
 
 !!! note
-    Single-shot mode loads and unloads weights each time. Use serve mode for repeated inference.
+    Single-shot mode loads and unloads the weights on every run. Use serve mode for repeated
+    requests.
 
-## 4. Video Generation
+## 3. Serve mode
 
-Video models use the same `run` command; `--input-image` switches from text-to-video to image-to-video:
-
-```bash
-neurobrix import THUDM/CogVideoX-2b
-neurobrix run --model CogVideoX-2b \
-    --prompt "a hot air balloon drifting over mountains" \
-    --num-frames 49 --seed 42 --output balloon.mp4
-```
-
-## 5. LLM Chat
-
-For language models, use the interactive chat:
-
-```bash
-neurobrix serve --model deepseek-moe-16b-chat
-neurobrix chat
-```
-
-```
-You: What is the capital of France?
-DeepSeek: The capital of France is Paris...
-You: /quit
-```
-
-## 6. CPU-Only Machines
-
-No GPU? NeuroBrix works on CPU too. Auto-detection handles it automatically:
+Serve mode loads the weights once and keeps them resident:
 
 ```bash
 neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
-neurobrix chat
+neurobrix chat                          # interactive multi-turn chat (language models)
+neurobrix run --prompt "Hello"          # --model can be omitted while a daemon runs
+neurobrix stop                          # stop the daemon and free memory
 ```
 
-CPU inference is slower than GPU, but small models like TinyLlama run well. Great for development, testing, and edge deployment.
+!!! tip "Targeting specific hardware"
+    By default NeuroBrix plans against the whole machine. `--hardware <profile-id>` targets a
+    specific hardware profile instead (see [Hardware Profiles](../guide/hardware.md)).
 
-## What Happened?
+## 4. Other families
 
-1. `neurobrix import` downloaded a `.nbx` container — a self-contained archive with the model's graph, weights, and topology
-2. `neurobrix serve` detected your hardware and loaded the model using the **Prism solver**, which automatically determined the best execution strategy
-3. `neurobrix run` executed the graph — the runtime has zero knowledge of what kind of model it is; it only sees tensors and operations
+```bash
+# Speech-to-text
+neurobrix import openai/whisper-large-v3-turbo
+neurobrix run --model whisper-large-v3-turbo --audio recording.wav
+
+# Video; --input-image switches an image-to-video model to its first frame
+neurobrix import zai-org/CogVideoX-2b
+neurobrix run --model CogVideoX-2b --prompt "a hot air balloon over mountains" \
+    --num-frames 17 --seed 42 --output balloon.mp4
+
+# Upscaling
+neurobrix import xinntao/Real-ESRGAN-RealESRGAN_x4plus
+neurobrix upscale --model Real-ESRGAN-RealESRGAN_x4plus --input photo.png --output photo_x4.png
+```
+
+## What happened?
+
+1. `neurobrix import` downloaded a `.nbx` container: a self-contained archive with the model's
+   graph, weights and topology.
+2. `neurobrix run` or `neurobrix serve` detected your hardware and planned where each component
+   runs.
+3. The runtime executed the graph read from the container; the engine has no per-model pipeline.

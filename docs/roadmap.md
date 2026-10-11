@@ -7,12 +7,12 @@ any model, any hardware, zero model-specific code. The goal of this
 project is neither fundraising nor a sale. The goal is to **finish the
 engine** — performant, model-agnostic, hardware-agnostic.
 
-Where we stand (v0.4.x): 42 published models across 10 categories —
-image, video, LLM, code, VLM, omni multimodal understanding, TTS, STT,
-speech understanding, upscalers — every model validated in four
-execution modes (PyTorch sequential, PyTorch compiled, Triton
-sequential, Triton compiled), automatic multi-GPU placement, a
-tool-calling agent loop on the serving daemon.
+Where we stand (updated 2026-10-12): the released version is 0.5.4
+(NVIDIA GPUs and CPU). The hub lists 45 public models across 10
+categories: image, video, LLM, code, VLM, omni multimodal, TTS, STT,
+speech understanding, upscalers. Each release's notes say which models
+and modes are known not to work. Apple Silicon (Phase 3) is being
+integrated on `main` for 0.5.5.
 
 Five phases, in order.
 

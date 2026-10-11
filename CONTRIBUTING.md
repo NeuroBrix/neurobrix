@@ -12,8 +12,8 @@ NeuroBrix is developed and maintained by **WizWorks OÜ**, a property of **Neura
 
 Found something broken? Open a Bug Report on [GitHub](https://github.com/NeuroBrix/neurobrix/issues/new/choose) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues/new) with:
 
-- NeuroBrix version (`neurobrix info`)
-- Hardware profile used
+- NeuroBrix version (`neurobrix --version`) and the output of `neurobrix doctor`
+- Hardware (GPU model and count, or CPU only) and the execution mode flag used
 - Model name and family
 - Steps to reproduce
 - Full error traceback
@@ -31,7 +31,7 @@ Have an idea? Open a Feature Request on [GitHub](https://github.com/NeuroBrix/ne
 Want a specific model in the NeuroBrix Hub? Open a Model Request on [GitHub](https://github.com/NeuroBrix/neurobrix/issues/new/choose) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues/new) with:
 
 - Model name and source (Hugging Face link, paper, etc.)
-- Model family (image, LLM, audio, video)
+- Model family (LLM, code, vision-language, multimodal, speech-to-text, speech understanding, text-to-speech, image, video, upscaler)
 - Why this model matters to you
 
 ### Contribute Code
@@ -42,7 +42,7 @@ We welcome contributions across the entire stack:
 |------|-------------|-------------|
 | **Kernels** | Triton GPU kernels for attention, normalization, activations | Advanced |
 | **Hardware Profiles** | YAML profiles for new GPU configurations | Beginner |
-| **Core Runtime** | Executor, Prism solver, compiled sequences | Advanced |
+| **Core Runtime** | Executor, hardware placement, compiled sequences | Advanced |
 | **CLI** | New commands, UX improvements, output formatting | Intermediate |
 | **Documentation** | Guides, API docs, tutorials, translations | Beginner |
 | **Testing** | Test coverage, regression tests, benchmarks | Intermediate |
@@ -56,8 +56,8 @@ We welcome contributions across the entire stack:
 ### Prerequisites
 
 - Python 3.10+
-- PyTorch 2.1+ with CUDA
-- NVIDIA GPU (for kernel development)
+- PyTorch 2.1+ (a CUDA build for GPU work; see the [installation guide](docs/getting-started/installation.md))
+- An NVIDIA GPU for kernel development; the unit tests run without one
 - Git
 
 ### Clone and Install
@@ -75,13 +75,18 @@ pip install -e ".[dev]"
 ### Project Structure
 
 ```
-neurobrix/
+src/neurobrix/
   cli/           Command-line interface
-  core/          Runtime engine (executor, prism, dtype, flows)
-  kernels/       Triton GPU kernels
+  core/          Runtime engine (executor, placement, dtype, flows, strategies)
+  triton/        Triton compute branch (sequence, flows, weight loading)
+  kernels/       Triton GPU kernels and the NBXTensor type
   nbx/           .nbx container format
   serving/       Model serving daemon
-  config/        Hardware profiles, family configs
+  agent/         Tool-calling agent loop on the daemon
+  config/        Hardware profiles, vendor and family configs
+tests/
+  unit/          Unit tests (no GPU needed)
+  regression/    Regression tests (need installed models and a GPU)
 ```
 
 ---
@@ -146,13 +151,10 @@ Branch naming conventions:
 ### 3. Test Your Changes
 
 ```bash
-# Run the test suite
-python -m pytest tests/
+# Unit tests (no GPU needed)
+PYTHONPATH=src python -m pytest tests/unit
 
-# For kernel changes, run with GPU
-python -m pytest tests/kernels/ --gpu
-
-# Validate a model still works
+# Validate a container still passes the integrity checks
 neurobrix validate <model.nbx> --level deep --strict
 ```
 
@@ -180,19 +182,28 @@ All PRs require review from a maintainer. We look for:
 Adding a hardware profile is one of the easiest ways to contribute. Create a YAML file:
 
 ```yaml
-# config/hardware/your-gpu-profile.yaml
+# src/neurobrix/config/hardware/rtx4090-24g.yml
 id: rtx4090-24g
-name: "NVIDIA RTX 4090 24GB"
-gpus:
-  - vram_gb: 24
-    compute_capability: "8.9"
-    name: "RTX 4090"
-interconnect: null
-total_vram_gb: 24
-gpu_count: 1
+vendor: nvidia
+preferred_dtype: bfloat16
+summary:
+  total_gpus: 1
+  total_vram_gb: 24
+  topology: Single-GPU
+devices:
+- index: 0
+  brand: nvidia
+  model: NVIDIA GeForce RTX 4090
+  memory_mb: 24576
+  compute_capability: '8.9'
+  supports_dtypes: [float32, float16, bfloat16]
+  architecture: ada
+interconnect:
+  groups: []
 ```
 
-Place it in `config/hardware/` and submit a PR.
+Use an existing file in `src/neurobrix/config/hardware/` as the template, and see
+[Writing Hardware Profiles](docs/guide/hardware-profiles.md). Submit it as a PR.
 
 ---
 

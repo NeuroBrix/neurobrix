@@ -12,17 +12,17 @@ body:
     id: version
     attributes:
       label: NeuroBrix Version
-      description: "Run `neurobrix info` and paste the version"
-      placeholder: "e.g., 0.1.0a4"
+      description: "Run `neurobrix --version` and paste the output"
+      placeholder: "e.g., NeuroBrix v0.5.4"
     validations:
       required: true
 
   - type: input
     id: hardware
     attributes:
-      label: Hardware Profile
-      description: "The hardware profile used (e.g., v100-32g)"
-      placeholder: "e.g., v100-32g"
+      label: Hardware
+      description: "GPU model(s) and count, or CPU only; the --hardware profile if you passed one"
+      placeholder: "e.g., 2x NVIDIA V100 32GB, or CPU only"
     validations:
       required: true
 
@@ -30,8 +30,8 @@ body:
     id: model
     attributes:
       label: Model Name
-      description: "The model you were running"
-      placeholder: "e.g., sana/1600m-1024"
+      description: "The hub identifier of the model you were running"
+      placeholder: "e.g., TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     validations:
       required: true
 
@@ -40,10 +40,13 @@ body:
     attributes:
       label: Model Family
       options:
-        - Image Generation
-        - Large Language Model
-        - Audio
-        - Video
+        - Language model (LLM / code)
+        - Vision-language or multimodal
+        - Speech-to-text or speech understanding
+        - Text-to-speech
+        - Image generation
+        - Video generation
+        - Upscaler
         - Other
     validations:
       required: true
@@ -60,6 +63,8 @@ body:
         - neurobrix hub
         - neurobrix validate
         - neurobrix inspect
+        - neurobrix upscale
+        - neurobrix doctor
         - Other
     validations:
       required: true
@@ -103,5 +108,5 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: "Output of `neurobrix info --system`"
+      description: "Output of `neurobrix doctor` and `neurobrix info --system`, and the execution mode flag used (--compiled, --triton, ...)"
       render: shell
