@@ -77,7 +77,7 @@ def test_gpu_present_but_torch_blind_is_a_blocking_problem(monkeypatch, capsys):
     text = problems[0]
     assert "PyTorch reports no CUDA" in text
     assert "index-url" in text, "a diagnosis without the fix command is half a diagnosis"
-    assert "cu121" in text, "Volta must be sent to a CUDA build that still has sm_70"
+    assert "cu126" in text, "Volta must be sent to the build measured on sm_70"
 
 
 def test_gpu_architecture_missing_from_the_wheel_is_caught(monkeypatch):
@@ -116,6 +116,43 @@ def test_missing_torch_is_reported(monkeypatch):
     assert problems and "PyTorch is not installed" in problems[0]
 
 
-@pytest.mark.parametrize("cap,expected", [("7.0", "cu121"), ("8.6", "cu124"), (None, "cu124")])
-def test_install_hint_matches_the_gpu_generation(cap, expected):
-    assert expected in doctor._torch_install_hint(cap)
+def test_volta_is_sent_to_the_served_stack():
+    """The V100 build is the one the engine is served on (torch 2.14.0+cu126).
+    Until 2026-10-12 doctor named cu121, a literal in the code that had
+    outlived the stack it described."""
+    hint = doctor._torch_install_hint("7.0")
+    assert hint.endswith("--index-url https://download.pytorch.org/whl/cu126"), hint
+
+
+def test_the_hint_is_read_from_the_wheel_table(monkeypatch):
+    """Change the table and the hint follows: the build is data, not code."""
+    table = doctor._torch_wheels()
+    table["builds"]["volta"]["build"] = "cu999"
+    monkeypatch.setattr(doctor, "_torch_wheels", lambda: table)
+    assert doctor._torch_install_hint("7.0").endswith("whl/cu999")
+
+
+def test_every_table_entry_names_its_source():
+    table = doctor._torch_wheels()
+    assert table["builds"], "an empty table would turn every hint into the selector"
+    for arch, entry in table["builds"].items():
+        assert entry.get("source", "").strip(), f"{arch}: a build without its source"
+    assert table["cpu_only"]["source"].strip()
+
+
+@pytest.mark.parametrize("cap", ["8.6", "9.0", None])
+def test_an_unmeasured_gpu_is_told_so_not_given_a_guess(cap):
+    hint = doctor._torch_install_hint(cap)
+    assert "no PyTorch build has been measured" in hint
+    assert "pytorch.org/get-started/locally" in hint
+    assert "<cuda-build>" in hint
+
+
+def test_doctor_carries_no_build_literal():
+    """A CUDA build or a wheel URL written in doctor.py is the defect this
+    table replaced."""
+    import re
+    from pathlib import Path
+    src = Path(doctor.__file__).read_text()
+    found = re.findall(r"\bcu\d{3}\b|download\.pytorch\.org", src)
+    assert not found, f"doctor.py carries {found}; it belongs in config/torch_wheels.yml"

@@ -26,7 +26,7 @@ import argparse
 from pathlib import Path
 
 from neurobrix import __version__
-from neurobrix.cli.utils import REGISTRY_URL
+from neurobrix.cli.utils import REGISTRY_URL, IMPORT_EXAMPLES
 
 
 def _add_run_arguments(p):
@@ -73,11 +73,10 @@ def _add_run_arguments(p):
                                  'Useful for debugging individual ATen ops. '
                                  'Slower than --compiled.')
     p.add_argument('--triton', action='store_true',
-                            help='Triton-pure compiled mode: NeuroBrix Triton kernels '
-                                 'with arena + closures + fused kernels (TritonSequence). '
-                                 'Production NeuroBrix Triton mode. Should match or beat '
-                                 '--compiled on target shapes (project bet: custom '
-                                 'kernels > cuDNN).')
+                            help='Triton-pure compiled mode: every op runs on NeuroBrix\'s '
+                                 'own Triton kernels, with no cuDNN or cuBLAS, through '
+                                 'a preallocated memory arena and fused kernels '
+                                 '(TritonSequence). Needs the triton package.')
     p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
                             help='Triton-pure eager mode: Triton kernels op-by-op (no '
                                  'fusion, TritonSequentialDispatcher). Equivalent of '
@@ -326,13 +325,12 @@ For more information: https://neurobrix.es
         help='Download model from NeuroBrix registry',
         description='Download a .nbx model from neurobrix.es and extract to local cache',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  neurobrix import pixart/sigma-xl-1024
-  neurobrix import deepseek/janus-pro-7b
-        """
+        epilog="Examples:\n"
+               + "".join(f"  neurobrix import {ref}\n" for ref in IMPORT_EXAMPLES)
+               + "\nRun `neurobrix hub` to list every model the registry serves.\n"
     )
-    import_parser.add_argument('model_ref', help='Model reference: org/name (e.g., sana/1600m-1024)')
+    import_parser.add_argument('model_ref',
+                               help=f'Model reference: org/name (e.g., {IMPORT_EXAMPLES[0]})')
     import_parser.add_argument('--registry', default=None, help=f'Registry URL (default: {REGISTRY_URL})')
     import_parser.add_argument('--force', action='store_true', help='Re-download even if already cached')
     import_parser.add_argument('--no-keep', action='store_true', dest='no_keep',
