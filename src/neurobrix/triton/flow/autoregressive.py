@@ -331,9 +331,9 @@ class TritonAutoregressiveHandler:
                                    "argmax": idx_sorted[0]}, _f)
                 print(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}",
                       flush=True)
+            # `flow.first_token` is stamped inside the step, at the per-token
+            # emit site every decoding flow shares (decode_progress.emit).
             next_token, is_done = generator.step(logits, step_idx)
-            if step_idx == 0:
-                _phase_mark("flow.first_token")
             # A census shadow walks the decode by bucket classes of the cache length, not by
             # tokens (kernels/census.py::pace, 0 on a live run): the positions up to the
             # current bucket's top would produce this step's keys, so the cache's counters

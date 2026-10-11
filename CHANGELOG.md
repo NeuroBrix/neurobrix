@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expert cache on the card's standard memory rung (`expert_working_set` in `--json`). Placement
   does not use it yet. A 30B model with 3B active on a 32 GB V100: 58 235 MB dense, 6 395 MB for
   one token's dense part and experts.
+- **Every `neurobrix run` prints its timings on one line.** After the run, in both the default and
+  the Triton mode:
+  `[Timings] load_s=… ttft_s=… tpot_ms=… tok_s=… tokens=… first=token|output`. These are the load
+  time (container to ready, weight loading included), the time to the first token, the time per
+  decoded token, the tokens per second and the token count. For a model that does not generate
+  tokens (image, video, speech), the time to first output is measured to the finished output,
+  and the token fields read `na`.
 
 - **Faster 3x3 convolutions on Apple M4 Pro in the Triton mode.** The hardware profile can store
   3x3 convolution weights channels-innermost (`conv.weight_layout: KRSC`); the loader relays them
