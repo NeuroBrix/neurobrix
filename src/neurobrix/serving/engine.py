@@ -35,8 +35,9 @@ def daemon_identity() -> Dict[str, Any]:
     dispatcher answers — read from the engine's own sources (Studio request 1),
     the same record `neurobrix info --json` carries."""
     from neurobrix import __version__
-    from neurobrix.serving.protocol import PROTOCOL_VERSION, endpoint
-    return {"engine": __version__, "protocol": PROTOCOL_VERSION, "endpoint": endpoint(),
+    from neurobrix.serving.protocol import PROTOCOL_RANGE, PROTOCOL_VERSION, endpoint
+    return {"engine": __version__, "protocol": PROTOCOL_VERSION, "protocol_range": list(PROTOCOL_RANGE),
+            "endpoint": endpoint(),
             "operations": ["generate", "chat", "complete", "template", "new_chat", "status", "cancel",
                            "shutdown"]}
 
