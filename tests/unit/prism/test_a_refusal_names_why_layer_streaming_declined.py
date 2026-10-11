@@ -119,9 +119,14 @@ def test_the_kv_refusal_names_every_rejection_after_scoring(monkeypatch):
     The rung is imposed at 15 360: since the vlm flow declared its phases (2026-10-04) MiniCPM's
     decode phase (16 247 MB with its cache estimate) passes the check at the idle Mac's 16 384, and
     15 360 is the rung where every whole candidate is scored and then rejected by it (14 336 already
-    refuses them at scoring, before the check this cell reads)."""
+    refuses them at scoring, before the check this cell reads). Since Prism prices the Triton
+    engine's deferred drain (2026-10-11) every whole candidate has that much less room, so the rung
+    is 15 360 plus the drain read from the device's profile (954 MB on the M4 Pro: 16 314)."""
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
-    impose_rung(monkeypatch, 15360)
+    probe = PrismSolver()
+    probe._mode = "triton"
+    drain = probe._deferred_drain_mb(probe._prepare_devices(profile(APPLE_M4_PRO))[0])
+    impose_rung(monkeypatch, 15360 + int(round(drain)))
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
 
     def declines(self, *a, **k):

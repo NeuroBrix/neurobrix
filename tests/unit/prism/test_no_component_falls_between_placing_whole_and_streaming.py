@@ -82,7 +82,9 @@ def band_for(mode):
             dev = s._prepare_devices(profile(APPLE))[0]
             whole = s._whole_component_mb(c, COMP, seen[COMP], dev)
             total = seen[COMP].total_mb
-            _BANDS[mode] = (total, whole / s.whole_component_fraction)
+            # The top of the band is the rung whose usable part (`_usable_mb`: the rung times the
+            # fraction, less the Triton engine's deferred drain, 0 under compiled) equals `whole`.
+            _BANDS[mode] = (total, (whole + s._deferred_drain_mb(dev)) / s.whole_component_fraction)
         finally:
             mp.undo()
     return _BANDS[mode]
