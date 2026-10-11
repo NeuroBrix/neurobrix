@@ -105,11 +105,15 @@ def _parse_env_int(name: str, default: int) -> int:
 _DEFERRED_DRAIN_COUNT_DEFAULT = 512
 
 
-def _resolve_drain_policy():
+def _resolve_drain_policy(planned_cliff: Optional[int] = None):
     """Resolve the per-run deferred-drain policy once, applying env overrides.
 
     Returns `(cliff, floor, reserve, interval, count_limit)`. The config-driven
-    base comes from `wrappers.deferred_drain_policy()`; two env overrides layer
+    base comes from `wrappers.deferred_drain_policy()`; the cliff is then the
+    PLAN's (`planned_cliff`, `ComponentAllocation.deferred_drain_cliff_bytes`)
+    when Prism set one — Prism budgeted this device against that figure, never
+    against the profile's, and the pressure floor never exceeds it. Two env
+    overrides layer
     on top for reproducibility/demonstration (looked up once per run, never in
     the hot loop):
       - NBX_DEFERRED_DRAIN_BYTES pins `cliff` AND disables the pressure branch
@@ -120,6 +124,9 @@ def _resolve_drain_policy():
     (R30 by construction). No torch, no compute (R33).
     """
     cliff, floor, reserve, interval = deferred_drain_policy()
+    if planned_cliff is not None:
+        cliff = int(planned_cliff)
+        floor = min(floor, cliff)
     _env_cap = _parse_env_int("NBX_DEFERRED_DRAIN_BYTES", 0)
     if _env_cap > 0:
         cliff = _env_cap
@@ -268,10 +275,13 @@ _ACCUMULATOR_OPS = frozenset({
 })
 
 
-def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int) -> str:
+def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int,
+                            planned: bool = False) -> str:
     """For a refused device allocation only: what the deferred dead-tensor queue held when the op
-    asked, against what the plan priced for it (the drain cliff, `memory.deferred_drain_cliff_bytes`,
-    which `PrismSolver._deferred_drain_mb` subtracts from every card's usable part). The allocator no
+    asked, against the cliff this run drained at — the PLAN's (`planned`: Prism's
+    `ComponentAllocation.deferred_drain_cliff_bytes`, the room it left beside what it holds whole
+    on the device) or the profile's (`memory.deferred_drain_cliff_bytes`, which
+    `PrismSolver._deferred_drain_mb` subtracts from every card's usable part). The allocator no
     longer drains the queue and retries (2026-10-11): an OOM is raised, and this line says whether
     the queue stayed inside its price — then the plan under-priced the op's live set — or not.
     Any other failure passes through with nothing appended."""
@@ -281,9 +291,10 @@ def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int) -> str:
     mb = 1024 * 1024
     asked = getattr(exc, "requested", None)
     within = deferred_bytes <= drain_cliff
+    whose = "the plan's drain cliff" if planned else "the profile's drain cliff"
     return (f" | the op asked {asked / mb:,.0f} MB" if asked else " | the op's request")\
         + (f" with the deferred-free queue holding {deferred_bytes / mb:,.0f} MB of the "
-           f"{drain_cliff / mb:,.0f} MB the plan priced for it (the drain cliff): "
+           f"{drain_cliff / mb:,.0f} MB priced for it ({whose}): "
            + ("the queue stayed inside its price, so the plan under-priced this op's live set"
               if within else "the queue overran its price"))
 
@@ -379,8 +390,11 @@ class TritonSequence:
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
-                 config_constants=None):
+                 config_constants=None, drain_cliff_bytes: Optional[int] = None):
         self.dag = dag
+        # The deferred-drain cliff Prism planned for this device (None: the profile's) —
+        # `_resolve_drain_policy(planned_cliff=...)` in both hot loops.
+        self._planned_drain_cliff: Optional[int] = drain_cliff_bytes
         # profile.json architectural ints — the seq_len promotion's collision set (R30 mirror)
         self._config_constants = set(config_constants or ())
         self.device_idx = device_idx
@@ -915,7 +929,8 @@ class TritonSequence:
             "output_tensor_ids": list(plan["frontier_tids"]),
             "torch_dtype": self.dag.get("torch_dtype", ""),
         }
-        seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype)
+        seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype,
+                             drain_cliff_bytes=self._planned_drain_cliff)
         seq.set_activations_fp16_safe(self._activations_fp16_safe)
         seq.compile()
         seq.bind_weights(weights)
@@ -3473,7 +3488,8 @@ class TritonSequence:
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
-         _drain_count_limit) = _resolve_drain_policy()
+         _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
+        _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
@@ -3962,7 +3978,7 @@ class TritonSequence:
                         if isinstance(a, NBXTensor))
                     _msg = _oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff)} | None args at "
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
                         e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
@@ -4247,7 +4263,8 @@ class TritonSequence:
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
-         _drain_count_limit) = _resolve_drain_policy()
+         _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
+        _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
@@ -4335,7 +4352,7 @@ class TritonSequence:
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(_oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff)} | None args at "
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
@@ -4355,7 +4372,7 @@ class TritonSequence:
                 except Exception as e:
                     raise RuntimeError(_oom_annotate(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
-                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff)}", e,
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
 

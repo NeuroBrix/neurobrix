@@ -14,9 +14,15 @@ half a drain under the usable part of the rung before the drain is priced — so
 the queue is not counted. The figures are read from the solver and the vendor profile, never
 written here.
 
+Option B (merge-queue-25): the plan carries a per-device cliff, `min(profile cliff, room)`, room =
+the rung's part less the largest component it holds whole there; a component is held whole only if
+that room is at least the profile's `deferred_drain_floor_bytes`, and the hot loop drains at the
+plan's cliff.
+
 What these cells would do on the code before the price: the first fails at the missing
 `_deferred_drain_mb`; with the price forced to 0 (the injection), the first fails on the figure and
-the second places the component whole on the card under Triton — the plan that needed the rescue.
+the floor cell places the component whole on the card under Triton — the plan that needed the
+rescue. With the plan's cliff not recorded or not read, the room and hot-loop cells fail.
 """
 from __future__ import annotations
 
@@ -70,27 +76,94 @@ def _place(s, dev, mem):
     return s._place_component(None, "denoiser", mem, [dev], {}, profile(V100_16GB))
 
 
-def test_a_component_that_fits_only_without_the_drain_is_not_held_whole_under_triton(monkeypatch):
-    s_c, dev_c = _card(monkeypatch, "compiled")
-    s_t, dev_t = _card(monkeypatch, "triton")
-    cliff = _cliff_mb(dev_t)
-    factor = s_t._live_activation_mb(SimpleNamespace(activation_mb=1.0))   # the arena factor, read
-    room = s_c._usable_mb(dev_c) - cliff / 2          # what the card holds before the drain is priced
+def _floor_mb(dev) -> float:
+    brand = getattr(dev.spec.brand, "value", dev.spec.brand)
+    return get_vendor_config(brand, dev.spec.architecture)["memory"]["deferred_drain_floor_bytes"] / MB
+
+
+def _component_of_whole(s_t, dev_t, whole_target):
+    """A synthetic component whose whole cost on `dev_t` is `whole_target` MB (the arena factor
+    read from the solver, never written here)."""
+    factor = s_t._live_activation_mb(SimpleNamespace(activation_mb=1.0))
     act = 1024.0
-    weight = room - act * factor                       # whole under Triton = room, inside usable - 0
+    weight = whole_target - act * factor
     mem = SimpleNamespace(weight_mb=weight, activation_mb=act, total_mb=weight + act,
                           weight_bytes=int(weight * MB), activation_bytes=int(act * MB),
-                          overhead_bytes=0)
+                          overhead_bytes=0, peak_op_uid=None, activation_profiled=True)
     s_t._get_component_dtype = lambda c, n: "float16"
-    whole = s_t._whole_component_mb(None, "denoiser", mem, dev_t)
-    assert s_c._usable_mb(dev_c) - cliff < whole <= s_c._usable_mb(dev_c), (
-        "the scenario no longer sits between the two figures")
+    assert s_t._whole_component_mb(None, "denoiser", mem, dev_t) == pytest.approx(whole_target)
+    return mem
+
+
+def _plan_cliff(s, dev, mem, placed_on) -> int:
+    """The cliff `_assign_drain_cliffs` sets on a one-component plan placed on `placed_on`."""
+    from neurobrix.core.prism.solver import ComponentAllocation
+    alloc = ComponentAllocation(name="denoiser", devices=[placed_on.split("zero3:")[-1]],
+                                dtype="float16", memory_mb=mem.total_mb, architecture="volta",
+                                vendor="nvidia",
+                                strategy="zero3" if placed_on.startswith("zero3:") else "single_gpu")
+    plan = SimpleNamespace(components={"denoiser": alloc}, component_memory={"denoiser": mem},
+                           layer_stream_plan={}, component_tiling={}, deferred_drain_cliffs={})
+    s._assign_drain_cliffs(None, plan, [dev])
+    assert plan.deferred_drain_cliffs.get(dev.device_string) == alloc.deferred_drain_cliff_bytes
+    return alloc.deferred_drain_cliff_bytes
+
+
+def test_a_component_whole_beside_a_smaller_queue_stays_whole_and_the_plan_drains_at_its_room(monkeypatch):
+    """Option B (merge-queue-25): a component that fits whole beside a queue SMALLER than the
+    profile's cliff, yet at least the profile's floor, is held whole, and the plan records the
+    room it leaves as that device's cliff — the Janus-on-the-idle-Mac shape (room 904 MB)."""
+    s_c, dev_c = _card(monkeypatch, "compiled")
+    s_t, dev_t = _card(monkeypatch, "triton")
+    cliff, floor = _cliff_mb(dev_t), _floor_mb(dev_t)
+    part = s_c._usable_mb(dev_c)                        # the rung's part, no queue under compiled
+    assert s_t._rung_part_mb(dev_t) == pytest.approx(part)
+    room = (cliff + floor) / 2                          # between the floor and the profile's cliff
+    mem = _component_of_whole(s_t, dev_t, part - room)
+    placed = _place(s_t, dev_t, mem)
+    assert placed is not None and placed[0] == dev_t.device_string, (
+        f"a component leaving {room:,.0f} MB (floor {floor:,.0f}, cliff {cliff:,.0f}) not held whole: {placed}")
+    planned = _plan_cliff(s_t, dev_t, mem, placed[0])
+    assert planned == pytest.approx(room * MB, abs=MB), (
+        f"the plan drains at {planned / MB:,.0f} MB, not the {room:,.0f} MB the component leaves")
+    assert planned < cliff * MB
+    # The compiled engine has no queue: the same component is whole, and no cliff is recorded.
+    assert _place(s_c, dev_c, mem)[0] == dev_c.device_string
+    assert _plan_cliff(s_c, dev_c, mem, dev_c.device_string) is None
+
+
+def test_a_component_leaving_less_than_the_floor_is_not_held_whole_under_triton(monkeypatch):
+    s_c, dev_c = _card(monkeypatch, "compiled")
+    s_t, dev_t = _card(monkeypatch, "triton")
+    floor = _floor_mb(dev_t)
+    part = s_c._usable_mb(dev_c)
+    mem = _component_of_whole(s_t, dev_t, part - floor / 2)     # leaves half the floor
     placed = _place(s_t, dev_t, mem)
     assert placed is not None
-    assert placed[0] != dev_t.device_string, (
-        f"{whole:,.0f} MB held whole on {dev_t.device_string} beside a {cliff:,.0f} MB drain the "
-        f"usable {s_t._usable_mb(dev_t) + cliff:,.0f} MB cannot also hold: the plan the allocator "
-        f"had to rescue")
-    assert placed[0] == f"zero3:{dev_t.device_string}", placed
+    assert placed[0] == f"zero3:{dev_t.device_string}", (
+        f"a component leaving {floor / 2:,.0f} MB beside it, under the {floor:,.0f} MB drain floor, "
+        f"placed {placed[0]} — the plan the allocator had to rescue")
+    # Its plan, held off the card, drains at the profile's cliff.
+    assert _plan_cliff(s_t, dev_t, mem, placed[0]) == int(_cliff_mb(dev_t) * MB)
     # The control: the compiled engine has no queue, and holds the same component whole.
     assert _place(s_c, dev_c, mem)[0] == dev_c.device_string
+
+
+def test_the_hot_loop_drains_at_the_plans_cliff_and_the_door_still_pins_it(monkeypatch):
+    from neurobrix.kernels.wrappers import deferred_drain_policy
+    from neurobrix.triton.sequence import TritonSequence, _resolve_drain_policy
+
+    monkeypatch.delenv("NBX_DEFERRED_DRAIN_BYTES", raising=False)
+    monkeypatch.delenv("NBX_DEFERRED_DRAIN_RESERVE", raising=False)
+    prof_cliff, prof_floor = deferred_drain_policy()[:2]
+    planned = 904 * MB
+    assert planned < prof_cliff
+    cliff, floor = _resolve_drain_policy(planned)[:2]
+    assert cliff == planned, "the hot loop drains at the profile's cliff, not the plan's"
+    assert floor == min(prof_floor, planned)
+    assert _resolve_drain_policy(None)[:2] == (prof_cliff, prof_floor)
+    # The sequence carries the plan's figure to both hot loops (and to its sub-sequences).
+    seq = TritonSequence({"ops": {}, "tensors": {}}, drain_cliff_bytes=planned)
+    assert seq._planned_drain_cliff == planned
+    monkeypatch.setenv("NBX_DEFERRED_DRAIN_BYTES", str(300 * MB))
+    assert _resolve_drain_policy(planned)[:2] == (300 * MB, 300 * MB), "the door no longer pins the cliff"

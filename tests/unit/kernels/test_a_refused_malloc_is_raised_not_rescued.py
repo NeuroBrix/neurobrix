@@ -79,9 +79,12 @@ def test_the_hot_loops_oom_line_states_the_ask_the_queue_and_its_price():
     oom = DeviceOOMError("GPU malloc failed (error 2) for 536870912 bytes", requested=512 * mb)
     inside = _deferred_drain_context(oom, 1605 * mb, 2_000_000_000)
     assert "asked 512 MB" in inside
-    assert "holding 1,605 MB" in inside and "1,907 MB the plan priced" in inside
+    assert "holding 1,605 MB" in inside and "1,907 MB priced for it (the profile's drain cliff)" in inside
     assert "under-priced this op's live set" in inside
     over = _deferred_drain_context(oom, 2500 * mb, 2_000_000_000)
     assert "overran its price" in over
+    # A run draining at the PLAN's cliff (Prism's room beside what it holds whole) names that one.
+    planned = _deferred_drain_context(oom, 700 * mb, 904 * mb, True)
+    assert "of the 904 MB priced for it (the plan's drain cliff)" in planned
     # Any other failure is passed through untouched: it must not read as a memory problem.
     assert _deferred_drain_context(RuntimeError("illegal memory access"), 1605 * mb, 2_000_000_000) == ""
