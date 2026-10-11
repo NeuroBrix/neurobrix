@@ -61,7 +61,7 @@ from neurobrix.serving.operations import OperationTable, Operation, serving_sett
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
     IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS, INSTANCE,
-    send_message, recv_message, MalformedFrame,
+    send_message, recv_message, MalformedFrame, version_refusal,
     make_response,
 )
 
@@ -466,6 +466,11 @@ class ServingDaemon:
                 continue
             if request is None:
                 break  # Client disconnected
+
+            refused = version_refusal(request)
+            if refused is not None:
+                send_message(conn, make_response(error=refused))
+                return   # a client of another protocol: told why, then closed
 
             method = request.get("method", "")
             _phase_mark(f"server.recv.{method or '?'}")

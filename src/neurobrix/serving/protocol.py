@@ -217,6 +217,33 @@ def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
 #: know instead of guessing (Studio requests 1 and 7). One number, read here.
 PROTOCOL_VERSION = 1
 
+#: The client protocol versions this daemon serves, inclusive. A request
+#: outside it is refused at that frame, before any work, and the connection is
+#: closed (Studio request 7): a client of another shape is told so instead of
+#: reading answers it cannot parse. Widened only when the daemon learns to
+#: serve an older shape beside its own.
+PROTOCOL_RANGE = (PROTOCOL_VERSION, PROTOCOL_VERSION)
+
+#: The version of a request that carries no `protocol` field: every client
+#: written before the field existed spoke version 1 without saying so. Served
+#: only while it lies in PROTOCOL_RANGE; refused like any other once it is not.
+UNSTAMPED_VERSION = 1
+
+
+def version_refusal(request: Dict[str, Any]) -> Optional[str]:
+    """Why this request's protocol version is not served here, or None."""
+    declared = request["protocol"] if "protocol" in request else UNSTAMPED_VERSION
+    if type(declared) is not int:         # bool is an int subclass: refused too
+        return (f"malformed request: `protocol` must be an integer, "
+                f"got {type(declared).__name__} {declared!r}")
+    low, high = PROTOCOL_RANGE
+    if low <= declared <= high:
+        return None
+    from neurobrix import __version__
+    side = "daemon" if declared > high else "client"
+    return (f"protocol {declared} is not served here: this daemon (engine {__version__}) "
+            f"accepts protocol {low}..{high}; update the {side}")
+
 
 def endpoint() -> Dict[str, Any]:
     """Where this process's daemon instance listens, as a record (Studio request 1)."""
@@ -224,8 +251,9 @@ def endpoint() -> Dict[str, Any]:
 
 
 def make_request(method: str, **params) -> Dict[str, Any]:
-    """Build a JSON-RPC request."""
+    """Build a JSON-RPC request, stamped with the protocol this client speaks."""
     return {
+        "protocol": PROTOCOL_VERSION,
         "method": method,
         "params": params,
     }
