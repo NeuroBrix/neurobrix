@@ -13,6 +13,11 @@ Injections (each RED, then restored GREEN; see the commit message):
     stop request) — the ordering test fails;
   * the work methods not taking the inference lock — the serialization test
     sees overlapping generations.
+  * the listener closed without waking accept() — every test's teardown
+    finds the accept loop still alive (a shutdown reply hung the daemon until
+    its idle timeout);
+  * an orphan recorded as a cancel, and the cancel outcomes collapsed to one
+    — the vanished-client and cancel-twice tests fail.
 """
 from __future__ import annotations
 
@@ -121,6 +126,7 @@ def daemon(monkeypatch):
     srv._close_listener()
     t.join(10)
     shutil.rmtree(d, ignore_errors=True)
+    assert not t.is_alive(), "closing the listener did not end the accept loop"
 
 
 def _client():
