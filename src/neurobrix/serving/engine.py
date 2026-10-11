@@ -42,6 +42,38 @@ def daemon_identity() -> Dict[str, Any]:
                            "shutdown"]}
 
 
+class _ReadKeys(dict):
+    """A request's params that remember which keys the handler looked at, so a
+    key nobody read is refused instead of silently ignored: the accepted set
+    is what the handler reads, never a list beside it."""
+
+    def __init__(self, params) -> None:
+        super().__init__(params)
+        self.read = set()
+
+    def __contains__(self, key) -> bool:
+        self.read.add(key)
+        return super().__contains__(key)
+
+    def __getitem__(self, key):
+        self.read.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self.read.add(key)
+        return super().get(key, default)
+
+    def pop(self, key, *default):
+        self.read.add(key)
+        return super().pop(key, *default)
+
+    def refuse_unread(self, also_read=()) -> None:
+        unread = sorted(set(self) - self.read)
+        if unread:
+            reads = ", ".join(sorted(self.read | set(also_read)))
+            raise ValueError(f"params key {unread[0]!r} is not read by this engine; it reads: {reads}")
+
+
 class InferenceEngine:
     """
     Persistent inference engine — load once, serve many.
@@ -202,6 +234,7 @@ class InferenceEngine:
             raise RuntimeError("ZERO FALLBACK: Engine not loaded. Call load() first.")
 
         # Build inputs dict (same structure as cmd_run)
+        kwargs = _ReadKeys(kwargs)
         inputs = {}
         if prompt:
             inputs["global.prompt"] = prompt
@@ -254,6 +287,9 @@ class InferenceEngine:
             seed = kwargs["seed"]
             inputs["global.seed"] = seed
             device_seed(self._device, seed)
+        # Every key was looked at by now: one nobody read is refused before
+        # the model runs (to_mac 2026-10-11 21:12, ZERO FALLBACK).
+        kwargs.refuse_unread(also_read=("prompt",))
 
         # Execute
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
