@@ -118,10 +118,21 @@ class DaemonClient:
 
     def send(self, method: str, **params) -> Dict[str, Any]:
         """Send JSON-RPC request and return response."""
+        return self._roundtrip(make_request(method, **params))
+
+    @staticmethod
+    def _work_request(method: str, op_id: Optional[str], **params) -> Dict[str, Any]:
+        """A work request; `op_id` (optional) names its operation so the
+        caller can cancel it from another connection before the reply."""
+        request = make_request(method, **params)
+        if op_id is not None:
+            request["op_id"] = op_id
+        return request
+
+    def _roundtrip(self, request: Dict[str, Any]) -> Dict[str, Any]:
         if self._sock is None:
             raise RuntimeError("ZERO FALLBACK: Not connected. Call connect() first.")
 
-        request = make_request(method, **params)
         send_message(self._sock, request)
 
         response = recv_message(self._sock)
@@ -133,15 +144,16 @@ class DaemonClient:
 
         return response.get("result", {})
 
-    def generate(self, prompt: str, **kwargs) -> Dict[str, Any]:
-        """Send generate request."""
-        return self.send("generate", prompt=prompt, **kwargs)
+    def generate(self, prompt: str, op_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """Send generate request. The result carries `op_id` and `status`
+        ("completed", or "cancelled" / "orphaned" / "stopped" with `steps`)."""
+        return self._roundtrip(self._work_request("generate", op_id, prompt=prompt, **kwargs))
 
-    def generate_stream(self, prompt: str, **kwargs):
+    def generate_stream(self, prompt: str, op_id: Optional[str] = None, **kwargs):
         """Send generate with stream=true; yield events as they arrive.
 
         Yields ("token", event) per decoded token — event carries
-        {step, n, token, done} and, for a text family, {text, rewind}: the
+        {step, n, token, done, op_id} and, for a text family, {text, rewind}: the
         text to append after taking back `rewind` characters, decoded by the
         engine's tokenizer — then ("result", result) once, and returns.
         The per-token events arrive live from the daemon's decode loop, so
@@ -150,7 +162,7 @@ class DaemonClient:
         if self._sock is None:
             raise RuntimeError("ZERO FALLBACK: Not connected. Call connect() first.")
 
-        request = make_request("generate", prompt=prompt, stream=True, **kwargs)
+        request = self._work_request("generate", op_id, prompt=prompt, stream=True, **kwargs)
         send_message(self._sock, request)
 
         while True:
@@ -165,13 +177,22 @@ class DaemonClient:
             yield ("result", msg.get("result", {}))
             return
 
-    def chat(self, message: str, **kwargs) -> Dict[str, Any]:
-        """Send chat request. Returns {text, context}."""
-        return self.send("chat", message=message, **kwargs)
+    def cancel(self, op_id: str) -> Dict[str, Any]:
+        """Cancel an operation (send it on a connection other than the one
+        running it). Returns {outcome, op_id, state, steps}; `outcome` is one of
+        cancelled, already_cancelled, already_finished, unknown_op, cancel_pending
+        — only "cancelled" confirms that this request stopped it."""
+        return self._roundtrip(make_request("cancel", op_id=op_id))
 
-    def complete(self, messages: list, tools=None, **kwargs) -> Dict[str, Any]:
-        """Stateless completion over caller-managed messages. Returns {text}."""
-        return self.send("complete", messages=messages, tools=tools, **kwargs)
+    def chat(self, message: str, op_id: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """Send chat request. Returns {text, context, op_id, status}."""
+        return self._roundtrip(self._work_request("chat", op_id, message=message, **kwargs))
+
+    def complete(self, messages: list, tools=None, op_id: Optional[str] = None,
+                 **kwargs) -> Dict[str, Any]:
+        """Stateless completion over caller-managed messages. Returns {text, op_id, status}."""
+        return self._roundtrip(self._work_request("complete", op_id, messages=messages,
+                                                  tools=tools, **kwargs))
 
     def template(self) -> Dict[str, Any]:
         """Fetch the loaded model's chat template text. Returns {text}."""

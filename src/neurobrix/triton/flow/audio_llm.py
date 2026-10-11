@@ -22,7 +22,7 @@ import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix import decode_progress
+from neurobrix import decode_progress, decode_stop
 from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.kernels import wrappers as w
@@ -297,9 +297,12 @@ class TritonAudioLLMEngine:
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
-            decode_progress.record(_step, len(generated_ids), next_token,
-                                   next_token == eos_token_id or _step + 1 >= max_tokens)
-            if next_token == eos_token_id:
+            _done = next_token == eos_token_id or _step + 1 >= max_tokens
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = not _done and decode_stop.requested(len(generated_ids))
+            decode_progress.record(_step, len(generated_ids), next_token, _done or _stop)
+            if next_token == eos_token_id or _stop:
                 break
 
             token_embed = self._embed_ids(

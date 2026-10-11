@@ -14,7 +14,7 @@ import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix import decode_progress
+from neurobrix import decode_progress, decode_stop
 from .base import FlowHandler, FlowContext, register_flow
 from .table_gather import gather_rows
 from neurobrix.core.memory.manager import release_flow_memory
@@ -260,10 +260,12 @@ class AudioLLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
-            decode_progress.record(step, len(generated_ids), next_token,
-                                   next_token == eos_token_id or step + 1 >= max_tokens)
-
-            if next_token == eos_token_id:
+            _done = next_token == eos_token_id or step + 1 >= max_tokens
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = not _done and decode_stop.requested(len(generated_ids))
+            decode_progress.record(step, len(generated_ids), next_token, _done or _stop)
+            if next_token == eos_token_id or _stop:
                 break
 
             # Append new token embedding to context
