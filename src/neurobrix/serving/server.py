@@ -45,6 +45,7 @@ ZERO HARDCODE: Model name and hardware profile from CLI args; the dispatcher's
 limits and timeouts from config/system.yml `serving:`.
 """
 
+import json
 import os
 import sys
 import select
@@ -53,6 +54,7 @@ import socket
 import threading
 import time
 import traceback
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from neurobrix import decode_progress, decode_stop
@@ -64,6 +66,9 @@ from neurobrix.serving.protocol import (
     send_message, recv_message, MalformedFrame, version_refusal,
     make_response,
 )
+
+#: The prefix of the one stdout line that carries the daemon's ready record.
+READY_LINE = "NBX-READY"
 
 #: The methods that run the model: each is an operation under the inference lock.
 WORK_METHODS = ("generate", "chat", "complete")
@@ -136,7 +141,10 @@ class ServingDaemon:
         self._idle_timeout = idle_timeout
         self._running = False
         self._server_socket: Optional[socket.socket] = None
-        self._ready_fd: Optional[int] = None  # Write end of pipe for ready signal
+        # Where the launcher waits for the ready record, besides stdout: the
+        # write end of its pipe (POSIX) or a file (a launcher with no pipe).
+        self._ready_fd: Optional[int] = None
+        self._ready_file = None
         self._settings = serving_settings()
         self._ops = OperationTable(self._settings["operations_retained"])
         self._inference_lock = threading.Lock()
@@ -144,15 +152,24 @@ class ServingDaemon:
         self._conn_lock = threading.Lock()
         self._connections: Dict[socket.socket, threading.Thread] = {}
 
-    def start(self, foreground: bool = False) -> None:
+    def start(self, foreground: bool = False, ready_fd: Optional[int] = None,
+              ready_file=None) -> None:
         """
         Load model and start serving.
 
         If foreground=True, runs in current process (blocks terminal).
         If foreground=False (default):
-          - Unix/macOS: fork to background, parent waits for ready signal
-          - Windows: subprocess.Popen with CREATE_NEW_PROCESS_GROUP
+          - Linux: fork to background, the parent waits on a pipe
+          - macOS: a subprocess (fork+setsid breaks Metal), the parent waits on a pipe
+          - Windows: a subprocess with CREATE_NEW_PROCESS_GROUP, the parent
+            watches the instance's ready file
+
+        `ready_fd` / `ready_file` are where the process that launched this
+        one waits for the ready record (`--ready-fd` / `--ready-file`);
+        stdout carries it in every case (`READY_LINE`).
         """
+        self._ready_fd = ready_fd
+        self._ready_file = ready_file
         if not foreground:
             if IS_WINDOWS or sys.platform == "darwin":
                 # Windows + macOS: spawn subprocess (fork+setsid breaks Metal GPU on macOS)
@@ -172,14 +189,14 @@ class ServingDaemon:
         On macOS, os.fork() + os.setsid() breaks Metal GPU access
         (MTLCompilerService is per-session). Subprocess preserves the GPU context.
         On Windows, subprocess is the only option (no os.fork).
+
+        The child is this command again in the foreground, told where its
+        launcher waits: an inherited pipe on macOS (`pass_fds`), the
+        instance's ready file on Windows, where subprocess passes no fd.
         """
         import subprocess
-        import time
 
         DAEMON_DIR.mkdir(parents=True, exist_ok=True)
-        ready_path = DAEMON_DIR / "daemon.ready"
-        if ready_path.exists():
-            ready_path.unlink()
 
         # Build the command to re-execute ourselves in foreground mode
         cmd = [
@@ -196,44 +213,33 @@ class ServingDaemon:
             "stdin": subprocess.DEVNULL,
         }
 
+        read_fd = None
         if IS_WINDOWS:
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             DETACHED_PROCESS = 0x00000008
             popen_kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+            if INSTANCE.ready_path.exists():
+                INSTANCE.ready_path.unlink()   # a dead daemon's record is not this one's
+            cmd += ["--ready-file", str(INSTANCE.ready_path)]
         else:
             # macOS/Linux: start_new_session detaches without breaking GPU
             popen_kwargs["start_new_session"] = True
+            read_fd, write_fd = os.pipe()
+            popen_kwargs["pass_fds"] = (write_fd,)
+            cmd += ["--ready-fd", str(write_fd)]
 
         proc = subprocess.Popen(cmd, **popen_kwargs)
+        if read_fd is not None:
+            os.close(write_fd)   # only the child holds it: its exit closes the pipe
 
         print(f"[Serve] Loading model in background (PID {proc.pid})...")
         print(f"[Serve] Log: {LOG_PATH}")
 
-        # Poll for ready signal (file written by child after model load)
-        deadline = time.time() + 300  # 5 min max for model loading
-        while time.time() < deadline:
-            ret = proc.poll()
-            if ret is not None:
-                print(f"[Serve] Daemon process exited with code {ret}. Check {LOG_PATH}")
-                sys.exit(1)
-
-            if ready_path.exists():
-                msg = ready_path.read_text().strip()
-                ready_path.unlink()
-                if msg.startswith("ready:"):
-                    info = msg[6:].strip()
-                    print(f"[Serve] {info}")
-                    print(f"[Serve] Use 'neurobrix chat' to connect")
-                    print(f"[Serve] Use 'neurobrix stop' to shutdown")
-                    return
-                elif msg.startswith("error:"):
-                    print(f"[Serve] Failed: {msg[6:].strip()}")
-                    sys.exit(1)
-
-            time.sleep(0.5)
-
-        print(f"[Serve] Timed out waiting for daemon. Check {LOG_PATH}")
-        sys.exit(1)
+        record = wait_ready(proc, read_fd=read_fd,
+                            ready_file=None if read_fd is not None else INSTANCE.ready_path,
+                            poll_s=self._settings["ready_poll_s"])
+        if not _announce(record):
+            sys.exit(1)
 
     def _daemonize_unix(self) -> None:
         """
@@ -242,7 +248,7 @@ class ServingDaemon:
 
         Uses a pipe for clean ready signaling (no polling).
         """
-        # Create pipe: parent reads, child writes "ready" when model loaded
+        # Create pipe: parent reads, child writes the ready record when model loaded
         read_fd, write_fd = os.pipe()
 
         pid = os.fork()
@@ -255,27 +261,8 @@ class ServingDaemon:
             print(f"[Serve] Loading model in background (PID {pid})...")
             print(f"[Serve] Log: {LOG_PATH}")
 
-            read_pipe = os.fdopen(read_fd, 'r')
-            try:
-                # Block until child writes or pipe closes (child died)
-                msg = read_pipe.read()
-            finally:
-                read_pipe.close()
-
-            if msg.startswith("ready:"):
-                # Child loaded successfully
-                info = msg[6:].strip()
-                print(f"[Serve] {info}")
-                print(f"[Serve] Use 'neurobrix chat' to connect")
-                print(f"[Serve] Use 'neurobrix stop' to shutdown")
-                sys.exit(0)
-            elif msg.startswith("error:"):
-                print(f"[Serve] Failed: {msg[6:].strip()}")
-                sys.exit(1)
-            else:
-                # Pipe closed without message → child crashed
-                print(f"[Serve] Daemon process died unexpectedly. Check {LOG_PATH}")
-                sys.exit(1)
+            record = wait_ready(_ForkedChild(pid), read_fd=read_fd)
+            sys.exit(0 if _announce(record) else 1)
 
         else:
             # ── CHILD PROCESS (daemon) ──
@@ -297,23 +284,43 @@ class ServingDaemon:
             os.dup2(devnull, sys.stdin.fileno())
             os.close(devnull)
 
-    def _signal_ready(self, message: str) -> None:
-        """Signal parent process that daemon is ready (or failed)."""
-        if IS_WINDOWS or sys.platform == "darwin":
-            # Windows + macOS: write ready signal to a file (parent polls)
-            ready_path = DAEMON_DIR / "daemon.ready"
+    def _ready_record(self, error: Optional[BaseException] = None) -> Dict[str, Any]:
+        """What the launcher learns at start-up, as one record: ready (bound,
+        listening, model loaded) with where and what is served, or failed
+        with why. The identity part is the one `neurobrix info --json` prints."""
+        from neurobrix.serving.engine import daemon_identity
+        rec = {"state": "failed" if error is not None else "ready", "pid": os.getpid(),
+               "model": self._engine.model_name, **daemon_identity()}
+        if error is not None:
+            rec["error"] = f"{type(error).__name__}: {error}"
+        else:
+            rec["family"] = self._engine.family or "unknown"
+            rec["serving"] = "warm" if self._engine._warm_serving else "cold"
+        return rec
+
+    def _signal_ready(self, record: Dict[str, Any]) -> None:
+        """Say the ready record: one stdout line in every run (a launcher that
+        reads the child's stdout, e.g. Studio), then the launcher's pipe or
+        file when it gave one. A record that cannot be delivered is said in
+        the log; the daemon serves on (its clients do not need the launcher)."""
+        line = json.dumps(record, separators=(",", ":"))
+        print(f"{READY_LINE} {line}", flush=True)
+        if self._ready_fd is not None:
+            fd, self._ready_fd = self._ready_fd, None
             try:
-                ready_path.write_text(message)
-            except OSError:
-                pass
-        elif self._ready_fd is not None:
-            # Unix: write to pipe fd
+                os.write(fd, (line + "\n").encode())
+            except OSError as e:
+                print(f"[Daemon] ready signal not delivered on fd {fd}: {e}", flush=True)
+            finally:
+                os.close(fd)
+        if self._ready_file is not None:
+            path, self._ready_file = Path(self._ready_file), None
+            tmp = path.with_name(path.name + ".tmp")
             try:
-                os.write(self._ready_fd, message.encode())
-                os.close(self._ready_fd)
-            except OSError:
-                pass
-            self._ready_fd = None
+                tmp.write_text(line + "\n")
+                os.replace(tmp, path)   # the launcher never reads half a record
+            except OSError as e:
+                print(f"[Daemon] ready signal not delivered to {path}: {e}", flush=True)
 
     def _start_serving(self) -> None:
         """Load model, bind socket, enter serve loop."""
@@ -347,13 +354,7 @@ class ServingDaemon:
             INSTANCE.record_bound_port(server_socket)
             server_socket.listen(self._settings["listen_backlog"])
 
-            strategy = "warm" if self._engine._warm_serving else "cold"
-            family = self._engine.family or "unknown"
-            ready_msg = (
-                f"ready:Model loaded — {self._engine.model_name} "
-                f"({family}, {strategy} serving)"
-            )
-            self._signal_ready(ready_msg)
+            self._signal_ready(self._ready_record())
 
             print(f"\n[Daemon] Listening on {INSTANCE.endpoint()}")
             print(f"[Daemon] Idle timeout: {self._idle_timeout}s")
@@ -361,7 +362,7 @@ class ServingDaemon:
             self.serve(server_socket)
 
         except Exception as e:
-            self._signal_ready(f"error:{e}")
+            self._signal_ready(self._ready_record(e))
             raise
 
         finally:
@@ -764,3 +765,68 @@ class ServingDaemon:
                     print(f"[Daemon] Could not remove {f}: {e}")
 
         print("[Daemon] Cleaned up")
+
+
+class _ForkedChild:
+    """The `poll()` of a forked child, so `wait_ready` reads its exit code."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: Optional[int] = None
+
+    def poll(self) -> Optional[int]:
+        if self.returncode is None:
+            done, status = os.waitpid(self.pid, os.WNOHANG)
+            if done:
+                self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+    def wait(self) -> int:
+        if self.returncode is None:
+            self.returncode = os.waitstatus_to_exitcode(os.waitpid(self.pid, 0)[1])
+        return self.returncode
+
+
+def wait_ready(proc, read_fd: Optional[int] = None, ready_file=None,
+               poll_s: Optional[float] = None) -> Dict[str, Any]:
+    """The launcher's side: the daemon's ready record, or a failed record
+    naming the exit code of a child that ended without one.
+
+    With `read_fd` (POSIX) it blocks on the pipe the child inherited: no
+    sleep, no deadline — the child's exit closes the pipe. With `ready_file`
+    (Windows) it watches the file every `poll_s` until the file appears or
+    the child exits; the file is removed once read."""
+    if read_fd is not None:
+        with os.fdopen(read_fd, "r") as pipe:
+            line = pipe.readline()
+        if line.strip():
+            return json.loads(line)
+        code = proc.wait()
+    else:
+        path = Path(ready_file)
+        if poll_s is None:
+            poll_s = serving_settings()["ready_poll_s"]
+        while True:
+            if path.exists():
+                record = json.loads(path.read_text())
+                path.unlink()
+                return record
+            code = proc.poll()
+            if code is not None:
+                if path.exists():
+                    continue   # written just before the exit: read it
+                break
+            time.sleep(poll_s)
+    return {"state": "failed", "pid": proc.pid,
+            "error": f"the daemon process exited with code {code} before it was ready; see {LOG_PATH}"}
+
+
+def _announce(record: Dict[str, Any]) -> bool:
+    """What `neurobrix serve` prints once its background daemon answered."""
+    if record.get("state") != "ready":
+        print(f"[Serve] Failed: {record.get('error')}")
+        return False
+    print(f"[Serve] Model loaded — {record['model']} ({record['family']}, {record['serving']} serving)")
+    print(f"[Serve] Use 'neurobrix chat' to connect")
+    print(f"[Serve] Use 'neurobrix stop' to shutdown")
+    return True

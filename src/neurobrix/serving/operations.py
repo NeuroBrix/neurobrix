@@ -44,6 +44,7 @@ _SETTINGS = {
     "listen_backlog": (int,),
     "orphan_poll_s": (int, float),
     "drain_timeout_s": (int, float),
+    "ready_poll_s": (int, float),
 }
 
 

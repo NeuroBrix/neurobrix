@@ -442,6 +442,12 @@ Examples:
                               help='Idle timeout in seconds (default: 1800)')
     serve_parser.add_argument('--foreground', action='store_true',
                               help='Run in foreground (block terminal, for debugging)')
+    serve_parser.add_argument('--ready-fd', type=int, default=None,
+                              help='POSIX: an inherited pipe fd; the ready record (one JSON line) is '
+                                   'written there once the daemon accepts, then the fd is closed')
+    serve_parser.add_argument('--ready-file', default=None,
+                              help='A file the ready record (one JSON line) is written to, whole, once '
+                                   'the daemon accepts (the Windows launcher reads it there)')
     # Execution modes (mutually exclusive). When no flag is passed the
     # default is --compiled. Mirror of run_parser; see CLAUDE.md
     # "Execution Modes" section for the contract.

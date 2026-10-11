@@ -78,6 +78,9 @@ class Instance:
                              else DAEMON_DIR / "daemon.log")
             self.port_path = None
             self._fixed_port = None
+        # Where a launcher that cannot hand the daemon a pipe (Windows) reads
+        # its ready record: the instance's own, never shared between two.
+        self.ready_path = stem.with_suffix(".ready") if stem is not None else DAEMON_DIR / "daemon.ready"
 
     # -- addresses --------------------------------------------------------
     def bind_address(self):
