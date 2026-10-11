@@ -109,6 +109,25 @@ def _as_int(value) -> int:
     return int(getattr(value, "value", value) or 0)
 
 
+def _drains_autoreleased(method):
+    """Run a runtime method inside an autorelease pool, so what it autoreleases is released on return.
+
+    `-[MTLCommandQueue commandBuffer]` returns an AUTORELEASED command buffer, and a Python thread has no
+    pool: a synchronize, an event record or an event wait opened one each and none was ever released.
+    Measured 2026-10-11 on an M4 Pro: +1.6 KB per `stream_synchronize`, +3.1 KB per timed event pair;
+    `do_bench` times every sweep candidate by such events, so a certifier walk grew ~5 MB per key until
+    the memory guard killed it (`test_metal_command_buffers_are_drained.py`). What the runtime keeps
+    (an event's last buffer) it holds by its own reference, which the pool does not touch."""
+    import functools
+
+    @functools.wraps(method)
+    def drained(*args, **kwargs):
+        import objc
+        with objc.autorelease_pool():
+            return method(*args, **kwargs)
+    return drained
+
+
 #: The `new*` selectors this runtime calls through pyobjc. Every one returns an object the caller
 #: OWNS (+1, the Cocoa "new" family — for instance methods too, per clang's ownership rules).
 _NEW_FAMILY_SELECTORS = (b"newBufferWithLength:options:", b"newCommandQueue", b"newSharedEvent")
@@ -791,6 +810,7 @@ class MetalRuntime:
         with self._lock:
             return bool(self._open) or any(self._pending.values())
 
+    @_drains_autoreleased
     def sync(self) -> int:
         """`cudaDeviceSynchronize()` on the allocator's own queue.
 
@@ -842,6 +862,7 @@ class MetalRuntime:
             return _OK if self._queues.pop(key, None) is not None \
                 else _ERR_UNKNOWN_POINTER
 
+    @_drains_autoreleased
     def stream_sync(self, handle) -> int:
         key = _as_int(handle)
         if not key:
@@ -923,6 +944,7 @@ class MetalRuntime:
                                          "value": entry["value"]})
             return _OK
 
+    @_drains_autoreleased
     def event_record(self, handle, stream=None) -> int:
         """Signal the event from a command buffer on `stream`'s queue."""
         key = _as_int(handle)
@@ -957,6 +979,7 @@ class MetalRuntime:
         command_buffer.waitUntilCompleted()
         return _OK if command_buffer.error() is None else _ERR_ALLOC
 
+    @_drains_autoreleased
     def stream_wait_event(self, stream, handle, flags=None) -> int:
         """Make a queue wait on the event, without blocking the host."""
         key = _as_int(handle)
