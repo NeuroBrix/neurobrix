@@ -108,6 +108,7 @@ can meet without any engine fault:
 | unknown `method` | `Unknown method: <name>` | stays open |
 | `cancel` without a non-empty string `params.op_id` | `cancel needs params.op_id` | stays open |
 | work request whose `op_id` is not a non-empty string, or names a live operation | `refused: op_id ...` | stays open |
+| a `generate` params key the engine does not read (a misspelt `step`), refused before the model runs | `params key 'K' is not read by this engine; it reads: ...` (the keys it does read); `op_id` present | stays open |
 | engine failure during the work | the engine's message; `op_id` present | stays open |
 
 ## 5. Versions and the accepted range
@@ -136,7 +137,7 @@ the field is refused like any other out-of-range version.
 
 | method | params | result |
 |---|---|---|
-| `generate` | `prompt`; per family: `steps`, `height`, `width`, `num_frames`, `seed`, `cfg`, `max_tokens`, `temperature`, `repetition_penalty`, `speaker`, `mode`, `image_path`, `audio_path`, `chat_mode`; `stream` (bool); `output_path` (image, video and audio families: where to save) | `family`, `timing.total_s`, the family's output (text families: the text), `op_id`, `status` ∈ `completed`/`cancelled`/`orphaned`/`stopped`; when not `completed`, `steps` (tokens produced) and `detail` if any; `output_path` (the saved file) when `output_path` was given for an image, video or audio family. A params key not in this list is ignored today, without an error |
+| `generate` | `prompt`; per family: `steps`, `height`, `width`, `num_frames`, `seed`, `cfg`, `max_tokens`, `temperature`, `repetition_penalty`, `speaker`, `mode`, `image_path`, `audio_path`, `chat_mode`; `stream` (bool); `output_path` (image, video and audio families: where to save) | `family`, `timing.total_s`, the family's output (text families: the text), `op_id`, `status` ∈ `completed`/`cancelled`/`orphaned`/`stopped`; when not `completed`, `steps` (tokens produced) and `detail` if any; `output_path` (the saved file) when `output_path` was given for an image, video or audio family. A params key the engine does not read is refused (section 4) |
 | `chat` | `message`, sampling params | `text`, `context` (session window), `summarized` (bool) |
 | `complete` | `messages` (list of role/content), `tools` (optional), sampling params | `text` |
 | `template` | — | `text`: the model's chat template |
