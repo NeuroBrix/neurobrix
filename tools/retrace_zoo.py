@@ -1096,6 +1096,28 @@ def engine_fixed_point_reader(engine_src):
     return mod.unstamped_components
 
 
+def forge_trunk_door(forge_dir: Path):
+    """None when the Forge checkout sits at the trunk (its HEAD is the repository's `main`);
+    else the refusal, by name. Read from git, never from a list of revisions: one line only,
+    every retrace runs on Forge main (supervisor, 2026-10-12 01:25)."""
+    forge_dir = Path(forge_dir).resolve()
+
+    def git(*a):
+        r = subprocess.run(["git", "-C", str(forge_dir), *a], capture_output=True, text=True, timeout=60)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    head = git("rev-parse", "--verify", "HEAD")
+    trunk = git("rev-parse", "--verify", "refs/heads/main")
+    if head is None or trunk is None:
+        return (f"TRUNK DOOR: the Forge at {forge_dir} is not a git checkout holding a `main` "
+                f"(HEAD={head}, main={trunk}); a retrace runs on the trunk only; nothing traced")
+    if head != trunk:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        return (f"TRUNK DOOR: the Forge at {forge_dir} is at {head[:12]} ({branch}), not the trunk "
+                f"main {trunk[:12]}; a retrace runs on Forge main only; nothing traced")
+    return None
+
+
 def forge_fixed_point_door(forge_dir: Path, engine_src, scratch: Path, py: str = None):
     """None when Forge's single write stamps what the engine reads; else the refusal, by name.
     Memoised per (Forge checkout, engine tree)."""
@@ -1564,7 +1586,9 @@ class Model:
         return None
 
     def fixed_point_door(self):
-        return forge_fixed_point_door(FORGE.parent, self.args.src, Path(self.args.tmp))
+        """The Forge doors, checked before any trace or build: the trunk first, then the stamp."""
+        return (forge_trunk_door(FORGE.parent)
+                or forge_fixed_point_door(FORGE.parent, self.args.src, Path(self.args.tmp)))
 
     def step_trace(self):
         if self.done("trace"): return True
