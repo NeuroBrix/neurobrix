@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton mode runs graphs that cast to bool again.** A model whose graph casts a tensor to bool
+  (Allegro among them) stopped in the Triton mode with `unknown dtype 'bool_'`; it runs again.
+
 - **Models carrying double-precision constants run on Apple GPUs.** A device whose hardware
   profile declares no float64 support now receives those constants in float32, as the models'
   own reference code does there, instead of failing on the transfer.

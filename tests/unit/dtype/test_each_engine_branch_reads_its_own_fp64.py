@@ -175,6 +175,21 @@ def test_both_engines_hold_every_dtype_at_the_same_width(stores_fp64):
 
 
 @pytest.mark.parametrize("stores_fp64", [True, False])
+def test_the_triton_engine_stores_every_enum_member_the_table_carries(stores_fp64):
+    """Every NBXDtype member the table carries comes back as a member, `bool_` included: its enum name
+    is Python's keyword escape, not the table's name (mq24 Allegro triton, `unknown dtype 'bool_'`)."""
+    from neurobrix.triton import itemsize
+    from neurobrix.triton.dtype import TritonDtypeEngine
+    tri = TritonDtypeEngine(NBXDtype.float16, stores_fp64=stores_fp64)
+    carried = [m for m in NBXDtype if itemsize.canonical_name(m) in itemsize.known_dtypes()]
+    assert NBXDtype.bool_ in carried
+    for member in carried:
+        held = tri.storage_dtype(member)
+        assert isinstance(held, NBXDtype), member
+        assert held is member or itemsize.canonical_name(member) in ("float64", "complex128"), member
+
+
+@pytest.mark.parametrize("stores_fp64", [True, False])
 def test_every_triton_site_asks_its_engine(stores_fp64):
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
     from neurobrix.triton.dtype import constant_load_dtype

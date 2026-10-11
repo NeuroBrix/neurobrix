@@ -703,7 +703,10 @@ class TritonDtypeEngine:
         """`dtype` as this branch holds it: float64 -> float32 and complex128 -> complex64 where it
         carries no fp64, unchanged otherwise — `DtypeEngine.storage_dtype`'s mirror, through the
         module's `storage_dtype` (the one Triton narrowing)."""
-        return NBXDtype[storage_dtype(dtype.name, self.stores_fp64)]
+        # The MEMBER goes to the table, never its `.name`: `NBXDtype.bool_` is Python's keyword escape,
+        # which only `canonical_name` maps to the table's `bool` (mq24 Allegro triton, 2026-10-11).
+        from neurobrix.kernels.nbx_tensor import parse_dtype
+        return parse_dtype(storage_dtype(dtype, self.stores_fp64))
 
     def accumulation_dtype(self, dtype: NBXDtype) -> NBXDtype:
         """The dtype the partials of a contraction split over its reduced axis are summed in
