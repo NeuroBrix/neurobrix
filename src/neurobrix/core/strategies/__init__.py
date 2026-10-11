@@ -58,6 +58,7 @@ _STRATEGY_CLASSES = {
 #: this table cannot silently fall out of step with the strategies it names.
 _MANAGES_WEIGHT_RESIDENCY = frozenset({
     "zero3",            # weights on pinned host memory, streamed for compute
+    "expert_store",     # zero3 with the dense part resident and routed experts cached on the card
     "layer_streaming",  # one segment of one component resident at a time
 })
 
@@ -146,6 +147,9 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # === Sequential / Offload ===
     "lazy_sequential": "LazySequentialStrategy",
     "zero3": "Zero3Strategy",
+    # zero3's ratchet in its expert-store state (core/strategies/expert_store.py): Prism refines a
+    # routed zero3 component to it; the same class serves both names.
+    "expert_store": "Zero3Strategy",
 
     # === CPU-only (Doctrine R35 last-resort cascade) ===
     "cpu_execution": "CPUExecutionStrategy",

@@ -11,6 +11,7 @@ Algorithm: Best-Fit-Decreasing with Activation-Aware Memory Estimation
 
 import json
 import logging
+import math
 import os
 import re
 from typing import TYPE_CHECKING
@@ -205,6 +206,9 @@ class ComponentAllocation:
     # the plan leaves beside everything it holds with the component (`_zero3_resident_budgets`). The
     # ratchet streams only the blocks beyond it. 0 streams every block on every pass.
     resident_weight_mb: float = 0.0
+    # expert_store only (a routed zero3 component, `_zero3_resident_budgets`): the MB of device
+    # slots holding recently routed experts beside the resident dense part (`resident_weight_mb`).
+    expert_cache_mb: float = 0.0
 
     @property
     def device(self) -> str:
@@ -495,6 +499,8 @@ class ExecutionPlan:
                     "sharded": alloc.sharded,
                     "shard_map": alloc.shard_map,
                     "resident_weight_mb": alloc.resident_weight_mb,
+                    "strategy": alloc.strategy,
+                    "expert_cache_mb": alloc.expert_cache_mb,
                 }
                 for name, alloc in self.components.items()
             },
@@ -546,6 +552,9 @@ class ExecutionPlan:
                 shard_map=comp.get("shard_map", {}),
                 # a plan saved before the field streamed every zero3 block: 0 is that plan's meaning
                 resident_weight_mb=float(comp.get("resident_weight_mb", 0.0)),
+                # a plan saved before these fields carried no component strategy: the dataclass default
+                strategy=comp.get("strategy", "single_gpu"),
+                expert_cache_mb=float(comp.get("expert_cache_mb", 0.0)),
             )
             for name, comp in data.get("components", {}).items()
         }
@@ -923,7 +932,7 @@ class PrismSolver:
             costs: Dict[str, int] = {}
             for n, m in plan.component_memory.items():
                 a = plan.components.get(n)
-                if a is not None and a.strategy == "zero3":
+                if a is not None and a.strategy in ("zero3", "expert_store"):
                     c = int(self._live_activation_mb(m) * mib) + int(m.overhead_bytes) + granted.get(n, 0)
                 else:
                     c = int(m.total_bytes)
@@ -937,11 +946,49 @@ class PrismSolver:
             window_mb = 2.0 * max(blocks.get("block_sizes", {}).values(), default=0.0) * mult
             room_mb = self._usable_mb(dev) - held_mb - window_mb
             weight_mb = plan.component_memory[name].weight_mb * mult
+            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
+            if store is not None:
+                # The component routes and its working set fits where every weight does not: the
+                # dense part resident, the routed experts through a cache on the card — no block
+                # streams, so no window is held.
+                alloc.strategy = "expert_store"
+                alloc.resident_weight_mb, alloc.expert_cache_mb = store
+                granted[name] = int((alloc.resident_weight_mb + alloc.expert_cache_mb) * mib)
+                self.__dict__.setdefault("_zero3_residency", {})[name] = (
+                    f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB = dense "
+                    f"{alloc.resident_weight_mb:.0f} MB + expert cache {alloc.expert_cache_mb:.0f} MB")
+                continue
             resident_mb = max(0.0, min(room_mb, weight_mb))
             alloc.resident_weight_mb = float(int(resident_mb))
             granted[name] = int(alloc.resident_weight_mb * mib)
             self.__dict__.setdefault("_zero3_residency", {})[name] = (
                 f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB - window {window_mb:.0f} MB")
+
+    def _expert_store_budget(self, name: str, weight_mb: float, room_mb: float,
+                             mult: float) -> Optional[Tuple[float, float]]:
+        """(resident dense MB, expert cache MB) when `name` runs as an expert store in `room_mb`,
+        else None (it stays zero3).
+
+        A routed component's fused MoE op does not read its whole layer per token: it reads
+        `top_k` experts. Priced as an expert store, its footprint on the card is the dense part
+        (every weight but the routed experts, `expert_topology.py`) plus a cache of at least the
+        widest `top_k` experts. A call routing to more experts than the cache holds (a prefill)
+        is served in runs of cached experts by both engines, so one layer's full expert set is
+        never required. Selected when that minimum fits and every weight does not (where every
+        weight fits, zero3 keeps them all resident). The cache takes the rest of the room, capped
+        at every routed expert. Stacked expert slabs have no per-expert host tensor to copy and stay
+        zero3."""
+        topo = (getattr(self, "_expert_topology", None) or {}).get(name)
+        if topo is None or not topo.layers or any(l.stacked for l in topo.layers):
+            return None
+        mib = 1024 * 1024
+        routed_mb = topo.routed_bytes / mib * mult
+        dense_mb = float(math.ceil(weight_mb - routed_mb))
+        floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
+        if not (dense_mb + floor_mb <= room_mb < weight_mb):
+            return None
+        cache_mb = float(int(min(room_mb - dense_mb, routed_mb)))
+        return dense_mb, cache_mb
 
     def _peak_loaded_bytes(self, container, plan) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
@@ -7534,6 +7581,9 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                  "dtype": getattr(alloc, "dtype", None), "sharded": bool(getattr(alloc, "sharded", False))}
         if getattr(alloc, "strategy", None) == "zero3":
             entry["zero3_resident_weight_mb"] = float(alloc.resident_weight_mb)
+        if getattr(alloc, "strategy", None) == "expert_store":
+            entry["expert_store"] = {"resident_weight_mb": float(alloc.resident_weight_mb),
+                                     "expert_cache_mb": float(alloc.expert_cache_mb)}
         if mem is not None:
             entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
                           "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,
@@ -7613,6 +7663,10 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         if getattr(alloc, "strategy", None) == "zero3":
             lines.append(f"  {'':<20}    zero3: weights on the host, {alloc.resident_weight_mb:.0f} MB of them "
                          f"kept resident on {alloc.device} across passes, the rest streamed per pass")
+        if getattr(alloc, "strategy", None) == "expert_store":
+            lines.append(f"  {'':<20}    expert store: the dense {alloc.resident_weight_mb:.0f} MB resident on "
+                         f"{alloc.device}, routed experts on the host through a {alloc.expert_cache_mb:.0f} MB "
+                         f"expert cache")
     if plan.cfg_split_components:
         lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
                      f"each (the reason is the plan's why)")

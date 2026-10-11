@@ -361,6 +361,7 @@ class CompiledSequence:
         '_const_fold_plan',  # dag["_optim_const_fold"] partition, executed once at bind (Phase 2)
         '_const_fold_sig',  # identity signature of the partition's external inputs at last fold
         '_loader_consumers',  # container weights an op reads -> first reader, checked at every bind
+        '_expert_store',  # TorchExpertStore under the `expert_store` strategy (set by the zero3 ratchet), else None
     )
 
     def __init__(
@@ -393,6 +394,7 @@ class CompiledSequence:
             fp32_op_uids: matmuls the vendor keeps in fp32 (DtypeEngine).
         """
         self.dag = dag
+        self._expert_store = None
         # Architectural integer constants (profile.json config) — protected
         # from every value-matched rewrite of a shape list (see the guards).
         self._config_constants: set = set(config_constants or ())
@@ -2054,6 +2056,10 @@ class CompiledSequence:
         _stacked_attrs = dict(attrs) if stacked else None
         _in_slot_c, _out_slot_c = _in_slot, _out_slot
         _cached_w_dtype = [None]  # Mutable container for closure — resolved once on first call
+        # The layer's name for an expert store (`expert_residency.routed_layers`): its first gate
+        # weight id, the string the triton and triton-sequential dispatchers pass too.
+        _layer_key = None if stacked else gate_weight_ids[0]
+        _seq = self
 
         def moe_fused_dispatch(arena):
             """
@@ -2164,6 +2170,23 @@ class CompiledSequence:
             # After: 1 .tolist() = 1 GPU sync per layer × 48 layers = 48 syncs/token (128x fewer)
             boundaries_cpu = boundaries.tolist()
 
+            # Expert store (strategy `expert_store`): the experts stay on the host and the store
+            # copies the routed ones into its device slots on a side stream, one event per
+            # expert, waited just before that expert computes. A call routing to more distinct
+            # experts than the store holds acquires them in ascending runs of `n_slots` — the
+            # loop below computes the experts in the same ascending order either way.
+            _store = _seq._expert_store if _gv is None else None
+            if _store is not None:
+                _routed = [e for e in range(_num_experts)
+                           if boundaries_cpu[e] != (boundaries_cpu[e - 1] if e else 0)]
+                _n_slots = _store.residency.n_slots
+                _runs = {r[0]: r for r in (_routed[i:i + _n_slots]
+                                           for i in range(0, len(_routed), _n_slots))}
+
+                def _host_expert(e):
+                    return (arena[_gate_w_slots[e]], arena[_up_w_slots[e]], arena[_down_w_slots[e]])
+            _on_card, _ready = {}, {}
+
             output = torch.zeros_like(hidden_states)
             start = 0
 
@@ -2181,6 +2204,13 @@ class CompiledSequence:
                     gate_w = _gv[expert_id]
                     up_w = _uv[expert_id]
                     down_w = _dv[expert_id]
+                elif _store is not None:
+                    if expert_id in _runs:
+                        _on_card, _ready = _store.acquire(_layer_key, _runs[expert_id], _host_expert)
+                    _ev = _ready.get(expert_id)
+                    if _ev is not None:
+                        _ev.wait()
+                    gate_w, up_w, down_w = _on_card[expert_id]
                 else:
                     gate_w = arena[_gate_w_slots[expert_id]]
                     up_w = arena[_up_w_slots[expert_id]]

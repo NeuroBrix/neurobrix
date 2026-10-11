@@ -3769,6 +3769,10 @@ class GraphExecutor:
             topk_indices=store.get(idx_tid) if blended else None,
             topk_weights=store.get(w_tid) if blended else None,
             weights_per_call=per_call,
+            # Strategy `expert_store` (core/strategies/expert_store.py): the routed experts are
+            # served from the component's store, named by the layer's first gate weight id.
+            expert_store=None if attrs.get("stacked_experts") else getattr(self, "_expert_store", None),
+            expert_layer=None if attrs.get("stacked_experts") else attrs["expert_gate_weight_ids"][0],
         )
 
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):
