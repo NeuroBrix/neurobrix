@@ -13,11 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.paths import cache_dir
 from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from tests.conftest import installed_container
 
 MB = 1024 * 1024
-CACHE = cache_dir()
 
 
 class _Container:
@@ -26,15 +25,14 @@ class _Container:
 
 
 def _spec(monkeypatch, model, h, w, frames, weights_mb, act_mb, over_mb, rung_mb):
-    if not (CACHE / model).exists():
-        pytest.skip(f"{model} is not in this machine's cache")
+    root = installed_container(model)
     # The factor does not depend on the extent lattice; none, so the lattice's own rules stay out.
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: 0))
     s = PrismSolver.__new__(PrismSolver)
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=2, height=h, width=w, num_frames=frames, vae_scale=32)
     mem = ComponentMemory("vae", weights_mb * MB, act_mb * MB, over_mb * MB)
-    return s._spatial_component_tiling(_Container(CACHE / model), "vae", mem, rung_mb)
+    return s._spatial_component_tiling(_Container(root), "vae", mem, rung_mb)
 
 
 def test_sana_video_tiles_at_the_scale_its_graph_measures(monkeypatch):
@@ -53,9 +51,7 @@ def test_a_declared_upscale_that_disagrees_with_the_graph_is_refused(monkeypatch
     (measured 4) under a profile that declares upscale 2 refuses by name."""
     import json
     import shutil
-    src = CACHE / "real-esrgan-x4" / "components" / "model"
-    if not src.exists():
-        pytest.skip("real-esrgan-x4 is not in this machine's cache")
+    src = installed_container("real-esrgan-x4") / "components" / "model"
     comp = tmp_path / "components" / "model"
     comp.mkdir(parents=True)
     shutil.copy(src / "graph.json", comp / "graph.json")

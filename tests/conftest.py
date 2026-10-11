@@ -31,6 +31,8 @@ forty-two times, and the forty-third test would have been written without it.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 # Each vendor phrases the same fact its own way; torch's is the last one, and it
@@ -76,3 +78,24 @@ def tl_dot_gemms(monkeypatch):
     unit's own placement is asserted by the cells that leave it declared."""
     from neurobrix.kernels.ops import _configs
     monkeypatch.setattr(_configs, "matrix_unit", lambda: {})
+
+
+def installed_container(name: str) -> Path:
+    """The container `name` in the cache the ENGINE resolves, or a skip that names it and the path.
+
+    THE ONE PLACE a test learns whether a real container is on this machine. The cache root is
+    `neurobrix.core.paths.cache_dir()` — `NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`, then the
+    default — never a literal in a test: a literal is blind to where another machine keeps its
+    models, and blind to the run that hides the cache to prove this very skip.
+
+    Installed means extracted: its `manifest.json` is there, the first file every reader opens.
+    Absent is not a result, so it is a SKIP, by name — before 2026-10-12 a machine without a model
+    (the M4, 140 failed + 14 errors under tests/unit/{prism,runtime}) reported one red per test that
+    plans it, and a real red drowned in them. Everything PAST the manifest — a missing component, a
+    graph that will not load — is the container's defect and fails, so this helper is called first
+    and never wrapped in a try."""
+    from neurobrix.core import paths
+    root = paths.cache_dir() / name
+    if not (root / "manifest.json").is_file():
+        pytest.skip(f"container {name} not installed at {root}")
+    return root

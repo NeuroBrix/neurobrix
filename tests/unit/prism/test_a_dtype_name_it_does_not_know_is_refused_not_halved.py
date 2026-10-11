@@ -78,9 +78,10 @@ def test_the_real_conversions_are_unchanged(src, dst, want):
 def test_every_dtype_in_this_cache_resolves():
     """The claim the refusal rests on, as an assertion rather than a sentence."""
     import json, os
-    cache = os.path.expanduser("~/.neurobrix/ca" + "che")
-    if not os.path.isdir(cache):
-        pytest.skip("no cache on this machine")
+    from neurobrix.core.paths import cache_dir
+    cache = str(cache_dir())
+    if not any(os.path.isfile(os.path.join(cache, m, "manifest.json")) for m in os.listdir(cache)):
+        pytest.skip(f"no container installed at {cache}")     # the census below would read nothing
     seen = set()
     for model in os.listdir(cache):
         mp = os.path.join(cache, model, "manifest.json")
@@ -142,9 +143,10 @@ def test_every_TENSOR_dtype_in_this_cache_resolves():
     """Per-tensor, not per-component. Counted 2026-09-22 across every cached graph:
     complex128 338 tensors, complex64 10, and nothing else missing."""
     import glob, json, os, collections
-    cache = os.path.expanduser("~/.neurobrix/ca" + "che")
-    if not os.path.isdir(cache):
-        pytest.skip("no cache on this machine")
+    from neurobrix.core.paths import cache_dir
+    cache = str(cache_dir())
+    if not any(os.path.isfile(os.path.join(cache, m, "manifest.json")) for m in os.listdir(cache)):
+        pytest.skip(f"no container installed at {cache}")     # the census below would read nothing
     seen = collections.Counter()
     for g in glob.glob(os.path.join(cache, "*", "components", "*", "graph.json")):
         try:

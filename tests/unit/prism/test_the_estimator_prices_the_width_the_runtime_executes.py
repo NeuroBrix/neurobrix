@@ -356,12 +356,12 @@ def test_the_plan_time_contract_is_the_runtime_s_triple():
     graph gives the flag, its islands and the structural narrow set."""
     assert plan_time_contract(None, "vae", {"ops": {}}, "bfloat16").safe is False
     import json
-    from pathlib import Path
-    cache = Path.home() / ".neurobrix" / ("ca" + "che") / "Sana_1600M_1024px_MultiLing"
+    from tests.conftest import installed_container
+    cache = installed_container("Sana_1600M_1024px_MultiLing")
     g = cache / "components" / "vae" / "graph.json"
     from neurobrix.core.dtype import calibration as _cal
-    if not g.exists() or _cal.load_record("Sana_1600M_1024px_MultiLing", "vae") is None:
-        pytest.skip("Sana_1600M_1024px_MultiLing vae or its calibration record absent")
+    if _cal.load_record("Sana_1600M_1024px_MultiLing", "vae") is None:
+        pytest.skip("Sana_1600M_1024px_MultiLing vae has no calibration record")
     dag = json.loads(g.read_text())
     k = plan_time_contract(cache, "vae", dag, "float16")
     from neurobrix.core.runtime import precision_contract as _pc

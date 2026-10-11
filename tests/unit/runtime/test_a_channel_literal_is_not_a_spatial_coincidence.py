@@ -13,16 +13,14 @@ Red on c76a4620 (the channel entry of view::94 becomes an expression over a spat
 """
 import copy
 import json
-import pathlib
 
-import pytest
+from tests.conftest import installed_container
 
-CONTAINER = pathlib.Path.home() / ".neurobrix" / "cache" / "Sana_1600M_4Kpx_BF16"
-VAE = CONTAINER / "components" / "vae" / "graph.json"
+MODEL = "Sana_1600M_4Kpx_BF16"
 
 
-@pytest.mark.skipif(not VAE.exists(), reason="Sana_1600M_4Kpx_BF16 is not in the local cache")
 def test_the_vae_channel_counts_stay_literal():
+    VAE = installed_container(MODEL) / "components" / "vae" / "graph.json"
     from neurobrix.triton.promotion import _spatial_promotion_pass
     dag = json.loads(VAE.read_text())
     ops = copy.deepcopy(dag["ops"])

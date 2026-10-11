@@ -16,10 +16,9 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
+from tests.conftest import installed_container
 
 REPO = Path(__file__).resolve().parents[3]
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 MODEL = "orpheus-3b-0.1-ft"
 
 DRIVER = textwrap.dedent("""
@@ -39,8 +38,8 @@ DRIVER = textwrap.dedent("""
 """)
 
 
-@pytest.mark.skipif(not (CACHE / MODEL).exists(), reason=f"{MODEL} is not in this catalogue")
 def test_a_model_whose_components_fit_alone_but_not_together_is_streamed(tmp_path):
+    installed_container(MODEL)
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
            "PYTHONPATH": f"{REPO / 'src'}:{REPO}", "PYTHONNOUSERSITE": "1"}
     import yaml
