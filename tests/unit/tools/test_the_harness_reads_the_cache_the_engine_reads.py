@@ -36,4 +36,6 @@ def test_a_container_under_the_configured_cache_is_a_cell_of_the_matrix(tmp_path
     (tmp_path / "a-model").mkdir()
     (tmp_path / "a-model" / "manifest.json").write_text(json.dumps({"name": "a-model"}))
     cells = _harness(tmp_path, "print(sorted(m for m, _ in R.full_matrix()))")
-    assert cells == "['a-model', 'a-model', 'a-model']", cells       # one per mode, from the configured cache
+    n = int(_harness(tmp_path, "print(len(R.GATE_MODES))"))
+    # one per GATE mode, from the configured cache (a gate is native + triton since 2026-10-11)
+    assert cells == str(["a-model"] * n), cells
