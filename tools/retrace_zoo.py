@@ -1575,7 +1575,11 @@ class Model:
         if snap is None:
             self.mark("trace", False, error="no COMPLETE snapshot on the export or in the download directory (index file, no partial file, the marker when the tool touched it)"); return False
         t0 = time.time()
-        cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
+        # No --device: Forge's `auto` loads on the VMM pool's primary card. A pinned cuda:0
+        # contradicts a pool whose primary is the other card (the most free memory) and every
+        # host-loaded component died in `.to(cuda:0)` with "CUDA error: invalid argument"
+        # (parakeet-tdt-1.1b, pool 0,3, retrace5 2026-10-12).
+        cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         self.mark("trace", rc == 0, rc=rc, seconds=round(time.time() - t0, 1))
         return rc == 0
