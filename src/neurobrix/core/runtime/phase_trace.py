@@ -22,10 +22,20 @@ from __future__ import annotations
 import os
 import sys
 import time
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 _ENABLED = os.environ.get("NBX_PHASE_TRACE") == "1"
 _T0 = time.monotonic()
+
+# The run ledger — ALWAYS on, unlike the stderr stamps: the first monotonic
+# instant of every phase name since the last `reset_ledger()`, and the spans
+# a run spent becoming ready (executor setup, a component's weights loaded).
+# One `time.monotonic()` per phase boundary — never per op — is the whole
+# cost. `run_timings` reads it to state the run's four timings
+# (core/runtime/run_timings.py); nothing here computes or prints them.
+_FIRST: Dict[str, float] = {}
+_LOAD_SPANS: List[Tuple[float, float]] = []
 
 
 def enabled() -> bool:
@@ -38,7 +48,11 @@ def mark(name: str, sync: Optional[Callable[[], object]] = None,
     is a callable returning a short string appended to the stamp (the
     flows pass their allocator's live/cached/free bytes so a serve-vs-CLI
     differential reads the memory baseline at each boundary); it is only
-    invoked when the flag is on."""
+    invoked when the flag is on.
+
+    The phase's first instant is kept in the run ledger whether or not the
+    flag is on (host time: no `sync` is issued for it)."""
+    _FIRST.setdefault(name, time.monotonic())
     if not _ENABLED:
         return
     if sync is not None:
@@ -52,3 +66,31 @@ def mark(name: str, sync: Optional[Callable[[], object]] = None,
             extra = f" note_error={type(exc).__name__}"
     sys.stderr.write(f"[phase] {name} wall={now:.6f} t={time.monotonic() - _T0:.3f}{extra}\n")
     sys.stderr.flush()
+
+
+def reset_ledger() -> None:
+    """Open a fresh run ledger (one request)."""
+    _FIRST.clear()
+    _LOAD_SPANS.clear()
+
+
+def first(name: str) -> Optional[float]:
+    """The monotonic instant phase `name` was first marked in this ledger, or None."""
+    return _FIRST.get(name)
+
+
+@contextmanager
+def load_span() -> Iterator[None]:
+    """Bracket work that makes the engine ready (setup, a weight load): the
+    span lands in the ledger, so the run's load time counts it and its
+    time-to-first-output does not."""
+    t = time.monotonic()
+    try:
+        yield
+    finally:
+        _LOAD_SPANS.append((t, time.monotonic()))
+
+
+def load_spans() -> List[Tuple[float, float]]:
+    """The ledger's load spans, in the order they closed."""
+    return list(_LOAD_SPANS)

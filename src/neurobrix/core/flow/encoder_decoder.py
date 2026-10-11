@@ -10,6 +10,8 @@ ZERO HARDCODE: All parameters from NBX container.
 """
 
 import time
+
+from neurobrix import decode_progress
 import torch
 from neurobrix.core.device_utils import device_multinomial
 from neurobrix.core.memory.manager import release_flow_memory
@@ -331,6 +333,9 @@ class EncoderDecoderEngine(FlowHandler):
                 )
 
             generated_ids.append(next_token)
+            # the per-token event every decoding flow emits (listener, run tally,
+            # flow.first_token); the file line below keeps its decoder statistics
+            decode_progress.emit(step - 1, step, int(next_token), next_token == eos_token_id)
             _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
             if _prog:  # gated diagnostic — compiled decoder ref trajectory
                 _stat = ""
