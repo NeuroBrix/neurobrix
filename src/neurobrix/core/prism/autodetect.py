@@ -169,13 +169,22 @@ _PCIE_BW_MAP = {
 # PUBLIC API
 # ============================================================================
 
+def detect_devices() -> Tuple[List[Dict[str, Any]], str]:
+    """The accelerators this process sees, as (devices, brand), from the OS
+    probes of this host — the one detection every reader shares: the
+    hardware profile below, the per-environment profile tag, and `neurobrix
+    info` (Studio's start-up discovery), which must answer without loading a
+    compute branch."""
+    return _detect_gpus(platform.system())
+
+
 def _visible_set_tag() -> Optional[str]:
     """A short tag naming WHAT THIS PROCESS SEES (GPU models in order): the
     per-environment profile file is keyed by it, so two processes pinned to
     different cards never rewrite each other's profile. None when detection
     is unavailable (the shared default.yml serves then)."""
     try:
-        devices, _ = _detect_gpus(platform.system())
+        devices, _ = detect_devices()
     except Exception:
         return None
     models = [str(d.get("model")) for d in devices]
@@ -402,7 +411,7 @@ def detect_hardware() -> Dict[str, Any]:
     cpu["runtime_base_mb"] = _measure_runtime_base_mb()
 
     # --- GPUs (OS-specific cascade) ---
-    devices, brand = _detect_gpus(os_type)
+    devices, brand = detect_devices()
 
     # --- System vendor ---
     vendor = _detect_system_vendor(os_type)
