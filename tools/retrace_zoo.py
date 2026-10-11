@@ -63,7 +63,11 @@ ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
 VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
-HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
+# A model's hub entry is read from the LIVE registry, matched by the `hf_repo` its build-toolchain
+# registry entry names (`hub_entry`). The frozen map this tool read before (retrace_2026_09_07/
+# hub_map.json) went stale as entries were renamed to their maker's repository: parakeet-tdt-1.1b's
+# restore asked for nvidia/Parakeet-TDT-1.1B and got 404 while the registry held
+# nvidia/parakeet-tdt-1.1b (2026-10-12).
 # A container with no hub entry is a NEW publication: its org, name, category, license, tags
 # and description are WRITTEN here (the owner's word of 2026-09-07 00:26 for swin2SR-x2), never
 # deduced by the tool — a model with neither a hub entry nor a written line is refused by name.
@@ -929,6 +933,66 @@ def registry_checkpoint_file(name: str) -> str | None:
     return None
 
 
+def registry_hf_repo(name: str) -> str | None:
+    """The `hf_repo` ("org/name") the build toolchain's registry names as this model's SOURCE, or None
+    when the registry has no entry for it or the entry names none."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return None
+    import yaml
+    doc = yaml.safe_load(reg.read_text()) or {}
+    for section in doc.values():
+        if isinstance(section, dict) and isinstance(section.get(name), dict):
+            repo = section[name].get("hf_repo")
+            return repo.strip().rstrip("/") if isinstance(repo, str) and repo.strip() else None
+    return None
+
+
+class HubUnreachable(RuntimeError):
+    """The live registry did not answer the listing: a model's hub entry is then UNKNOWN, never guessed."""
+
+
+def live_hub_slugs(registry: str = REGISTRY) -> list:
+    """Every "org/name" the live registry lists, all pages read (the server caps a page at 100)."""
+    import requests
+    slugs, page = [], 1
+    while True:
+        try:
+            r = requests.get(f"{registry}/api/models", params={"limit": 100, "page": page}, timeout=30)
+            r.raise_for_status()
+            body = r.json()
+            models, total = body["models"], int(body["total"])
+        except Exception as exc:  # noqa: BLE001 — named, never a silent empty listing
+            raise HubUnreachable(f"the registry {registry} did not list its models (page {page}): "
+                                 f"{type(exc).__name__}: {str(exc)[:160]}") from exc
+        slugs += [m.get("slug") or f"{m['org']}/{m['name']}" for m in models]
+        if not models or len(slugs) >= total:
+            return slugs
+        page += 1
+
+
+def hub_entry(name: str, registry: str = REGISTRY, listing=None) -> str | None:
+    """The live registry's "org/name" for this model, or None (a NEW entry). Matched by the `hf_repo` the
+    build toolchain's registry names for it, case-insensitively against the registry's org/name; the
+    registry's own spelling is returned. A model whose registry entry names no `hf_repo`, or whose
+    repository the hub does not list, is None — said by name by the caller, never looked up elsewhere.
+    Two listed entries equal but for case are ambiguous and refused by name. A missing build-toolchain
+    registry file is refused by name: without it every model would read as a new entry (a worktree
+    that does not carry the ignored `forge/` pointer)."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        raise HubUnreachable(f"{name}: the build toolchain's registry {reg} is absent — the hub entry cannot be "
+                             f"matched by hf_repo, refused")
+    repo = registry_hf_repo(name)
+    if not repo:
+        return None
+    slugs = live_hub_slugs(registry) if listing is None else listing
+    hits = sorted({s for s in slugs if s.lower() == repo.lower()})
+    if len(hits) > 1:
+        raise HubUnreachable(f"{name}: the registry lists {hits} for hf_repo {repo} — ambiguous, refused")
+    return hits[0] if hits else None
+
+
 def registry_source_repository(name: str) -> str | None:
     """The directory name of the repository the build toolchain's registry names as this model's SOURCE
     (`hf_repo`'s last segment), or None when the entry names none. The owner's naming rule (2026-09-28
@@ -1006,10 +1070,24 @@ class Model:
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {"model": name, "steps": {}}
         fams = json.loads(FAMILIES.read_text()) if FAMILIES.exists() else {}
         self.family = fams.get(name) or C.family_of(name)
-        hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
-        self.hub = hub.get(name)                       # "org/name" or None (a new entry)
         self.registry_name = REGISTRY_ALIAS.get(name, name)
+        self._hub = ...                                # resolved from the live registry on first use
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
+
+    @property
+    def hub(self):
+        """The live registry's "org/name" for this model, or None (a new entry, logged by name).
+        Raises HubUnreachable when the registry does not answer: never a guess."""
+        if self._hub is ...:
+            self._hub = hub_entry(self.registry_name)
+            if self._hub is None:
+                log(f"{self.name}: no hub entry — the registry lists no org/name equal to hf_repo "
+                    f"{registry_hf_repo(self.registry_name)!r}: a NEW entry")
+        return self._hub
+
+    @hub.setter
+    def hub(self, value):
+        self._hub = value
 
     def snapshot_names(self):
         """The directory names a snapshot of this model may have, the registry's source repository FIRST
@@ -1286,8 +1364,14 @@ class Model:
         export probe: the store shares its storage with the exports, and a stream beside the
         batteries' reads stalled them six times on 2026-09-07. The object's identity is checked
         against the backup (same build) before it is installed."""
-        if not self.hub:
-            self.mark("old_outputs", False, error="no hub entry to restore the previous object from"); return False
+        try:
+            hub = self.hub
+        except HubUnreachable as exc:
+            self.mark("old_outputs", False, state="DEFERRED", reason=str(exc))
+            log(f"{self.name}: restore DEFERRED — {exc}"); return False
+        if not hub:
+            self.mark("old_outputs", False, error=f"no hub entry to restore the previous object from "
+                                                  f"(hf_repo {registry_hf_repo(self.registry_name)!r} not listed)"); return False
         try:
             repo_env.require("NEUROBRIX_API_TOKEN")
         except repo_env.MissingVariable as exc:
@@ -1806,6 +1890,12 @@ class Model:
             self.mark("upload", False, state="DEFERRED", reason=f"hub object store: {health}; retry when it answers 200", nbx=nbx)
             log(f"{self.name}: upload DEFERRED — hub object store: {health}; the artifact is gated and ready, a later pass uploads it")
             return False
+        try:
+            self.hub
+        except HubUnreachable as exc:
+            self.mark("upload", False, state="DEFERRED", reason=str(exc), nbx=nbx)
+            log(f"{self.name}: upload DEFERRED — {exc}")
+            return False
         if self.hub:
             org, name = self.hub.split("/", 1)
             size = Path(nbx).stat().st_size if nbx and Path(nbx).exists() else 0
@@ -1833,9 +1923,7 @@ class Model:
         if rc == 0 and not self.hub and NEW_ENTRIES.exists():
             new = json.loads(NEW_ENTRIES.read_text()).get(self.name) or {}
             if new:
-                hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
-                hub[self.name] = self.hub = f"{new['org']}/{new['name']}"
-                HUB_MAP.write_text(json.dumps(hub, indent=1, sort_keys=True))
+                self.hub = f"{new['org']}/{new['name']}"   # the registry lists it from now on
         self.mark("upload", rc == 0, rc=rc, command=shlex.join(cmd[2:]))
         if rc == 0 and nbx and Path(nbx).exists():
             # The hub holds it now (checksum verified by the toolchain before the repoint);
