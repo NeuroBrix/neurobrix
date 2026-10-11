@@ -34,7 +34,7 @@
 
 <!-- How did you test this change? -->
 
-- [ ] Existing tests pass (`python -m pytest tests/`)
+- [ ] Unit tests pass (`PYTHONPATH=src python -m pytest tests/unit`)
 - [ ] New tests added for this change
 - [ ] Manually validated with a model: <!-- which model? -->
 

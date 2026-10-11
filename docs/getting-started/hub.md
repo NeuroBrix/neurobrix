@@ -13,82 +13,119 @@ neurobrix hub
 Filter by category:
 
 ```bash
-neurobrix hub --category IMAGE
 neurobrix hub --category LLM
-neurobrix hub --category AUDIO
 neurobrix hub --category VIDEO
+neurobrix hub --category TTS
 ```
 
 Search:
 
 ```bash
-neurobrix hub --search sana
+neurobrix hub --search whisper
 ```
 
 ## Available Models
 
-### Image Generation
+The hub listed 45 public models on 2026-10-12. The hub is the live list: run
+`neurobrix hub` or see [neurobrix.es/models](https://neurobrix.es/models). Being on the hub means a
+container can be downloaded; each release's notes list the models and modes known not to work.
 
-| Model | Author | License | Description |
-|-------|--------|---------|-------------|
-| PixArt-Sigma-XL-1024 | PixArt | OpenRAIL++ | Multi-subject generation |
-| PixArt-XL-1024 | PixArt | OpenRAIL++ | XL generation |
-| Sana-1600M-MultiLing | NVIDIA | NVIDIA Open Model License | 1024px, multilingual prompts |
-| Sana-1600M-4Kpx-BF16 | NVIDIA | NVIDIA Open Model License | Up to 4K resolution, 1.6B params |
-| Flex.1-alpha | Ostris | Apache 2.0 | Flexible image generation |
+### Language models (`LLM`)
 
-### Audio (Speech-to-Text, Speech Understanding, Text-to-Speech)
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `deepseek-ai/deepseek-moe-16b-chat` | deepseek | 32.8 GB |
+| `ibm-granite/granite-3.1-1b-a400m-instruct` | apache-2.0 | 2.8 GB |
+| `Qwen/Qwen3-30B-A3B-Thinking-2507` | apache-2.0 | 61.1 GB |
+| `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | apache-2.0 | 2.2 GB |
 
-| Model | Author | License | Type |
-|-------|--------|---------|------|
-| Whisper-Large-V3 | OpenAI | MIT | STT |
-| Whisper-V3-Turbo | OpenAI | MIT | STT |
-| Parakeet-TDT-1.1B | NVIDIA | CC-BY-4.0 | STT |
-| Canary-Qwen-2.5B | NVIDIA | CC-BY-4.0 | audio_llm |
-| Voxtral-Mini-3B | Mistral AI | Apache 2.0 | audio_llm |
-| Granite-Speech-3.3-8B | IBM | Apache 2.0 | audio_llm |
-| Orpheus-3B | Canopy Labs | Apache 2.0 | TTS |
-| Kokoro-82M | Hexgrad | Apache 2.0 | TTS |
-| VibeVoice-1.5B | Microsoft | MIT | TTS |
-| OpenAudio-S1-Mini | Fish Audio | CC-BY-NC-SA-4.0 | TTS |
-| Chatterbox | Resemble AI | MIT | TTS |
+### Code (`CODE`)
 
-> **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only.
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct` | deepseek | 32.1 GB |
+| `Qwen/Qwen3-Coder-30B-A3B-Instruct` | apache-2.0 | 61.1 GB |
 
-### Image Upscalers (Super-Resolution)
+### Vision-language (`VLM`)
 
-| Model | Author | License | Scale |
-|-------|--------|---------|-------|
-| HAT-L-x4 | XPixelGroup | Apache 2.0 | 4x |
-| Real-ESRGAN-x4 | Xintao Wang et al. | BSD-3-Clause | 4x |
-| SwinIR-Classical-x4 | Jingyun Liang et al. | Apache 2.0 | 4x |
-| Swin2SR-Classical-x4 | Marcos V. Conde et al. | Apache 2.0 | 4x |
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `zai-org/GLM-4.1V-9B-Thinking` | mit | 20.6 GB |
 
-### Large Language Models
+### Multimodal (`MULTIMODAL`)
 
-| Model | Author | License | Description |
-|-------|--------|---------|-------------|
-| DeepSeek-MoE-16B-Chat | DeepSeek | DeepSeek License | 64-expert MoE |
-| Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 30B/3B active, reasoning |
-| TinyLlama-1.1B-Chat | TinyLlama | Apache 2.0 | Compact, fast |
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `deepseek-ai/Janus-Pro-7B` | mit | 14.8 GB |
+| `inclusionAI/Ming-Lite-Omni-1.5` | mit | 54.9 GB |
+| `openbmb/MiniCPM-o-4_5` | apache-2.0 | 20.7 GB |
+| `Qwen/Qwen3-Omni-30B-A3B-Instruct` | apache-2.0 | 70.6 GB |
+| `Qwen/Qwen3-VL-30B-A3B-Thinking` | apache-2.0 | 62.1 GB |
 
-### Video Generation
+### Speech-to-text (`STT`)
 
-The complete video family — validated in all four execution modes, being published alongside the v0.3.0 release:
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `nvidia/parakeet-tdt-1.1b` | cc-by-4.0 | 4.3 GB |
+| `openai/whisper-large` | mit | 6.2 GB |
+| `openai/whisper-large-v3-turbo` | mit | 1.6 GB |
 
-| Model | Author | License | Type |
-|-------|--------|---------|------|
-| Wan-AI/Wan2.1-T2V-1.3B | Alibaba | Apache 2.0 | text-to-video |
-| Wan-AI/Wan2.1-VACE-1.3B | Alibaba | Apache 2.0 | video creation & editing |
-| Wan-AI/Wan2.1-I2V-14B-480P | Alibaba | Apache 2.0 | image-to-video |
-| Wan-AI/Wan2.2-I2V-A14B | Alibaba | Apache 2.0 | image-to-video, 28B dual-denoiser |
-| THUDM/CogVideoX-2b | Zhipu AI | Apache 2.0 | text-to-video |
-| THUDM/CogVideoX-5b-I2V | Zhipu AI | CogVideoX License | image-to-video |
-| genmo/Mochi-1-preview | Genmo | Apache 2.0 | text-to-video |
-| hpcai-tech/Open-Sora-v2 | HPC-AI Tech | Apache 2.0 | text-to-video |
-| rhymes-ai/Allegro | Rhymes AI | Apache 2.0 | text-to-video, native 720×1280, 88 frames |
-| rhymes-ai/Allegro-TI2V | Rhymes AI | Apache 2.0 | image-to-video |
-| Efficient-Large-Model/SANA-Video-2B-720p | NVIDIA | NVIDIA Open Model License | text-to-video, 720p |
+### Speech understanding (`AUDIO_LLM`)
+
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `ibm-granite/granite-speech-3.3-8b` | apache-2.0 | 17.3 GB |
+| `mistralai/Voxtral-Mini-3B-2507` | apache-2.0 | 9.4 GB |
+| `nvidia/canary-qwen-2.5b` | cc-by-4.0 | 5.1 GB |
+
+### Text-to-speech (`TTS`)
+
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `canopylabs/orpheus-3b-0.1-ft` | apache-2.0 | 15.2 GB |
+| `fishaudio/s1-mini` | cc-by-nc-sa-4.0 | 3.6 GB |
+| `hexgrad/Kokoro-82M` | apache-2.0 | 370 MB |
+| `microsoft/VibeVoice-1.5B` | mit | 5.4 GB |
+| `ResembleAI/chatterbox` | mit | 2.2 GB |
+
+### Image generation (`IMAGE`)
+
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `ostris/Flex.1-alpha` | apache-2.0 | 26.3 GB |
+| `PixArt-alpha/PixArt-XL-2-1024-MS` | openrail++ | 21.8 GB |
+
+### Video generation (`VIDEO`)
+
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `Efficient-Large-Model/SANA-Video_2B_720p_diffusers` | nvidia-open-model-license | 18.4 GB |
+| `genmo/mochi-1-preview` | apache-2.0 | 41.0 GB |
+| `hpcai-tech/Open-Sora-v2` | apache-2.0 | 45.6 GB |
+| `rhymes-ai/Allegro` | apache-2.0 | 25.3 GB |
+| `rhymes-ai/Allegro-TI2V` | apache-2.0 | 26.1 GB |
+| `Wan-AI/Wan2.1-I2V-14B-480P` | apache-2.0 | 90.6 GB |
+| `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | apache-2.0 | 28.9 GB |
+| `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | apache-2.0 | 19.5 GB |
+| `Wan-AI/Wan2.2-I2V-A14B` | apache-2.0 | 126.7 GB |
+| `zai-org/CogVideoX-2b` | apache-2.0 | 13.8 GB |
+| `zai-org/CogVideoX-5b-I2V` | cogvideox-license | 22.6 GB |
+
+### Upscaling (`UPSCALER`)
+
+| `neurobrix import` | License (as listed on the hub) | Size |
+|---|---|---:|
+| `ai-forever/Real-ESRGAN-RealESRGAN_x2` | see the hub page | 67 MB |
+| `ai-forever/Real-ESRGAN-RealESRGAN_x8` | see the hub page | 67 MB |
+| `caidas/swin2SR-classical-sr-x2-64` | apache-2.0 | 49 MB |
+| `caidas/swin2SR-classical-sr-x4-64` | apache-2.0 | 50 MB |
+| `caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr` | apache-2.0 | 49 MB |
+| `jaideepsingh/upscale_models-HAT-L_SRx4_ImageNet-pretrain` | apache-2.0 | 166 MB |
+| `JingyunLiang/SwinIR-001_classicalSR_DF2K_s64w8_SwinIR-M_x2` | apache-2.0 | 68 MB |
+| `JingyunLiang/SwinIR-001_classicalSR_DIV2K_s48w8_SwinIR-M_x4` | apache-2.0 | 60 MB |
+| `xinntao/Real-ESRGAN-RealESRGAN_x4plus` | bsd-3-clause | 67 MB |
+
+> **Non-commercial:** `fishaudio/s1-mini` is licensed CC-BY-NC-SA-4.0, non-commercial use only.
 
 ## Import a Model
 
@@ -99,10 +136,10 @@ neurobrix import <org>/<model>
 Example:
 
 ```bash
-neurobrix import sana/1600m-1024
+neurobrix import TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
-The model is downloaded and extracted to `~/.neurobrix/cache/`.
+The model is downloaded and extracted to `~/.neurobrix/cache/<name>`; `--model` takes that `<name>`.
 
 ## Manage Models
 
@@ -111,7 +148,7 @@ The model is downloaded and extracted to `~/.neurobrix/cache/`.
 neurobrix list
 
 # Remove a model
-neurobrix remove 1600m-1024
+neurobrix remove TinyLlama-1.1B-Chat-v1.0
 
 # Clean all
 neurobrix clean --all -y
