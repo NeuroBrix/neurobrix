@@ -249,14 +249,13 @@ def test_a_new_publication_carries_its_written_entry(model, monkeypatch, tmp_pat
     entries.write_text(json.dumps({m.name: {"org": "o", "name": "N", "category": "TTS", "license": "apache-2.0",
                                             "tags": "a,b", "description": "d"}}))
     monkeypatch.setattr(R, "NEW_ENTRIES", entries)
-    monkeypatch.setattr(R, "HUB_MAP", tmp_path / "hub_map.json")
     seen = {}
     monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 0)
     monkeypatch.setattr(R.shutil, "rmtree", lambda *a, **k: None)
     m.step_upload()
     c = seen["cmd"]
     assert "publish" in c and c[c.index("--org") + 1] == "o" and c[c.index("--category") + 1] == "TTS"
-    assert json.loads((tmp_path / "hub_map.json").read_text())[m.name] == "o/N"      # a later pass replaces
+    assert m.hub == "o/N"          # the published entry, which the live registry lists from now on
 
 
 def test_a_container_with_neither_entry_nor_written_line_is_refused_by_name(model, monkeypatch, tmp_path):
