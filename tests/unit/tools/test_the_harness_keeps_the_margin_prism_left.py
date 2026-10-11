@@ -50,5 +50,6 @@ def test_the_plan_figure_says_when_the_device_draws_on_the_host(tmp_path, monkey
     for dev, want in ((5 * GiB, "plan-unified"), (0, "plan")):
         doc = {"plan": {"host_footprint": {"total_bytes": 9 * GiB, "device_bytes": dev}}}
         monkeypatch.setattr(R, "cell_request", lambda model: [])
+        monkeypatch.setattr(R, "cell_profile", lambda gpu, src: ("default-x", 16384))
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, json.dumps(doc), ""))
         assert R.plan_host_need("M", "triton", "0", tmp_path) == (9 * GiB, want)
