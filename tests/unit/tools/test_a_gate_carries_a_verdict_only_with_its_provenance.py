@@ -286,7 +286,10 @@ def test_the_committed_records_load_and_classify_every_tracked_path():
     """The committed known-cause record reads, and the mapping classifies every path this repository tracks:
     a new top-level path fails here, not in the middle of a gate."""
     repo = Path(R.__file__).resolve().parents[1]
-    R._read_records(repo / "docs" / "reference" / "known-cause-reds.yml", "reds", R.KNOWN_RED_FIELDS)
+    records = sorted((repo / "docs" / "reference").glob("known-cause-reds.*.yml"))
+    assert [p.name for p in records] == ["known-cause-reds.16g.yml", "known-cause-reds.32g.yml"]
+    for p in records:                         # one record per memory class: a red proven on one class is not the other's
+        R._read_records(p, "reds", R.KNOWN_RED_FIELDS)
     tracked = subprocess.run(["git", "-C", str(repo), "ls-files"], capture_output=True, text=True).stdout.split()
     assert tracked
     R.classify_paths(repo, [p for p in tracked if not p.startswith("src/")], R.load_branches())
