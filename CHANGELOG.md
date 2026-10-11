@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--explain-plan` states the working set of a mixture-of-experts model.** For every routed
+  component the plan reads its experts, how many each token uses, its shared experts and the size
+  of one expert, and states the working set: the dense part, the experts a token reads, and an
+  expert cache on the card's standard memory rung (`expert_working_set` in `--json`). Placement
+  does not use it yet. A 30B model with 3B active on a 32 GB V100: 58 235 MB dense, 6 395 MB for
+  one token's dense part and experts.
+
 - **Faster 3x3 convolutions on Apple M4 Pro in the Triton mode.** The hardware profile can store
   3x3 convolution weights channels-innermost (`conv.weight_layout: KRSC`); the loader relays them
   once and the kernel reads them in place. On an M4 Pro every 3x3 key runs 46-63 % faster (1024
