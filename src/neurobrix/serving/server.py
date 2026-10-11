@@ -402,6 +402,13 @@ class ServingDaemon:
                 self._connections[conn] = thread
             thread.start()
         self._running = False
+        # The loop owns its listener and closes it only once it has left
+        # accept(): closed from another thread, a macOS listener drops the
+        # queued wake connection and leaves accept() blocked for good.
+        try:
+            self._server_socket.close()
+        except OSError as e:
+            print(f"[Daemon] Listener close: {e}")
         self._drain()
 
     def _open_connections(self) -> int:
@@ -709,9 +716,12 @@ class ServingDaemon:
 
     def _close_listener(self) -> None:
         """Stop the accept loop from any thread. Closing a listening socket
-        does NOT wake an `accept()` blocked in another thread on Linux, so the
-        loop is woken by one connection to its own address first (it sees
-        `_running` False and leaves); the close follows."""
+        does NOT wake an `accept()` blocked in another thread (Linux, macOS),
+        and on macOS a close right after the wake connection drops that
+        connection from the queue, so `accept()` never returns (seen 2026-10-11
+        on the M4: every second daemon of a test run hung). So this only wakes
+        the loop, by one connection to its own address; the loop sees
+        `_running` False, leaves, and closes its listener itself."""
         self._running = False
         sock = self._server_socket
         if sock is None:
@@ -723,10 +733,6 @@ class ServingDaemon:
                 wake.connect(addr)
         except OSError as e:
             print(f"[Daemon] Listener already closed or unreachable at wake: {e}")
-        try:
-            sock.close()
-        except OSError as e:
-            print(f"[Daemon] Listener close: {e}")
 
     def _handle_signal(self, signum, frame):
         """Graceful shutdown on SIGTERM/SIGINT."""
