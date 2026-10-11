@@ -450,19 +450,52 @@ def cell_request(model: str) -> list:
     return derived_request(model, Z.family_of(model))
 
 
+@functools.lru_cache(maxsize=None)
+def cell_profile(gpu: str, src: Path) -> tuple:
+    """(profile id, rung MB) a cell on card `gpu` runs under: the id the runtime resolves with that card
+    visible (core/prism/autodetect.get_or_create_default_profile — detection, no allocation), and the
+    card's memory class from that profile's own id (structure.memory_class_from_profile_id: the one
+    rounding the census rows' `rungs_mb` and the certified directory share). RuntimeError when either
+    cannot be read — said by the caller, never guessed."""
+    code = ("from neurobrix.core.prism.autodetect import get_or_create_default_profile as g\n"
+            "from neurobrix.core.prism.loader import load_profile\n"
+            "from neurobrix.core.prism.structure import memory_class_from_profile_id as m\n"
+            "h = g(); print(h, m(load_profile(h).id))")
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)
+    words = (p.stdout.strip().splitlines() or [""])[-1].split()
+    if p.returncode != 0 or len(words) != 2 or not words[1].isdigit():
+        raise RuntimeError(f"card {gpu}: its profile could not be resolved (rc {p.returncode}: "
+                           f"{(p.stderr or p.stdout).strip()[-160:]})")
+    return words[0], int(words[1]) * 1024
+
+
 def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     """(bytes, "plan") — the host footprint the ENGINE's plan states for this request on this card
     (`plan.host_footprint.total_bytes`, Prism's host estimate, the owner's 14:27 rule: a reservation is
     what the plan the engine chose says the run will hold), or None when the tree under test prints
     no such figure (a tree before prism-prices-the-host). Asked with `--explain-plan --json` in the
-    cell's own environment; nothing runs."""
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
-           "--explain-plan", "--json"]
+    cell's own profile; nothing runs.
+
+    The plan is the one the cell runs on the card ALONE, never the one the card's current occupant
+    leaves room for: a card another process holds reads as shared, its budget the free rung, and the
+    plan priced then is another plan — Ming-Lite-Omni-1.5 16g asked beside a running cell came out
+    cpu_streaming at 189.4 GiB, the cell ran layer_streaming (66 515 MB priced, 31.0 GiB measured),
+    and the reservation held two cards idle (2026-10-11). So the cell's profile is resolved the
+    runtime's way on its card (detection only), and the plan is solved on the census path at that
+    profile's rung — the plan a certified-only cell must form, its keys being the census's."""
     def _none(why):
         # Said, never silent: the cell then reserves the static estimate and the reason is in its log.
         print(f"[matrix] {model} {mode}: no plan host figure ({why}) — the static estimate is reserved", flush=True)
         return None
+    try:
+        hw = cell_profile(gpu, src)
+    except RuntimeError as e:
+        return _none(str(e))
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
+           "NBX_PRISM_BUDGET_MB": str(hw[1]), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
+           "--hardware", hw[0], "--explain-plan", "--json"]
     try:
         p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
