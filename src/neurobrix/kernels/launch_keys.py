@@ -441,13 +441,25 @@ def is_krsc_weight(w) -> bool:
     return tuple(w.stride()) == (R * S * C, 1, S * C, C)
 
 
-def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
-    """The profile's matrix unit runs this attention's flash (`matrix_unit.flash` has a row for head dim D and the
-    three operands are its operand dtype) — the wrappers' route asks this same function."""
+def unit_flash(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> Optional[Tuple[str, dict]]:
+    """(representation, tile) of this attention's flash on the profile's matrix unit, or None: the DtypeEngine's
+    `matrix_unit_flash_representation` ("native": the three operands are the unit's operand dtype; "split": they are
+    among `fp32_split.operands`, carried as hi + lo) and the first row of `matrix_unit.flash` — or of
+    `matrix_unit.fp32_split.flash` for the split — holding head dim D. The wrapper launches with this function."""
     from neurobrix.kernels.ops._configs import matrix_unit, matrix_unit_flash_tile
+    from neurobrix.triton.dtype import matrix_unit_flash_representation
     mu = matrix_unit()
-    return (matrix_unit_flash_tile(D, mu) is not None
-            and q.name == k.name == v.name == mu["operand_dtype"])
+    rep = matrix_unit_flash_representation(q.name, k.name, v.name, mu)
+    if rep is None:
+        return None
+    tile = matrix_unit_flash_tile(D, mu["fp32_split"] if rep == "split" else mu)
+    return (rep, tile) if tile is not None else None
+
+
+def unit_flash_takes(D: int, q: NBXDtype, k: NBXDtype, v: NBXDtype) -> bool:
+    """The profile's matrix unit runs this attention's flash (`unit_flash`) — the wrappers' route and the derived
+    census ask this same function."""
+    return unit_flash(D, q, k, v) is not None
 
 
 def sdpa_route(batch: int, nheads: int, Tq: int, Tk: int, D: int, Dv: int, budget_bytes: int,

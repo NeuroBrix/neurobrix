@@ -11,6 +11,17 @@ and P never leaves the registers: its layout carries the k-step index as a regis
 is selected from it exactly. The zero bias of an unmasked call is not read (HAS_BIAS).
 The head dim is cut into at most two power-of-two parts DA + DB (the wrapper rounds it up to such a sum, the
 extra columns loaded as zeros), so 96 runs as 64 + 32 and never as 128.
+
+SPLIT (the DtypeEngine's "split" representation, triton/dtype.matrix_unit_flash_representation, the profile's
+`matrix_unit.fp32_split.flash`): operands of any float dtype in memory are widened to fp32 and carried to the fp16 unit
+as hi + lo, as ops/matmul_m8n8k4.py carries a GEMM operand (its `split_exponent` / `hi_lo`). Each operand takes a
+power-of-two scale constant along the axis it is reduced over, so the scale factors out of the product: Q (after
+`softmax_scale`) per query row and K per key, both over the whole head dim (DA + DB together); V per head-dim column
+of each key tile; P (in [0, 1]) is split unscaled. S = (Qh Kh + (Ql Kh + Qh Kl) 2^-LO_SHIFT) 2^-sq 2^-sk and the
+tile's P V = (Ph Vh + (Pl Vh + Ph Vl) 2^-LO_SHIFT) 2^-sv; the unit sums at most `block_k` head-dim columns of S
+(BLOCK_N keys of P V) into a zeroed accumulator — it rounds toward zero (Fasi et al. 2021) — and every such partial
+is added on the FMA units with round to nearest. lo*lo (< 2^-22 of a product) is not formed (Ootomo & Yokota 2022,
+arXiv 2203.03341). The row statistics, the online softmax and the output are those of the native path, in fp32.
 """
 
 import functools
@@ -18,6 +29,7 @@ import functools
 from triton.experimental import gluon
 from triton.experimental.gluon import language as gl
 
+from .matmul_m8n8k4 import _bcast_cols, _bcast_rows, _pow2, hi_lo, split_exponent
 from .mma_m8n8k4 import (MMA_ASM, MMA_CONSTRAINTS, acc_rows_cols, bcast_rows, mma_k4, row_layout_rows, row_max,
                          row_sum, stage_k_inner, stage_k_outer)
 
@@ -36,6 +48,7 @@ def flash_attention_m8n8k4_kernel(
     nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
     MB: gl.constexpr, NS: gl.constexpr, DA: gl.constexpr, DB: gl.constexpr, GQA_GROUPS: gl.constexpr,
     HAS_BIAS: gl.constexpr,
+    SPLIT: gl.constexpr, HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr, KSA: gl.constexpr, KSB: gl.constexpr,
     LS: gl.constexpr, LOA: gl.constexpr, LOB: gl.constexpr,
     LAS: gl.constexpr, LAOA: gl.constexpr, LAOB: gl.constexpr,
     LBK: gl.constexpr, LBVA: gl.constexpr, LBVB: gl.constexpr,
@@ -66,7 +79,8 @@ def flash_attention_m8n8k4_kernel(
     v_a = gl.arange(0, DA, layout=gl.SliceLayout(0, GV))[None, :]
     q_rows = m0 + r_m
     q_a = gl.load(q_base + q_rows * stride_qm + c_a, mask=(q_rows < seqlen_q) & (c_a < headdim), other=0.0)
-    stage_k_inner(sq_a, (q_a * softmax_scale).to(gl.float16), BM, DA)
+    if not SPLIT:
+        stage_k_inner(sq_a, (q_a * softmax_scale).to(gl.float16), BM, DA)
     acc_a = gl.zeros([MB, 2, 8, DA // 16, 2, 2, 4], gl.float32, layout=LOA)
     if DB > 0:
         sq_b = gl.allocate_shared_memory(gl.float16, [(DB // 4) * BM, 4], SH)
@@ -75,35 +89,112 @@ def flash_attention_m8n8k4_kernel(
         c_b = DA + gl.arange(0, DB, layout=gl.SliceLayout(0, GR))[None, :]
         v_b = DA + gl.arange(0, DB, layout=gl.SliceLayout(0, GV))[None, :]
         q_b = gl.load(q_base + q_rows * stride_qm + c_b, mask=(q_rows < seqlen_q) & (c_b < headdim), other=0.0)
-        stage_k_inner(sq_b, (q_b * softmax_scale).to(gl.float16), BM, DB)
+        if not SPLIT:
+            stage_k_inner(sq_b, (q_b * softmax_scale).to(gl.float16), BM, DB)
         acc_b = gl.zeros([MB, 2, 8, DB // 16, 2, 2, 4], gl.float32, layout=LOB)
+    if SPLIT:
+        # the lo halves; Q split once per program under one scale per query row over the whole head dim
+        sql_a = gl.allocate_shared_memory(gl.float16, [(DA // 4) * BM, 4], SH)
+        skl_a = gl.allocate_shared_memory(gl.float16, [(DA // 4) * BN, 4], SH)
+        svl_a = gl.allocate_shared_memory(gl.float16, [(BN // 4) * DA, 4], SH)
+        xq_a = q_a.to(gl.float32) * softmax_scale
+        mq = gl.max(gl.abs(xq_a), axis=1)
+        if DB > 0:
+            sql_b = gl.allocate_shared_memory(gl.float16, [(DB // 4) * BM, 4], SH)
+            skl_b = gl.allocate_shared_memory(gl.float16, [(DB // 4) * BN, 4], SH)
+            svl_b = gl.allocate_shared_memory(gl.float16, [(BN // 4) * DB, 4], SH)
+            xq_b = q_b.to(gl.float32) * softmax_scale
+            mq = gl.maximum(mq, gl.max(gl.abs(xq_b), axis=1))
+        eq = split_exponent(mq, HI_EXP)
+        hq, lq = hi_lo(xq_a * gl.expand_dims(_pow2(eq), 1), LO_SHIFT)
+        stage_k_inner(sq_a, hq, BM, DA)
+        stage_k_inner(sql_a, lq, BM, DA)
+        if DB > 0:
+            hq, lq = hi_lo(xq_b * gl.expand_dims(_pow2(eq), 1), LO_SHIFT)
+            stage_k_inner(sq_b, hq, BM, DB)
+            stage_k_inner(sql_b, lq, BM, DB)
 
     s_rows, s_cols = acc_rows_cols(LS, MB, NS)
     s_rows = m0 + s_rows
     RS: gl.constexpr = gl.SliceLayout(3, gl.SliceLayout(4, gl.SliceLayout(5, gl.SliceLayout(6, LS))))
     m_i = gl.full([MB, 2, 8], float("-inf"), gl.float32, layout=RS)      # running max, log2 domain
     l_i = gl.zeros([MB, 2, 8], gl.float32, layout=RS)
+    if SPLIT:
+        inv_q = _bcast_rows(gl.reshape(_pow2(-eq), [MB, 2, 8]), LS)
 
     for n0 in range(0, seqlen_k, BN):
         gl.barrier()                                       # every warp is done reading the previous tile
         k_rows = n0 + r_n
         v_rows = n0 + v_n
-        stage_k_inner(sk_a, gl.load(k_base + k_rows * stride_kn + c_a,
-                                    mask=(k_rows < seqlen_k) & (c_a < headdim), other=0.0), BN, DA)
-        stage_k_outer(sv_a, gl.load(v_base + v_rows * stride_vn + v_a,
-                                    mask=(v_rows < seqlen_k) & (v_a < headdim), other=0.0), BN, DA)
-        if DB > 0:
-            stage_k_inner(sk_b, gl.load(k_base + k_rows * stride_kn + c_b,
-                                        mask=(k_rows < seqlen_k) & (c_b < headdim), other=0.0), BN, DB)
-            stage_k_outer(sv_b, gl.load(v_base + v_rows * stride_vn + v_b,
-                                        mask=(v_rows < seqlen_k) & (v_b < headdim), other=0.0), BN, DB)
+        if SPLIT:
+            # K under one scale per key over the whole head dim; V under one scale per column of this key tile
+            xk_a = gl.load(k_base + k_rows * stride_kn + c_a, mask=(k_rows < seqlen_k) & (c_a < headdim),
+                           other=0.0).to(gl.float32)
+            xv_a = gl.load(v_base + v_rows * stride_vn + v_a, mask=(v_rows < seqlen_k) & (v_a < headdim),
+                           other=0.0).to(gl.float32)
+            mk = gl.max(gl.abs(xk_a), axis=1)
+            if DB > 0:
+                xk_b = gl.load(k_base + k_rows * stride_kn + c_b, mask=(k_rows < seqlen_k) & (c_b < headdim),
+                               other=0.0).to(gl.float32)
+                xv_b = gl.load(v_base + v_rows * stride_vn + v_b, mask=(v_rows < seqlen_k) & (v_b < headdim),
+                               other=0.0).to(gl.float32)
+                mk = gl.maximum(mk, gl.max(gl.abs(xk_b), axis=1))
+            ek = split_exponent(mk, HI_EXP)
+            hk, lk = hi_lo(xk_a * gl.expand_dims(_pow2(ek), 1), LO_SHIFT)
+            stage_k_inner(sk_a, hk, BN, DA)
+            stage_k_inner(skl_a, lk, BN, DA)
+            ev_a = split_exponent(gl.max(gl.abs(xv_a), axis=0), HI_EXP)
+            hv, lv = hi_lo(xv_a * gl.expand_dims(_pow2(ev_a), 0), LO_SHIFT)
+            stage_k_outer(sv_a, hv, BN, DA)
+            stage_k_outer(svl_a, lv, BN, DA)
+            if DB > 0:
+                hk, lk = hi_lo(xk_b * gl.expand_dims(_pow2(ek), 1), LO_SHIFT)
+                stage_k_inner(sk_b, hk, BN, DB)
+                stage_k_inner(skl_b, lk, BN, DB)
+                ev_b = split_exponent(gl.max(gl.abs(xv_b), axis=0), HI_EXP)
+                hv, lv = hi_lo(xv_b * gl.expand_dims(_pow2(ev_b), 0), LO_SHIFT)
+                stage_k_outer(sv_b, hv, BN, DB)
+                stage_k_outer(svl_b, lv, BN, DB)
+        else:
+            stage_k_inner(sk_a, gl.load(k_base + k_rows * stride_kn + c_a,
+                                        mask=(k_rows < seqlen_k) & (c_a < headdim), other=0.0), BN, DA)
+            stage_k_outer(sv_a, gl.load(v_base + v_rows * stride_vn + v_a,
+                                        mask=(v_rows < seqlen_k) & (v_a < headdim), other=0.0), BN, DA)
+            if DB > 0:
+                stage_k_inner(sk_b, gl.load(k_base + k_rows * stride_kn + c_b,
+                                            mask=(k_rows < seqlen_k) & (c_b < headdim), other=0.0), BN, DB)
+                stage_k_outer(sv_b, gl.load(v_base + v_rows * stride_vn + v_b,
+                                            mask=(v_rows < seqlen_k) & (v_b < headdim), other=0.0), BN, DB)
         gl.barrier()
         s = gl.zeros([MB, 2, 8, NS, 2, 2, 4], gl.float32, layout=LS)
-        for j in gl.static_range(DA // 4):
-            s = mma_k4(sq_a, j * BM, sk_a, j * BN, s, MB, NS, LAS, LBK, LS)
-        if DB > 0:
-            for j in gl.static_range(DB // 4):
-                s = mma_k4(sq_b, j * BM, sk_b, j * BN, s, MB, NS, LAS, LBK, LS)
+        if SPLIT:
+            # KSA (KSB) k-steps of 4 head-dim columns per partial in a zeroed accumulator, added round-to-nearest
+            for c in gl.static_range(DA // (4 * KSA)):
+                t_hh = gl.zeros([MB, 2, 8, NS, 2, 2, 4], gl.float32, layout=LS)
+                t_lo = gl.zeros([MB, 2, 8, NS, 2, 2, 4], gl.float32, layout=LS)
+                for i in gl.static_range(KSA):
+                    t_hh = mma_k4(sq_a, (c * KSA + i) * BM, sk_a, (c * KSA + i) * BN, t_hh, MB, NS, LAS, LBK, LS)
+                    t_lo = mma_k4(sql_a, (c * KSA + i) * BM, sk_a, (c * KSA + i) * BN, t_lo, MB, NS, LAS, LBK, LS)
+                    t_lo = mma_k4(sq_a, (c * KSA + i) * BM, skl_a, (c * KSA + i) * BN, t_lo, MB, NS, LAS, LBK, LS)
+                s = s + (t_hh + t_lo * (1.0 / (1 << LO_SHIFT)))
+            if DB > 0:
+                for c in gl.static_range(DB // (4 * KSB)):
+                    t_hh = gl.zeros([MB, 2, 8, NS, 2, 2, 4], gl.float32, layout=LS)
+                    t_lo = gl.zeros([MB, 2, 8, NS, 2, 2, 4], gl.float32, layout=LS)
+                    for i in gl.static_range(KSB):
+                        t_hh = mma_k4(sq_b, (c * KSB + i) * BM, sk_b, (c * KSB + i) * BN, t_hh, MB, NS, LAS, LBK, LS)
+                        t_lo = mma_k4(sql_b, (c * KSB + i) * BM, sk_b, (c * KSB + i) * BN, t_lo, MB, NS, LAS, LBK,
+                                      LS)
+                        t_lo = mma_k4(sq_b, (c * KSB + i) * BM, skl_b, (c * KSB + i) * BN, t_lo, MB, NS, LAS, LBK,
+                                      LS)
+                    s = s + (t_hh + t_lo * (1.0 / (1 << LO_SHIFT)))
+            s = s * inv_q * _bcast_cols(gl.reshape(_pow2(-ek), [NS, 2, 2, 4]), LS)
+        else:
+            for j in gl.static_range(DA // 4):
+                s = mma_k4(sq_a, j * BM, sk_a, j * BN, s, MB, NS, LAS, LBK, LS)
+            if DB > 0:
+                for j in gl.static_range(DB // 4):
+                    s = mma_k4(sq_b, j * BM, sk_b, j * BN, s, MB, NS, LAS, LBK, LS)
         cols = n0 + s_cols
         if HAS_BIAS:
             bias = gl.load(b_base + s_rows * stride_bm + cols, mask=(s_rows < seqlen_q) & (cols < seqlen_k),
@@ -117,20 +208,44 @@ def flash_attention_m8n8k4_kernel(
         m_i = m_new
         # P never leaves the registers: (mb, mi3, mi, nb, ni3, ni2, k) -> (mb, mi3, mi, k, nb, ni3, ni2) in LX, whose
         # k-step index j = 4 nb + 2 ni3 + ni2 is a register dim; one A fragment per j by select + sum (exact).
-        px = gl.convert_layout(gl.reshape(gl.permute(p.to(gl.float16), [0, 1, 2, 6, 3, 4, 5]),
-                                          [MB, 2, 8, 4, BN // 4]), LX)
         jj = gl.arange(0, BN // 4, layout=gl.SliceLayout(0, gl.SliceLayout(1, gl.SliceLayout(2, gl.SliceLayout(3, LX)))))
         jj = jj[None, None, None, None, :]
         # P V of this key tile in a zeroed accumulator (the unit rounds toward zero, Fasi et al. 2021); the tiles
         # are summed on the FMA units with round to nearest, under the running rescale.
-        t_a = gl.zeros([MB, 2, 8, DA // 16, 2, 2, 4], gl.float32, layout=LOA)
-        if DB > 0:
-            t_b = gl.zeros([MB, 2, 8, DB // 16, 2, 2, 4], gl.float32, layout=LOB)
-        for j in gl.static_range(BN // 4):
-            f = gl.sum(gl.where(jj == j, px, 0.0), axis=4).to(gl.float16)
-            t_a = _mma_frag(f, sv_a, j * DA, t_a, MB, DA // 16, LAOA, LBVA, LOA)
+        if SPLIT:
+            ph, pl = hi_lo(p, LO_SHIFT)                    # p in [0, 1] and l >= 1: no scale
+            pxh = gl.convert_layout(gl.reshape(gl.permute(ph, [0, 1, 2, 6, 3, 4, 5]), [MB, 2, 8, 4, BN // 4]), LX)
+            pxl = gl.convert_layout(gl.reshape(gl.permute(pl, [0, 1, 2, 6, 3, 4, 5]), [MB, 2, 8, 4, BN // 4]), LX)
+            t_a = gl.zeros([MB, 2, 8, DA // 16, 2, 2, 4], gl.float32, layout=LOA)
+            u_a = gl.zeros([MB, 2, 8, DA // 16, 2, 2, 4], gl.float32, layout=LOA)
             if DB > 0:
-                t_b = _mma_frag(f, sv_b, j * DB, t_b, MB, DB // 16, LAOB, LBVB, LOB)
+                t_b = gl.zeros([MB, 2, 8, DB // 16, 2, 2, 4], gl.float32, layout=LOB)
+                u_b = gl.zeros([MB, 2, 8, DB // 16, 2, 2, 4], gl.float32, layout=LOB)
+            for j in gl.static_range(BN // 4):
+                fh = gl.sum(gl.where(jj == j, pxh, 0.0), axis=4).to(gl.float16)
+                fl = gl.sum(gl.where(jj == j, pxl, 0.0), axis=4).to(gl.float16)
+                t_a = _mma_frag(fh, sv_a, j * DA, t_a, MB, DA // 16, LAOA, LBVA, LOA)
+                u_a = _mma_frag(fh, svl_a, j * DA, u_a, MB, DA // 16, LAOA, LBVA, LOA)
+                u_a = _mma_frag(fl, sv_a, j * DA, u_a, MB, DA // 16, LAOA, LBVA, LOA)
+                if DB > 0:
+                    t_b = _mma_frag(fh, sv_b, j * DB, t_b, MB, DB // 16, LAOB, LBVB, LOB)
+                    u_b = _mma_frag(fh, svl_b, j * DB, u_b, MB, DB // 16, LAOB, LBVB, LOB)
+                    u_b = _mma_frag(fl, sv_b, j * DB, u_b, MB, DB // 16, LAOB, LBVB, LOB)
+            t_a = (t_a + u_a * (1.0 / (1 << LO_SHIFT))) * _bcast_cols(gl.reshape(_pow2(-ev_a), [DA // 16, 2, 2, 4]), LOA)
+            if DB > 0:
+                t_b = (t_b + u_b * (1.0 / (1 << LO_SHIFT))) * _bcast_cols(
+                    gl.reshape(_pow2(-ev_b), [DB // 16, 2, 2, 4]), LOB)
+        else:
+            px = gl.convert_layout(gl.reshape(gl.permute(p.to(gl.float16), [0, 1, 2, 6, 3, 4, 5]),
+                                              [MB, 2, 8, 4, BN // 4]), LX)
+            t_a = gl.zeros([MB, 2, 8, DA // 16, 2, 2, 4], gl.float32, layout=LOA)
+            if DB > 0:
+                t_b = gl.zeros([MB, 2, 8, DB // 16, 2, 2, 4], gl.float32, layout=LOB)
+            for j in gl.static_range(BN // 4):
+                f = gl.sum(gl.where(jj == j, px, 0.0), axis=4).to(gl.float16)
+                t_a = _mma_frag(f, sv_a, j * DA, t_a, MB, DA // 16, LAOA, LBVA, LOA)
+                if DB > 0:
+                    t_b = _mma_frag(f, sv_b, j * DB, t_b, MB, DB // 16, LAOB, LBVB, LOB)
         acc_a = acc_a * bcast_rows(alpha, LOA) + t_a
         if DB > 0:
             acc_b = acc_b * bcast_rows(alpha, LOB) + t_b

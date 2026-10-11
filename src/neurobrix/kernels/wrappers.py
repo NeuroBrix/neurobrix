@@ -24,8 +24,7 @@ from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_cha
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from .ops._configs import sdpa_launch_meta as _sdpa_launch_meta
-from .ops._configs import (matrix_unit as _matrix_unit, matrix_unit_flash_tile as _matrix_unit_flash_tile,
-                           matrix_unit_mm_tile as _matrix_unit_mm_tile)
+from .ops._configs import matrix_unit as _matrix_unit, matrix_unit_mm_tile as _matrix_unit_mm_tile
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
 from . import launcher as _nbx_launcher
 
@@ -8264,15 +8263,21 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     return out.reshape(batch, nheads, 1, headdim)
 
 
-def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias):
+def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, split=False):
     """Flash forward on the m8n8k4 matrix unit (ops/flash_attention_m8n8k4.py); `bias` is the wrapper's
     memory-resident [B, H, Sq, Sk] bias view (unit stride on the key axis), not read when `has_bias` is False (the
-    zero bias of a call with neither mask nor causality)."""
+    zero bias of a call with neither mask nor causality). `split`: the operands carried as hi + lo (the DtypeEngine's
+    "split" representation, `launch_keys.unit_flash`), `tile` then a `matrix_unit.fp32_split.flash` row whose
+    `block_k` head-dim columns the unit sums before each round-to-nearest add."""
     from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
+    from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
     MB, NS = tile["block_m"] // 16, tile["block_n"] // 16
     DA, DB = head_parts(headdim)
+    hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
+    ksa = min(tile["block_k"], DA) // 4 if split else 1
+    ksb = min(tile["block_k"], DB) // 4 if split and DB else 1
     o = NBXTensor.empty_like(q)
     seqlen_q_rounded = math.ceil(seqlen_q / (16 * MB)) * 16 * MB
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
@@ -8286,7 +8291,8 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias):
         bias.stride(0), bias.stride(1), bias.stride(-2),
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
-        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias), num_warps=tile["warps_m"],
+        MB=MB, NS=NS, DA=DA, DB=DB, GQA_GROUPS=gqa_groups, HAS_BIAS=bool(has_bias),
+        SPLIT=bool(split), HI_EXP=hi_exp, LO_SHIFT=lo_shift, KSA=ksa, KSB=ksb, num_warps=tile["warps_m"],
         **flash_layouts(MB, NS, DA, DB, tile["warps_m"]))
     return o
 
@@ -8821,13 +8827,14 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     is_causal = False
 
     # The arch's matrix unit, where the profile declares one Triton does not lower `tl.dot` onto
-    # (`matrix_unit`, volta.yml): the flash kernel built on that unit, for the operand dtype it takes and
-    # the head dims its measured rows cover. Same contract as the kernel below (bias, GQA, LSE, tails).
+    # (`matrix_unit`, volta.yml): the flash kernel built on that unit, for the operands the DtypeEngine carries
+    # on it (its operand dtype natively, an `fp32_split` operand as hi + lo) and the head dims its measured rows
+    # cover. Same contract as the kernel below (bias, GQA, LSE, tails).
     # Taken before the tl.dot kernel's own output, LSE and tile buffers are allocated.
-    _mu = _matrix_unit()
-    _mu_tile = _matrix_unit_flash_tile(headdim, _mu) if _mu else None
-    if _mu_tile is not None and q._dtype.name == k._dtype.name == v._dtype.name == _mu["operand_dtype"]:
-        o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_tile, _bias_read)
+    _mu_flash = _lk.unit_flash(headdim, q._dtype, k._dtype, v._dtype)
+    if _mu_flash is not None:
+        o = _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, _mu_flash[1], _bias_read,
+                          split=_mu_flash[0] == "split")
         if attn_mask is not None:
             o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
         return o

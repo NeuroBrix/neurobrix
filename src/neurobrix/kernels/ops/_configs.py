@@ -596,17 +596,27 @@ def matrix_unit() -> dict:
         if mu.get(f) != UNIT[f]:
             raise ValueError(f"hardware profile: matrix_unit.{f} {mu.get(f)!r} is not what "
                              f"{UNIT['shape']} computes in ({UNIT[f]!r})")
-    for sec, fields in (("flash", ("block_m", "block_n")), ("mm", ("block_m", "block_n"))):
-        for row in mu.get(sec) or []:
-            for f in fields:
+    for row in mu.get("mm") or []:
+        for f in ("block_m", "block_n"):
+            t = int(row[f])
+            if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
+                raise ValueError(f"hardware profile: matrix_unit.mm {f} {t} is not 16 x a power of two")
+    split = mu.get("fp32_split") or {}
+    for sec, rows in (("flash", mu.get("flash") or []), ("fp32_split.flash", split.get("flash") or [])):
+        for row in rows:
+            for f in ("block_m", "block_n"):
                 t = int(row[f])
                 if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
                     raise ValueError(f"hardware profile: matrix_unit.{sec} {f} {t} is not 16 x a power of two")
-    for row in mu.get("flash") or []:
-        wm = int(row["warps_m"])
-        if wm < 1 or wm & (wm - 1) or (int(row["block_m"]) // 16) % wm:
-            raise ValueError(f"hardware profile: matrix_unit.flash warps_m {wm} does not divide the "
-                             f"{row['block_m']}-row tile's 16-row bands")
+            wm = int(row["warps_m"])
+            if wm < 1 or wm & (wm - 1) or (int(row["block_m"]) // 16) % wm:
+                raise ValueError(f"hardware profile: matrix_unit.{sec} warps_m {wm} does not divide the "
+                                 f"{row['block_m']}-row tile's 16-row bands")
+    for row in split.get("flash") or []:
+        # the head-dim columns the unit sums (rounding toward zero) before each round-to-nearest add of S
+        bk = int(row["block_k"])
+        if bk < 4 or bk & (bk - 1):
+            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash block_k {bk} is not a power of two >= 4")
     layout = (active_vendor_profile().get("conv") or {}).get("weight_layout")
     if layout not in (None, "KCRS"):
         # ops/conv2d_m8n8k4.py reads a filter as one contiguous (C, R, S) run (w.stride(0) alone): a weight the
@@ -614,7 +624,6 @@ def matrix_unit() -> dict:
         # declarations meet, until that kernel takes the weight's four strides.
         raise ValueError(f"hardware profile: matrix_unit with conv.weight_layout {layout!r} — the {UNIT['shape']} "
                          f"convolution reads KCRS weights only")
-    split = mu.get("fp32_split") or {}
     if split and (not split.get("mm") or not split.get("operands")):
         raise ValueError("hardware profile: matrix_unit.fp32_split declares no mm tiles or no operands")
     for row in split.get("mm") or []:
@@ -634,12 +643,13 @@ def matrix_unit() -> dict:
 
 
 def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Optional[dict]:
-    """The first `matrix_unit.flash` row matching `head_dim` (`head_dim_le` optional), or None (no unit
-    declared, or a head dim beyond its measured rows: the kernel keeps tl.dot)."""
+    """The first `flash` row of `unit` (the profile's `matrix_unit`, or its `fp32_split`) matching `head_dim`
+    (`head_dim_le` optional), or None (no unit declared, or a head dim beyond its measured rows: the kernel keeps
+    tl.dot)."""
     for row in (matrix_unit() if unit is None else unit).get("flash") or []:
         if "head_dim_le" in row and head_dim > row["head_dim_le"]:
             continue
-        return {"block_m": int(row["block_m"]), "block_n": int(row["block_n"]), "warps_m": int(row["warps_m"])}
+        return {f: int(row[f]) for f in ("block_m", "block_n", "warps_m", "block_k") if f in row}
     return None
 
 
