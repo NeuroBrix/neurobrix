@@ -164,3 +164,53 @@ def host_reading() -> DeviceReading:
 def host_budget_mb() -> int:
     """Host RAM through the same law: the free reading rounded down onto the ladder."""
     return budget_mb(host_reading())
+
+
+# ----------------------------------------------------------------------------- the deferred drain
+#: The env door that pins the drain cliff (`triton/sequence.py::_resolve_drain_policy`), read here
+#: by the same name so the plan prices the cliff the run will hold.
+DEFERRED_DRAIN_DOOR = "NBX_DEFERRED_DRAIN_BYTES"
+
+
+def deferred_drain_policy_of(memory: dict) -> tuple:
+    """The Triton engine's deferred-free drain policy from ONE vendor profile's `memory:` section,
+    as `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)` — the pure reading
+    shared by the runtime (`kernels.wrappers.deferred_drain_policy`, which drains by it) and the
+    plan (`PrismSolver._deferred_drain_mb`, which prices it). One function, so the two can never
+    read two figures.
+
+    The hot loops retire every dead or overwritten tensor onto a queue and free it only after a
+    device sync, when the queue reaches `cliff` bytes (or, with the pressure branch armed and the
+    allocator pool off, earlier). Between two drains the queue's bytes are dead to the program and
+    alive to the card. A profile that does not state its cliff is refused by name: the figure is
+    both a runtime knob and a planned price, and neither may be guessed."""
+    if "deferred_drain_cliff_bytes" not in (memory or {}):
+        raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
+                       "deferred_drain_cliff_bytes — the Triton engine's dead-tensor queue has "
+                       "no stated ceiling, so neither the run nor the plan can size it")
+    cliff = int(memory["deferred_drain_cliff_bytes"])
+    reserve = int(memory.get("deferred_drain_pressure_reserve_bytes", 0))
+    if reserve <= 0:
+        return (cliff, cliff, 0, 1 << 30)
+    floor = min(int(memory["deferred_drain_floor_bytes"]), cliff)
+    interval = max(1, int(memory.get("deferred_drain_freecheck_interval", 8)))
+    return (cliff, floor, reserve, interval)
+
+
+def deferred_drain_retained_bytes(memory: dict) -> int:
+    """The most dead bytes a Triton hot loop's queue holds at any allocation: its CLIFF.
+
+    Why the cliff bounds it exactly: the loop appends an op's evicted tensors AFTER the op ran and
+    tests the cliff right there, so every allocation an op makes sees a queue below the cliff. The
+    pressure branch only drains earlier, and under the allocator pool (the default) it is off — so
+    the cliff, not the floor, is what a card must hold room for. The door pins it as it pins the
+    run's cliff."""
+    door = os.environ.get(DEFERRED_DRAIN_DOOR)
+    if door:
+        try:
+            pinned = int(door)
+        except ValueError:
+            pinned = 0
+        if pinned > 0:
+            return pinned
+    return deferred_drain_policy_of(memory)[0]

@@ -1067,21 +1067,14 @@ class DeviceAllocator:
     # that device, never in the hot path afterwards).
     _pool_cap_bytes: Dict[int, int] = {}
 
-    # OOM-reclaim hooks (P-TRITON-LIVE-SET) — last-chance reclaimers called
-    # ONLY after a device malloc fails, before declaring OOM. The triton hot
-    # loops register their deferred dead-tensor queues here: those tensors
-    # are already killed in the arena (guaranteed dead) but their frees are
-    # batched behind the drain policy's cliff, so at the OOM instant the
-    # queue can legally hold up to the cliff (~2 GB) of reclaimable bytes.
-    # The drain policy's pressure gate compares free memory to a static
-    # reserve and is blind to the SIZE of the incoming request (Sana 4Kpx
-    # VAE decode: 8 GiB request with 7.4 GiB free — above the 6 GiB
-    # reserve, so no pressure drain — failed by ~0.8 GiB while the queue
-    # held reclaimable bytes). A hook takes (device_idx, nbytes requested)
-    # and returns bytes freed (best effort); a non-zero total triggers one
-    # malloc retry. Same philosophy as the pool-flush retry in malloc_cuda
-    # (torch CachingAllocator release-cached-blocks -> retry): dead code on
-    # every run that never OOMs.
+    # Deferred-queue reclaimers (P-TRITON-LIVE-SET). The triton hot loops
+    # register their deferred dead-tensor queues here. Since 2026-10-11 the
+    # allocator's OWN malloc never calls them: Prism prices the queue
+    # (`PrismSolver._deferred_drain_mb`), so a refused malloc is raised, not
+    # rescued. The one reader left is `wrappers._autotune_headroom_guard`,
+    # for the single device allocation the engine does not make and the plan
+    # does not price — the Triton autotuner's benchmark buffer. A hook takes
+    # (device_idx, nbytes requested) and returns the bytes it freed.
     _oom_reclaim_hooks: list = []
 
     @classmethod
@@ -1522,28 +1515,14 @@ class DeviceAllocator:
         ret = getattr(rt, backend["malloc"])(
             ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
 
-        # OOM-retry step 1 (P-TRITON-LIVE-SET): ask registered reclaimers
-        # (the hot loops' deferred dead-tensor queues) to sync+free, then
-        # retry once. Dead tensors first — guaranteed-reclaimable memory —
-        # before the pool flush below. A broken reclaimer must never mask
-        # the real OOM: its exception is logged and the retry proceeds on
-        # whatever the other hooks freed; the original OOM raise (with full
-        # diagnostics) still follows if the retry fails.
-        if ret != 0 and DeviceAllocator._oom_reclaim_hooks:
-            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
-            _reclaimed = 0
-            for _hook in list(DeviceAllocator._oom_reclaim_hooks):
-                try:
-                    _reclaimed += int(_hook(dev, nbytes) or 0)
-                except Exception as _hook_err:
-                    print(f"[NBX_OOM_RECLAIM] hook error (OOM raise follows "
-                          f"if retry fails): {_hook_err}", flush=True)
-            if _reclaimed > 0:
-                print(f"[NBX_OOM_RECLAIM] freed {_reclaimed/1024/1024:.0f}MB "
-                      f"from deferred queues, retrying "
-                      f"{nbytes/1024/1024:.0f}MB malloc", flush=True)
-                ret = getattr(rt, backend["malloc"])(
-                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+        # No reclaim-and-retry of the hot loops' deferred dead-tensor queues here
+        # (ZERO FALLBACK, 2026-10-11). That rescue drained the queue on a refused
+        # malloc and retried — `[NBX_OOM_RECLAIM] freed ...` 1 279 times in one
+        # 16 GB Allegro run — so a plan that did not leave room for the queue ran
+        # anyway. Prism now PRICES the queue (`PrismSolver._deferred_drain_mb`, the
+        # vendor profile's `memory.deferred_drain_cliff_bytes`), and a malloc refused
+        # with the queue inside its price is a plan defect, raised below and named
+        # by the hot loop with the op, the queue it held and the price it had.
 
         # Phase 2 OOM-retry: if cudaMalloc fails and the pool holds cached
         # blocks, flush them back to the driver and retry. Defragments the

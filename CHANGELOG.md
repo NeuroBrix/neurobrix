@@ -136,6 +136,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The Triton mode plans room for memory that is freed late, and no longer retries a refused
+  allocation.** The Triton engine frees dead tensors in batches, so up to the hardware profile's
+  `deferred_drain_cliff_bytes` (2 GB on NVIDIA V100) can still be held on the card at any moment.
+  Placement now subtracts that amount from each card's usable memory in the Triton mode. Before,
+  plans did not count it. When an allocation was refused, the engine freed the batch and tried
+  again, printing `[NBX_OOM_RECLAIM]`; on a 16 GB card that happened up to 1 279 times in one
+  video run. A refused allocation now stops the run with an error. The error names the operation,
+  how much it asked for, how much the batch held, and how much the plan set aside for the batch.
+  A component that fits on the card only without that room is now planned with its weights
+  streamed from host memory.
+
 - **Hardware profiles state how attention treats inputs of different precision.** A new
   `precision.attention_operands` key (`narrowest` or `widest`) decides the precision an attention
   computes in when its query, key and value arrive in different precisions, the same in both

@@ -965,8 +965,49 @@ class PrismSolver:
         was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
         the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
         accelerator, on a device that holds it.
+
+        Under the Triton engine the part is net of the DEFERRED DRAIN (`_deferred_drain_mb`): the
+        dead tensors the hot loop retires and frees only at its drain cliff sit on the card beside
+        whatever runs, so the room for one component is the rung's usable part less that queue.
         """
-        return self._effective_capacity_mb(dev) * self.whole_component_fraction
+        return (self._effective_capacity_mb(dev) * self.whole_component_fraction
+                - self._deferred_drain_mb(dev))
+
+    def _deferred_drain_mb(self, dev: "DeviceState") -> float:
+        """What the Triton engine's deferred-free queue holds on `dev` at its worst, in MB — the
+        price of the drain, read from the device's vendor profile (`memory.deferred_drain_cliff_bytes`,
+        through `memory_budget.deferred_drain_retained_bytes`, the reading the runtime drains by).
+
+        The hot loops (`triton/sequence.py`) retire every dead or overwritten tensor onto a queue and
+        free it, after a device sync, only when the queue reaches the cliff; under the allocator pool
+        (the default) no earlier drain fires. Until 2026-10-11 the plan priced the live set and not
+        that queue, and the allocator reclaimed it by draining on a refused malloc and retrying
+        (`[NBX_OOM_RECLAIM] freed ...`): 1 279 times in Allegro's 16 GB triton run, up to 1 883 MB a
+        time in CogVideoX-5b-I2V's (mq24 gate, 2026-10-10) — a plan that fitted only through a rescue.
+        The queue is one per running sequence, so it is priced once per device, inside `_usable_mb`.
+
+        0 under the compiled engine (torch frees at the kill point; there is no queue) and on a host
+        device (its queue is host memory, priced by the host ledger). A card whose profile states no
+        cliff is refused by name: an unstated queue is not an empty one."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return 0.0
+        if str(getattr(dev, "device_string", "")).startswith("cpu"):
+            return 0.0
+        spec = getattr(dev, "spec", None)
+        if spec is None:
+            raise PlanNotComputable(
+                f"{dev.device_string} carries no device spec, so its vendor profile cannot be read "
+                f"and the Triton engine's deferred-drain queue cannot be priced on it")
+        from neurobrix.core.config.loader import get_vendor_config
+        from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
+        brand = getattr(spec, "brand", None)
+        memory = (get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                  .get("memory", {}) or {})
+        try:
+            return deferred_drain_retained_bytes(memory) / (1024 * 1024)
+        except KeyError as exc:
+            raise PlanNotComputable(f"{dev.device_string} ({spec.architecture}): {exc.args[0]}") from exc
 
     def _max_allocation_mb(self, dev: "DeviceState") -> Optional[int]:
         """THE LARGEST SINGLE ALLOCATION `dev` GRANTS, in MB — `DeviceSpec.max_allocation_mb`, the

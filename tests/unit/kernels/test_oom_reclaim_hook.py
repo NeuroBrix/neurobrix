@@ -1,15 +1,12 @@
-"""Unit tests — DeviceAllocator OOM-reclaim hooks (P-TRITON-LIVE-SET).
+"""Unit tests — DeviceAllocator deferred-queue reclaim hooks (P-TRITON-LIVE-SET).
 
-The deferred-free drain policy's pressure gate compares device-free memory
-to a static reserve and is blind to the SIZE of the incoming request: the
-Sana 4Kpx triton VAE decode issued an 8 GiB malloc with 7.4 GiB free (above
-the 6 GiB reserve, so no pressure drain) and failed by ~0.8 GiB while the
-deferred dead-tensor queue legally held up to the 2 GB cliff of
-reclaimable bytes. `DeviceAllocator.malloc_cuda` now calls registered
-OOM-reclaim hooks after a failed device malloc and retries once if they
-freed anything — the only chokepoint that sees both the request and the
-reclaimable queue. These tests cover the registry mechanics (CPU) and the
-end-to-end reclaim-then-retry on a real device (GPU, skipped without one).
+The triton hot loops register their deferred dead-tensor queues here. Since
+2026-10-11 `DeviceAllocator.malloc_cuda` never calls them — Prism prices the
+queue and a refused malloc is raised
+(`test_a_refused_malloc_is_raised_not_rescued.py`); the one reader left is the
+autotune headroom guard (`test_alloc_pool_gate.py`). These tests cover the
+registry mechanics (CPU) and that an impossible request raises (GPU, skipped
+without one).
 
 Runnable two ways:
   - pytest:  PYTHONPATH=src python3 -m pytest tests/unit/kernels/test_oom_reclaim_hook.py -v
@@ -73,49 +70,6 @@ CHUNK = 256 * 1024 * 1024  # 256 MiB fp32 chunks
 
 
 @pytest.mark.skipif(not _gpu_available(), reason="no GPU")
-def test_oom_reclaim_drains_queue_and_retry_succeeds():
-    """Fill the device, park 8 chunks (2 GiB) in a dead queue, then request
-    an allocation larger than driver-free: the hook must drain the queue
-    and the retried malloc must succeed."""
-    held = []
-    try:
-        # Fill to capacity (natural OOM stops the fill — no hooks yet).
-        while True:
-            try:
-                held.append(NBXTensor.empty((CHUNK // 4,), "float32"))
-            except RuntimeError:
-                break
-        assert len(held) >= 10, "device too small for this test"
-
-        # Free one chunk of true headroom, park 8 in the dead queue.
-        held.pop()
-        queue = [held.pop() for _ in range(8)]  # 2 GiB reclaimable
-        drained = {"n": 0}
-
-        def hook(dev, nbytes):
-            if not queue:
-                return 0
-            DeviceAllocator.sync_device()
-            freed = sum(t._nbytes for t in queue)
-            queue.clear()
-            drained["n"] += 1
-            return freed
-
-        DeviceAllocator.register_oom_reclaim_hook(hook)
-        try:
-            # ~1.5 GiB request: > the ~256 MiB free, < free + queue.
-            big = NBXTensor.empty((6 * CHUNK // 4,), "float32")
-            assert big is not None
-            assert drained["n"] == 1, "hook did not fire exactly once"
-            assert not queue, "queue not drained"
-            del big
-        finally:
-            DeviceAllocator.unregister_oom_reclaim_hook(hook)
-    finally:
-        held.clear()
-
-
-@pytest.mark.skipif(not _gpu_available(), reason="no GPU")
 def test_oom_still_raises_when_nothing_reclaimable():
     """With no hooks (or empty queues), an impossible request still raises
     the diagnostic RuntimeError — the reclaim path never masks a real OOM."""
@@ -132,7 +86,6 @@ if __name__ == "__main__":
     test_register_is_deduplicated()
     test_unregister_unknown_hook_is_noop()
     if _gpu_available():
-        test_oom_reclaim_drains_queue_and_retry_succeeds()
         test_oom_still_raises_when_nothing_reclaimable()
         print("ALL OOM-RECLAIM TESTS PASS (CPU+GPU)")
     else:
