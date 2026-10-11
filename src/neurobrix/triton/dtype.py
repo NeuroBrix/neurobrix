@@ -326,6 +326,24 @@ def matrix_unit_representation(dtype: str, unit: dict) -> Optional[str]:
     return None
 
 
+def matrix_unit_flash_representation(q: str, k: str, v: str, unit: dict) -> Optional[str]:
+    """How the profile's matrix unit carries an attention's three operands (names, already aligned by
+    `attention_operand_dtypes`) in its flash kernel (kernels/ops/flash_attention_m8n8k4.py): "native" when all three
+    ARE the unit's operand dtype and the profile lists `matrix_unit.flash` rows; "split" when all three are among
+    `matrix_unit.fp32_split.operands` and the profile lists `matrix_unit.fp32_split.flash` rows — Q, K, V and the
+    softmax's P carried as hi + lo as `matrix_unit_representation` carries a GEMM operand, the vendor's fp32
+    arithmetic kept; else None (the attention keeps its tl.dot kernel). The ONE decision the wrapper launches with
+    and the derived census routes with (kernels/launch_keys.unit_flash)."""
+    if not unit or not (q == k == v):
+        return None
+    if q == unit["operand_dtype"]:
+        return "native" if unit.get("flash") else None
+    split = unit.get("fp32_split") or {}
+    if split.get("flash") and q in (split.get("operands") or ()):
+        return "split"
+    return None
+
+
 #: The ways a hardware profile may align attention operands that disagree in dtype
 #: (`precision.attention_operands`): every operand takes the narrowest of the three, or the widest.
 ATTENTION_OPERAND_ALIGNMENTS = ("narrowest", "widest")

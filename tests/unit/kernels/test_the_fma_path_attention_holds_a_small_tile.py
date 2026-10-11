@@ -94,13 +94,13 @@ def _attn(q, k, v):
     the unit is declared it takes these operands — tests/unit/kernels/test_flash_m8n8k4.py; this kernel still
     serves every call the unit does not take)."""
     from neurobrix.kernels import wrappers as W
-    real, real_mu = W._lk.sdpa_route, W._matrix_unit
+    real, real_mu = W._lk.sdpa_route, W._lk.unit_flash
     W._lk.sdpa_route = lambda *a, **kw: ("flash", 0)
-    W._matrix_unit = lambda: {}
+    W._lk.unit_flash = lambda *a, **kw: None
     try:
         return W.scaled_dot_product_attention_wrapper(q, k, v, k_pre_transposed=False)
     finally:
-        W._lk.sdpa_route, W._matrix_unit = real, real_mu
+        W._lk.sdpa_route, W._lk.unit_flash = real, real_mu
 
 
 @volta
