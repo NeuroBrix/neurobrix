@@ -169,6 +169,14 @@ _PCIE_BW_MAP = {
 # PUBLIC API
 # ============================================================================
 
+# What every cascade answers when its OS probes find nothing: the host has no
+# accelerator, said by name, and Prism plans CPU. No compute branch is imported
+# to look again (R33; the Dell's decision 2026-10-11 20:17): a torch-build
+# fallback made the profile depend on which build was installed and made a
+# CPU-only discovery pay a framework import.
+_NO_DEVICE: Tuple[List[Dict[str, Any]], str] = ([], "none")
+
+
 def detect_devices() -> Tuple[List[Dict[str, Any]], str]:
     """The accelerators this process sees, as (devices, brand), from the OS
     probes of this host — the one detection every reader shares: the
@@ -788,7 +796,7 @@ def _detect_gpus(os_type: str) -> Tuple[List[Dict[str, Any]], str]:
 def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
     """
     Linux GPU detection cascade:
-    nvidia-smi → rocm → xpu-smi → tt-smi → chinese SMI → lspci → PyTorch
+    nvidia-smi → rocm → xpu-smi → tt-smi → chinese SMI → lspci → no device
     """
     # An explicitly EMPTY CUDA_VISIBLE_DEVICES means "no GPU", conclusively.
     # Checked before the cascade: filtering only the nvidia-smi result made
@@ -818,28 +826,26 @@ def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
     if devices:
         return devices, brand
 
-    # PyTorch backend fallback
-    return _detect_torch_fallback()
+    return _NO_DEVICE
 
 
 def _detect_gpus_darwin() -> Tuple[List[Dict[str, Any]], str]:
     """
     macOS GPU detection:
-    system_profiler → PyTorch MPS → PyTorch CUDA (Hackintosh edge case)
+    system_profiler → no device
     """
     devices = _parse_system_profiler()
     if devices:
         brand = devices[0].get("brand", "apple")
         return devices, brand
 
-    # PyTorch MPS fallback
-    return _detect_torch_fallback()
+    return _NO_DEVICE
 
 
 def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
     """
     Windows GPU detection cascade:
-    nvidia-smi → rocm-smi → xpu-smi → WMI/PowerShell
+    nvidia-smi → rocm-smi → xpu-smi → WMI/PowerShell → no device
     """
     for detector, brand in [
         (_parse_nvidia_smi, "nvidia"),
@@ -855,8 +861,7 @@ def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
     if devices:
         return devices, brand
 
-    # PyTorch backend fallback
-    return _detect_torch_fallback()
+    return _NO_DEVICE
 
 
 # ============================================================================
@@ -1693,149 +1698,6 @@ def _parse_smi_output(
         })
 
     return devices
-
-
-# ============================================================================
-# PYTORCH BACKEND FALLBACK (last resort — catches any GPU PyTorch can see)
-# ============================================================================
-
-def _detect_torch_fallback() -> Tuple[List[Dict[str, Any]], str]:
-    """Last-resort detection via PyTorch backends."""
-    try:
-        import torch
-    except ImportError:
-        return [], "unknown"
-
-    # CUDA (NVIDIA, AMD ROCm, Hygon DTK, Iluvatar IXUCA)
-    if torch.cuda.is_available():
-        devices = []
-        is_hip = hasattr(torch, 'version') and hasattr(torch.version, 'hip') and torch.version.hip is not None  # type: ignore[union-attr]
-        brand = "amd" if is_hip else "nvidia"
-
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            name = props.name
-            mem_mb = props.total_memory // (1024 * 1024)
-            cc = f"{props.major}.{props.minor}"
-            name_lower = name.lower()
-
-            if "hygon" in name_lower:
-                brand = "amd"
-                arch = "hygon_dcu"
-                dtypes = ["float32", "float16"]
-                cc = getattr(props, 'gcnArchName', "0.0")
-            elif "iluvatar" in name_lower or "bi-v" in name_lower:
-                brand = "iluvatar"
-                arch = "corex"
-                dtypes = ["float32", "float16"]
-                cc = "0.0"
-            elif is_hip:
-                arch = _amd_name_to_arch(name)
-                dtypes = _AMD_DTYPE_MAP.get(arch, ["float32", "float16"])
-                cc = getattr(props, 'gcnArchName', cc)
-            else:
-                arch = _nvidia_cc_to_arch(cc)
-                cc_major = str(props.major)
-                dtypes = _NVIDIA_DTYPE_MAP.get(cc_major, ["float32", "float16"])
-
-            devices.append({
-                "index": i,
-                "brand": brand,
-                "model": name,
-                "memory_mb": mem_mb,
-                "compute_capability": cc,
-                "supports_dtypes": dtypes,
-                "architecture": arch,
-                "pcie_version": "3.0",
-            })
-        return devices, brand
-
-    # Intel XPU
-    if hasattr(torch, 'xpu') and torch.xpu.is_available():  # type: ignore[attr-defined]
-        devices = []
-        for i in range(torch.xpu.device_count()):  # type: ignore[attr-defined]
-            props = torch.xpu.get_device_properties(i)  # type: ignore[attr-defined]
-            name = props.name
-            mem_mb = props.total_memory // (1024 * 1024)
-            arch = _intel_name_to_arch(name)
-
-            devices.append({
-                "index": i,
-                "brand": "intel",
-                "model": name,
-                "memory_mb": mem_mb,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": arch,
-                "pcie_version": "4.0",
-            })
-        return devices, "intel"
-
-    # Moore Threads (torch.musa)
-    if hasattr(torch, 'musa') and torch.musa.is_available():  # type: ignore[attr-defined]
-        devices = []
-        for i in range(torch.musa.device_count()):  # type: ignore[attr-defined]
-            props = torch.musa.get_device_properties(i)  # type: ignore[attr-defined]
-            name = props.name
-            mem_mb = props.total_memory // (1024 * 1024)
-            devices.append({
-                "index": i,
-                "brand": "moore_threads",
-                "model": name,
-                "memory_mb": mem_mb,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": "musa",
-                "pcie_version": "4.0",
-            })
-        return devices, "moore_threads"
-
-    # Cambricon MLU (torch.mlu)
-    if hasattr(torch, 'mlu') and torch.mlu.is_available():  # type: ignore[attr-defined]
-        devices = []
-        for i in range(torch.mlu.device_count()):  # type: ignore[attr-defined]
-            name = torch.mlu.get_device_name(i)  # type: ignore[attr-defined]
-            props = torch.mlu.get_device_properties(i)  # type: ignore[attr-defined]
-            mem_mb = props.total_memory // (1024 * 1024)
-            devices.append({
-                "index": i,
-                "brand": "cambricon",
-                "model": name,
-                "memory_mb": mem_mb,
-                "compute_capability": "0.0",
-                "supports_dtypes": ["float32", "float16"],
-                "architecture": "mlu",
-                "pcie_version": "4.0",
-            })
-        return devices, "cambricon"
-
-    # Apple MPS
-    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        chip_name = _detect_apple_chip()
-        memory_mb = _detect_apple_memory_mb()
-
-        # bf16 support: M2+ chips with macOS 14+ (Sonoma)
-        supports_dtypes = ["float32", "float16"]
-        if _apple_supports_bf16(chip_name):
-            supports_dtypes.append("bfloat16")
-
-        devices = [{
-            "index": 0,
-            "brand": "apple",
-            "model": chip_name,
-            "memory_mb": memory_mb,
-            "compute_capability": "N/A",
-            "supports_dtypes": supports_dtypes,
-            "architecture": "apple_silicon",
-            "pcie_version": "N/A",
-            "unified_memory": True,
-        }]
-        max_alloc_mb = _detect_apple_max_allocation_mb()
-        if max_alloc_mb is not None:
-            devices[0]["max_allocation_mb"] = max_alloc_mb
-        return devices, "apple"
-
-    return [], "unknown"
 
 
 # ============================================================================
