@@ -104,6 +104,29 @@ def first_error(log: Path) -> str:
     return text.strip().splitlines()[-1][:300] if text.strip() else ""
 
 
+#: The row fields a cell's `[Timings]` line fills, from the line's fields (core/runtime/run_timings.py).
+TIMING_ROW_FIELDS = {"load_s": "load_s", "ttft_s": "ttft_s", "tpot_ms": "tpot_ms", "tok_s": "tok_s",
+                     "tokens": "tokens", "first": "first_output"}
+
+
+def timings_of(log: Path) -> dict:
+    """A cell's four timings, read from its log's `[Timings]` line by the engine's own parser.
+    Every row carries every field: None where the run does not define the value (`na`), and all
+    None for a log without the line (a run that died before it, or a tree older than the line);
+    a malformed line is said in `timings_error`, never guessed."""
+    from neurobrix.core.runtime.run_timings import parse_line
+    text = log.read_text(errors="replace") if log.exists() else ""
+    row = {k: None for k in TIMING_ROW_FIELDS.values()}
+    try:
+        parsed = parse_line(text)
+    except ValueError as e:
+        row["timings_error"] = str(e)[:300]
+        return row
+    if parsed is not None:
+        row.update({TIMING_ROW_FIELDS[k]: v for k, v in parsed.items()})
+    return row
+
+
 def missing_keys(log: Path) -> list:
     """The KeyNotCertified messages of a cell's log, distinct, in order of first appearance — one per
     key the certified directory did not serve (a message printed twice is one miss)."""
@@ -568,7 +591,9 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            "certified_dir_override": env.get(CERTIFIED_DIR_ENV) or None,
            # a confirmation run's misses: the key and its census row, from the KeyNotCertified line
            "misses": len(misses),
-           "first_missing_key": missing_key_text(misses[0]) if misses else None}
+           "first_missing_key": missing_key_text(misses[0]) if misses else None,
+           # the run's own [Timings] line: load, time to first output, per-token, tok/s
+           **timings_of(log)}
     if art.exists() and rc == 0:
         row.update(artefact=str(art), sha256=sha256(art), bytes=art.stat().st_size,
                    mechanical=mechanical(art, family, size))

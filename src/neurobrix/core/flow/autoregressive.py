@@ -687,9 +687,9 @@ class AutoregressiveHandler(FlowHandler):
                                        "argmax": idx_sorted[0]}, _f)
                     print(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
                           f"to {_dump_path}", flush=True)
+                # `flow.first_token` is stamped inside the step, at the per-token
+                # emit site every decoding flow shares (decode_progress.emit).
                 next_token, is_done = generator.step(logits, step_idx)
-                if step_idx == 0:
-                    _phase_mark("flow.first_token")
 
                 if _debug_decode and step_idx < 15:
                     h_last = hidden[0, -1, :].float()
