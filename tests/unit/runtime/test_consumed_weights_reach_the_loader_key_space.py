@@ -223,3 +223,22 @@ def test_an_encoded_weight_is_held_and_borrowed_as_the_tensor_it_was_assembled_i
                                  "norm.weight", "block.0.w.weight"})
     assert keep == {"block.0.w.weight"}, keep
     assert taken == {"head.weight": assembled, "norm.weight": lender["norm.weight"]}, taken
+
+
+def test_a_name_the_executor_resolves_by_trailing_suffix_is_loaded_in_a_piece():
+    # 2026-10-11, Wan2.1-T2V-1.3B native, layer_streaming: the text encoder's
+    # graph names the embedding twice, `encoder.token_embed.weight` (read by
+    # aten.embedding::0) and `token_embed.weight` (UMT5's shared table); the
+    # index holds only `token_embed.weight`. Every index key is then a graph
+    # name, the reconcile leaves the dict alone, and the executor finds the
+    # embedding at bind time by its trailing suffix (`_execute_compiled_graph`).
+    # The first segment, with no flow read, consumed `encoder.token_embed.weight`
+    # and loaded nothing for it: AbsentWeightError at bind_weights.
+    graph_params = {"encoder.token_embed.weight", "token_embed.weight",
+                    "blocks.0.attn.q.weight", "blocks.1.attn.q.weight"}
+    index = ["token_embed.weight", "blocks.0.attn.q.weight", "blocks.1.attn.q.weight"]
+    consumed = {"encoder.token_embed.weight", "blocks.0.attn.q.weight"}
+    assert filt(consumed, index, graph_params, None, False) == {"token_embed.weight", "blocks.0.attn.q.weight"}
+    loaded = GraphExecutor.binding_of_the_loaded(consumed, index, graph_params, None, False)
+    assert GraphExecutor.resolve_by_trailing_suffix("encoder.token_embed.weight", set(loaded.values())) \
+        == "token_embed.weight"
