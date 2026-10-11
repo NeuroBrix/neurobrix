@@ -11,7 +11,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from neurobrix import decode_progress
+from neurobrix import decode_progress, decode_stop
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 from .samplers import CombinedSampler, create_sampler
@@ -157,6 +157,12 @@ class TritonGenerator:
         if token_id in self._eos_ids:
             self._state.is_done = True
         if len(self._state.generated_tokens) >= self.max_tokens:
+            self._state.is_done = True
+
+        # The stop seam (Studio request 3): a stop requested by the daemon's
+        # control path ends the loop here, as if the length bound were reached
+        # — the flow returns the tokens produced so far. stdlib-only (R33).
+        if not self._state.is_done and decode_stop.requested(len(self._state.generated_tokens)):
             self._state.is_done = True
 
         prog_path = os.environ.get("NBX_DECODE_PROGRESS")

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The serving daemon answers while it generates, and a generation can be cancelled.** `status`,
+  `cancel` and `shutdown` are answered while a generation runs. Generations still run one at a
+  time. Every `generate`, `chat` and `complete` request carries an `op_id` (yours, or one the
+  daemon assigns), and its reply says how it ended: `completed`, `cancelled`, `orphaned` (the
+  client went away) or `stopped` (the daemon shut down), with the number of tokens produced.
+  `cancel {op_id}` stops the generation at its next token, in both engines. It answers only once
+  the generation has returned and the device is idle. An already cancelled, already finished or
+  unknown operation gets its own named answer. `DaemonClient.cancel(op_id)` sends it. Malformed
+  requests are answered with a named error instead of dropping the connection. The new
+  `serving:` settings in `system.yml` hold the limits.
+
 - **Faster 3x3 convolutions on Apple M4 Pro in the Triton mode.** The hardware profile can store
   3x3 convolution weights channels-innermost (`conv.weight_layout: KRSC`); the loader relays them
   once and the kernel reads them in place. On an M4 Pro every 3x3 key runs 46-63 % faster (1024

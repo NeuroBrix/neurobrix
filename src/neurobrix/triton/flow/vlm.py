@@ -40,7 +40,7 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from neurobrix import decode_progress
+from neurobrix import decode_progress, decode_stop
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
@@ -613,9 +613,12 @@ class TritonVLMEngine:
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
             # decode_progress is stdlib-only (R33-safe by design).
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
             context_embeds = NBXTensor.cat([context_embeds, token_embed],
@@ -1012,9 +1015,12 @@ class TritonVLMEngine:
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
             # decode_progress is stdlib-only (R33-safe by design).
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
             context_embeds = NBXTensor.cat([context_embeds, token_embed],
@@ -1530,9 +1536,12 @@ class TritonVLMEngine:
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
             # decode_progress is stdlib-only (R33-safe by design).
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
             context_embeds = NBXTensor.cat([context_embeds, token_embed],

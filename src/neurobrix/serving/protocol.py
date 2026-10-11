@@ -155,8 +155,24 @@ def send_message(sock: socket.socket, data: Dict[str, Any]) -> None:
     sock.sendall(header + payload)
 
 
+class MalformedFrame(RuntimeError):
+    """A frame the peer sent that is not a protocol message.
+
+    `resync` tells whether the stream is still framed after it: a payload that
+    is not a JSON object arrived whole (its length was honest), so the next
+    frame can be read; an invalid length leaves no frame boundary to trust,
+    and the connection must be closed after the error is answered."""
+
+    def __init__(self, message: str, resync: bool) -> None:
+        super().__init__(message)
+        self.resync = resync
+
+
 def recv_message(sock: socket.socket) -> Optional[Dict[str, Any]]:
-    """Receive a length-prefixed JSON message from a socket."""
+    """Receive a length-prefixed JSON message from a socket.
+
+    None when the peer closed the connection (also mid-frame). A frame that is
+    not a JSON object raises `MalformedFrame` naming what was wrong."""
     # Read header
     header = _recv_exact(sock, HEADER_SIZE)
     if header is None:
@@ -164,14 +180,24 @@ def recv_message(sock: socket.socket) -> Optional[Dict[str, Any]]:
 
     msg_len = struct.unpack(">I", header)[0]
     if msg_len > MAX_MESSAGE_SIZE:
-        raise RuntimeError(f"Message too large: {msg_len} bytes (max {MAX_MESSAGE_SIZE})")
+        raise MalformedFrame(
+            f"Message too large: {msg_len} bytes (max {MAX_MESSAGE_SIZE})", resync=False)
+    if msg_len == 0:
+        raise MalformedFrame("Empty frame: a message is one JSON object", resync=True)
 
     # Read payload
     payload = _recv_exact(sock, msg_len)
     if payload is None:
         return None
 
-    return json.loads(payload.decode("utf-8"))
+    try:
+        message = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise MalformedFrame(f"Frame is not UTF-8 JSON: {e}", resync=True) from e
+    if not isinstance(message, dict):
+        raise MalformedFrame(
+            f"Frame is JSON {type(message).__name__}, not an object", resync=True)
+    return message
 
 
 def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
@@ -205,11 +231,15 @@ def make_request(method: str, **params) -> Dict[str, Any]:
     }
 
 
-def make_response(result: Any = None, error: Optional[str] = None) -> Dict[str, Any]:
+def make_response(result: Any = None, error: Optional[str] = None,
+                  op_id: Optional[str] = None) -> Dict[str, Any]:
     """Build a JSON-RPC response. Every envelope names the protocol and the
-    engine that produced it."""
+    engine that produced it; a message that belongs to an operation (a work
+    request's reply or error) also names its `op_id` (Studio request 3)."""
     from neurobrix import __version__
     head = {"protocol": PROTOCOL_VERSION, "engine": __version__}
+    if op_id is not None:
+        head["op_id"] = op_id
     if error is not None:
         return {**head, "error": error}
     return {**head, "result": result}
