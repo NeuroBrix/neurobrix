@@ -38,6 +38,14 @@ def test_a_streamed_plan_states_a_window_inside_its_rung():
     assert plan["strategy"] == "layer_streaming", plan["strategy"]
     w = plan["device_window_mb"]
     assert w is not None and 0 < w <= 1024 < plan["planned_memory_mb"], (w, plan["planned_memory_mb"])
+    # The 1 024 MB rung less the profile's drain cliff leaves no room for a segment (942 - 1 907 on a
+    # V100-16GB): the cut is taken against the rung less the drain floor, and the plan states the
+    # cliff its card then drains at — at least the floor, under the profile's (merge-queue-25).
+    from neurobrix.core.config.loader import get_vendor_config
+    mem = get_vendor_config("nvidia", "volta")["memory"]
+    (cliff,) = plan["deferred_drain_cliffs"].values()
+    assert mem["deferred_drain_floor_bytes"] <= cliff < mem["deferred_drain_cliff_bytes"], cliff
+    assert "drain floor" in plan["why"], plan["why"]
 
 
 def test_the_unified_reservation_takes_the_window_of_a_streamed_plan():
