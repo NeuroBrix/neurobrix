@@ -198,12 +198,7 @@ class ServingDaemon:
 
         DAEMON_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Build the command to re-execute ourselves in foreground mode
-        cmd = [
-            sys.executable, "-m", "neurobrix", "serve",
-            "--model", self._engine.model_name,
-            "--foreground",
-        ]
+        cmd = self._foreground_command()
 
         log_file = open(str(LOG_PATH), "w")
 
@@ -240,6 +235,18 @@ class ServingDaemon:
                             poll_s=self._settings["ready_poll_s"])
         if not _announce(record):
             sys.exit(1)
+
+    def _foreground_command(self) -> list:
+        """This `serve` again, in the foreground: the child serves the model,
+        hardware profile, execution mode and idle timeout the parent was asked
+        for (the mode flag is the mode's name, `--triton-sequential` for
+        `triton_sequential`)."""
+        return [sys.executable, "-m", "neurobrix", "serve",
+                "--model", self._engine.model_name,
+                "--hardware", self._engine.hardware_id,
+                f"--{self._engine.mode.replace('_', '-')}",
+                "--timeout", str(int(self._idle_timeout)),
+                "--foreground"]
 
     def _daemonize_unix(self) -> None:
         """
