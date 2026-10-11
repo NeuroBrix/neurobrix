@@ -35,15 +35,14 @@ from __future__ import annotations
 import copy
 import re
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 import torch.nn.functional as TF
 
-from neurobrix.core.paths import cache_dir
 from neurobrix.core.runtime.graph import moe_fusion as MF
+from tests.conftest import installed_container
 
 # ─────────────────────────────── the synthetic block ──────────────────────────────
 
@@ -409,9 +408,7 @@ def test_the_fused_op_in_bf16_stays_within_the_combine_rounding():
 # ─────────────────────── (c) the real containers, the engine's pass ───────────────
 
 def _graph(model, comp):
-    p = Path(cache_dir()) / model / "components" / comp / "graph.json"
-    if not p.exists():
-        pytest.skip(f"{model} is not in this machine's cache — proven where the trace lives")
+    p = installed_container(model) / "components" / comp / "graph.json"
     return json.loads(p.read_text()), p.parents[2]
 
 

@@ -17,22 +17,17 @@ from __future__ import annotations
 
 import copy
 import json
-from pathlib import Path
 
 import pytest
 
-from neurobrix.core.paths import cache_dir
+from tests.conftest import installed_container
 
-_GRAPH = Path(cache_dir()) / "granite-3.1-1b-a400m-instruct" / "components" / \
-    "model" / "graph.json"
+MODEL = "granite-3.1-1b-a400m-instruct"
 
 
 @pytest.fixture(scope="module")
 def granite_dag():
-    if not _GRAPH.exists():
-        pytest.skip("granite-3.1-1b-a400m-instruct is not in this machine's "
-                    "cache — the pattern is proven where the trace lives")
-    return json.loads(_GRAPH.read_text())
+    return json.loads((installed_container(MODEL) / "components" / "model" / "graph.json").read_text())
 
 
 def _fused(dag):

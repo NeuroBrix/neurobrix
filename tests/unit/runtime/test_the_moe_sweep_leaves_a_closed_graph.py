@@ -24,8 +24,8 @@ import json
 
 import pytest
 
-from neurobrix.core.paths import cache_dir
 from neurobrix.core.runtime.graph import moe_fusion as MF
+from tests.conftest import installed_container
 
 from .test_a_stacked_expert_block_routed_softmax_first_is_fused import qwen3vl_block
 
@@ -75,9 +75,7 @@ def test_the_stacked_path_leaves_a_closed_block_too(renorm):
 
 
 def _cached(model, comp):
-    p = cache_dir() / model / "components" / comp / "graph.json"
-    if not p.exists():
-        pytest.skip(f"{model} is not in the cache")
+    p = installed_container(model) / "components" / comp / "graph.json"
     return json.loads(p.read_text())
 
 

@@ -51,10 +51,9 @@ MB = 1024 * 1024
 # run with FileNotFoundError — and, worse, the no-extents cell failed for the
 # WRONG reason (an unreadable container returns None before the extents guard
 # can raise). `core.paths.cache_dir()` is the door 7f340b02 built for exactly
-# this; the per-cell "not in this machine's cache" skip stays in force.
-from neurobrix.core.paths import cache_dir
+# this; an absent container is the suite's one named skip, `installed_container`.
+from tests.conftest import installed_container
 
-CACHE = cache_dir()
 MODEL = "real-esrgan-x8"
 
 
@@ -72,9 +71,7 @@ def _solver(h=1024, w=1024, vae_scale=None):
 
 
 def _size(model=MODEL, h=1024, w=1024, act_mb=16384, budget_mb=5232, vae_scale=None):
-    path = CACHE / model
-    if not (path / "components" / "model" / "graph.json").exists():
-        pytest.skip(f"{model} is not in this machine's cache")
+    path = installed_container(model)
     mem = ComponentMemory("model", 32 * MB, act_mb * MB, 821 * MB)
     return _solver(h, w, vae_scale)._spatial_component_tiling(
         _Container(path), "model", mem, memory_ladder_rung_mb(budget_mb))
@@ -95,9 +92,7 @@ def test_the_esrgan_case_is_now_sized():
 
 def test_the_scale_comes_from_the_graph_when_the_config_is_silent():
     """And the config really is silent — checked, not assumed."""
-    pj = CACHE / MODEL / "components" / "model" / "profile.json"
-    if not pj.exists():
-        pytest.skip(f"{MODEL} is not in this machine's cache")
+    pj = installed_container(MODEL) / "components" / "model" / "profile.json"
     prof = json.load(open(pj))
     assert not (prof.get("config") or {}).get("upscale"), (
         "this container now declares an upscale, so this cell no longer tests "
@@ -137,12 +132,11 @@ def test_no_vae_means_the_requests_own_grid():
 def test_a_request_without_extents_still_refuses():
     """The guard that remains is the one that should: no height, no decision."""
     from neurobrix.core.runtime_values import MissingRuntimeValue
-    if not (CACHE / MODEL).exists():
-        pytest.skip(f"{MODEL} is not in this machine's cache")
+    root = installed_container(MODEL)
     s = _solver(h=None, w=None)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
     with pytest.raises(MissingRuntimeValue):
-        s._spatial_component_tiling(_Container(CACHE / MODEL), "model", mem, memory_ladder_rung_mb(5232))
+        s._spatial_component_tiling(_Container(root), "model", mem, memory_ladder_rung_mb(5232))
 
 
 def test_a_component_that_fits_is_left_alone():

@@ -17,7 +17,6 @@ import resource
 import sys
 from types import SimpleNamespace
 
-import pytest
 
 from neurobrix.core.prism import PrismSolver
 from neurobrix.core.prism import host_footprint as HF
@@ -41,11 +40,8 @@ def _pin_the_mac(monkeypatch):
 def _plan(monkeypatch):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
-    try:
-        root = container_root(MODEL)
-        c = NBXContainer.load(str(root))
-    except Exception as e:                                # a machine without the container
-        pytest.skip(f"{MODEL} not in this machine's cache: {e}")
+    root = container_root(MODEL)                          # absent: a skip that names it
+    c = NBXContainer.load(str(root))
     man = json.loads((root / "manifest.json").read_text())
     args = create_parser().parse_args(["run", "--model", MODEL, "--prompt", "Write a quicksort in Python.",
                                        "--max-tokens", "32", "--triton"])
