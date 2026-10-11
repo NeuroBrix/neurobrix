@@ -1,0 +1,22 @@
+# Known-cause reds — the machine record a gate reads (`tools/regression_matrix.py run --known-reds`).
+#
+# A red cell whose cause is identified is NOT replayed by a gate until a batch claims to fix it
+# (`--claims-fix MODEL/MODE,...`); the gate carries its red verdict with this provenance instead.
+# The FINDING stays where it is canonical, docs/reference/red-cells.md: each entry here names its row
+# there (`red_cells`). This file exists because that table is written for readers — its mode column is
+# prose ("all", "triton, tseq, 16 GB", "Apple triton") and it names no source gate, date or engine sha —
+# so a tool reading it would guess; a carried verdict is never guessed.
+#
+# One entry per cell, every field required (the tool refuses an entry missing one):
+#   model        the container name
+#   mode         native | triton | triton-sequential
+#   source_gate  the gate's matrix directory (its --out) holding the red row
+#   date         that row's own `date` (UTC, as the row writes it)
+#   engine       that row's `engine` sha
+#   cause        the identified cause, one line
+#   red_cells    the red-cells.md row it is recorded under (model | class)
+#
+# The tool reads the row from `source_gate` and refuses the entry when the row is absent, when its
+# engine or date differ from the entry, or when it is not red (a green source row means the record is
+# stale: remove the entry). Gates are per machine — this record is the rack's (CUDA); the Mac keeps its own.
+reds: []
