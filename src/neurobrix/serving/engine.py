@@ -315,12 +315,30 @@ class InferenceEngine:
             result["_upscale_orig_hw"] = _upscale_orig_hw
         return result
 
-    def _generate_from_token_ids(self, token_ids: list, **kwargs) -> Dict[str, Any]:
+    @staticmethod
+    def _decode_inputs(params: Dict[str, Any]) -> Dict[str, Any]:
+        """The decode settings of a chat or complete request, as executor
+        inputs; a params key not read here is refused before anything runs."""
+        params = _ReadKeys(params)
+        inputs: Dict[str, Any] = {}
+        if "temperature" in params and params["temperature"] is not None:
+            inputs["global.temperature"] = params["temperature"]
+        if "repetition_penalty" in params and params["repetition_penalty"] is not None:
+            inputs["global.repetition_penalty"] = params["repetition_penalty"]
+        if "max_tokens" in params and params["max_tokens"] is not None:
+            inputs["global.max_tokens"] = params["max_tokens"]
+        if "seed" in params and params["seed"] is not None:
+            inputs["global.seed"] = params["seed"]
+        params.refuse_unread()
+        return inputs
+
+    def _generate_from_token_ids(self, token_ids: list, decode: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate from pre-tokenized token IDs (chat path).
 
         Bypasses TextProcessor entirely — token IDs already include chat template,
         special tokens, and generation prompt. No double-BOS possible.
+        `decode` is what `_decode_inputs` built from the request.
         """
         if not self._is_loaded:
             raise RuntimeError("ZERO FALLBACK: Engine not loaded. Call load() first.")
@@ -329,17 +347,10 @@ class InferenceEngine:
         inputs = {
             "global.input_token_ids": token_ids,
             "global.chat_mode": False,  # Template already applied
+            **decode,
         }
-        if "temperature" in kwargs and kwargs["temperature"] is not None:
-            inputs["global.temperature"] = kwargs["temperature"]
-        if "repetition_penalty" in kwargs and kwargs["repetition_penalty"] is not None:
-            inputs["global.repetition_penalty"] = kwargs["repetition_penalty"]
-        if "max_tokens" in kwargs and kwargs["max_tokens"] is not None:
-            inputs["global.max_tokens"] = kwargs["max_tokens"]
-        if "seed" in kwargs and kwargs["seed"] is not None:
-            seed = kwargs["seed"]
-            inputs["global.seed"] = seed
-            device_seed(self._device, seed)
+        if "global.seed" in inputs:
+            device_seed(self._device, inputs["global.seed"])
 
         # Execute
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
@@ -368,6 +379,7 @@ class InferenceEngine:
             raise RuntimeError(
                 f"ZERO FALLBACK: chat() requires LLM family, got '{self._family}'."
             )
+        decode = self._decode_inputs(kwargs)
 
         if self._session is None:
             tokenizer = self._executor.modules.get("tokenizer")
@@ -388,7 +400,7 @@ class InferenceEngine:
         from neurobrix.core.runtime_values import resolve as _resolve_runtime
         max_tokens = _resolve_runtime(
             "max_tokens", container=self._pkg.defaults,
-            extra=[("the request", kwargs.get("max_tokens"))],
+            extra=[("the request", decode.get("global.max_tokens"))],
             why="It bounds this generation.")
         summarized = self._session.ensure_fits(
             max_cache_len=max_cache_len,
@@ -402,7 +414,7 @@ class InferenceEngine:
         # This avoids double-BOS: the template already includes special tokens,
         # so we pass token IDs directly to the executor, bypassing TextProcessor.
         token_ids = self._session.build_token_ids()
-        result = self._generate_from_token_ids(token_ids, **kwargs)
+        result = self._generate_from_token_ids(token_ids, decode)
 
         # Extract response text
         response_text = result.get("text", "")
@@ -431,6 +443,7 @@ class InferenceEngine:
                 f"'agent' in modes.supported; family '{self._family}' "
                 f"declares {supported or 'none'}."
             )
+        decode = self._decode_inputs(kwargs)
         tokenizer = self._executor.modules.get("tokenizer")
         if tokenizer is None:
             raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
@@ -441,7 +454,7 @@ class InferenceEngine:
         if tools:
             template_kwargs["tools"] = tools
         token_ids = tokenizer.apply_chat_template(messages, **template_kwargs)
-        result = self._generate_from_token_ids(token_ids, **kwargs)
+        result = self._generate_from_token_ids(token_ids, decode)
         return result.get("text", "")
 
     def chat_template_text(self) -> str:

@@ -108,7 +108,7 @@ can meet without any engine fault:
 | unknown `method` | `Unknown method: <name>` | stays open |
 | `cancel` without a non-empty string `params.op_id` | `cancel needs params.op_id` | stays open |
 | work request whose `op_id` is not a non-empty string, or names a live operation | `refused: op_id ...` | stays open |
-| a `generate` params key the engine does not read (a misspelt `step`), refused before the model runs | `params key 'K' is not read by this engine; it reads: ...` (the keys it does read); `op_id` present | stays open |
+| a `generate`, `chat` or `complete` params key the engine does not read (a misspelt `step`), refused before the model runs (and, for `chat`, before the message joins the conversation) | `params key 'K' is not read by this engine; it reads: ...` (the keys it does read); `op_id` present | stays open |
 | engine failure during the work | the engine's message; `op_id` present | stays open |
 
 ## 5. Versions and the accepted range
