@@ -926,6 +926,17 @@ class PrismSolver:
                 continue
             cost = self._whole_component_mb(container, name, plan.component_memory[name], dev)
             whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
+        # A streamed plan holds its WINDOW on the card (resident beside + constants + flow reads +
+        # KV + the largest piece): a held cost like a whole component. Cut against the profile's
+        # cliff it leaves at least that cliff and changes nothing; cut against the floor it sets
+        # the room the card drains at.
+        if plan.layer_stream_plan and getattr(plan, "device_window_mb", None):
+            for name in plan.layer_stream_plan:
+                alloc = plan.components.get(name)
+                dev = by_name.get(str(alloc.device)) if alloc is not None else None
+                if dev is not None:
+                    whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0),
+                                                      float(plan.device_window_mb))
         cliffs: Dict[str, int] = {}
         for name, alloc in plan.components.items():
             own: List[int] = []
@@ -1921,7 +1932,11 @@ class PrismSolver:
                     #   DeepSeek-Coder-V2-Lite  segments+resident 13 598.8 + KV 3 846.4 = 17 445 MB
                     #   Qwen3-Coder-30B-A3B     segments+resident 11 966.3 + KV 8 394.4 = 20 361 MB
                     # against a 16 384 MB rung, 15 073 usable, 17 277 capacity.
-                    total_capacity = int(self._usable_mb(strat_devices[0]) * 1024 * 1024)
+                    # Cut against the drain floor (`_try_layer_streaming`'s second step): that
+                    # figure, the one the window was held to.
+                    total_capacity = int((self._whole_usable_mb(strat_devices[0])
+                                          if getattr(self, "_layer_stream_cut_against_floor", False)
+                                          else self._usable_mb(strat_devices[0])) * 1024 * 1024)
                 else:
                     # Every other GPU strategy: the RUNGS of its devices, not their raw capacity —
                     # the raw figure ignores both the ladder and memory another process holds on a
@@ -2101,6 +2116,11 @@ class PrismSolver:
                     f"{sum(len(v) for v in plan.layer_stream_chunks.values())} stretch(es) in slices of "
                     f"a token axis: no plan held the request on the accelerator otherwise")
             plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
+            if getattr(self, "_layer_stream_cut_against_floor", False):
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — segments cut against the rung less the drain floor: "
+                    f"less the profile's drain cliff left no room for them, so the card drains its "
+                    f"dead tensors at the room the window leaves (the plan's drain cliff)")
             # The components this rung kept resident by tiling them: their tiling is the plan's.
             for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
                 self._component_tiling[_cn] = _spec
@@ -6255,7 +6275,39 @@ class PrismSolver:
     def _try_layer_streaming(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """Stream a component at LAYER granularity, on the accelerator.
+        """The layer-streaming rung, its segments cut in two steps (merge-queue-25, option B for a
+        streamed plan): first against the rung's usable part net of the PROFILE's drain cliff
+        (`_usable_mb`), so every plan that cut there keeps its full queue; only when that cut
+        declines — the forced 1 024 MB rung of a V100-16GB: 942 - 1 907 < 0 — against the part net
+        of the drain FLOOR (`_whole_usable_mb`). The second cut is a priced choice written in the
+        plan: its window is a cost held on the card (`_assign_drain_cliffs`), so the card drains at
+        min(profile cliff, part - window), at least the floor, and the plan's why says so. Under it,
+        the refusal stands, named. The compiled engine has no queue: one cut, as before."""
+        self._layer_stream_cut_against_floor = False
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container,
+            self._usable_mb(devices[0]) if devices else 0.0)
+        if got is not None or not devices:
+            return got
+        floor_part = self._whole_usable_mb(devices[0])
+        if floor_part <= self._usable_mb(devices[0]):
+            return got                     # no queue priced (compiled, host) or the door pins it
+        first = self._layer_streaming_declined
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container, floor_part)
+        if got is None:
+            self._layer_streaming_declined = (
+                f"{first}; and cut against the rung less the drain floor ({floor_part:.0f} MB): "
+                f"{self._layer_streaming_declined}")
+            return None
+        self._layer_stream_cut_against_floor = True
+        return got
+
+    def _try_layer_streaming_against(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container, usable_mb: float
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Stream a component at LAYER granularity, on the accelerator, its segments cut against
+        `usable_mb` (`_try_layer_streaming` chooses it).
 
         The rung below every rung that keeps a component whole. `lazy_sequential`
         drops the requirement from sum(components) to max(component);
@@ -6342,10 +6394,10 @@ class PrismSolver:
         # profile); and cutting segments against the rung would hold a streamed peak to a looser
         # standard than a whole component, and would fit such a component in ONE segment, which
         # this rung then declines. One figure for both decisions closes the band.
-        budget_bytes = int(self._usable_mb(target) * 1024 * 1024)
+        budget_bytes = int(usable_mb * 1024 * 1024)
         if budget_bytes <= 0:
             return _decline(f"the usable part of {target.device_string}'s rung is "
-                            f"{self._usable_mb(target):.0f} MB: nothing to cut against")
+                            f"{usable_mb:.0f} MB: nothing to cut against")
 
         graphs = {}
         try:
@@ -7646,6 +7698,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
+           "deferred_drain_cliffs": dict(getattr(plan, "deferred_drain_cliffs", None) or {}),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
            "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
                              for c, p in (plan.runtime_op_tiling or {}).items()
