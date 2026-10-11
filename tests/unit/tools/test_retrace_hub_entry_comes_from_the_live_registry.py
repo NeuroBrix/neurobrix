@@ -103,3 +103,12 @@ def test_an_absent_toolchain_registry_is_refused_not_read_as_new(tmp_path, monke
     _stub_hub(monkeypatch, LIVE)
     with pytest.raises(R.HubUnreachable, match="absent"):
         R.hub_entry("parakeet-tdt-1.1b", registry="http://hub")
+
+
+def test_a_card_list_reaches_forge_as_its_unified_vmm_pool(tmp_path):
+    """`--gpu 0,1,3` is the POOL: every visible card joins Forge's unified VMM (forge/vmm/vmm_pool.py,
+    worker.py `pool_applies` -> `vmm_pool_primary_gpu`), so the list must reach the trace whole."""
+    import types
+    m = types.SimpleNamespace(args=types.SimpleNamespace(gpu="0,1,3", src=None, tmp=str(tmp_path / "t"),
+                                                         models_root=str(tmp_path / "b")))
+    assert R.Model.env(m, tree=False)["CUDA_VISIBLE_DEVICES"] == "0,1,3"
