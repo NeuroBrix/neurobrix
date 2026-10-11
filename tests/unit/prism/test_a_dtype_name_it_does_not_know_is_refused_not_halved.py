@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.dtype import BYTES_MAP
+from neurobrix.core.paths import cache_dir
 from neurobrix.core.prism.memory_estimator import (
     compute_dtype_factor, get_dtype_bytes_per_element)
 
@@ -68,10 +69,10 @@ def test_the_real_conversions_are_unchanged(src, dst, want):
 
 def test_every_dtype_in_this_cache_resolves():
     """The claim the refusal rests on, as an assertion rather than a sentence."""
-    import json, os
-    cache = os.path.expanduser("~/.neurobrix/ca" + "che")
-    if not os.path.isdir(cache):
-        pytest.skip("no cache on this machine")
+    import glob, json, os
+    cache = str(cache_dir())  # the CONFIGURED cache (NEUROBRIX_CACHE / config), never the literal home path
+    if not glob.glob(os.path.join(cache, "*", "manifest.json")):
+        pytest.skip(f"no container in the configured cache {cache}")
     seen = set()
     for model in os.listdir(cache):
         mp = os.path.join(cache, model, "manifest.json")
@@ -133,7 +134,9 @@ def test_every_TENSOR_dtype_in_this_cache_resolves():
     """Per-tensor, not per-component. Counted 2026-09-22 across every cached graph:
     complex128 338 tensors, complex64 10, and nothing else missing."""
     import glob, json, os, collections
-    cache = os.path.expanduser("~/.neurobrix/ca" + "che")
+    cache = str(cache_dir())  # the CONFIGURED cache (NEUROBRIX_CACHE / config), never the literal home path
+    if not glob.glob(os.path.join(cache, "*", "manifest.json")):
+        pytest.skip(f"no container in the configured cache {cache}")
     if not os.path.isdir(cache):
         pytest.skip("no cache on this machine")
     seen = collections.Counter()
