@@ -205,12 +205,55 @@ def deferred_drain_retained_bytes(memory: dict) -> int:
     pressure branch only drains earlier, and under the allocator pool (the default) it is off — so
     the cliff, not the floor, is what a card must hold room for. The door pins it as it pins the
     run's cliff."""
+    door = _drain_door_bytes()
+    return door if door > 0 else deferred_drain_policy_of(memory)[0]
+
+
+def _drain_door_bytes() -> int:
+    """The door's pinned cliff in bytes, 0 when the door is shut (unset, empty, unparsable, <= 0)."""
     door = os.environ.get(DEFERRED_DRAIN_DOOR)
-    if door:
-        try:
-            pinned = int(door)
-        except ValueError:
-            pinned = 0
-        if pinned > 0:
-            return pinned
-    return deferred_drain_policy_of(memory)[0]
+    if not door:
+        return 0
+    try:
+        return max(0, int(door))
+    except ValueError:
+        return 0
+
+
+def deferred_drain_floor_of(memory: dict) -> int:
+    """The SMALLEST queue a plan may leave the Triton hot loop: the profile's
+    `deferred_drain_floor_bytes`, clamped to the cliff.
+
+    Source: the same key the runtime's pressure branch drains early at (`deferred_drain_policy_of`)
+    — the profile's statement of the queue size below which draining costs more than it frees
+    (each drain is a device sync, then a free per dead tensor). A plan leaving less room than this
+    beside a component held whole would make the hot loop drain after nearly every op; such a
+    component is not held whole. A profile that does not state it is refused by name."""
+    if "deferred_drain_floor_bytes" not in (memory or {}):
+        raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
+                       "deferred_drain_floor_bytes — the smallest drain cliff a plan may leave the "
+                       "Triton engine's dead-tensor queue is not stated, so no component can be "
+                       "judged whole beside it")
+    return min(int(memory["deferred_drain_floor_bytes"]), deferred_drain_policy_of(memory)[0])
+
+
+def planned_drain_cliff_bytes(memory: dict, room_bytes: float) -> int:
+    """THE drain cliff a plan gives one device, read by Prism (which plans and prices it) and, through
+    the plan, by the Triton hot loop (which drains at it):
+
+        cliff = min(profile cliff, room),   room = what the device's usable part leaves beside the
+                                            largest component the plan holds whole on it.
+
+    Pass a room at or above the profile cliff when nothing is held whole. The door
+    (`NBX_DEFERRED_DRAIN_BYTES`) pins the result, as it pins the run. Never below 0; a room under
+    the floor (`deferred_drain_floor_of`) is a placement the plan refuses, not a cliff it returns."""
+    door = _drain_door_bytes()
+    if door > 0:
+        return door
+    return max(0, min(deferred_drain_policy_of(memory)[0], int(room_bytes)))
+
+
+def planned_drain_floor_bytes(memory: dict) -> int:
+    """The room a component held whole must leave the queue: the floor, or the door's pinned cliff."""
+    door = _drain_door_bytes()
+    return door if door > 0 else deferred_drain_floor_of(memory)

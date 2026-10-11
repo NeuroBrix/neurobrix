@@ -108,9 +108,21 @@ def test_janus_is_planned_whole_on_the_idle_mac(monkeypatch):
     mode = "triton"
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
-    p, _ = _plan("Janus-Pro-7B", mode)
+    p, s = _plan("Janus-Pro-7B", mode)
     assert p.strategy in WHOLE, f"Janus [{mode}] planned {p.strategy!r}"
     assert p.device_window_mb is None
+    # Whole beside a queue SMALLER than the profile's cliff (merge-queue-25 option B): the plan
+    # drains the Mac's card at the room the language model leaves — rung part less its whole cost,
+    # 15 072 - 14 168 = 904 MB on 2026-10-11 — never at the profile's 954 MB it cannot also hold.
+    (dev_name, cliff), = p.deferred_drain_cliffs.items()
+    dev = next(d for d in s._prepare_devices(profile(APPLE_M4_PRO)) if d.device_string == dev_name)
+    c = NBXContainer.load(str(container_root("Janus-Pro-7B")))
+    lm = max(p.components, key=lambda n: s._whole_component_mb(c, n, p.component_memory[n], dev)
+             if n in p.component_memory else 0.0)
+    room = s._rung_part_mb(dev) - s._whole_component_mb(c, lm, p.component_memory[lm], dev)
+    assert s._deferred_drain_floor_mb(dev) <= room < s._deferred_drain_mb(dev), (room, lm)
+    assert cliff == int(room * MB), (cliff / MB, room, lm)
+    assert all(a.deferred_drain_cliff_bytes == cliff for a in p.components.values() if a.device == dev_name)
     fp = p.host_footprint
     assert (fp["total_bytes"] - fp["resident_bytes"]) / MB <= 18186
     # the host side holds the decode phase, not the decoder beside it

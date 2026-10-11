@@ -420,6 +420,8 @@ class ExecutorFactory:
         # resolved against no manifest and silently kept the default).
         cache_path = str(ensure_extracted(Path(nbx_path)))
         executor._cache_path = cache_path
+        # The drain cliff Prism planned for this device (Triton engine), as resident_weight_mb rides.
+        executor._deferred_drain_cliff_bytes = getattr(allocation, "deferred_drain_cliff_bytes", None)
 
         # Load DAG directly (NO reconstruction)
         executor.load_graph_from_dict(dag)
