@@ -79,7 +79,8 @@ def cmd_serve(args):
         idle_timeout=float(timeout),
     )
 
-    daemon.start(foreground=foreground)
+    daemon.start(foreground=foreground, ready_fd=getattr(args, 'ready_fd', None),
+                 ready_file=getattr(args, 'ready_file', None))
 
 
 def cmd_stop(args):

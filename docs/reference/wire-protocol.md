@@ -165,5 +165,28 @@ timeout changes nothing on the daemon.
 
 ## 7. Readiness
 
-A daemon is ready when it is bound to its endpoint and its model is loaded.
-(Section written with Studio item 6.)
+A daemon is ready when its model is loaded and its endpoint accepts
+connections. It says so once, as one **ready record** (a JSON object), so a
+launcher waits for it instead of retrying connections:
+
+```json
+{"state": "ready", "pid": 4242, "model": "Qwen/Qwen3-0.6B", "family": "llm", "serving": "warm",
+ "engine": "0.x.y", "protocol": 1, "protocol_range": [1, 1],
+ "endpoint": {"kind": "unix", "path": "/Users/me/.neurobrix/daemon.sock"}, "operations": [...]}
+{"state": "failed", "pid": 4242, "model": "...", "engine": "0.x.y", "protocol": 1, "protocol_range": [1, 1],
+ "endpoint": {...}, "operations": [...], "error": "FileNotFoundError: Model '...' not found. ..."}
+```
+
+`state` is `ready` or `failed`; a failed daemon exits after saying it. The
+identity fields are those of `neurobrix info --json`. The record is delivered:
+
+| to | how | for |
+|---|---|---|
+| stdout, every run | one line `NBX-READY <record>`, flushed | a launcher that runs `neurobrix serve --foreground` as its child and reads its stdout |
+| `--ready-fd N` (macOS, Linux) | the record as one line on fd `N`, which the daemon inherited, then closed | a launcher that passes the write end of a pipe and blocks on the read end: no polling and no deadline, because a daemon that dies closes the pipe (EOF without a record = failed; the exit code says how) |
+| `--ready-file PATH` | the record, written whole (written beside, then renamed) | a launcher that can pass no fd. `neurobrix serve` on Windows uses the instance's own file, `<stem>.ready` (named) or `~/.neurobrix/daemon.ready` (default), and looks for it every `serving.ready_poll_s` until it appears or the daemon exits |
+
+`neurobrix serve` without `--foreground` is itself such a launcher: it prints
+`[Serve] Model loaded — <model> (<family>, <warm|cold> serving)` or
+`[Serve] Failed: <error>` and exits 0 or 1. A record that cannot be delivered
+(the launcher is gone) is said in the daemon's log; the daemon serves on.
