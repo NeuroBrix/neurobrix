@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Mixture-of-experts models run with their experts cached on the card when the model does
+  not fit.** Instead of streaming every weight on every token, the dense part stays on the card and
+  the experts stay in host memory; the experts each token routes to are copied into an expert cache
+  on the card, in both the native and the Triton modes. The plan sizes the cache from what is left
+  on the card, and needs only the experts one token reads, not a whole layer's.
+
 - **`--explain-plan` states the working set of a mixture-of-experts model.** For every routed
   component the plan reads its experts, how many each token uses, its shared experts and the size
   of one expert, and states the working set: the dense part, the experts a token reads, and an

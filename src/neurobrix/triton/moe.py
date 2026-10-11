@@ -505,6 +505,8 @@ def execute_moe_fused(
     topk_indices=None,
     topk_weights=None,
     weights_per_call: bool = False,
+    expert_store=None,
+    expert_layer=None,
 ):
     """Execute MoE via fused grouped GEMM — zero torch, zero extra memory.
 
@@ -535,6 +537,11 @@ def execute_moe_fused(
             here verbatim. Mirror of the compiled engine (R30).
         topk_weights: Pre-computed routing weights [batch*seq, top_k], float.
             Supplied together with topk_indices or not at all.
+        expert_store: the component's `NBXExpertStore` (strategy `expert_store`): the expert
+            weights stay on the host and the store copies the routed ones into its device
+            slots (`expert_layer` names the layer, the first gate weight id). A call routing
+            to more distinct experts than the store holds runs in groups of consecutive
+            experts (`_expert_store_grouped_pass`), byte for byte the ungrouped blocks.
     """
     if hidden_states is None:
         raise RuntimeError("MoE fused: hidden_states is None")
@@ -609,13 +616,16 @@ def execute_moe_fused(
     # resident blocks keep a stable cache entry while evicted ones
     # force a rebuild. See tests/scratch/zero3_leak_investigation/
     # REPORT.md for the groundwork APIs.
-    any_cpu_weight = any(
+    # Under an expert store the host experts are the store's to copy, slot by slot, once the
+    # routing is known (below) — never promoted whole here.
+    any_cpu_weight = expert_store is None and any(
         getattr(w, '_device', 'cuda') == 'cpu'
         for lst in (gate_weights, up_weights, down_weights)
         for w in lst)
     # Weights whose device memory lives for this call only: promoted below, or
-    # promoted by the caller (a stacked slab). The two are one regime.
-    per_call = weights_per_call or any_cpu_weight
+    # promoted by the caller (a stacked slab). The two are one regime. A store's slots are
+    # rewritten between calls, so their tables are built per call too.
+    per_call = weights_per_call or any_cpu_weight or expert_store is not None
     import os as _os_z3
     _Z3_DIAG = _os_z3.environ.get("NBX_Z3_TRITON_DIAG") == "1"
     if _Z3_DIAG and any_cpu_weight:
@@ -722,6 +732,28 @@ def execute_moe_fused(
     flat_indices = indices.reshape(-1)                 # [M * top_k]
     flat_scores = scores.reshape(-1).to(w_dtype)       # [M * top_k]
     _dump("flat_scores", flat_scores)
+
+    if expert_store is not None:
+        # The experts this call routes to, read once on the host; the store copies the misses
+        # into its slots and returns [E] lists of device tensors (an unrouted entry points at
+        # a routed slot and is never dereferenced).
+        _host = (gate_weights, up_weights, down_weights)
+
+        def _host_expert(e, _h=_host):
+            return (_h[0][e], _h[1][e], _h[2][e])
+        routed = sorted({int(e) for e in flat_indices.numpy().ravel().tolist()})
+        if len(routed) > expert_store.residency.n_slots:
+            output = _expert_store_grouped_pass(
+                hidden_states, flat_indices, flat_scores, expert_store, expert_layer,
+                _host_expert, num_experts, top_k, M, K, N_gate, act_dev)
+            if len(orig_shape) == 3:
+                output = output.reshape(orig_shape)
+            DeviceAllocator.set_device(act_dev)
+            DeviceAllocator.ensure_triton_device(act_dev)
+            return output
+        gate_weights, up_weights, down_weights = expert_store.acquire(
+            expert_layer, routed, num_experts, _host_expert)
+        del _host
 
     # ================================================================
     # STEP 2: Build pointer tables (cached — zero-copy)
@@ -874,6 +906,62 @@ def execute_moe_fused(
               flush=True)
 
     return output
+
+
+def _expert_store_grouped_pass(hidden_states, flat_indices, flat_scores, store, layer, host,
+                               num_experts, top_k, M, K, N_gate, dev):
+    """One fused MoE call whose routed experts outnumber the store's slots (a prefill on a cache
+    below one layer's expert set): the aligned blocks, sorted by expert, are cut into runs of
+    consecutive experts of at most `n_slots` distinct ones; each run acquires its experts and
+    launches the three grouped GEMMs on its own range of blocks (a view of the one alignment).
+
+    Byte for byte the ungrouped pass: every block computes the same rows against the same expert
+    with the same launch constants, the kernels write rows keyed by token, never by block, the
+    SwiGLU is elementwise, and the top_k reduce runs once over the whole result."""
+    bm = _BLOCK_SIZE_M
+    sorted_ids, expert_ids, ntpp = moe_align_block_size(flat_indices, bm, num_experts, dev)
+    n_blocks = int(ntpp.numpy().ravel()[0]) // bm
+    blk = [int(e) for e in expert_ids.narrow(0, 0, n_blocks).numpy().ravel().tolist()]
+    groups = []
+    lo, experts = 0, []
+    for b, e in enumerate(blk):
+        if experts and e == experts[-1]:
+            continue
+        if len(experts) == store.residency.n_slots:
+            groups.append((lo, b, experts))
+            lo, experts = b, []
+        experts.append(e)
+    if experts:
+        groups.append((lo, n_blocks, experts))
+
+    dt = hidden_states._dtype
+    padded = sorted_ids.shape[0]
+    DeviceAllocator.set_device(dev)
+    gate_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
+    up_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
+    down_out = NBXTensor.zeros((padded, K), dtype=dt, device=f"cuda:{dev}")
+    for lo, hi, experts in groups:
+        g, u, d = store.acquire(layer, experts, num_experts, host)
+        tables = _build_ptr_tables(g, u, d)
+        DeviceAllocator.set_device(dev)
+        DeviceAllocator.ensure_triton_device(dev)
+        s_g = sorted_ids.narrow(0, lo * bm, (hi - lo) * bm)
+        e_g = expert_ids.narrow(0, lo, hi - lo)
+        n_g = NBXTensor.from_numpy(np.array([(hi - lo) * bm], dtype=np.int64))
+        for name, x, out in (("gate", hidden_states, gate_out), ("up", hidden_states, up_out)):
+            w.invoke_fused_moe(
+                x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores, s_g, e_g, n_g,
+                N_gate, K, getattr(tables, f"{name}_stride_bk")[dev],
+                getattr(tables, f"{name}_stride_bn")[dev], top_k, mul_routed_weight=False)
+        activated = w.mul(w.silu(gate_out), up_out)
+        w.invoke_fused_moe(
+            activated, tables.down_ptrs[dev], down_out, flat_scores, s_g, e_g, n_g,
+            K, N_gate, tables.down_stride_bk[dev], tables.down_stride_bn[dev], top_k,
+            mul_routed_weight=True, topk_divide=False)
+        tables.release_pins()
+        del tables, g, u, d
+    result = down_out.narrow(0, 0, M * top_k).reshape(M, top_k, K)
+    return w.sum_wrapper(result, dim=1)
 
 
 def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
