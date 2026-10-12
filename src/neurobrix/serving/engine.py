@@ -37,7 +37,8 @@ def daemon_identity() -> Dict[str, Any]:
     from neurobrix import __version__
     from neurobrix.serving.protocol import PROTOCOL_VERSION, endpoint
     return {"engine": __version__, "protocol": PROTOCOL_VERSION, "endpoint": endpoint(),
-            "operations": ["generate", "chat", "complete", "template", "new_chat", "status", "shutdown"]}
+            "operations": ["generate", "chat", "complete", "template", "new_chat", "status", "cancel",
+                           "shutdown"]}
 
 
 class InferenceEngine:
@@ -459,6 +460,23 @@ class InferenceEngine:
         device_empty_cache(self._device)
 
         self._is_loaded = False
+
+    def sync_devices(self) -> None:
+        """Wait until every device the plan holds has drained its queued work.
+
+        The serving dispatcher calls it after a generation returns and BEFORE
+        it acknowledges a cancel (Studio request 3): an acknowledged stop means
+        no kernel of that generation is still running anywhere. Every device of
+        every component allocation, through `device_sync` (the device utility
+        both engines share — the ATen branch when it is loaded, the NBX
+        allocator otherwise, R33)."""
+        if self._plan is None:
+            return
+        devices = set()
+        for alloc in self._plan.components.values():
+            devices.update(getattr(alloc, "devices", None) or [alloc.device])
+        for device in sorted(devices):
+            device_sync(device)
 
     def get_status(self) -> Dict[str, Any]:
         """Return engine status info."""

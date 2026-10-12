@@ -10,6 +10,7 @@ ZERO HARDCODE: All parameters from NBX container.
 """
 
 import time
+from neurobrix import decode_stop
 import torch
 from neurobrix.core.device_utils import device_multinomial
 from neurobrix.core.memory.manager import release_flow_memory
@@ -151,6 +152,8 @@ class EncoderDecoderEngine(FlowHandler):
                                 if encoder_output is not None else None))
             if not _seek_ctx:
                 break
+            if decode_stop.honoured_at() is not None:
+                break   # a stop ended this window: no further window is decoded
             _seek += _adv if _adv else _seek_ctx["nsamp"]
             if _seek >= _seek_total:
                 break
@@ -347,6 +350,10 @@ class EncoderDecoderEngine(FlowHandler):
                     _pf.write(f"step={step} last={next_token}{_stat}\n")
                     _pf.flush()
             if next_token == eos_token_id:
+                break
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            if decode_stop.requested(len(generated_ids)):
                 break
 
         dec_elapsed = (time.perf_counter() - start) * 1000
