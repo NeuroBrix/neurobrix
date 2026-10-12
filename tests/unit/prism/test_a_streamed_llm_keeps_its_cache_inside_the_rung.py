@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.prism import InputConfig, PrismSolver
-from neurobrix.core.prism.solver import _graph_constant_bytes
+from neurobrix.core.prism.solver import PlanNotComputable, _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
                                               pin_host, pin_shared_card, profile)
@@ -220,3 +220,37 @@ def test_every_rung_starts_unsliced(monkeypatch):
     s.solve_smart(NBXContainer.load(str(container_root(LLMS[0]))), profile(APPLE_M4_PRO),
                   InputConfig(batch_size=1), mode="triton")
     assert seen and seen[0] is False, seen
+
+
+@pytest.mark.parametrize("serve", [False, True], ids=["run", "serve"])
+def test_a_package_without_its_decoder_facts_is_refused_not_planned_without_a_cache(
+        monkeypatch, tmp_path, serve):
+    """The Mac, 4c29e0e7: its Qwen3-Coder-30B-A3B package had no runtime/defaults.json. The plan
+    still went out — layer_streaming, `kv_cache_plan=None`, in run and serve — because
+    `_compute_kv_cache_plan` answers None when it reads no decoder facts, and every check that
+    subtracts the KV estimate read 0. A decoder whose cache cannot be sized has no plan: refused,
+    naming the file. The package is the rack's own, every file linked but that one.
+
+    Injection (seen red, then restored green): the refusal removed -> a plan with no cache."""
+    src = container_root(LLMS[1])
+    pkg = tmp_path / LLMS[1]
+    pkg.mkdir()
+    for entry in src.iterdir():
+        if entry.name != "runtime":
+            (pkg / entry.name).symlink_to(entry)
+    (pkg / "runtime").mkdir()
+    for entry in (src / "runtime").iterdir():
+        if entry.name != "defaults.json":
+            (pkg / "runtime" / entry.name).symlink_to(entry)
+    no_door(monkeypatch)
+    pin_host(monkeypatch, 24576, 18186, "the Mac, idle")
+    s = PrismSolver()
+    c = NBXContainer.load(str(pkg))
+    try:
+        p = s.solve_smart(c, profile(APPLE_M4_PRO), InputConfig(batch_size=1), serve_mode=serve,
+                          mode="triton")
+    except PlanNotComputable as refusal:
+        assert "defaults.json" in str(refusal) and "absent" in str(refusal), str(refusal)
+        return
+    pytest.fail(f"planned {p.strategy!r} with kv_cache_plan={p.kv_cache_plan!r} from a package whose "
+                f"decoder facts are absent")
