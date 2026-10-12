@@ -317,18 +317,24 @@ def istft_launches(batch: int, bins: int, frames: int, n_fft: int,
 # ---------------------------------------------------------------------------------------------
 
 def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
-                        q_round: Optional[NBXDtype] = None):
+                        q_round: Optional[NBXDtype] = None, alignment: Optional[str] = None):
     """The (q, k, v, q_round) dtypes `scaled_dot_product_attention_wrapper` computes attention
-    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under the active
-    hardware profile's `precision.attention_operands`. The wrapper, the derived census and
-    Prism's width estimate all ask this one function, so none of them holds a rule of its own."""
-    from neurobrix.kernels.ops._configs import active_vendor_profile
+    with: the DtypeEngine's decision (`triton/dtype.attention_operand_dtypes`) under a hardware
+    profile's `precision.attention_operands`. The wrapper, the derived census and Prism's width
+    estimate all ask this one function, so none of them holds a rule of its own.
+
+    `alignment`: the profile's declared alignment when the caller prices hardware other than the
+    card this process drives (Prism, from the profile it plans for:
+    `triton/dtype.profile_attention_operand_alignment`); None reads the active vendor profile —
+    the wrapper's and the census's own (the census binds it from its hardware profile)."""
     from neurobrix.triton.dtype import attention_operand_alignment, attention_operand_dtypes
     qj = q_round if q_round is not None else q
     if qj == k == v:
         return q, k, v, q_round
-    out = attention_operand_dtypes(q.name, k.name, v.name,
-                                   attention_operand_alignment(active_vendor_profile()),
+    if alignment is None:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        alignment = attention_operand_alignment(active_vendor_profile())
+    out = attention_operand_dtypes(q.name, k.name, v.name, alignment,
                                    q_round.name if q_round is not None else None)
     return tuple(None if d is None else NBXDtype[d] for d in out)
 

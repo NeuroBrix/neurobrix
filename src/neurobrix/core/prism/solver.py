@@ -2955,12 +2955,16 @@ class PrismSolver:
         else:
             from neurobrix.core.dtype.config import profile_device_supports_fp64
             stores_fp64 = profile_device_supports_fp64(profile)
+        # How an attention whose operands disagree is aligned: the PRICED profile's declaration,
+        # never the card this process happens to see (`profile_attention_operand_alignment`).
+        from neurobrix.triton.dtype import profile_attention_operand_alignment
         tensors = comp.graph.get("tensors", {})
         symbol_map = profiler.build_symbol_map(input_config, placement_floor=True)
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
             contract=contract, stores_fp64=stores_fp64, tiling=None,
-            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
+            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map),
+            attention_operands=profile_attention_operand_alignment(profile))
 
     def _graph_as_executed(self, comp, container):
         """The component as the engines will run it: with the declared-MoE
