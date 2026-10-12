@@ -228,3 +228,66 @@ def test_68333e77_selects_only_integer_division_holders_in_triton(cfg):
         must = cells.of(cls, want_models, {"triton"}) - _retraced(res, cls)
         may = cells.of(cls, want_models, {"triton", "native"})
         assert must <= s <= may, (cls, sorted(must - s), sorted(s - may))
+
+
+# -------------------------------------------------------------------------------------------------------------
+# a method dispatched where its class is constructed
+# -------------------------------------------------------------------------------------------------------------
+
+def _program(tmp_path):
+    """A package whose Handler family is constructed under a literal flow test and run through a holder, and a
+    Loose class the program never constructs by name (a registry builds it)."""
+    pkg = tmp_path / "src" / "pkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "flow.py").write_text(
+        "class Handler:\n    def __init__(self, fn):\n        self.fn = fn\n    def run(self):\n        return self.fn()\n"
+        "class TritonHandler(Handler):\n    def run(self):\n        return 1\n"
+        "class Loose:\n    def go(self):\n        return 2\n")
+    (pkg / "run.py").write_text(
+        "from pkg.flow import Handler, TritonHandler, Loose\n"
+        "def make(kind, triton):\n    if kind == 'iterative_process':\n"
+        "        return TritonHandler(None) if triton else Handler(None)\n    raise ValueError(kind)\n"
+        "def drive(h):\n    return h.run()\n"
+        "def loose(reg):\n    l = reg['x']()\n    return l.go()\n")
+    index = C.SourceIndex(tmp_path / "src", "pkg")
+    units = C.unit_nodes(index)
+    return C.Program(index, units, set(units))
+
+
+def _lits(cond):
+    return {n.value for term in cond for n in ast.walk(term) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+
+def test_a_class_family_is_constructed_where_the_program_names_it(tmp_path):
+    P = _program(tmp_path)
+    fam = P.construction_sites("pkg.flow:Handler")
+    assert [(c, _lits(cond)) for c, _, cond in fam] == [("pkg.run:make", {"iterative_process"})] * 2
+    assert len(P.construction_sites("pkg.flow:TritonHandler")) == 1          # the subclass alone: its own site
+    assert P.construction_sites("pkg.flow:Loose") == []                      # built by a registry, never by name
+
+
+def test_a_held_instances_method_is_walked_from_its_construction(tmp_path):
+    """`drive(h)` holds an instance: the walk from `TritonHandler.run` goes up from `make`'s constructions,
+    under `kind == 'iterative_process'` — a flow anchor where the holder's callers gave none. Injection: with
+    `through_constructions` returning its callers unchanged, the first assertion names `drive` (seen red,
+    2026-10-12)."""
+    P = _program(tmp_path)
+    callers = [(P, None, c) for c in P.sites().get("pkg.flow:TritonHandler.run", [])]
+    assert [c[2][0] for c in callers] == ["pkg.run:drive"]
+    out, via = G.through_constructions("pkg.flow:TritonHandler.run", callers)
+    assert via == "pkg.flow:TritonHandler"
+    assert [(c[2][0], c[2][2], c[2][3], c[2][5]) for c in out] == [("pkg.run:make", None, True, "construct")]
+    assert _lits(out[0][2][4]) == {"iterative_process"}
+    # a sibling call on `self` is not a holder: the caller stays, the walk continues through the class
+    callers = [(P, None, c) for c in P.sites().get("pkg.flow:Handler.run", [])]
+    own = [c for c in callers if c[2][0] == "pkg.run:drive"]
+    assert own, [c[2][0] for c in callers]
+
+
+def test_a_class_never_constructed_by_name_keeps_its_callers(tmp_path):
+    P = _program(tmp_path)
+    callers = [(P, None, c) for c in P.sites().get("pkg.flow:Loose.go", [])]
+    assert [c[2][0] for c in callers] == ["pkg.run:loose"]
+    out, via = G.through_constructions("pkg.flow:Loose.go", callers)
+    assert via is None and out == callers

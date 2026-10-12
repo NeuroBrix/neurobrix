@@ -1543,10 +1543,12 @@ class Judge:
             return set()
         return {i for i, res in zip(idx, r["results"]) if res == "False"}
 
-    def walk(self, uid, pair, diffs, modes, why="") -> dict:
+    def walk(self, uid, pair, diffs, modes, why="", through=False) -> dict:
         """From the unit up its callers (both trees) to what dispatches it: an op map's entry (whose
         signatures the region's guard, carried along each call, is evaluated over — and whose own callers are
-        walked on, an op wrapper being callable by another) or a call under a literal op/flow test."""
+        walked on, an op wrapper being callable by another) or a call under a literal op/flow test. A walk
+        that reaches the entry with no anchor is walked once more `through` the constructions: a method
+        called on an instance its caller holds is then dispatched where the instance is constructed."""
         g0 = self.unit_guard(uid, pair, diffs)
         guard0 = (g0, "__g") if g0 is not None else None
         ops_of = self.ops_of()
@@ -1556,7 +1558,7 @@ class Judge:
         # the op maps' own references to their entries are the anchor itself, not callers
         tables = {om["builder"] for om in self.cfg["op_maps"] if "builder" in om} | \
             {om["table"].split(":")[0] + ":<module>" for om in self.cfg["op_maps"] if "table" in om}
-        visits, pruned = {}, []
+        visits, pruned, via = {}, [], {}
         while todo:
             u, guard = todo.pop()
             visits[u] = visits.get(u, 0) + 1
@@ -1569,6 +1571,10 @@ class Judge:
                 named.append(f"walk limit at {u}")
                 break
             callers = [(P, t, c) for P, t in progs for c in P.sites().get(u, [])]
+            if through:
+                callers, cls = through_constructions(u, callers)
+                if cls:
+                    via[u] = cls
             if ops_of.get(u):
                 anchors.append(("op", u, ops_of[u], guard))
                 callers = [x for x in callers if not (x[2][5] == "ref" and x[2][0] in tables)]
@@ -1585,6 +1591,10 @@ class Judge:
                     anchors.append(("lit", caller, lits, None))
                 else:
                     todo.append((caller, self.caller_guard(P, t, u, guard, caller, node, recv, ctor, kind)))
+        if named and not through:
+            r = self.walk(uid, pair, diffs, modes, why, through=True)
+            if not r.get("fallback"):
+                return r
         if named:
             return V("fallback", (why + "; " if why else "") + "reached from " + ", ".join(named[:3])
                      + " with no op, flow or op-map anchor on the path", self.cells.every(self.cls, modes),
@@ -1613,10 +1623,39 @@ class Judge:
                                     for x in xs])
                 cells |= self.cells.of(self.cls, got, modes & (self.modes(u) or modes))
                 desc.append(f"{u} under {' / '.join(sorted(xs))}")
+        for m, cls in sorted(via.items()):
+            desc.append(f"{m.split(':')[1]} dispatched where {cls.split(':')[1]} is constructed")
         if pruned:
             desc.append(f"{len(pruned)} call sites closed by the guard (e.g. {', '.join(sorted(set(pruned))[:3])})")
         return V("walk", (why + "; " if why else "") + "; ".join(sorted(set(desc))[:8]),
                  cells, dimension="op", walked=len(seen))
+
+
+def own_receiver(P, caller, recv) -> bool:
+    """The receiver is the caller's own instance: `self` (or `super()`), a sibling method."""
+    if isinstance(recv, ast.Call):
+        return True
+    return isinstance(recv, ast.Name) and recv.id == P.self_name(caller)
+
+
+def through_constructions(u, callers):
+    """The call sites of a method `u` on an instance the caller merely holds (`self.h.run()`, `h.run()` — not
+    `self.run()`) replaced by the construction sites of the method's class family (the class and its
+    subclasses): that is where the instance, and so the method, is dispatched — `Handler(...)` under
+    `if kind == "iterative_process"` anchors every method of Handler to that flow's holders. A class the program
+    never constructs by name (built by a registry) keeps its callers. Returns (callers, the class walked
+    through | None); a substituted site carries kind "construct" and no receiver, so no guard crosses it."""
+    out, via = [], None
+    for P, t, (caller, node, recv, ctor, cond, kind) in callers:
+        if kind == "call" and recv is not None and not ctor and not own_receiver(P, caller, recv):
+            cls = P.owner(u)
+            sites = P.construction_sites(cls) if cls else []
+            if sites:
+                out += [(P, t, (c2, n2, None, True, cond2, "construct")) for c2, n2, cond2 in sites]
+                via = cls
+                continue
+        out.append((P, t, (caller, node, recv, ctor, cond, kind)))
+    return out, via
 
 
 # =============================================================================================================

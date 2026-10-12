@@ -1132,6 +1132,7 @@ class Program:
                     if b != "<external>":
                         self.children.setdefault(b, set()).add(cid)
         self._sites = None
+        self._ctor_sites = None
         self._pslots, self._aslots, self._atypes = {}, {}, {}
         self._atypes_open = False
         self._slots_done = False
@@ -1431,6 +1432,9 @@ class Program:
         kind "call", or "ref" for a function named as a value (a table entry, a callback)."""
         if self._sites is not None:
             return self._sites
+        if not self._slots_done:                       # the slots are read while the sites are built: they go first
+            self._ensure_slots()
+            return self._sites
         if getattr(self, "_sites_busy", False):
             raise RuntimeError("sites() re-entered while building")
         self._sites_busy = True
@@ -1461,7 +1465,30 @@ class Program:
                     if did in self.units and not self.is_class(did):
                         out.setdefault(did, []).append((uid, node, None, False, cond, "ref"))
         self._sites = out
+        self._ctor_sites = None
         return out
+
+    # -- construction sites --------------------------------------------------------------------------------
+    def construction_sites(self, cid) -> list:
+        """[(caller uid, call node, [path terms])] of every call constructing `cid` or a subclass of it, over
+        the reached units. A method called on an instance its caller merely holds (``self.handler.run()``) is
+        dispatched where that instance is CONSTRUCTED — ``Handler(...)`` under ``if kind == "iterative_process"``
+        — so a walk that found no anchor through the holders goes up from there, under the construction's own
+        path condition. Keyed by the constructed class as the call names it, not by the ``__init__`` the
+        construction resolves to: a subclass without one is still its own class."""
+        if self._ctor_sites is None:
+            out = {}
+            for uid in self.reached:
+                if uid not in self.units:
+                    continue
+                for node, cond in path_sites(self.canon(uid)):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    f = node.func.value if isinstance(node.func, ast.Subscript) else node.func
+                    if is_ref(f) and self.is_class(ref_id(f)):
+                        out.setdefault(ref_id(f), []).append((uid, node, cond))
+            self._ctor_sites = out
+        return [s for c in [cid, *sorted(self.subclasses(cid))] for s in self._ctor_sites.get(c, [])]
 
     # -- slots ---------------------------------------------------------------------------------------------
     def _arg_for(self, callee_fn, call, recv, ctor, pname):
