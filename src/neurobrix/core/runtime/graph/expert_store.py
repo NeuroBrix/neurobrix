@@ -13,6 +13,11 @@ just before computing that expert, so the copy of expert e+1 overlaps the matmul
 Byte identity: a slot is a byte copy of the host weight at the same shape and contiguous layout as
 the `.to(device)` the dispatch performs without a store, and the experts are computed in the same
 ascending order — the output is the zero3 output.
+
+On a device without CUDA streams (MPS: the unified expert store, whose host experts are views of the
+container's files, `core/runtime/expert_files.py`) the copies are queued on the device's one queue,
+in order behind the work that read the slot's former expert, and no event is returned: the compiled
+closure waits only on the events it is given.
 """
 from __future__ import annotations
 
@@ -33,7 +38,9 @@ class TorchExpertStore:
         self.slots: List[Triple] = [
             tuple(torch.empty(s, dtype=d, device=self.device) for s, d in self._shape)
             for _ in range(residency.n_slots)]
-        self._stream = torch.cuda.Stream(device=self.device)
+        # CUDA: a side stream and one event per copied expert. Elsewhere (MPS) the one device queue
+        # orders a slot's copy after the work that read its former expert (module docstring).
+        self._stream = torch.cuda.Stream(device=self.device) if self.device.type == "cuda" else None
         self.bytes_in = 0
 
     @property
@@ -45,26 +52,31 @@ class TorchExpertStore:
         """({expert: device triple}, {missed expert: its copy's event}) for the experts `routed` names."""
         slots, missed = self.residency.assign(layer, routed)
         events: Dict[int, torch.cuda.Event] = {}
-        if missed:
+        if missed and self._stream is None:
+            for e in missed:
+                self._copy(layer, e, self.slots[slots[e]], host(e))
+        elif missed:
             self._stream.wait_stream(torch.cuda.current_stream(self.device))
             with torch.cuda.stream(self._stream):
                 for e in missed:
-                    dst = self.slots[slots[e]]
-                    src = host(e)
-                    for i, (d, s) in enumerate(zip(dst, src)):
-                        if (tuple(s.shape), s.dtype) != self._shape[i] or not s.is_contiguous():
-                            raise RuntimeError(
-                                f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is "
-                                f"{tuple(s.shape)} {s.dtype} contiguous={s.is_contiguous()}; the store's "
-                                f"slots are {self._shape[i]} contiguous — one geometry per component")
-                        d.copy_(s, non_blocking=True)
-                        self.bytes_in += s.numel() * s.element_size()
+                    self._copy(layer, e, self.slots[slots[e]], host(e))
                     ev = torch.cuda.Event()
                     ev.record(self._stream)
                     events[e] = ev
         return {e: self.slots[s] for e, s in slots.items()}, events
 
+    def _copy(self, layer, e: int, dst: Triple, src: Triple) -> None:
+        for i, (d, s) in enumerate(zip(dst, src)):
+            if (tuple(s.shape), s.dtype) != self._shape[i] or not s.is_contiguous():
+                raise RuntimeError(
+                    f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is "
+                    f"{tuple(s.shape)} {s.dtype} contiguous={s.is_contiguous()}; the store's "
+                    f"slots are {self._shape[i]} contiguous — one geometry per component")
+            d.copy_(s, non_blocking=self._stream is not None)
+            self.bytes_in += s.numel() * s.element_size()
+
     def release(self) -> None:
-        torch.cuda.current_stream(self.device).wait_stream(self._stream)
+        if self._stream is not None:
+            torch.cuda.current_stream(self.device).wait_stream(self._stream)
         self.slots = []
         self.residency.clear()

@@ -17,6 +17,11 @@ it: plan-level zero3, and the lazy_sequential brick in both engines. The state h
   as `_expert_store` on the sequence (compiled and triton MoE closures) and on the executor
   (triton-sequential dispatch), which call it with the experts each fused op routes to.
 
+On a unified device the plan marks the store `expert_files` (Prism Strategy 2.5): the dense part is
+loaded to the device and the expert weights are views of the container's shards
+(`core/runtime/expert_files.py`), never pinned — on Metal pinned host memory counts against the same
+working set — and the torch store copies on the device's one queue (no CUDA stream).
+
 This module imports no tensor library: the engine's store is imported on the branch that runs it.
 """
 from __future__ import annotations
@@ -34,6 +39,14 @@ _MIB = 1024 * 1024
 def expert_cache_mb(allocations: Dict[str, Any], component_name: str) -> float:
     alloc = allocations.get(component_name)
     return float(alloc.get('expert_cache_mb', 0.0)) if isinstance(alloc, dict) else 0.0
+
+
+def holds_expert_files(allocations: Dict[str, Any], component_name: str) -> bool:
+    """True when the plan holds `component_name` as a unified expert store whose experts are views of
+    the container's files: nothing of it is pinned, and its torch path runs without CUDA streams."""
+    alloc = allocations.get(component_name)
+    return (isinstance(alloc, dict) and alloc.get('strategy') == EXPERT_STORE
+            and bool(alloc.get('expert_files')))
 
 
 def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: Any, is_triton: bool,
@@ -98,7 +111,7 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     else:
         import torch
         from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
-        store = TorchExpertStore(residency, torch.device(f"cuda:{dev_idx}"), like)
+        store = TorchExpertStore(residency, torch.device(z3.exec_device), like)
     seq._expert_store = store
     executor._expert_store = store
 

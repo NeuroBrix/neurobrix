@@ -207,6 +207,10 @@ class ComponentAllocation:
     # expert_store only (a routed zero3 component, `_zero3_resident_budgets`): the MB of device
     # slots holding recently routed experts beside the resident dense part (`resident_weight_mb`).
     expert_cache_mb: float = 0.0
+    # expert_store on a UNIFIED device (`_place_component` Strategy 2.5): the routed experts are
+    # never loaded — the runtime maps them from the container's files and copies a missed expert into
+    # a cache slot (core/runtime/expert_files.py). On a discrete card they sit in pinned host memory.
+    expert_files: bool = False
 
     @property
     def device(self) -> str:
@@ -822,9 +826,14 @@ class PrismSolver:
             if part is not None:
                 costs[name] = int(part.peak_resident_bytes)   # a segment never held the cache
                 continue
+            store_mb = self._unified_store_mb(strat_name, name, dev, profile)
             if (isinstance(dev, str) and dev.startswith("zero3:")
                     and not _device_is_unified(dev, profile)):
                 cost = int(m.activation_bytes + m.overhead_bytes)
+            elif store_mb is not None:
+                # an expert store on a unified device: its dense part and the floor of its expert
+                # cache beside its activations — the routed experts stay in the container's pages
+                cost = int(m.activation_bytes + m.overhead_bytes + store_mb * 1024 * 1024)
             else:
                 cost = int(m.total_bytes)
             # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
@@ -837,6 +846,16 @@ class PrismSolver:
         if container is not None and self._loads_on_demand(strat_name):
             return self._phase_peak(container, costs)
         return sum(costs.values())
+
+    def _unified_store_mb(self, strat_name: str, name: str, dev, profile) -> Optional[float]:
+        """The MB an expert store placed by `strat_name` holds of `name` on the unified device `dev`
+        (dense + the cache floor, `_place_component` Strategy 2.5), or None when it placed none
+        there. Only `lazy_sequential` places components one by one (`_try_lazy_sequential`)."""
+        if strat_name != AllocationStrategy.LAZY_SEQUENTIAL.value or not isinstance(dev, str):
+            return None
+        if not _device_is_unified(dev, profile):
+            return None
+        return (getattr(self, "_unified_expert_stores", None) or {}).get(name)
 
     def _loads_on_demand(self, strat_name: str) -> bool:
         """True when a plan of `strat_name` loads a component when the flow reaches it and lets the
@@ -972,8 +991,16 @@ class PrismSolver:
         its earlier grant added), the KV cache as planned in place of the estimate priced inside
         the language model — less the streaming window (two of its largest blocks, `_parse_blocks`,
         at the device's cost for its dtype). The components are granted in name order, each grant
-        added to its cost before the next is read. A unified device is never zero3 (`_place_component`)."""
-        z3 = [n for n, a in sorted(plan.components.items()) if a.strategy == "zero3"]
+        added to its cost before the next is read. A unified device is never zero3 (`_place_component`).
+
+        An expert store `_place_component` placed on a UNIFIED device (Strategy 2.5) is granted here
+        too, by the same arithmetic with no window (no block streams): its dense part resident and
+        the rest of the room as its expert cache (`_expert_store_budget`), its plan figure raised to
+        match. A room the KV cache left below the store's floor is refused by name: the plan was
+        accepted at the floor against the rung, and the usable part of it does not hold it."""
+        z3 = [n for n, a in sorted(plan.components.items())
+              if a.strategy == "zero3"
+              or (a.strategy == "expert_store" and _device_is_unified(a.device, profile))]
         if not z3:
             return
         by_name = {d.device_string: d for d in (devices or [])}
@@ -986,7 +1013,8 @@ class PrismSolver:
         for name in z3:
             alloc = plan.components[name]
             dev = by_name.get(alloc.device)
-            if dev is None or _device_is_unified(alloc.device, profile):
+            unified = _device_is_unified(alloc.device, profile)
+            if dev is None or (unified and alloc.strategy != "expert_store"):
                 continue
             costs: Dict[str, int] = {}
             for n, m in plan.component_memory.items():
@@ -1000,12 +1028,24 @@ class PrismSolver:
                 costs[n] = c
             held_mb = (self._phase_peak(container, costs, outliving=kv_planned, owner=lm, holding=name)
                        if self._loads_on_demand(plan.strategy) else sum(costs.values())) / mib
-            blocks = self._parse_blocks(container, name)
             mult = dev.get_cost_multiplier(self._get_component_dtype(container, name))
-            window_mb = 2.0 * max(blocks.get("block_sizes", {}).values(), default=0.0) * mult
+            window_mb = 0.0 if unified else 2.0 * max(
+                self._parse_blocks(container, name).get("block_sizes", {}).values(), default=0.0) * mult
             room_mb = self._usable_mb(dev) - held_mb - window_mb
             weight_mb = plan.component_memory[name].weight_mb * mult
             store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
+            if unified:
+                if store is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: '{name}' was placed as an expert store on {alloc.device} and its "
+                        f"room is {room_mb:.0f} MB (usable {self._usable_mb(dev):.0f} MB - held "
+                        f"{held_mb:.0f} MB with the KV cache as planned), below its dense part and the "
+                        f"widest top_k experts — the floor it was accepted at")
+                alloc.expert_files = True
+                m = plan.component_memory[name]
+                before_mb = alloc.memory_mb
+                alloc.memory_mb = (m.activation_mb + m.overhead_bytes / mib + store[0] + store[1])
+                plan.total_memory_mb += alloc.memory_mb - before_mb
             if store is not None:
                 # The component routes and its working set fits where every weight does not: the
                 # dense part resident, the routed experts through a cache on the card — no block
@@ -1037,6 +1077,23 @@ class PrismSolver:
         weight fits, zero3 keeps them all resident). The cache takes the rest of the room, capped
         at every routed expert. Stacked expert slabs have no per-expert host tensor to copy and stay
         zero3."""
+        floor = self._expert_store_floor(name, weight_mb, mult)
+        if floor is None:
+            return None
+        dense_mb, floor_mb, routed_mb = floor
+        if not (dense_mb + floor_mb <= room_mb < weight_mb):
+            return None
+        cache_mb = float(int(min(room_mb - dense_mb, routed_mb)))
+        return dense_mb, cache_mb
+
+    def _expert_store_floor(self, name: str, weight_mb: float,
+                            mult: float) -> Optional[Tuple[float, float, float]]:
+        """(dense MB, floor MB, routed MB) of `name` served as an expert store, at the device's cost
+        multiplier `mult` — the dense part (every weight but the routed experts), the widest layer's
+        `top_k` experts (the least cache one call can run in), every routed expert — or None when
+        it cannot be one: no fused routed layer, or a stacked expert slab (no per-expert tensor to
+        copy into a slot). The one reading `_expert_store_budget` (the grant) and `_place_component`
+        (a unified device's placement) both price from."""
         topo = (getattr(self, "_expert_topology", None) or {}).get(name)
         if topo is None or not topo.layers or any(l.stacked for l in topo.layers):
             return None
@@ -1044,10 +1101,7 @@ class PrismSolver:
         routed_mb = topo.routed_bytes / mib * mult
         dense_mb = float(math.ceil(weight_mb - routed_mb))
         floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
-        if not (dense_mb + floor_mb <= room_mb < weight_mb):
-            return None
-        cache_mb = float(int(min(room_mb - dense_mb, routed_mb)))
-        return dense_mb, cache_mb
+        return dense_mb, floor_mb, routed_mb
 
     def _peak_loaded_bytes(self, container, plan) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
@@ -1066,6 +1120,13 @@ class PrismSolver:
             if missing:
                 raise KeyError(f"layer_streaming rung priced no cost for {missing}")
             totals = {n: int(cost[n]) for n in totals if n not in streamed}
+        for n, a in plan.components.items():
+            if a.strategy == "expert_store" and n in totals:
+                # its dense part and its expert cache beside its activations: the routed experts
+                # are never loaded whole (`_place_component` Strategy 2.5, `_zero3_resident_budgets`)
+                m = plan.component_memory[n]
+                totals[n] = int(m.activation_bytes + m.overhead_bytes
+                                + (a.resident_weight_mb + a.expert_cache_mb) * 1024 * 1024)
         kv = int(getattr(getattr(plan, "kv_cache_plan", None), "memory_bytes", 0) or 0)
         return self._phase_peak(container, totals, outliving=kv, owner=self._lm_component_name)
 
@@ -1662,6 +1723,8 @@ class PrismSolver:
         # executor to instantiate a TilingEngine. _input_config is stashed so
         # the tile sizer can read the runtime spatial extent.
         self._component_tiling = {}
+        # The expert stores the lazy_sequential pass places on a unified device (`_place_component`).
+        self._unified_expert_stores = {}
         # The host rungs' own device sizing under the Triton engine (`_size_host_placement_on_device`),
         # per rung: {rung: {component: tiling}} and {rung: (card, usable MB, {component: live MB})}.
         self._host_device_tilings = {}
@@ -2294,11 +2357,11 @@ class PrismSolver:
             _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
             device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)),
-            **self._streamed_loads(plan))
+            file_backed=self._file_backed_experts(plan, profile), **self._streamed_loads(plan))
 
         # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
         # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
-        # Placement does not read it: the expert store that would run it is not built yet.
+        # Placement does not read this figure: an expert store is placed from the topology (`_expert_store_floor`).
         plan.expert_working_set = self._expert_working_set(plan, profile)
 
         # Step 8: Summary
@@ -2327,6 +2390,24 @@ class PrismSolver:
             reserved += int(plan.kv_cache_plan.memory_bytes)
         return price_working_set(topologies, {n: int(m.weight_bytes) for n, m in plan.component_memory.items()},
                                  rung, reserved, source)
+
+    def _file_backed_experts(self, plan, profile) -> Dict[str, set]:
+        """{component: routed expert weight names} of each expert store the plan holds on a UNIFIED
+        device — weights its load never reads whole: the store maps them from the container's files
+        and copies a missed expert into a cache slot (`_place_component` Strategy 2.5). A discrete
+        card's store keeps its experts in pinned host memory, priced as zero3's."""
+        topologies = getattr(self, "_expert_topology", None) or {}
+        out: Dict[str, set] = {}
+        for name, alloc in plan.components.items():
+            if alloc.strategy != "expert_store" or not _device_is_unified(alloc.device, profile):
+                continue
+            topo = topologies.get(name)
+            names = {n for l in (topo.layers if topo else []) for n in l.expert_weight_names}
+            if not names:
+                raise RuntimeError(f"ZERO FALLBACK: '{name}' is an expert store on {alloc.device} and its "
+                                   f"topology names no routed expert weight")
+            out[name] = names
+        return out
 
     def _streamed_loads(self, plan) -> Dict:
         """The host estimate's view of what a streamed plan loads at a time: each streamed component's
@@ -4692,6 +4773,9 @@ class PrismSolver:
         # Reset component-tiling flags for this placement pass so a rejected
         # attempt never leaves stale entries (the chosen pass repopulates).
         self._component_tiling = {}
+        # Likewise the expert stores this pass places on a unified device ({component: dense + floor
+        # MB}, `_place_component` Strategy 2.5), read by the KV check and `_build_plan`.
+        self._unified_expert_stores = {}
 
         fresh = self._fresh_devices(devices)
         allocations = {}
@@ -5336,6 +5420,26 @@ class PrismSolver:
         )
         if fgp_result is not None:
             return fgp_result
+
+        # Strategy 2.5: an expert store on a UNIFIED device. A routed component's fused MoE op reads
+        # `top_k` experts per token, not its whole layer, so held whole it is priced at its dense
+        # part plus the widest layer's `top_k` experts (`_expert_store_floor`) beside its live
+        # activations; the routed experts stay in the container's mapped shards, the one pool's file
+        # pages, and the runtime copies the experts each call routes to into a cache on the device.
+        # zero3 frees nothing here (one pool) and is refused below; layer streaming cut such a
+        # component into segments that each hold whole layers — 128 experts of 9 MB for the 8 a token
+        # reads (Qwen3-30B-A3B-Thinking-2507 on the Mac's M4 Pro, 2026-10-12: segments re-read from
+        # disk per token, or refused where one layer's 1 152 MB exceeds a segment). The cache beyond
+        # the floor is granted with the plan (`_zero3_resident_budgets`), after the KV cache.
+        if _device_is_unified(largest.device_string, profile):
+            store = self._expert_store_budget(comp_name, real_weight,
+                                              usable - self._live_activation_mb(mem), cost_mult)
+            cap = self._max_allocation_mb(largest)
+            if store is not None and (cap is None or store[0] <= cap):
+                dense_mb, floor_mb, _ = self._expert_store_floor(comp_name, real_weight, cost_mult)
+                self.__dict__.setdefault("_unified_expert_stores", {})[comp_name] = dense_mb + floor_mb
+                shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
 
         # Strategy 3: zero3 — CPU offload of weights, GPU for compute only.
         # Works only when activations fit on the largest GPU (with the
@@ -7467,19 +7571,27 @@ class PrismSolver:
             else:
                 device_list = [device_str]
                 comp_strategy = "single_gpu"
+            memory_mb = mem.total_mb
+            store_mb = self._unified_store_mb(strategy, comp_name, device_str, profile)
+            if store_mb is not None:
+                # `_place_component` Strategy 2.5: held as an expert store, priced at its dense part
+                # and cache floor beside its activations; the cache is granted after the KV cache
+                # (`_zero3_resident_budgets`), which adds it to this figure.
+                comp_strategy = "expert_store"
+                memory_mb = mem.activation_mb + mem.overhead_bytes / (1024 * 1024) + store_mb
 
             components[comp_name] = ComponentAllocation(
                 name=comp_name,
                 devices=device_list,
                 dtype=comp_dtypes.get(comp_name, "float32"),
-                memory_mb=mem.total_mb,
+                memory_mb=memory_mb,
                 architecture=arch,
                 vendor=vendor,
                 sharded=len(device_list) > 1,
                 shard_map=shard_map,
                 strategy=comp_strategy,
             )
-            total_mb += mem.total_mb
+            total_mb += memory_mb
 
         # Determine loading mode — strategy + serve_mode driven
         # Eager: weights stay in VRAM permanently (fast serving, near-zero latency)
@@ -7752,7 +7864,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
             entry["zero3_resident_weight_mb"] = float(alloc.resident_weight_mb)
         if getattr(alloc, "strategy", None) == "expert_store":
             entry["expert_store"] = {"resident_weight_mb": float(alloc.resident_weight_mb),
-                                     "expert_cache_mb": float(alloc.expert_cache_mb)}
+                                     "expert_cache_mb": float(alloc.expert_cache_mb),
+                                     "expert_files": bool(getattr(alloc, "expert_files", False))}
         if mem is not None:
             entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
                           "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,
