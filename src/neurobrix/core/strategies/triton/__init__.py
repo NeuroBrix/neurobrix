@@ -38,7 +38,6 @@ TRITON_REGISTRY = {
     "weight_sharding": WeightShardingStrategy,
     "lazy_sequential": LazySequentialStrategy,
     "zero3": Zero3Strategy,
-    "expert_store": Zero3Strategy,
     "cpu_execution": CPUExecutionStrategy,
 }
 

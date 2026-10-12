@@ -2080,16 +2080,16 @@ class GraphExecutor:
         """{loader key: a host view of its stored bytes} for the routed experts `keys`, in this
         engine's tensor type (`expert_files.bind_views`): torch.frombuffer on the compiled engine,
         NBXTensor.from_raw on the triton one — both over the private shard map, no byte copied."""
-        from neurobrix.core.runtime.expert_files import bind_views, locate
+        from neurobrix.core.runtime.expert_files import bind_views, held_dtype, locate
         spans = locate(nbx_path, component, keys)
         if self.mode in ("triton", "triton_sequential"):
             import ctypes
             from neurobrix.kernels.nbx_tensor import NBXTensor
-            from neurobrix.triton.weight_loader import _SF_DTYPE_INFO, stored_dtype_in_compute
+            from neurobrix.triton.weight_loader import _SF_DTYPE_INFO
             by_nbx = {info[1]: sf for sf, info in _SF_DTYPE_INFO.items()}
 
             def held_as(sf):
-                return by_nbx[stored_dtype_in_compute(_SF_DTYPE_INFO[sf][1], compute_dtype)]
+                return by_nbx[held_dtype(_SF_DTYPE_INFO[sf][1], compute_dtype, "triton")]
 
             def build(m, span, key):
                 ptr = ctypes.addressof(ctypes.c_char.from_buffer(m, span.offset))
@@ -2100,9 +2100,12 @@ class GraphExecutor:
             sf_of = {torch.bfloat16: "BF16", torch.float16: "F16", torch.float32: "F32", torch.float64: "F64"}
             torch_of = {v: k for k, v in sf_of.items()}
 
+            from neurobrix.kernels.nbx_tensor import nbx_dtype_to_torch
+
             def held_as(sf):
                 # the compiled loader converts every floating weight to the placement dtype
-                return sf_of[compute_dtype] if sf in torch_of else sf
+                return (sf_of[nbx_dtype_to_torch(held_dtype(torch_of[sf], compute_dtype, "compiled"))]
+                        if sf in torch_of else sf)
 
             def build(m, span, key):
                 dt = torch_of[span.dtype]

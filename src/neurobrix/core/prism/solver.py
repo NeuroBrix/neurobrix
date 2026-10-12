@@ -976,6 +976,7 @@ class PrismSolver:
             weight_mb = plan.component_memory[name].weight_mb * mult
             store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
             if unified:
+                self._refuse_unheld_expert_files(container, name, alloc)
                 if store is None:
                     raise RuntimeError(
                         f"ZERO FALLBACK: '{name}' was placed as an expert store on {alloc.device} and its "
@@ -1003,6 +1004,60 @@ class PrismSolver:
             granted[name] = int(alloc.resident_weight_mb * mib)
             self.__dict__.setdefault("_zero3_residency", {})[name] = (
                 f"usable {self._usable_mb(dev):.0f} MB - held {held_mb:.0f} MB - window {window_mb:.0f} MB")
+
+    def _refuse_unheld_expert_files(self, container, name: str, alloc) -> None:
+        """Refuses, at plan time and by name, a unified expert store whose routed experts are STORED in a
+        dtype other than the one its engine holds them in.
+
+        A file-backed store binds each routed expert to a view of its stored bytes and copies them into
+        cache slots unconverted (core/runtime/expert_files.py), so the load refuses any expert whose
+        stored dtype is not the dtype the engine computes it in (`bind_views`). A plan accepted here
+        then died at load. The same rule decides both (`expert_files.held_dtype`), from the same two
+        reads: the stored dtype from the component's weights index (`read_weights_index`, the read the
+        load's `locate` makes), the compute dtype from the plan — `alloc.dtype`, the per-component dtype
+        the dtype door resolved (`_resolve_component_dtypes`), which the runtime's dtype engine holds a
+        component on an accelerator in (`compute_dtype_for_placement`; a unified store is never a host
+        placement) — under the engine this plan is for (`self._mode`). An index that cannot be read, or
+        a routed expert it does not record, is refused too: the plan would accept what it cannot check."""
+        from pathlib import Path as _P
+        from neurobrix.core.prism.host_footprint import engine_of
+        from neurobrix.core.runtime.expert_files import held_dtype
+        from neurobrix.kernels.nbx_tensor import parse_dtype
+        from neurobrix.nbx.weight_presence import read_weights_index
+        topo = (getattr(self, "_expert_topology", None) or {}).get(name)
+        names = sorted({n for l in (topo.layers if topo else []) for n in l.expert_weight_names})
+        if not names:
+            raise RuntimeError(f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} and "
+                               f"its topology names no routed expert weight")
+        base = getattr(container, "cache_path", None)
+        index = read_weights_index(name, _P(base) / "components" / name) if base is not None else None
+        if index is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device}, whose routed experts "
+                f"are mapped from the container's files, and its weights index cannot be read "
+                f"(cache path {base}): the experts' stored dtype cannot be checked against the compute dtype")
+        engine = engine_of(getattr(self, "_mode", "compiled"))
+        compute = parse_dtype(alloc.dtype)
+        unheld: Dict[Tuple[str, str], List[str]] = {}
+        for n in names:
+            entry = index.get(n)
+            if not isinstance(entry, dict) or not entry.get("dtype"):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} and its routed "
+                    f"expert {n!r} has no stored dtype in its weights index")
+            stored = parse_dtype(entry["dtype"])
+            held = held_dtype(stored, compute, engine)
+            if held != stored:
+                unheld.setdefault((stored.name, held.name), []).append(n)
+        if unheld:
+            pairs = "; ".join(f"{len(ns)} stored {s_} held as {h_} (e.g. {ns[0]!r})"
+                              for (s_, h_), ns in sorted(unheld.items()))
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{name}' is planned as an expert store on {alloc.device} under the {engine} "
+                f"engine at the plan's dtype {compute.name}, and its routed experts are not stored in the "
+                f"dtype that engine computes them in: {pairs}. The store maps stored bytes and converts "
+                f"none (core/runtime/expert_files.py) — the load would refuse it; a file-backed expert "
+                f"must be stored in its compute dtype")
 
     def _expert_store_budget(self, name: str, weight_mb: float, room_mb: float,
                              mult: float) -> Optional[Tuple[float, float]]:
