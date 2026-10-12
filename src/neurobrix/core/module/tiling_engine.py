@@ -842,11 +842,15 @@ class OpLevelTilingPlan:
         # Each entry: (op_uid, reuse_input_index) — residual aten::add
         # ops where Prism's liveness analysis proved one input has its
         # last use at this op, so its buffer can be reused as output
-        # (saves a 3rd allocation = output_size bytes per call). Detected
-        # at register-time from the DAG; populated by
-        # `_detect_inplace_add_candidates`. P-SANA-4KPX-RUNTIME 2026-05-05
-        # multi-branch fusion fix vector B.
-        self.inplace_adds: List[Tuple[str, int]] = []
+        # (saves a 3rd allocation = output_size bytes per call).
+        # P-SANA-4KPX-RUNTIME 2026-05-05 multi-branch fusion fix vector B.
+        # A PLAN DECISION, taken by Prism at the request it prices
+        # (`PrismSolver._identify_inplace_add_candidates_static`, sized by
+        # `_request_shape_of`) and handed over with every plan it emits —
+        # an empty list is "none at this request". None is "never decided":
+        # the runtime refuses it by name (`register_into_graph_executor`)
+        # instead of re-detecting at the DAG's traced extents.
+        self.inplace_adds: Optional[List[Tuple[str, int]]] = None
         # Each entry: dict {"fork_uid": str, "merge_uid": str,
         # "chain_uids": List[str], "tile_factor": int, "spatial_axis": int,
         # "halo": int, "shape": List[int]} — long residual chains where
@@ -873,6 +877,8 @@ class OpLevelTilingPlan:
         self.tiled_ops.append((op_uid, op_type, max(1, int(tile_factor))))
 
     def add_inplace_add(self, op_uid: str, reuse_input_index: int) -> None:
+        if self.inplace_adds is None:
+            self.inplace_adds = []
         self.inplace_adds.append((op_uid, int(reuse_input_index)))
 
     def add_inplace_unary(self, op_uid: str, op_type: str) -> None:
@@ -1186,7 +1192,8 @@ class OpLevelTilingEngine:
         with 8,242 MB already live and 6,586 MB free, and the run dies there.
         Writing into the input takes that pair's peak from 16.4 GB to 8.2 GB.
 
-        Same liveness rule as `_detect_inplace_add_candidates` and the same
+        Same liveness rule as Prism's in-place adds
+        (`PrismSolver._identify_inplace_add_candidates_static`) and the same
         DAG-static basis: a consumer map, no Prism profile and no runtime
         state. Universal -- every convolutional decoder alternates conv and
         activation, so the pattern belongs to no family, model or vendor.
@@ -1204,7 +1211,7 @@ class OpLevelTilingEngine:
         So: liveness is a property of the GRAPH and is settled here; size is a
         property of the REQUEST and is settled in the interceptor, which holds
         the real tensor, so this detector takes no byte threshold.
-        `_detect_inplace_add_candidates`' own threshold has the same blind
+        the in-place adds' own threshold had the same blind
         spot, unnoticed because Sana's trace extents were already over a
         gigabyte.
         """
@@ -1251,130 +1258,6 @@ class OpLevelTilingEngine:
         return out
 
     @staticmethod
-    def _detect_inplace_add_candidates(
-        graph_executor, threshold_bytes: Optional[int] = None,
-        shape_of: Optional[Callable[[str], Optional[List[int]]]] = None,
-    ) -> "List[Tuple[str, int]]":
-        """Scan the GraphExecutor's DAG for residual aten::add ops where
-        liveness analysis proves at least one input has its last use at
-        this op. Returns a list of `(op_uid, reuse_input_index)` for adds
-        whose output exceeds `threshold_bytes` (default
-        `tiling_sizes.inplace_min_bytes()`).
-
-        Detection is purely DAG-static (no Prism profile / no runtime
-        info): builds a consumer map and checks whether each input's only
-        downstream consumer is the add itself AND the input is not a
-        graph output. This is the same liveness logic used by triton
-        sequence's `_compute_liveness` and `_run_triton_sequential`'s
-        `dead_at_op`.
-
-        Universal — applies to any model whose decoder has multi-branch
-        residual merges (DC-AE, ResNet residual blocks at high spatial
-        resolution, etc.). On Sana 4Kpx VAE, returns 26 candidates
-        (8 above 4 GiB at the 4096×4096 res, 4 above 4 GiB at 2048×2048).
-
-        SIZE IS A PROPERTY OF THE REQUEST. `shape_of(tensor_id)` returns a
-        tensor's extents at the request being planned (Prism passes its
-        profiler's resolution under the request's symbol map); the byte
-        threshold and the residual shape test read it. Without it the
-        detector reads the DAG's `input_shapes` / `output_shapes` — the
-        extents the model was TRACED at. Sana_1600M_4Kpx_BF16's VAE retraced
-        at its own 7x10 latent (Forge 4730493, 2026-10-12) put every merge
-        add at 224x320, under the 1 GiB threshold, and the plan for a
-        3072x4096 decode installed none of the adds a 128x128-latent trace
-        had exceeded it with: 15 360 MB planned became 18 432 MB.
-        """
-        if threshold_bytes is None:
-            threshold_bytes = _tsz.inplace_min_bytes()
-        dag = getattr(graph_executor, '_dag', None)
-        if dag is None:
-            return []
-        ops = dag.get("ops", {})
-        if isinstance(ops, list):
-            ops_by_uid = {o["op_uid"]: o for o in ops}
-        else:
-            ops_by_uid = ops
-        order = dag.get("execution_order", [])
-        output_ids = set(dag.get("output_tensor_ids", []))
-
-        # Build consumer map: tensor_id -> [op_uid that reads it]
-        def _collect_arg_tids(arg, out_set):
-            if isinstance(arg, dict):
-                atype = arg.get("type")
-                if atype in ("tensor", "tensor_ref"):
-                    t = arg.get("tensor_id")
-                    if t:
-                        out_set.add(t)
-                elif atype == "tensor_tuple":
-                    for t in arg.get("tensor_ids", []):
-                        out_set.add(t)
-                elif atype == "list":
-                    for item in arg.get("value", []):
-                        _collect_arg_tids(item, out_set)
-
-        consumers: Dict[str, List[str]] = {}
-        for op_uid in order:
-            op = ops_by_uid.get(op_uid)
-            if op is None:
-                continue
-            attrs = op.get("attributes", {})
-            seen: set = set()
-            for arg in attrs.get("args", []):
-                _collect_arg_tids(arg, seen)
-            for arg in attrs.get("kwargs", {}).values():
-                _collect_arg_tids(arg, seen)
-            for tid in seen:
-                consumers.setdefault(tid, []).append(op_uid)
-
-        candidates: List[Tuple[str, int]] = []
-        for op_uid in order:
-            op = ops_by_uid.get(op_uid)
-            if op is None or op.get("op_type") != "aten::add":
-                continue
-            inp_tids = op.get("input_tensor_ids", [])
-            ishapes = op.get("input_shapes", [])
-            oshapes = op.get("output_shapes", [])
-            if len(inp_tids) < 2 or len(ishapes) < 2 or not oshapes:
-                continue
-            if shape_of is not None:
-                _outs = op.get("output_tensor_ids", [])
-                if not _outs:
-                    continue
-                ishapes = [shape_of(inp_tids[0]), shape_of(inp_tids[1])]
-                oshapes = [shape_of(_outs[0])]
-                if ishapes[0] is None or ishapes[1] is None or oshapes[0] is None:
-                    continue
-            sh_a = ishapes[0]
-            sh_b = ishapes[1]
-            sh_o = oshapes[0]
-            # Residual pattern: identical 4D input shapes.
-            if sh_a != sh_b or len(sh_a) != 4:
-                continue
-            # Output size (use fp32 as conservative estimate; runtime
-            # dtype may be smaller but we'd rather under-trigger than
-            # mis-trigger). The threshold is intentionally generous.
-            elems = 1
-            for d in sh_o:
-                elems *= max(1, int(d))
-            out_bytes = elems * 4  # fp32
-            if out_bytes < threshold_bytes:
-                continue
-            # Liveness check: is at least one input's last use this op?
-            a_consumers = consumers.get(inp_tids[0], [])
-            b_consumers = consumers.get(inp_tids[1], [])
-            a_last = (len(a_consumers) == 1
-                      and a_consumers[0] == op_uid
-                      and inp_tids[0] not in output_ids)
-            b_last = (len(b_consumers) == 1
-                      and b_consumers[0] == op_uid
-                      and inp_tids[1] not in output_ids)
-            if a_last:
-                candidates.append((op_uid, 0))
-            elif b_last:
-                candidates.append((op_uid, 1))
-        return candidates
-
-    @staticmethod
     def _detect_residual_chains(
         graph_executor,
         threshold_bytes: Optional[int] = None,  # tiling_sizes.residual_chain_min_base_bytes_fp32()
@@ -1412,8 +1295,8 @@ class OpLevelTilingEngine:
         block at 4096², 2048², 1024², 512²). Anti-pattern check:
         returns [] for Sana 1024 VAE, PixArt KL-AE, TinyLlama, etc.
 
-        `shape_of(tensor_id)`: the tensor's extents at the REQUEST, as for
-        `_detect_inplace_add_candidates` (see there): the base-size threshold,
+        `shape_of(tensor_id)`: the tensor's extents at the REQUEST
+        (`PrismSolver._request_shape_of`, the one sizing rule): the base-size threshold,
         the spatial test and the spec's `shape` / `bytes_fp32` (which set the
         band factor) are read from it. Without it, the DAG's traced extents.
         """
@@ -1621,14 +1504,20 @@ class OpLevelTilingEngine:
             fused_upsample_conv2d,
         )
 
-        # Auto-detect in-place residual add candidates from the DAG. Only
-        # populated for components where Prism already triggered op-level
-        # tiling (high-VRAM-pressure models — Sana 4Kpx and similar);
-        # cheaper models bypass this entire engine. The detection is
-        # universal (any multi-branch residual pattern; not Sana-specific).
-        if not self.plan.inplace_adds:
-            self.plan.inplace_adds = OpLevelTilingEngine._detect_inplace_add_candidates(
-                graph_executor)
+        # The in-place residual adds are Prism's decision, taken at the
+        # REQUEST it priced (`_identify_inplace_add_candidates_static` under
+        # `_request_shape_of`) and handed over with every plan it emits. The
+        # runtime never re-detects them: the DAG's `output_shapes` are the
+        # TRACE's extents, and a re-detection there installed adds the
+        # estimate never priced or dropped adds it did (Sana_1600M_4Kpx_BF16
+        # retraced at a 7x10 latent, 2026-10-12). A plan that carries no
+        # decision is refused by name.
+        if self.plan.inplace_adds is None:
+            raise RuntimeError(
+                f"[OpLevelTilingEngine] '{self.plan.component_name}': the plan carries no "
+                f"in-place-add decision (inplace_adds is None) — Prism decides them at the "
+                f"request it prices and hands them over with the plan; the runtime does not "
+                f"re-detect them at the trace's extents")
         # The same liveness question asked of element-wise activations, which
         # is where the bytes actually are in a convolutional decoder: a conv
         # and the activation reading it hold two buffers of identical size
@@ -1734,7 +1623,7 @@ class OpLevelTilingEngine:
                     f"budget was accepted with it banded, so it is never run whole instead")
 
         # In-place residual adds (multi-branch fusion fix vector B).
-        # See `_detect_inplace_add_candidates` for the safety contract.
+        # See `PrismSolver._identify_inplace_add_candidates_static` for the safety contract.
         # Dual-backend: routes to NBX in-place kernel for triton modes,
         # to torch's tensor.add_() for compiled/sequential modes (so
         # compiled mode keeps its perf path AND benefits from in-place
@@ -2433,7 +2322,7 @@ class OpLevelTilingEngine:
             f"interceptors on component '{self.plan.component_name}': "
             f"fusion_pairs={len(self.plan.fusion_pairs)} "
             f"tiled_ops={len(self.plan.tiled_ops)} "
-            f"inplace_adds={len(self.plan.inplace_adds)} "
+            f"inplace_adds={len(self.plan.inplace_adds or [])} "
             f"residual_chains={len(self.plan.residual_chains)}"
         )
         return len(interceptors)
