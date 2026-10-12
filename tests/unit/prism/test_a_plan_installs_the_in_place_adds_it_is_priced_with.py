@@ -11,6 +11,12 @@ full size (3 x 3.2 GB), an 18 157 MB footprint and an out-of-memory in the decod
 What each test would do if the code were wrong: without the installation the first test finds no
 plan for the component (RED, seen); a detector that installed in-place adds regardless of the
 estimate's own threshold would make the second test find a plan (RED).
+
+SIZE IS THE REQUEST'S, NOT THE TRACE'S (2026-10-12). Sana_1600M_4Kpx_BF16's VAE retraced at its
+own 7x10 latent (Forge 4730493) carries 224x320 traced extents at its merge adds; the detectors read
+the DAG's traced `output_shapes`, every add fell under the 1 GiB threshold, and the 3072x4096 plan
+priced and installed none of them (15 360 -> 18 432 MB). The third test holds the request's sizing:
+SEEN RED with `_request_shape_of` returning None (the traced extents) — no candidate, no plan.
 """
 from __future__ import annotations
 
@@ -70,3 +76,37 @@ def test_an_add_the_estimate_prices_out_of_place_installs_nothing():
     g = _graph(256, 256)                   # 32 MiB fp32-equivalent: under the estimate's 1 GiB in-place threshold
     assert PrismSolver()._identify_inplace_add_candidates_static(g) == []
     assert _detect(g) == {}
+
+
+def _symbolic_graph(trace_h: int, trace_w: int, scale: int) -> dict:
+    """The same residual add, its spatial dims SYMBOLIC (latent height/width x scale), traced small."""
+    def dim(sym, trace):
+        return {"type": "mul", "left": {"type": "symbol", "id": sym, "trace": trace}, "right": scale,
+                "trace": trace * scale}
+    shape = [1, 128, trace_h * scale, trace_w * scale]
+    sym = {"dims": [{"type": "symbol", "id": "s0", "trace": 1}, 128, dim("s1", trace_h), dim("s2", trace_w)],
+           "concrete": shape}
+    g = _graph(shape[2], shape[3])
+    for t in g["tensors"].values():
+        t["symbolic_shape"] = sym
+    g["symbolic_context"] = {"symbols": {
+        "s0": {"name": "batch", "trace_value": 1},
+        "s1": {"name": "height", "trace_value": trace_h},
+        "s2": {"name": "width", "trace_value": trace_w}}}
+    return g
+
+
+def test_an_add_is_sized_at_the_request_not_at_the_trace():
+    g = _symbolic_graph(7, 10, 32)         # traced at 224x320: 36 MiB fp32-equivalent, under 1 GiB
+    request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)
+    solver = PrismSolver()
+    assert solver._identify_inplace_add_candidates_static(g) == []          # the trace's answer
+    priced = solver._identify_inplace_add_candidates_static(g, input_config=request)
+    assert priced == [("aten.add::0", 0)], priced                           # 6 GiB at 3072x4096
+    comp = SimpleNamespace(name="vae", graph=g)
+    dev = SimpleNamespace(memory_mb=32768, get_device_string=lambda: "cuda:0")
+    alloc = SimpleNamespace(device="cuda:0", memory_mb=300, shard_map={})
+    plans = solver._detect_op_level_tiling_pairs(
+        container=None, components=[comp], allocations={"vae": alloc},
+        profile=SimpleNamespace(devices=[dev]), input_config=request, target_dtype_str="float16")
+    assert "vae" in plans and plans["vae"].inplace_adds == priced, plans

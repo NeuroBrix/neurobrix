@@ -2632,7 +2632,7 @@ class PrismSolver:
             _c3_uids = self._conv3d_chunk_uids(comp, profiler, input_config, dtype_bytes,
                                                _ts.op_budget_bytes(comp_vram, _c3_resident))
             has_chains = bool(
-                self._identify_residual_chain_specs(comp.graph)
+                self._identify_residual_chain_specs(comp.graph, input_config)
             )
             if not ap.overflow_ops and not has_chains:
                 # THE FIGURE A STRATEGY IS GATED ON IS THE FIGURE THE PLAN EXECUTES UNDER.
@@ -2647,7 +2647,8 @@ class PrismSolver:
                 # footprint and an out-of-memory in the decode. So the adds the estimate
                 # assumed are installed with the plan: no band streaming, no fusion, only
                 # the add written into the buffer of its dead input (numerically the add).
-                _priced_in_place = self._identify_inplace_add_candidates_static(comp.graph)
+                _priced_in_place = self._identify_inplace_add_candidates_static(
+                    comp.graph, input_config=input_config)
                 if _priced_in_place or _c3_uids:
                     _iplan = OpLevelTilingPlan(comp.name)
                     for _uid, _reuse in _priced_in_place:
@@ -2825,7 +2826,7 @@ class PrismSolver:
             # is structural (R34): only models that match the
             # fork→linear-N≥3→merge signature with large intermediates
             # get any chain spec; cheaper models pay nothing.
-            chain_specs = self._identify_residual_chain_specs(comp.graph)
+            chain_specs = self._identify_residual_chain_specs(comp.graph, input_config)
             for spec in chain_specs:
                 # Tile factor: bands of at most `residual_chain.band_target_bytes`
                 # at runtime, from the bf16 estimate (bytes_fp32 / 2).
@@ -2868,18 +2869,43 @@ class PrismSolver:
                 out.append(uid)
         return out
 
-    def _identify_residual_chain_specs(self, graph: Dict):
+    def _identify_residual_chain_specs(self, graph: Dict, input_config=None):
         """Return raw residual-chain specs from a DAG dict. Wrapper around
         `OpLevelTilingEngine._detect_residual_chains` that accepts a raw
         graph dict so the solver does not depend on a live GraphExecutor.
-        S5 2026-05-13."""
+        S5 2026-05-13. Sized at `input_config` (`_request_shape_of`)."""
         from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
 
         class _DagWrap:
             def __init__(self, d):
                 self._dag = d
 
-        return OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
+        return OpLevelTilingEngine._detect_residual_chains(
+            _DagWrap(graph), shape_of=self._request_shape_of(graph, input_config))
+
+    @staticmethod
+    def _request_shape_of(graph: Dict, input_config):
+        """{tensor_id -> extents at THIS request}, the sizing every structural
+        tiling decision (in-place adds, residual chains) is taken on — the
+        profiler's own resolution under the placement-floored symbol map the
+        estimate binds (`_compute_memory`), so the plan installs exactly what
+        the estimate priced. None when no request is given: the detectors then
+        read the DAG's traced extents, which are the trace's, not a request's
+        (Sana_1600M_4Kpx_BF16 retraced at a 7x10 latent, 2026-10-12: every
+        merge add fell under the in-place threshold for a 3072x4096 decode)."""
+        if input_config is None:
+            return None
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        profiler = ActivationProfiler(graph)
+        smap = profiler.build_symbol_map(input_config, placement_floor=True)
+        tensors = graph.get("tensors", {})
+
+        def shape_of(tid):
+            meta = tensors.get(tid)
+            if meta is None:
+                return None
+            return [int(d) for d in profiler._resolve_shape(meta, smap)]
+        return shape_of
 
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False,
                     mode: str = "compiled"):
@@ -2891,7 +2917,7 @@ class PrismSolver:
     # =========================================================================
 
     def _identify_inplace_add_candidates_static(
-        self, graph: Dict, threshold_bytes: Optional[int] = None,
+        self, graph: Dict, threshold_bytes: Optional[int] = None, input_config=None,
     ):
         """DAG-static replica of `OpLevelTilingEngine._detect_inplace_add_candidates`
         (`tiling_engine.py:613`) — returns the same list of `(op_uid,
@@ -2906,9 +2932,12 @@ class PrismSolver:
         Same threshold formula MUST match — divergence would mean the
         estimator predicts an in-place that the runtime won't actually
         engage. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        Sized at `input_config` (`_request_shape_of`): the runtime helper's
+        `shape_of`, the same rule.
         """
         if threshold_bytes is None:
             threshold_bytes = _ts.inplace_min_bytes()
+        shape_of = self._request_shape_of(graph, input_config)
         ops = graph.get("ops", {})
         order = graph.get("execution_order", [])
         output_ids = set(graph.get("output_tensor_ids", []))
@@ -2927,6 +2956,14 @@ class PrismSolver:
             oshapes = op.get("output_shapes", [])
             if len(in_tids) < 2 or len(ishapes) < 2 or not oshapes:
                 continue
+            if shape_of is not None:
+                _outs = op.get("output_tensor_ids", [])
+                if not _outs:
+                    continue
+                ishapes = [shape_of(in_tids[0]), shape_of(in_tids[1])]
+                oshapes = [shape_of(_outs[0])]
+                if ishapes[0] is None or ishapes[1] is None or oshapes[0] is None:
+                    continue
             sh_a = ishapes[0]
             sh_b = ishapes[1]
             sh_o = oshapes[0]
@@ -2952,7 +2989,7 @@ class PrismSolver:
                 candidates.append((uid, 1))
         return candidates
 
-    def _identify_residual_chain_proxy_uids(self, graph: Dict):
+    def _identify_residual_chain_proxy_uids(self, graph: Dict, input_config=None):
         """Identify the chain-intermediate op_uids that
         `OpLevelTilingEngine._detect_residual_chains` will band-stream at
         runtime. Each intermediate writes a band-sized buffer at any
@@ -2981,7 +3018,8 @@ class PrismSolver:
             def __init__(self, d):
                 self._dag = d
 
-        chains = OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
+        chains = OpLevelTilingEngine._detect_residual_chains(
+            _DagWrap(graph), shape_of=self._request_shape_of(graph, input_config))
         proxy_uids: set = set()
         for c in chains:
             for uid in c.get("chain_uids", []):
@@ -3334,7 +3372,7 @@ class PrismSolver:
                         # single_gpu on 16g and routes VAE to GPU
                         # under the residual-chain wrapper.
                         chain_uids = self._identify_residual_chain_proxy_uids(
-                            comp.graph
+                            comp.graph, input_config
                         )
                         zero_uids = fusion_uids | f2a_uids | chain_uids
                         # In-place residual adds: detected statically by the
@@ -3345,7 +3383,7 @@ class PrismSolver:
                         # input's lifetime through downstream consumers and
                         # zero-allocates the output.
                         inplace_adds = self._identify_inplace_add_candidates_static(
-                            comp.graph
+                            comp.graph, input_config=input_config
                         )
                         if zero_uids or inplace_adds:
                             ap_tiled = profiler.estimate_peak_memory(
@@ -3373,7 +3411,7 @@ class PrismSolver:
                         # add detection alone (relevant for shapes where
                         # in-place adds dominate even without upsample fusion).
                         inplace_adds = self._identify_inplace_add_candidates_static(
-                            comp.graph
+                            comp.graph, input_config=input_config
                         )
                         if inplace_adds:
                             ap_tiled = profiler.estimate_peak_memory(
