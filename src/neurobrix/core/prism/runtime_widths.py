@@ -18,7 +18,8 @@ Non-floating tensors keep their traced dtype.
 
 Where the rules come from. Everything that can be CALLED is called: the Triton engine's AMP
 classes and its fp32-constant rule (`triton/dtype.py`), the stored-weight rule
-(`triton/weight_loader.stored_dtype_in_compute`), the seam predicate
+(`triton/weight_loader.stored_dtype_in_compute`) and the compiled engine's own weight and constant
+rules (`core/dtype/config.compiled_weight_dtype` / `compiled_constant_dtype`), the seam predicate
 (`core/prism/layer_partition.is_seam_tensor`), the op-name aliases
 (`kernels/classification.canonical_aten`), and the precision contract's own functions
 (`core/runtime/precision_contract`, `core/dtype/calibration`). What cannot be called without
@@ -44,6 +45,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
+from neurobrix.core.dtype.config import compiled_constant_dtype, compiled_weight_dtype
 from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
@@ -489,10 +491,15 @@ class _Rules:
         return self.first_dimensioned(fl)
 
     def weight_dtype(self, tid: str, traced: str) -> str:
-        """A param/buffer/constant: `stored_dtype_in_compute` (triton/weight_loader.py:609-627),
-        the loader's rule for every weight of a shard — the documented mirror of the ATen
-        branch's WeightLoader(torch_dtype=C)."""
-        return _nbx_name(stored_dtype_in_compute(_nbx(traced), _nbx(self.c)))
+        """A param/buffer/constant: the dtype the ENGINE'S OWN loader holds it in — each engine
+        names its rule below; this base names none."""
+        raise NotImplementedError(f"{type(self).__name__} names no weight rule")
+
+    def embedded_constant(self, tid: str) -> bool:
+        """A constant embedded in graph.json (`GraphExecutor._load_constants_from_graph`), bound by
+        the engine's constant rule rather than its weight loader; a computable one is computed."""
+        meta = self.tensors.get(tid) or {}
+        return bool(meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"))
 
     def mm_store(self, a: str, b: str, m: Optional[int]) -> str:
         """The Triton mm/addmm store dtype — `mm` operand alignment (wrappers.py:2178-2224)
@@ -566,14 +573,16 @@ class _TritonRules(_Rules):
         name = tid.split("::", 1)[1] if "::" in tid else tid
         if name in self.fp32_constants:
             return "float32"
-        meta = self.tensors.get(tid) or {}
-        if meta.get("constant") and meta.get("constant_data") and not meta.get("is_computable"):
+        if self.embedded_constant(tid):
             # An embedded constant is bound by the loader's own rule (`constant_load_dtype`,
             # GraphExecutor._load_constant_triton): its traced dtype, a bf16 one decoded to the
             # half compute dtype — swin2SR's fp32 coordinates table stayed fp32, canary's bf16
             # positional table became fp16 (the census walk).
             return _tdt.constant_load_dtype(traced, self.c)
-        return super().weight_dtype(tid, traced)
+        # The Triton loader's rule for every weight of a shard (`stored_dtype_in_compute`): a half
+        # weight follows the compute half, fp32 is narrowed under a half compute, anything else
+        # (an fp16 weight under an fp32 plan) keeps its stored dtype.
+        return _nbx_name(stored_dtype_in_compute(_nbx(traced), _nbx(self.c)))
 
     def amp_fp32_out(self, op=None, narrowed: bool = False) -> str:
         # `_wrap_fp32_internal_compute_dtype_output`: fp32 compute; the output is the engine's
@@ -752,6 +761,18 @@ class _AtenRules(_Rules):
 
     def remap_explicit(self, name: str) -> str:
         return _aten_kwarg_remap(name, self.c)
+
+    def weight_dtype(self, tid: str, traced: str) -> str:
+        # The compiled engine's OWN loaders, never the Triton engine's rule: an embedded constant
+        # through `DtypeEngine.convert_constant` (its graph-dtype constants at C, a vendor's
+        # other-precision constant kept), every other weight through `WeightLoader.held_dtype`
+        # (every floating weight at C — an fp16 weight under an fp32 plan is held fp32). Both
+        # rules are CALLED from core/dtype/config, where the engine's code calls them too.
+        # (A float64 constant on a device without fp64 is narrowed first by the engine's
+        # `storage_dtype`; the device is not known here, so it is priced as traced — wider.)
+        if self.embedded_constant(tid):
+            return compiled_constant_dtype(traced, self.c, self.graph_dtype)
+        return compiled_weight_dtype(traced, self.c)
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c

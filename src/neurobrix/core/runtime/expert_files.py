@@ -117,25 +117,22 @@ class ShardMaps:
         return len(self._maps)
 
 
-#: The weights the compiled (ATen) loader converts to the placement dtype: every floating one
-#: (`WeightLoader(torch_dtype=...)`); any other keeps its stored dtype.
-_COMPILED_CONVERTS = frozenset({"float16", "bfloat16", "float32", "float64"})
-
-
 def held_dtype(stored, compute, engine: str):
     """The dtype (an NBXDtype) `engine` holds a weight stored as `stored` in, under the compute dtype
     `compute` (each anything `parse_dtype` reads: a name, an NBXDtype, a torch dtype) — THE rule a
     file-backed expert is held to, read by both engines' views (`bind_views`'s `held_as`) and by
     Prism when it plans a unified expert store (`_refuse_unheld_expert_files`), so the plan refuses
     exactly what the load would. Triton: `stored_dtype_in_compute`, its loader's one rule. Compiled:
-    the ATen loader converts every floating weight to the placement dtype and keeps the rest."""
+    `core/dtype/config.compiled_weight_dtype`, the ATen loader's one rule (every floating weight at the
+    placement dtype, the rest as stored)."""
     from neurobrix.kernels.nbx_tensor import parse_dtype
     s, c = parse_dtype(stored), parse_dtype(compute)
     if engine == "triton":
         from neurobrix.triton.weight_loader import stored_dtype_in_compute
         return stored_dtype_in_compute(s, c)
     if engine == "compiled":
-        return c if s.name in _COMPILED_CONVERTS else s
+        from neurobrix.core.dtype.config import compiled_weight_dtype
+        return parse_dtype(compiled_weight_dtype(s.name, c.name))
     raise RuntimeError(f"ZERO FALLBACK: no engine named {engine!r} (triton, compiled)")
 
 
