@@ -9,14 +9,43 @@ from neurobrix import __version__
 from neurobrix.cli.utils import PACKAGE_ROOT, CACHE_DIR, STORE_DIR, format_size
 
 
+# The compute branches whose installed version `info` reports, read from the
+# package metadata: discovery imports no branch (Studio request 1 — a start-up
+# call answers in the time of the OS probes, not of a framework import).
+_BRANCH_DISTRIBUTIONS = ("torch", "triton")
+
+
+def _devices() -> list:
+    """The accelerators, from the engine's own detection (`core/prism/autodetect`),
+    the one Prism plans from: every vendor its OS probes know, no framework import."""
+    from neurobrix.core.prism.autodetect import detect_devices
+    devices, _brand = detect_devices()
+    return [{"index": d["index"], "name": d["model"], "memory_bytes": int(d["memory_mb"]) << 20,
+             "brand": d["brand"], "architecture": d["architecture"],
+             "unified_memory": d.get("unified_memory")}       # None: the detector does not state it
+            for d in devices]
+
+
+def _branches() -> dict:
+    """Installed version of each compute branch, None when not installed."""
+    from importlib.metadata import version, PackageNotFoundError
+    found = {}
+    for dist in _BRANCH_DISTRIBUTIONS:
+        try:
+            found[dist] = version(dist)
+        except PackageNotFoundError:
+            found[dist] = None
+    return found
+
+
 def info_record(args) -> dict:
     """What `info` knows, as one record: the engine's version, where things live
     on disk, the installed models, the hardware profiles, the compute stack —
     read from the same sources the human listing reads (Studio request 1:
     machine-readable discovery without loading a model)."""
     rec = {"version": __version__, "package": str(PACKAGE_ROOT), "cache": str(CACHE_DIR), "store": str(STORE_DIR),
-           "python": sys.version.split()[0], "models": [], "hardware_profiles": [], "torch": None,
-           "cuda_available": False, "gpus": []}
+           "python": sys.version.split()[0], "models": [], "hardware_profiles": [], "gpus": _devices(),
+           "branches": _branches()}
     if CACHE_DIR.exists():
         for model_dir in sorted(CACHE_DIR.iterdir()):
             if model_dir.is_dir() and (model_dir / "manifest.json").exists():
@@ -30,16 +59,6 @@ def info_record(args) -> dict:
         rec.update({k: v for k, v in daemon_identity().items() if k != "engine"})
     except Exception as exc:          # the serving module may not import on a minimal install: said, not hidden
         rec["daemon"] = f"unavailable ({exc})"
-    try:
-        import torch
-        rec["torch"] = torch.__version__
-        rec["cuda_available"] = bool(torch.cuda.is_available())
-        if rec["cuda_available"]:
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                rec["gpus"].append({"index": i, "name": props.name, "memory_bytes": int(props.total_memory)})
-    except ImportError:
-        pass
     return rec
 
 
@@ -90,17 +109,12 @@ def cmd_info(args):
         print(f"  Store: {STORE_DIR}")
         print(f"  Python: {sys.version.split()[0]}")
 
-        try:
-            import torch
-            print(f"  PyTorch: {torch.__version__}")
-            print(f"  CUDA Available: {torch.cuda.is_available()}")
-            if torch.cuda.is_available():
-                print(f"  GPU Count: {torch.cuda.device_count()}")
-                for i in range(torch.cuda.device_count()):
-                    props = torch.cuda.get_device_properties(i)
-                    print(f"    [{i}] {props.name}: {props.total_memory / (1024**3):.1f} GB")
-        except ImportError:
-            print("  PyTorch: Not installed")
+        for dist, ver in _branches().items():
+            print(f"  {dist}: {ver or 'not installed'}")
+        devices = _devices()
+        print(f"  Accelerators: {len(devices)}")
+        for d in devices:
+            print(f"    [{d['index']}] {d['name']}: {d['memory_bytes'] / (1024**3):.1f} GB")
 
 
 def cmd_inspect(args):
