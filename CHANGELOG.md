@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once and the kernel reads them in place. On an M4 Pro every 3x3 key runs 46-63 % faster (1024
   channels at 256x256: 3.31 -> 5.38 TFLOP/s). Profiles that do not declare it are unchanged.
 
+- **Float32 attention on NVIDIA V100 tensor cores in the Triton engine.** An attention whose inputs are
+  float32 or bfloat16 now runs on the tensor cores, each operand carried as two float16 halves with
+  float32 accumulation, instead of the scalar float32 path. On a V100-SXM2 at 79 200 tokens, 24 heads,
+  head dim 96, one attention takes 4.4 s where it took 22.1 s. Its error against float64 is 0.1 times
+  that of the previous float32 path at that length.
+
 - **Tensor cores on NVIDIA V100 in the Triton engine.** Matrix products, convolutions and attention
   run on the V100's tensor cores, with tile sizes read from the hardware profile. Float32 and
   bfloat16 matrix products are carried as two float16 halves with float32 accumulation. Their error

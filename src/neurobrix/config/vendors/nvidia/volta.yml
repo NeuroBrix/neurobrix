@@ -144,6 +144,31 @@ matrix_unit:
         warps_m: 2
         warps_n: 2
         group_m: 8
+    flash:               # an fp32 attention (Q, K, V, P as hi + lo); block_k: head-dim columns of S the unit sums
+      # before each round-to-nearest add (ops/flash_attention_m8n8k4.py, SPLIT). 2026-10-12, V100-SXM2-16GB, B1 H24 L79200
+      # D96 fp32: 128x32 w8 4.39 s (13.2 TFLOP/s) where 64x32 w4 gave 6.93, 64x64 w4 6.52, 128x32 w4 9.99; block_k 64
+      # 4.38 (noise), 16 4.96; the FMA flash took 22.1 s. Wider rows than below exceed the shared memory (refused at
+      # launch, measured per head dim); the rows past 96 are the largest that fit, not yet timed.
+      - head_dim_le: 96
+        block_m: 128
+        block_n: 32
+        warps_m: 8
+        block_k: 32
+      - head_dim_le: 160
+        block_m: 64
+        block_n: 32
+        warps_m: 4
+        block_k: 32
+      - head_dim_le: 192
+        block_m: 64
+        block_n: 16
+        warps_m: 4
+        block_k: 32
+      - head_dim_le: 256
+        block_m: 32
+        block_n: 16
+        warps_m: 2
+        block_k: 32
 
 sdpa_thresholds:
   # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
