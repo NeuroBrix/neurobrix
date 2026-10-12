@@ -33,6 +33,7 @@ import ast
 import json
 import os
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -322,3 +323,62 @@ def test_a_literal_of_a_known_flows_ladder_anchors_even_when_no_container_holds_
     assert J.literal_anchor([_not("other == 'iterative_process'"), _t("flow_type == 'static_graph'")]) == set()
     # a negated test alone never anchors
     assert J.literal_anchor([_not("flow_type == 'iterative_process'")]) == set()
+
+
+# -------------------------------------------------------------------------------------------------------------
+# the probe's rack: the vendor profile is bound behind the door, or the rack is refused
+# -------------------------------------------------------------------------------------------------------------
+
+HW = "default-ff6008b7"
+
+
+def _rack_tree():
+    """A tree carrying the class's hardware profile (gitignored, so a checkout may lack it): this one, else a
+    materialized gate tree."""
+    for t in [ROOT, *sorted(G.SCRATCH.glob("trees/*"))]:
+        if (t / "src/neurobrix/config/hardware" / f"{HW}.yml").is_file():
+            return t
+    pytest.skip(f"no tree at hand carries src/neurobrix/config/hardware/{HW}.yml")
+
+
+def _probe(tree, rack, jobs):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("NBX_", "NEUROBRIX_"))}
+    env.update(CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(tree / "src"), PYTHONNOUSERSITE="1")
+    req = {"src": str(tree / "src"), "hw": HW, "jobs": jobs, "rack": rack}
+    p = subprocess.run([G.PYTHON, str(G.TOOLS / "gate_scope_probe.py")], input=json.dumps(req),
+                       capture_output=True, text=True, env=env, timeout=900)
+    if G.MARK in p.stdout:
+        return json.loads(p.stdout.rsplit(G.MARK, 1)[1])
+    assert p.stdout.strip(), p.stderr[-800:]
+    return json.loads(p.stdout.strip().splitlines()[-1])     # a refusal at the rack: one JSON line, no mark
+
+
+# a point reads the vendor profile the way a launch key does (matrix_unit() -> active_vendor_profile())
+READS_PROFILE = ("def f(x):\n"
+                 "    from neurobrix.kernels.ops._configs import matrix_unit, active_vendor_profile\n"
+                 "    return (x, active_vendor_profile().get('_profile'), bool(matrix_unit()))\n")
+
+
+def test_a_probe_point_reads_the_racks_vendor_profile_and_not_an_empty_one(cfg):
+    """Behind the door no driver answers; before 2026-10-12 the rack left the vendor profile to the driver, every
+    point re-probed it (37.6 ms each, measured) and was answered under `{}` — the matrix unit unread."""
+    tree = _rack_tree()
+    rack = dict(cfg["rack"], package=cfg["package"])
+    job = {"id": "p", "kind": "points", "module": "neurobrix.kernels.launch_keys", "source": READS_PROFILE,
+           "entry": "f", "points": [{"x": {"lit": i}} for i in range(2000)]}
+    t0 = time.perf_counter()
+    out = _probe(tree, rack, [job])
+    wall = time.perf_counter() - t0
+    assert "error" not in out, out
+    res = out["p"]["results"]
+    assert len(res) == 2000 and all(r.endswith(", 'volta', True)") for r in res), res[:3]
+    # 2 000 reads: bound, the whole probe ran in 1.8 s (measured 2026-10-12); unbound it is 75 s of driver probes
+    assert wall < 30, wall
+
+
+def test_a_rack_whose_vendor_profile_resolves_empty_is_refused_by_name(cfg):
+    tree = _rack_tree()
+    rack = dict(cfg["rack"], package=cfg["package"], target_binder="operator:is_")   # a binder that binds nothing
+    out = _probe(tree, rack, [{"id": "p", "kind": "points", "module": "neurobrix.kernels.launch_keys",
+                               "source": READS_PROFILE, "entry": "f", "points": [{"x": {"lit": 0}}]}])
+    assert set(out) == {"error"} and "vendor profile resolved EMPTY" in out["error"], out

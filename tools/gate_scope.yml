@@ -33,6 +33,14 @@ rack:
   # `CONFIG_ROOT / "vendors" / vendor / f"{architecture}.yml"`, CONFIG_ROOT = src/neurobrix/config)
   reader_files: "src/neurobrix/config/vendors/{0}/{1}.yml"
   profile_loader: "neurobrix.core.prism.loader:load_profile"
+  # The launcher's target, bound from the class's hardware profile exactly as the census shadow binds it: behind
+  # the door (no card) no driver answers which VENDOR profile applies, the driver's construction fails and is
+  # never cached, and every call that reads the vendor profile re-probes it — measured 2026-10-12: 37.6 ms per
+  # `matrix_unit()` call, so the 400 000 points of one unit took hours (two mq24→mq25 runs, 4 h 40 without
+  # output), and every point was answered under NO profile (`{}`), not the gate's.
+  target_binder: "neurobrix.kernels.census:_bind_target"
+  # read after the setup: a vendor profile that resolved EMPTY is refused by name, never probed point by point
+  vendor_profile: "neurobrix.kernels.ops._configs:active_vendor_profile"
   setup: "neurobrix.kernels.wrappers:set_hardware_profile"
 
 # Memory classes of this rack (CLAUDE.local.md: cards 0,1 = 16 GB, cards 2,3 = 32 GB).
