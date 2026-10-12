@@ -257,6 +257,22 @@ def _describes_the_whole_machine(profile_data: Dict[str, Any]) -> bool:
     return len(profile_data.get("devices", [])) == machine
 
 
+def _complete_measured_fields(path: Path) -> None:
+    """A profile written by an older detector lacks what the current one measures, and was returned as
+    is forever: the rack's eight auto profiles predated `cpu.runtime_base_mb`, so every plan on them
+    priced no engine base (deepseek-moe triton layer_streaming: 1 264 MB priced, 1 347 measured,
+    2026-10-10). The missing measurement is taken here and written into the profile; what the file
+    already says is kept."""
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    cpu = data.get("cpu")
+    if not isinstance(cpu, dict) or "runtime_base_mb" in cpu:
+        return
+    cpu["runtime_base_mb"] = _measure_runtime_base_mb()
+    _write_profile_atomically(path, data)
+    print(f"   [Auto-detect] Measured the engine base into {path.name}: {cpu['runtime_base_mb']}")
+
+
 def get_or_create_default_profile() -> str:
     """
     Ensure the auto-detected profile of THIS environment exists in
@@ -276,6 +292,7 @@ def get_or_create_default_profile() -> str:
     tag = _visible_set_tag()
     if tag is None:
         if DEFAULT_PROFILE_PATH.exists():
+            _complete_measured_fields(DEFAULT_PROFILE_PATH)
             return "default"
         profile_data = detect_hardware()
         _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
@@ -285,6 +302,7 @@ def get_or_create_default_profile() -> str:
     hardware_id = f"default-{tag}"
     path = HARDWARE_DIR / f"{hardware_id}.yml"
     if path.exists():
+        _complete_measured_fields(path)
         return hardware_id
 
     print("   [Auto-detect] No --hardware specified, detecting system hardware...")
