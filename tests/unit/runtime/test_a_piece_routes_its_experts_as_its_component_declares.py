@@ -15,6 +15,13 @@ A piece reads its component's state from the base as it is now (`_component_from
 load; the declaration is read the same way, at every run, so a sliced stretch's passes — built
 at their first run — take it too.
 
+The routing is judged only by the vendor's greedy ids (a gate cell judges rc and certified misses,
+so a wrong renormalisation passes it). Both catalogue DeepSeek MoE containers declare
+`norm_topk_prob: false`, 6 experts per token (vendor config.json); their vendor references, bf16
+on CPU, 32 tokens, recorded by the Dell on 2026-10-12 (_agents/archives/dell.vendor_greedy_2026_10_12_*.json):
+  DeepSeek-Coder-V2-Lite-Instruct  429 9539 6266 5501 2320 254 1492 1373 ...
+  deepseek-moe-16b-chat            429 9539 6266 5501 2320 254 1492 3266 ...
+
 Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_a_piece_routes_its_experts_as_its_component_declares.py
 """
 import pytest
