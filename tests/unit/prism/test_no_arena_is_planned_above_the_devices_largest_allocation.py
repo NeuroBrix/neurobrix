@@ -41,6 +41,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from neurobrix.core.prism import PrismSolver
+from neurobrix.core.prism.solver import _graph_constant_bytes
 from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import APPLE_M4_PRO, V100_16GB, container_root, no_door, pin_host, profile
@@ -192,42 +193,101 @@ def test_the_arena_door_refuses_a_plan_holding_one_component_whole_over_the_boun
 
 # ─────────────────────────────── the measured cells ───────────────────────────────
 
+def _expert_store(p, s):
+    """The LM's allocation when the plan holds it as an expert store on the unified device, else None."""
+    a = p.components.get(s._lm_component_name)
+    return a if (p.strategy == "lazy_sequential" and a is not None and a.strategy == "expert_store") else None
+
+
+def _judge_store(p, s, spec, model):
+    """An expert store (`_place_component` Strategy 2.5, 0a90722c/53eeaec5): its dense part, its expert
+    cache, at least its profiled activations (less the KV estimate the check sizes itself) and overhead,
+    every other component whole, the graph constants and the cache as planned, within the usable part
+    of the rung the plan was granted; its one arena — the dense part — within the device's largest
+    allocation. Read from the plan and the component memory, never from the solver's own sums."""
+    a = _expert_store(p, s)
+    dev = s._prepare_devices(profile(spec))[0]
+    lm = s._lm_component_name
+    m = p.component_memory[lm]
+    c = NBXContainer.load(str(container_root(model)))
+    kv_est = s._estimate_kv_cache_bytes(c, s._target_dtype_str)
+    held = (m.activation_bytes - kv_est + m.overhead_bytes
+            + (a.resident_weight_mb + a.expert_cache_mb) * MB
+            + sum(q.total_bytes for n, q in p.component_memory.items() if n != lm)
+            + _graph_constant_bytes(next(x.graph for x in c.get_neural_components() if x.name == lm),
+                                    s._constants_store_fp64(dev))
+            + p.kv_cache_plan.memory_bytes) / MB
+    assert a.resident_weight_mb > 0 and a.expert_cache_mb > 0, (a.resident_weight_mb, a.expert_cache_mb)
+    assert held <= s._usable_mb(dev) + 1e-6, (
+        f"{model}: dense {a.resident_weight_mb:.0f} + expert cache {a.expert_cache_mb:.0f} + activations, "
+        f"beside, constants and KV = {held:.1f} MB over the usable {s._usable_mb(dev):.1f} MB")
+    cap = spec["devices"][0].get("max_allocation_mb")
+    assert cap is None or a.resident_weight_mb <= cap, (
+        f"{model}: the store's dense arena {a.resident_weight_mb:.0f} MB over the {cap} MB allocation bound")
+
+
 def test_deepseek_moe_at_17_gb_free_cuts_every_piece_under_the_largest_allocation(monkeypatch):
     """The Mac's failure, the arena bound alone (pool off, so the parked rule moves nothing): 17.1 GB
     free, 3 pieces, the first one's arena refused by size.
 
-    The bound is the device's measured largest allocation, or one MB under the largest unbounded
-    piece when that is lower: since Prism prices the Triton engine's deferred drain (2026-10-11) the
-    unbounded pieces are cut 954 MB tighter and the largest (13 455 MB) already sits under the
-    measured 13 639. The scenario is derived from the plan, as the Janus cell below derives it."""
+    The plan is judged as it comes. Streamed: the bound is the device's measured largest allocation,
+    or one MB under the largest unbounded piece when that is lower (since Prism prices the Triton
+    engine's deferred drain, 2026-10-11, the largest piece, 13 455 MB, already sits under the measured
+    13 639), and every capped piece is under it. Held as an expert store (its dense part, its widest
+    `top_k` experts and the cache fit the usable rung): the store fits the rung and its one arena — the
+    dense part, never the whole weight — is under the measured bound; and under a bound one MB below
+    that dense part the store is declined by name and the model is streamed in pieces under it.
+    Seen red (2026-10-12): the store's cache granted 256 MB over its room (14 333 MB against the
+    usable 14 120), and the store's dense arena left unbounded at placement and at the arena door (the
+    dense-1 bound then planned lazy_sequential, the store's arena over the bound)."""
     no_door(monkeypatch)
     monkeypatch.setenv("NBX_ALLOC_POOL", "0")
     pin_host(monkeypatch, 24576, 17510, "the Mac at 17.1 GB free")
-    p, s = _plan("deepseek-moe-16b-chat", APPLE_M4_PRO)
-    bound = min(MAX_ALLOCATION_MB, max(_pieces(s)["model"]) - 1)
-    assert p.strategy == "layer_streaming" and max(_pieces(s)["model"]) > bound, \
-        f"the scenario's precondition: unbounded, a piece over the bound {bound} {_pieces(s)}"
+    model = "deepseek-moe-16b-chat"
+    p, s = _plan(model, APPLE_M4_PRO)
+    if _expert_store(p, s) is not None:
+        _judge_store(p, s, APPLE_M4_PRO, model)
+        p, s = _plan(model, APPLE_CAPPED)
+        assert _expert_store(p, s) is not None, (p.strategy, getattr(s, "_arena_declined", {}))
+        _judge_store(p, s, APPLE_CAPPED, model)
+        bound = int(_expert_store(p, s).resident_weight_mb) - 1
+    else:
+        bound = min(MAX_ALLOCATION_MB, max(_pieces(s)["model"]) - 1)
+        assert p.strategy == "layer_streaming" and max(_pieces(s)["model"]) > bound, \
+            f"the scenario's precondition: unbounded, a piece over the bound {bound} {_pieces(s)}"
     capped = copy.deepcopy(APPLE_CAPPED)
     capped["devices"][0]["max_allocation_mb"] = bound
-    p, s = _plan("deepseek-moe-16b-chat", capped)
-    assert p.strategy == "layer_streaming", p.strategy
+    p, s = _plan(model, capped)
+    assert p.strategy == "layer_streaming", (p.strategy, getattr(s, "_arena_declined", {}))
     assert max(_pieces(s)["model"]) <= bound, _pieces(s)
     assert "'model'" in (s._arena_declined.get("model") or ""), s._arena_declined
 
 
 def test_deepseek_moe_prices_the_arena_parked_at_the_wrap_around(monkeypatch):
     """The Mac's second measurement: the last piece parked beside the first. With the pool on, every
-    change of the cut — by the allocator's rule, written here — fits the window the plan announces."""
+    change of the cut — by the allocator's rule, written here — fits the window the plan announces.
+
+    Held as an expert store instead (no piece, nothing parks at a wrap-around): the store fits the
+    usable rung and its dense arena the device, pool off and on. Seen red on an injected over-budget
+    store (its cache granted 256 MB over its room, 2026-10-12)."""
     no_door(monkeypatch)
     pin_host(monkeypatch, 24576, 17510, "the Mac at 17.1 GB free")
+    model = "deepseek-moe-16b-chat"
     cap = 0.25 * 18186 * MB
     monkeypatch.setenv("NBX_ALLOC_POOL", "0")
-    p0, s0 = _plan("deepseek-moe-16b-chat", APPLE_M4_PRO)
+    p0, s0 = _plan(model, APPLE_M4_PRO)
+    if _expert_store(p0, s0) is not None:
+        _judge_store(p0, s0, APPLE_M4_PRO, model)
+        monkeypatch.setenv("NBX_ALLOC_POOL", "1")
+        p, s = _plan(model, APPLE_M4_PRO)
+        assert _expert_store(p, s) is not None, p.strategy
+        _judge_store(p, s, APPLE_M4_PRO, model)
+        return
     part0 = s0._layer_stream_partitions["model"]
     assert _changes(part0.segments, cap) > part0.peak_resident_bytes, \
         f"the precondition: unpriced, a change above the announced peak {_pieces(s0)}"
     monkeypatch.setenv("NBX_ALLOC_POOL", "1")
-    p, s = _plan("deepseek-moe-16b-chat", APPLE_M4_PRO)
+    p, s = _plan(model, APPLE_M4_PRO)
     part = s._layer_stream_partitions["model"]
     assert p.strategy == "layer_streaming"
     assert _changes(part.segments, cap) <= part.peak_resident_bytes, (_pieces(s), _changes(part.segments, cap) / MB)

@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.core.prism.solver import _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
                                               pin_host, pin_shared_card, profile)
@@ -55,15 +56,43 @@ def _solve(monkeypatch, model, serve):
     return p, s, seen, c, evals
 
 
+def _judge_expert_store(p, s, seen, c, model, dev):
+    """A routed LM held as an expert store on the unified device (`_place_component` Strategy 2.5):
+    its dense part and its expert cache as granted, its graph constants, at least its profiled activations (without the
+    KV estimate the check sizes itself) and its overhead, every other component whole, the cache as
+    planned — within the usable part of the rung the store was placed against. A lower bound on what
+    the plan holds, read from the plan and the component memory, never from the solver's own sums."""
+    lm = s._lm_component_name
+    a = p.components[lm]
+    m = seen[lm]
+    kv_est = s._estimate_kv_cache_bytes(c, s._target_dtype_str)
+    store = (m.activation_bytes - kv_est + m.overhead_bytes
+             + (a.resident_weight_mb + a.expert_cache_mb) * MB)
+    beside = sum(q.total_bytes for n, q in seen.items() if n != lm)
+    consts = _graph_constant_bytes(next(x.graph for x in c.get_neural_components() if x.name == lm),
+                                   s._constants_store_fp64(dev))
+    held = (store + beside + consts + p.kv_cache_plan.memory_bytes) / MB
+    assert a.expert_cache_mb > 0 and a.resident_weight_mb > 0, (a.resident_weight_mb, a.expert_cache_mb)
+    assert held <= s._usable_mb(dev) + 1e-6, (
+        f"{model}: dense {a.resident_weight_mb:.1f} + expert cache {a.expert_cache_mb:.1f} + activations, "
+        f"beside and KV = {held:.1f} MB over the usable {s._usable_mb(dev):.1f} MB of the rung")
+
+
 @pytest.mark.parametrize("serve", [False, True], ids=["run", "serve"])
 @pytest.mark.parametrize("model", LLMS)
 def test_segments_resident_constants_and_cache_fit_the_usable_rung(monkeypatch, model, serve):
+    """Whichever plan the rung yields — the routed LM streamed, or held as an expert store where its
+    dense part, its widest `top_k` experts and the cache fit the usable rung (0a90722c, 53eeaec5) —
+    what it holds fits the usable part of the rung it was cut or placed against."""
     p, s, seen, c, _ = _solve(monkeypatch, model, serve)
+    dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]
+    if p.strategy == "lazy_sequential" and p.components[s._lm_component_name].strategy == "expert_store":
+        _judge_expert_store(p, s, seen, c, model, dev)
+        return
     assert p.strategy == "layer_streaming", (
         f"{model} ({'serve' if serve else 'run'}) planned {p.strategy!r}; this cell judges a "
-        f"streamed plan — a refusal here is the second defect back")
+        f"streamed plan or an expert store — a refusal here is the second defect back")
     parts = s._layer_stream_partitions
-    dev = s._prepare_devices(profile(APPLE_M4_PRO))[0]
     # Precondition, so this oracle never has to copy the solver's subtraction rule: the LM is the
     # streamed component, whose segment peak never held the cache; what stays beside it is whole.
     assert s._lm_component_name in parts, (s._lm_component_name, list(parts))
@@ -73,6 +102,25 @@ def test_segments_resident_constants_and_cache_fit_the_usable_rung(monkeypatch, 
     assert held <= s._usable_mb(dev) + 1e-6, (
         f"{model}: segments + resident + constants + KV = {held:.1f} MB over the usable "
         f"{s._usable_mb(dev):.1f} MB of the rung the segments were cut against")
+
+
+@pytest.mark.parametrize("model", LLMS)
+def test_a_served_expert_store_is_held_at_the_rung_it_fits(monkeypatch, model):
+    """A served cache takes every byte the KV check leaves, and the store's expert cache is granted
+    after it (`_zero3_resident_budgets`). The check must price the store as its placement and its
+    grant do — the usable part of the rung, its activations as the arena holds them — or the cache
+    takes the difference out of the store's floor and the grant refuses the plan at every rung.
+    DeepSeek-Coder-V2-Lite served on the Mac's idle profile descended 16 384 -> 4 096 and streamed
+    (6e7dbff0: "usable 14120 MB - held 13154 MB", then 51.6 MB short at the arena's activations).
+
+    Injection (seen red, then restored green): either figure put back — the check at the summed
+    rung, or the store at its profiled activations — and the plan descends the ladder."""
+    p, s, seen, c, _ = _solve(monkeypatch, model, True)
+    refused = [r for r in (getattr(p, "unified_rungs_tried", None) or []) if r[1] == "refused"]
+    if p.strategy == "layer_streaming" and not refused:
+        pytest.skip(f"{model}: the store's floor and the served cache do not fit the first rung; streamed there")
+    assert not refused, f"{model}: the served plan descended the ladder: {p.unified_rungs_tried}"
+    assert p.components[s._lm_component_name].strategy == "expert_store", p.strategy
 
 
 def test_a_served_llm_on_a_shared_card_sizes_its_cache_on_the_rung_not_the_capacity(monkeypatch):
