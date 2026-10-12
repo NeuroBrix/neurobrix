@@ -291,3 +291,34 @@ def test_a_class_never_constructed_by_name_keeps_its_callers(tmp_path):
     assert [c[2][0] for c in callers] == ["pkg.run:loose"]
     out, via = G.through_constructions("pkg.flow:Loose.go", callers)
     assert via is None and out == callers
+
+
+def _judge(flows):
+    import types
+    J = G.Judge.__new__(G.Judge)
+    J.cells = types.SimpleNamespace(all_ops=set(), all_flows=set(flows))
+    return J
+
+
+def _not(src):
+    return ast.UnaryOp(op=ast.Not(), operand=ast.parse(src, mode="eval").body)
+
+
+def _t(src):
+    return ast.parse(src, mode="eval").body
+
+
+def test_a_literal_of_a_known_flows_ladder_anchors_even_when_no_container_holds_it():
+    """`elif flow_type == "static_graph"` after `if flow_type == "iterative_process"`: static_graph is of the
+    flows' domain (the ladder tests the same variable against a known flow) and anchors on no cell. Injection:
+    with the domain inference removed, the first assertion gives set() and the walk falls back on every cell
+    (seen red 2026-10-12)."""
+    J = _judge({"iterative_process"})
+    assert J.literal_anchor([_not("flow_type == 'iterative_process'"), _t("flow_type == 'static_graph'")]) == {"static_graph"}
+    assert J.literal_anchor([_t("flow_type == 'iterative_process'")]) == {"iterative_process"}
+    assert J.literal_anchor([_t("flow_type in ('iterative_process', 'static_graph')")]) == {"iterative_process"}
+    # an unknown literal with no known sibling on its variable is not a flow test: nothing anchors
+    assert J.literal_anchor([_t("flow_type == 'static_graph'")]) == set()
+    assert J.literal_anchor([_not("other == 'iterative_process'"), _t("flow_type == 'static_graph'")]) == set()
+    # a negated test alone never anchors
+    assert J.literal_anchor([_not("flow_type == 'iterative_process'")]) == set()

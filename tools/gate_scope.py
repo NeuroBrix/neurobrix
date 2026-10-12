@@ -1379,17 +1379,35 @@ class Judge:
         return self._ops_of
 
     def literal_anchor(self, cond) -> set:
-        lits = set()
+        """The op/flow literals a path condition tests for: every string a known op or flow name is compared
+        with (`==` / `in`) in a positive term. A literal of the SAME variable's ladder that no container holds
+        (`elif flow_type == "static_graph"` after `if flow_type == "iterative_process"`) is of the flows'
+        domain too: it anchors — on no cell, since nothing in the gate exercises it — instead of walking on to
+        the entry and falling back on every cell."""
+        known = self.cells.all_ops | self.cells.all_flows
+        pos, neg = {}, {}                      # tested variable (dumped) -> the string literals compared with it
         for term in cond:
-            if isinstance(term, ast.UnaryOp) and isinstance(term.op, ast.Not):
-                continue
+            negated = isinstance(term, ast.UnaryOp) and isinstance(term.op, ast.Not)
             for n in ast.walk(term):
                 if isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.Eq, ast.In)):
+                    lits, var = set(), None
                     for e in [n.left] + n.comparators:
                         xs = [e] if isinstance(e, ast.Constant) else list(e.elts) \
                             if isinstance(e, (ast.Tuple, ast.List, ast.Set)) else []
-                        lits |= {x.value for x in xs if isinstance(x, ast.Constant) and isinstance(x.value, str)}
-        return lits & (self.cells.all_ops | self.cells.all_flows)
+                        got = {x.value for x in xs if isinstance(x, ast.Constant) and isinstance(x.value, str)}
+                        if got:
+                            lits |= got
+                        elif not isinstance(e, (ast.Constant, ast.Tuple, ast.List, ast.Set)):
+                            var = ast.dump(e)
+                    if lits and var:
+                        (neg if negated else pos).setdefault(var, set()).update(lits)
+        out = set()
+        for var, lits in pos.items():
+            if lits & known:
+                out |= lits & known
+            elif neg.get(var, set()) & known:
+                out |= lits
+        return out
 
     def unit_guard(self, uid, pair, diffs):
         """The source of `__g(<the unit's parameters>)`: whether a call reaches a changed region (an inserted
