@@ -27,6 +27,13 @@ def test_the_full_matrix_is_every_container_in_every_gate_mode(tmp_path):
     assert R.full_matrix(cache) == {(m, mode) for m in "ab" for mode in R.GATE_MODES}
 
 
+def test_an_install_staging_tree_beside_the_cache_is_not_a_cell(tmp_path):
+    """2026-10-12 15:07: the Janus cell of the mq25 gate was refused because chatterbox was being
+    installed beside it — `.chatterbox.installing.<host>.<pid>/manifest.json` was counted as a model."""
+    cache = _cache(tmp_path, ["a", ".chatterbox.installing.metatron.4242", "b.replaced.metatron.7.20261012"])
+    assert R.full_matrix(cache) == {("a", mode) for mode in R.GATE_MODES}
+
+
 def test_a_partial_gate_is_refused_and_a_full_one_starts(tmp_path):
     cache = _cache(tmp_path, ["a", "b"])
     modes = ",".join(R.GATE_MODES)

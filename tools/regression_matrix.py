@@ -654,7 +654,13 @@ def full_matrix(cache: Path = None) -> set:
     """Every cell a gate holds: each container of the shared cache (a directory with a manifest) in
     every gate mode — derived from the cache, never a hand-kept list."""
     cache = cache or CACHE
-    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in GATE_MODES}
+    from neurobrix.nbx.atomic_install import is_install_artifact
+    # A staging tree (`<name>.installing.<host>.<pid>`) or an aside (`<name>.replaced.…`) carries a
+    # manifest.json from its first member on and is not a model: the 15:07 Janus cell of the mq25 gate
+    # (2026-10-12) was refused for ".chatterbox.installing/native, .chatterbox.installing/triton" missing
+    # from its lists while chatterbox was being installed beside it.
+    return {(d.name, mode) for d in cache.iterdir()
+            if (d / "manifest.json").exists() and not is_install_artifact(d.name) for mode in GATE_MODES}
 
 
 def cells_of_lists(paths) -> set:
