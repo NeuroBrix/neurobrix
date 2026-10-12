@@ -994,6 +994,33 @@ def hub_entry(name: str, registry: str = REGISTRY, listing=None) -> str | None:
     return hits[0] if hits else None
 
 
+def registry_entry_name(name: str) -> str:
+    """The build toolchain's registry entry a cached container belongs to: the name itself when it
+    is an entry, else the ONE entry whose source repository (`hf_repo`'s last segment) is that name,
+    else the name (an alias, or a model the registry does not hold: the trace refuses it by name).
+    A container cached under its source repository's name (`Wan2.1-T2V-1.3B-Diffusers`) belongs to
+    the entry named by the model's own name (`Wan2.1-T2V-1.3B`, owner 2026-09-28 03:06): the trace
+    is keyed by the entry, so the build — which names its container by the entry the snapshot
+    resolves to — reads the graphs the trace wrote, and the install retires the suffixed name
+    (2026-10-12 03:05: traced under the repository's name, the build refused it)."""
+    if name in REGISTRY_ALIAS:
+        return REGISTRY_ALIAS[name]
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return name
+    import yaml
+    doc = yaml.safe_load(reg.read_text()) or {}
+    entries = {k: v for sec in doc.values() if isinstance(sec, dict) for k, v in sec.items() if isinstance(v, dict)}
+    if name in entries:
+        return name
+    hits = [k for k, v in entries.items()
+            if isinstance(v.get("hf_repo"), str) and v["hf_repo"].rstrip("/").rsplit("/", 1)[-1] == name]
+    if len(hits) > 1:
+        raise ValueError(f"{name}: the source repository of {len(hits)} registry entries ({', '.join(sorted(hits))}) "
+                         f"— name the entry, never the repository")
+    return hits[0] if hits else name
+
+
 def registry_source_repository(name: str) -> str | None:
     """The directory name of the repository the build toolchain's registry names as this model's SOURCE
     (`hf_repo`'s last segment), or None when the entry names none. The owner's naming rule (2026-09-28
@@ -1169,7 +1196,7 @@ class Model:
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {"model": name, "steps": {}}
         fams = json.loads(FAMILIES.read_text()) if FAMILIES.exists() else {}
         self.family = fams.get(name) or C.family_of(name)
-        self.registry_name = REGISTRY_ALIAS.get(name, name)
+        self.registry_name = registry_entry_name(name)
         self._hub = ...                                # resolved from the live registry on first use
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
 
