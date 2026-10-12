@@ -453,6 +453,10 @@ class ExecutionPlan:
     host_footprint: Dict = field(default_factory=dict)
     # On a device that draws on host memory: [(rung MB, strategy, host side MB)] per rung solve() tried.
     unified_rungs_tried: List = field(default_factory=list)
+    # A routed (MoE) plan's working set — dense part + the experts a token reads + an expert cache on
+    # the profile's standard rung (expert_topology.py). Stated, never read to place; None when no
+    # component routes.
+    expert_working_set: Optional[Dict] = None
 
     @property
     def primary_device(self) -> str:
@@ -2245,9 +2249,37 @@ class PrismSolver:
             device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)),
             **self._streamed_loads(plan))
 
+        # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —
+        # the dense part, the experts a token reads, an expert cache on the profile's standard rung.
+        # Placement does not read it: the expert store that would run it is not built yet.
+        plan.expert_working_set = self._expert_working_set(plan, profile)
+
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
         return plan
+
+    def _expert_working_set(self, plan, profile) -> Optional[Dict]:
+        """The routed working set of this plan's MoE components, priced on the standard rung of the
+        profile's smallest card (a dedicated card's own rung, `memory_budget.tile_rung_mb`, the
+        NBX_PRISM_BUDGET_MB door included); None when no component routes."""
+        topologies = getattr(self, "_expert_topology", None) or {}
+        if not topologies:
+            return None
+        from neurobrix.core.prism.expert_topology import price_working_set
+        from neurobrix.core.prism.memory_budget import DeviceReading, tile_rung_mb
+        cards = [d for d in (getattr(profile, "devices", None) or []) if getattr(d, "memory_mb", None)]
+        if cards:
+            card = min(cards, key=lambda d: d.memory_mb)
+            rung = tile_rung_mb(DeviceReading(kind="device", capacity_mb=float(card.memory_mb),
+                                              free_mb=float(card.memory_mb)))
+            source = f"the standard rung of {getattr(card, 'name', None) or 'the smallest card'} ({card.memory_mb} MB)"
+        else:
+            rung, source = 0, "no card in the profile"
+        reserved = sum(int(m.activation_bytes) for m in plan.component_memory.values())
+        if plan.kv_cache_plan is not None:
+            reserved += int(plan.kv_cache_plan.memory_bytes)
+        return price_working_set(topologies, {n: int(m.weight_bytes) for n, m in plan.component_memory.items()},
+                                 rung, reserved, source)
 
     def _streamed_loads(self, plan) -> Dict:
         """The host estimate's view of what a streamed plan loads at a time: each streamed component's
@@ -2897,6 +2929,8 @@ class PrismSolver:
 
         # Kept: the post-scoring KV check must know which component's estimate carries the cache.
         self._lm_component_name = lm_component_name
+        # {component: ExpertTopology} of the routed components sized below (`expert_topology.py`).
+        self._expert_topology = {}
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
             # Per-component runtime dtype (the dtype this component ACTUALLY
@@ -2933,8 +2967,20 @@ class PrismSolver:
             # Falls back to the file bytes when the graph cannot answer,
             # which over-estimates rather than under-estimates: the safe
             # direction, and it is the previous behaviour exactly.
-            weight_bytes = _consumed_weight_bytes(
-                self._graph_as_executed(comp, container), dtype_mult)
+            _executed = self._graph_as_executed(comp, container)
+            weight_bytes = _consumed_weight_bytes(_executed, dtype_mult)
+            # The routed experts inside those bytes (expert_topology.py): read from the same graph as
+            # executed, in the same units, stated by the plan — never read to place.
+            if isinstance(getattr(_executed, "graph", None), dict):
+                from neurobrix.core.prism.expert_topology import read_expert_topology
+                _lm = self._read_lm_config(container)
+                _topo = read_expert_topology(
+                    comp.name, _executed.graph,
+                    getattr(_executed, "weights_index", None) or getattr(_executed, "weight_index", None),
+                    dtype_mult, _lm,
+                    (_lm or {}).get("component_name") or (self._read_defaults(container) or {}).get("lm_component"))
+                if _topo is not None:
+                    self._expert_topology[comp.name] = _topo
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
@@ -7696,6 +7742,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
         rec["host_footprint"] = dict(plan.host_footprint)
     if plan.unified_rungs_tried:
         rec["unified_rungs_tried"] = [list(t) for t in plan.unified_rungs_tried]
+    if getattr(plan, "expert_working_set", None):
+        rec["expert_working_set"] = dict(plan.expert_working_set)
     return rec
 
 
@@ -7743,6 +7791,17 @@ def explain_plan(plan: "ExecutionPlan") -> str:
             lines.append(f"sliced          {_cn} {_c['first_op']}..{_c['last_op']}: {_c['count']} slices of "
                          f"{_c['slice']} along {_c['symbol']}, {_c['passes']} pass(es), "
                          f"{_c['peak_bytes'] / 2**20:.0f} MB live at worst")
+    _ews = getattr(plan, "expert_working_set", None)
+    if _ews:
+        for _c in _ews["components"]:
+            lines.append(f"experts         {_c['component']}: {_c['routed_layers']} routed layers, top {_c['top_k']} "
+                         f"of {_c['n_experts']}, {_c['expert_mb']} MB per expert, shared "
+                         f"{_c['shared_experts'] if _c['shared_experts'] is not None else 'undeclared'} "
+                         f"({_c['shared_expert_mb_per_layer']} MB per layer)")
+        lines.append(f"working set     {_ews['working_set_mb']:.0f} MB of {_ews['dense_equivalent_mb']:.0f} MB dense: "
+                     f"dense part {_ews['dense_mb']:.0f} + active experts {_ews['active_experts_mb']:.0f} + "
+                     f"expert cache {_ews['expert_cache_mb']:.0f} ({_ews['cached_experts_per_layer']} more per "
+                     f"layer, on {_ews['rung_source']}) — stated, not used to place")
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
