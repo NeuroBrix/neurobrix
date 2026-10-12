@@ -547,27 +547,31 @@ def _create_ones_tensor(shape: tuple, dtype: NBXDtype, device: str) -> NBXTensor
     return _create_ones(shape, dtype=dtype, device=device)
 
 
+
+def txt_ids_carry_a_sequence_axis(shape) -> bool:
+    """Whether the declared text-id width holds a text-sequence axis beyond (t, h, w): four
+    channels do (the FLUX.2 convention, L in the last channel); three do not (FLUX.1 / Flex.1:
+    the text ids are zeros). Read from the container's declared shape, the same in both engines."""
+    return int(shape[-1]) >= 4
+
+
 def _synthesize_position_ids(ctx: 'FlowContext', comp_inputs: list, comp_shapes: dict) -> None:
     """Synthesize position IDs for guidance-embedding models (Flux-style)."""
 
     if "txt_ids" in comp_inputs and "txt_ids" in comp_shapes:
         shape = comp_shapes["txt_ids"]
-        # Create zeros tensor
-        txt_ids = NBXTensor.zeros(tuple(shape), dtype=NBXDtype.int64)
-        # Text tokens carry sequential position in the LAST channel (L-coordinate).
-        # For triton mode, we build this via numpy and upload.
-        if len(shape) == 3:
-            seq_len = shape[1]
-            arr = np.zeros(shape, dtype=np.int64)
-            for i in range(seq_len):
-                arr[0, i, -1] = i
-            txt_ids = NBXTensor.from_numpy(arr)
-        else:
-            seq_len = shape[0]
-            arr = np.zeros(shape, dtype=np.int64)
-            for i in range(seq_len):
-                arr[i, -1] = i
-            txt_ids = NBXTensor.from_numpy(arr)
+        # The text ids follow the WIDTH the container declares (R30 mirror of core/cfg/engine.py
+        # `_synthesize_position_ids`): three axes (t, h, w) — FLUX.1 / Flex.1 — are zeros for
+        # every text token (diffusers pipeline_flux.py: `text_ids = torch.zeros(L, 3)`); a fourth
+        # axis is the text sequence coordinate L (pipeline_flux2_klein.py `_prepare_text_ids`),
+        # written into that last channel. Measured 2026-10-12 on Flex.1-alpha (see the core engine).
+        arr = np.zeros(tuple(shape), dtype=np.int64)
+        if txt_ids_carry_a_sequence_axis(shape):
+            if len(shape) == 3:
+                arr[0, :, -1] = np.arange(shape[1])
+            else:
+                arr[:, -1] = np.arange(shape[0])
+        txt_ids = NBXTensor.from_numpy(arr)
         ctx.variable_resolver.set("global.txt_ids", txt_ids)
 
     if "img_ids" in comp_inputs and "img_ids" in comp_shapes:
