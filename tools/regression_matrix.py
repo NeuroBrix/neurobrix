@@ -159,6 +159,25 @@ def engine_sha(tree: Path) -> str:
                           capture_output=True, text=True).stdout.strip()
 
 
+def container_identity(model: str) -> dict:
+    """What the cell ran ON, written beside the command (the owner's rule of 2026-10-12, point 2: a broken verdict
+    names which of the container, the engine or the request changed): the sha256 over the container's manifest and
+    every component's graph.json and weights_index.json (the files a retrace or a single write changes; the shards
+    are not re-read), with the manifest's created_at. Cheap, and enough to tell two containers apart."""
+    root = CACHE / model
+    h = hashlib.sha256()
+    files = [root / "manifest.json"] + sorted(root.glob("components/*/graph.json")) + sorted(root.glob("components/*/weights_index.json"))
+    for f in files:
+        if f.exists():
+            h.update(f.name.encode()); h.update(f.read_bytes())
+    created = None
+    try:
+        created = json.loads((root / "manifest.json").read_text()).get("created_at")
+    except Exception:
+        pass
+    return {"container": h.hexdigest()[:16], "container_created_at": created}
+
+
 def reference_state(src: Path) -> dict:
     """Whether the certified reference the cells read differs from the tree's HEAD: `git status
     --porcelain` of the `--src` tree's repository limited to CERTIFIED_REFERENCE. `tree_dirty` is
@@ -621,6 +640,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            # the exact command the cell ran, replayable by hand (the owner's rule of 2026-10-12: a model is
            # tested through the engine's entry point and nothing else; the harness only orchestrates it)
            "command": shlex.join(cmd),
+           **container_identity(model),
            "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
            "off_trace_size": list(size) if size else None, "log": str(log),
            "python": sys.executable,
