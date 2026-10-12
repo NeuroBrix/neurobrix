@@ -239,9 +239,17 @@ class Rack:
                     getattr(m, reader_name, None) is real:
                 setattr(m, reader_name, reader)
         self._reader_name, self._real, self._wrapper = reader_name, real, reader
+        # the launcher's target from the class's hardware profile, as the census shadow binds it: with no card
+        # the driver never answers, and a vendor profile left to it resolves empty and is re-probed at every read
+        _resolve(cfg["target_binder"])(hw, None)
         profile = _resolve(cfg["profile_loader"])(hw)
         _resolve(cfg["setup"])(profile)
         self.profile = profile
+        vendor = _resolve(cfg["vendor_profile"])()
+        if not vendor:
+            raise RuntimeError(f"the vendor profile resolved EMPTY behind the door for the hardware profile {hw!r}: "
+                               f"every point would re-probe the driver and be answered under no profile")
+        self.vendor_profile = vendor.get("_profile")
 
     def rebind(self):
         for m in list(sys.modules.values()):
