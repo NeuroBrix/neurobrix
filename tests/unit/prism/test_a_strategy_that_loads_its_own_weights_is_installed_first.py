@@ -72,7 +72,7 @@ def test_the_load_is_gated_on_the_narrower_flag_not_the_wider_one():
     and not `manages_weight_residency` — reading the wider one is what would break zero3."""
     import inspect
     from neurobrix.core.runtime import executor as _ex
-    src = inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded)
+    src = _load_body_source()
     i_skip = src.find("loads_own_weights")
     i_load = src.find("executor.load_weights(")
     assert i_skip > -1, "the load is no longer gated on loads_own_weights"
@@ -80,6 +80,18 @@ def test_the_load_is_gated_on_the_narrower_flag_not_the_wider_one():
         "the capability is consulted AFTER the load — which is the original defect, "
         "where the install was gated and the load was not")
 
+
+
+def _load_body_source() -> str:
+    """The source of the method that holds the load: `_ensure_weights_loaded` delegates its body
+    to `_load_component_weights_now` (5980d787 wrapped the load in the run's load-time span).
+    The delegation itself is asserted, so this cannot read a method nobody calls."""
+    import inspect
+    from neurobrix.core.runtime import executor as _ex
+    outer = inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded)
+    assert "self._load_component_weights_now(" in outer, (
+        "_ensure_weights_loaded no longer delegates to _load_component_weights_now")
+    return inspect.getsource(_ex.RuntimeExecutor._load_component_weights_now)
 
 def _code_only(src: str) -> str:
     """`src` with its comments and docstrings removed.
@@ -114,7 +126,7 @@ def test_install_happens_before_the_skip_returns():
     with no weights at all — worse than the OOM this replaces."""
     import inspect
     from neurobrix.core.runtime import executor as _ex
-    src = _code_only(inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded))
+    src = _code_only(_load_body_source())
     block = src[src.find("loads_own_weights"):]
     i_install = block.find("install_fn ( comp_name , executor )")
     i_return = block.find("return")
@@ -137,7 +149,7 @@ def test_the_skip_is_taken_only_when_the_strategy_SAYS_it_took_over():
     """
     import inspect
     from neurobrix.core.runtime import executor as _ex
-    src = _code_only(inspect.getsource(_ex.RuntimeExecutor._ensure_weights_loaded))
+    src = _code_only(_load_body_source())
     block = src[src.find("loads_own_weights"):]
     i_install = block.find("install_fn ( comp_name , executor )")
     i_return = block.find("return")
