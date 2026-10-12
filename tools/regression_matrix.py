@@ -56,6 +56,7 @@ import functools
 import hashlib
 import json
 import os
+import shlex
 import re
 import subprocess
 import sys
@@ -617,6 +618,9 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     tree = src.parent
     misses = missing_keys(log)
     row = {"model": model, "family": family, "mode": mode, "gpu": gpu, "rc": rc,
+           # the exact command the cell ran, replayable by hand (the owner's rule of 2026-10-12: a model is
+           # tested through the engine's entry point and nothing else; the harness only orchestrates it)
+           "command": shlex.join(cmd),
            "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
            "off_trace_size": list(size) if size else None, "log": str(log),
            "python": sys.executable,
