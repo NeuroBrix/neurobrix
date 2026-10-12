@@ -1,0 +1,52 @@
+# The engine branches a batch's diff is classified into, for the per-branch gate of
+# tools/regression_matrix.py (`run --base-gate DIR --base-sha SHA`; contract in
+# docs/reference/tool-contracts.md, "regression_matrix — carried verdicts").
+#
+# A changed path is classified by its LONGEST matching prefix over every list below; a path no
+# prefix matches is refused by name (a batch whose reach cannot be said re-runs nothing on a guess).
+#
+#   branches.<name>.roots  the code only that branch's modes execute — a CLAIM the tool checks:
+#                          a .py file under a root that any module under ANOTHER branch's roots
+#                          imports (directly or transitively, lazy imports included — the static
+#                          import closure of src/) is SHARED, and a non-.py file under a root is
+#                          SHARED too (no import closure can confine a data file);
+#   branches.<name>.modes  the matrix modes that branch's code moves;
+#   shared                 moves every mode: both branches re-run;
+#   inert                  moves no cell (documentation, tests, benchmarks, CI): it neither confines
+#                          nor widens a batch. A batch touching no branch at all re-runs both.
+#
+# The roots are the two engines of CLAUDE.md ("Mode 1 compiled lives in core/; mode 2 triton lives
+# in triton/ and kernels/"), with core's Triton placement strategies on the Triton side, where
+# their package puts them.
+branches:
+  compiled:
+    modes: [native]
+    roots: [src/neurobrix/core/]
+  triton:
+    modes: [triton, triton-sequential]
+    roots: [src/neurobrix/triton/, src/neurobrix/kernels/, src/neurobrix/core/strategies/triton/]
+shared:
+  - src/
+  - tools/
+  - pyproject.toml
+  - wd.sh
+inert:
+  - docs/
+  - tests/
+  - benchmarks/
+  - assets/
+  - scripts/
+  - .github/
+  - .gitlab-ci.yml
+  - .coderabbit.yaml
+  - .gitignore
+  - CHANGELOG.md
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - LICENSE
+  - README.md
+  - ROADMAP.md
+  - SECURITY.md
+  - mkdocs.yml
+  - run_suites.sh
+  - suites.md

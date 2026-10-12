@@ -42,6 +42,11 @@ never write one JSON store at once.
 
     tools/regression_matrix.py run --models A,B --gpu 1 --out nbx/campaigns/<dated>/matrix
     tools/regression_matrix.py table --out nbx/campaigns/<dated>/matrix [--proofs last_proofs.json]
+
+A gate may CARRY a cell's verdict from an earlier gate instead of running it — an explicit record
+(--carry), a known-cause red not claimed by the batch (--known-reds, --claims-fix), or the other
+engine branch's cells when the batch's diff touches one branch only (--base-gate, --base-sha) — each
+read from its source gate and written as carried, never presumed (docs/reference/tool-contracts.md).
 """
 from __future__ import annotations
 
@@ -445,19 +450,52 @@ def cell_request(model: str) -> list:
     return derived_request(model, Z.family_of(model))
 
 
+@functools.lru_cache(maxsize=None)
+def cell_profile(gpu: str, src: Path) -> tuple:
+    """(profile id, rung MB) a cell on card `gpu` runs under: the id the runtime resolves with that card
+    visible (core/prism/autodetect.get_or_create_default_profile — detection, no allocation), and the
+    card's memory class from that profile's own id (structure.memory_class_from_profile_id: the one
+    rounding the census rows' `rungs_mb` and the certified directory share). RuntimeError when either
+    cannot be read — said by the caller, never guessed."""
+    code = ("from neurobrix.core.prism.autodetect import get_or_create_default_profile as g\n"
+            "from neurobrix.core.prism.loader import load_profile\n"
+            "from neurobrix.core.prism.structure import memory_class_from_profile_id as m\n"
+            "h = g(); print(h, m(load_profile(h).id))")
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    p = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=300)
+    words = (p.stdout.strip().splitlines() or [""])[-1].split()
+    if p.returncode != 0 or len(words) != 2 or not words[1].isdigit():
+        raise RuntimeError(f"card {gpu}: its profile could not be resolved (rc {p.returncode}: "
+                           f"{(p.stderr or p.stdout).strip()[-160:]})")
+    return words[0], int(words[1]) * 1024
+
+
 def plan_host_need(model: str, mode: str, gpu: str, src: Path):
     """(bytes, "plan") — the host footprint the ENGINE's plan states for this request on this card
     (`plan.host_footprint.total_bytes`, Prism's host estimate, the owner's 14:27 rule: a reservation is
     what the plan the engine chose says the run will hold), or None when the tree under test prints
     no such figure (a tree before prism-prices-the-host). Asked with `--explain-plan --json` in the
-    cell's own environment; nothing runs."""
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
-           "--explain-plan", "--json"]
+    cell's own profile; nothing runs.
+
+    The plan is the one the cell runs on the card ALONE, never the one the card's current occupant
+    leaves room for: a card another process holds reads as shared, its budget the free rung, and the
+    plan priced then is another plan — Ming-Lite-Omni-1.5 16g asked beside a running cell came out
+    cpu_streaming at 189.4 GiB, the cell ran layer_streaming (66 515 MB priced, 31.0 GiB measured),
+    and the reservation held two cards idle (2026-10-11). So the cell's profile is resolved the
+    runtime's way on its card (detection only), and the plan is solved on the census path at that
+    profile's rung — the plan a certified-only cell must form, its keys being the census's."""
     def _none(why):
         # Said, never silent: the cell then reserves the static estimate and the reason is in its log.
         print(f"[matrix] {model} {mode}: no plan host figure ({why}) — the static estimate is reserved", flush=True)
         return None
+    try:
+        hw = cell_profile(gpu, src)
+    except RuntimeError as e:
+        return _none(str(e))
+    env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
+           "NBX_PRISM_BUDGET_MB": str(hw[1]), "PYTHONPATH": str(src), "PYTHONNOUSERSITE": "1"}
+    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *cell_request(model), *MODES[mode],
+           "--hardware", hw[0], "--explain-plan", "--json"]
     try:
         p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
     except subprocess.TimeoutExpired:
@@ -581,34 +619,17 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     return row
 
 
-#: Where the data a gate's mode set is read from: the family profiles and the hardware profiles.
-CONFIG = REPO / "src" / "neurobrix" / "config"
+#: The modes a gate runs (the owner, 2026-10-11 18:52): a gate is native + triton. triton-sequential is
+#: the verification and debugging mode — the kernel oracle — run only on order, to diagnose a red cell,
+#: never as a gate cell.
+GATE_MODES = ("native", "triton")
 
 
-def whole_sequential(container: Path, hardware: str) -> bool:
-    """Whether a gate runs this container WHOLE in triton-sequential (the owner, 2026-10-05 23:16).
-    Sequential is the kernel oracle: run whole only on small models; video and heavy models are gated
-    compiled + Triton certified-only, and run sequential only to locate a defect (whole Allegro cells
-    at 720x1280 took 1.6 to 3 h each). Carried by the data, never by a name or a size in this code:
-    the family profile's `gate.whole_sequential` when it declares one (video declares false), else
-    the container's weights must fit the smallest card of the hardware profile the gate runs under."""
-    family = json.loads((container / "manifest.json").read_text())["family"]
-    declared = ((yaml.safe_load((CONFIG / "families" / f"{family}.yml").read_text()) or {})
-                .get("gate") or {}).get("whole_sequential")
-    if declared is not None:
-        return bool(declared)
-    devices = yaml.safe_load((CONFIG / "hardware" / f"{hardware}.yml").read_text())["devices"]
-    weights = sum(f.stat().st_size for f in container.glob("components/*/weights/*"))
-    return weights <= min(d["memory_mb"] for d in devices) * (1 << 20)
-
-
-def full_matrix(cache: Path = None, hardware: str = None) -> set:
-    """Every cell the matrix holds: each container of the shared cache (a directory with a manifest)
-    in every mode — derived from the cache, never a hand-kept list. Under a hardware profile, the
-    triton-sequential cell is held only where `whole_sequential` says the gate runs it whole."""
+def full_matrix(cache: Path = None) -> set:
+    """Every cell a gate holds: each container of the shared cache (a directory with a manifest) in
+    every gate mode — derived from the cache, never a hand-kept list."""
     cache = cache or CACHE
-    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in MODES
-            if mode != "triton-sequential" or hardware is None or whole_sequential(d, hardware)}
+    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in GATE_MODES}
 
 
 def cells_of_lists(paths) -> set:
@@ -622,12 +643,12 @@ def cells_of_lists(paths) -> set:
     return cells
 
 
-def refuse_a_partial_gate(lists, cache: Path = None, hardware: str = None) -> None:
+def refuse_a_partial_gate(lists, cache: Path = None) -> None:
     """A queue's gate covers EVERY cell of the matrix (the supervisor, 2026-09-27 16:25): queue-9's
     gate ran lists inherited from queue-8 and never ran Sana_1600M_4Kpx_BF16 native — a regression
     it would have seen landed on main. Refused by name when the union of the gate's lists is not
     the full matrix."""
-    full, named = full_matrix(cache, hardware), cells_of_lists(lists)
+    full, named = full_matrix(cache), cells_of_lists(lists)
     if not full:
         # An empty cache is an empty matrix, and empty lists "cover" it: a gate over no cell proves nothing.
         raise SystemExit(f"REFUSED: the cache {cache or CACHE} holds no container — a gate over an empty "
@@ -647,12 +668,312 @@ def refuse(why: str) -> int:
     return 2
 
 
+# ---------------------------------------------------------------------------------------------------------
+# CARRIED VERDICTS (the supervisor, 2026-10-11 18:55). A gate may carry a cell's verdict from an earlier gate
+# instead of running it — only from a record naming the source gate, the source row's date, its engine sha
+# and a reason, and only once that row is READ from the source gate and found to be what the record says.
+# The carried row is written as such (`carried: {...}`), never presumed and never silently green; a cell
+# neither run nor carried is "not measured". Three sources, in this order of precedence:
+#   record      --carry FILE: explicit records (`carries:` in YAML), one per cell;
+#   known-red   --known-reds FILE: a red with an identified cause is not replayed until a batch names it in
+#               --claims-fix; its source row must BE red (a green one is refused: it is no longer a red);
+#   branch      --base-gate DIR --base-sha SHA: a batch whose diff base..HEAD touches only one engine branch
+#               (tools/gate_branches.yml, checked against the import closure of src/) carries the other
+#               branch's cells from the base gate, measured at the base sha.
+# ---------------------------------------------------------------------------------------------------------
+
+#: The engine-branch mapping a per-branch gate classifies a diff with.
+GATE_BRANCHES = REPO / "tools" / "gate_branches.yml"
+#: The fields a carry record must name.
+CARRY_FIELDS = ("model", "mode", "source_gate", "date", "engine", "reason")
+KNOWN_RED_FIELDS = ("model", "mode", "source_gate", "date", "engine", "cause", "red_cells")
+SHA_MIN = 7
+
+
+def same_sha(a, b) -> bool:
+    """Two abbreviations of one commit: both at least SHA_MIN characters, one a prefix of the other."""
+    a, b = (a or "").strip(), (b or "").strip()
+    return len(a) >= SHA_MIN and len(b) >= SHA_MIN and (a.startswith(b) or b.startswith(a))
+
+
+def _read_records(path, key: str, fields: tuple) -> list:
+    """The `key:` list of a YAML record file, every entry naming every field — refused by name otherwise."""
+    p = Path(path)
+    if not p.is_file():
+        raise SystemExit(f"REFUSED: the record {p} does not exist")
+    doc = yaml.safe_load(p.read_text()) or {}
+    if not isinstance(doc, dict) or not isinstance(doc.get(key), list):
+        raise SystemExit(f"REFUSED: {p} has no `{key}:` list (an empty record is `{key}: []`)")
+    for n, e in enumerate(doc[key], 1):
+        absent = [f for f in fields if not (isinstance(e, dict) and str(e.get(f) or "").strip())]
+        if absent:
+            raise SystemExit(f"REFUSED: {p} `{key}` entry {n} names no {', '.join(absent)} — a carried verdict "
+                             f"names its source gate, date, engine sha and reason")
+        if e["mode"] not in MODES:
+            raise SystemExit(f"REFUSED: {p} `{key}` entry {n}: {e['mode']!r} is not a mode of the matrix")
+    return doc[key]
+
+
+def source_row(gate, cell) -> dict:
+    """The row a source gate holds for a cell (its latest, its outside judgment merged) — refused by name when
+    the gate holds none: a verdict is carried from a row that exists, never from a record alone."""
+    g = Path(gate)
+    if not any(g.glob("rows_card*.jsonl")):
+        raise SystemExit(f"REFUSED: the source gate {g} holds no rows_card*.jsonl")
+    for r in load_rows(g):
+        if (r["model"], r["mode"]) == (current_name(cell[0]), cell[1]):
+            return r
+    raise SystemExit(f"REFUSED: the source gate {g} holds no row for {cell[0]}/{cell[1]}")
+
+
+def is_red(r: dict) -> bool:
+    """A row that does not confirm: a non-zero rc, an outside verdict `broken`, or a degenerate artefact."""
+    return r.get("rc") != 0 or r.get("verdict") == "broken" or bool((r.get("mechanical") or {}).get("degenerate"))
+
+
+#: What a carried row keeps of its source row: the verdict and what judged it, never the paths of a run here.
+CARRIED_KEYS = ("family", "rc", "wall_s", "exec_s", "request", "off_trace_size", "python", "error", "misses",
+                "first_missing_key", "artefact", "sha256", "bytes", "mechanical", "judged", "verdict", "judged_on")
+
+
+def carried_row(cell, src: dict, kind: str, gate, reason: str, here: str, **extra) -> dict:
+    """The row a carried cell is written as: the source row's verdict under the source's OWN engine sha (the
+    engine that measured it), and `carried` naming where it comes from, why, and the gate that carried it."""
+    row = {"model": cell[0], "mode": cell[1], **{k: src[k] for k in CARRIED_KEYS if k in src},
+           "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+           "engine": src.get("engine"),
+           "carried": {"kind": kind, "source_gate": str(gate), "date": src.get("date"), "engine": src.get("engine"),
+                       "reason": reason, "carried_by_engine": here, **extra}}
+    if src.get("carried"):
+        row["carried"]["source_carried"] = src["carried"]          # a carry of a carry keeps the whole chain
+    return row
+
+
+def record_carries(path, asked, here: str) -> dict:
+    """--carry: explicit records; the source row must hold the record's engine and date."""
+    out = {}
+    for e in _read_records(path, "carries", CARRY_FIELDS):
+        cell = (e["model"], e["mode"])
+        if cell not in asked:
+            continue
+        src = source_row(e["source_gate"], cell)
+        if not same_sha(src.get("engine"), str(e["engine"])) or src.get("date") != str(e["date"]):
+            raise SystemExit(f"REFUSED: {path}: {cell[0]}/{cell[1]} names engine {e['engine']} at {e['date']}, the "
+                             f"source gate's row is engine {src.get('engine')} at {src.get('date')} — not the "
+                             f"measurement the record names")
+        out[cell] = carried_row(cell, src, "record", e["source_gate"], str(e["reason"]), here)
+    return out
+
+
+def known_red_carries(path, claims, asked, here: str) -> dict:
+    """--known-reds: every red with an identified cause is carried, red, with its cause — unless this batch
+    claims to fix it (--claims-fix), when it runs. A claim on a cell the record does not hold is refused (a
+    misspelt claim would leave the red carried while the batch believes it re-ran)."""
+    reds = _read_records(path, "reds", KNOWN_RED_FIELDS)
+    known = {(e["model"], e["mode"]) for e in reds}
+    stray = sorted(set(claims) - known)
+    if stray:
+        raise SystemExit(f"REFUSED: --claims-fix names {', '.join(f'{m}/{mo}' for m, mo in stray)} — no known-cause "
+                         f"red in {path}; a batch claims only a recorded red")
+    out = {}
+    for e in reds:
+        cell = (e["model"], e["mode"])
+        if cell not in asked:
+            continue
+        if cell in claims:
+            print(f"[matrix] {cell[0]} {cell[1]}: a known-cause red this batch claims to fix — it runs", flush=True)
+            continue
+        src = source_row(e["source_gate"], cell)
+        if not same_sha(src.get("engine"), str(e["engine"])) or src.get("date") != str(e["date"]):
+            raise SystemExit(f"REFUSED: {path}: {cell[0]}/{cell[1]} names engine {e['engine']} at {e['date']}, the "
+                             f"source gate's row is engine {src.get('engine')} at {src.get('date')}")
+        if not is_red(src):
+            raise SystemExit(f"REFUSED: {path}: {cell[0]}/{cell[1]} is recorded as a known-cause red but its source "
+                             f"row (rc {src.get('rc')}, verdict {src.get('verdict', 'pending')}) is not red — the "
+                             f"record is stale: remove the entry, the cell runs")
+        out[cell] = carried_row(cell, src, "known-red", e["source_gate"], str(e["cause"]), here,
+                                red_cells=str(e["red_cells"]))
+    return out
+
+
+# --- the per-branch gate ------------------------------------------------------------------------------------
+
+def _module_file(src: Path, dotted: str):
+    p = src.joinpath(*dotted.split("."))
+    if (p / "__init__.py").is_file():
+        return p / "__init__.py"
+    return p.with_suffix(".py") if p.with_suffix(".py").is_file() else None
+
+
+def _imported_files(src: Path, f: Path) -> set:
+    """The files of src/ a module imports, anywhere in its body (a lazy import executes too), each with the
+    packages above it (importing a.b.c runs a/__init__ and a/b/__init__). Third-party imports are not files here."""
+    import ast
+    try:
+        tree = ast.parse(f.read_text(errors="replace"))
+    except SyntaxError:
+        return set()                                    # its own branch's cells will see it
+    pkg = f.relative_to(src).parts[:-1]                 # the package a relative import starts from
+    names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = list(pkg[:len(pkg) - node.level + 1]) if node.level else []
+            mod = ".".join(base + ([node.module] if node.module else []))
+            names += [mod] + [f"{mod}.{a.name}" for a in node.names if a.name != "*"]
+    files = set()
+    for n in names:
+        parts = n.split(".")
+        for i in range(1, len(parts) + 1):
+            mf = _module_file(src, ".".join(parts[:i]))
+            if mf is not None:
+                files.add(mf.resolve())
+    return files
+
+
+def load_branches(path=None) -> dict:
+    """The branch mapping (tools/gate_branches.yml): every branch names its modes and roots."""
+    path = Path(path or GATE_BRANCHES)
+    doc = yaml.safe_load(path.read_text()) or {}
+    br = doc.get("branches") or {}
+    for name, b in br.items():
+        if not (b.get("modes") and b.get("roots")) or set(b["modes"]) - set(MODES):
+            raise SystemExit(f"REFUSED: {path}: branch {name} needs `modes` (of {', '.join(MODES)}) and `roots`")
+    if len(br) < 2 or not isinstance(doc.get("shared"), list) or not isinstance(doc.get("inert"), list):
+        raise SystemExit(f"REFUSED: {path} needs two `branches`, a `shared` and an `inert` list")
+    return {"branches": br, "shared": doc["shared"], "inert": doc["inert"]}
+
+
+def classify_paths(repo: Path, paths, mapping: dict) -> dict:
+    """{path: branch name | "shared" | "inert"} for a diff's paths — the longest prefix decides; a branch's .py
+    file another branch's roots import is "shared", as is a non-.py file under a root. A path no prefix
+    matches is refused by name."""
+    src = repo / "src"
+    prefixes = [(p, ("branch", n)) for n, b in mapping["branches"].items() for p in b["roots"]]
+    prefixes += [(p, ("shared", None)) for p in mapping["shared"]] + [(p, ("inert", None)) for p in mapping["inert"]]
+    closures = {}
+    out, unknown = {}, []
+    for path in paths:
+        hits = [(p, c) for p, c in prefixes if path == p.rstrip("/") or (p.endswith("/") and path.startswith(p))]
+        if not hits:
+            unknown.append(path)
+            continue
+        _, (kind, name) = max(hits, key=lambda h: len(h[0]))
+        if kind != "branch":
+            out[path] = kind
+            continue
+        if not path.endswith(".py"):
+            out[path] = "shared"
+            continue
+        others = [r for n, b in mapping["branches"].items() if n != name for r in b["roots"]]
+        key = tuple(others)
+        if key not in closures:
+            # the other branches' roots, minus this branch's own deeper roots (core/ holds core/strategies/triton/)
+            mine = mapping["branches"][name]["roots"]
+            starts = []
+            for r in others:
+                d = repo / r
+                starts += [p for p in d.rglob("*.py")
+                           if not any(str(p.relative_to(repo)).startswith(m) and len(m) > len(r) for m in mine)] \
+                    if d.is_dir() else []
+            closures[key] = _closure_from(src, starts)
+        out[path] = "shared" if (repo / path).resolve() in closures[key] else name
+    if unknown:
+        raise SystemExit(f"REFUSED: the diff touches {', '.join(unknown[:8])}{' ...' if len(unknown) > 8 else ''} — "
+                         f"no prefix of {GATE_BRANCHES.name} classifies it; name it there (branch, shared or inert)")
+    return out
+
+
+def _closure_from(src: Path, starts) -> set:
+    todo = [p.resolve() for p in starts]
+    seen = set(todo)
+    while todo:
+        for g in _imported_files(src, todo.pop()) - seen:
+            seen.add(g)
+            todo.append(g)
+    return seen
+
+
+def branch_diff(tree: Path, base: str) -> tuple:
+    """(paths, shortstat) of `git diff base HEAD` in the engine tree — refused when the tree has uncommitted
+    changes to tracked or untracked-unignored files (HEAD would not be what the cells run)."""
+    st = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True)
+    if st.returncode != 0:
+        raise SystemExit(f"REFUSED: git status in {tree} failed: {st.stderr.strip()[:160]}")
+    if st.stdout.strip():
+        raise SystemExit(f"REFUSED: the engine tree {tree} has uncommitted changes "
+                         f"({len(st.stdout.splitlines())} paths) — a per-branch gate proves its reach on a commit")
+    d = subprocess.run(["git", "-C", str(tree), "diff", "--name-only", "--no-renames", base, "HEAD"],
+                       capture_output=True, text=True)
+    if d.returncode != 0:
+        raise SystemExit(f"REFUSED: git diff {base} HEAD in {tree} failed: {d.stderr.strip()[:160]}")
+    stat = subprocess.run(["git", "-C", str(tree), "diff", "--shortstat", base, "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    return [l for l in d.stdout.splitlines() if l.strip()], stat
+
+
+def branch_carries(tree: Path, base_sha: str, base_gate, asked, here: str, mapping_path=None) -> dict:
+    """--base-gate/--base-sha: a batch whose diff touches exactly one engine branch carries the cells of every
+    mode only the OTHER branches move from the base gate's rows measured at the base sha (a row the base gate
+    itself carried counts at the engine that carried it). Shared paths, two branches, or none: nothing carried."""
+    mapping = load_branches(mapping_path)
+    paths, stat = branch_diff(tree, base_sha)
+    cls = classify_paths(tree, paths, mapping)
+    touched = {c for c in cls.values() if c != "inert"}
+    if "shared" in touched or len(touched) != 1:
+        why = ("shared paths: " + ", ".join(p for p, c in cls.items() if c == "shared")[:300]) if "shared" in touched \
+            else (f"{len(touched)} engine branches" if touched else "no engine branch")
+        print(f"[matrix] per-branch gate: base {base_sha}..HEAD touches {why} — every branch runs", flush=True)
+        return {}
+    (branch,) = touched
+    moved = set(mapping["branches"][branch]["modes"])
+    still = {m for n, b in mapping["branches"].items() if n != branch for m in b["modes"]} - moved
+    reason = (f"the diff {base_sha}..{here} ({stat or 'empty'}) touches only the {branch} branch: "
+              f"{sum(1 for c in cls.values() if c == branch)} path(s), {sum(1 for c in cls.values() if c == 'inert')} inert")
+    print(f"[matrix] per-branch gate: {reason} — the {', '.join(sorted(still))} cells are carried from {base_gate}",
+          flush=True)
+    out = {}
+    for cell in asked:
+        if cell[1] not in still:
+            continue
+        src = source_row(base_gate, cell)
+        measured_at = (src.get("carried") or {}).get("carried_by_engine") or src.get("engine")
+        if not same_sha(measured_at, base_sha):
+            raise SystemExit(f"REFUSED: the base gate {base_gate}'s row for {cell[0]}/{cell[1]} is engine "
+                             f"{measured_at} at {src.get('date')}, not the base {base_sha} — it is not the base gate")
+        out[cell] = carried_row(cell, src, "branch", base_gate, reason, here,
+                                base=base_sha, diff_paths=sorted(cls)[:DIRTY_PATHS_CAP], branch=branch)
+    return out
+
+
+def parse_cells(spec: str) -> set:
+    """"model/mode,model/mode" — each named in full."""
+    cells = set()
+    for item in (s.strip() for s in (spec or "").split(",")):
+        if not item:
+            continue
+        model, sep, mode = item.rpartition("/")
+        if not sep or not model or mode not in MODES:
+            raise SystemExit(f"REFUSED: --claims-fix {item!r}: a cell is <model>/<mode>, the mode one of {', '.join(MODES)}")
+        cells.add((model, mode))
+    return cells
+
+
 def cmd_run(a) -> int:
     if getattr(a, "gate_lists", None):
-        if not getattr(a, "gate_hardware", None):
-            raise SystemExit("REFUSED: a gate names the hardware profile it runs under (--gate-hardware): its "
-                             "mode set per container is read from that profile and the family profiles.")
-        refuse_a_partial_gate(a.gate_lists, hardware=a.gate_hardware)
+        refuse_a_partial_gate(a.gate_lists)
+        off = [m.strip() for m in a.modes.split(",") if m.strip() and m.strip() not in GATE_MODES]
+        if off:
+            return refuse(f"--modes: {', '.join(off)} in a gate — a gate runs {', '.join(GATE_MODES)}; "
+                          f"triton-sequential runs only on order, to diagnose a red cell")
+        if not getattr(a, "known_reds", None):
+            return refuse("a gate names its known-cause record (--known-reds FILE; `reds: []` when it holds none): "
+                          "a red with an identified cause is carried, never replayed, until a batch claims it")
+    if getattr(a, "claims_fix", None) and not getattr(a, "known_reds", None):
+        return refuse("--claims-fix without --known-reds: a claim is checked against the known-cause record")
+    if bool(getattr(a, "base_gate", None)) != bool(getattr(a, "base_sha", None)):
+        return refuse("--base-gate and --base-sha go together: the base gate's rows are read at the base sha")
     # The request, refused by name before any cell: an empty list is not a run, and a name the cache
     # does not hold is not a cell (it would be judged by its absence).
     models = [m.strip() for m in a.models.split(",")]
@@ -691,10 +1012,36 @@ def cmd_run(a) -> int:
     # Without it, an earlier row is done only when it measured THIS engine against a clean reference:
     # its engine sha is this run's and neither its tree nor this one had the certified reference dirty.
     here, here_state = engine_sha(src.parent), reference_state(src)
-    done = set()
+    # CARRIED cells, before anything runs: each read from its source gate and refused by name if the source
+    # does not hold what its record says. Precedence: an explicit record, a known-cause red, the branch rule.
+    carries = {}
+    if getattr(a, "base_gate", None):
+        carries.update(branch_carries(src.parent, a.base_sha, a.base_gate, asked, here,
+                                      getattr(a, "branches", None)))
+    if getattr(a, "known_reds", None):
+        carries.update(known_red_carries(a.known_reds, parse_cells(getattr(a, "claims_fix", None)), asked, here))
+    if getattr(a, "carry", None):
+        carries.update(record_carries(a.carry, asked, here))
+    for cell, row in carries.items():
+        prev = latest.get(cell)
+        if prev is not None and prev.get("carried") == row["carried"]:
+            print(f"[matrix] {cell[0]} {cell[1]}: carried already ({row['carried']['kind']}) — row kept", flush=True)
+            continue                                    # idempotent: the same carry is written once
+        if prev is not None:
+            row["supersedes"] = {k: prev.get(k) for k in ("date", "gpu", "rc", "wall_s", "error", "engine", "sha256")}
+        append_jsonl(rows_path, row)
+        c = row["carried"]
+        print(f"[matrix] {cell[0]} {cell[1]}: CARRIED ({c['kind']}) rc={row.get('rc')} from {c['source_gate']} "
+              f"@{c['engine']} {c['date']} — {c['reason'][:160]}", flush=True)
+    done = set(carries)
     for cell in asked:
         prev = latest.get(cell)
-        if a.rerun or prev is None:
+        if a.rerun or prev is None or cell in done:
+            continue
+        if prev.get("carried"):
+            # a carried row is not a measurement of this engine: it is reused only by carrying it again
+            print(f"[matrix] {cell[0]} {cell[1]}: the earlier row is CARRIED ({prev['carried'].get('kind')}), not "
+                  f"measured, and no carry names it now — the cell runs", flush=True)
             continue
         if not here:
             why = "this run's engine sha is unknown"
@@ -886,7 +1233,13 @@ def table_cell(r) -> str:
     """One mode's cell of table.md: not run, the rc and its error, the judge's error, a degenerate
     artefact, or the run and its verdict."""
     if r is None:
-        return "not run"
+        return "not measured"
+    c = r.get("carried")
+    if c:
+        # never silently green: a carried cell says so, where from and why, before its verdict
+        inner = table_cell({k: v for k, v in r.items() if k != "carried"})
+        return (f"CARRIED {c['kind']} from {Path(c['source_gate']).name} @{c['engine']} {c['date']} "
+                f"({c['reason'][:60]}): {inner}")
     if r["rc"] != 0:
         return f"rc {r['rc']}: {r.get('error', '')[:80]}"
     mech = r.get("mechanical") or {}
@@ -950,6 +1303,7 @@ def cmd_export(a) -> int:
             "regression": r.get("regression"),
             "bisect": r.get("bisect"),
             "cause_class": r.get("cause_class"),
+            "carried": r.get("carried"),
         })
     dest = Path(a.dest)
     write_atomic(dest, "".join(json.dumps(x) + "\n" for x in lines))
@@ -965,13 +1319,24 @@ def main() -> int:
     r.add_argument("--models", required=True)
     r.add_argument("--gpu", required=True)
     r.add_argument("--out", required=True)
-    r.add_argument("--modes", default=",".join(MODES))
+    r.add_argument("--modes", default=",".join(GATE_MODES))
     r.add_argument("--gate-lists", nargs="+", default=None,
                    help="this run is a queue gate: the card lists of the whole gate; refused unless together they name every cell of the matrix")
-    r.add_argument("--gate-hardware", default=None,
-                   help="the hardware profile id the gate runs under: with the family profiles, it decides which containers a gate runs whole in triton-sequential")
     r.add_argument("--rerun", action="store_true",
                    help="run the listed cells although they have a row; the new row supersedes the old one")
+    r.add_argument("--known-reds", default=None, metavar="YAML",
+                   help="the known-cause reds record (`reds:`): each is carried, red, with its cause, unless "
+                        "--claims-fix names it; REQUIRED for a gate (`reds: []` when it holds none)")
+    r.add_argument("--claims-fix", default=None, metavar="MODEL/MODE,...",
+                   help="the known-cause reds this batch claims to fix: they run")
+    r.add_argument("--carry", default=None, metavar="YAML",
+                   help="explicit carry records (`carries:` model, mode, source_gate, date, engine, reason)")
+    r.add_argument("--base-gate", default=None, metavar="DIR",
+                   help="the base gate (a matrix --out) whose rows the per-branch rule carries")
+    r.add_argument("--base-sha", default=None, metavar="SHA",
+                   help="the commit the base gate measured; the diff SHA..HEAD of the engine tree is classified")
+    r.add_argument("--branches", default=str(GATE_BRANCHES), metavar="YAML",
+                   help="the engine-branch mapping the diff is classified with")
     r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--defer-after", type=float, default=None, metavar="SECONDS",
                    help="a cell the host cannot take for this long leaves the run without a row, named DEFERRED, "
