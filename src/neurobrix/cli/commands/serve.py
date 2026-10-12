@@ -15,9 +15,15 @@ import sys
 
 def cmd_serve(args):
     """Start the serving daemon."""
+    from neurobrix.cli.json_out import wants_json, human_lines_to_stderr
     from neurobrix.serving.client import DaemonClient
     from neurobrix.serving.server import ServingDaemon
 
+    with human_lines_to_stderr(wants_json(args)):
+        _serve(args, DaemonClient, ServingDaemon, wants_json(args))
+
+
+def _serve(args, DaemonClient, ServingDaemon, json_events: bool) -> None:
     # Check if already running
     if DaemonClient.is_running():
         pid = DaemonClient.get_pid()
@@ -77,6 +83,7 @@ def cmd_serve(args):
         hardware_id=hardware_id,
         mode=mode,
         idle_timeout=float(timeout),
+        json_events=json_events,
     )
 
     daemon.start(foreground=foreground)

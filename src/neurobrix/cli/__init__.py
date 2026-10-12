@@ -442,6 +442,11 @@ Examples:
                               help='Idle timeout in seconds (default: 1800)')
     serve_parser.add_argument('--foreground', action='store_true',
                               help='Run in foreground (block terminal, for debugging)')
+    serve_parser.add_argument('--json', action='store_true',
+                              help='NDJSON events on stdout, human lines on stderr: one `ready` event (endpoint, '
+                                   'protocol, model, family, strategy, pid) once the daemon serves, or one `error` '
+                                   'event — a signal for the client that starts the daemon itself, never a poll '
+                                   '(docs/reference/wire-protocol.md, Readiness)')
     # Execution modes (mutually exclusive). When no flag is passed the
     # default is --compiled. Mirror of run_parser; see CLAUDE.md
     # "Execution Modes" section for the contract.

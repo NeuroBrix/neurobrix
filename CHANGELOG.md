@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A daemon started in the foreground signals its readiness.** `neurobrix serve --foreground --json`
+  speaks NDJSON on stdout: one `ready` event (endpoint, protocol, model, family, serving strategy,
+  pid) once it serves, or one `error` event with the message; every human line goes to stderr. A
+  client that starts the daemon itself reads the signal instead of polling `status`; the background
+  forms keep their pipe (Linux) and `daemon.ready` file (Windows, macOS). Schema `neurobrix.serve/1`.
+- **The wire protocol, specified for a client without the code:** `docs/reference/wire-protocol.md`
+  — transport and endpoints per OS, framing and its limits, envelopes, version and range, every
+  method with inputs and outputs, operations and their states, streaming events, the error forms,
+  readiness and liveness, the serving settings.
 - **`neurobrix info` loads no framework.** The discovery record (`--json`) and the human listing
   read the accelerators through the engine's own detection (`core/prism/autodetect.visible_devices`,
   the vendor-tool cascade, `CUDA_VISIBLE_DEVICES` honoured) and the installed PyTorch's version

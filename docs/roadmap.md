@@ -173,5 +173,5 @@ The remaining four, plus two items they imply, are queued in this order:
 4. **Discovery without torch** (request 1): `neurobrix info` reads the hardware through the existing
    detection, with no framework import; a change in its record's shape is versioned and documented. **Done 2026-10-13** (`visible_devices`, package metadata; the record's shape unchanged, its semantics documented in `docs/reference/json-output.md`).
 5. **The wire protocol, specified**: framing, envelopes, version and range, methods, errors, endpoints
-   per OS and hard limits, written for a reader without access to the code.
-6. **A readiness signal in the foreground**, so a client that starts the daemon itself does not poll.
+   per OS and hard limits, written for a reader without access to the code. **Done 2026-10-13:** `docs/reference/wire-protocol.md`.
+6. **A readiness signal in the foreground**, so a client that starts the daemon itself does not poll. **Done 2026-10-13:** `serve --foreground --json` emits one NDJSON `ready` (or `error`) event on stdout, human lines on stderr.

@@ -129,6 +129,7 @@ class ServingDaemon:
         mode: str = "compiled",
         idle_timeout: float = 1800.0,
         engine=None,
+        json_events: bool = False,
     ):
         # `engine` is injected only by a test (a fake engine that yields tokens
         # without a model); the daemon builds its InferenceEngine.
@@ -137,6 +138,9 @@ class ServingDaemon:
         self._running = False
         self._server_socket: Optional[socket.socket] = None
         self._ready_fd: Optional[int] = None  # Write end of pipe for ready signal
+        # `--json`: readiness as one NDJSON event on stdout (`ready` / `error`), the
+        # signal a client that starts the daemon itself reads instead of polling.
+        self._json_events = json_events
         self._settings = serving_settings()
         self._ops = OperationTable(self._settings["operations_retained"])
         self._inference_lock = threading.Lock()
@@ -262,6 +266,8 @@ class ServingDaemon:
             finally:
                 read_pipe.close()
 
+            if self._json_events:
+                self._emit_ready_event(msg if msg else "error:daemon process died before signalling")
             if msg.startswith("ready:"):
                 # Child loaded successfully
                 info = msg[6:].strip()
@@ -297,8 +303,15 @@ class ServingDaemon:
             os.dup2(devnull, sys.stdin.fileno())
             os.close(devnull)
 
-    def _signal_ready(self, message: str) -> None:
-        """Signal parent process that daemon is ready (or failed)."""
+    def _signal_ready(self, message: str, ready: Optional[Dict[str, Any]] = None) -> None:
+        """Signal that the daemon is ready (or failed): to the parent through
+        the pipe (background, Unix) or `daemon.ready` (background, Windows and
+        macOS), and under `--json` as one NDJSON event on stdout — `ready`
+        with the endpoint, the protocol, the model, the family, the serving
+        strategy and the pid, or `error` with the message — so a client that
+        started the daemon in the foreground is told, never left to poll."""
+        if self._json_events:
+            self._emit_ready_event(message, ready)
         if IS_WINDOWS or sys.platform == "darwin":
             # Windows + macOS: write ready signal to a file (parent polls)
             ready_path = DAEMON_DIR / "daemon.ready"
@@ -314,6 +327,17 @@ class ServingDaemon:
             except OSError:
                 pass
             self._ready_fd = None
+
+    @staticmethod
+    def _emit_ready_event(message: str, ready: Optional[Dict[str, Any]]) -> None:
+        from neurobrix.cli.json_out import event
+        from neurobrix.serving.protocol import PROTOCOL_VERSION
+        kind, _, detail = message.partition(":")
+        if kind == "ready":
+            event("serve", "ready", {"endpoint": INSTANCE.endpoint(), "protocol": PROTOCOL_VERSION,
+                                     **(ready or {}), "pid": os.getpid()})
+        else:
+            event("serve", "error", {"message": detail.strip()})
 
     def _start_serving(self) -> None:
         """Load model, bind socket, enter serve loop."""
@@ -353,7 +377,8 @@ class ServingDaemon:
                 f"ready:Model loaded — {self._engine.model_name} "
                 f"({family}, {strategy} serving)"
             )
-            self._signal_ready(ready_msg)
+            self._signal_ready(ready_msg, ready={"model": self._engine.model_name, "family": family,
+                                                 "strategy": strategy})
 
             print(f"\n[Daemon] Listening on {INSTANCE.endpoint()}")
             print(f"[Daemon] Idle timeout: {self._idle_timeout}s")

@@ -58,6 +58,8 @@ after it ends — request 4 names this the governing item. The proposal:
    the plan holds (Memory Manager's `device_sync`, never a hand-rolled sync)
    and only then answers `{"cancelled": id, "steps": n}`. A disconnect or a
    timeout is never an acknowledgement.
+**The wire protocol as a client reads it** — framing, envelopes, version and range, every method, the operation states, streaming, errors, readiness, limits: `docs/reference/wire-protocol.md` (2026-10-13).
+
 4. **The protocol range (request 7).** A request may carry `protocol` (the
    client's); the daemon refuses one outside `[PROTOCOL_MIN, PROTOCOL_VERSION]`
    with an error naming both numbers and the engine version. A request without
