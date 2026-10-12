@@ -75,3 +75,20 @@ def test_the_cuda_rule_is_unchanged():
 def test_an_mps_load_without_its_workers_is_refused_by_name():
     with pytest.raises(ValueError, match="te.*loader workers"):
         _price("mps:0", workers=0)
+
+
+def test_a_streamed_cuda_component_still_adds_up_under_eager():
+    """The Dell, 2026-10-12 15:26: the change must leave every pinning load's price as it was. Under eager two
+    streamed CUDA components' passes were summed; they stay summed (only a load the loader does not pin for
+    leaves the sum). Injection: streamed pinning passes priced as max(...) -> RED."""
+    keys = {"lm": {"block.0.w": 100 * MB, "block.1.w": 100 * MB}, "te": {"block.0.w": 50 * MB, "block.1.w": 50 * MB}}
+    shards = {"lm": {"s0": 200 * MB}, "te": {"s0": 100 * MB}}
+    loads = {"lm": [{"block.0.w"}, {"block.1.w"}], "te": [{"block.0.w"}, {"block.1.w"}]}
+    kw = dict(load_workers=1, pinned_in_flight=1)
+
+    def price(*names):
+        plan = _plan("eager", **{n: ("cuda:0", "float16") for n in names})
+        return H.host_footprint(plan, {n: keys[n] for n in names}, {n: shards[n] for n in names}, "compiled", None,
+                                DT, _block, {n: {"float16"} for n in names},
+                                streamed_loads={n: loads[n] for n in names}, **kw)["transient_bytes"]
+    assert price("lm", "te") == price("lm") + price("te"), (price("lm", "te") / MB, price("lm") / MB, price("te") / MB)
