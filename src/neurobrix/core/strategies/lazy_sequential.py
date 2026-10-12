@@ -127,9 +127,13 @@ class LazySequentialStrategy(ExecutionStrategy):
         return 'cpu'
 
     def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
-        """Pin CPU weights for zero3 sub-components."""
+        """Pin CPU weights for zero3 sub-components — never a unified expert store's experts, which
+        are views of the container's files (`expert_store.holds_expert_files`)."""
         weights = getattr(executor, '_weights', None)
         if not weights:
+            return
+        from .expert_store import holds_expert_files
+        if holds_expert_files(self.context.allocations, component_name):
             return
 
         pinned = 0

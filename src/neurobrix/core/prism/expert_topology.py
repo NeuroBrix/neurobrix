@@ -7,7 +7,9 @@ too: a 30B-parameter model with 3B active on a 32 GB card was priced at ~57 GB a
 8 of 128 experts per layer run.
 
 This module READS the topology; it decides nothing. Sparsity is a dimension of the plan, not a
-strategy: the figure is stated beside the plan's other figures, and placement does not read it yet.
+strategy: the figure is stated beside the plan's other figures. Placement reads the topology itself
+(the solver's `_expert_store_floor`: an expert store's dense part and its widest top_k experts), never
+this stated working set, which is priced on the profile's standard rung.
 
 Where the topology comes from — the container, nothing else:
 
@@ -30,7 +32,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from neurobrix.nbx.neurotax import SynonymRegistry as _NeuroTax
 
@@ -57,6 +59,9 @@ class RoutedLayer:
     expert_bytes: int          # one routed expert's weights, at the component's runtime dtype
     shared_bytes: int          # the layer's shared-expert weights (0 when it has none)
     stacked: bool = False      # the experts are one [E, ...] slab per projection, not per-expert matrices
+    #: the routed experts' weight names (the graph's `weight_name`, the weights index's keys) — what an
+    #: expert store reads from the container's files per miss; empty for a stacked slab
+    expert_weight_names: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -166,6 +171,7 @@ def read_expert_topology(component: str, graph: Dict[str, Any], weights_index: O
                 raise RuntimeError(f"ZERO FALLBACK: fused MoE op {uid} carries no {key!r}")
         e, k = int(a["num_experts"]), int(a["top_k"])
         st = a.get("stacked_experts")
+        names: Tuple[str, ...] = ()
         if st:
             slab = (_tensor_bytes(st["input_linear_tid"], tensors, sizes)
                     + _tensor_bytes(st["output_linear_tid"], tensors, sizes))
@@ -178,6 +184,7 @@ def read_expert_topology(component: str, graph: Dict[str, Any], weights_index: O
                                    f"weights for {e} experts")
             slab = sum(_tensor_bytes(t, tensors, sizes) for x in ids for t in x)
             first = ids[0][0]
+            names = tuple((tensors.get(t) or {}).get("weight_name") or t for x in ids for t in x)
         if slab % e:
             raise RuntimeError(f"fused MoE op {uid}: {slab} expert bytes do not divide into {e} equal experts")
         block = _block_of(first, tensors)
@@ -186,7 +193,7 @@ def read_expert_topology(component: str, graph: Dict[str, Any], weights_index: O
             norm_topk_prob=(None if a.get("norm_topk_prob") is None else bool(a["norm_topk_prob"])),
             expert_bytes=int(slab // e * dtype_mult),
             shared_bytes=int(shared_by_block.get(block, 0) * dtype_mult) if block is not None else 0,
-            stacked=bool(st)))
+            stacked=bool(st), expert_weight_names=names))
 
     if lm_config is not None and declared_component == component:
         want_e, want_k = lm_config.get("num_experts"), lm_config.get("num_experts_per_tok")

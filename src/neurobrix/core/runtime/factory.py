@@ -443,6 +443,9 @@ class ExecutorFactory:
             "shard_map": shard_map,
         }
         executor._weights_loaded = False
+        # An expert store on a unified device maps its routed experts from the container's files
+        # (Prism `ComponentAllocation.expert_files`, `core/runtime/expert_files.py`).
+        executor._expert_files = bool(getattr(allocation, "expert_files", False))
 
         # LAZY LOADING: Only load weights if skip_weights=False
         if not skip_weights:
