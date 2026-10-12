@@ -29,7 +29,7 @@ NAME = "audio-test"
 
 
 def _args(tmp):
-    return types.SimpleNamespace(out=str(tmp / "out"), backup=str(tmp / "backup"), models_root=str(tmp / "builds"),
+    return types.SimpleNamespace(stage=str(tmp / "stage"), out=str(tmp / "out"), backup=str(tmp / "backup"), models_root=str(tmp / "builds"),
                                  tmp=str(tmp / "tmp"), gpu=None, src=None, extra=[], timeout=10, trace_timeout=10,
                                  restore_mbps=10.0, upload_mbps=10.0)
 
@@ -57,11 +57,17 @@ def chain(tmp_path, monkeypatch):
 
     def fake_run(cmd, env, log, timeout, cwd=None):
         installs.append([str(c) for c in cmd])
-        _manifest(R.CACHE, "2026-09-26T02:18:21")          # what `forge local --overwrite` leaves behind
+        _manifest(R.CACHE, "2026-09-26T02:18:21")          # what Forge's single write leaves behind:
+        (R.CACHE / NAME / "components" / "model").mkdir(parents=True, exist_ok=True)   # the build, stamped
+        (R.CACHE / NAME / "components" / "model" / "graph.json").write_text("{}")
+        (R.CACHE / NAME / "topology.json").write_text(json.dumps(
+            {"extracted_values": {"model": {"symbolic_fixed_point": "rev"}}}))
         Path(log).write_text("installed")
         return 0
     monkeypatch.setattr(R, "run", fake_run)
     monkeypatch.setattr(m, "env", lambda tree=False: {})
+    monkeypatch.setattr(m, "fixed_point_door", lambda: None)
+    monkeypatch.setattr(m, "stage_unfit", lambda stage, need, env: None)
     return m, installs
 
 
@@ -71,7 +77,8 @@ def test_an_install_marked_done_over_the_previous_container_is_redone_and_the_st
     _manifest(Path(m.args.backup), "2026-06-04T18:46:52")   # the backup holds the same build
     assert m.cache_holds_backup() is True
     assert m.step_install() is True
-    assert len(installs) == 1 and "local" in installs[0] and "--overwrite" in installs[0]
+    assert len(installs) == 1 and installs[0][1].endswith("repropagate_in_place.py") and "--apply" in installs[0]
+    assert m.state["steps"]["install"]["unstamped"] == []
     assert m.cache_holds_backup() is False                  # the built container is what the arms will run on
     assert "new_outputs" not in m.state["steps"] and "gate" not in m.state["steps"]
     assert m.state["steps"]["install"]["ok"] is True and m.state["steps"]["install"].get("reinstalled")
