@@ -1497,6 +1497,8 @@ class Judge:
             fn = P.canon(caller)
         except Exception:                          # noqa: BLE001
             return None
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return None                            # a module-level call site: no parameters to guard over
         stmt = None
         for x in ast.walk(fn):
             if isinstance(x, ast.stmt) and x is not fn and any(y is node for y in ast.walk(x)):

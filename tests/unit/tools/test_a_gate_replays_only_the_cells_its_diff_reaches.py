@@ -89,6 +89,29 @@ def test_a_region_inside_a_loop_has_no_parameter_guard():
     assert G.region_guard(b, {id(target)}) is None
 
 
+def test_a_module_level_call_site_carries_no_parameter_guard():
+    """A callee reached from a module-level statement (`X = f(...)` at import) has no caller parameters to
+    guard over: the site carries no guard (None — treated as reached), never a crash building one."""
+    callee = _fn("def f(a):\n    return a\n")
+    caller = ast.parse("X = f(1)\n")
+    node = caller.body[0].value
+
+    class P:
+        @staticmethod
+        def _arg_for(cfn, node, recv, ctor, p):
+            return ("arg", node.args[0])
+
+        @staticmethod
+        def canon(uid):
+            return caller
+
+    class T:
+        units = {"m:f": callee}
+
+    got = G.Judge.caller_guard(type("S", (), {})(), P, T, "m:f", ("", "g"), "m:<module>", node, None, False, "call")
+    assert got is None
+
+
 def test_a_prune_without_its_reason_is_refused(tmp_path):
     with pytest.raises(SystemExit, match="reason"):
         G.main(["--commits", "HEAD", "--gate-dir", str(tmp_path), "--out", str(tmp_path / "o"),
