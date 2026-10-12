@@ -1,0 +1,33 @@
+# PyTorch wheel builds that `neurobrix doctor` recommends.
+#
+# Read by neurobrix/cli/commands/doctor.py, and nowhere else. The keys under
+# `builds` are the architecture names hardware detection emits
+# (core/prism/autodetect.py `_nvidia_cc_to_arch`: 7.0 -> volta, 8.6 ->
+# ampere_consumer, ...).
+#
+# An entry exists only for a build that was MEASURED on that architecture, and
+# carries its source. An architecture absent from `builds` has no measured
+# build: doctor says so and points to `selector_url`; it never guesses one.
+
+# PyTorch's wheel index; a build is a sub-directory of it (`<index_url><build>`).
+# Source: https://pytorch.org/get-started/locally/ (the pip commands it prints).
+index_url: https://download.pytorch.org/whl/
+
+# Where a user picks the build their driver supports when none is listed here.
+# Source: PyTorch's own install selector.
+selector_url: https://pytorch.org/get-started/locally/
+
+builds:
+  volta:
+    build: cu126
+    source: >-
+      Measured on the project's Tesla V100-SXM2 machines (sm_70): torch 2.10.0+cu126 and
+      torch 2.14.0+cu126 run the engine, and torch 2.14.0+cu126 is the stack the engine is
+      served and certified on. The default PyPI torch and the cu128, cu129, cu130 and cu132
+      builds were not usable there (README.md, "NVIDIA V100 (Volta)").
+
+# The build for a machine with no GPU. Source: PyTorch's CPU-only index, as
+# printed by https://pytorch.org/get-started/locally/ for "Compute Platform: CPU".
+cpu_only:
+  build: cpu
+  source: PyTorch's CPU-only wheel index (pytorch.org/get-started/locally, Compute Platform CPU).

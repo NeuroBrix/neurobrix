@@ -47,6 +47,16 @@ CACHE_DIR = _cache_dir()               # Extracted models (runtime)
 import os as _os
 REGISTRY_URL = _os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
 
+# The model references `neurobrix import --help` and its error messages show as
+# examples. Each is a model the hub serves, as recorded in
+# docs/reference/model-status.md (the "(registry)" column); a test holds them to
+# that record, so a renamed or withdrawn model fails the suite instead of
+# lingering in the help. `neurobrix hub` lists the live catalogue.
+IMPORT_EXAMPLES = (
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "hexgrad/Kokoro-82M",
+)
+
 
 def find_model(model_name: str) -> Path:
     """

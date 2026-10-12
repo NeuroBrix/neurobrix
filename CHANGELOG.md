@@ -70,6 +70,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`neurobrix doctor` recommends the PyTorch build the engine runs on.** On an NVIDIA V100 it
+  named a `cu121` wheel; it now names `cu126`, the build measured on V100 (torch 2.14.0+cu126).
+  The recommendation is read from `config/torch_wheels.yml`, where each build carries its source.
+  For a GPU with no measured build, doctor says so and points to the PyTorch install selector
+  instead of naming an untested build.
+
+- **`neurobrix import --help` shows models the hub serves.** The examples were names the hub never
+  carried (`pixart/sigma-xl-1024`, `deepseek/janus-pro-7b`, `sana/1600m-1024`). They now show
+  `TinyLlama/TinyLlama-1.1B-Chat-v1.0` and `hexgrad/Kokoro-82M`, and point to `neurobrix hub` for
+  the full list.
+
+- **`neurobrix run --help` describes `--triton` plainly.** It now says the mode runs NeuroBrix's
+  own Triton kernels without cuDNN or cuBLAS and needs the `triton` package. An internal remark
+  has been removed from the help text.
+
 - **Triton mode runs graphs that cast to bool again.** A model whose graph casts a tensor to bool
   (Allegro among them) stopped in the Triton mode with `unknown dtype 'bool_'`; it runs again.
 

@@ -62,13 +62,43 @@ def _driver_version() -> str | None:
         return None
 
 
+def _torch_wheels() -> dict:
+    """The wheel table, `config/torch_wheels.yml`: one measured build per
+    architecture, each with its source. Read every time — doctor runs once."""
+    import yaml
+    from neurobrix.core.config.loader import CONFIG_ROOT
+    with open(CONFIG_ROOT / "torch_wheels.yml") as f:
+        return yaml.safe_load(f)
+
+
 def _torch_install_hint(cap: str | None) -> str:
-    """The exact command that fixes a mismatched torch, per GPU generation."""
-    if cap and cap.startswith("7.0"):
-        return ("pip install --force-reinstall torch "
-                "--index-url https://download.pytorch.org/whl/cu121")
-    return ("pip install --force-reinstall torch "
-            "--index-url https://download.pytorch.org/whl/cu124")
+    """The command that fixes a mismatched torch on this GPU, read from the
+    wheel table by the GPU's architecture.
+
+    An architecture the table does not list has no measured build, and the
+    hint says so and sends the user to PyTorch's selector instead of naming
+    a build nobody ran on it.
+    """
+    from neurobrix.core.prism.autodetect import _nvidia_cc_to_arch
+    table = _torch_wheels()
+    index_url = table["index_url"]
+    arch = _nvidia_cc_to_arch(cap) if cap else None
+    if arch in table["builds"]:
+        build = table["builds"][arch]["build"]
+        return (f"pip install --force-reinstall torch "
+                f"--index-url {index_url}{build}")
+    return (f"no PyTorch build has been measured on this GPU "
+            f"({arch or 'architecture unknown'}); pick the CUDA build your "
+            f"driver supports at {table['selector_url']}, then:\n"
+            f"        pip install --force-reinstall torch "
+            f"--index-url {index_url}<cuda-build>")
+
+
+def _cpu_install_hint() -> str:
+    """The CPU-only torch install command, from the wheel table."""
+    table = _torch_wheels()
+    return (f"pip install torch --index-url "
+            f"{table['index_url']}{table['cpu_only']['build']}")
 
 
 def check_compute_environment() -> list[str]:
@@ -139,8 +169,7 @@ def check_compute_environment() -> list[str]:
                   f"(CUDA {cuda_build}) on a machine with no")
             print("    NVIDIA GPU — that is several GB of unused wheels. For a "
                   "CPU-only install:")
-            print("      pip install torch --index-url "
-                  "https://download.pytorch.org/whl/cpu")
+            print(f"      {_cpu_install_hint()}")
             print("      pip install neurobrix")
         return problems
 
