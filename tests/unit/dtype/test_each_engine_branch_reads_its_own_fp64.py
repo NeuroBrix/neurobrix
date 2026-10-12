@@ -297,7 +297,12 @@ def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch)
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
     kw = dict(attention_operands="narrowest", has_native_bf16=False,
               contract=conservative_contract("test: no contract"), stores_fp64=False)
-    dag = {"ops": {}, "tensors": {"w": {"dtype": "float64", "shape": [4]}}, "execution_order": []}
+    # An embedded fp64 constant in a half graph: the vendor's own precision, which the compiled
+    # engine keeps (`compiled_constant_dtype`) and its ceiling then narrows. (A floating WEIGHT is
+    # converted to the compute dtype by the compiled loader, b16e2f93, so no ceiling is reached.)
+    dag = {"ops": {}, "torch_dtype": "float16", "execution_order": [],
+           "tensors": {"w": {"dtype": "float64", "shape": [4], "constant": True,
+                             "constant_data": [0.0, 1.0, 2.0, 3.0]}}}
     assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float32"
     triton_before = runtime_dtypes(dag, "float16", "triton", **kw)["w"]
     monkeypatch.setattr(core_itemsize, "storage_dtype",

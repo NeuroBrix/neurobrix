@@ -100,6 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Triton mode runs graphs that cast to bool again.** A model whose graph casts a tensor to bool
   (Allegro among them) stopped in the Triton mode with `unknown dtype 'bool_'`; it runs again.
 
+- **The native (PyTorch) mode loads every floating-point weight in the plan's precision.** A
+  weight file mixing float32 and bfloat16 tensors whose first tensor already had the plan's
+  precision was loaded unconverted, so a component placed on the CPU (which computes in float32)
+  kept its bfloat16 weights. The memory plan of the native mode now also counts each weight and
+  embedded constant at the precision that mode loads it in, rather than the Triton mode's.
+
 - **A mixture-of-experts plan on Apple unified memory is refused at planning when its experts would
   fail to load.** When the experts are read straight from the model files, they must already be
   stored in the precision the run computes in. A model stored in another precision was accepted by
