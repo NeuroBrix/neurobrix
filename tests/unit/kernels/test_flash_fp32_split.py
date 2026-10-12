@@ -221,7 +221,7 @@ def test_range_edges(edge):
     _gate(q, k, v, conditioned=conditioned)
 
 
-_BF16_ULP = 2.0 ** -8      # bfloat16: 8 significand bits
+_BF16_ULP = 2.0 ** -7      # bfloat16: 7 stored significand bits (8 with the implicit one): values 2^e apart by 2^(e-7)
 
 
 def _bf16_round(x):
@@ -238,27 +238,42 @@ def test_a_bfloat16_attention_through_the_split_is_fp32_level_inside(L, D):
     correctly rounded bf16 of the fp64 oracle only where the oracle lies within the kernel's internal error of a
     rounding boundary. With an fp32-level inside (~4 eps32 relative) that is a fraction ~ 2 x 4 eps32 / ulp_bf16
     = 1e-3 of the elements, every one by ONE bf16 ulp; with an fp16-level inside (the lo terms dropped, ~1e-3
-    relative) half the elements would differ. Bound: at most 1 % of the elements differ, and by at most one ulp
-    of the oracle's binade. The FMA path (unit withheld) on the same bf16 inputs is held to the same bound: the two
-    paths of one dtype agree with the oracle alike."""
+    relative) half the elements would differ. Bound: at most 1 % of the elements differ, each by at most one ulp
+    of the binade the oracle OR the result lies in (a value rounded up into the next binade is one ulp of THAT
+    binade away) plus the inside's fp32-level error taken against the UNCANCELLED weighted sum sum_k p_k |v_k| /
+    sum p — a dot product's error scales with that sum, not with its result, so an element that cancels to near
+    zero keeps the row's absolute error, far above its own ulp (first measurements 2026-10-12: 0.02-0.04 % off,
+    maxima exactly 2.00 'ulp' and 10 'ulp' on a near-zero element — the first because the gate's ulp constant was
+    2^-8 where bfloat16's spacing is 2^-7 (7 stored bits), so every one-ulp element read as two; the second the
+    cancellation above). The FMA path (unit withheld) on the same bf16 inputs is the Dao kernel with bf16 operands: it
+    rounds the scaled Q and the probabilities P to bf16 before their products (ops/flash_attention.py, `p = p.to(v.dtype)`),
+    as the vendor's own bf16 attention does on this hardware (the math path: bf16 scores, bf16 P) — a bf16-level inside,
+    so about half its elements differ from the correctly rounded oracle (measured 2026-10-12: 51.6 %, max 478 ulp of a
+    cancelling element's binade). It is held to THAT inside: one ulp plus 2^-8 of the uncancelled sum, no fraction
+    clause. The split path is the one that is fp32-level inside."""
     from neurobrix.kernels.nbx_tensor import NBXDtype
     rng = np.random.default_rng(L + D)
     q32, k32, v32 = (rng.standard_normal((1, 2, L, D)).astype(np.float32) for _ in range(3))
     q, k, v = (_bf16_round(x).astype(np.float32) for x in (q32, k32, v32))     # the bf16 values, exactly
     rows = np.unique(np.r_[0, L - 1, rng.integers(0, L, 126)])
     ref = _oracle_rows(q, k, v, rows, 0.0, 1.0 / np.sqrt(D))
-    ulp = _BF16_ULP * 2.0 ** np.floor(np.log2(np.maximum(np.abs(ref), 1e-300)))
+    uncancelled = _oracle_rows(q, k, np.abs(v), rows, 0.0, 1.0 / np.sqrt(D))   # same p, |v|: the sum before cancellation
     for unit in (True, False):
         got, how = _run(q, k, v, unit=unit, dtype=NBXDtype.bfloat16)
         assert (how is True) if unit else (how is None)
         g = got[:, :, rows]
         off = np.abs(g - _bf16_round(ref))
+        ulp = _BF16_ULP * 2.0 ** np.floor(np.log2(np.maximum(np.maximum(np.abs(ref), np.abs(g)), 1e-300)))
+        inside = 4 * _EPS32 if unit else 2.0 ** -8          # fp32-level through the split; bf16-level Q and P on the FMA path
+        bound = ulp + inside * uncancelled
         frac = float((off > 0).mean())
         print(f"\n  bf16 {'split' if unit else 'FMA'} {L}x{D}: {frac * 100:.3f} % of elements off the rounded oracle, "
-              f"max {float((off / ulp).max()):.2f} ulp")
+              f"max {float((off / ulp).max()):.2f} ulp of the binade, max {float((off / bound).max()):.2f} of the bound")
         assert np.isfinite(g).all()
-        assert (off <= ulp * (1 + 1e-9)).all(), "an element more than one bf16 ulp from the rounded oracle"
-        assert frac <= 0.01, f"{frac * 100:.2f} % of the elements off the correctly rounded oracle"
+        assert (off <= bound * (1 + 1e-9)).all(), \
+            "an element further from the rounded oracle than one ulp of its binade plus the inside's error on the uncancelled sum"
+        if unit:
+            assert frac <= 0.01, f"{frac * 100:.2f} % of the elements off the correctly rounded oracle"
 
 
 @gpu
