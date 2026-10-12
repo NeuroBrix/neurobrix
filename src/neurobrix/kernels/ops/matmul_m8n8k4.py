@@ -171,6 +171,24 @@ def _pow2(e):
 
 
 @gluon.jit
+def split_exponent(m, HI_EXP: gl.constexpr):
+    """The exponent s of the power-of-two scale 2^s that brings a largest magnitude m (fp32) into
+    [2^HI_EXP, 2^(HI_EXP+1)): 0 for m = 0, clamped to the fp32 normal range."""
+    e = ((m.to(gl.int32, bitcast=True) >> 23) & 0xFF) - 127
+    s = gl.where(m == 0.0, 0, HI_EXP - e)
+    return gl.minimum(gl.maximum(s, -126), 126)
+
+
+@gluon.jit
+def hi_lo(x, LO_SHIFT: gl.constexpr):
+    """fp32 x (already scaled) as hi = fp16(x) and lo = fp16((x - hi) 2^LO_SHIFT); lo is 0 where hi holds x whole
+    (an infinity among them)."""
+    hi = x.to(gl.float16)
+    h32 = hi.to(gl.float32)
+    return hi, gl.where(h32 == x, 0.0, (x - h32) * (1 << LO_SHIFT)).to(gl.float16)
+
+
+@gluon.jit
 def _stage_split(s_hi, s_lo, tile, K_INNER: gl.constexpr, R: gl.constexpr, KK: gl.constexpr,
                  HI_EXP: gl.constexpr, LO_SHIFT: gl.constexpr):
     """Stage one operand tile as hi + lo of the unit's operand dtype, each row (k along the columns) or column (k
@@ -178,14 +196,8 @@ def _stage_split(s_hi, s_lo, tile, K_INNER: gl.constexpr, R: gl.constexpr, KK: g
     s = 0; s is clamped to the fp32 normal range. A value hi already holds whole (an infinity among them) has lo 0."""
     x = tile.to(gl.float32)
     KA: gl.constexpr = 1 if K_INNER else 0
-    m = gl.max(gl.abs(x), axis=KA)
-    e = ((m.to(gl.int32, bitcast=True) >> 23) & 0xFF) - 127
-    s = gl.where(m == 0.0, 0, HI_EXP - e)
-    s = gl.minimum(gl.maximum(s, -126), 126)
-    x = x * gl.expand_dims(_pow2(s), KA)
-    hi = x.to(gl.float16)
-    h32 = hi.to(gl.float32)
-    lo = gl.where(h32 == x, 0.0, (x - h32) * (1 << LO_SHIFT)).to(gl.float16)
+    s = split_exponent(gl.max(gl.abs(x), axis=KA), HI_EXP)
+    hi, lo = hi_lo(x * gl.expand_dims(_pow2(s), KA), LO_SHIFT)
     if K_INNER:
         stage_k_inner(s_hi, hi, R, KK)
         stage_k_inner(s_lo, lo, R, KK)
