@@ -82,6 +82,7 @@ MODES = {"native": [], "triton": ["--triton"], "triton-sequential": ["--triton-s
 #: container the engine finds elsewhere (a NAS mount, for one that does not fit the local disk) was refused as
 #: absent before its cell could run (the Mac, 2026-10-04: Qwen3-Coder-30B in place from the mount).
 from neurobrix.core import paths as _engine_paths  # noqa: E402
+from neurobrix.nbx.atomic_install import is_install_artifact  # noqa: E402
 
 CACHE = _engine_paths.cache_dir()
 #: The certified reference a cell reads, under the `--src` tree: the directory and the census tables.
@@ -654,7 +655,11 @@ def full_matrix(cache: Path = None) -> set:
     """Every cell a gate holds: each container of the shared cache (a directory with a manifest) in
     every gate mode — derived from the cache, never a hand-kept list."""
     cache = cache or CACHE
-    return {(d.name, mode) for d in cache.iterdir() if (d / "manifest.json").exists() for mode in GATE_MODES}
+    # A staging or aside directory of an installation carries a manifest from its first member on and is
+    # never a model (atomic_install.is_install_artifact): on 2026-10-12 the Ming-Lite-Omni-1.5 restore's
+    # `.Ming-Lite-Omni-1.5.installing` made this door refuse nine 16 GB cells for "2 of 100 missing".
+    return {(d.name, mode) for d in cache.iterdir()
+            if (d / "manifest.json").exists() and not is_install_artifact(d.name) for mode in GATE_MODES}
 
 
 def cells_of_lists(paths) -> set:
