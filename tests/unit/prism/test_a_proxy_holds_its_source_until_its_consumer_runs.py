@@ -30,6 +30,12 @@ SEEN RED (2026-09-28): the solver's `source_holding_uids=` argument removed ->
 test_the_sana_4k_decoder_is_priced_at_what_it_held reads 12 288 MB; the holder
 branch of the profiler's alias loop disabled -> both synthetic tests red as well.
 
+RETRACED 2026-10-12 (Forge 4730493, the VAE traced at its own 7x10 latent): the same figure and
+peak op on the new graph once the in-place adds and residual chains are sized at the REQUEST, not
+at the DAG's traced extents (`PrismSolver._request_shape_of`). SEEN RED with it returning None:
+18 432 MB at aten.add::86 — no in-place add and no chain sentinel reached the 1 GiB thresholds at
+224x320, so every merge add was priced as a fresh fp32 buffer.
+
 Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src python -m pytest -q \
      tests/unit/prism/test_a_proxy_holds_its_source_until_its_consumer_runs.py
 """

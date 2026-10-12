@@ -1253,6 +1253,7 @@ class OpLevelTilingEngine:
     @staticmethod
     def _detect_inplace_add_candidates(
         graph_executor, threshold_bytes: Optional[int] = None,
+        shape_of: Optional[Callable[[str], Optional[List[int]]]] = None,
     ) -> "List[Tuple[str, int]]":
         """Scan the GraphExecutor's DAG for residual aten::add ops where
         liveness analysis proves at least one input has its last use at
@@ -1271,6 +1272,17 @@ class OpLevelTilingEngine:
         residual merges (DC-AE, ResNet residual blocks at high spatial
         resolution, etc.). On Sana 4Kpx VAE, returns 26 candidates
         (8 above 4 GiB at the 4096×4096 res, 4 above 4 GiB at 2048×2048).
+
+        SIZE IS A PROPERTY OF THE REQUEST. `shape_of(tensor_id)` returns a
+        tensor's extents at the request being planned (Prism passes its
+        profiler's resolution under the request's symbol map); the byte
+        threshold and the residual shape test read it. Without it the
+        detector reads the DAG's `input_shapes` / `output_shapes` — the
+        extents the model was TRACED at. Sana_1600M_4Kpx_BF16's VAE retraced
+        at its own 7x10 latent (Forge 4730493, 2026-10-12) put every merge
+        add at 224x320, under the 1 GiB threshold, and the plan for a
+        3072x4096 decode installed none of the adds a 128x128-latent trace
+        had exceeded it with: 15 360 MB planned became 18 432 MB.
         """
         if threshold_bytes is None:
             threshold_bytes = _tsz.inplace_min_bytes()
@@ -1324,6 +1336,14 @@ class OpLevelTilingEngine:
             oshapes = op.get("output_shapes", [])
             if len(inp_tids) < 2 or len(ishapes) < 2 or not oshapes:
                 continue
+            if shape_of is not None:
+                _outs = op.get("output_tensor_ids", [])
+                if not _outs:
+                    continue
+                ishapes = [shape_of(inp_tids[0]), shape_of(inp_tids[1])]
+                oshapes = [shape_of(_outs[0])]
+                if ishapes[0] is None or ishapes[1] is None or oshapes[0] is None:
+                    continue
             sh_a = ishapes[0]
             sh_b = ishapes[1]
             sh_o = oshapes[0]
@@ -1358,6 +1378,7 @@ class OpLevelTilingEngine:
     def _detect_residual_chains(
         graph_executor,
         threshold_bytes: Optional[int] = None,  # tiling_sizes.residual_chain_min_base_bytes_fp32()
+        shape_of: Optional[Callable[[str], Optional[List[int]]]] = None,
     ) -> "List[Dict[str, Any]]":
         """Detect long residual chains (`fork → ≥3-op chain → merge`).
 
@@ -1390,6 +1411,11 @@ class OpLevelTilingEngine:
         Validated on Sana 4Kpx VAE: matches 4 chains (one per DC-AE
         block at 4096², 2048², 1024², 512²). Anti-pattern check:
         returns [] for Sana 1024 VAE, PixArt KL-AE, TinyLlama, etc.
+
+        `shape_of(tensor_id)`: the tensor's extents at the REQUEST, as for
+        `_detect_inplace_add_candidates` (see there): the base-size threshold,
+        the spatial test and the spec's `shape` / `bytes_fp32` (which set the
+        band factor) are read from it. Without it, the DAG's traced extents.
         """
         if threshold_bytes is None:
             threshold_bytes = _tsz.residual_chain_min_base_bytes_fp32()
@@ -1461,6 +1487,12 @@ class OpLevelTilingEngine:
         chains: List[Dict[str, Any]] = []
         seen_chains: set = set()
 
+        def _out_shape(op):
+            if shape_of is None:
+                return (op.get("output_shapes") or [None])[0]
+            outs = op.get("output_tensor_ids") or []
+            return shape_of(outs[0]) if outs else None
+
         for fork_uid in order:
             fork_op = ops_by_uid.get(fork_uid)
             if fork_op is None:
@@ -1476,7 +1508,7 @@ class OpLevelTilingEngine:
             if len(t_base_consumers) != 2:
                 continue
             # Check shape threshold (use fp32 as conservative estimate)
-            fork_oshape = fork_op.get("output_shapes", [None])[0]
+            fork_oshape = _out_shape(fork_op)
             if not fork_oshape or len(fork_oshape) != 4:
                 continue
             elems = 1
@@ -1550,8 +1582,7 @@ class OpLevelTilingEngine:
             # a spatial chain).
             shapes_consistent = True
             for cu in chain_uids:
-                shp = ops_by_uid.get(cu, {}).get("output_shapes",
-                                                [None])[0]
+                shp = _out_shape(ops_by_uid.get(cu, {}))
                 if not shp or len(shp) != 4:
                     shapes_consistent = False
                     break
