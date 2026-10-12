@@ -1190,16 +1190,13 @@ class DtypeEngine:
         """
         if self.storage_dtype(tensor.dtype) != tensor.dtype:
             tensor = tensor.to(self.storage_dtype(tensor.dtype))
-        if not tensor.is_floating_point():
-            return tensor
         if self.compute_dtype is None:
             return tensor
-        if tensor.dtype == self.compute_dtype:
-            return tensor
-        # Only convert if the constant matches graph_dtype
-        if self.graph_dtype is not None and tensor.dtype != self.graph_dtype:
-            return tensor  # Intentional different-precision constant
-        return tensor.to(self.compute_dtype)
+        # THE rule, torch-free, shared with Prism's width pass (runtime_widths._AtenRules).
+        from neurobrix.core.dtype.config import compiled_constant_dtype
+        want = compiled_constant_dtype(_dtype_name(tensor.dtype), _dtype_name(self.compute_dtype),
+                                       _dtype_name(self.graph_dtype))
+        return tensor if want == _dtype_name(tensor.dtype) else tensor.to(getattr(torch, want))
 
     # ========================================================================
     # INTERNAL — _to_copy compilation

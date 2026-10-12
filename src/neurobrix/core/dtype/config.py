@@ -89,6 +89,42 @@ def parse_dtype(dtype_str: str, compute_dtype: Optional[torch.dtype] = None) -> 
     return parsed
 
 
+def is_floating_name(name: str) -> bool:
+    """`torch.dtype.is_floating_point` on a dtype NAME, torch-free: every `float*` and `bfloat16`
+    (the fp8 formats included), never a complex or an integer. A test holds it equal to torch's
+    own predicate over every dtype torch defines."""
+    return name.startswith("float") or name == "bfloat16"
+
+
+def compiled_weight_dtype(stored: str, compute: str) -> str:
+    """The dtype (a name) the COMPILED engine holds a weight loaded from the container's shards in,
+    under the compute dtype `compute` — the dtype the DtypeEngine's placement decision gives the
+    component (`engine.compute_dtype_for_placement`, `GraphExecutor._placement_torch_dtype`).
+
+    THE rule of the ATen loader (`core/io/weight_loader.WeightLoader`, every tensor of every shard),
+    read by Prism's width pass (`runtime_widths._AtenRules`) and by the expert-file views
+    (`expert_files.held_dtype`): every floating weight is converted to the compute dtype, whatever
+    it was stored in — an fp16 weight under an fp32 plan is held fp32 — and every other weight
+    keeps its stored dtype. The Triton engine's loader has its own rule
+    (`triton/weight_loader.stored_dtype_in_compute`: a half or fp32 weight follows the compute
+    half, anything else is kept), so the two engines' widths differ where their loaders do."""
+    return compute if is_floating_name(stored) else stored
+
+
+def compiled_constant_dtype(traced: str, compute: str, graph: Optional[str]) -> str:
+    """The dtype (a name) the COMPILED engine binds a constant embedded in graph.json in
+    (`DtypeEngine.convert_constant`, which calls this): a floating constant whose dtype is the
+    component's GRAPH dtype `graph` (or any floating one when the graph states none) is converted
+    to the compute dtype; a floating constant in another dtype is the vendor's own choice (an fp32
+    `inv_freq` in a half graph) and is kept; a non-floating one is kept. `traced` is the dtype as
+    the device stores it (the caller narrows float64 where the device has no fp64)."""
+    if not is_floating_name(traced) or traced == compute:
+        return traced
+    if graph is not None and traced != graph:
+        return traced
+    return compute
+
+
 def strip_aten_prefix(op_type: str) -> str:
     """
     Strip 'aten::' prefix and variant suffix from op_type string.
