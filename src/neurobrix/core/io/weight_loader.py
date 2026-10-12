@@ -615,7 +615,7 @@ class WeightLoader:
                 block_weights = self._load_weight_file(weight_file, "cpu", None)
                 for key, tensor in list(block_weights.items()):
                     target_device = key_devices.get(key, default_device)
-                    if dtype is not None and tensor.is_floating_point():
+                    if dtype is not None and self.held_dtype(tensor.dtype, dtype) != tensor.dtype:
                         tensor = safe_dtype_convert(tensor, dtype)
                     tensor = tensor.to(target_device)
                     results.append((key, tensor))
@@ -627,7 +627,7 @@ class WeightLoader:
                 block_weights = self._load_weight_file(weight_file, "cpu", None)
                 for key, tensor in list(block_weights.items()):
                     target_device = self._match_fgp_key(key, shard_map) or default_device
-                    if dtype is not None and tensor.is_floating_point():
+                    if dtype is not None and self.held_dtype(tensor.dtype, dtype) != tensor.dtype:
                         tensor = safe_dtype_convert(tensor, dtype)
                     tensor = tensor.to(target_device)
                     results.append((key, tensor))
@@ -922,13 +922,11 @@ class WeightLoader:
         # One tensor at a time: read, converted, pinned, uploaded, dropped — the host holds the tensors in
         # flight, not the shard. Reading the whole shard, then converting it into a second dict, then
         # pinning it into a third held three copies of every shard the workers had open: deepseek-moe
-        # layer_streaming peaked at 75-87 GB of RSS against 62 GB priced (2026-10-10). The dtype decision
-        # is the one `_convert_weights_dtype` makes for a shard, taken on the shard's first floating
-        # tensor in file order, so the bytes are the same.
+        # layer_streaming peaked at 75-87 GB of RSS against 62 GB priced (2026-10-10). Each tensor is held
+        # in the dtype `held_dtype` names — the one `_convert_weights_dtype` applies.
         from safetensors import safe_open
         only = getattr(self, "_only", None)
         weights: Dict[str, torch.Tensor] = {}
-        convert: Optional[bool] = None if dtype is not None else False
         # At most PINNED_IN_FLIGHT uploads outstanding per worker: a pinned block returns to PyTorch's host
         # cache only once its copy is done, so unbounded non-blocking uploads let the cache grow with the
         # disk-vs-PCIe race (deepseek-moe layer_streaming: RssShmem 1.0 -> 3.7 GB over one run, 2026-10-10).
@@ -938,10 +936,10 @@ class WeightLoader:
                 if only is not None and k not in only:
                     continue
                 t = f.get_tensor(k)
-                if convert is None and t.is_floating_point():
-                    convert = t.dtype != dtype
-                if convert and t.is_floating_point() and t.dtype != dtype:
-                    t = safe_dtype_convert(t, dtype)
+                if dtype is not None:
+                    want = self.held_dtype(t.dtype, dtype)
+                    if want != t.dtype:
+                        t = safe_dtype_convert(t, want)
                 if is_cuda:
                     # Pinned for the non-blocking DMA; the caller syncs once after every shard.
                     if len(in_flight) >= PINNED_IN_FLIGHT:
@@ -1055,27 +1053,31 @@ class WeightLoader:
         dtype: torch.dtype,
     ) -> Dict[str, torch.Tensor]:
         """
-        Convert weights to target dtype (from Prism hardware profile).
+        Every weight in the dtype `held_dtype` names under the placement dtype `dtype`
+        (bfloat16 → float16 with safe clamping, `safe_dtype_convert`).
 
-        ARCHITECTURE (ZERO HARDCODE):
-        - Only floating-point tensors are converted
-        - Integer tensors (indices, attention masks) are preserved
-        - bfloat16 → float16 uses safe clamping to avoid overflow
+        Decided per TENSOR. A shard-wide shortcut stood here — no tensor of a shard converted when its
+        FIRST floating tensor already had `dtype`. Shards mixing fp32 and bf16 exist (Wan2.1-VACE's
+        transformer and openaudio's codec start with an fp32 tensor): under an fp32 plan (a host
+        placement) their bf16 weights stayed bf16, while Prism priced and the expert-file views held
+        every floating weight at the plan's dtype. Under the half plans the V100 profiles give them,
+        the first tensor already differed and every weight was converted, as now.
         """
-        # Early exit: check if first floating-point tensor already matches
-        for t in weights.values():
-            if t.is_floating_point():
-                if t.dtype == dtype:
-                    return weights  # No conversion needed
-                break  # Needs conversion
-
         converted = {}
         for name, tensor in weights.items():
-            if tensor.is_floating_point() and tensor.dtype != dtype:
-                converted[name] = safe_dtype_convert(tensor, dtype)
-            else:
-                converted[name] = tensor
+            want = self.held_dtype(tensor.dtype, dtype)
+            converted[name] = tensor if want == tensor.dtype else safe_dtype_convert(tensor, want)
         return converted
+
+    @staticmethod
+    def held_dtype(stored: torch.dtype, dtype: torch.dtype) -> torch.dtype:
+        """The dtype this loader holds a weight stored as `stored` in, under the placement dtype
+        `dtype` — `core/dtype/config.compiled_weight_dtype`, the rule Prism's width pass and the
+        expert-file views read: every floating weight at `dtype`, every other as stored."""
+        from neurobrix.core.dtype.config import compiled_weight_dtype
+        name = str(stored).replace("torch.", "")
+        want = compiled_weight_dtype(name, str(dtype).replace("torch.", ""))
+        return stored if want == name else dtype
 
     def get_graph(self, component_name: str) -> Optional[Dict]:
         """
