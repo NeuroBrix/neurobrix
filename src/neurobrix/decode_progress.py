@@ -32,6 +32,24 @@ TokenListener = Callable[[int, int, int, bool], None]
 
 _local = threading.local()
 
+# The run's token tally — always on, process-wide: how many tokens the run
+# emitted and the monotonic instant of its last one. The FIRST token is not
+# kept here: it is the `flow.first_token` phase mark, stamped from this emit
+# site for every flow that decodes (core/runtime/phase_trace.py), so the
+# phase trace and the run's timings read the same instant.
+_tally = {"n": 0, "last": None}
+
+
+def reset_tally() -> None:
+    """Open a fresh token tally (one request)."""
+    _tally["n"] = 0
+    _tally["last"] = None
+
+
+def tally() -> dict:
+    """{"n": tokens emitted since the reset, "last": monotonic instant of the last one}."""
+    return dict(_tally)
+
 
 def set_listener(fn: TokenListener) -> None:
     """Register the per-token listener for the current thread."""
@@ -44,7 +62,14 @@ def clear_listener() -> None:
 
 
 def emit(step_idx: int, n_generated: int, token_id: int, is_done: bool) -> None:
-    """Emit one per-token event to the current thread's listener, if any."""
+    """Emit one per-token event to the current thread's listener, if any, and
+    count it in the run's tally (the first one marks `flow.first_token`)."""
+    now = time.monotonic()
+    if _tally["n"] == 0:
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
+        _phase_mark("flow.first_token")
+    _tally["n"] += 1
+    _tally["last"] = now
     fn: Optional[TokenListener] = getattr(_local, "listener", None)
     if fn is not None:
         fn(step_idx, n_generated, token_id, is_done)

@@ -474,6 +474,8 @@ def cmd_run(args):
 
     # 1. Load NBX Container
     print("\n[1/4] Loading NBX container...")
+    from neurobrix.core.runtime import run_timings
+    run_timings.open_container()
     container = NBXContainer.load(str(nbx_path))
 
     # DATA-DRIVEN: Validate inputs against family YAML inputs.required spec
@@ -880,8 +882,10 @@ def cmd_run(args):
     try:
         _drain_device()
         t_exec_start = time.time()
+        run_timings.begin_request()
         outputs = executor.execute(inputs)
         _drain_device()
+        run_timings.end_request()
         t_exec_total = time.time() - t_exec_start
     except Exception as e:
         print(f"\n[ERROR] Pipeline failed: {e}")
@@ -891,6 +895,9 @@ def cmd_run(args):
 
     # 6a. Print timing summary
     print(f"\n[Timing] Total execution: {t_exec_total:.2f}s")
+    # The run's four timings on one parseable line (core/runtime/run_timings.py),
+    # read by the gate harness into each row.
+    print(run_timings.format_line(run_timings.measured()), flush=True)
 
     # 7. Save output — DATA-DRIVEN by family YAML output_format
     family = pkg.manifest.get("family")
