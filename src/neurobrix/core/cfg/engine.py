@@ -513,6 +513,14 @@ class CFGEngine:
         return uncond_output + guidance_scale * (cond_output - uncond_output)
 
 
+
+def txt_ids_carry_a_sequence_axis(shape) -> bool:
+    """Whether the declared text-id width holds a text-sequence axis beyond (t, h, w): four
+    channels do (the FLUX.2 convention, L in the last channel); three do not (FLUX.1 / Flex.1:
+    the text ids are zeros). Read from the container's declared shape, the same in both engines."""
+    return int(shape[-1]) >= 4
+
+
 def _synthesize_position_ids(ctx: 'FlowContext', comp_inputs: list, comp_shapes: dict) -> None:
     """Synthesize position IDs for guidance-embedding models (Flux-style)."""
     import math
@@ -520,15 +528,20 @@ def _synthesize_position_ids(ctx: 'FlowContext', comp_inputs: list, comp_shapes:
     if "txt_ids" in comp_inputs and "txt_ids" in comp_shapes:
         shape = comp_shapes["txt_ids"]
         txt_ids = torch.zeros(shape, dtype=torch.long)
-        # Text tokens carry sequential position in the LAST channel (L-coordinate).
-        # Convention: [t=0, h=0, w=0, l=position_index] for 4D position encoding.
-        # This matches diffusers _prepare_text_ids: cartesian_prod(t, h, w, arange(L)).
-        if len(shape) == 3:
-            seq_len = shape[1]
-            txt_ids[0, :, -1] = torch.arange(seq_len)
-        else:
-            seq_len = shape[0]
-            txt_ids[:, -1] = torch.arange(seq_len)
+        # The text ids follow the WIDTH the container declares (the vendor's convention is read
+        # from it, never from the model's name): three axes (t, h, w) — FLUX.1 / Flex.1 —
+        # are all zeros for every text token (diffusers pipeline_flux.py `encode_prompt`:
+        # `text_ids = torch.zeros(prompt_embeds.shape[1], 3)`); a fourth axis is the text
+        # sequence coordinate L (diffusers pipeline_flux2_klein.py `_prepare_text_ids`:
+        # `cartesian_prod(t, h, w, arange(L))`), written into that last channel. Measured
+        # 2026-10-12: writing L into the third channel of Flex.1-alpha's 3-axis ids gave every
+        # text token an image-grid rotary (sin table l2 165.9 against the vendor's 131.2) and,
+        # on the vendor's own draw at 512x384, red petals where the vendor renders the apple.
+        if txt_ids_carry_a_sequence_axis(shape):
+            if len(shape) == 3:
+                txt_ids[0, :, -1] = torch.arange(shape[1])
+            else:
+                txt_ids[:, -1] = torch.arange(shape[0])
         ctx.variable_resolver.set("global.txt_ids", txt_ids)
 
     if "img_ids" in comp_inputs and "img_ids" in comp_shapes:
