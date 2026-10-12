@@ -72,3 +72,15 @@ def test_a_gate_run_asking_a_sequential_cell_is_refused_before_any_cell(tmp_path
               timeout=60, rerun=False, gate_lists=[str(tmp_path / "l")])
     assert R.cmd_run(args) == 2
     assert not (tmp_path / "o").exists()
+
+
+def test_an_installers_staging_directory_is_not_a_cell(tmp_path):
+    """2026-10-12 15:48: the Ming-Lite-Omni-1.5 restore staged `.Ming-Lite-Omni-1.5.installing` — a whole
+    container, manifest included — beside the installed one; the door counted it as a model and refused
+    every 16 GB cell for "2 of 100 cells missing" until the stage was renamed: nine cells lost. A staging
+    or aside name (`atomic_install.is_install_artifact`) is never a cell, whatever it carries."""
+    cache = _cache(tmp_path, ["a"])
+    for n in [".a.installing", "a.installing.mac.123", "a.replaced.mac.1.2", "a.lock"]:
+        (cache / n).mkdir()
+        (cache / n / "manifest.json").write_text("{}")
+    assert R.full_matrix(cache) == {("a", mode) for mode in R.GATE_MODES}
