@@ -37,6 +37,7 @@ import shlex
 import argparse
 import hashlib
 import json
+import traceback
 import os
 import shutil
 import subprocess
@@ -1229,8 +1230,11 @@ class Model:
         campaign's bound on a length the vendor leaves open (a denoiser's step count, 2026-09-08)
         changes it, and arms measured on another one are another measurement."""
         if getattr(self, "_request_key", None) is None:
+            # Read from the container the cache HOLDS (`new_name`): once the install retired the cached
+            # name (Wan2.1-T2V-1.3B-Diffusers -> Wan2.1-T2V-1.3B, 2026-10-12) the old name has no
+            # topology, and reading it here answered "" — no request check, a gate recording no request.
             try:
-                self._request_key = " ".join(str(a) for a in C.request_args(self.name, self.family, list(self.args.extra)))
+                self._request_key = " ".join(str(a) for a in C.request_args(self.new_name, self.family, list(self.args.extra)))
             except Exception:                  # a container the cache does not hold yet: no check
                 self._request_key = ""
         return self._request_key
@@ -1324,7 +1328,10 @@ class Model:
         """The sequential oracle and the family protocol on the Triton engine, outputs hashed."""
         name = self.name if tag == "old" else self.new_name
         freeze = self.autotune_freeze()
-        req = C.request_args(self.name, self.family, list(self.args.extra))
+        # The request is read from the container THIS arm runs: the install retires the cached name
+        # when the registry entry differs (2026-10-12, both Wan 1.3B: new_outputs died reading
+        # cache/Wan2.1-T2V-1.3B-Diffusers/topology.json after the single write had retired it).
+        req = C.request_args(name, self.family, list(self.args.extra))
         ext = C.output_ext(self.family, req)
         # The REQUEST is part of an output's identity. An arm measured on another request — or on
         # one this state never recorded — is set aside and re-run, never compared with this one's:
@@ -1375,13 +1382,13 @@ class Model:
         the family's own measure. Image families only; others return {}."""
         if self.family != "image":
             return {}
-        req = C.request_args(self.name, self.family, list(self.args.extra))
+        req = C.request_args(self.new_name, self.family, list(self.args.extra))   # the container the cache holds
         def _opt(flag, default=None):
             return req[req.index(flag) + 1] if flag in req and req.index(flag) + 1 < len(req) else default
         prompt, seed = _opt("--prompt"), int(_opt("--seed", 42))
         gen = {}
         try:
-            gen = (json.loads((CACHE / self.name / "topology.json").read_text()).get("flow") or {}).get("generation") or {}
+            gen = (json.loads((CACHE / self.new_name / "topology.json").read_text()).get("flow") or {}).get("generation") or {}
         except (OSError, json.JSONDecodeError):
             pass
         # The request's pin wins over the container's declaration: the arms render the length the
@@ -2124,6 +2131,17 @@ class Model:
             log(f"{self.name}: staged build removed after the upload ({nbx})")
         return rc == 0
 
+    def run_step(self, name: str, fn) -> bool:
+        """Run one step; an exception it raises is RECORDED in the state as that step's failure,
+        then propagates. Before (2026-10-12, both Wan 1.3B): new_outputs raised, the process died
+        with rc=1, the state still ended at install and summary.json kept a previous attempt's line
+        — no trace of the failure anywhere but a log."""
+        try:
+            return fn()
+        except Exception as e:
+            self.mark(name, False, error=f"{type(e).__name__}: {e}"[:2000], traceback=traceback.format_exc()[-4000:])
+            raise
+
     def run_all(self):
         order = [("old_outputs", self.step_old_outputs), ("trace", self.step_trace), ("build", self.step_build),
                  ("backup", self.step_backup), ("install", self.step_install), ("new_outputs", self.step_new_outputs),
@@ -2132,7 +2150,7 @@ class Model:
             if self.done(name):
                 continue
             log(f"{self.name}: {name} …")
-            ok = fn()
+            ok = self.run_step(name, fn)
             if not ok:
                 st = self.state["steps"].get(name) or {}
                 log(f"{self.name}: {name} → {st.get('state') or 'STOPPED'} ({st.get('verdict') or st.get('error') or st.get('reason') or ('rc ' + str(st.get('rc')))})")
@@ -2211,41 +2229,46 @@ def main():
     args.extra = shlex.split(args.extra)
     summary = {}
     for m in [x for x in args.models.split(",") if x]:
-        model = Model(m, args)
-        if args.only_upload:
-            gate = model.state["steps"].get("gate") or {}
-            # The recorded verdict is what an upload needs: a PASS on the arms it was measured on
-            # stands; the chain's freshness rule (re-gate when the arms are re-measured) is not the
-            # loop's concern — at 08:34 it refused nine gated artifacts as "not PASS".
-            if gate.get("verdict", "").startswith("PASS") and gate.get("ok") is True:
-                if not model.done("upload"):
-                    log(f"{m}: upload …")
-                    model.step_upload()
-            else:
-                log(f"{m}: upload REFUSED — the gate is not PASS in the state (an upload loop never traces or builds)")
-            summary[m] = summary_line(model.state["steps"])
-            write_summary(Path(args.out))
-            continue
-        if args.stop_at:
-            # run steps up to and including stop_at
-            for name, fn in [("old_outputs", model.step_old_outputs), ("trace", model.step_trace), ("build", model.step_build),
-                             ("backup", model.step_backup), ("install", model.step_install), ("new_outputs", model.step_new_outputs),
-                             ("gate", model.step_gate), ("upload", model.step_upload)]:
-                if not model.done(name):
-                    log(f"{m}: {name} …")
-                    if not fn():
-                        break
-                if name == args.stop_at:
-                    break
-        else:
-            model.run_all()
-        summary[m] = summary_line(model.state["steps"])
-        write_summary(Path(args.out))
+        try:
+            summary[m] = run_model(Model(m, args), args)
+        finally:
+            write_summary(Path(args.out))      # every exit, a raised step included, leaves the projection current
     print(json.dumps(summary, indent=1))
     # The exit code tells the truth: a model whose chain stopped (a gate that did not pass, a refused,
     # deferred or failed upload) makes the run fail, so a marker chained on this command cannot say DONE.
     incomplete = [m for m, st in summary.items() if not (st.get("upload") == "ok")]
     return 1 if incomplete else 0
+
+
+def run_model(model: "Model", args) -> dict:
+    """One model's steps as the arguments ask; returns its summary line."""
+    m = model.name
+    if args.only_upload:
+        gate = model.state["steps"].get("gate") or {}
+        # The recorded verdict is what an upload needs: a PASS on the arms it was measured on
+        # stands; the chain's freshness rule (re-gate when the arms are re-measured) is not the
+        # loop's concern — at 08:34 it refused nine gated artifacts as "not PASS".
+        if gate.get("verdict", "").startswith("PASS") and gate.get("ok") is True:
+            if not model.done("upload"):
+                log(f"{m}: upload …")
+                model.step_upload()
+        else:
+            log(f"{m}: upload REFUSED — the gate is not PASS in the state (an upload loop never traces or builds)")
+        return summary_line(model.state["steps"])
+    if args.stop_at:
+        # run steps up to and including stop_at
+        for name, fn in [("old_outputs", model.step_old_outputs), ("trace", model.step_trace), ("build", model.step_build),
+                         ("backup", model.step_backup), ("install", model.step_install), ("new_outputs", model.step_new_outputs),
+                         ("gate", model.step_gate), ("upload", model.step_upload)]:
+            if not model.done(name):
+                log(f"{m}: {name} …")
+                if not model.run_step(name, fn):
+                    break
+            if name == args.stop_at:
+                break
+    else:
+        model.run_all()
+    return summary_line(model.state["steps"])
 
 
 if __name__ == "__main__":
