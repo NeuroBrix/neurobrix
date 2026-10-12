@@ -19,7 +19,8 @@ Steps per model (state in <out>/<model>/state.json, each idempotent):
   trace        forge trace (corrected tracer) into the toolchain's graph cache
   build        forge build → <models-root>/<model>/model.nbx
   backup       the old container copied to <backup>/<model> (restorable)
-  install      forge local --overwrite
+  install      Forge's single write (repropagate_in_place --apply --sources the extracted build):
+               re-propagated, renamed, stamped at the fixed point, under the cache lock
   new_outputs  the same two runs on the new container
   gate         bytes old vs new on both runs + graph diff (only symbolic_shape
                annotations may differ) → PASS / NEEDS_EXPLANATION / FAIL
@@ -63,7 +64,11 @@ ENGINE_PY = os.environ.get("NBX_PYTHON", PY)
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
 VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
-HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
+# A model's hub entry is read from the LIVE registry, matched by the `hf_repo` its build-toolchain
+# registry entry names (`hub_entry`). The frozen map this tool read before (retrace_2026_09_07/
+# hub_map.json) went stale as entries were renamed to their maker's repository: parakeet-tdt-1.1b's
+# restore asked for nvidia/Parakeet-TDT-1.1B and got 404 while the registry held
+# nvidia/parakeet-tdt-1.1b (2026-10-12).
 # A container with no hub entry is a NEW publication: its org, name, category, license, tags
 # and description are WRITTEN here (the owner's word of 2026-09-07 00:26 for swin2SR-x2), never
 # deduced by the tool — a model with neither a hub entry nor a written line is refused by name.
@@ -929,6 +934,66 @@ def registry_checkpoint_file(name: str) -> str | None:
     return None
 
 
+def registry_hf_repo(name: str) -> str | None:
+    """The `hf_repo` ("org/name") the build toolchain's registry names as this model's SOURCE, or None
+    when the registry has no entry for it or the entry names none."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return None
+    import yaml
+    doc = yaml.safe_load(reg.read_text()) or {}
+    for section in doc.values():
+        if isinstance(section, dict) and isinstance(section.get(name), dict):
+            repo = section[name].get("hf_repo")
+            return repo.strip().rstrip("/") if isinstance(repo, str) and repo.strip() else None
+    return None
+
+
+class HubUnreachable(RuntimeError):
+    """The live registry did not answer the listing: a model's hub entry is then UNKNOWN, never guessed."""
+
+
+def live_hub_slugs(registry: str = REGISTRY) -> list:
+    """Every "org/name" the live registry lists, all pages read (the server caps a page at 100)."""
+    import requests
+    slugs, page = [], 1
+    while True:
+        try:
+            r = requests.get(f"{registry}/api/models", params={"limit": 100, "page": page}, timeout=30)
+            r.raise_for_status()
+            body = r.json()
+            models, total = body["models"], int(body["total"])
+        except Exception as exc:  # noqa: BLE001 — named, never a silent empty listing
+            raise HubUnreachable(f"the registry {registry} did not list its models (page {page}): "
+                                 f"{type(exc).__name__}: {str(exc)[:160]}") from exc
+        slugs += [m.get("slug") or f"{m['org']}/{m['name']}" for m in models]
+        if not models or len(slugs) >= total:
+            return slugs
+        page += 1
+
+
+def hub_entry(name: str, registry: str = REGISTRY, listing=None) -> str | None:
+    """The live registry's "org/name" for this model, or None (a NEW entry). Matched by the `hf_repo` the
+    build toolchain's registry names for it, case-insensitively against the registry's org/name; the
+    registry's own spelling is returned. A model whose registry entry names no `hf_repo`, or whose
+    repository the hub does not list, is None — said by name by the caller, never looked up elsewhere.
+    Two listed entries equal but for case are ambiguous and refused by name. A missing build-toolchain
+    registry file is refused by name: without it every model would read as a new entry (a worktree
+    that does not carry the ignored `forge/` pointer)."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        raise HubUnreachable(f"{name}: the build toolchain's registry {reg} is absent — the hub entry cannot be "
+                             f"matched by hf_repo, refused")
+    repo = registry_hf_repo(name)
+    if not repo:
+        return None
+    slugs = live_hub_slugs(registry) if listing is None else listing
+    hits = sorted({s for s in slugs if s.lower() == repo.lower()})
+    if len(hits) > 1:
+        raise HubUnreachable(f"{name}: the registry lists {hits} for hf_repo {repo} — ambiguous, refused")
+    return hits[0] if hits else None
+
+
 def registry_source_repository(name: str) -> str | None:
     """The directory name of the repository the build toolchain's registry names as this model's SOURCE
     (`hf_repo`'s last segment), or None when the entry names none. The owner's naming rule (2026-09-28
@@ -996,6 +1061,104 @@ def vendor_verdict(vendor: dict) -> str:
         return f"PASS (both within the vendor gate, the new arm closer: new {pn} dB, old {po} dB)"
     return f"NEEDS_EXPLANATION (both within the vendor gate but the old arm closer: old {po} dB, new {pn} dB)"
 
+# THE FIXED-POINT DOOR (2026-10-12). The engine refuses, by name and before any weight I/O, a
+# container whose graphs carry no fixed-point declaration (`neurobrix/nbx/fixed_point.py`); the
+# declaration is written by Forge's SINGLE WRITE (`forge/tools/repropagate_in_place.py`,
+# `stamp_fixed_point`), never by `forge local`. On 2026-10-12 PixArt-Sigma-XL-2-1024-MS and
+# PixArt-XL-2-1024-MS were traced by a Forge that carried no single write and installed with
+# `forge local`: two containers in the shared cache the engine refused in both modes. The question
+# is asked BEFORE the trace, of the code that will write: Forge's own stamp is run on a synthetic
+# topology and the ENGINE's own reader judges what it wrote — no revision list, no flag name
+# copied here.
+_DOOR_SEEN: dict = {}
+
+_DOOR_PROBE = r"""
+import sys
+from pathlib import Path
+sys.path.insert(0, ".")
+from tools.repropagate_in_place import stamp_fixed_point, install_and_apply  # noqa: F401  (the install entry)
+container, comps = Path(sys.argv[1]), sys.argv[2:]
+stamp_fixed_point(container / "topology.json", comps, "retrace-zoo-door", True)
+"""
+
+
+def engine_fixed_point_reader(engine_src):
+    """The engine's `unstamped_components`, loaded from the source tree the runs use; None when that
+    engine declares no fixed-point requirement (then nothing is required of the writer)."""
+    import importlib.util
+    root = Path(engine_src).resolve() if engine_src else REPO / "src"
+    f = root / "neurobrix" / "nbx" / "fixed_point.py"
+    if not f.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_engine_fixed_point", f)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.unstamped_components
+
+
+def forge_trunk_door(forge_dir: Path):
+    """None when the Forge checkout sits at the trunk (its HEAD is the repository's `main`);
+    else the refusal, by name. Read from git, never from a list of revisions: one line only,
+    every retrace runs on Forge main (supervisor, 2026-10-12 01:25)."""
+    forge_dir = Path(forge_dir).resolve()
+
+    def git(*a):
+        r = subprocess.run(["git", "-C", str(forge_dir), *a], capture_output=True, text=True, timeout=60)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    head = git("rev-parse", "--verify", "HEAD")
+    trunk = git("rev-parse", "--verify", "refs/heads/main")
+    if head is None or trunk is None:
+        return (f"TRUNK DOOR: the Forge at {forge_dir} is not a git checkout holding a `main` "
+                f"(HEAD={head}, main={trunk}); a retrace runs on the trunk only; nothing traced")
+    if head != trunk:
+        branch = git("rev-parse", "--abbrev-ref", "HEAD")
+        return (f"TRUNK DOOR: the Forge at {forge_dir} is at {head[:12]} ({branch}), not the trunk "
+                f"main {trunk[:12]}; a retrace runs on Forge main only; nothing traced")
+    return None
+
+
+def forge_fixed_point_door(forge_dir: Path, engine_src, scratch: Path, py: str = None):
+    """None when Forge's single write stamps what the engine reads; else the refusal, by name.
+    Memoised per (Forge checkout, engine tree)."""
+    forge_dir = Path(forge_dir).resolve()
+    key = (str(forge_dir), str(engine_src))
+    if key in _DOOR_SEEN:
+        return _DOOR_SEEN[key]
+    reader = engine_fixed_point_reader(engine_src)
+    if reader is None:
+        _DOOR_SEEN[key] = None
+        return None
+    import tempfile
+    scratch.mkdir(parents=True, exist_ok=True)
+    box = Path(tempfile.mkdtemp(prefix="fixed_point_door.", dir=str(scratch)))
+    try:
+        comps = ["door_a", "door_b"]
+        for c in comps:
+            (box / "components" / c).mkdir(parents=True)
+            (box / "components" / c / "graph.json").write_text("{}")
+        (box / "topology.json").write_text(json.dumps({"extracted_values": {}}))
+        r = subprocess.run([py or PY, "-c", _DOOR_PROBE, str(box), *comps], cwd=str(forge_dir),
+                           capture_output=True, text=True, timeout=300,
+                           env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+        missing = reader(box, json.loads((box / "topology.json").read_text()))
+        if r.returncode != 0:
+            why = (f"FIXED-POINT DOOR: the Forge at {forge_dir} has no single write that stamps the "
+                   f"fixed point (tools/repropagate_in_place.py stamp_fixed_point + install_and_apply): "
+                   f"rc={r.returncode}: {(r.stderr or r.stdout).strip().splitlines()[-1:]} — the engine "
+                   f"would refuse its container; nothing traced")
+        elif missing:
+            why = (f"FIXED-POINT DOOR: the Forge at {forge_dir} stamps a declaration the engine "
+                   f"({engine_src or REPO / 'src'}) does not read: components {missing} unstamped "
+                   f"by its reader — the engine would refuse its container; nothing traced")
+        else:
+            why = None
+    finally:
+        shutil.rmtree(box, ignore_errors=True)
+    _DOOR_SEEN[key] = why
+    return why
+
+
 class Model:
     def __init__(self, name: str, args):
         self.name = name
@@ -1006,10 +1169,24 @@ class Model:
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {"model": name, "steps": {}}
         fams = json.loads(FAMILIES.read_text()) if FAMILIES.exists() else {}
         self.family = fams.get(name) or C.family_of(name)
-        hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
-        self.hub = hub.get(name)                       # "org/name" or None (a new entry)
         self.registry_name = REGISTRY_ALIAS.get(name, name)
+        self._hub = ...                                # resolved from the live registry on first use
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
+
+    @property
+    def hub(self):
+        """The live registry's "org/name" for this model, or None (a new entry, logged by name).
+        Raises HubUnreachable when the registry does not answer: never a guess."""
+        if self._hub is ...:
+            self._hub = hub_entry(self.registry_name)
+            if self._hub is None:
+                log(f"{self.name}: no hub entry — the registry lists no org/name equal to hf_repo "
+                    f"{registry_hf_repo(self.registry_name)!r}: a NEW entry")
+        return self._hub
+
+    @hub.setter
+    def hub(self, value):
+        self._hub = value
 
     def snapshot_names(self):
         """The directory names a snapshot of this model may have, the registry's source repository FIRST
@@ -1286,8 +1463,14 @@ class Model:
         export probe: the store shares its storage with the exports, and a stream beside the
         batteries' reads stalled them six times on 2026-09-07. The object's identity is checked
         against the backup (same build) before it is installed."""
-        if not self.hub:
-            self.mark("old_outputs", False, error="no hub entry to restore the previous object from"); return False
+        try:
+            hub = self.hub
+        except HubUnreachable as exc:
+            self.mark("old_outputs", False, state="DEFERRED", reason=str(exc))
+            log(f"{self.name}: restore DEFERRED — {exc}"); return False
+        if not hub:
+            self.mark("old_outputs", False, error=f"no hub entry to restore the previous object from "
+                                                  f"(hf_repo {registry_hf_repo(self.registry_name)!r} not listed)"); return False
         try:
             repo_env.require("NEUROBRIX_API_TOKEN")
         except repo_env.MissingVariable as exc:
@@ -1402,19 +1585,34 @@ class Model:
                 return p
         return None
 
+    def fixed_point_door(self):
+        """The Forge doors, checked before any trace or build: the trunk first, then the stamp."""
+        return (forge_trunk_door(FORGE.parent)
+                or forge_fixed_point_door(FORGE.parent, self.args.src, Path(self.args.tmp)))
+
     def step_trace(self):
         if self.done("trace"): return True
+        why = self.fixed_point_door()
+        if why:
+            self.mark("trace", False, state="REFUSED", error=why); log(f"{self.name}: {why}"); return False
         snap = self.snapshot()
         if snap is None:
             self.mark("trace", False, error="no COMPLETE snapshot on the export or in the download directory (index file, no partial file, the marker when the tool touched it)"); return False
         t0 = time.time()
-        cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
+        # No --device: Forge's `auto` loads on the VMM pool's primary card. A pinned cuda:0
+        # contradicts a pool whose primary is the other card (the most free memory) and every
+        # host-loaded component died in `.to(cuda:0)` with "CUDA error: invalid argument"
+        # (parakeet-tdt-1.1b, pool 0,3, retrace5 2026-10-12).
+        cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         self.mark("trace", rc == 0, rc=rc, seconds=round(time.time() - t0, 1))
         return rc == 0
 
     def step_build(self):
         if self.done("build"): return True
+        why = self.fixed_point_door()
+        if why:
+            self.mark("build", False, state="REFUSED", error=why); log(f"{self.name}: {why}"); return False
         snap = self.snapshot()
         if snap is None:
             self.mark("build", False, error="no snapshot on the export or in the download directory"); return False
@@ -1476,17 +1674,66 @@ class Model:
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
         if not nbx or not Path(nbx).exists():
             self.mark("install", False, error="no built .nbx"); return False
+        why = self.fixed_point_door()
+        if why:
+            self.mark("install", False, state="REFUSED", error=why); log(f"{self.name}: {why}"); return False
+        # THE SINGLE WRITE installs the build (2026-10-12): `forge local` extracts a container as
+        # built and stamps nothing, so the engine refused both PixArts it installed. The built .nbx
+        # is extracted into a stage on the root fs (Forge's own floor checked first), handed to
+        # Forge's single writer as the SOURCE of the cache container — copied beside it,
+        # re-propagated, renamed, stamped at the fixed point and swapped in under the cache lock the
+        # writer takes itself — and the stage is released once the engine's reader finds every
+        # component stamped. The .nbx stays for the upload.
         import zipfile
-        try:
-            with zipfile.ZipFile(nbx) as zf:
-                installed = json.loads(zf.read("manifest.json")).get("model_name") or self.name
-        except Exception:
-            installed = self.name
-        rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
-        ok = rc == 0 and (CACHE / installed / "manifest.json").exists()
+        with zipfile.ZipFile(nbx) as zf:
+            built = json.loads(zf.read("manifest.json"))
+            need = sum(i.file_size for i in zf.infolist())
+            installed = built.get("model_name") or self.name
+            stage = Path(getattr(self.args, "stage", None) or Path(self.args.tmp) / "install_stage").resolve() / installed
+            fenv = {**self.env(tree=False), "CUDA_VISIBLE_DEVICES": "", "FORGE_PROJECT_ROOT": str(REPO)}
+            unfit = self.stage_unfit(stage, need, fenv)
+            if unfit:
+                self.mark("install", False, state="DEFERRED", error=unfit); log(f"{self.name}: install DEFERRED — {unfit}")
+                return False
+            shutil.rmtree(stage, ignore_errors=True)
+            part = stage.with_name(stage.name + ".extracting")
+            shutil.rmtree(part, ignore_errors=True)
+            zf.extractall(part)
+            os.replace(part, stage)
+        src = {installed: {"source": str(stage), "why": f"retrace_zoo ({self.args.out}): the retrace built {built.get('created_at')}"}}
+        if installed != self.name and (CACHE / self.name).exists():
+            src[installed]["retires"] = self.name
+        sources = self.dir / "install_sources.json"
+        sources.write_text(json.dumps(src, indent=1))
+        wenv = {**fenv, "PYTHONPATH": str(Path(getattr(self.args, "writer_src", None) or self.args.src or REPO / "src").resolve()),
+                "NEUROBRIX_ENGINE_ROOT": str(Path(getattr(self.args, "writer_src", None) or self.args.src or REPO / "src").resolve().parent)}
+        rc = run([PY, str(REPO / "forge" / "tools" / "repropagate_in_place.py"), str(CACHE / installed), "--apply",
+                  "--sources", str(sources)], wenv, self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
+        man = CACHE / installed / "manifest.json"
+        unstamped = None
+        if rc == 0 and man.exists():
+            reader = engine_fixed_point_reader(self.args.src)
+            topo = CACHE / installed / "topology.json"
+            unstamped = reader(CACHE / installed, json.loads(topo.read_text())) if reader else []
+        same = man.exists() and json.loads(man.read_text()).get("created_at") == built.get("created_at")
+        ok = rc == 0 and same and unstamped == []
+        if ok:
+            shutil.rmtree(stage, ignore_errors=True)       # the cache holds it now
         self.new_name = installed
-        self.mark("install", ok, rc=rc, installed_name=installed, **({"reinstalled": reinstall} if reinstall else {}))
+        self.mark("install", ok, rc=rc, installed_name=installed, created_at=built.get("created_at"),
+                  writer="forge/tools/repropagate_in_place.py --apply --sources", unstamped=unstamped,
+                  **({} if ok else {"error": f"rc={rc} created_at_matches={same} unstamped={unstamped}"}),
+                  **({"reinstalled": reinstall} if reinstall else {}))
         return ok
+
+    def stage_unfit(self, stage: Path, need: int, env: dict):
+        """None when Forge's own stage door (the configured root floor) lets `need` bytes be staged
+        at `stage`; else its refusal."""
+        fit = subprocess.run([PY, "-c", "import sys; from pathlib import Path; sys.path.insert(0, '.'); "
+                              "from tools.repropagate_in_place import refuse_a_stage_that_does_not_fit as r; "
+                              "r(Path(sys.argv[1]), int(sys.argv[2]))", str(stage), str(need)],
+                             cwd=str(REPO / "forge"), capture_output=True, text=True, env=env)
+        return None if fit.returncode == 0 else ((fit.stderr or fit.stdout).strip().splitlines() or ["rc %d" % fit.returncode])[-1]
 
     def step_new_outputs(self):
         if self.done("new_outputs"): return True
@@ -1806,6 +2053,12 @@ class Model:
             self.mark("upload", False, state="DEFERRED", reason=f"hub object store: {health}; retry when it answers 200", nbx=nbx)
             log(f"{self.name}: upload DEFERRED — hub object store: {health}; the artifact is gated and ready, a later pass uploads it")
             return False
+        try:
+            self.hub
+        except HubUnreachable as exc:
+            self.mark("upload", False, state="DEFERRED", reason=str(exc), nbx=nbx)
+            log(f"{self.name}: upload DEFERRED — {exc}")
+            return False
         if self.hub:
             org, name = self.hub.split("/", 1)
             size = Path(nbx).stat().st_size if nbx and Path(nbx).exists() else 0
@@ -1833,9 +2086,7 @@ class Model:
         if rc == 0 and not self.hub and NEW_ENTRIES.exists():
             new = json.loads(NEW_ENTRIES.read_text()).get(self.name) or {}
             if new:
-                hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
-                hub[self.name] = self.hub = f"{new['org']}/{new['name']}"
-                HUB_MAP.write_text(json.dumps(hub, indent=1, sort_keys=True))
+                self.hub = f"{new['org']}/{new['name']}"   # the registry lists it from now on
         self.mark("upload", rc == 0, rc=rc, command=shlex.join(cmd[2:]))
         if rc == 0 and nbx and Path(nbx).exists():
             # The hub holds it now (checksum verified by the toolchain before the repoint);
@@ -1898,6 +2149,10 @@ def main():
     ap.add_argument("--tmp", default="/home/mlops/nbx_tmp", help="TMPDIR for the build staging (root fs)")
     ap.add_argument("--backup", default=str(Path.home() / ".neurobrix" / "backups" / "retrace_2026_09_07"))
     ap.add_argument("--extra", default="", help="extra request args for the family protocol")
+    ap.add_argument("--stage", default="/home/mlops/nbx/stage/retrace_install",
+                    help="where a built .nbx is extracted for Forge's single write (root fs, never the cache)")
+    ap.add_argument("--writer-src", default=None,
+                    help="the engine source tree Forge's single writer runs its gate with (default: --src)")
     ap.add_argument("--timeout", type=int, default=7200)
     ap.add_argument("--trace-timeout", type=int, default=14400)
     ap.add_argument("--upload-mbps", type=float, default=10.0,
