@@ -162,3 +162,20 @@ Economy: sub-agents only in extreme necessity, the reason written in the report 
 never a turn spent checking that a job progresses (a shell watcher wakes the agent at its end); scripts written
 once into the campaign and re-run by path, never pasted; one command per step with truncated output; the report
 is rewritten on disk, not repeated in the conversation; anything not visible in the owner's terminal is closed.
+
+## 2026-10-12 19:50 — CHAIN OF COMMAND, CLI-ONLY TESTS, LAST DATED PROOF, CODE HYGIENE (the owner, URGENT, via the supervisor)
+
+0. **Chain of command.** The supervisors steer, not the agent. An inbox entry marked URGENT is executed before any
+   other action, at once, and acknowledged on the first line of the report; orders run in the order given.
+1. **Tests are the engine's command line, nothing else.** A model is tested as a user does: the `neurobrix` entry point
+   with the command and flags its request needs (model, prompt, resolution, steps, frames, temperature, audio or image
+   input), then the output is looked at. No custom test script. A script may only chain many identical commands, or
+   measure a dimension outside the engine's workflow; it lives in the campaign, never in this repository, and invents
+   no execution path. The gate harness only orchestrates that exact command, written in every result row so it can be
+   replayed by hand. Test scripts that do not respect this are inventoried and deleted.
+2. **"Validated many times, broken today."** Before a validated model is announced broken, it is compared with its last
+   dated proof under the same CLI command and flags, naming which of the three changed: the container (sha), the engine
+   (commit) or the request/test. If the test changed, the defect is the test. No fix breaks something else: each fix is
+   proven at the CLI on the fixed model and on a neighbouring validated model before it lands.
+3. **Code hygiene.** A change is complete or does not exist: no unwired fragment, no old code path left beside the new
+   one, the touched file cleaned, every change committed and pushed to both remotes (git history is the only way back).
