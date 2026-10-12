@@ -169,7 +169,7 @@ The remaining four, plus two items they imply, are queued in this order:
    acknowledged only once the native work has stopped at both engines' per-token seam, after the
    device sync. A dropped connection or a timeout is never reported as a confirmed cancellation.
 3. **A protocol range** (request 7): a client outside the daemon's supported range is refused at
-   connection with a message naming both ranges.
+   connection with a message naming both ranges. **Done 2026-10-13** (`protocol_refusal`, refused at the first frame, connection closed).
 4. **Discovery without torch** (request 1): `neurobrix info` reads the hardware through the existing
    detection, with no framework import; a change in its record's shape is versioned and documented.
 5. **The wire protocol, specified**: framing, envelopes, version and range, methods, errors, endpoints

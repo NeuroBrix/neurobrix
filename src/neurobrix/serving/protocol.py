@@ -217,6 +217,33 @@ def _recv_exact(sock: socket.socket, n: int) -> Optional[bytes]:
 #: know instead of guessing (Studio requests 1 and 7). One number, read here.
 PROTOCOL_VERSION = 1
 
+#: The oldest wire version this daemon still serves. A request stamped with a
+#: `protocol` outside `[PROTOCOL_MIN, PROTOCOL_VERSION]` is refused at its
+#: first frame (`protocol_refusal`). A request WITHOUT the field is a client
+#: from before the handshake and is served as protocol 1: the absence is a
+#: documented meaning, not a guess (Studio request 7).
+PROTOCOL_MIN = 1
+
+
+def protocol_refusal(request: Dict[str, Any]) -> Optional[str]:
+    """Why this request's `protocol` cannot be served, or None.
+
+    The field is the client's wire version. Absent, the client predates the
+    handshake and is served as protocol 1. Present, it must be an integer in
+    `[PROTOCOL_MIN, PROTOCOL_VERSION]`; the refusal names the client's number,
+    the daemon's range and the engine's version, so the client can say what
+    it needs (Studio request 7)."""
+    if "protocol" not in request:
+        return None
+    from neurobrix import __version__
+    got = request["protocol"]
+    daemon = f"this daemon serves protocols {PROTOCOL_MIN}..{PROTOCOL_VERSION} (engine {__version__})"
+    if isinstance(got, bool) or not isinstance(got, int):
+        return (f"protocol {got!r} is not an integer wire version; {daemon}")
+    if not PROTOCOL_MIN <= got <= PROTOCOL_VERSION:
+        return (f"protocol {got} is outside the range; {daemon}")
+    return None
+
 
 def endpoint() -> Dict[str, Any]:
     """Where this process's daemon instance listens, as a record (Studio request 1)."""
@@ -224,8 +251,9 @@ def endpoint() -> Dict[str, Any]:
 
 
 def make_request(method: str, **params) -> Dict[str, Any]:
-    """Build a JSON-RPC request."""
+    """Build a JSON-RPC request, stamped with this client's wire version."""
     return {
+        "protocol": PROTOCOL_VERSION,
         "method": method,
         "params": params,
     }

@@ -59,10 +59,10 @@ from neurobrix import decode_progress, decode_stop
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.operations import OperationTable, Operation, serving_settings
 from neurobrix.serving.protocol import (
-    SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
     IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS, INSTANCE,
+    SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
     send_message, recv_message, MalformedFrame,
-    make_response,
+    make_response, protocol_refusal,
 )
 
 #: The methods that run the model: each is an operation under the inference lock.
@@ -459,6 +459,13 @@ class ServingDaemon:
                 continue
             if request is None:
                 break  # Client disconnected
+
+            refused = protocol_refusal(request)
+            if refused is not None:
+                # An incompatible client: answered by name, then closed — nothing
+                # further on this connection can be read as a request we serve.
+                send_message(conn, make_response(error=refused))
+                return
 
             method = request.get("method", "")
             _phase_mark(f"server.recv.{method or '?'}")

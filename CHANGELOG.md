@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The daemon refuses a client outside its protocol range.** Every request the client builds
+  carries `protocol`, its wire version; the daemon serves `[PROTOCOL_MIN, PROTOCOL_VERSION]`
+  and answers a request outside it, or with a non-integer version, with an error that names the
+  client's number, the daemon's range and the engine version, then closes the connection. A
+  request without the field is a client from before the handshake and is served as protocol 1
+  (`serving/protocol.py::protocol_refusal`; Studio request 7, second half).
 - **The serving daemon answers while it generates, and a generation can be cancelled.** `status`,
   `cancel` and `shutdown` are answered while a generation runs. Generations still run one at a
   time. Every `generate`, `chat` and `complete` request carries an `op_id` (yours, or one the
