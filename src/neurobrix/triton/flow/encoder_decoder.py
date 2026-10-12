@@ -8,7 +8,8 @@ No torch imports in this file (except at audio preprocessing boundary).
 """
 
 import time
-from neurobrix import decode_stop
+
+from neurobrix import decode_progress, decode_stop
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
@@ -324,6 +325,9 @@ class TritonEncoderDecoderEngine:
                 )
 
             generated_ids.append(next_token)
+            # the per-token event every decoding flow emits (listener, run tally,
+            # flow.first_token); the file line below keeps its decoder statistics
+            decode_progress.emit(step - 1, step, int(next_token), next_token == eos_token_id)
             _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
             if _prog:  # gated, off by default — file write is immune to stdout buffering
                 _stat = ""

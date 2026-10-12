@@ -41,6 +41,7 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
 from neurobrix.core.prism.host_footprint import engine_of
 from neurobrix.core.runtime.torch_allocator import configure_torch_allocator
+from neurobrix.core.runtime.phase_trace import load_span
 
 
 class RuntimeExecutor:
@@ -356,8 +357,10 @@ class RuntimeExecutor:
         2. Initialize variables and helpers
         3. Dispatch to appropriate flow handler
         """
-        # 1. Setup Phase (no-op if already called by serving layer)
-        self.setup()
+        # 1. Setup Phase (no-op if already called by serving layer) — time the
+        # run spends becoming ready (core/runtime/run_timings.py)
+        with load_span():
+            self.setup()
 
         # 2. Variable Resolution Phase
         # The input boundary: arrays from the media processors (image,
@@ -1361,7 +1364,13 @@ class RuntimeExecutor:
 
         if getattr(executor, '_weights_loaded', False):
             return
+        # The load is time the run spent becoming ready: counted in its load
+        # time, never in its time to first output (core/runtime/run_timings.py).
+        with load_span():
+            self._load_component_weights_now(comp_name, executor)
 
+    def _load_component_weights_now(self, comp_name: str, executor) -> None:
+        """The body of `_ensure_weights_loaded` once it is known the weights are absent."""
         params = getattr(executor, '_weight_loading_params', None)
         if params is None:
             raise RuntimeError(

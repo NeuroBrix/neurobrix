@@ -260,6 +260,8 @@ class InferenceEngine:
 
         # Execute
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
+        from neurobrix.core.runtime import run_timings as _run_timings
+        _run_timings.reset()  # one ledger per request (core/runtime/run_timings.py)
         t_start = time.time()
         device_sync(self._device)
         _phase_mark("engine.execute.begin")
@@ -310,6 +312,8 @@ class InferenceEngine:
 
         # Execute
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
+        from neurobrix.core.runtime import run_timings as _run_timings
+        _run_timings.reset()  # one ledger per request (core/runtime/run_timings.py)
         t_start = time.time()
         device_sync(self._device)
         _phase_mark("engine.execute.begin")
