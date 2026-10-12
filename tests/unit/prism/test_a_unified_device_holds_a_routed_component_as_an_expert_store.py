@@ -53,10 +53,28 @@ class _Container:
         return [SimpleNamespace(name="model", get_dominant_dtype=lambda: "bfloat16")]
 
 
+def _expert_names(layer):
+    return tuple(f"block.{layer}.ffn.expert.{e}.{p}.weight"
+                 for p in ("ffn_gate", "up", "down") for e in range(EXPERTS))
+
+
 def _topology(stacked=False):
     return {"model": ExpertTopology("model", [
         RoutedLayer(op_uid=f"m{i}", block=i, n_experts=EXPERTS, top_k=TOP_K, norm_topk_prob=True,
-                    expert_bytes=EXPERT, shared_bytes=0, stacked=stacked) for i in range(LAYERS)])}
+                    expert_bytes=EXPERT, shared_bytes=0, stacked=stacked,
+                    expert_weight_names=() if stacked else _expert_names(i)) for i in range(LAYERS)])}
+
+
+def _indexed(tmp_path, dtype="bfloat16"):
+    """A container whose weights index stores every routed expert in `dtype` — what the plan reads
+    the experts' stored dtype from (`_refuse_unheld_expert_files`)."""
+    import json
+    comp = tmp_path / "components" / "model"
+    comp.mkdir(parents=True, exist_ok=True)
+    tensors = {n: {"shard": "shard_000.safetensors", "dtype": dtype}
+               for i in range(LAYERS) for n in _expert_names(i)}
+    (comp / "weights_index.json").write_text(json.dumps({"tensors": tensors}))
+    return SimpleNamespace(cache_path=tmp_path)
 
 
 def _model_mem():
@@ -123,7 +141,7 @@ def test_the_plan_names_the_store_and_prices_its_working_set_not_its_weights():
     assert other.components["model"].strategy == "single_gpu"
 
 
-def test_the_rest_of_the_room_is_granted_as_the_expert_cache():
+def test_the_rest_of_the_room_is_granted_as_the_expert_cache(tmp_path):
     s = _solver()
     profile, dev = _device("mps:0", unified=True)
     s._lm_component_name = "model"
@@ -139,7 +157,7 @@ def test_the_rest_of_the_room_is_granted_as_the_expert_cache():
     plan = s._build_plan({"model": ("mps:0", {})}, comp_mem, [dev], {"model": "bfloat16"}, profile,
                          "lazy_sequential")
     plan.kv_cache_plan = SimpleNamespace(memory_bytes=kv_mb * MB)
-    s._zero3_resident_budgets(None, plan, [dev], profile)
+    s._zero3_resident_budgets(_indexed(tmp_path), plan, [dev], profile)
     a = plan.components["model"]
     room = s._usable_mb(dev) - ACT_MB                         # the KV as planned = as priced; no window
     assert a.resident_weight_mb == DENSE_MB
@@ -152,7 +170,7 @@ def test_the_rest_of_the_room_is_granted_as_the_expert_cache():
     assert s._peak_loaded_bytes(None, plan) == int((ACT_MB + DENSE_MB + a.expert_cache_mb) * MB)
 
 
-def test_a_room_below_the_floor_after_the_kv_cache_is_refused_by_name():
+def test_a_room_below_the_floor_after_the_kv_cache_is_refused_by_name(tmp_path):
     s = _solver()
     profile, dev = _device("mps:0", unified=True)
     s._lm_component_name = "model"
@@ -166,8 +184,8 @@ def test_a_room_below_the_floor_after_the_kv_cache_is_refused_by_name():
                          "lazy_sequential")
     room = s._usable_mb(dev) - ACT_MB
     plan.kv_cache_plan = SimpleNamespace(memory_bytes=int((room - DENSE_MB - FLOOR_MB + 1) * MB))
-    with pytest.raises(RuntimeError, match="expert store"):
-        s._zero3_resident_budgets(None, plan, [dev], profile)
+    with pytest.raises(RuntimeError, match="below its dense part and the widest top_k experts"):
+        s._zero3_resident_budgets(_indexed(tmp_path), plan, [dev], profile)
 
 
 def test_a_stacked_slab_on_a_unified_device_is_not_a_store():
@@ -232,9 +250,9 @@ def test_the_compiled_load_of_a_unified_store_passes_only_its_dense_part_through
 def test_the_solver_names_the_file_backed_experts_of_a_unified_store_only():
     s = _solver()
     names = {f"e{i}" for i in range(3)}
-    s._expert_topology["model"].layers[0] = RoutedLayer(
+    s._expert_topology["model"] = ExpertTopology("model", [RoutedLayer(
         op_uid="m0", block=0, n_experts=EXPERTS, top_k=TOP_K, norm_topk_prob=True, expert_bytes=EXPERT,
-        shared_bytes=0, expert_weight_names=tuple(names))
+        shared_bytes=0, expert_weight_names=tuple(names))])
     profile, _ = _device("mps:0", unified=True)
     plan = SimpleNamespace(components={"model": SimpleNamespace(device="mps:0", strategy="expert_store")})
     assert s._file_backed_experts(plan, profile) == {"model": names}

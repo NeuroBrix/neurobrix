@@ -147,9 +147,12 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # === Sequential / Offload ===
     "lazy_sequential": "LazySequentialStrategy",
     "zero3": "Zero3Strategy",
-    # zero3's ratchet in its expert-store state (core/strategies/expert_store.py): Prism refines a
-    # routed zero3 component to it; the same class serves both names.
-    "expert_store": "Zero3Strategy",
+    # `expert_store` is NOT a plan strategy and has no entry here. It is a COMPONENT strategy — the
+    # name Prism writes into one `ComponentAllocation.strategy` of a plan whose own strategy is
+    # `lazy_sequential` or `zero3` (`_place_component` Strategy 2.5, `_zero3_resident_budgets`) —
+    # and `get_strategy` is only ever asked the plan's. Its runtime half is a ratchet STATE of
+    # Zero3Strategy, reached through both rungs (core/strategies/expert_store.py). The component
+    # namespace is `ExecutorFactory.STRATEGY_MAP`; test_solver_registry_parity.py holds both.
 
     # === CPU-only (Doctrine R35 last-resort cascade) ===
     "cpu_execution": "CPUExecutionStrategy",

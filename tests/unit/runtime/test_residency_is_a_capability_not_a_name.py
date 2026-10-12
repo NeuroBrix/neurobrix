@@ -90,8 +90,11 @@ def test_zero3_declares_the_capability_and_the_registry_agrees():
 
 
 def test_only_strategies_that_manage_residency_say_so():
-    """The whole registry, so a new strategy cannot claim it by accident."""
-    claimed = {n for n in STRATEGY_REGISTRY
+    """The whole registry, so a new strategy cannot claim it by accident — both namespaces the
+    question is asked of: the plan's (`STRATEGY_REGISTRY`) and a component's
+    (`ExecutorFactory.STRATEGY_MAP`, where the component-only `expert_store` lives)."""
+    from neurobrix.core.runtime.factory import ExecutorFactory
+    claimed = {n for n in set(STRATEGY_REGISTRY) | set(ExecutorFactory.STRATEGY_MAP)
                if strategy_manages_weight_residency(n)}
     # expert_store (2026-10-12) is zero3's ratchet with the dense part resident and the routed
     # experts served from a cache on the card (core/strategies/expert_store.py): it drives its
