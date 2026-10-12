@@ -330,7 +330,7 @@ def test_a_served_plan_keeps_what_the_handler_never_unloads(tmp_path):
 
 def test_a_plan_that_loads_on_demand_holds_its_dearest_phase_on_a_unified_device(tmp_path, monkeypatch):
     s, c = _built(tmp_path, "triton")
-    plan = SimpleNamespace(component_memory=COMPS, device_window_mb=None, loading_mode="lazy",
+    plan = SimpleNamespace(component_memory=COMPS, components={}, device_window_mb=None, loading_mode="lazy",
                            total_memory_mb=11_500.0, kv_cache_plan=SimpleNamespace(memory_bytes=KV))
     peak = s._peak_loaded_bytes(c, plan)
     assert peak == (10_000 + 200 + 600) * MB          # {lm, head} + the tower; not {head, dec}

@@ -16,6 +16,11 @@ where the rule lives, so a change there is a change to price here:
         pinned; everything else and all compute stay on the card (triton/weight_loader.py
         `_load_to_pinned_cpu`, graph_executor.py re-routes compute to a card);
   transient — while a component loads:
+    compiled, a component the plan holds as an EXPERT STORE on a unified device: only its dense part
+        passes through the host as below; its routed experts are never loaded whole — the store maps
+        them from the container's files and copies a missed expert into a cache slot on the device
+        (`file_backed`: their keys). Their file pages are the page cache's, reclaimable, and the slots
+        are the device plan's (the `device` term);
     compiled: the component passes through the host whole — read at its stored width, and pinned at
         the plan's width for the non-blocking upload (core/io/weight_loader.py `_load_with_pinned_dma`:
         load_file to cpu, `_convert_weights_dtype`, `_transfer_with_pinned_memory`). The pinned copies
@@ -85,7 +90,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
                    resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
                    streamed_loads: Optional[Mapping[str, Sequence[Collection[str]]]] = None,
-                   load_workers: int = 0, pinned_in_flight: int = 0) -> Dict:
+                   load_workers: int = 0, pinned_in_flight: int = 0,
+                   file_backed: Optional[Mapping[str, Collection[str]]] = None) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -100,6 +106,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                  keys no segment names load together as one more load (the compiled engine's rule)
     load_workers, pinned_in_flight  the loader's workers and its uploads outstanding per worker
                  (core.workspace), required when a component is streamed on the compiled engine
+    file_backed  {component: weight keys} its loads never read: an expert store's routed experts, mapped
+                 from the container's files on a unified device; every one must be sized by the index
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -171,8 +179,19 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             shards = sorted((shard_sizes.get(name) or {}).values(), reverse=True)
             mapped = min(max(sizes), sum(shards[:load_workers])) if shards else max(sizes)
             return mapped + sum(_cost(n) for n in in_flight)
+        def _loaded(name, stored_bytes):
+            skipped = set((file_backed or {}).get(name) or ())
+            if not skipped:
+                return stored_bytes
+            keys = key_sizes.get(name) or {}
+            unsized = sorted(skipped - set(keys))
+            if unsized:
+                raise ValueError(f"ZERO FALLBACK: {name}: {len(unsized)} file-backed expert weight(s) are absent "
+                                 f"from the weights index (another key space?): {unsized[:3]}")
+            return stored_bytes - sum(keys[k] for k in skipped)
         passes = [_streams_through(name, (streamed_loads or {})[name]) if name in (streamed_loads or {})
-                  else _passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
+                  else _passes_through(name, _loaded(name, sum(sh.values())))
+                  for name, sh in shard_sizes.items() if sh]
         transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
     else:
         transient = TRITON_COPIES_PER_TENSOR * max(

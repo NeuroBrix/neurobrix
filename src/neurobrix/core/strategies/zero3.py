@@ -92,7 +92,7 @@ from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 if TYPE_CHECKING:  # R33: the ATen branch imports it; the shared strategy only branches on it
     import torch
 
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.device_utils import device_empty_cache, device_sync
 
 from .base import ExecutionStrategy, StrategyContext
 
@@ -197,6 +197,9 @@ class Zero3Strategy(ExecutionStrategy):
         weights = getattr(executor, '_weights', None)
         if not weights:
             return
+        from .expert_store import holds_expert_files
+        if holds_expert_files(self.context.allocations, component_name):
+            return  # its host experts are views of the container's files (expert_store.py)
 
         total_mb = 0.0
         for t in weights.values():
@@ -377,7 +380,9 @@ class Zero3Strategy(ExecutionStrategy):
             DA.set_device(dev_idx)
         else:
             import torch
-            torch.cuda.set_device(dev_idx)
+            on_cuda = self.exec_device.startswith("cuda")
+            if on_cuda:
+                torch.cuda.set_device(dev_idx)
         for tid in entry['weight_tensor_ids']:
             cpu_t = state['cpu_originals'].get(tid)
             if cpu_t is None:
@@ -393,7 +398,7 @@ class Zero3Strategy(ExecutionStrategy):
                 if not (is_torch_tensor(cpu_t) and cpu_t.device.type == 'cpu'):
                     continue
                 import torch
-                target = torch.device(f"cuda:{dev_idx}")
+                target = torch.device(f"cuda:{dev_idx}" if on_cuda else self.exec_device)
                 if cpu_t.is_pinned() and state['transfer_stream_torch'] is not None:
                     with torch.cuda.stream(state['transfer_stream_torch']):
                         moved[tid] = cpu_t.to(target, non_blocking=True)
@@ -495,8 +500,7 @@ class Zero3Strategy(ExecutionStrategy):
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
             DA.sync_device()
         else:
-            import torch
-            torch.cuda.synchronize()
+            device_sync(self.exec_device)
 
     def _reset_ratchet(self, component_name: str) -> None:
         """Drop every GPU-cached STREAMED block — the resident ones
@@ -634,17 +638,22 @@ class Zero3Strategy(ExecutionStrategy):
             # AttributeError three calls later. The triton branch above is
             # untouched: its primitives are DeviceAllocator-dispatched and
             # verified on Metal.
-            if not self.exec_device.startswith("cuda"):
+            # The one non-CUDA form: a unified expert store (`expert_files`), whose dense part is
+            # already on the device and whose store copies on the device's one queue — no stream.
+            from .expert_store import holds_expert_files
+            unified_store = holds_expert_files(self.context.allocations, component_name)
+            if not self.exec_device.startswith("cuda") and not unified_store:
                 raise RuntimeError(
                     f"ZERO FALLBACK: zero3's torch path is CUDA machinery "
                     f"(streams/events/set_device) and cannot run on "
                     f"{self.exec_device!r}. On a unified device zero3 frees "
                     f"nothing (measured 2026-09-09) and the solver refuses "
                     f"to select it — re-plan rather than forcing it.")
-            try:
-                transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
-            except Exception:
-                transfer_stream_torch = None
+            if self.exec_device.startswith("cuda"):
+                try:
+                    transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
+                except Exception:
+                    transfer_stream_torch = None
 
         # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
         # experts served from an expert cache on the card (core/strategies/expert_store.py).
