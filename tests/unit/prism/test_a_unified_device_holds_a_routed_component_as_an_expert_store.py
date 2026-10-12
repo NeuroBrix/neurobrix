@@ -74,7 +74,10 @@ def _indexed(tmp_path, dtype="bfloat16"):
     tensors = {n: {"shard": "shard_000.safetensors", "dtype": dtype}
                for i in range(LAYERS) for n in _expert_names(i)}
     (comp / "weights_index.json").write_text(json.dumps({"tensors": tensors}))
-    return SimpleNamespace(cache_path=tmp_path)
+    # It declares its component, as every container does (`get_neural_components`): the plan reads
+    # the graph's constants from it (`_graph_constants_mb`); this one carries no graph, so none.
+    return SimpleNamespace(cache_path=tmp_path, get_neural_components=lambda: [
+        SimpleNamespace(name="model", graph=None, get_dominant_dtype=lambda: "bfloat16")])
 
 
 def _model_mem():

@@ -832,8 +832,13 @@ class PrismSolver:
                 cost = int(m.activation_bytes + m.overhead_bytes)
             elif store_mb is not None:
                 # an expert store on a unified device: its dense part and the floor of its expert
-                # cache beside its activations — the routed experts stay in the container's pages
-                cost = int(m.activation_bytes + m.overhead_bytes + store_mb * 1024 * 1024)
+                # cache beside its activations — the routed experts stay in the container's pages.
+                # Its activations as the arena holds them (`_live_activation_mb`): the figure the
+                # store was placed against (`_place_component` Strategy 2.5) and is granted its cache
+                # from (`_zero3_resident_budgets`). At the profiled figure a served cache took the
+                # difference (DeepSeek-Coder-V2-Lite, triton, 51.6 MB) out of the store's floor.
+                cost = int(self._live_activation_mb(m) * 1024 * 1024 + m.overhead_bytes
+                           + store_mb * 1024 * 1024)
             else:
                 cost = int(m.total_bytes)
             # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
@@ -1021,6 +1026,9 @@ class PrismSolver:
                 a = plan.components.get(n)
                 if a is not None and a.strategy in ("zero3", "expert_store"):
                     c = int(self._live_activation_mb(m) * mib) + int(m.overhead_bytes) + granted.get(n, 0)
+                    if a.strategy == "expert_store" and _device_is_unified(a.device, profile):
+                        # its graph constants, loaded beside it (`_place_component` Strategy 2.5)
+                        c += int(self._graph_constants_mb(container, n, by_name.get(a.device) or dev) * mib)
                 else:
                     c = int(m.total_bytes)
                 if n == lm:
@@ -1045,7 +1053,8 @@ class PrismSolver:
                 alloc.expert_files = True
                 m = plan.component_memory[name]
                 before_mb = alloc.memory_mb
-                alloc.memory_mb = (m.activation_mb + m.overhead_bytes / mib + store[0] + store[1])
+                alloc.memory_mb = (m.activation_mb + m.overhead_bytes / mib + store[0] + store[1]
+                                   + self._graph_constants_mb(container, name, dev))
                 plan.total_memory_mb += alloc.memory_mb - before_mb
             if store is not None:
                 # The component routes and its working set fits where every weight does not: the
@@ -1329,6 +1338,36 @@ class PrismSolver:
         self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
         return why
 
+    def _graph_constants_mb(self, container, comp_name: str, dev: "DeviceState") -> float:
+        """The MB of graph constants `comp_name`'s executor loads on `dev` (`_graph_constant_bytes`, in
+        the dtype the plan's engine stores them in there, `_constants_store_fp64`); 0 when the
+        container carries no graph for it."""
+        for comp in (container.get_neural_components() or []) if container is not None else []:
+            if comp.name == comp_name:
+                return _graph_constant_bytes(getattr(comp, "graph", None),
+                                             self._constants_store_fp64(dev)) / (1024 * 1024)
+        return 0.0
+
+    def _store_arena_over_allocation(self, container, comp_name: str, mem: "ComponentMemory",
+                                     dev: "DeviceState") -> Optional[str]:
+        """Why the unified expert store `comp_name` cannot load its dense part as ONE arena on `dev`,
+        or None — the bound `_place_component` placed it under (Strategy 2.5: `store[0] <= cap`), read
+        from the same floor (`_expert_store_floor`) at the device's cost for the component's dtype."""
+        cap = self._max_allocation_mb(dev)
+        if cap is None:
+            return None
+        mult = dev.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+        floor = self._expert_store_floor(comp_name, mem.weight_mb * mult, mult)
+        if floor is None:
+            return self._arena_over_allocation(container, comp_name, mem, dev)
+        if floor[0] <= cap:
+            return None
+        why = (f"'{comp_name}' as an expert store loads its dense part as one arena of {floor[0]:,.0f} MB, "
+               f"over the {cap:,} MB {dev.device_string} grants in a single allocation (the profile's "
+               f"max_allocation_mb)")
+        self.__dict__.setdefault("_arena_declined", {})[comp_name] = why
+        return why
+
     def _parked_cap_mb(self, dev: "DeviceState", profile) -> Optional[float]:
         """What the Triton allocator's pool may keep PARKED on `dev` beside a new allocation, in MB,
         or None where a parked block never sits beside one.
@@ -1373,6 +1412,18 @@ class PrismSolver:
             dev_str, shard_map = (alloc if isinstance(alloc, tuple) else (alloc, {}))
             dev = by_name.get(dev_str)
             if dev is None or any(v != dev_str for v in (shard_map or {}).values()):
+                continue
+            if (strat_name == AllocationStrategy.LAZY_SEQUENTIAL.value
+                    and getattr(dev.spec, "has_unified_memory", False)
+                    and comp_name in (getattr(self, "_unified_expert_stores", None) or {})):
+                # An expert store on a unified device (`_place_component` Strategy 2.5) loads its
+                # DENSE part as its one arena; its routed experts are views of the container's shards
+                # and its cache is one small allocation per slot (core/runtime/expert_files.py,
+                # triton/expert_store.py). Judged by its whole weight, deepseek-moe-16b-chat's store
+                # (2 323 MB dense of 32 GB) was refused under the M4 Pro's 13 639 MB bound and streamed.
+                why = self._store_arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
+                if why is not None:
+                    return why
                 continue
             why = self._arena_over_allocation(container, comp_name, component_memory[comp_name], dev)
             if why is not None:
@@ -1574,16 +1625,17 @@ class PrismSolver:
             _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             plan = None
+            last = refusal                # the refusal of the rung named beside it, not the first one's
             for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
                 tried.append((int(rung), "refused", None))
                 self._unified_rung_cap_mb = float(lower)
                 try:
                     plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
                     log.warning("unified memory: no strategy fits rung %s (%s) — rung %s", int(rung),
-                                str(refusal).splitlines()[0], lower)
+                                str(last).splitlines()[0], lower)
                     break
-                except RuntimeError:
-                    rung = lower
+                except RuntimeError as below:
+                    rung, last = lower, below
             if plan is None:
                 self._unified_rung_cap_mb = None
                 self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
@@ -2115,6 +2167,20 @@ class PrismSolver:
                     # on cards other than the LM's, and the LM's own card is over-committed.
                     total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
                                          for d in strat_devices)
+                    # An expert store on a unified device (`_place_component` Strategy 2.5) is
+                    # accepted against the USABLE part of its device's rung, and its expert cache is
+                    # granted from that same figure after the cache (`_zero3_resident_budgets`). Sized
+                    # against the rung, a served cache took the difference between the two figures out
+                    # of the store's floor, and the grant refused the plan at every rung of the ladder:
+                    # DeepSeek-Coder-V2-Lite served on the Mac's profile descended 16 384 -> 4 096 and
+                    # streamed (usable 14 120 MB - held 13 154 MB with the cache = 965 MB of room).
+                    _store_devs = {(a[0] if isinstance(a, tuple) else a) for n, a in strat_allocs.items()
+                                   if self._unified_store_mb(strat_name, n, a[0] if isinstance(a, tuple) else a,
+                                                             profile) is not None}
+                    if _store_devs:
+                        total_capacity = min(total_capacity, sum(
+                            int(self._usable_mb(d) * 1024 * 1024)
+                            for d in strat_devices if d.device_string in _store_devs))
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
@@ -5487,12 +5553,16 @@ class PrismSolver:
         # disk per token, or refused where one layer's 1 152 MB exceeds a segment). The cache beyond
         # the floor is granted with the plan (`_zero3_resident_budgets`), after the KV cache.
         if _device_is_unified(largest.device_string, profile):
+            # The graph's constants are loaded beside the store (`_graph_constant_bytes`) and the
+            # store's cache takes the rest of the room: unpriced, they sat over the usable rung —
+            # DeepSeek-Coder-V2-Lite's 1 080 MB of RoPE tables beside a store granted to the byte.
+            consts_mb = self._graph_constants_mb(container, comp_name, largest)
             store = self._expert_store_budget(comp_name, real_weight,
-                                              usable - self._live_activation_mb(mem), cost_mult)
+                                              usable - self._live_activation_mb(mem) - consts_mb, cost_mult)
             cap = self._max_allocation_mb(largest)
             if store is not None and (cap is None or store[0] <= cap):
                 dense_mb, floor_mb, _ = self._expert_store_floor(comp_name, real_weight, cost_mult)
-                self.__dict__.setdefault("_unified_expert_stores", {})[comp_name] = dense_mb + floor_mb
+                self.__dict__.setdefault("_unified_expert_stores", {})[comp_name] = dense_mb + floor_mb + consts_mb
                 shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
 
