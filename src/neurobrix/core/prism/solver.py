@@ -2651,6 +2651,7 @@ class PrismSolver:
                     comp.graph, input_config=input_config)
                 if _priced_in_place or _c3_uids:
                     _iplan = OpLevelTilingPlan(comp.name)
+                    _iplan.inplace_adds = []
                     for _uid, _reuse in _priced_in_place:
                         _iplan.add_inplace_add(_uid, _reuse)
                     for _uid in _c3_uids:
@@ -2673,6 +2674,13 @@ class PrismSolver:
                     consumers.setdefault(tid, []).append((uid, uid_to_step[uid]))
 
             plan = OpLevelTilingPlan(comp.name)
+            # The in-place adds this component is priced with (`_compute_memory`
+            # passes the same candidates to the estimate) are installed with the
+            # plan, at the request — the runtime refuses a plan without them.
+            plan.inplace_adds = []
+            for _uid, _reuse in self._identify_inplace_add_candidates_static(
+                    comp.graph, input_config=input_config):
+                plan.add_inplace_add(_uid, _reuse)
             seen_pair_convs = set()
             for uid in order:
                 op = ops.get(uid, {})
@@ -2919,21 +2927,17 @@ class PrismSolver:
     def _identify_inplace_add_candidates_static(
         self, graph: Dict, threshold_bytes: Optional[int] = None, input_config=None,
     ):
-        """DAG-static replica of `OpLevelTilingEngine._detect_inplace_add_candidates`
-        (`tiling_engine.py:613`) — returns the same list of `(op_uid,
-        reuse_input_idx)` for residual `aten::add` ops where one input has
-        its last use at the add (so its buffer can be reused as output).
-        Operates on `graph.json` `input_tensor_ids` (the post-import
-        canonical form) instead of the runtime version's
-        `attributes.args` walk; both yield the same set on a
-        well-formed graph (input_tensor_ids is built from args at import
-        time). Threshold: `tiling_sizes.inplace_min_bytes()` unless stated, the
-        runtime helper's own.
-        Same threshold formula MUST match — divergence would mean the
-        estimator predicts an in-place that the runtime won't actually
-        engage. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
-        Sized at `input_config` (`_request_shape_of`): the runtime helper's
-        `shape_of`, the same rule.
+        """THE in-place-add decision: `(op_uid, reuse_input_idx)` for residual
+        `aten::add` ops where one input has its last use at the add (so its
+        buffer can be reused as output), from `graph.json` `input_tensor_ids`.
+        Threshold: `tiling_sizes.inplace_min_bytes()` unless stated.
+        One list serves both ends: the estimate prices it
+        (`_compute_memory`) and the plan installs it
+        (`_detect_op_level_tiling_pairs` -> `OpLevelTilingPlan.inplace_adds`);
+        the runtime no longer re-detects (it refuses a plan without the
+        decision), so the estimate and the execution cannot diverge.
+        P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        Sized at `input_config` (`_request_shape_of`), never at the trace.
         """
         if threshold_bytes is None:
             threshold_bytes = _ts.inplace_min_bytes()

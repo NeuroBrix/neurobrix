@@ -64,8 +64,8 @@ def _dag(*, consumers_of_conv=("act",), conv_is_graph_output=False,
             "output_tensor_ids": (["t"] if conv_is_graph_output else ["z"])}
 
 
-def _detect(dag, threshold=1024 ** 3):
-    return OpLevelTilingEngine._detect_inplace_unary_candidates(_Executor(dag), threshold)
+def _detect(dag):
+    return OpLevelTilingEngine._detect_inplace_unary_candidates(_Executor(dag))
 
 
 def test_the_esrgan_case_is_admitted():
@@ -113,9 +113,6 @@ def test_size_is_deliberately_not_decided_here():
     back to the detector, it goes red.
     """
     assert _detect(_dag(shape=SMALL)) == [("act", "aten::leaky_relu")]
-    # and the argument is accepted-and-ignored rather than removed, so the
-    # signature still matches the adds' detector
-    assert _detect(_dag(shape=SMALL), threshold=10 ** 15) == [("act", "aten::leaky_relu")]
 
 
 class _CapturingExecutor(_Executor):
@@ -133,6 +130,7 @@ class _CapturingExecutor(_Executor):
 def _interceptor_for(dag, op_uid="act"):
     from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
     plan = OpLevelTilingPlan("model")
+    plan.inplace_adds = []  # Prism's decision: none at this request
     engine = OpLevelTilingEngine(plan)
     ex = _CapturingExecutor(dag)
     engine.register_into_graph_executor(ex)

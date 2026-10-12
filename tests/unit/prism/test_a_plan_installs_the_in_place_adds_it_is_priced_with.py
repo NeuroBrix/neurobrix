@@ -110,3 +110,52 @@ def test_an_add_is_sized_at_the_request_not_at_the_trace():
         container=None, components=[comp], allocations={"vae": alloc},
         profile=SimpleNamespace(devices=[dev]), input_config=request, target_dtype_str="float16")
     assert "vae" in plans and plans["vae"].inplace_adds == priced, plans
+
+
+# THE RUNTIME SITE (2026-10-12). `OpLevelTilingEngine.register_into_graph_executor` re-detected the
+# in-place adds from the DAG whenever a plan carried none — at the TRACE's `output_shapes`, the
+# same class the two tests above hold at the plan. Prism now hands its request-sized decision over
+# with EVERY plan it emits (also the overflow / residual-chain branch, which handed nothing over),
+# and the runtime refuses a plan that carries no decision, by name. What each test would do if the
+# code were wrong: a plan built without the handover would carry `inplace_adds is None` (RED in the
+# fourth test, SEEN); a runtime that re-detected instead of refusing would install the add at the
+# trace's extents and not raise (RED in the fifth, SEEN).
+
+def test_a_plan_from_the_chain_branch_carries_the_request_sized_adds(monkeypatch):
+    g = _symbolic_graph(7, 10, 32)
+    request = InputConfig(batch_size=1, height=3072, width=4096, dtype="float16", vae_scale=32)
+    solver = PrismSolver()
+    spec = {"fork_uid": "aten.relu::0", "merge_uid": "aten.add::0", "chain_uids": ["aten.relu::1"],
+            "spatial_axis": 2, "halo": 0, "shape": [1, 128, 3072, 4096], "bytes_fp32": 6 * GiB}
+    monkeypatch.setattr(PrismSolver, "_identify_residual_chain_specs", lambda self, graph, ic=None: [spec])
+    comp = SimpleNamespace(name="vae", graph=g)
+    dev = SimpleNamespace(memory_mb=32768, get_device_string=lambda: "cuda:0")
+    alloc = SimpleNamespace(device="cuda:0", memory_mb=300, shard_map={})
+    plans = solver._detect_op_level_tiling_pairs(
+        container=None, components=[comp], allocations={"vae": alloc},
+        profile=SimpleNamespace(devices=[dev]), input_config=request, target_dtype_str="float16")
+    assert "vae" in plans and plans["vae"].residual_chains, plans       # the chain branch ran
+    assert plans["vae"].inplace_adds == [("aten.add::0", 0)], plans["vae"].inplace_adds
+
+
+def test_the_runtime_refuses_a_plan_without_the_in_place_decision_by_name():
+    import pytest
+    from neurobrix.core.module.tiling_engine import OpLevelTilingEngine, OpLevelTilingPlan
+    g = _graph(4096, 4096)                 # an add the trace extents alone would put in place
+
+    class _Exec:
+        mode = "compiled"
+        _dag = g
+        _weights = {}
+
+        def register_op_uid_interceptors(self, interceptors, groups=(), planned=()):
+            self.registered = dict(interceptors)
+            return len(interceptors)
+
+    plan = OpLevelTilingPlan("vae")
+    plan.add_tiled_op("aten.relu::0", "aten::convolution", 2)   # a non-empty plan, no add decision
+    assert plan.inplace_adds is None
+    ex = _Exec()
+    with pytest.raises(RuntimeError, match=r"'vae': the plan carries no in-place-add decision"):
+        OpLevelTilingEngine(plan).register_into_graph_executor(ex)
+    assert plan.inplace_adds is None and not hasattr(ex, "registered")

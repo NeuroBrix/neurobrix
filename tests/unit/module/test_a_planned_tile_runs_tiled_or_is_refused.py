@@ -42,6 +42,7 @@ class _Executor:
 
 def test_a_planned_tiled_conv_reaches_the_executor_as_planned():
     plan = OpLevelTilingPlan("vae")
+    plan.inplace_adds = []  # Prism's decision: none at this request
     plan.add_tiled_op("conv", "aten::convolution", 4)
     ex = _Executor("compiled")
     OpLevelTilingEngine(plan).register_into_graph_executor(ex)
@@ -50,6 +51,7 @@ def test_a_planned_tiled_conv_reaches_the_executor_as_planned():
 
 def test_a_planned_op_of_a_type_without_a_tiled_implementation_is_refused_by_name():
     plan = OpLevelTilingPlan("vae")
+    plan.inplace_adds = []  # Prism's decision: none at this request
     plan.add_tiled_op("conv", "aten::cudnn_convolution", 4)
     with pytest.raises(RuntimeError, match=r"conv \(aten::cudnn_convolution\).*no tiled implementation"):
         OpLevelTilingEngine(plan).register_into_graph_executor(_Executor("compiled"))
@@ -58,6 +60,7 @@ def test_a_planned_op_of_a_type_without_a_tiled_implementation_is_refused_by_nam
 def test_a_planned_residual_chain_the_mode_does_not_run_is_refused_by_name(monkeypatch):
     monkeypatch.setenv("NBX_TRITON_CHAIN_WRAPPER", "0")
     plan = OpLevelTilingPlan("vae")
+    plan.inplace_adds = []  # Prism's decision: none at this request
     plan.residual_chains = [{"fork_uid": "conv", "merge_uid": "conv2", "chain_uids": []}]
     ex = _Executor("triton")
     with pytest.raises(RuntimeError, match=r"2 op\(s\) no interceptor runs in mode 'triton'.*conv.*residual chains"):

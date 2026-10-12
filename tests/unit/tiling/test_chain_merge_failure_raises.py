@@ -60,6 +60,7 @@ class _FakeGraphExecutor:
 
 def _make_engine_with_chain():
     plan = OpLevelTilingPlan("test_component")
+    plan.inplace_adds = []  # Prism's decision: none at this request
     plan.add_residual_chain({
         "fork_uid": FORK_UID,
         "merge_uid": MERGE_UID,
