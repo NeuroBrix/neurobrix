@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`neurobrix info` loads no framework.** The discovery record (`--json`) and the human listing
+  read the accelerators through the engine's own detection (`core/prism/autodetect.visible_devices`,
+  the vendor-tool cascade, `CUDA_VISIBLE_DEVICES` honoured) and the installed PyTorch's version
+  through the package metadata; torch is no longer imported on the client's first call (0.29 s
+  against 2.03 s on four V100). Same keys, same types; `cuda_available` is now what the driver
+  shows and `memory_bytes` the driver's total (`docs/reference/json-output.md`; Studio request 1).
 - **The daemon refuses a client outside its protocol range.** Every request the client builds
   carries `protocol`, its wire version; the daemon serves `[PROTOCOL_MIN, PROTOCOL_VERSION]`
   and answers a request outside it, or with a non-integer version, with an error that names the

@@ -171,7 +171,7 @@ The remaining four, plus two items they imply, are queued in this order:
 3. **A protocol range** (request 7): a client outside the daemon's supported range is refused at
    connection with a message naming both ranges. **Done 2026-10-13** (`protocol_refusal`, refused at the first frame, connection closed).
 4. **Discovery without torch** (request 1): `neurobrix info` reads the hardware through the existing
-   detection, with no framework import; a change in its record's shape is versioned and documented.
+   detection, with no framework import; a change in its record's shape is versioned and documented. **Done 2026-10-13** (`visible_devices`, package metadata; the record's shape unchanged, its semantics documented in `docs/reference/json-output.md`).
 5. **The wire protocol, specified**: framing, envelopes, version and range, methods, errors, endpoints
    per OS and hard limits, written for a reader without access to the code.
 6. **A readiness signal in the foreground**, so a client that starts the daemon itself does not poll.

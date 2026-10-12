@@ -783,6 +783,18 @@ def _cpu_preferred_dtype(cpu: Dict[str, Any]) -> str:
 # GPU DETECTION (OS-FIRST DISPATCH)
 # ============================================================================
 
+def visible_devices(os_type: str) -> Tuple[List[Dict[str, Any]], str]:
+    """The accelerators this process can address, as (devices, brand): the
+    OS-specific vendor-tool cascade below, filtered by the visible set. The
+    one detection — `neurobrix info` reads it for its discovery record
+    (Studio request 1) so no command keeps a second one, and none imports a
+    framework to learn what the driver already says. The cascade's last
+    resort, `_detect_torch_fallback`, is reached only when no vendor tool
+    answers; on such a machine the discovery is as slow as that import, and
+    says so by its figures, not by a flag."""
+    return _detect_gpus(os_type)
+
+
 def _detect_gpus(os_type: str) -> Tuple[List[Dict[str, Any]], str]:
     """Detect GPUs using OS-specific cascade. Returns (devices, brand)."""
     if os_type == "Linux":

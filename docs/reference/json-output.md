@@ -22,7 +22,7 @@ parse or lacks its schema (seen red on an injected stray print).
 
 | command | record |
 |---|---|
-| `info --json` | `version`, `package`, `cache`, `store`, `python`, `torch`, `cuda_available`, `gpus[{index,name,memory_bytes}]`, `models[{name,size_bytes}]`, `hardware_profiles[]` — machine-readable discovery without loading a model |
+| `info --json` | `version`, `package`, `cache`, `store`, `python`, `torch`, `cuda_available`, `gpus[{index,name,memory_bytes}]`, `models[{name,size_bytes}]`, `hardware_profiles[]` — machine-readable discovery without loading a model. Since 2026-10-13 the record loads no framework: `torch` is the installed distribution's version (package metadata, `null` when absent), `cuda_available` is whether NVIDIA devices are in the visible set as the driver reports them, `gpus` is the engine's own detection (`core/prism/autodetect.visible_devices`: vendor tools, `CUDA_VISIBLE_DEVICES` honoured, `memory_bytes` = the driver's total); same keys, same types, the schema stays `neurobrix.info/1` |
 | `list --json` | `models[{name,family,size_bytes,license,in_store}]`, `store_only[{name,size_bytes}]`, `store{path,files[{name,size_bytes}],bytes}` |
 | `hub --json [--category C] [--search S]` | `registry`, `query{category,search}`, `total`, `models[{slug,name,category,size_bytes,license,downloads,visibility,installed}]` — the registry's own answer, `installed` read from this machine's cache |
 | `inspect <path-or-model> --json` | `path`, `model`, `nbx_version`, `family`, `components[{name,category,neural,ops?,shards?}]` |

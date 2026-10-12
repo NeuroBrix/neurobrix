@@ -30,17 +30,28 @@ def info_record(args) -> dict:
         rec.update({k: v for k, v in daemon_identity().items() if k != "engine"})
     except Exception as exc:          # the serving module may not import on a minimal install: said, not hidden
         rec["daemon"] = f"unavailable ({exc})"
-    try:
-        import torch
-        rec["torch"] = torch.__version__
-        rec["cuda_available"] = bool(torch.cuda.is_available())
-        if rec["cuda_available"]:
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                rec["gpus"].append({"index": i, "name": props.name, "memory_bytes": int(props.total_memory)})
-    except ImportError:
-        pass
+    rec.update(_compute_stack())
     return rec
+
+
+def _compute_stack() -> dict:
+    """The installed PyTorch's version from the package metadata and the
+    accelerators from the engine's own detection — no framework imported:
+    discovery is the client's first call and belongs to no branch (Studio
+    request 1). `cuda_available` is what the driver shows: NVIDIA devices in
+    the visible set."""
+    import importlib.metadata
+    import platform
+    from neurobrix.core.prism.autodetect import visible_devices
+    try:
+        torch_version = importlib.metadata.version("torch")
+    except importlib.metadata.PackageNotFoundError:
+        torch_version = None
+    devices, brand = visible_devices(platform.system())
+    return {"torch": torch_version,
+            "cuda_available": brand == "nvidia" and bool(devices),
+            "gpus": [{"index": d["index"], "name": d["model"], "memory_bytes": int(d["memory_mb"]) * 1024 * 1024}
+                     for d in devices]}
 
 
 def cmd_info(args):
@@ -90,17 +101,13 @@ def cmd_info(args):
         print(f"  Store: {STORE_DIR}")
         print(f"  Python: {sys.version.split()[0]}")
 
-        try:
-            import torch
-            print(f"  PyTorch: {torch.__version__}")
-            print(f"  CUDA Available: {torch.cuda.is_available()}")
-            if torch.cuda.is_available():
-                print(f"  GPU Count: {torch.cuda.device_count()}")
-                for i in range(torch.cuda.device_count()):
-                    props = torch.cuda.get_device_properties(i)
-                    print(f"    [{i}] {props.name}: {props.total_memory / (1024**3):.1f} GB")
-        except ImportError:
-            print("  PyTorch: Not installed")
+        stack = _compute_stack()
+        print(f"  PyTorch: {stack['torch'] or 'Not installed'}")
+        print(f"  CUDA Available: {stack['cuda_available']}")
+        if stack["gpus"]:
+            print(f"  GPU Count: {len(stack['gpus'])}")
+            for g in stack["gpus"]:
+                print(f"    [{g['index']}] {g['name']}: {g['memory_bytes'] / (1024**3):.1f} GB")
 
 
 def cmd_inspect(args):
