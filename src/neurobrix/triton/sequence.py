@@ -105,11 +105,15 @@ def _parse_env_int(name: str, default: int) -> int:
 _DEFERRED_DRAIN_COUNT_DEFAULT = 512
 
 
-def _resolve_drain_policy():
+def _resolve_drain_policy(planned_cliff: Optional[int] = None):
     """Resolve the per-run deferred-drain policy once, applying env overrides.
 
     Returns `(cliff, floor, reserve, interval, count_limit)`. The config-driven
-    base comes from `wrappers.deferred_drain_policy()`; two env overrides layer
+    base comes from `wrappers.deferred_drain_policy()`; the cliff is then the
+    PLAN's (`planned_cliff`, `ComponentAllocation.deferred_drain_cliff_bytes`)
+    when Prism set one — Prism budgeted this device against that figure, never
+    against the profile's, and the pressure floor never exceeds it. Two env
+    overrides layer
     on top for reproducibility/demonstration (looked up once per run, never in
     the hot loop):
       - NBX_DEFERRED_DRAIN_BYTES pins `cliff` AND disables the pressure branch
@@ -120,6 +124,9 @@ def _resolve_drain_policy():
     (R30 by construction). No torch, no compute (R33).
     """
     cliff, floor, reserve, interval = deferred_drain_policy()
+    if planned_cliff is not None:
+        cliff = int(planned_cliff)
+        floor = min(floor, cliff)
     _env_cap = _parse_env_int("NBX_DEFERRED_DRAIN_BYTES", 0)
     if _env_cap > 0:
         cliff = _env_cap
@@ -268,6 +275,30 @@ _ACCUMULATOR_OPS = frozenset({
 })
 
 
+def _deferred_drain_context(exc, deferred_bytes: int, drain_cliff: int,
+                            planned: bool = False) -> str:
+    """For a refused device allocation only: what the deferred dead-tensor queue held when the op
+    asked, against the cliff this run drained at — the PLAN's (`planned`: Prism's
+    `ComponentAllocation.deferred_drain_cliff_bytes`, the room it left beside what it holds whole
+    on the device) or the profile's (`memory.deferred_drain_cliff_bytes`, which
+    `PrismSolver._deferred_drain_mb` subtracts from every card's usable part). The allocator no
+    longer drains the queue and retries (2026-10-11): an OOM is raised, and this line says whether
+    the queue stayed inside its price — then the plan under-priced the op's live set — or not.
+    Any other failure passes through with nothing appended."""
+    from neurobrix.kernels.nbx_tensor import DeviceOOMError
+    if not isinstance(exc, DeviceOOMError):
+        return ""
+    mb = 1024 * 1024
+    asked = getattr(exc, "requested", None)
+    within = deferred_bytes <= drain_cliff
+    whose = "the plan's drain cliff" if planned else "the profile's drain cliff"
+    return (f" | the op asked {asked / mb:,.0f} MB" if asked else " | the op's request")\
+        + (f" with the deferred-free queue holding {deferred_bytes / mb:,.0f} MB of the "
+           f"{drain_cliff / mb:,.0f} MB priced for it ({whose}): "
+           + ("the queue stayed inside its price, so the plan under-priced this op's live set"
+              if within else "the queue overran its price"))
+
+
 def _sync_deferred_all_devices(deferred) -> None:
     """Sync EVERY device that owns a tensor in the deferred batch before
     clear() lets the finalizers cudaFree.
@@ -359,8 +390,12 @@ class TritonSequence:
 
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
-                 config_constants=None, *, stores_fp64: bool):
+                 config_constants=None, *, stores_fp64: bool,
+                 drain_cliff_bytes: Optional[int] = None):
         self.dag = dag
+        # The deferred-drain cliff Prism planned for this device (None: the profile's) —
+        # `_resolve_drain_policy(planned_cliff=...)` in both hot loops.
+        self._planned_drain_cliff: Optional[int] = drain_cliff_bytes
         # profile.json architectural ints — the seq_len promotion's collision set (R30 mirror)
         self._config_constants = set(config_constants or ())
         self.device_idx = device_idx
@@ -896,7 +931,8 @@ class TritonSequence:
             "torch_dtype": self.dag.get("torch_dtype", ""),
         }
         seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype,
-                             stores_fp64=self._dtype_engine.stores_fp64)
+                             stores_fp64=self._dtype_engine.stores_fp64,
+                             drain_cliff_bytes=self._planned_drain_cliff)
         seq.set_activations_fp16_safe(self._activations_fp16_safe)
         seq.compile()
         seq.bind_weights(weights)
@@ -2927,22 +2963,20 @@ class TritonSequence:
                 inputs, self._input_ids, self.dag.get("tensors", {}))
 
     def _ensure_oom_reclaim_hook(self) -> None:
-        """Register (once per instance) a last-chance OOM reclaimer that
-        drains this sequence's CURRENT deferred dead-tensor queue
-        (`self._oom_deferred_queue`, rebound at the start of each run by
-        both hot loops). Called by DeviceAllocator.malloc_cuda ONLY after a
-        device malloc fails — dead code on every run that never OOMs. The
-        drain mirrors the in-loop drains exactly: device sync BEFORE the
-        frees (UAF-safe, sync-before-free doctrine), then clear. The loop's
-        local `_deferred_bytes` counter is deliberately left stale after a
-        hook drain: it only OVERSTATES, so the next cliff check performs
-        one drain of an already-empty queue (a wasted sync on the
-        OOM-recovery path only) and resets — never an early free. Weakref-
-        bound: a dead sequence's hook frees nothing and unregisters itself.
-        P-TRITON-LIVE-SET: the drain policy's pressure gate is blind to the
-        incoming request size (an 8 GiB ask with 7.4 GiB free trips
-        nothing), so the allocator-side retry is the only chokepoint that
-        sees both the request and the reclaimable queue.
+        """Register (once per instance) a reclaimer that drains this
+        sequence's CURRENT deferred dead-tensor queue (`self._oom_deferred_queue`,
+        rebound at the start of each run by both hot loops). Its one caller is
+        `wrappers._autotune_headroom_guard`, for the Triton autotuner's
+        benchmark buffer — the one device allocation the plan does not price.
+        `DeviceAllocator.malloc_cuda` no longer calls it (2026-10-11): Prism
+        prices the queue (`PrismSolver._deferred_drain_mb`) and a refused
+        malloc is raised, named by the hot loop (`_deferred_drain_context`).
+        The drain mirrors the in-loop drains exactly: device sync BEFORE the
+        frees (UAF-safe), then clear. The loop's local `_deferred_bytes`
+        counter is left stale after a hook drain: it only OVERSTATES, so the
+        next cliff check drains an already-empty queue and resets — never an
+        early free. Weakref-bound: a dead sequence's hook frees nothing and
+        unregisters itself.
         """
         if getattr(self, "_oom_hook_registered", False):
             return
@@ -3451,13 +3485,14 @@ class TritonSequence:
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
-         _drain_count_limit) = _resolve_drain_policy()
+         _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
+        _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
 
-        # OOM last-chance reclaim: expose THIS run's deferred queue to the
-        # allocator (drained+retried only after a failed device malloc).
+        # Expose THIS run's deferred queue to the autotune headroom guard (the
+        # one unplanned allocation); the allocator's own malloc never drains it.
         self._oom_deferred_queue = _deferred
         self._ensure_oom_reclaim_hook()
 
@@ -3939,7 +3974,8 @@ class TritonSequence:
                         for i, a in enumerate(args)
                         if isinstance(a, NBXTensor))
                     _msg = _oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)} | NBX args: {_arg_diag}",
                         e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
@@ -4117,9 +4153,9 @@ class TritonSequence:
             _pressure = False
             # Under the allocator pool the pressure probe has no object: a
             # pressure drain parks dead blocks in the free-list (no driver
-            # memory comes back), and a malloc that would fail already drains
-            # the deferred queues through the registered reclaim hooks before
-            # raising. Measured (2026-09-02, xlong int4 prefill): 401
+            # memory comes back), and the queue's ceiling, the cliff, is priced
+            # by the plan (`PrismSolver._deferred_drain_mb`); a malloc refused
+            # anyway is raised. Measured (2026-09-02, xlong int4 prefill): 401
             # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
             if (not _drain_now and _drain_reserve > 0
                     and not DeviceAllocator._pool_enabled
@@ -4224,7 +4260,8 @@ class TritonSequence:
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
         (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
-         _drain_count_limit) = _resolve_drain_policy()
+         _drain_count_limit) = _resolve_drain_policy(self._planned_drain_cliff)
+        _drain_planned = _drain_cliff == self._planned_drain_cliff   # not the door's, not the profile's
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
@@ -4238,8 +4275,8 @@ class TritonSequence:
             _watch_slot = -1
         _watch_ref = arena[_watch_slot] if _watch_slot >= 0 else None
 
-        # OOM last-chance reclaim: expose THIS run's deferred queue to the
-        # allocator (drained+retried only after a failed device malloc).
+        # Expose THIS run's deferred queue to the autotune headroom guard (the
+        # one unplanned allocation); the allocator's own malloc never drains it.
         self._oom_deferred_queue = _deferred
         self._ensure_oom_reclaim_hook()
 
@@ -4311,7 +4348,8 @@ class TritonSequence:
                 except Exception as e:
                     _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)} | None args at "
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)} | None args at "
                         f"positions {_none_pos} of {len(args)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
@@ -4330,7 +4368,8 @@ class TritonSequence:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
                     raise RuntimeError(_oom_annotate(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}", e,
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}{impossible_extent_context(e, args, self._symbol_resolver)}"
+                        f"{_deferred_drain_context(e, _deferred_bytes, _drain_cliff, _drain_planned)}", e,
                         next((tuple(getattr(a, "_shape", ())) for a in args
                               if isinstance(a, NBXTensor)), None))) from e
 
@@ -4394,9 +4433,9 @@ class TritonSequence:
             _pressure = False
             # Under the allocator pool the pressure probe has no object: a
             # pressure drain parks dead blocks in the free-list (no driver
-            # memory comes back), and a malloc that would fail already drains
-            # the deferred queues through the registered reclaim hooks before
-            # raising. Measured (2026-09-02, xlong int4 prefill): 401
+            # memory comes back), and the queue's ceiling, the cliff, is priced
+            # by the plan (`PrismSolver._deferred_drain_mb`); a malloc refused
+            # anyway is raised. Measured (2026-09-02, xlong int4 prefill): 401
             # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
             if (not _drain_now and _drain_reserve > 0
                     and not DeviceAllocator._pool_enabled

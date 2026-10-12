@@ -82,7 +82,10 @@ def band_for(mode):
             dev = s._prepare_devices(profile(APPLE))[0]
             whole = s._whole_component_mb(c, COMP, seen[COMP], dev)
             total = seen[COMP].total_mb
-            _BANDS[mode] = (total, whole / s.whole_component_fraction)
+            # The top of the band is the rung whose WHOLE part (`_whole_usable_mb`: the rung times
+            # the fraction, less the smallest drain the Triton plan may leave, the profile's floor —
+            # 0 under compiled) equals `whole` (merge-queue-25 option B).
+            _BANDS[mode] = (total, (whole + s._deferred_drain_floor_mb(dev)) / s.whole_component_fraction)
         finally:
             mp.undo()
     return _BANDS[mode]

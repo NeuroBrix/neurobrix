@@ -7841,20 +7841,11 @@ def deferred_drain_policy():
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
         cfg = get_vendor_config(_vendor, devices[0].architecture)
-        mem = cfg.get("memory", {})
-        cliff = int(mem.get("deferred_drain_cliff_bytes", cliff))
-        reserve = int(mem.get("deferred_drain_pressure_reserve_bytes", 0))
-        if reserve <= 0:
-            # Pressure branch disabled → pure cliff (prior behavior).
-            return (cliff, cliff, 0, 1 << 30)
-        floor = int(mem.get("deferred_drain_floor_bytes",
-                            _DEFERRED_DRAIN_FLOOR_DEFAULT))
-        if floor > cliff:
-            floor = cliff
-        interval = int(mem.get("deferred_drain_freecheck_interval", 8))
-        if interval < 1:
-            interval = 1
-        return (cliff, floor, reserve, interval)
+        # The ONE reading of the policy, shared with the plan that prices the cliff
+        # (`core/prism/memory_budget.deferred_drain_policy_of`): the run and the plan
+        # cannot read two figures.
+        from neurobrix.core.prism.memory_budget import deferred_drain_policy_of
+        return deferred_drain_policy_of(cfg.get("memory", {}))
     except Exception:
         return fallback
 

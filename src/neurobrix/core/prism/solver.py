@@ -197,6 +197,11 @@ class ComponentAllocation:
     # the plan leaves beside everything it holds with the component (`_zero3_resident_budgets`). The
     # ratchet streams only the blocks beyond it. 0 streams every block on every pass.
     resident_weight_mb: float = 0.0
+    # Triton engine only: the bytes of dead tensors the hot loop may queue before it drains, on
+    # this component's device (`PrismSolver._assign_drain_cliffs`, `memory_budget.
+    # planned_drain_cliff_bytes`): the profile's cliff, or less where the plan holds a component
+    # whole with less room beside it. None — a compiled plan, a host device — drains at the profile's.
+    deferred_drain_cliff_bytes: Optional[int] = None
 
     @property
     def device(self) -> str:
@@ -387,6 +392,9 @@ class ExecutionPlan:
     # boundary recomputed on a different graph is not the boundary the budget
     # was accepted under.
     layer_stream_plan: Dict[str, List[List[str]]] = field(default_factory=dict)
+    # Triton engine: the deferred-drain cliff each accelerator drains at, in bytes
+    # (`PrismSolver._assign_drain_cliffs`); also carried on each component's allocation.
+    deferred_drain_cliffs: Dict[str, int] = field(default_factory=dict)
     # component -> `graph_fingerprint` of the graph those segments were cut on. The strategy
     # refuses to cut a graph with another fingerprint (register 106).
     layer_stream_graph: Dict[str, str] = field(default_factory=dict)
@@ -483,6 +491,7 @@ class ExecutionPlan:
                     "sharded": alloc.sharded,
                     "shard_map": alloc.shard_map,
                     "resident_weight_mb": alloc.resident_weight_mb,
+                    "deferred_drain_cliff_bytes": alloc.deferred_drain_cliff_bytes,
                 }
                 for name, alloc in self.components.items()
             },
@@ -534,6 +543,8 @@ class ExecutionPlan:
                 shard_map=comp.get("shard_map", {}),
                 # a plan saved before the field streamed every zero3 block: 0 is that plan's meaning
                 resident_weight_mb=float(comp.get("resident_weight_mb", 0.0)),
+                # a plan saved before the field drained at the profile's cliff: None is that meaning
+                deferred_drain_cliff_bytes=comp.get("deferred_drain_cliff_bytes"),
             )
             for name, comp in data.get("components", {}).items()
         }
@@ -870,6 +881,66 @@ class PrismSolver:
         return loose + max(sum(costs.get(n, 0) for n in ph) + (0 if owner in ph else int(outliving))
                            for ph in phases)
 
+    def _assign_drain_cliffs(self, container, plan, devices) -> None:
+        """The deferred-drain cliff of every accelerator the plan uses, set on each component held
+        there (`ComponentAllocation.deferred_drain_cliff_bytes`) — the figure the Triton hot loop
+        drains at instead of the profile's:
+
+            cliff(dev) = min(profile cliff, room),
+            room       = the rung's part (`_rung_part_mb`) less the largest WHOLE cost the plan holds
+                         on dev (`_whole_component_mb` of every component placed whole there).
+
+        `memory_budget.planned_drain_cliff_bytes` computes it, the door pinning it. A component is
+        whole here when it is on that one device, not zero3, not streamed and not tiled; the others
+        were budgeted against `_usable_mb`, the profile's cliff set aside, and bound nothing. Every
+        whole placement read `_whole_usable_mb`, so the room is at least the profile's floor; a
+        room under it (a forced strategy) is still the cliff the run gets — the plan's figure,
+        stated in the plan, never a silent profile default. Compiled plans and host devices: None."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return
+        from neurobrix.core.prism.memory_budget import planned_drain_cliff_bytes
+        mib = 1024 * 1024
+        by_name = {d.device_string: d for d in (devices or [])}
+        streamed = set(plan.layer_stream_plan or {})
+        tiled = set(plan.component_tiling or {})
+        whole_mb: Dict[str, float] = {}
+        for name, alloc in plan.components.items():
+            dev = by_name.get(str(alloc.device))
+            if dev is None or len(alloc.devices) != 1 or alloc.strategy == "zero3":
+                continue
+            if name in streamed or name in tiled or name not in plan.component_memory:
+                continue
+            cost = self._whole_component_mb(container, name, plan.component_memory[name], dev)
+            whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
+        # A streamed plan holds its WINDOW on the card (resident beside + constants + flow reads +
+        # KV + the largest piece): a held cost like a whole component. Cut against the profile's
+        # cliff it leaves at least that cliff and changes nothing; cut against the floor it sets
+        # the room the card drains at.
+        if plan.layer_stream_plan and getattr(plan, "device_window_mb", None):
+            for name in plan.layer_stream_plan:
+                alloc = plan.components.get(name)
+                dev = by_name.get(str(alloc.device)) if alloc is not None else None
+                if dev is not None:
+                    whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0),
+                                                      float(plan.device_window_mb))
+        cliffs: Dict[str, int] = {}
+        for name, alloc in plan.components.items():
+            own: List[int] = []
+            for key in alloc.devices:
+                dev = by_name.get(str(key))
+                memory = self._drain_profile_memory(dev) if dev is not None else None
+                if memory is None:
+                    continue
+                if key not in cliffs:
+                    room_mb = self._rung_part_mb(dev) - whole_mb.get(key, 0.0)
+                    cliffs[key] = planned_drain_cliff_bytes(memory, room_mb * mib)
+                own.append(cliffs[key])
+            # A component spread over several cards runs one queue per card's sequence; it
+            # carries the smallest of their cliffs, so no card it touches is drained above its own.
+            alloc.deferred_drain_cliff_bytes = min(own) if own else None
+        plan.deferred_drain_cliffs = cliffs
+
     def _zero3_resident_budgets(self, container, plan, devices, profile) -> None:
         """How many MB of each zero3 component's weights its card keeps RESIDENT across passes
         (`ComponentAllocation.resident_weight_mb`), set on the plan.
@@ -952,8 +1023,89 @@ class PrismSolver:
         was served by neither: PixArt-XL-2-1024-MS's 9 630 MB text_encoder (9 171.7 MB whole) on
         the Mac's profile, at any rung in [9 630, 9 969) MB, planned `cpu_streaming`, off the
         accelerator, on a device that holds it.
+
+        Under the Triton engine the part is net of the DEFERRED DRAIN at the profile's cliff
+        (`_deferred_drain_mb`): the dead tensors the hot loop retires and frees only at its drain
+        cliff sit on the card beside whatever runs. This is the figure segments, zero3 activations,
+        residency and tiles are budgeted against. A component held WHOLE is judged against
+        `_whole_usable_mb` instead, and the plan then gives the device the cliff its room allows
+        (`_assign_drain_cliffs`).
         """
+        return self._rung_part_mb(dev) - self._deferred_drain_mb(dev)
+
+    def _rung_part_mb(self, dev: "DeviceState") -> float:
+        """The rung times the whole-component fraction, before any drain is set aside."""
         return self._effective_capacity_mb(dev) * self.whole_component_fraction
+
+    def _whole_usable_mb(self, dev: "DeviceState") -> float:
+        """What ONE component held WHOLE may occupy on `dev`: the rung's part less the SMALLEST drain
+        the plan may leave the Triton hot loop (`_deferred_drain_floor_mb`, the profile's floor).
+        The plan then drains that device at min(profile cliff, the room left beside its largest
+        whole component) — `memory_budget.planned_drain_cliff_bytes`, the same function the hot
+        loop's cliff comes from — so a component that fits whole beside a smaller queue stays whole,
+        and one that leaves less than the floor is streamed, zero3 or tiled against `_usable_mb`.
+        Janus-Pro-7B's language model on the idle Mac (14 168 MB whole, 15 073 MB of rung part):
+        904 MB of room, cliff 904 MB instead of the profile's 954, held whole.
+        Under compiled and on a host both drains are 0 and the two figures are one."""
+        return self._rung_part_mb(dev) - self._deferred_drain_floor_mb(dev)
+
+    def _deferred_drain_mb(self, dev: "DeviceState") -> float:
+        """What the Triton engine's deferred-free queue holds on `dev` at its worst, in MB — the
+        price of the drain, read from the device's vendor profile (`memory.deferred_drain_cliff_bytes`,
+        through `memory_budget.deferred_drain_retained_bytes`, the reading the runtime drains by).
+
+        The hot loops (`triton/sequence.py`) retire every dead or overwritten tensor onto a queue and
+        free it, after a device sync, only when the queue reaches the cliff; under the allocator pool
+        (the default) no earlier drain fires. Until 2026-10-11 the plan priced the live set and not
+        that queue, and the allocator reclaimed it by draining on a refused malloc and retrying
+        (`[NBX_OOM_RECLAIM] freed ...`): 1 279 times in Allegro's 16 GB triton run, up to 1 883 MB a
+        time in CogVideoX-5b-I2V's (mq24 gate, 2026-10-10) — a plan that fitted only through a rescue.
+        The queue is one per running sequence, so it is priced once per device, inside `_usable_mb`.
+        This is the CEILING: a device whose plan holds a component whole drains at the room that
+        component leaves, never more than this (`_whole_usable_mb`, `_assign_drain_cliffs`).
+
+        0 under the compiled engine (torch frees at the kill point; there is no queue) and on a host
+        device (its queue is host memory, priced by the host ledger). A card whose profile states no
+        cliff is refused by name: an unstated queue is not an empty one."""
+        from neurobrix.core.prism.memory_budget import deferred_drain_retained_bytes
+        return self._read_drain(dev, deferred_drain_retained_bytes)
+
+    def _deferred_drain_floor_mb(self, dev: "DeviceState") -> float:
+        """The smallest queue the plan may leave the Triton hot loop on `dev`, in MB: the profile's
+        `deferred_drain_floor_bytes` (`memory_budget.planned_drain_floor_bytes`; the door pins it to
+        its cliff). 0 under compiled and on a host, as the drain itself."""
+        from neurobrix.core.prism.memory_budget import planned_drain_floor_bytes
+        return self._read_drain(dev, planned_drain_floor_bytes)
+
+    def _drain_profile_memory(self, dev: "DeviceState") -> Optional[dict]:
+        """`dev`'s vendor profile `memory:` section when the Triton engine runs on an accelerator,
+        None otherwise (the compiled engine has no queue; a host device's queue is host memory)."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "triton":
+            return None
+        if str(getattr(dev, "device_string", "")).startswith("cpu"):
+            return None
+        spec = getattr(dev, "spec", None)
+        if spec is None:
+            raise PlanNotComputable(
+                f"{dev.device_string} carries no device spec, so its vendor profile cannot be read "
+                f"and the Triton engine's deferred-drain queue cannot be priced on it")
+        from neurobrix.core.config.loader import get_vendor_config
+        brand = getattr(spec, "brand", None)
+        return (get_vendor_config(getattr(brand, "value", brand), spec.architecture)
+                .get("memory", {}) or {})
+
+    def _read_drain(self, dev: "DeviceState", reading) -> float:
+        """One drain figure of `dev` in MB through `reading(memory) -> bytes`; 0 where there is no
+        queue; a profile that does not state the figure refused by name."""
+        memory = self._drain_profile_memory(dev)
+        if memory is None:
+            return 0.0
+        try:
+            return reading(memory) / (1024 * 1024)
+        except KeyError as exc:
+            spec = dev.spec
+            raise PlanNotComputable(f"{dev.device_string} ({spec.architecture}): {exc.args[0]}") from exc
 
     def _max_allocation_mb(self, dev: "DeviceState") -> Optional[int]:
         """THE LARGEST SINGLE ALLOCATION `dev` GRANTS, in MB — `DeviceSpec.max_allocation_mb`, the
@@ -1049,10 +1201,10 @@ class PrismSolver:
 
     def _holds_whole(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
                      usable_mb: Optional[float] = None) -> bool:
-        """ONE answer to "is `comp_name` held whole on `dev`": its whole cost within the usable part
-        of the rung (`_usable_mb`, or the budget the caller cuts against) AND its arena within the
-        device's largest allocation."""
-        usable = self._usable_mb(dev) if usable_mb is None else usable_mb
+        """ONE answer to "is `comp_name` held whole on `dev`": its whole cost within the part of the
+        rung a whole component may hold (`_whole_usable_mb`, or the figure the caller passes) AND its
+        arena within the device's largest allocation."""
+        usable = self._whole_usable_mb(dev) if usable_mb is None else usable_mb
         return (self._whole_component_mb(container, comp_name, mem, dev) <= usable
                 and self._arena_over_allocation(container, comp_name, mem, dev) is None)
 
@@ -1766,7 +1918,11 @@ class PrismSolver:
                     #   DeepSeek-Coder-V2-Lite  segments+resident 13 598.8 + KV 3 846.4 = 17 445 MB
                     #   Qwen3-Coder-30B-A3B     segments+resident 11 966.3 + KV 8 394.4 = 20 361 MB
                     # against a 16 384 MB rung, 15 073 usable, 17 277 capacity.
-                    total_capacity = int(self._usable_mb(strat_devices[0]) * 1024 * 1024)
+                    # Cut against the drain floor (`_try_layer_streaming`'s second step): that
+                    # figure, the one the window was held to.
+                    total_capacity = int((self._whole_usable_mb(strat_devices[0])
+                                          if getattr(self, "_layer_stream_cut_against_floor", False)
+                                          else self._usable_mb(strat_devices[0])) * 1024 * 1024)
                 else:
                     # Every other GPU strategy: the RUNGS of its devices, not their raw capacity —
                     # the raw figure ignores both the ladder and memory another process holds on a
@@ -1946,6 +2102,11 @@ class PrismSolver:
                     f"{sum(len(v) for v in plan.layer_stream_chunks.values())} stretch(es) in slices of "
                     f"a token axis: no plan held the request on the accelerator otherwise")
             plan.device_window_mb = int(self._layer_stream_window_bytes) / (1024 * 1024)
+            if getattr(self, "_layer_stream_cut_against_floor", False):
+                plan.selection_reason = (
+                    f"{plan.selection_reason} — segments cut against the rung less the drain floor: "
+                    f"less the profile's drain cliff left no room for them, so the card drains its "
+                    f"dead tensors at the room the window leaves (the plan's drain cliff)")
             # The components this rung kept resident by tiling them: their tiling is the plan's.
             for _cn, _spec in (getattr(self, "_layer_stream_tilings", None) or {}).items():
                 self._component_tiling[_cn] = _spec
@@ -1968,6 +2129,7 @@ class PrismSolver:
         if _host_t:
             plan.component_tiling = dict(plan.component_tiling or {})
             plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
+        self._assign_drain_cliffs(container, plan, devices)
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
         # intermediate tensor would OOM the assigned GPU. Decision happens
@@ -5052,11 +5214,13 @@ class PrismSolver:
         usable = self._usable_mb(largest)
 
         # Strategy 1: single_gpu — the component fits whole on the largest GPU: its whole cost
-        # against the usable part of the rung (`_usable_mb`, the whole-component fraction of
-        # PRISM_DEFAULTS). No flat `oom_reserve_mb` is subtracted here — this comment said so
+        # against the part of the rung a WHOLE component may hold (`_whole_usable_mb`: the
+        # whole-component fraction of PRISM_DEFAULTS, less the smallest drain the plan may leave
+        # the Triton hot loop; the device then drains at the room left, `_assign_drain_cliffs`). No flat `oom_reserve_mb` is subtracted here — this comment said so
         # until 2026-09-24 and the code never did; the fraction is the only headroom. And its
         # weights are ONE arena, within the device's largest allocation (`_arena_over_allocation`).
-        if required <= usable and self._arena_over_allocation(container, comp_name, mem, largest) is None:
+        if (required <= self._whole_usable_mb(largest)
+                and self._arena_over_allocation(container, comp_name, mem, largest) is None):
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
 
@@ -5767,7 +5931,7 @@ class PrismSolver:
             for i in range(n_gpus):
                 required = self._whole_component_mb(container, comp_name, mem, fresh[i])
                 new_peak = max(bin_peaks[i], required)
-                capacity = self._usable_mb(fresh[i])
+                capacity = self._whole_usable_mb(fresh[i])
                 if new_peak <= capacity and self._arena_over_allocation(
                         container, comp_name, mem, fresh[i]) is None:
                     headroom = capacity - new_peak
@@ -5917,13 +6081,14 @@ class PrismSolver:
             return True
         largest = max(cards, key=lambda d: d.capacity_mb)
         usable = self._usable_mb(largest)
+        whole_usable = self._whole_usable_mb(largest)    # "fits as it is": the whole figure
         unified = profile is not None and _device_is_unified(largest.device_string, profile)
         tilings: Dict[str, Dict[str, Any]] = {}
         overflow: Dict[str, float] = {}
         for comp_name, mem in sorted_comps:
             whole = (self._whole_component_mb(container, comp_name, mem, largest) if unified
                      else self._live_activation_mb(mem))
-            if whole <= usable:
+            if whole <= whole_usable:
                 continue
             tiling = self._spatial_component_tiling(
                 container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
@@ -6054,7 +6219,39 @@ class PrismSolver:
     def _try_layer_streaming(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """Stream a component at LAYER granularity, on the accelerator.
+        """The layer-streaming rung, its segments cut in two steps (merge-queue-25, option B for a
+        streamed plan): first against the rung's usable part net of the PROFILE's drain cliff
+        (`_usable_mb`), so every plan that cut there keeps its full queue; only when that cut
+        declines — the forced 1 024 MB rung of a V100-16GB: 942 - 1 907 < 0 — against the part net
+        of the drain FLOOR (`_whole_usable_mb`). The second cut is a priced choice written in the
+        plan: its window is a cost held on the card (`_assign_drain_cliffs`), so the card drains at
+        min(profile cliff, part - window), at least the floor, and the plan's why says so. Under it,
+        the refusal stands, named. The compiled engine has no queue: one cut, as before."""
+        self._layer_stream_cut_against_floor = False
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container,
+            self._usable_mb(devices[0]) if devices else 0.0)
+        if got is not None or not devices:
+            return got
+        floor_part = self._whole_usable_mb(devices[0])
+        if floor_part <= self._usable_mb(devices[0]):
+            return got                     # no queue priced (compiled, host) or the door pins it
+        first = self._layer_streaming_declined
+        got = self._try_layer_streaming_against(
+            sorted_comps, comp_mem, devices, shard_sizes, profile, container, floor_part)
+        if got is None:
+            self._layer_streaming_declined = (
+                f"{first}; and cut against the rung less the drain floor ({floor_part:.0f} MB): "
+                f"{self._layer_streaming_declined}")
+            return None
+        self._layer_stream_cut_against_floor = True
+        return got
+
+    def _try_layer_streaming_against(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container, usable_mb: float
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Stream a component at LAYER granularity, on the accelerator, its segments cut against
+        `usable_mb` (`_try_layer_streaming` chooses it).
 
         The rung below every rung that keeps a component whole. `lazy_sequential`
         drops the requirement from sum(components) to max(component);
@@ -6141,10 +6338,10 @@ class PrismSolver:
         # profile); and cutting segments against the rung would hold a streamed peak to a looser
         # standard than a whole component, and would fit such a component in ONE segment, which
         # this rung then declines. One figure for both decisions closes the band.
-        budget_bytes = int(self._usable_mb(target) * 1024 * 1024)
+        budget_bytes = int(usable_mb * 1024 * 1024)
         if budget_bytes <= 0:
             return _decline(f"the usable part of {target.device_string}'s rung is "
-                            f"{self._usable_mb(target):.0f} MB: nothing to cut against")
+                            f"{usable_mb:.0f} MB: nothing to cut against")
 
         graphs = {}
         try:
@@ -6185,7 +6382,9 @@ class PrismSolver:
         # A component whose weights are ONE arena over the device's largest allocation is not held
         # whole however much the rung holds, and tiling does not shrink its arena: it is streamed,
         # its pieces cut below that allocation (`max_arena_bytes`, below).
-        _usable_whole_mb = budget_bytes / (1024 * 1024)
+        # Held whole by the same figure every whole placement reads (`_whole_usable_mb`), so a
+        # component the other rungs hold whole is never the one streamed here.
+        _usable_whole_mb = self._whole_usable_mb(target)
         # A component the request never loads (`_unloaded_by_request`) is neither tiled nor streamed:
         # it stays whole, never loaded, and is priced nowhere.
         held_whole = {name for name, mem in sorted_comps
@@ -7453,6 +7652,7 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            "refused": [{"strategy": n, "score": float(sc), "why": why} for n, sc, why in (plan.rejected or [])],
            "planned_memory_mb": float(plan.total_memory_mb), "cpu_ram_mb": int(plan.cpu_ram_mb or 0),
            "device_window_mb": (float(plan.device_window_mb) if plan.device_window_mb is not None else None),
+           "deferred_drain_cliffs": dict(getattr(plan, "deferred_drain_cliffs", None) or {}),
            "components": comps, "op_level_tiling": sorted(plan.runtime_op_tiling or []),
            "conv3d_chunks": {c: list(getattr(p, "conv3d_chunks", []) or [])
                              for c, p in (plan.runtime_op_tiling or {}).items()
@@ -7530,6 +7730,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+    for _dev, _cliff in sorted((getattr(plan, "deferred_drain_cliffs", None) or {}).items()):
+        lines.append(f"drain cliff     {_dev}: the Triton hot loop drains its dead tensors at "
+                     f"{_cliff / 2**20:.0f} MB queued")
     if plan.margin_mb:
         lines.append(f"margin          {plan.margin_mb} MB held back per card"
                      + (f"  ({plan.margin_reason})" if plan.margin_reason else ""))
