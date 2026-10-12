@@ -53,8 +53,10 @@ class _Solver(PrismSolver):
 
 
 def _profile(unified: bool):
-    from neurobrix.core.prism.loader import load_profile
-    p = load_profile("default")
+    # Built here, never the machine's gitignored `default.yml` (register 102): without it, a
+    # worktree failed both cells with FileNotFoundError before reaching the guard (2026-10-12).
+    from tests.unit.prism._pinned_machine import V100_16GB, profile
+    p = profile(V100_16GB)
     p.devices[0].unified_memory = unified
     return p
 

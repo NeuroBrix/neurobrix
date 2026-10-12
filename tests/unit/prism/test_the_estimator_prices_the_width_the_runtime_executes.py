@@ -534,37 +534,64 @@ def test_under_fp16_a_tuple_norm_output_keeps_the_fp32_its_kernel_wrote():
 
 
 @pytest.fixture
-def volta_profile(monkeypatch):
-    """The profile in force is volta.yml, whatever card (or none) the test host carries: the
-    alignment is the profile's (`precision.attention_operands`), read by the function the run calls."""
-    import os
-    import yaml
+def volta_alignment(monkeypatch):
+    """volta.yml's `precision.attention_operands`, read through the engine's loader — and NO card
+    in force (`active_vendor_profile` answers {}, as on a host with CUDA_VISIBLE_DEVICES=''): the
+    width pass prices the profile it is handed, never the planning process's card."""
+    from neurobrix.core.config.loader import get_vendor_config
     from neurobrix.kernels.ops import _configs
-    path = os.path.join(os.path.dirname(_configs.__file__), "..", "..", "config", "vendors", "nvidia", "volta.yml")
-    with open(path) as f:
-        prof = yaml.safe_load(f)
-    monkeypatch.setattr(_configs, "active_vendor_profile", lambda: prof)
-    return prof
+    from neurobrix.triton.dtype import attention_operand_alignment
+    monkeypatch.setattr(_configs, "active_vendor_profile", lambda: {})
+    return attention_operand_alignment(get_vendor_config("nvidia", "volta"))
 
-def test_an_attention_over_disagreeing_operands_writes_the_narrowest(volta_profile):
+
+def test_an_attention_over_disagreeing_operands_writes_the_narrowest(volta_alignment):
     """`scaled_dot_product_attention_wrapper` casts q, k, v that disagree to the narrowest of them
-    before any route (`launch_keys.sdpa_operand_dtypes`, the compiled engine's alignment), so Wan's
-    cross-attention (fp16 q/k, fp32 v) writes fp16 — this pass reads the same function. Agreeing
-    operands keep q's dtype. Injection: the alignment returning fp32 again -> 'float32', RED."""
-    def dag(island):
+    before any route (`launch_keys.sdpa_operand_dtypes`), and the compiled engine does the same
+    through its DtypeEngine (`align_attention_operands`, every compiled attention route), so Wan's
+    cross-attention (fp16 q/k, fp32 v) writes fp16 on all four engines — this pass reads the same
+    decision under the PRICED profile's alignment. Agreeing operands keep q's dtype.
+    Injections: the alignment returning fp32 again -> 'float32', RED; the ATen rule back to
+    "q's dtype" -> a Sana-shaped fp32 q prices fp32 where the engine computes fp16, RED."""
+    assert volta_alignment == "narrowest"
+
+    def dag(island, q_dtype="float16"):
         T = {"input::q": _t([1, 2, 8, 4], is_input=True), "input::k": _t([1, 2, 8, 4], is_input=True),
              "input::x": _t([1, 2, 8, 4], is_input=True), "v": _t([1, 2, 8, 4]), "o": _t([1, 2, 8, 4])}
         ops = [_op("exp::0", "aten::exp", ["input::x"], ["v"]),
                _op("sdpa::0", "aten::scaled_dot_product_attention", ["input::q", "input::k", "v"], ["o"])]
         k = PrecisionContract(True, frozenset({"exp::0"} if island else ()), frozenset())
         return _dag(T, ops, ["input::q", "input::k", "input::x"], ["o"]), k
-    for eng in ("triton", "triton_sequential"):
+    for eng in ("triton", "triton_sequential", "compiled", "sequential"):
         d, k = dag(True)                              # v from an fp32 island
-        w = _w(d, eng, contract=k)
-        assert (w["input::q"], w["input::k"], w["v"]) == ("float16", "float16", "float32")
+        w = _w(d, eng, contract=k, operands=volta_alignment)
+        assert (w["input::q"], w["input::k"], w["v"]) == ("float16", "float16", "float32"), eng
         assert w["o"] == "float16", eng
         d, k = dag(False)                             # all three fp16
-        assert _w(d, eng, contract=k)["o"] == "float16", eng
+        assert _w(d, eng, contract=k, operands=volta_alignment)["o"] == "float16", eng
+        d, k = dag(True)                              # a profile declaring the widest
+        assert _w(d, eng, contract=k, operands="widest")["o"] == "float32", eng
+
+
+def test_an_attention_over_disagreeing_operands_without_an_alignment_is_refused():
+    """A width pass handed no `precision.attention_operands` refuses an attention whose operands
+    disagree, by name — it never reaches for the card the planning process sees. Operands that
+    agree ask nothing. Injection: the refusal replaced by the active profile -> on this
+    card-less host the ValueError names "hardware profile None" instead, RED on the match."""
+    T = {"input::q": _t([1, 2, 8, 4], is_input=True), "input::k": _t([1, 2, 8, 4], is_input=True),
+         "input::x": _t([1, 2, 8, 4], is_input=True), "v": _t([1, 2, 8, 4]), "o": _t([1, 2, 8, 4])}
+    ops = [_op("exp::0", "aten::exp", ["input::x"], ["v"]),
+           _op("sdpa::0", "aten::scaled_dot_product_attention", ["input::q", "input::k", "v"], ["o"])]
+    d = _dag(T, ops, ["input::q", "input::k", "input::x"], ["o"])
+    for eng in ("triton", "compiled"):
+        with pytest.raises(ValueError, match=r"sdpa::0 has operands that disagree.*attention_operands"):
+            _w(d, eng, contract=PrecisionContract(True, frozenset({"exp::0"}), frozenset()), operands=None)
+    T = {"input::q": _t([1, 2, 8, 4], is_input=True), "input::k": _t([1, 2, 8, 4], is_input=True),
+         "input::v": _t([1, 2, 8, 4], is_input=True), "o": _t([1, 2, 8, 4])}
+    agree = _dag(T, [_op("sdpa::0", "aten::scaled_dot_product_attention", ["input::q", "input::k", "input::v"],
+                         ["o"])], ["input::q", "input::k", "input::v"], ["o"])
+    for eng in ("triton", "compiled"):
+        assert _w(agree, eng)["o"] == "float16", eng
 
 
 def test_an_attention_is_priced_with_the_profile_the_plan_is_for(monkeypatch):

@@ -24,11 +24,14 @@ MODEL = "TinyLlama-1.1B-Chat-v1.0"
 
 def test_a_streamed_plan_states_a_window_inside_its_rung():
     installed_container(MODEL)
+    # `v100-16g` is the committed profile of the card the scenario was measured on; the rack's
+    # generated `default-ff6008b7` is gitignored, absent from a worktree and from every other
+    # machine (register 102), where this cell failed on an empty stdout (2026-10-12).
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
            "NBX_FORCE_STRATEGY": "layer_streaming", "NBX_PRISM_BUDGET_MB": "1024",
            "PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1"}
     r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", MODEL, "--prompt", "hi",
-                        "--max-tokens", "4", "--triton", "--hardware", "default-ff6008b7",
+                        "--max-tokens", "4", "--triton", "--hardware", "v100-16g",
                         "--explain-plan", "--json"], env=env, capture_output=True, text=True,
                        timeout=600, cwd=str(REPO))
     t = r.stdout

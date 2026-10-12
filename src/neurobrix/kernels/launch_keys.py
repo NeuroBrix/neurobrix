@@ -323,16 +323,16 @@ def sdpa_operand_dtypes(q: NBXDtype, k: NBXDtype, v: NBXDtype,
     `alignment` — `precision.attention_operands` of the hardware the attention runs on. The
     wrapper and the derived census run ON that hardware and leave it None (the active profile);
     Prism plans for a profile that need not be the process's and passes that profile's answer
-    (`Profile.attention_operands`). All three ask this one function, so none holds a rule of
+    (`Profile.attention_operands`, read by `triton/dtype.profile_attention_operand_alignment`). All three ask this one function, so none holds a rule of
     its own."""
-    from neurobrix.kernels.ops._configs import active_vendor_profile
     from neurobrix.triton.dtype import attention_operand_alignment, attention_operand_dtypes
     qj = q_round if q_round is not None else q
     if qj == k == v:
         return q, k, v, q_round
-    out = attention_operand_dtypes(q.name, k.name, v.name,
-                                   alignment if alignment is not None
-                                   else attention_operand_alignment(active_vendor_profile()),
+    if alignment is None:
+        from neurobrix.kernels.ops._configs import active_vendor_profile
+        alignment = attention_operand_alignment(active_vendor_profile())
+    out = attention_operand_dtypes(q.name, k.name, v.name, alignment,
                                    q_round.name if q_round is not None else None)
     return tuple(None if d is None else NBXDtype[d] for d in out)
 

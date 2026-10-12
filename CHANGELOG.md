@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   own Triton kernels without cuDNN or cuBLAS and needs the `triton` package. An internal remark
   has been removed from the help text.
 
+- **Planning for a hardware profile no longer depends on which GPU the planning process can see.**
+  `--hardware` with no visible GPU (or a profile for another machine) refused models whose
+  attention mixes float16 and float32 inputs ("precision.attention_operands is None"). The plan now
+  reads that setting from the profile it plans for. The PyTorch mode's memory estimate for those
+  attentions now matches the precision it actually runs them in.
+
 - **Triton mode runs graphs that cast to bool again.** A model whose graph casts a tensor to bool
   (Allegro among them) stopped in the Triton mode with `unknown dtype 'bool_'`; it runs again.
 
