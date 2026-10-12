@@ -57,7 +57,7 @@ class LazySequentialStrategy(TritonStrategy):
         # weights in pinned memory (cudaMallocHost) for fast DMA — no
         # torch.pin_memory() needed. Mark as handled.
         comp_strategy = self._get_component_strategy(component_name)
-        if comp_strategy == "zero3":
+        if comp_strategy in ("zero3", "expert_store"):
             self._pinned_components.add(component_name)
 
         # Ensure inputs on the component's EXECUTION device (no-op when
@@ -135,7 +135,7 @@ class LazySequentialStrategy(TritonStrategy):
         brick already carries the triton leg (NBX pinning is loader-
         side; ratchet/prefetch/flip all have is_triton branches —
         proven on Qwen3-Coder-30B under lazy_sequential)."""
-        if self._get_component_strategy(component_name) != "zero3":
+        if self._get_component_strategy(component_name) not in ("zero3", "expert_store"):
             return
         if getattr(self, "_zero3_brick", None) is None:
             from ..zero3 import Zero3Strategy

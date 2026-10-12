@@ -388,6 +388,10 @@ class TritonSequence:
     2. Run: zero-overhead hot loop (no isinstance checks)
     """
 
+    #: The component's expert store when its plan names `expert_store` (set and cleared by the
+    #: zero3 ratchet, `core/strategies/expert_store.py`); the MoE closures read it per call.
+    _expert_store = None
+
     def __init__(self, dag: dict, device_idx: int = 0,
                  compute_dtype: NBXDtype = NBXDtype.float16,
                  config_constants=None, *, stores_fp64: bool,
@@ -2091,6 +2095,10 @@ class TritonSequence:
         _norm = norm_topk_prob
 
         _cache_key = f"triton_compiled_{op_uid}"
+        # The layer's name for an expert store (`expert_residency.routed_layers`): its first gate
+        # weight id, the same string the compiled and triton-sequential dispatchers pass.
+        _layer_key = None if stacked else gate_weight_ids[0]
+        _seq = self
 
         import os as _os_md
         _moe_slot_diag = bool(_os_md.environ.get("NBX_MOE_DIAG"))
@@ -2135,6 +2143,8 @@ class TritonSequence:
                 topk_indices=None if _ti_slot is None else arena[_ti_slot],
                 topk_weights=None if _tw_slot is None else arena[_tw_slot],
                 weights_per_call=_per_call,
+                expert_store=_seq._expert_store,
+                expert_layer=_layer_key,
             )
 
         # Output slots

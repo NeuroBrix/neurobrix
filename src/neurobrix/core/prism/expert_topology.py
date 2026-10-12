@@ -56,6 +56,7 @@ class RoutedLayer:
     norm_topk_prob: Optional[bool]
     expert_bytes: int          # one routed expert's weights, at the component's runtime dtype
     shared_bytes: int          # the layer's shared-expert weights (0 when it has none)
+    stacked: bool = False      # the experts are one [E, ...] slab per projection, not per-expert matrices
 
 
 @dataclass
@@ -114,10 +115,12 @@ def _tensor_bytes(tid: str, tensors: Dict[str, Any], sizes: Optional[Dict[str, A
             raise RuntimeError(f"ZERO FALLBACK: expert weight {tid!r} has a symbolic shape {t.get('shape')} "
                                "and no weights_index entry — its bytes cannot be read")
         n *= d
-    from neurobrix.core.prism.solver import _DTYPE_WIDTH   # the one width table the sizing reads
-    width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
-    if width is None:
-        raise RuntimeError(f"ZERO FALLBACK: expert weight {tid!r} has dtype {t.get('dtype')!r}, of unknown width")
+    from neurobrix.core.dtype import itemsize as _itemsize   # the one table (config/dtypes.yml)
+    try:
+        width = _itemsize.itemsize(t.get("dtype"))
+    except (KeyError, ValueError) as e:
+        raise RuntimeError(f"ZERO FALLBACK: expert weight {tid!r} has dtype {t.get('dtype')!r}, of unknown "
+                           f"width ({e})") from e
     return n * width
 
 
@@ -182,7 +185,8 @@ def read_expert_topology(component: str, graph: Dict[str, Any], weights_index: O
             op_uid=uid, block=block, n_experts=e, top_k=k,
             norm_topk_prob=(None if a.get("norm_topk_prob") is None else bool(a["norm_topk_prob"])),
             expert_bytes=int(slab // e * dtype_mult),
-            shared_bytes=int(shared_by_block.get(block, 0) * dtype_mult) if block is not None else 0))
+            shared_bytes=int(shared_by_block.get(block, 0) * dtype_mult) if block is not None else 0,
+            stacked=bool(st)))
 
     if lm_config is not None and declared_component == component:
         want_e, want_k = lm_config.get("num_experts"), lm_config.get("num_experts_per_tok")
