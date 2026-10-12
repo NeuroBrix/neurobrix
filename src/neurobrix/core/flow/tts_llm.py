@@ -22,6 +22,7 @@ ZERO HARDCODE: All parameters from NBX container.
 from neurobrix.nbx.neurotax import SynonymRegistry
 from neurobrix.core.memory.manager import release_flow_memory
 import time
+from neurobrix import decode_stop
 import numpy as np
 import torch
 from neurobrix.core.device_utils import device_multinomial
@@ -459,6 +460,10 @@ class TTSLLMEngine(FlowHandler):
             generated_ids.append(next_token)
 
             if next_token == eos_token_id and not _teacher:
+                break
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            if not _teacher and decode_stop.requested(len(generated_ids)):
                 break
 
             # Embed new speech token for next step

@@ -74,3 +74,25 @@ io:
 
   # Log performance metrics
   log_performance: true
+
+# The serving daemon's dispatcher (serving/server.py, serving/operations.py; Studio requests 3-4).
+# PROVENANCE: chosen when the dispatcher became one thread per connection (2026-10-11), not
+# measured — each value is data so a measurement has one place to land.
+serving:
+  # How long a `cancel` waits for its operation's decode loop to read the stop flag, return and
+  # have its devices synced before it answers `cancel_pending` (never a confirmation). A stop is
+  # read once per token, so this bounds ONE decode step plus the flow's own wind-down; chosen
+  # far above a token step of a streamed plan (seconds), and below a client's patience.
+  cancel_ack_timeout_s: 120
+  # Finished operations the table remembers, so a late `cancel` gets `already_finished` /
+  # `already_cancelled` instead of `unknown_op`. The oldest is forgotten first.
+  operations_retained: 256
+  # Pending connections the listening socket queues while the accept thread hands one to its
+  # thread (socket.listen backlog). The accept loop never serves, so the queue drains at once.
+  listen_backlog: 16
+  # How often a connection whose client sent a NON-streamed work request is checked for a
+  # vanished client while the generation runs (a streamed one learns it at its next send).
+  orphan_poll_s: 0.5
+  # How long a shutdown waits for the connection threads to deliver the replies of the work it
+  # stopped before the process exits.
+  drain_timeout_s: 30

@@ -42,7 +42,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import FlowHandler, FlowContext, register_flow, requests_speech
 from .table_gather import gather_rows
-from neurobrix import decode_progress
+from neurobrix import decode_progress, decode_stop
 from neurobrix.core.memory.manager import release_flow_memory
 
 
@@ -581,9 +581,12 @@ class VLMEngine(FlowHandler):
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             context_embeds = torch.cat(
                 [context_embeds, _embed([next_token]).to(device=device)], dim=1)
@@ -991,9 +994,12 @@ class VLMEngine(FlowHandler):
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             context_embeds = torch.cat(
                 [context_embeds, _embed([next_token])], dim=1)
@@ -1577,9 +1583,12 @@ class VLMEngine(FlowHandler):
             generated_ids.append(next_token)
             # In-process per-token event (same site as the autoregressive
             # generators): feeds the daemon's streaming RPC for real TTFT.
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            _stop = next_token not in eos_ids and decode_stop.requested(len(generated_ids))
             decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
-                                 int(next_token), next_token in eos_ids)
-            if next_token in eos_ids:
+                                 int(next_token), next_token in eos_ids or _stop)
+            if next_token in eos_ids or _stop:
                 break
             context_embeds = torch.cat(
                 [context_embeds, _embed([next_token])], dim=1)

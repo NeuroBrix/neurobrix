@@ -156,3 +156,22 @@ One rule decides its architecture. The CLI and the serving daemon stay the
 engine's only entry points; the interface drives them and never opens a
 second path into the runtime. A window that reached into the engine directly
 would be a second surface to keep correct, and the two would drift.
+
+### The engine-side queue for the interface (2026-10-11)
+
+The interface is a separate client that never works around a gap in the engine; it reports the gap and
+waits. Four of the eight requests in `docs/reference/studio-engine-requests.md` are done (2, 5, 6, 8).
+The remaining four, plus two items they imply, are queued in this order:
+
+1. **A daemon that answers while it generates** (request 4): one thread per connection under one
+   inference lock, so `status` and control requests are served during a generation.
+2. **Acknowledged cancellation** (request 3): an operation id per job and an explicit `cancel`,
+   acknowledged only once the native work has stopped at both engines' per-token seam, after the
+   device sync. A dropped connection or a timeout is never reported as a confirmed cancellation.
+3. **A protocol range** (request 7): a client outside the daemon's supported range is refused at
+   connection with a message naming both ranges.
+4. **Discovery without torch** (request 1): `neurobrix info` reads the hardware through the existing
+   detection, with no framework import; a change in its record's shape is versioned and documented.
+5. **The wire protocol, specified**: framing, envelopes, version and range, methods, errors, endpoints
+   per OS and hard limits, written for a reader without access to the code.
+6. **A readiness signal in the foreground**, so a client that starts the daemon itself does not poll.

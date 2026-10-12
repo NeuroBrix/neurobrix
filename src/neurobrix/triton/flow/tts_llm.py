@@ -18,6 +18,7 @@ No torch imports in hot path.
 """
 
 import time
+from neurobrix import decode_stop
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -333,6 +334,10 @@ class TritonTTSLLMEngine:
             generated_ids.append(next_token)
 
             if next_token == eos_token_id and not _teacher:
+                break
+            # The stop seam (Studio request 3, decode_stop): ends the decode
+            # here as if its length were reached. stdlib-only (R33).
+            if not _teacher and decode_stop.requested(len(generated_ids)):
                 break
 
             # Embed new speech token for next step
