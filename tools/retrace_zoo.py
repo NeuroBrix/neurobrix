@@ -935,6 +935,34 @@ def registry_checkpoint_file(name: str) -> str | None:
     return None
 
 
+def registry_component_files(name: str) -> list[str] | None:
+    """The weight files a multi-file bare entry names, one per component, or None.
+
+    A vendor that ships its own library instead of a transformers/diffusers layout (chatterbox:
+    `ve.safetensors`, `t3_cfg.safetensors`, `s3gen.safetensors`, no config.json) is declared in
+    the registry as `weight_format: bare` with a `file` on every component — the build
+    toolchain reads exactly those files. The entry is the authority, as for `checkpoint_file`.
+    None unless the entry is bare AND every component names its file: a partial declaration
+    admits nothing."""
+    reg = FORGE.parent / "config" / "model_registry.yml"
+    if not reg.exists():
+        return None
+    try:
+        import yaml
+        doc = yaml.safe_load(reg.read_text()) or {}
+    except Exception:
+        return None
+    for section in doc.values():
+        if isinstance(section, dict) and isinstance(section.get(name), dict):
+            e = section[name]
+            comps = e.get("components")
+            if e.get("weight_format") != "bare" or not isinstance(comps, dict) or not comps:
+                return None
+            files = [c.get("file") if isinstance(c, dict) else None for c in comps.values()]
+            return files if all(isinstance(f, str) and f for f in files) else None
+    return None
+
+
 def registry_hf_repo(name: str) -> str | None:
     """The `hf_repo` ("org/name") the build toolchain's registry names as this model's SOURCE, or None
     when the registry has no entry for it or the entry names none."""
@@ -1052,7 +1080,8 @@ def snapshot_has_a_format(p: Path, name: str | None = None) -> bool:
     the directory (real-esrgan-x2, 2026-09-16).
 
     Bare weights are admitted ONLY when the registry names the checkpoint and it is
-    there. That condition is what keeps the guard this test exists for: a stopped
+    there — one `checkpoint_file`, or a `weight_format: bare` entry whose every component
+    names its `file` (chatterbox, refused on 2026-10-12 with its three files present). That condition is what keeps the guard this test exists for: a stopped
     diffusers download (Sana 4K, 6 GB of shards, no model_index.json, 2026-09-07)
     is bare weights too, and declares no `checkpoint_file` — so it stays refused."""
     if ((p / "model_index.json").exists() or (p / "config.json").exists()
@@ -1060,7 +1089,10 @@ def snapshot_has_a_format(p: Path, name: str | None = None) -> bool:
             or ((p / "model_config.yaml").exists() and (p / "model_weights.ckpt").exists())):
         return True
     ckpt = registry_checkpoint_file(name) if name else None
-    return bool(ckpt) and (p / ckpt).exists()
+    if ckpt:
+        return (p / ckpt).exists()
+    files = registry_component_files(name) if name else None
+    return bool(files) and all((p / f).exists() for f in files)
 
 
 def snapshot_weight_gb(snap) -> float:

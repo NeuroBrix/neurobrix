@@ -35,6 +35,16 @@ def registry(tmp_path, monkeypatch):
         '    checkpoint_file: "Weights_x2.pth"\n'
         "  a-diffusers-pipeline:\n"
         "    family: image\n"
+        "  a-library-tts:\n"
+        "    weight_format: bare\n"
+        "    components:\n"
+        "      enc: {file: enc.safetensors}\n"
+        "      lm: {file: lm.safetensors}\n"
+        "  a-half-declared-tts:\n"
+        "    weight_format: bare\n"
+        "    components:\n"
+        "      enc: {file: enc.safetensors}\n"
+        "      lm: {role: speech_lm}\n"
     )
     monkeypatch.setattr(R, "FORGE", forge / "forge.py")
     return forge
@@ -84,3 +94,22 @@ def test_the_four_layouts_are_untouched(tmp_path, registry):
     nemo.mkdir()
     (nemo / "model.nemo").write_bytes(b"\x00")
     assert R.snapshot_has_a_format(nemo, None) is True
+
+
+def test_a_multi_file_bare_entry_is_a_format_when_every_file_is_there(tmp_path, registry):
+    """chatterbox: three files the registry names, no config.json (refused 2026-10-12)."""
+    snap = tmp_path / "a-library-tts"
+    snap.mkdir()
+    (snap / "enc.safetensors").write_bytes(b"\x00" * 16)
+    assert R.snapshot_has_a_format(snap, "a-library-tts") is False   # one file still missing
+    (snap / "lm.safetensors").write_bytes(b"\x00" * 16)
+    assert R.snapshot_has_a_format(snap, "a-library-tts") is True
+
+
+def test_a_partially_declared_bare_entry_admits_nothing(tmp_path, registry):
+    """A component without its file is not a declaration the door can check."""
+    snap = tmp_path / "a-half-declared-tts"
+    snap.mkdir()
+    (snap / "enc.safetensors").write_bytes(b"\x00" * 16)
+    assert R.registry_component_files("a-half-declared-tts") is None
+    assert R.snapshot_has_a_format(snap, "a-half-declared-tts") is False
