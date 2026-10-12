@@ -1835,6 +1835,17 @@ class GraphExecutor:
             # the identity.
             binding = {k: k for k in probed}
         consumed_keys = {wk for name, wk in binding.items() if name in consumed}
+        # A consumed name no pass binds is found at bind time by its longest
+        # trailing suffix among the loaded keys (`_execute_compiled_graph`);
+        # load that key. Wan2.1's text encoder names `encoder.token_embed.weight`
+        # beside `token_embed.weight`, the only key: the reconcile is the
+        # identity and a segment without flow reads loaded nothing for it.
+        probed_set = set(probed)
+        for name in consumed:
+            if name not in binding and name not in probed_set:
+                key = GraphExecutor.resolve_by_trailing_suffix(name, probed_set)
+                if key is not None:
+                    consumed_keys.add(key)
         wanted = set()
         for wk in index_keys:
             if probe[wk] in consumed_keys:
@@ -1842,6 +1853,21 @@ class GraphExecutor:
             elif flow_reads and not is_block_key(wk):
                 wanted.add(wk)
         return wanted
+
+    @staticmethod
+    def resolve_by_trailing_suffix(name, keys):
+        """The key the executor binds graph name `name` to at bind time:
+        `name` itself, else its longest proper trailing dotted suffix in
+        `keys`; None when neither is there. One rule for the executor and
+        for the loader filter that must load what it will look up."""
+        if name in keys:
+            return name
+        parts = name.split('.')
+        for i in range(1, len(parts)):
+            cand = '.'.join(parts[i:])
+            if cand in keys:
+                return cand
+        return None
 
     @staticmethod
     def binding_of_the_loaded(consumed, index_keys, graph_params, encodes=None,
@@ -4621,15 +4647,8 @@ class GraphExecutor:
         # param by stripping its leading prefix segments, longest-suffix first; the
         # trailing suffix is unique per tensor so this cannot mis-bind.
         def _resolve_weight(name: str):
-            t = self._weights.get(name)
-            if t is not None:
-                return t
-            _parts = name.split('.')
-            for _i in range(1, len(_parts)):
-                _t = self._weights.get('.'.join(_parts[_i:]))
-                if _t is not None:
-                    return _t
-            return None
+            key = GraphExecutor.resolve_by_trailing_suffix(name, self._weights)
+            return None if key is None else self._weights.get(key)
         weight_map = {}
         for tid in tensors:
             if tid.startswith("param::"):
