@@ -125,3 +125,13 @@ current state under 150 lines; history in dated archives; one watcher for inbox 
 release candidate's gate runs once, on both machines, after every model × dtype × mode is certified from (1) and verified
 at zero miss under (3). The manifesto (`CLAUDE.md`, untracked by this repository's own rule) carries the same text at its
 top on each machine.
+
+## 2026-10-12 15:25 — NOTHING IS LOST (the owner, via the supervisor)
+
+Four sub-agents ran on the Dell all night, never collected; their work was found nowhere.
+
+1. Every job launched (sub-agent, chain, script, GPU run) has, before it starts, a line in the agent's report — what, where it writes, how its end is known — and an end watcher. No work runs unreported.
+2. A sub-agent writes its own deliverable to disk in the campaign, at a path fixed when it is launched, not only in its reply. It is collected and closed in the turn it ends.
+3. At every wake, every context compaction and every turn end, the live sub-agents and chains are listed and compared with the report; a gap is fixed and noted.
+4. Every sub-agent and chain of the last 48 h has its deliverable on disk and in the report, or is recovered from the campaign and the session logs under RECOVERED.
+5. A job that ran unreported is a fault of method, not an incident.
