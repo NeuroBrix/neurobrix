@@ -82,3 +82,15 @@ injection) with the 11 existing harness suites.
 | inputs | a blank model or mode, an unknown mode, a model absent from the cache, an empty cache refused before any cell; a cell asked for with no row is an error naming it |
 | the committed reference | each row records `tree_dirty` over the `--src` tree's config/autotune and config/census, and `certified_dir_override`; the override refuses the run unless `--allow-certified-dir-override`; an earlier row is reused only at the same engine sha with a clean reference on both sides |
 | readable files | a cut last line skipped and said, a malformed inner line refused; appends fsynced, a cut fragment moved aside; the table and the export written atomically. **OPEN:** `host_ledger.json` / `host_waiting.json` rewritten in place under their flock |
+
+### Carried verdicts (the supervisor, 2026-10-11 18:55)
+
+A gate may carry a cell's verdict instead of running it. Test:
+`tests/unit/tools/test_a_gate_carries_a_verdict_only_with_its_provenance.py` (each clause seen red on
+its injection).
+
+| clause | how it holds |
+|---|---|
+| provenance | `--carry YAML` (`carries:` model, mode, source_gate, date, engine, reason): the row is READ from the source gate and refused by name when absent or at another engine or date; the row is written with `carried: {kind, source_gate, date, engine, reason, carried_by_engine}` and the source's own engine; `table` prints `CARRIED <kind> from <gate> @<engine> <date>` before the verdict; a cell neither run nor carried is `not measured`; a carried row is never reused as a measurement; the same carry is written once |
+| known-cause reds | `--known-reds YAML` (`docs/reference/known-cause-reds.<class>.yml`, one per memory class, required for a gate): each red is carried, red, with its cause and its `red-cells.md` row, until `--claims-fix MODEL/MODE,...` names it; a claim on an unrecorded cell and a record whose source row is green are refused |
+| per-branch gate | `--base-gate DIR --base-sha SHA`: `git diff --name-only base HEAD` of a clean engine tree classified by `tools/gate_branches.yml` (longest prefix; a path no prefix matches is refused); a branch's `.py` file that another branch's roots import (static closure, lazy imports included) is shared, a non-`.py` file under a root is shared; only a diff touching exactly one branch carries the other branch's modes from the base gate's rows measured at the base sha. **Limit:** an import by string (`importlib.import_module`) is not in the closure |

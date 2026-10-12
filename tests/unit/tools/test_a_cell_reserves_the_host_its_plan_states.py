@@ -36,6 +36,7 @@ def _fake_tree(tmp_path: Path, plan: dict) -> Path:
 @pytest.fixture
 def no_request(monkeypatch):
     monkeypatch.setattr(R, "cell_request", lambda model: ["--prompt", "x"])
+    monkeypatch.setattr(R, "cell_profile", lambda gpu, src: ("default-x", 16384))
 
 
 def test_a_tree_that_states_its_host_figure_is_reserved_by_it(tmp_path, no_request):
