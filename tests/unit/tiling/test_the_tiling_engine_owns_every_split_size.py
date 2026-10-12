@@ -182,7 +182,7 @@ def _op_level_plan(monkeypatch, card_mb, resident_mb, chain_bytes_fp32):
     monkeypatch.setattr(ME, "estimate_op_workspace_bytes", lambda *a, **k: 5 * GiB)
     s = PrismSolver()
     monkeypatch.setattr(s, "_identify_residual_chain_specs",
-                        lambda g: [{"fork_uid": "f", "merge_uid": "m", "chain_uids": [], "halo": 2,
+                        lambda g, ic=None: [{"fork_uid": "f", "merge_uid": "m", "chain_uids": [], "halo": 2,
                                     "bytes_fp32": chain_bytes_fp32}])
     comp = SimpleNamespace(name="vae", graph=_op_level_graph())
     dev = SimpleNamespace(memory_mb=card_mb, get_device_string=lambda: "cuda:0")
@@ -268,6 +268,7 @@ def _component_spec(tmp_path, name, graph, config, frames, activation_bytes):
     s = PrismSolver()
     s._input_config = InputConfig(batch_size=1, height=720, width=1280, num_frames=frames,
                                   temporal_compression=4)
+    s._planned_profile = SimpleNamespace(tile_extent_lattice=0)   # no lattice: the sizes unsnapped
     mem = ComponentMemory(component_name=name, weight_bytes=244 * MB, activation_bytes=activation_bytes,
                           overhead_bytes=0)
     return s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path / name), name, mem, 32768)

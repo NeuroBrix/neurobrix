@@ -134,7 +134,10 @@ def test_split_frozen_keeps_the_two_classes_apart(rows):
     m = _census()
     adjudicated, unadjudicated = m.split_frozen(rows)
     assert all(r.get("adjudicated") or r.get("unreadable") for r in adjudicated)
-    assert len(unadjudicated) >= 2
+    # every derived break of the subject lands among the unadjudicated (a count pinned to one
+    # container's breaks, `>= 2`, went red when a retrace left the subject with one, 2026-10-12)
+    derived = _derived(rows)
+    assert derived and all(any(r is u for u in unadjudicated) for r in derived), (derived, unadjudicated)
     assert all(not r.get("adjudicated") for r in unadjudicated)
 
 
