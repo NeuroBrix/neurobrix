@@ -6645,6 +6645,135 @@
    },
    "excluded": []
   },
+  "(7680, 1152, 1152, False, False, 'bf16', 'bf16', 'bf16', 'bf16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-12T11:52:38+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
+    },
+    "shape": [
+     7680,
+     1152,
+     1152,
+     false,
+     false,
+     "bf16",
+     "bf16",
+     "bf16",
+     "bf16"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     0.002390311110511454
+    ],
+    "deviation": 0.002390311110511454,
+    "tolerance": 0.04,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-502; rows 3589-4091; rows 7178-7680) of 7680 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 4.135314835442437,
+    "second_ms": 4.141185177697076,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.018,
+     "runs": 0.245,
+     "bench": 2.386
+    },
+    "stability_witness": {
+     "open_ms": 3.3366,
+     "close_ms": 3.4367,
+     "drift": 0.03,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.5612,
+       "close_ms": 3.4008,
+       "drift": 0.045,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.3909,
+       "close_ms": 3.3624,
+       "drift": 0.0084,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.3564,
+       "close_ms": 3.3472,
+       "drift": 0.0027,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.348,
+       "close_ms": 3.3457,
+       "drift": 0.0007,
+       "attempt": 1,
+       "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3366,
+       "close_ms": 3.4367,
+       "drift": 0.03,
+       "attempt": 1,
+       "contenders": 2
+      }
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
   "(8, 1024, 4096, False, False, 'bf16', 'bf16', 'bf16', 'bf16')": {
    "config": {
     "kwargs": {
@@ -7324,6 +7453,135 @@
       2048,
       2048,
       2048
+     ]
+    },
+    "built": {
+     "gpu": true,
+     "how": "no backend compilation fallback was raised during the certifying run",
+     "fallback": null
+    }
+   },
+   "excluded": []
+  },
+  "(8192, 1152, 1152, False, False, 'bf16', 'bf16', 'bf16', 'bf16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 1,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-10-12T11:52:57+00:00",
+    "engine_version": "0.5.4",
+    "backend": {
+     "triton": "3.8.0+git4a15f415",
+     "name": "mps",
+     "backend_hash": "msl-v0.1-42ebffa212f366de"
+    },
+    "shape": [
+     8192,
+     1152,
+     1152,
+     false,
+     false,
+     "bf16",
+     "bf16",
+     "bf16",
+     "bf16"
+    ],
+    "launches": 1,
+    "launch_deviations": [
+     0.0023302109009076706
+    ],
+    "deviation": 0.0023302109009076706,
+    "tolerance": 0.04,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 row window(s) of the output (rows 0-502; rows 3845-4347; rows 7690-8192) of 8192 rows",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-27.0.1-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "mps-apple-m4-pro",
+     "device": {
+      "ordinal": 0,
+      "visible_devices": null,
+      "name": "Apple M4 Pro",
+      "memory_mb": 18186,
+      "unified": true
+     },
+     "clocks_mhz": null
+    },
+    "best_ms": 4.32759263780382,
+    "second_ms": 4.507194466061062,
+    "candidates": 14,
+    "accepted": 14,
+    "benched": 13,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.018,
+     "runs": 0.187,
+     "bench": 2.421
+    },
+    "stability_witness": {
+     "open_ms": 3.3659,
+     "close_ms": 3.418,
+     "drift": 0.0155,
+     "tolerance": 0.08,
+     "kernel": "matmul",
+     "shape": [
+      2048,
+      2048,
+      2048
+     ],
+     "chunk": 4,
+     "brackets": [
+      {
+       "what": "chunk 1 of 4",
+       "open_ms": 3.4329,
+       "close_ms": 3.3959,
+       "drift": 0.0108,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 2 of 4",
+       "open_ms": 3.3894,
+       "close_ms": 3.3608,
+       "drift": 0.0084,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 3 of 4",
+       "open_ms": 3.387,
+       "close_ms": 3.378,
+       "drift": 0.0027,
+       "attempt": 1,
+       "contenders": 4
+      },
+      {
+       "what": "chunk 4 of 4",
+       "open_ms": 3.3592,
+       "close_ms": 3.3591,
+       "drift": 0.0,
+       "attempt": 1,
+       "contenders": 1
+      },
+      {
+       "what": "the final two",
+       "open_ms": 3.3659,
+       "close_ms": 3.418,
+       "drift": 0.0155,
+       "attempt": 1,
+       "contenders": 2
+      }
      ]
     },
     "built": {
