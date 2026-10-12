@@ -281,6 +281,9 @@ class GraphExecutor:
         self.dtype = dtype
         self.mode = mode
         self._sequential_dispatcher = None  # For ATen op dispatch (sequential mode)
+        # Prism's deferred-drain cliff for this component's device (`ComponentAllocation.
+        # deferred_drain_cliff_bytes`), handed to the Triton sequence; None drains at the profile's.
+        self._deferred_drain_cliff_bytes: Optional[int] = None
         self._compiled_seq: Optional["CompiledSequence"] = None  # For compiled mode (zero-overhead)
         self._compiled_exec_count = 0  # Track executions for verbose control
 
@@ -3843,7 +3846,8 @@ class GraphExecutor:
             dag_for_triton, device_idx=device_idx,
             compute_dtype=parse_dtype(self.dtype),
             config_constants=self._resolve_config_constants(),
-            stores_fp64=self._triton_stores_fp64())
+            stores_fp64=self._triton_stores_fp64(),
+            drain_cliff_bytes=self._deferred_drain_cliff_bytes)
 
         # Precision contract of THIS component for the triton engine: the
         # same resolver as the compiled path, flag AND per-op islands — the

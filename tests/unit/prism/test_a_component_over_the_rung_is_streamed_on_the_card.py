@@ -204,6 +204,11 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
                 [embedding::0, view::227] [moe_fused::block.11, view::427] [moe_fused::block.21, rms_norm::81]
                 The compiled estimate keeps the transposed bytes (its fp32 operand copy is not
                 measured yet) and its cut did not move: the two modes differ from here on.
+      prism-prices-the-deferred-drain (2026-10-11), TRITON ONLY: the usable part is net of the
+                Triton hot loop's deferred-free queue (volta's drain cliff, 1 907 MB), so the
+                segments have that much less room: still 3, each seam earlier:
+                [embedding::0, view::187] [moe_fused::block.9, view::367] [moe_fused::block.18, rms_norm::81]
+                The compiled engine has no queue and its cut did not move.
 
     Reaches `_try_layer_streaming` for real: the rung is attempted (its partition is left on the
     solver) and `lazy_sequential` then outscores it. A retrace of this container moves these op
@@ -225,7 +230,7 @@ def test_a_dedicated_card_cuts_the_boundaries_pinned_here(monkeypatch, mode):
     pinned = {"compiled": [["aten.embedding::0", "aten.split_with_sizes::35"],
                            ["aten.slice::502", "aten.view::427"],
                            ["moe_fused::block.21", "custom.rms_norm::81"]],
-              "triton": [["aten.embedding::0", "aten.view::227"],
-                         ["moe_fused::block.11", "aten.view::427"],
-                         ["moe_fused::block.21", "custom.rms_norm::81"]]}
+              "triton": [["aten.embedding::0", "aten.view::187"],
+                         ["moe_fused::block.9", "aten.view::367"],
+                         ["moe_fused::block.18", "custom.rms_norm::81"]]}
     assert cut == {"model": pinned[mode]}, cut

@@ -164,3 +164,96 @@ def host_reading() -> DeviceReading:
 def host_budget_mb() -> int:
     """Host RAM through the same law: the free reading rounded down onto the ladder."""
     return budget_mb(host_reading())
+
+
+# ----------------------------------------------------------------------------- the deferred drain
+#: The env door that pins the drain cliff (`triton/sequence.py::_resolve_drain_policy`), read here
+#: by the same name so the plan prices the cliff the run will hold.
+DEFERRED_DRAIN_DOOR = "NBX_DEFERRED_DRAIN_BYTES"
+
+
+def deferred_drain_policy_of(memory: dict) -> tuple:
+    """The Triton engine's deferred-free drain policy from ONE vendor profile's `memory:` section,
+    as `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)` — the pure reading
+    shared by the runtime (`kernels.wrappers.deferred_drain_policy`, which drains by it) and the
+    plan (`PrismSolver._deferred_drain_mb`, which prices it). One function, so the two can never
+    read two figures.
+
+    The hot loops retire every dead or overwritten tensor onto a queue and free it only after a
+    device sync, when the queue reaches `cliff` bytes (or, with the pressure branch armed and the
+    allocator pool off, earlier). Between two drains the queue's bytes are dead to the program and
+    alive to the card. A profile that does not state its cliff is refused by name: the figure is
+    both a runtime knob and a planned price, and neither may be guessed."""
+    if "deferred_drain_cliff_bytes" not in (memory or {}):
+        raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
+                       "deferred_drain_cliff_bytes — the Triton engine's dead-tensor queue has "
+                       "no stated ceiling, so neither the run nor the plan can size it")
+    cliff = int(memory["deferred_drain_cliff_bytes"])
+    reserve = int(memory.get("deferred_drain_pressure_reserve_bytes", 0))
+    if reserve <= 0:
+        return (cliff, cliff, 0, 1 << 30)
+    floor = min(int(memory["deferred_drain_floor_bytes"]), cliff)
+    interval = max(1, int(memory.get("deferred_drain_freecheck_interval", 8)))
+    return (cliff, floor, reserve, interval)
+
+
+def deferred_drain_retained_bytes(memory: dict) -> int:
+    """The most dead bytes a Triton hot loop's queue holds at any allocation: its CLIFF.
+
+    Why the cliff bounds it exactly: the loop appends an op's evicted tensors AFTER the op ran and
+    tests the cliff right there, so every allocation an op makes sees a queue below the cliff. The
+    pressure branch only drains earlier, and under the allocator pool (the default) it is off — so
+    the cliff, not the floor, is what a card must hold room for. The door pins it as it pins the
+    run's cliff."""
+    door = _drain_door_bytes()
+    return door if door > 0 else deferred_drain_policy_of(memory)[0]
+
+
+def _drain_door_bytes() -> int:
+    """The door's pinned cliff in bytes, 0 when the door is shut (unset, empty, unparsable, <= 0)."""
+    door = os.environ.get(DEFERRED_DRAIN_DOOR)
+    if not door:
+        return 0
+    try:
+        return max(0, int(door))
+    except ValueError:
+        return 0
+
+
+def deferred_drain_floor_of(memory: dict) -> int:
+    """The SMALLEST queue a plan may leave the Triton hot loop: the profile's
+    `deferred_drain_floor_bytes`, clamped to the cliff.
+
+    Source: the same key the runtime's pressure branch drains early at (`deferred_drain_policy_of`)
+    — the profile's statement of the queue size below which draining costs more than it frees
+    (each drain is a device sync, then a free per dead tensor). A plan leaving less room than this
+    beside a component held whole would make the hot loop drain after nearly every op; such a
+    component is not held whole. A profile that does not state it is refused by name."""
+    if "deferred_drain_floor_bytes" not in (memory or {}):
+        raise KeyError("ZERO FALLBACK: the vendor profile's memory section declares no "
+                       "deferred_drain_floor_bytes — the smallest drain cliff a plan may leave the "
+                       "Triton engine's dead-tensor queue is not stated, so no component can be "
+                       "judged whole beside it")
+    return min(int(memory["deferred_drain_floor_bytes"]), deferred_drain_policy_of(memory)[0])
+
+
+def planned_drain_cliff_bytes(memory: dict, room_bytes: float) -> int:
+    """THE drain cliff a plan gives one device, read by Prism (which plans and prices it) and, through
+    the plan, by the Triton hot loop (which drains at it):
+
+        cliff = min(profile cliff, room),   room = what the device's usable part leaves beside the
+                                            largest component the plan holds whole on it.
+
+    Pass a room at or above the profile cliff when nothing is held whole. The door
+    (`NBX_DEFERRED_DRAIN_BYTES`) pins the result, as it pins the run. Never below 0; a room under
+    the floor (`deferred_drain_floor_of`) is a placement the plan refuses, not a cliff it returns."""
+    door = _drain_door_bytes()
+    if door > 0:
+        return door
+    return max(0, min(deferred_drain_policy_of(memory)[0], int(room_bytes)))
+
+
+def planned_drain_floor_bytes(memory: dict) -> int:
+    """The room a component held whole must leave the queue: the floor, or the door's pinned cliff."""
+    door = _drain_door_bytes()
+    return door if door > 0 else deferred_drain_floor_of(memory)

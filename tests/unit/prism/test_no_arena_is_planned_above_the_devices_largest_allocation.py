@@ -194,16 +194,24 @@ def test_the_arena_door_refuses_a_plan_holding_one_component_whole_over_the_boun
 
 def test_deepseek_moe_at_17_gb_free_cuts_every_piece_under_the_largest_allocation(monkeypatch):
     """The Mac's failure, the arena bound alone (pool off, so the parked rule moves nothing): 17.1 GB
-    free, 3 pieces, the first one's arena refused by size."""
+    free, 3 pieces, the first one's arena refused by size.
+
+    The bound is the device's measured largest allocation, or one MB under the largest unbounded
+    piece when that is lower: since Prism prices the Triton engine's deferred drain (2026-10-11) the
+    unbounded pieces are cut 954 MB tighter and the largest (13 455 MB) already sits under the
+    measured 13 639. The scenario is derived from the plan, as the Janus cell below derives it."""
     no_door(monkeypatch)
     monkeypatch.setenv("NBX_ALLOC_POOL", "0")
     pin_host(monkeypatch, 24576, 17510, "the Mac at 17.1 GB free")
     p, s = _plan("deepseek-moe-16b-chat", APPLE_M4_PRO)
-    assert p.strategy == "layer_streaming" and max(_pieces(s)["model"]) > MAX_ALLOCATION_MB, \
-        f"the scenario's precondition: unbounded, a piece over the device's largest allocation {_pieces(s)}"
-    p, s = _plan("deepseek-moe-16b-chat", APPLE_CAPPED)
+    bound = min(MAX_ALLOCATION_MB, max(_pieces(s)["model"]) - 1)
+    assert p.strategy == "layer_streaming" and max(_pieces(s)["model"]) > bound, \
+        f"the scenario's precondition: unbounded, a piece over the bound {bound} {_pieces(s)}"
+    capped = copy.deepcopy(APPLE_CAPPED)
+    capped["devices"][0]["max_allocation_mb"] = bound
+    p, s = _plan("deepseek-moe-16b-chat", capped)
     assert p.strategy == "layer_streaming", p.strategy
-    assert max(_pieces(s)["model"]) <= MAX_ALLOCATION_MB, _pieces(s)
+    assert max(_pieces(s)["model"]) <= bound, _pieces(s)
     assert "'model'" in (s._arena_declined.get("model") or ""), s._arena_declined
 
 
