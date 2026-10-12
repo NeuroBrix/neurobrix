@@ -29,7 +29,9 @@ class StaticGraphHandler(FlowHandler):
     def __init__(
         self,
         ctx: FlowContext,
-        execute_component_fn: Callable[[str, str, Optional[torch.Tensor]], Any]
+        execute_component_fn: Callable[[str, str, Optional[torch.Tensor]], Any],
+        *,
+        unload_weights_fn: Callable[[str], None]
     ):
         """
         Initialize static graph handler.
@@ -40,6 +42,7 @@ class StaticGraphHandler(FlowHandler):
         """
         super().__init__(ctx)
         self._execute_component = execute_component_fn
+        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """
@@ -71,7 +74,10 @@ class StaticGraphHandler(FlowHandler):
         """Unload component weights and clear memory (skip in serve mode)."""
         if self.ctx.persistent_mode:
             return
-        executor = self.ctx.executors.get(comp_name)
-        if executor:
-            executor.unload_weights()
+        # Through the engine executor's own brick — the strategy's uninstall FIRST (a zero3 ratchet
+        # evicts its resident blocks nowhere else), then the executor's unload. Calling
+        # `executor.unload_weights()` here left mochi-1-preview's 18 938 MB of resident transformer
+        # blocks under the post-loop VAE on a 32 GB V100 (aten.convolution::27, 2026-10-12).
+        if comp_name in self.ctx.executors:
+            self._unload_component_weights(comp_name)
         release_flow_memory(self.ctx.primary_device)
