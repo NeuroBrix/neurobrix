@@ -832,8 +832,13 @@ class PrismSolver:
                 cost = int(m.activation_bytes + m.overhead_bytes)
             elif store_mb is not None:
                 # an expert store on a unified device: its dense part and the floor of its expert
-                # cache beside its activations — the routed experts stay in the container's pages
-                cost = int(m.activation_bytes + m.overhead_bytes + store_mb * 1024 * 1024)
+                # cache beside its activations — the routed experts stay in the container's pages.
+                # Its activations as the arena holds them (`_live_activation_mb`): the figure the
+                # store was placed against (`_place_component` Strategy 2.5) and is granted its cache
+                # from (`_zero3_resident_budgets`). At the profiled figure a served cache took the
+                # difference (DeepSeek-Coder-V2-Lite, triton, 51.6 MB) out of the store's floor.
+                cost = int(self._live_activation_mb(m) * 1024 * 1024 + m.overhead_bytes
+                           + store_mb * 1024 * 1024)
             else:
                 cost = int(m.total_bytes)
             # The KV estimate is inside the named LM's activations (`_compute_memory`); the check
@@ -1574,16 +1579,17 @@ class PrismSolver:
             _said = (list(self._rejected), self._layer_streaming_declined, list(self._strategies_tried))
             rung = min(d.budget_mb for d in self._prepare_devices(profile) if d.spec.has_unified_memory)
             plan = None
+            last = refusal                # the refusal of the rung named beside it, not the first one's
             for lower in reversed([r for r in memory_ladder_mb() if r < rung]):
                 tried.append((int(rung), "refused", None))
                 self._unified_rung_cap_mb = float(lower)
                 try:
                     plan = self._solve_at_rung(container, profile, input_config, serve_mode=serve_mode, mode=mode)
                     log.warning("unified memory: no strategy fits rung %s (%s) — rung %s", int(rung),
-                                str(refusal).splitlines()[0], lower)
+                                str(last).splitlines()[0], lower)
                     break
-                except RuntimeError:
-                    rung = lower
+                except RuntimeError as below:
+                    rung, last = lower, below
             if plan is None:
                 self._unified_rung_cap_mb = None
                 self._rejected, self._layer_streaming_declined, self._strategies_tried = _said
@@ -2115,6 +2121,20 @@ class PrismSolver:
                     # on cards other than the LM's, and the LM's own card is over-committed.
                     total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
                                          for d in strat_devices)
+                    # An expert store on a unified device (`_place_component` Strategy 2.5) is
+                    # accepted against the USABLE part of its device's rung, and its expert cache is
+                    # granted from that same figure after the cache (`_zero3_resident_budgets`). Sized
+                    # against the rung, a served cache took the difference between the two figures out
+                    # of the store's floor, and the grant refused the plan at every rung of the ladder:
+                    # DeepSeek-Coder-V2-Lite served on the Mac's profile descended 16 384 -> 4 096 and
+                    # streamed (usable 14 120 MB - held 13 154 MB with the cache = 965 MB of room).
+                    _store_devs = {(a[0] if isinstance(a, tuple) else a) for n, a in strat_allocs.items()
+                                   if self._unified_store_mb(strat_name, n, a[0] if isinstance(a, tuple) else a,
+                                                             profile) is not None}
+                    if _store_devs:
+                        total_capacity = min(total_capacity, sum(
+                            int(self._usable_mb(d) * 1024 * 1024)
+                            for d in strat_devices if d.device_string in _store_devs))
 
                 if strat_name == "zero3":
                     # Weights leave the device only where the host is a
