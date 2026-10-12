@@ -213,10 +213,10 @@ def test_every_triton_site_asks_its_engine(stores_fp64):
                        "y": {"dtype": "float64", "shape": [4]}},
            "execution_order": ["a::0"]}
     for engine in ("triton", "triton_sequential"):
-        got = runtime_dtypes(dag, "float16", engine, has_native_bf16=False, contract=conservative_contract("test: no contract"),
+        got = runtime_dtypes(dag, "float16", engine, attention_operands="narrowest", has_native_bf16=False, contract=conservative_contract("test: no contract"),
                              stores_fp64=stores_fp64)
         assert got["y"] == wide["float64"], engine
-    got = runtime_dtypes(dag, "float16", "compiled", has_native_bf16=False,
+    got = runtime_dtypes(dag, "float16", "compiled", attention_operands="narrowest", has_native_bf16=False,
                          contract=conservative_contract("test: no contract"), stores_fp64=stores_fp64)
     assert got["y"] == wide["float64"], "compiled"
 
@@ -295,7 +295,8 @@ def test_the_compiled_price_reads_the_compiled_branch_s_own_ceiling(monkeypatch)
     compiled reader moves the compiled price and only it."""
     from neurobrix.core.dtype import itemsize as core_itemsize
     from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_dtypes
-    kw = dict(has_native_bf16=False, contract=conservative_contract("test: no contract"), stores_fp64=False)
+    kw = dict(attention_operands="narrowest", has_native_bf16=False,
+              contract=conservative_contract("test: no contract"), stores_fp64=False)
     dag = {"ops": {}, "tensors": {"w": {"dtype": "float64", "shape": [4]}}, "execution_order": []}
     assert runtime_dtypes(dag, "float16", "compiled", **kw)["w"] == "float32"
     triton_before = runtime_dtypes(dag, "float16", "triton", **kw)["w"]

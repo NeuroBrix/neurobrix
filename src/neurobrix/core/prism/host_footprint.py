@@ -23,6 +23,13 @@ where the rule lives, so a change there is a change to price here:
         list and never calls cudaFreeHost (pytorch#134332; PyTorch DevLog 2026-08-09, "Pinned memory:
         what it is for, and why nobody gives it back"), so the worker count bounds the pace, not the
         bytes;
+    compiled, a component the plan STREAMS (layer_streaming): the loader reads one tensor at a time per
+        worker and keeps at most `io.pinned_uploads_in_flight` uploads outstanding, then empties the
+        pinned host cache after each load (core/io/weight_loader.py `_load_with_pinned_dma`). What a
+        load holds is its file pages — at most the stored bytes of the largest single load, a segment
+        or the non-block rest, and at most the shards its workers hold open at once — plus the tensors in flight: at most workers x (1 + uploads in flight)
+        of them, the largest that many, as read, as converted and pinned. deepseek-moe-16b-chat on V100 (2026-10-10): RssFile 9.4 GB of an ~11 GB segment
+        (16 GB card) and 14.7 GB of ~16.4 GB (32 GB card); the whole-component rule priced 61 670 MB;
     triton: one tensor at a time, as read and as converted (triton/weight_loader.py);
   resident — what the planning process already holds when Prism prices: the interpreter, the CLI and
     the parsed container (NBXContainer.load keeps every component's graph and profile, 1.5-4.8x their
@@ -53,7 +60,7 @@ Pure arithmetic, no torch: Prism is torch-free (R33).
 """
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional
+from typing import Collection, Dict, Mapping, Optional, Sequence
 
 #: Copies of one tensor the triton loader holds: as read and as converted (triton/weight_loader.py).
 TRITON_COPIES_PER_TENSOR = 2
@@ -76,7 +83,9 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                    shard_sizes: Mapping[str, Mapping[str, int]], engine: str,
                    base_mb: Optional[int], dtype_bytes: Mapping[str, int],
                    is_block_key, stored_dtypes: Optional[Mapping[str, set]] = None,
-                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0) -> Dict:
+                   resident_bytes: int = 0, output_bytes: int = 0, device_bytes: int = 0,
+                   streamed_loads: Optional[Mapping[str, Sequence[Collection[str]]]] = None,
+                   load_workers: int = 0, pinned_in_flight: int = 0) -> Dict:
     """The host bytes `plan` holds on `engine`: {total, resident, base, steady (+ per component), transient}.
 
     key_sizes    {component: {weight key: stored bytes}}  (the weights index)
@@ -87,6 +96,10 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
     resident_bytes what the planning process holds when it prices (the caller measures it)
     output_bytes   what the output boundary holds (the largest graph output x the family's save cost)
     device_bytes   the device plan's bytes when the device draws on host memory (unified), 0 otherwise
+    streamed_loads {component: [weight keys of each segment]} for the components the plan streams; the
+                 keys no segment names load together as one more load (the compiled engine's rule)
+    load_workers, pinned_in_flight  the loader's workers and its uploads outstanding per worker
+                 (core.workspace), required when a component is streamed on the compiled engine
     """
     if engine not in ENGINES:
         raise ValueError(f"ZERO FALLBACK: no host rules for engine {engine!r} (known: {ENGINES})")
@@ -122,7 +135,44 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             if alloc is not None and widths and str(alloc.dtype) in dtype_bytes:
                 pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
             return stored_bytes + pinned
-        passes = [_passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
+        def _streams_through(name, loads):
+            keys = key_sizes.get(name) or {}
+            if not keys:
+                raise ValueError(f"ZERO FALLBACK: {name} is streamed and the weights index sizes none of its keys")
+            if load_workers < 1 or pinned_in_flight < 1:
+                raise ValueError(f"ZERO FALLBACK: {name} is streamed and no loader workers / uploads in flight "
+                                 f"were given ({load_workers}, {pinned_in_flight})")
+            named = set()
+            sizes = []
+            for load in loads:
+                # A name the index does not size is a constant the graph holds (a rotary inv_freq), never read
+                # from a shard; a segment that names weights yet sizes NONE reads another key space.
+                read = [k for k in load if k in keys]
+                if load and not read:
+                    raise ValueError(f"ZERO FALLBACK: {name}: a segment's weights are all absent from the "
+                                     f"weights index (another key space?): {sorted(load)[:3]}")
+                named.update(read)
+                sizes.append(sum(keys[k] for k in read))
+            sizes.append(sum(n for k, n in keys.items() if k not in named))
+            # In flight across the workers: each holds the tensor it reads (as read, as converted) and at most
+            # `pinned_in_flight` uploads, so at most workers x (1 + in flight) distinct tensors — the largest
+            # that many, each as read, converted and pinned (a bound: one tensor is never all three at once).
+            alloc = plan.components.get(name)
+            stored = set((stored_dtypes or {}).get(name) or ())
+            converts = alloc is not None and bool(stored) and stored != {str(alloc.dtype)}
+
+            def _cost(n):
+                pinned = _passes_through(name, n) - n
+                return n + pinned + (pinned if converts else 0)
+            in_flight = sorted(keys.values(), reverse=True)[:load_workers * (1 + pinned_in_flight)]
+            # The file pages a load maps: its stored bytes, and never more than the shards its workers hold
+            # open at once (one each, `safe_open` per shard) — deepseek-moe on the 32 GB card: a 27.5 GB segment
+            # read through 2 GB shards by 8 workers held 14.7 GB of RssFile.
+            shards = sorted((shard_sizes.get(name) or {}).values(), reverse=True)
+            mapped = min(max(sizes), sum(shards[:load_workers])) if shards else max(sizes)
+            return mapped + sum(_cost(n) for n in in_flight)
+        passes = [_streams_through(name, (streamed_loads or {})[name]) if name in (streamed_loads or {})
+                  else _passes_through(name, sum(sh.values())) for name, sh in shard_sizes.items() if sh]
         transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
     else:
         transient = TRITON_COPIES_PER_TENSOR * max(

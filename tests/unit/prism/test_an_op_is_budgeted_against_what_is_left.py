@@ -43,6 +43,7 @@ import json
 import pytest
 
 from neurobrix.core.prism.profiler import ActivationProfiler
+from tests.unit.prism._graph import as_graph
 
 MB = 1024 * 1024
 CARD = 16160 * MB          # a 16 GB V100, the class the rung was written for
@@ -59,7 +60,7 @@ def _graph():
     fp16, so elements are 2 bytes: 1024*2048*2048 elements is 8,192 MB and
     768*2048*2048 is 6,144 MB.
     """
-    return {
+    return as_graph({
         "version": "0.1",
         "tensors": {
             "input::seed": _t([1, 8, 2048, 2048]),          #    64 MB
@@ -82,7 +83,7 @@ def _graph():
                             "output_tensor_ids": ["aten.add::2::out_0"]},
         },
         "execution_order": ["aten.mul::0", "aten.mul::1", "aten.add::2"],
-    }
+    })
 
 
 def _profiler(tmp_path):

@@ -39,6 +39,7 @@ Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src:. python -m pytest -q \\
 """
 from __future__ import annotations
 
+
 import json
 import sys
 from pathlib import Path
@@ -52,6 +53,7 @@ from neurobrix.core.prism.layer_partition import LayerPartitioner
 from neurobrix.core.prism.profiler import ActivationProfiler, weight_transposes_read_in_place
 from neurobrix.core.prism.solver import unified_device_bytes
 from neurobrix.nbx import NBXContainer
+from tests.unit.prism._graph import as_graph
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
                                               pin_host, profile)
 
@@ -151,7 +153,7 @@ def _linear(reader="aten::mm", weight="param::weight", returned=False, second_re
         dag["ops"]["other::0"] = {"op_type": second_reader, "input_tensor_ids": ["aten.t::0::out_0"],
                                   "output_tensor_ids": ["other::0::out_0"]}
         dag["execution_order"].append("other::0")
-    return dag
+    return as_graph(dag)
 
 
 def test_a_weight_transpose_read_in_place_is_no_buffer():

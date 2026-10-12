@@ -35,6 +35,7 @@ Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src python -m pytest -q \
 """
 from __future__ import annotations
 
+
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,7 @@ def _t(shape, dtype="float32"):
 
 def _op(uid, op_type, ins, outs):
     return {"op_uid": uid, "op_type": op_type, "input_tensor_ids": list(ins),
-            "output_tensor_ids": list(outs), "attributes": {}}
+            "output_tensor_ids": list(outs), "attributes": {"args": [{"type": "tensor", "tensor_id": t} for t in ins]}}
 
 
 def _dag(tensors, ops, inputs, outputs):

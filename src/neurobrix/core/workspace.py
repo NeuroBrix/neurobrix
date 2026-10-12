@@ -39,6 +39,52 @@ def io_workers() -> int:
     return n
 
 
+def pinned_uploads_in_flight() -> int:
+    """How many non-blocking uploads one loader worker keeps outstanding (`io.pinned_uploads_in_flight`
+    in config/system.yml) — read by the compiled loader AND by Prism's host estimate, which prices the
+    pinned bytes of a load as workers x this x the largest tensor."""
+    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
+    n = (cfg.get("io") or {}).get("pinned_uploads_in_flight")
+    if not isinstance(n, int) or n < 1:
+        raise RuntimeError(
+            f"ZERO FALLBACK: no pinned upload depth is configured: looked at {SYSTEM_YML} under "
+            f"`io.pinned_uploads_in_flight` (got {n!r}).")
+    return n
+
+
+_mmap_threshold_set = False
+
+
+def _libc():
+    import ctypes
+    import ctypes.util
+    return ctypes.CDLL(ctypes.util.find_library("c"))
+
+
+def apply_host_mmap_threshold() -> None:
+    """Pin glibc's mmap threshold to `io.host_mmap_threshold_bytes` (config/system.yml), once per process.
+
+    A weight loader's large temporaries must go back to the OS when freed; with glibc's dynamic threshold
+    they stay in the heap (measured figures beside the value). Not glibc (macOS, musl, Windows): there is
+    no such threshold and nothing is done."""
+    global _mmap_threshold_set
+    if _mmap_threshold_set:
+        return
+    _mmap_threshold_set = True
+    import platform
+    if platform.libc_ver()[0] != "glibc":
+        return
+    cfg = yaml.safe_load(SYSTEM_YML.read_text()) or {}
+    n = (cfg.get("io") or {}).get("host_mmap_threshold_bytes")
+    if not isinstance(n, int) or n < 1:
+        raise RuntimeError(
+            f"ZERO FALLBACK: no host mmap threshold is configured: {SYSTEM_YML} under "
+            f"`io.host_mmap_threshold_bytes` (got {n!r}).")
+    M_MMAP_THRESHOLD = -3  # glibc <malloc.h>
+    if _libc().mallopt(M_MMAP_THRESHOLD, n) != 1:
+        raise RuntimeError(f"mallopt(M_MMAP_THRESHOLD, {n}) refused by glibc")
+
+
 class SnapshotNotPresent(Exception):
     """A snapshot is not in the configured root, and nothing fetches it here."""
 
