@@ -225,7 +225,8 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             if not sh:
                 continue
             if name in (streamed_loads or {}):
-                held.append(_streams_through(name, streamed_loads[name]))
+                passes = _streams_through(name, streamed_loads[name])
+                (kept if name in plan.components and _pins(name) else held).append(passes)
             elif name in plan.components and not _pins(name):
                 read = _whole(name)
                 held.append(_streams_through(name, [read], among=read))
