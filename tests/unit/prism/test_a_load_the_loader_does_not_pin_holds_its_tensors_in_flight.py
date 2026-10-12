@@ -10,10 +10,11 @@ were refused at 31/32 GiB while their earlier native rows measured 2.6-7.2 GB of
 
 The loader (core/io/weight_loader.py `_load_with_pinned_dma`) pins only when the device is cuda/hip;
 elsewhere it reads one tensor per worker through `safe_open`, converts it, `.to(device)` and drops it.
-What a load holds on the host is its file pages — the stored bytes, and never more than the shards its
-workers hold open at once — plus the tensors in flight: one per worker, the largest that many, as read
-and as converted. Nothing outlives the load, so the passes do not add up under eager. The device copy
-is the device plan's (the unified `device` term).
+What a load holds on the host is the tensors in flight: one per worker, the largest that many, as read
+and as converted. Its file pages are clean and counted as available by core/host_memory.py (the M4,
+PixArt-XL-2's T5 read so by 8 workers: peak RSS 15.6 GB, peak phys_footprint 0.59 GB), so not priced.
+Nothing outlives the load, so the passes do not add up under eager. The device copy is the device
+plan's (the unified `device` term).
 
 Run: PYTHONPATH=src python -m pytest tests/unit/prism/test_a_load_the_loader_does_not_pin_holds_its_tensors_in_flight.py
 """
@@ -51,11 +52,11 @@ def _price(device, loading="eager", workers=2):
                             load_workers=workers, pinned_in_flight=4)
 
 
-def test_an_mps_load_holds_its_open_shards_and_its_tensors_in_flight():
-    # te: 2 workers -> 2 shards mapped (800 MB) + the 2 largest tensors, each as read and converted
-    #     (fp32 -> bf16: 250 + 125, 200 + 100); tr: its one shard (300) + 180 + 120, no conversion.
-    te = 800 * MB + (250 + 125) * MB + (200 + 100) * MB
-    tr = 300 * MB + 180 * MB + 120 * MB
+def test_an_mps_load_holds_its_tensors_in_flight_not_its_file_pages():
+    # te: 2 workers -> the 2 largest tensors, each as read and converted (fp32 -> bf16: 250 + 125,
+    #     200 + 100); tr: 180 + 120, no conversion. No shard is priced.
+    te = (250 + 125) * MB + (200 + 100) * MB
+    tr = 180 * MB + 120 * MB
     f = _price("mps:0")
     assert f["transient_bytes"] == max(te, tr), (f["transient_bytes"] / MB, te / MB)
 
