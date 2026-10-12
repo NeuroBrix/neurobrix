@@ -18,11 +18,11 @@ The gate: `tests/unit/cli/test_read_commands_speak_json.py` runs every read
 command with `--json`, parses stdout, and refuses an output that does not
 parse or lacks its schema (seen red on an injected stray print).
 
-## The commands and their records (schema version 1)
+## The commands and their records (schema version 1 unless the row says otherwise)
 
 | command | record |
 |---|---|
-| `info --json` | `version`, `package`, `cache`, `store`, `python`, `torch`, `cuda_available`, `gpus[{index,name,memory_bytes}]`, `models[{name,size_bytes}]`, `hardware_profiles[]` — machine-readable discovery without loading a model |
+| `info --json` (schema **2**) | `version`, `package`, `cache`, `store`, `python`, `branches{torch,triton}` (installed version or null, read from package metadata, nothing imported), `gpus[{index,name,memory_bytes,brand,architecture,unified_memory}]` (the engine's own detection, `core/prism/autodetect.detect_devices`, every vendor; `unified_memory` null when the detector does not state it), `models[{name,size_bytes}]`, `hardware_profiles[]`, and the daemon identity (`daemon_identity()` minus `engine`) — machine-readable discovery without loading a model or a compute branch |
 | `list --json` | `models[{name,family,size_bytes,license,in_store}]`, `store_only[{name,size_bytes}]`, `store{path,files[{name,size_bytes}],bytes}` |
 | `hub --json [--category C] [--search S]` | `registry`, `query{category,search}`, `total`, `models[{slug,name,category,size_bytes,license,downloads,visibility,installed}]` — the registry's own answer, `installed` read from this machine's cache |
 | `inspect <path-or-model> --json` | `path`, `model`, `nbx_version`, `family`, `components[{name,category,neural,ops?,shards?}]` |
@@ -32,6 +32,17 @@ parse or lacks its schema (seen red on an injected stray print).
 | `autotune check --json` | `directory`, `files[{path,ok,shapes?,problems?}]`, `refused` |
 | `run --model M … --explain-plan --json` | `model`, `strategy`, `loading_mode`, `dtype`, `why`, `candidates[{strategy,score}]`, `refused[{strategy,score,why}]`, `planned_memory_mb`, `cpu_ram_mb`, `components[{name,devices[],dtype,sharded,weight_bytes,activation_bytes,overhead_bytes,peak_op_uid,activation_profiled}]`, `op_level_tiling[]`, `component_tiling{}`, `kv_cache{max_cache_len,memory_bytes,dtype}?` — read from the plan, never recomputed: what is printed is what will run |
 | `validate … --json` | the validation results (pre-existing) |
+
+### `neurobrix.info/2` (contract break, 2026-10-11)
+
+Version 1 read the accelerators from PyTorch: importing it cost a start-up
+call several seconds, and it saw only what the installed torch build saw
+(`gpus: []` on Apple silicon). Version 2 reads them from the detection Prism
+plans from, with no framework import. Removed: `torch` (now
+`branches.torch`) and `cuda_available` (a branch property, not a device one:
+the devices are `gpus`). `gpus` gains `brand`, `architecture`,
+`unified_memory`. A client of version 1 must read the schema field and refuse
+or migrate; nothing else changed meaning.
 
 Exit codes are unchanged by `--json`: a `doctor` with problems still exits 1,
 an `autotune check` with a refused file still exits 1, a `coverage` on an

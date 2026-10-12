@@ -19,7 +19,7 @@ import sys
 from typing import Any, Dict
 
 SCHEMAS: Dict[str, int] = {
-    "info": 1, "list": 1, "hub": 1, "inspect": 1, "coverage": 1, "doctor": 1,
+    "info": 2, "list": 1, "hub": 1, "inspect": 1, "coverage": 1, "doctor": 1,
     "autotune.status": 1, "autotune.check": 1, "explain-plan": 1, "validate": 1,
     "import": 1, "remove": 1,
 }
