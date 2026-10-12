@@ -150,3 +150,15 @@ Forge is the proprietary tool that traces our models.
   - unified VMM for every trace.
 - A fix never breaks another model's trace. The trace suite of the whole catalogue is the proof before a Forge fix lands.
 - Hard code is allowed in Forge, a private tool, but is not desirable.
+
+## 2026-10-12 18:20 — CONFIDENTIALITY and ECONOMY (the owner, via the supervisor)
+
+Confidentiality: the work is confidential. Never /feedback, /bug, or any send to the model vendor beyond the
+model calls themselves. No session-link trailer and no co-author trailer in any commit message (the engine
+repository is public). Agent settings disable non-essential traffic, telemetry, error reports and co-author
+lines on all three machines from their next session start.
+
+Economy: sub-agents only in extreme necessity, the reason written in the report before launch (zero by default);
+never a turn spent checking that a job progresses (a shell watcher wakes the agent at its end); scripts written
+once into the campaign and re-run by path, never pasted; one command per step with truncated output; the report
+is rewritten on disk, not repeated in the conversation; anything not visible in the owner's terminal is closed.
