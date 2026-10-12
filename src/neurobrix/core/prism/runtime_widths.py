@@ -313,18 +313,21 @@ def _explicit_dtype(op: Dict[str, Any]) -> Optional[str]:
 def runtime_widths(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                    has_native_bf16: bool, contract: PrecisionContract, stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
-                   shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, int]:
+                   shape_of: Optional[Callable[[str], List[int]]] = None,
+                   attention_operands: Optional[str] = None) -> Dict[str, int]:
     """{tensor_id: bytes per element at runtime} for every tensor of `dag` — see
     `runtime_dtypes`."""
     return {tid: get_dtype_bytes_per_element(n) for tid, n in runtime_dtypes(
         dag, compute_dtype, engine, has_native_bf16=has_native_bf16, contract=contract,
-        stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of).items()}
+        stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of,
+        attention_operands=attention_operands).items()}
 
 
 def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                    has_native_bf16: bool, contract: PrecisionContract, stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
-                   shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, str]:
+                   shape_of: Optional[Callable[[str], List[int]]] = None,
+                   attention_operands: Optional[str] = None) -> Dict[str, str]:
     """{tensor_id: dtype name at runtime}. `shape_of(tid)` answers a tensor's shape at the
     request (the matmul store rule reads M); absent, the traced shape answers. `stores_fp64`:
     whether the engine priced holds float64 / complex128 on the profile, read by its OWN branch
@@ -332,7 +335,11 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     device_supports_fp64` for ATen). Where it is False the compiled branch holds no float64 /
     complex128 tensor at all — it narrows every op traced wide (`DtypeEngine._make_fp64_ceiling`),
     every `_to_copy` target and every constant (`storage_dtype`), and MPS refuses a float64 tensor
-    outright — so the ATen rules price that ceiling over every tensor."""
+    outright — so the ATen rules price that ceiling over every tensor.
+
+    `attention_operands`: the `precision.attention_operands` of the hardware profile priced
+    (`triton.dtype.profile_attention_operand_alignment`) — how BOTH engines align an attention's
+    q, k, v that disagree in dtype. Asked only when they disagree; None there is refused by name."""
     c = str(compute_dtype).replace("torch.", "")
     if c not in _FLOAT:
         raise ValueError(f"runtime_widths: compute dtype {compute_dtype!r} is not a float dtype")
@@ -357,6 +364,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
 
     rule.shape_of = shape_of or traced_shape
     rule.traced_shape = traced_shape
+    rule.attention_operands = attention_operands
 
     out: Dict[str, str] = {}
     # SEEDS — tensors no op produces.
@@ -404,6 +412,20 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
 
 class _Rules:
     """What both engines share: the operand views every rule reads."""
+
+    #: The priced profile's `precision.attention_operands` (set by `runtime_dtypes`).
+    attention_operands: Optional[str] = None
+
+    def attention_alignment(self, uid, fl) -> str:
+        """The alignment an attention whose operands disagree computes with: the PRICED
+        profile's, never the planning process's card. None (a profile with no device, or a
+        caller that gave none) is refused by name, naming the op and its operand dtypes."""
+        if self.attention_operands is None:
+            raise ValueError(
+                f"runtime_widths: attention {uid} has operands that disagree "
+                f"({', '.join(d for _t, d, _z in fl[:3])}) and the width pass was given no "
+                f"precision.attention_operands of the profile it prices")
+        return self.attention_operands
 
     def __init__(self, dag, c, engine, has_native_bf16, contract, tiling, stores_fp64):
         self.dag, self.c, self.engine = dag, c, engine
@@ -732,7 +754,8 @@ class _TritonRules(_Rules):
             if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
                 from neurobrix.kernels import launch_keys as _lk
                 from neurobrix.kernels.nbx_tensor import NBXDtype
-                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]))[0].name
+                return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
+                                               alignment=self.attention_alignment(uid, fl))[0].name
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)
@@ -820,7 +843,13 @@ class _AtenRules(_Rules):
                 if len(a) >= 2 and a[0] == a[1] and fl and fl[0][1] == "float16":
                     return "float32"
         if name in _SDPA:
-            # compiled_ops `_make_attention` hands q, k, v to F.sdpa: the output is q's.
+            # compiled_ops `_make_attention` aligns q, k, v through the DtypeEngine
+            # (`DtypeEngine.align_attention_operands`, compiled_ops.py every attention route) and
+            # hands them to F.sdpa: the output is q's AFTER that alignment — the twin decision the
+            # Triton rule reads (`attention_operand_dtypes`, held equal to the engine's by a test).
+            if len(fl) >= 3 and len({d for _t, d, _z in fl[:3]}) > 1:
+                return _tdt.attention_operand_dtypes(
+                    *(d for _t, d, _z in fl[:3]), self.attention_alignment(uid, fl))[0]
             return self.first(fl) or self.default(op, fl)
         # Everything else is unwrapped: torch's promotion (the widest operand; cat promotes).
         return self.default(op, fl)
