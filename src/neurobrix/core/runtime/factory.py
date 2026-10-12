@@ -46,7 +46,10 @@ class ExecutorFactory:
     No defaults, no inference, no fallbacks.
     """
 
-    # Strategy to executor mapping — ALL 11 AllocationStrategy enum values.
+    # Strategy to executor mapping, keyed by `ComponentAllocation.strategy` — the COMPONENT
+    # namespace: the plan strategies a component carries, plus `expert_store`, which only a
+    # component carries (it is no plan strategy; core/strategies/__init__.py says why).
+    # test_solver_registry_parity.py holds every name the solver writes into a component to it.
     # Every strategy uses GraphExecutor. Execution flow is handled by strategies/ module.
     STRATEGY_MAP = {
         # === Single Device ===

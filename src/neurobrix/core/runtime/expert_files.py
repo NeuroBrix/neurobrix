@@ -19,7 +19,9 @@ miss, which the store's byte-copy contract does not make: it is refused by name,
 silently. Only the fused MoE op reads these weights, through the store (`expert_store.py`); a view
 reaching any kernel is a defect the engines refuse (an mmap address is no device buffer).
 
-Torch-free and triton-free here; each engine builds its own view from `ExpertFileSpan`.
+Torch-free here; each engine builds its own view from `ExpertFileSpan`. `held_dtype` is the one rule
+both engines' views and Prism's plan read (it imports the triton loader's torch-free
+`stored_dtype_in_compute` for the triton engine only).
 """
 from __future__ import annotations
 
@@ -113,6 +115,28 @@ class ShardMaps:
 
     def __len__(self) -> int:
         return len(self._maps)
+
+
+#: The weights the compiled (ATen) loader converts to the placement dtype: every floating one
+#: (`WeightLoader(torch_dtype=...)`); any other keeps its stored dtype.
+_COMPILED_CONVERTS = frozenset({"float16", "bfloat16", "float32", "float64"})
+
+
+def held_dtype(stored, compute, engine: str):
+    """The dtype (an NBXDtype) `engine` holds a weight stored as `stored` in, under the compute dtype
+    `compute` (each anything `parse_dtype` reads: a name, an NBXDtype, a torch dtype) — THE rule a
+    file-backed expert is held to, read by both engines' views (`bind_views`'s `held_as`) and by
+    Prism when it plans a unified expert store (`_refuse_unheld_expert_files`), so the plan refuses
+    exactly what the load would. Triton: `stored_dtype_in_compute`, its loader's one rule. Compiled:
+    the ATen loader converts every floating weight to the placement dtype and keeps the rest."""
+    from neurobrix.kernels.nbx_tensor import parse_dtype
+    s, c = parse_dtype(stored), parse_dtype(compute)
+    if engine == "triton":
+        from neurobrix.triton.weight_loader import stored_dtype_in_compute
+        return stored_dtype_in_compute(s, c)
+    if engine == "compiled":
+        return c if s.name in _COMPILED_CONVERTS else s
+    raise RuntimeError(f"ZERO FALLBACK: no engine named {engine!r} (triton, compiled)")
 
 
 def bind_views(spans: Dict[str, ExpertFileSpan], held_as: Callable[[str], str],
