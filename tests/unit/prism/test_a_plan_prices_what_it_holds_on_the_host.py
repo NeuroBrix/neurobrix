@@ -30,7 +30,7 @@ def _block(k):
 def test_compiled_host_compute_holds_fp32_weights_and_activations():
     plan = _plan(vae=("cpu", "float16", {"s0": "cpu"}, 100 * MB, 30 * MB, 5 * MB))
     f = H.host_footprint(plan, {"vae": {"w": 100 * MB}}, {"vae": {"s0": 100 * MB}}, "compiled",
-                         None, DT, _block)
+                         None, DT, _block, load_workers=1)
     assert f["steady"]["vae"] == 200 * MB + 30 * MB + 5 * MB
 
 
@@ -44,9 +44,11 @@ def test_compiled_zero3_holds_the_share_of_weights_on_host_shards():
 
 def test_lazy_holds_the_largest_eager_holds_them_all():
     comps = dict(a=("cpu", "float32", {"s": "cpu"}, 10 * MB, 0, 0), b=("cpu", "float32", {"s": "cpu"}, 30 * MB, 0, 0))
-    sizes, shards = {"a": {}, "b": {}}, {"a": {"s": 1}, "b": {"s": 1}}
-    assert H.host_footprint(_plan("lazy", **comps), sizes, shards, "compiled", None, DT, _block)["steady_bytes"] == 30 * MB
-    assert H.host_footprint(_plan("eager", **comps), sizes, shards, "compiled", None, DT, _block)["steady_bytes"] == 40 * MB
+    sizes, shards = {"a": {"w": 1}, "b": {"w": 1}}, {"a": {"s": 1}, "b": {"s": 1}}
+    assert H.host_footprint(_plan("lazy", **comps), sizes, shards, "compiled", None, DT, _block,
+                            load_workers=1)["steady_bytes"] == 30 * MB
+    assert H.host_footprint(_plan("eager", **comps), sizes, shards, "compiled", None, DT, _block,
+                            load_workers=1)["steady_bytes"] == 40 * MB
 
 
 def test_triton_pins_only_block_weights_and_loads_a_tensor_at_a_time():
