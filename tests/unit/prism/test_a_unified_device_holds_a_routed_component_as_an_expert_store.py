@@ -233,8 +233,8 @@ def test_the_topology_names_the_expert_weights_a_store_reads_from_its_files():
 
 
 def test_the_compiled_load_of_a_unified_store_passes_only_its_dense_part_through_the_host():
-    """host_footprint.py: the compiled load onto mps passes a component through the host per tensor (its
-    open shards' pages + one tensor per worker). A unified expert store's routed experts are mapped from
+    """host_footprint.py: the compiled load onto mps passes a component through the host per tensor (one
+    tensor per worker). A unified expert store's routed experts are mapped from
     the container's files, never loaded — Qwen3-30B-A3B on the M4 priced 115 288 MB of loading for a
     15 073 MB plan. Was priced read + pinned, whole (400 / 200 MB) until 2026-10-12: the CUDA rule."""
     from neurobrix.core.prism.host_footprint import host_footprint
@@ -244,9 +244,9 @@ def test_the_compiled_load_of_a_unified_store_passes_only_its_dense_part_through
     keys = {"model": {"dense.w": 100 * MB, "e0": 50 * MB, "e1": 50 * MB}}
     args = (plan, keys, {"model": {"s0": 200 * MB}}, "compiled", None, {"bfloat16": 2},
             lambda k: False, {"model": {"bfloat16"}})
-    one = {"load_workers": 1, "pinned_in_flight": 4}
-    assert host_footprint(*args, **one)["transient_bytes"] == 200 * MB + 100 * MB   # the shard + dense.w
-    assert host_footprint(*args, **one, file_backed={"model": {"e0", "e1"}})["transient_bytes"] == 100 * MB + 100 * MB
+    one = {"load_workers": 3, "pinned_in_flight": 4}
+    assert host_footprint(*args, **one)["transient_bytes"] == 200 * MB              # every weight in flight
+    assert host_footprint(*args, **one, file_backed={"model": {"e0", "e1"}})["transient_bytes"] == 100 * MB
     with pytest.raises(ValueError, match="absent from the weights index"):
         host_footprint(*args, **one, file_backed={"model": {"e0", "e9"}})
 
