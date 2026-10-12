@@ -11,7 +11,7 @@ import re
 
 from neurobrix import __version__
 from neurobrix.cli.utils import (
-    STORE_DIR, CACHE_DIR, REGISTRY_URL, format_size,
+    STORE_DIR, CACHE_DIR, REGISTRY_URL, IMPORT_EXAMPLES, format_size,
 )
 
 
@@ -267,7 +267,7 @@ def _import_body(args):
 
     if "/" not in model_ref:
         _die(args, f"ERROR: Invalid model reference '{model_ref}'",
-             "Expected format: org/name (e.g., pixart/sigma-xl-1024)")
+             f"Expected format: org/name (e.g., {IMPORT_EXAMPLES[0]})")
 
     org, name = model_ref.split("/", 1)
 
