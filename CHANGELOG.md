@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Triton mode runs graphs that cast to bool again.** A model whose graph casts a tensor to bool
   (Allegro among them) stopped in the Triton mode with `unknown dtype 'bool_'`; it runs again.
 
+- **A mixture-of-experts plan on Apple unified memory is refused at planning when its experts would
+  fail to load.** When the experts are read straight from the model files, they must already be
+  stored in the precision the run computes in. A model stored in another precision was accepted by
+  the plan and then stopped at load. The plan now names the component, the two precisions and an
+  example expert before anything loads.
+
+- **`NBX_FORCE_STRATEGY` no longer offers `expert_store`.** It was listed as a plan strategy, but it is
+  a way of holding one component inside a plan, so forcing it was refused on every machine.
+
 - **Models carrying double-precision constants run on Apple GPUs.** A device whose hardware
   profile declares no float64 support now receives those constants in float32, as the models'
   own reference code does there, instead of failing on the transfer.
