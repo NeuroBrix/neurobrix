@@ -1,0 +1,93 @@
+# The data of the computed gate scope (tools/gate_scope.py). Nothing in the tool names a module, a model, a
+# flow or an op of the engine: every entry point, registry and rack value it reads is declared here, each
+# with its source.
+
+package: neurobrix
+src: src/neurobrix
+
+# The process a gate cell is: `python -m neurobrix <cell_argv>` (tools/regression_matrix.py:cell_argv).
+entry: "neurobrix.__main__:<module>"
+argv:
+  seed: "neurobrix.cli:main"                    # the function that calls parse_args()
+  parser: "neurobrix.cli:create_parser"         # the engine's own parser parses every cell's argv
+  scope: "neurobrix.cli"                        # functions that receive the parsed namespace
+
+# The environment a gate cell runs under (tools/regression_matrix.py:_run_cell): the variables it never sets
+# read as unset. A unit that reads any other variable names it as an assumption.
+env_unset: [NBX_CENSUS]
+
+# The registries the launcher dispatches ops through (source: kernels/dispatch.py, kernels/metadata_ops.py).
+op_maps:
+  - builder: "neurobrix.kernels.dispatch:_build_op_map"
+    key: "neurobrix.kernels.classification:canonical_aten"
+    guard: wrapper                              # the wrapper's guard is evaluated over each op's signatures
+  - table: "neurobrix.kernels.metadata_ops:METADATA_OPS_IMPL"
+    guard: none                                 # keyed by the full op type
+
+# The rack the gate runs on: the probe answers the vendor reader with this rack's brand and architecture,
+# loads the class's hardware profile and runs the setup every cell's launcher runs (cli/commands/run.py).
+rack:
+  reader: "neurobrix.core.config.loader:get_vendor_config"
+  reader_values: [nvidia, volta]
+  # the file the reader opens for those values (source: core/config/loader.py, get_vendor_config:
+  # `CONFIG_ROOT / "vendors" / vendor / f"{architecture}.yml"`, CONFIG_ROOT = src/neurobrix/config)
+  reader_files: "src/neurobrix/config/vendors/{0}/{1}.yml"
+  profile_loader: "neurobrix.core.prism.loader:load_profile"
+  setup: "neurobrix.kernels.wrappers:set_hardware_profile"
+
+# Memory classes of this rack (CLAUDE.local.md: cards 0,1 = 16 GB, cards 2,3 = 32 GB).
+classes:
+  16g: default-ff6008b7
+  32g: default-5ca6057c
+
+# The planner: a change inside it is judged by the plan it emits for each cell (`--explain-plan --json`),
+# old tree against new tree, never by its code.
+planner:
+  packages: [neurobrix.core.prism]
+  # the environment of a plan-only run (no card: the census door plans for the class's devices)
+  env: {NBX_CENSUS: "1", NBX_CENSUS_DEVICES: "1"}
+  plan_fields: [strategy, loading_mode, dtype, planned_memory_mb, device_window_mb, components, op_level_tiling,
+                conv3d_chunks, op_level_tiling_ops, component_tiling, cfg_split_components, host_footprint]
+  # what the planning process measures of itself, and the fields that add it (source: core/prism/host_footprint.py,
+  # `resident_bytes` "what the planning process holds when it prices (the caller measures it)", summed into
+  # `total_bytes`): it moves with any change to the process, never with the plan
+  measured: {host_footprint.resident_bytes: [host_footprint.total_bytes]}
+
+# The graph records the engine reads: the tag key of an argument record and the record type of a dtype.
+records:
+  tag: type
+  dtype_tag: dtype
+
+# The census table of each class (tools/derived_census.py).
+census: "src/neurobrix/config/census/nvidia/volta/{cls}.jsonl"
+
+# The gate the scope is computed against (--gate-dir): its card lists, its rows, its timeouts (the layout
+# the gate harness writes; source: the mq24 campaign directory).
+gate:
+  lists: "gate2/gate_{cls}.list"
+  rows: "gate/matrix_{cls}"
+  timeouts: "timeouts.txt"
+
+# Tools in the import closure of a cell's harness: a change there reaches every cell.
+harness: [tools/regression_matrix.py]
+
+# Values of locals an external module produces, for a value probe (source: numpy's dtype kinds; numpy has
+# no bfloat16 — https://numpy.org/doc/stable/reference/arrays.scalars.html).
+external_domains:
+  numpy.ndarray:
+    spec_each: {"call": "numpy:zeros", "args": [{"lit": 0}], "kwargs": {"dtype": {"lit": "$v"}}}
+    values: [bool, int8, int16, int32, int64, uint8, uint16, float16, float32, float64, complex64, complex128]
+
+# How a graph argument signature (gate_scope_index `sigs`) is handed to a kernel wrapper's guard in a probe: a
+# tensor argument is an instance of the engine's tensor class carrying only its dtype (any other use raises —
+# a hit, conservatively); a dtype record is the dtype enum's member (source: kernels/nbx_tensor.py, whose
+# NBXTensor keeps its dtype in the `_dtype` slot and names bool `bool_`).
+stubs:
+  tensor: {class: "neurobrix.kernels.nbx_tensor:NBXTensor", dtype_slot: "_dtype"}
+  dtype: {enum: "neurobrix.kernels.nbx_tensor:NBXDtype", suffixes: ["_"]}
+
+# Bounds of the evaluation (a bound reached is NAMED in scope.json and the unit falls back, never truncated).
+limits:
+  points: 400000          # points of one unit's domain in one probe
+  walk: 400               # units one reverse walk visits before it falls back
+  plan_jobs: 12           # explain-plan processes at once (CPU only)
