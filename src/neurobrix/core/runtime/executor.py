@@ -692,7 +692,8 @@ class RuntimeExecutor:
                     execute_component_fn=self._execute_component,
                     extract_primary_output_fn=self._output_extractor.extract_primary_output,
                     cfg_engine=cfg_engine,
-                    output_extractor=self._output_extractor
+                    output_extractor=self._output_extractor,
+                    unload_weights_fn=self._unload_component_weights
                 )
             # Native mode: use CFGEngine (torch-based) — imported here, on
             # the compiled branch only (R33).
@@ -708,19 +709,22 @@ class RuntimeExecutor:
                 execute_component_fn=self._execute_component,
                 extract_primary_output_fn=self._output_extractor.extract_primary_output,
                 cfg_engine=cfg_engine,
-                output_extractor=self._output_extractor
+                output_extractor=self._output_extractor,
+                unload_weights_fn=self._unload_component_weights
             )
         elif flow_type == "static_graph":
             if ctx.mode in ("triton", "triton_sequential"):
                 from neurobrix.triton.flow.static_graph import TritonStaticGraphHandler
                 return TritonStaticGraphHandler(
                     ctx=ctx,
-                    execute_component_fn=self._execute_component
+                    execute_component_fn=self._execute_component,
+                    unload_weights_fn=self._unload_component_weights
                 )
             from neurobrix.core.flow.static_graph import StaticGraphHandler
             return StaticGraphHandler(
                 ctx=ctx,
-                execute_component_fn=self._execute_component
+                execute_component_fn=self._execute_component,
+                unload_weights_fn=self._unload_component_weights
             )
         elif flow_type == "forward_pass":
             if ctx.mode in ("triton", "triton_sequential"):
