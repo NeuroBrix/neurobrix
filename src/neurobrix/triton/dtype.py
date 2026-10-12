@@ -466,6 +466,33 @@ def profile_triton_stores_fp64(profile) -> bool:
     return _profile_fp64(profile, triton_stores_fp64)
 
 
+def profile_attention_operand_alignment(profile) -> Optional[str]:
+    """`precision.attention_operands` of the hardware profile a plan TARGETS (a PrismProfile),
+    read from every device's vendor profile and refused if they disagree; None for a profile with
+    no device (it places on the host, where no vendor profile declares one, and a width pass that
+    then meets operands that disagree refuses by name).
+
+    The plan's answer, never the process's: the launcher's `active_vendor_profile()` is the card
+    THIS process drives — nothing at all on a host with no visible card — while Prism prices the
+    hardware it was handed (a census of the other machine, the 16 GB card planned from the 32 GB
+    one, a Mac profile planned on the rack). Read off the driver, the plan's width estimate
+    depended on which card the planning process could see (2026-10-12: 30 plans refused under
+    CUDA_VISIBLE_DEVICES='', "hardware profile None")."""
+    if profile is None or not getattr(profile, "devices", None):
+        return None
+    from neurobrix.core.config import loader
+    answers = {}
+    for dev in profile.devices:
+        key = (getattr(dev.brand, "value", dev.brand), dev.architecture)
+        answers[key] = attention_operand_alignment(loader.get_vendor_config(*key))
+    if len(set(answers.values())) > 1:
+        raise ValueError(f"ZERO FALLBACK: the profile's devices disagree on "
+                         f"precision.attention_operands ({answers!r}); one plan prices one "
+                         f"answer, so a mixed profile is refused rather than decided by its "
+                         f"first device")
+    return next(iter(answers.values()))
+
+
 def constant_load_dtype(traced: str, compute: str, stores_fp64: bool) -> str:
     """The dtype (a name) an embedded graph constant is bound in by the Triton engines
     (`GraphExecutor._load_constant_triton`): a bfloat16 constant is decoded to the compute dtype

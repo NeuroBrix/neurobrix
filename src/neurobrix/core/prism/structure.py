@@ -536,17 +536,11 @@ class PrismProfile:
         is no alignment, so an attention whose operands agree is priced unchanged and one whose
         operands disagree is refused by name at the decision — as the compiled DtypeEngine
         refuses when it was given no hardware."""
-        from neurobrix.core.config.loader import get_vendor_config
-        from neurobrix.triton.dtype import attention_operand_alignment
-        said = {attention_operand_alignment(get_vendor_config(getattr(d.brand, "value", d.brand),
-                                                               d.architecture))
-                for d in self.devices}
-        if not said:
+        from neurobrix.triton.dtype import profile_attention_operand_alignment
+        said = profile_attention_operand_alignment(self)     # the one reader; a mixed answer refused
+        if said is None:
             return f"undeclared (hardware profile {self.id!r} has no device)"
-        if len(said) != 1:
-            raise ValueError(f"hardware profile {self.id!r}: its devices declare attention "
-                             f"operand alignments {sorted(said)} — one plan prices one")
-        return said.pop()
+        return said
 
     @property
     def tile_extent_lattice(self) -> int:

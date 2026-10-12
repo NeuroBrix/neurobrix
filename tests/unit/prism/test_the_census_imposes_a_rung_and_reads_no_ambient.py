@@ -22,8 +22,8 @@ import pytest
 
 from neurobrix.core.host_memory import MemoryState
 from neurobrix.core.prism import solver as _solver_mod
-from neurobrix.core.prism.loader import load_profile
 from neurobrix.core.prism.solver import PrismSolver
+from tests.unit.prism._pinned_machine import V100_16GB, profile as pinned_profile
 
 
 def _solver():
@@ -43,7 +43,10 @@ def _budget(monkeypatch, *, available_mb, door=None):
         monkeypatch.delenv("NBX_PRISM_BUDGET_MB", raising=False)
     else:
         monkeypatch.setenv("NBX_PRISM_BUDGET_MB", str(door))
-    profile = load_profile("default")
+    # The machine is BUILT here (register 102): `default.yml` is generated per machine and
+    # gitignored, so a worktree or another machine without it failed this file before a
+    # budget was read (2026-10-12, FileNotFoundError "Hardware profile 'default' not found").
+    profile = pinned_profile(V100_16GB)
     profile.devices[0].unified_memory = True
     # Read the budget of the device this cell MADE unified, BY NAME.
     # `_prepare_devices` ends with `devices.sort(key=lambda d: (-d.capacity_mb, ...))`, so

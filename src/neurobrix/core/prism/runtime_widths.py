@@ -337,16 +337,15 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
     every `_to_copy` target and every constant (`storage_dtype`), and MPS refuses a float64 tensor
     outright — so the ATen rules price that ceiling over every tensor.
     `attention_operands` is the planned hardware's `precision.attention_operands` (an SDPA whose
-    q, k, v disagree stores in the aligned q's dtype) — an argument, never the process's profile."""
+    q, k, v disagree stores in the aligned q's dtype) — an argument, never the process's profile.
+    Asked only when they disagree; None there is refused by name (`_Rules.attention_alignment`)."""
     c = str(compute_dtype).replace("torch.", "")
     if c not in _FLOAT:
         raise ValueError(f"runtime_widths: compute dtype {compute_dtype!r} is not a float dtype")
     if engine in TRITON_ENGINES:
         rule = _TritonRules(dag, c, engine, has_native_bf16, contract, tiling, stores_fp64)
-        rule.attention_operands = attention_operands
     elif engine in ATEN_ENGINES:
         rule = _AtenRules(dag, c, engine, has_native_bf16, contract, tiling, stores_fp64)
-        rule.attention_operands = attention_operands
     else:
         raise ValueError(f"runtime_widths: engine {engine!r} is none of "
                          f"{sorted(TRITON_ENGINES | ATEN_ENGINES)}")
@@ -364,6 +363,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
 
     rule.shape_of = shape_of or traced_shape
     rule.traced_shape = traced_shape
+    rule.attention_operands = attention_operands
 
     out: Dict[str, str] = {}
     # SEEDS — tensors no op produces.
@@ -411,6 +411,20 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
 
 class _Rules:
     """What both engines share: the operand views every rule reads."""
+
+    #: The priced profile's `precision.attention_operands` (set by `runtime_dtypes`).
+    attention_operands: Optional[str] = None
+
+    def attention_alignment(self, uid, fl) -> str:
+        """The alignment an attention whose operands disagree computes with: the PRICED
+        profile's, never the planning process's card. None (a profile with no device, or a
+        caller that gave none) is refused by name, naming the op and its operand dtypes."""
+        if self.attention_operands is None:
+            raise ValueError(
+                f"runtime_widths: attention {uid} has operands that disagree "
+                f"({', '.join(d for _t, d, _z in fl[:3])}) and the width pass was given no "
+                f"precision.attention_operands of the profile it prices")
+        return self.attention_operands
 
     def __init__(self, dag, c, engine, has_native_bf16, contract, tiling, stores_fp64):
         self.dag, self.c, self.engine = dag, c, engine
@@ -740,7 +754,7 @@ class _TritonRules(_Rules):
                 from neurobrix.kernels import launch_keys as _lk
                 from neurobrix.kernels.nbx_tensor import NBXDtype
                 return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
-                                               alignment=self.attention_operands)[0].name
+                                               alignment=self.attention_alignment(uid, fl))[0].name
             return self.first(fl) or self.default(op, fl)
         if name == "rms_norm":                                  # C fp32: unwrapped wrapper
             return self.first(fl) or self.default(op, fl)
@@ -835,7 +849,7 @@ class _AtenRules(_Rules):
                 from neurobrix.kernels import launch_keys as _lk
                 from neurobrix.kernels.nbx_tensor import NBXDtype
                 return _lk.sdpa_operand_dtypes(*(NBXDtype[d] for _t, d, _z in fl[:3]),
-                                               alignment=self.attention_operands)[0].name
+                                               alignment=self.attention_alignment(uid, fl))[0].name
             return self.first(fl) or self.default(op, fl)
         # Everything else is unwrapped: torch's promotion (the widest operand; cat promotes).
         return self.default(op, fl)
