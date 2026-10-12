@@ -144,7 +144,9 @@ class IterativeProcessHandler(FlowHandler):
         execute_component_fn: Callable[[str, str, Optional[torch.Tensor]], Any],
         extract_primary_output_fn: Callable[[str, Any], Any],
         cfg_engine: Optional[Any] = None,
-        output_extractor: Optional[Any] = None
+        output_extractor: Optional[Any] = None,
+        *,
+        unload_weights_fn: Callable[[str], None]
     ):
         """
         Initialize iterative process handler.
@@ -155,6 +157,7 @@ class IterativeProcessHandler(FlowHandler):
             extract_primary_output_fn: Function to extract primary output
             cfg_engine: Optional CFGEngine for classifier-free guidance
             output_extractor: Optional OutputExtractor for encoder lookups
+            unload_weights_fn: the engine executor's unload of one component (strategy uninstall first)
         """
         super().__init__(ctx)
         self._execute_component = execute_component_fn
@@ -162,6 +165,7 @@ class IterativeProcessHandler(FlowHandler):
         self._cfg_engine = cfg_engine
         self._output_extractor = output_extractor
         self._packing_info = None
+        self._unload_component_weights = unload_weights_fn
 
     def execute(self) -> Dict[str, Any]:
         """
@@ -1205,9 +1209,12 @@ class IterativeProcessHandler(FlowHandler):
             if loading_mode == "eager":
                 return
 
-        executor = self.ctx.executors.get(comp_name)
-        if executor:
-            executor.unload_weights()
+        # Through the engine executor's own brick — the strategy's uninstall FIRST (a zero3 ratchet
+        # evicts its resident blocks nowhere else), then the executor's unload. Calling
+        # `executor.unload_weights()` here left mochi-1-preview's 18 938 MB of resident transformer
+        # blocks under the post-loop VAE on a 32 GB V100 (aten.convolution::27, 2026-10-12).
+        if comp_name in self.ctx.executors:
+            self._unload_component_weights(comp_name)
         release_flow_memory(self.ctx.primary_device)
 
     def _is_loop_component(self, comp_name: str) -> bool:
