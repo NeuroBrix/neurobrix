@@ -96,3 +96,8 @@ serving:
   # How long a shutdown waits for the connection threads to deliver the replies of the work it
   # stopped before the process exits.
   drain_timeout_s: 30
+  # How often a Windows launcher (`neurobrix serve` without --foreground) looks for the daemon's
+  # ready file while the daemon loads. POSIX launchers block on a pipe and never poll; Windows
+  # hands a child no inherited fd through subprocess, so the file remains there. A wait ends on
+  # the file or on the child's exit, never on a deadline: a long load is not a failure.
+  ready_poll_s: 0.5
