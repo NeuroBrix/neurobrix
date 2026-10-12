@@ -2057,6 +2057,64 @@ class GraphExecutor:
         # the whole component a second time.
         self._weights_loaded = True
 
+    def _split_expert_files(self, load_set, only):
+        """(the keys to load, the routed expert keys to map from the files) for this load.
+
+        A component the plan holds as an expert store on a unified device (`_expert_files`, set by
+        the factory from `ComponentAllocation.expert_files`) loads its dense part and maps its
+        routed experts from the container's shards (`core/runtime/expert_files.py`). Only the
+        component's own first load splits: a later load names its keys (`only`), and none of them
+        is a routed expert the first load did not map."""
+        if only is not None or not getattr(self, "_expert_files", False):
+            return load_set, set()
+        if load_set is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{getattr(self, '_component_name', '?')}' maps its routed experts from "
+                f"its files and its load has no key set (no weights index to join the graph to): the "
+                f"experts cannot be told from the dense part")
+        from neurobrix.core.runtime.expert_files import expert_loader_keys
+        mapped = expert_loader_keys(self._dag, getattr(self, "_pending_weight_binding", None), load_set)
+        return set(load_set) - mapped, mapped
+
+    def _expert_file_views(self, nbx_path, component, keys, compute_dtype):
+        """{loader key: a host view of its stored bytes} for the routed experts `keys`, in this
+        engine's tensor type (`expert_files.bind_views`): torch.frombuffer on the compiled engine,
+        NBXTensor.from_raw on the triton one — both over the private shard map, no byte copied."""
+        from neurobrix.core.runtime.expert_files import bind_views, locate
+        spans = locate(nbx_path, component, keys)
+        if self.mode in ("triton", "triton_sequential"):
+            import ctypes
+            from neurobrix.kernels.nbx_tensor import NBXTensor
+            from neurobrix.triton.weight_loader import _SF_DTYPE_INFO, stored_dtype_in_compute
+            by_nbx = {info[1]: sf for sf, info in _SF_DTYPE_INFO.items()}
+
+            def held_as(sf):
+                return by_nbx[stored_dtype_in_compute(_SF_DTYPE_INFO[sf][1], compute_dtype)]
+
+            def build(m, span, key):
+                ptr = ctypes.addressof(ctypes.c_char.from_buffer(m, span.offset))
+                return NBXTensor.from_raw(ptr, span.shape, _SF_DTYPE_INFO[span.dtype][1], device="cpu",
+                                          owns_data=False, base=m)
+        else:
+            import torch
+            sf_of = {torch.bfloat16: "BF16", torch.float16: "F16", torch.float32: "F32", torch.float64: "F64"}
+            torch_of = {v: k for k, v in sf_of.items()}
+
+            def held_as(sf):
+                # the compiled loader converts every floating weight to the placement dtype
+                return sf_of[compute_dtype] if sf in torch_of else sf
+
+            def build(m, span, key):
+                dt = torch_of[span.dtype]
+                n = span.nbytes // torch.empty((), dtype=dt).element_size()
+                return torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
+        views, maps = bind_views(spans, held_as, build)
+        self._expert_maps = maps
+        print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] '{component}': "
+              f"{len(views)} routed expert weights mapped from {len(maps)} shard(s), "
+              f"{sum(s.nbytes for s in spans.values()) / 2**20:.0f} MB left in the files", flush=True)
+        return views
+
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""
         # Capability gate (unsupported-path doctrine): encoded-weight
@@ -2090,6 +2148,7 @@ class GraphExecutor:
         _only = only if only is not None else self._consumed_in_loader_space(
             self.consumed_weight_names(), nbx_path, component)
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
+        _only, _mapped = self._split_expert_files(_only, only)
         with WeightLoader(nbx_path) as loader:
             if shard_map:
                 loaded = loader.load_component_with_shard_map(
@@ -2097,6 +2156,8 @@ class GraphExecutor:
             else:
                 loaded = loader.load_component(
                     component, self.device, torch_dtype, only=_only)
+        if _mapped:
+            loaded.update(self._expert_file_views(nbx_path, component, _mapped, torch_dtype))
         if only is not None:
             self._weights.update(loaded)          # a rewrite added readers
         else:
@@ -2159,10 +2220,13 @@ class GraphExecutor:
         # A streamed piece takes the non-block weights its base holds by reference (`_borrow`):
         # one copy on the device, the base's, whose arenas outlive every piece's run.
         _only, _taken = self._borrow(_only) if only is None else (_only, {})
+        _only, _mapped = self._split_expert_files(_only, only)
         loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only,
             krsc=self._krsc_loader_keys(_only) if only is None else None)
+        if _mapped:
+            loaded.update(self._expert_file_views(nbx_path, component, _mapped, compute_dtype))
         if only is not None:
             # A rewrite added readers: the new weights join the dict. Their
             # arenas JOIN too — `update` used to replace `_arenas` (the

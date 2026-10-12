@@ -1100,12 +1100,15 @@ class RuntimeExecutor:
                     resident_weight_mb = float(getattr(alloc, 'resident_weight_mb', 0.0))
                     # expert_store: the expert cache Prism sizes on the card beside the dense part
                     expert_cache_mb = float(getattr(alloc, 'expert_cache_mb', 0.0))
+                    # expert_store on a unified device: the experts are mapped from the files
+                    expert_files = bool(getattr(alloc, 'expert_files', False))
                 elif isinstance(alloc, tuple) and len(alloc) >= 2:
                     device, shard_map = alloc[0], alloc[1]
                     dtype = alloc[2] if len(alloc) > 2 else None
                     strategy = alloc[3] if len(alloc) > 3 else 'single_gpu'
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
+                    expert_files = False
                 else:
                     device = str(alloc)
                     shard_map = {}
@@ -1113,6 +1116,7 @@ class RuntimeExecutor:
                     strategy = 'single_gpu'
                     resident_weight_mb = 0.0
                     expert_cache_mb = 0.0
+                    expert_files = False
                 # Store all allocation info including dtype and strategy
                 allocations[comp_name] = {
                     'device': device,
@@ -1121,6 +1125,7 @@ class RuntimeExecutor:
                     'strategy': strategy,
                     'resident_weight_mb': resident_weight_mb,
                     'expert_cache_mb': expert_cache_mb,
+                    'expert_files': expert_files,
                 }
 
         # Get loading_mode from Prism plan (DATA-DRIVEN)
