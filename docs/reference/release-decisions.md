@@ -135,3 +135,18 @@ Four sub-agents ran on the Dell all night, never collected; their work was found
 3. At every wake, every context compaction and every turn end, the live sub-agents and chains are listed and compared with the report; a gap is fixed and noted.
 4. Every sub-agent and chain of the last 48 h has its deliverable on disk and in the report, or is recovered from the campaign and the session logs under RECOVERED.
 5. A job that ran unreported is a fault of method, not an incident.
+
+## 2026-10-12 15:30 — FORGE guidelines (the owner, via the supervisor)
+
+Forge is the proprietary tool that traces our models.
+
+- It is used explicitly through its entry point and documented commands (its repository README and the CLAUDE.md at its root). It has its own git branch, and Forge main is the only line.
+- A model is never traced with a custom script.
+- Forge stays portable and traces every model we own: a lost container is retraced by Forge into an exact copy.
+- Every specification stays in force:
+  - NeuroTax 5.0;
+  - symbolic shapes are mandatory, with no frozen dimension;
+  - one algebraic-function tool for symbolic shapes, extended and fixed as needed;
+  - unified VMM for every trace.
+- A fix never breaks another model's trace. The trace suite of the whole catalogue is the proof before a Forge fix lands.
+- Hard code is allowed in Forge, a private tool, but is not desirable.
