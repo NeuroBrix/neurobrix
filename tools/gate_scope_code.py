@@ -1222,7 +1222,7 @@ class Program:
                 return self.owner(uid)
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 return None
-            st = _stores(fn).get(e.id, [])
+            st = self._unit_stores(uid, fn).get(e.id, [])
             if e.id in _params(fn):
                 key = (uid, e.id)
                 if key in seen:
@@ -1249,15 +1249,32 @@ class Program:
                 return t
             if len(st) != 1:
                 return None
-            for n in ast.walk(self.canon(uid)):
-                if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
-                        and n.targets[0].id == e.id:
-                    key = (uid, "=" + e.id)
-                    if key in seen:
-                        self.__dict__.setdefault("_vt_cuts", [0])[0] += 1
-                        return _BOT
-                    return self._vt(uid, n.value, seen | {key})
+            n = self._unit_assigns(uid).get(e.id)
+            if n is not None:
+                key = (uid, "=" + e.id)
+                if key in seen:
+                    self.__dict__.setdefault("_vt_cuts", [0])[0] += 1
+                    return _BOT
+                return self._vt(uid, n.value, seen | {key})
             return None
+
+    def _unit_stores(self, uid, fn):
+        """`_stores` of a unit's own node, once per unit (the units are never rewritten in place)."""
+        memo = self.__dict__.setdefault("_stores_memo", {})
+        if uid not in memo:
+            memo[uid] = _stores(fn)
+        return memo[uid]
+
+    def _unit_assigns(self, uid):
+        """{name: the first `name = E` of the unit's canonical form, in ast.walk order}, once per unit."""
+        memo = self.__dict__.setdefault("_assigns_memo", {})
+        if uid not in memo:
+            out = {}
+            for n in ast.walk(self.canon(uid)):
+                if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+                    out.setdefault(n.targets[0].id, n)
+            memo[uid] = out
+        return memo[uid]
         if isinstance(e, ast.Attribute):
             t = self._vt(uid, e.value, seen)
             if t is _BOT or t is None:
