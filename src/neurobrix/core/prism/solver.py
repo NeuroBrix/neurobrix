@@ -1803,8 +1803,25 @@ class PrismSolver:
         # every flow that opens a decode session has its cache planned, whatever its family
         # declares (the sessions refuse a plan without one): core/runtime/lm_facts
         from neurobrix.core.runtime.lm_facts import decode_lm_component
-        self._needs_kv_cache = self._model_category in ("llm", "image_vq") or decode_lm_component(
-            topology, list((topology.get("components") or {}).keys())) is not None
+        _decoder = decode_lm_component(topology, list((topology.get("components") or {}).keys()))
+        self._needs_kv_cache = self._model_category in ("llm", "image_vq") or _decoder is not None
+        # A flow that opens a decode session has its cache sized from the decoder's facts
+        # (`_read_lm_config`: the package's runtime/defaults.json, its `lm_config` or the flow's LM
+        # facts), and its session refuses a plan without one. Without them
+        # `_compute_kv_cache_plan` answered None, and the plan went out with NO cache while every
+        # figure that subtracts the KV estimate read 0: Qwen3-Coder-30B-A3B on the Mac's profile,
+        # its package without runtime/defaults.json, planned layer_streaming with
+        # `kv_cache_plan=None` in run and serve (the whole package plans an expert store, 2026-10-12).
+        # Flows that open no decode session (`_decoder` None) keep their caches their own way.
+        if _decoder is not None and not has_lm_config:
+            _defaults = (container.cache_path / "runtime" / "defaults.json"
+                         if container.cache_path else None)
+            raise PlanNotComputable(
+                f"the container '{manifest.get('model_name', '?')}' (family {family!r}) runs a "
+                f"KV-cached decoder, and its decoder facts cannot be read — "
+                f"{_defaults if _defaults else 'no cache path'}"
+                f"{'' if _defaults is None or _defaults.exists() else ' is absent'}: the cache "
+                f"cannot be sized, so the plan cannot be computed. The package is incomplete.")
 
         # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
         # and the genuine all-fp32 fallback below).
