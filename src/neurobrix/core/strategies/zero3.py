@@ -646,6 +646,14 @@ class Zero3Strategy(ExecutionStrategy):
             except Exception:
                 transfer_stream_torch = None
 
+        # `expert_store` (Prism, `_zero3_resident_budgets`): the dense part resident, the routed
+        # experts served from an expert cache on the card (core/strategies/expert_store.py).
+        alloc = self.context.allocations.get(component_name)
+        if isinstance(alloc, dict) and alloc.get('strategy') == "expert_store":
+            from .expert_store import build_expert_store_state
+            return build_expert_store_state(self, component_name, executor, seq, is_triton, blocks,
+                                            dev_idx, transfer_stream, transfer_stream_torch)
+
         # The weights Prism keeps RESIDENT across passes (`resident_weight_mb`, the room its plan
         # leaves on the card beside everything it holds with this component): the non-block
         # weights first — every pass reads them, op by op — then the blocks in execution order,
@@ -903,6 +911,9 @@ class Zero3Strategy(ExecutionStrategy):
             is_triton = state['is_triton']
             for bidx in list(state['gpu_cache'].keys()):
                 self._evict_block(state, bidx, is_triton)
+            if state.get('expert_store') is not None:
+                from .expert_store import release_expert_store
+                release_expert_store(state)
             if is_triton:
                 from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
                 for ev in state['block_events'].values():

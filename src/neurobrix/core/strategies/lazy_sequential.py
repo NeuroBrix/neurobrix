@@ -58,7 +58,7 @@ class LazySequentialStrategy(ExecutionStrategy):
 
         # If this component has zero3 sub-strategy, pin CPU weights
         comp_strategy = self._get_component_strategy(component_name)
-        if comp_strategy == "zero3" and component_name not in self._pinned_components:
+        if comp_strategy in ("zero3", "expert_store") and component_name not in self._pinned_components:
             self._pin_cpu_weights(component_name, executor)
             self._pinned_components.add(component_name)
 
@@ -91,7 +91,7 @@ class LazySequentialStrategy(ExecutionStrategy):
         Delegates to the Zero3Strategy brick: same StrategyContext, and its
         device derivation already understands both allocation formats.
         Idempotent (the brick tracks installed components)."""
-        if self._get_component_strategy(component_name) != "zero3":
+        if self._get_component_strategy(component_name) not in ("zero3", "expert_store"):
             return
         if getattr(self, "_zero3_brick", None) is None:
             from .zero3 import Zero3Strategy

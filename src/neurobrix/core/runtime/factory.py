@@ -69,6 +69,9 @@ class ExecutorFactory:
         # === Sequential / Offload ===
         "lazy_sequential": "graph",
         "zero3": "graph",
+        # zero3's ratchet with the dense part resident and the routed experts served from an
+        # expert cache on the card (core/strategies/expert_store.py)
+        "expert_store": "graph",
 
         # === CPU-only (Doctrine R35 last-resort cascade) ===
         # All weights and activations placed on host RAM, compute via
