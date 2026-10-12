@@ -602,6 +602,8 @@ def matrix_unit() -> dict:
             if t < 16 or t % 16 or (t // 16) & (t // 16 - 1):
                 raise ValueError(f"hardware profile: matrix_unit.mm {f} {t} is not 16 x a power of two")
     split = mu.get("fp32_split") or {}
+    smem = (active_vendor_profile().get("memory") or {}).get("max_shared_memory_per_block")
+    from .flash_attention_m8n8k4 import head_parts, staged_shared_bytes
     for sec, rows in (("flash", mu.get("flash") or []), ("fp32_split.flash", split.get("flash") or [])):
         for row in rows:
             for f in ("block_m", "block_n"):
@@ -612,11 +614,28 @@ def matrix_unit() -> dict:
             if wm < 1 or wm & (wm - 1) or (int(row["block_m"]) // 16) % wm:
                 raise ValueError(f"hardware profile: matrix_unit.{sec} warps_m {wm} does not divide the "
                                  f"{row['block_m']}-row tile's 16-row bands")
+            if "head_dim_le" not in row:
+                raise ValueError(f"hardware profile: matrix_unit.{sec} row {row!r} names no head_dim_le — the head "
+                                 "dim its shared memory is priced at")
+            if smem is not None:
+                # THE DOOR: the tiles the kernel stages by name (ops/flash_attention_m8n8k4.staged_shared_bytes) at
+                # the row's widest head dim, against the profile's budget. A wider row used to be refused by the
+                # compiler at the first launch that reached it — a census of "not this time"; here it never loads.
+                need = staged_shared_bytes(int(row["block_m"]), int(row["block_n"]),
+                                           *head_parts(int(row["head_dim_le"])), split=(sec != "flash"))
+                if need > int(smem):
+                    raise ValueError(f"hardware profile: matrix_unit.{sec} row head_dim_le {row['head_dim_le']} "
+                                     f"{row['block_m']}x{row['block_n']} stages {need} bytes of shared memory, over "
+                                     f"memory.max_shared_memory_per_block {smem}")
     for row in split.get("flash") or []:
         # the head-dim columns the unit sums (rounding toward zero) before each round-to-nearest add of S
+        if "block_k" not in row:
+            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash row head_dim_le {row.get('head_dim_le')} "
+                             "names no block_k (the head-dim columns the unit sums before each round-to-nearest add)")
         bk = int(row["block_k"])
-        if bk < 4 or bk & (bk - 1):
-            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash block_k {bk} is not a power of two >= 4")
+        if bk < UNIT["k"] or bk & (bk - 1):
+            raise ValueError(f"hardware profile: matrix_unit.fp32_split.flash block_k {bk} is not a power of two "
+                             f">= {UNIT['k']} (the unit's k)")
     layout = (active_vendor_profile().get("conv") or {}).get("weight_layout")
     if layout not in (None, "KCRS"):
         # ops/conv2d_m8n8k4.py reads a filter as one contiguous (C, R, S) run (w.stride(0) alone): a weight the
@@ -643,11 +662,11 @@ def matrix_unit() -> dict:
 
 
 def matrix_unit_flash_tile(head_dim: int, unit: Optional[dict] = None) -> Optional[dict]:
-    """The first `flash` row of `unit` (the profile's `matrix_unit`, or its `fp32_split`) matching `head_dim`
-    (`head_dim_le` optional), or None (no unit declared, or a head dim beyond its measured rows: the kernel keeps
-    tl.dot)."""
+    """The first `flash` row of `unit` (the profile's `matrix_unit`, or its `fp32_split`) holding `head_dim`
+    (every row names its `head_dim_le`: `matrix_unit()` refuses one that does not), or None (no unit declared, or a
+    head dim beyond its measured rows: the kernel keeps tl.dot). `block_k` is the split rows' field alone."""
     for row in (matrix_unit() if unit is None else unit).get("flash") or []:
-        if "head_dim_le" in row and head_dim > row["head_dim_le"]:
+        if head_dim > row["head_dim_le"]:
             continue
         return {f: int(row[f]) for f in ("block_m", "block_n", "warps_m", "block_k") if f in row}
     return None
