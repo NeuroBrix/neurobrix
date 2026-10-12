@@ -587,31 +587,21 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
     (`host_reserved_from`). Two static reservations held a gate's card idle behind 162 GB of
     estimate while the host used 17 GB (2026-09-28 07:49)."""
     need, need_from = need if need else cell_need(model, mode, gpu, out, src)
-    said_at, waiting_since = None, time.time()
-    while True:
-        while (out / "PAUSE").exists():
-            time.sleep(30)
-        if (reserve_host(out, need, headroom=0) if need_from.startswith("plan-unified")
-                else reserve_host(out, need)):
-            break
-        if not wait:
-            return None
-        if said_at is None or time.time() - said_at >= WAIT_SAY_S:
-            said_at = time.time()
-            print(f"[matrix] {model} {mode}: waits for host admission since "
-                  f"{time.strftime('%H:%M:%S', time.localtime(waiting_since))} — need {need / GIB:.1f} GiB "
-                  f"({need_from}), available {_mem_available() / GIB:.1f} GiB, headroom "
-                  f"{_host_bytes() * HOST_HEADROOM_SHARE / GIB:.1f} GiB; every {WAIT_SAY_S:.0f} s until admitted",
-                  flush=True)
+    while (out / "PAUSE").exists():          # the gate's own door: nothing runs beside a gate
         time.sleep(30)
-    try:
-        print(f"[matrix] {model} {mode}: {need >> 30} GiB of host reserved ({need_from})", flush=True)
-        with PeakRSS() as peak:
-            row = _run_cell(model, mode, gpu, out, timeout, src)
-        row.update(host_peak_rss=peak.peak, host_reserved=need, host_reserved_from=need_from)
-        return row
-    finally:
-        release_host(out)
+    # A correctness cell never waits for host memory and is never refused for it (the owner's rule of
+    # 2026-10-12 22:45, through the supervisor): it runs at Prism's plan, and a cell that cannot run is a
+    # Prism / Tiling defect to be named by the run, not a matrix admission. The plan's host figure is still
+    # written in the row (`host_reserved`, the figure the plan stated; `host_peak_rss`, what the cell held)
+    # so the two can be compared; the ledger admission (`reserve_host`) stays for the timing and witness
+    # cells of other tools, which must not share a host. Before this rule the admission refused Wan2.1-T2V
+    # triton at 45 GiB on the Mac and held cards idle here behind 135 GiB reservations.
+    print(f"[matrix] {model} {mode}: runs at the plan, host figure {need >> 30} GiB ({need_from}), no admission",
+          flush=True)
+    with PeakRSS() as peak:
+        row = _run_cell(model, mode, gpu, out, timeout, src)
+    row.update(host_peak_rss=peak.peak, host_reserved=need, host_reserved_from=need_from)
+    return row
 
 
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
