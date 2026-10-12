@@ -35,6 +35,14 @@ where the rule lives, so a change there is a change to price here:
         or the non-block rest, and at most the shards its workers hold open at once — plus the tensors in flight: at most workers x (1 + uploads in flight)
         of them, the largest that many, as read, as converted and pinned. deepseek-moe-16b-chat on V100 (2026-10-10): RssFile 9.4 GB of an ~11 GB segment
         (16 GB card) and 14.7 GB of ~16.4 GB (32 GB card); the whole-component rule priced 61 670 MB;
+    compiled, onto a device the loader does not pin for (anything but cuda/hip: mps, xpu, cpu — the
+        loader's own `is_cuda` test): no pinned copy and nothing outlives the load. Per tensor, per
+        worker: read through `safe_open`, converted, `.to(device)`, dropped. A load holds its file pages
+        (as streamed, below: at most the shards its workers hold open) plus one tensor in flight per
+        worker, the largest that many, as read and as converted; the device copy is the device plan's.
+        The passes do not add up under eager. The Mac, 2026-10-12: PixArt-XL-2 (T5 stored fp32, 18 GB)
+        native priced 50 170 MB of host, 32 740 MB of it the CUDA rule's whole component read + pinned;
+        Sana native rows priced ~12 GB measured 2.6-2.8 GB of host peak;
     triton: one tensor at a time, as read and as converted (triton/weight_loader.py);
   resident — what the planning process already holds when Prism prices: the interpreter, the CLI and
     the parsed container (NBXContainer.load keeps every component's graph and profile, 1.5-4.8x their
@@ -143,13 +151,20 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
             if alloc is not None and widths and str(alloc.dtype) in dtype_bytes:
                 pinned = stored_bytes * dtype_bytes[str(alloc.dtype)] // min(widths)
             return stored_bytes + pinned
-        def _streams_through(name, loads):
+        def _pins(name):
+            # The loader's own test (core/io/weight_loader.py `_load_weight_file`: `is_cuda`).
+            return str(plan.components[name].device).startswith(("cuda", "hip"))
+        def _streams_through(name, loads, among=None):
+            # `among`: the keys the loader reads (a unified store's file-backed experts are never read).
             keys = key_sizes.get(name) or {}
+            if among is not None:
+                keys = {k: n for k, n in keys.items() if k in among}
             if not keys:
                 raise ValueError(f"ZERO FALLBACK: {name} is streamed and the weights index sizes none of its keys")
-            if load_workers < 1 or pinned_in_flight < 1:
-                raise ValueError(f"ZERO FALLBACK: {name} is streamed and no loader workers / uploads in flight "
-                                 f"were given ({load_workers}, {pinned_in_flight})")
+            pins = _pins(name)
+            if load_workers < 1 or (pins and pinned_in_flight < 1):
+                raise ValueError(f"ZERO FALLBACK: {name} is loaded per tensor and no loader workers / uploads in "
+                                 f"flight were given ({load_workers}, {pinned_in_flight})")
             named = set()
             sizes = []
             for load in loads:
@@ -162,17 +177,20 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 named.update(read)
                 sizes.append(sum(keys[k] for k in read))
             sizes.append(sum(n for k, n in keys.items() if k not in named))
-            # In flight across the workers: each holds the tensor it reads (as read, as converted) and at most
-            # `pinned_in_flight` uploads, so at most workers x (1 + in flight) distinct tensors — the largest
-            # that many, each as read, converted and pinned (a bound: one tensor is never all three at once).
+            # In flight across the workers: each holds the tensor it reads (as read, as converted) and, where the
+            # loader pins, at most `pinned_in_flight` uploads, so at most workers x (1 + in flight) distinct
+            # tensors — the largest that many, each as read, converted and pinned (a bound: one tensor is never
+            # all three at once). Where it does not pin, one tensor per worker, as read and as converted.
             alloc = plan.components.get(name)
             stored = set((stored_dtypes or {}).get(name) or ())
             converts = alloc is not None and bool(stored) and stored != {str(alloc.dtype)}
 
             def _cost(n):
-                pinned = _passes_through(name, n) - n
-                return n + pinned + (pinned if converts else 0)
-            in_flight = sorted(keys.values(), reverse=True)[:load_workers * (1 + pinned_in_flight)]
+                at_plan = _passes_through(name, n) - n
+                if not pins:
+                    return n + (at_plan if converts else 0)
+                return n + at_plan + (at_plan if converts else 0)
+            in_flight = sorted(keys.values(), reverse=True)[:load_workers * (1 + pinned_in_flight if pins else 1)]
             # The file pages a load maps: its stored bytes, and never more than the shards its workers hold
             # open at once (one each, `safe_open` per shard) — deepseek-moe on the 32 GB card: a 27.5 GB segment
             # read through 2 GB shards by 8 workers held 14.7 GB of RssFile.
@@ -189,10 +207,28 @@ def host_footprint(plan, key_sizes: Mapping[str, Mapping[str, int]],
                 raise ValueError(f"ZERO FALLBACK: {name}: {len(unsized)} file-backed expert weight(s) are absent "
                                  f"from the weights index (another key space?): {unsized[:3]}")
             return stored_bytes - sum(keys[k] for k in skipped)
-        passes = [_streams_through(name, (streamed_loads or {})[name]) if name in (streamed_loads or {})
-                  else _passes_through(name, _loaded(name, sum(sh.values())))
-                  for name, sh in shard_sizes.items() if sh]
-        transient = sum(passes) if plan.loading_mode == "eager" else max(passes, default=0)
+        def _whole(name):
+            # The non-streamed load reads the component in one pass: one load of every key not file-backed.
+            _loaded(name, 0)                       # refuses a file-backed key the index does not size
+            skipped = set((file_backed or {}).get(name) or ())
+            return set(key_sizes.get(name) or {}) - skipped
+        held, kept = [], []
+        for name, sh in shard_sizes.items():
+            if not sh:
+                continue
+            if name in (streamed_loads or {}):
+                held.append(_streams_through(name, streamed_loads[name]))
+            elif name in plan.components and not _pins(name):
+                read = _whole(name)
+                held.append(_streams_through(name, [read], among=read))
+            else:
+                kept.append(_passes_through(name, _loaded(name, sum(sh.values()))))
+        # What a pinning load leaves in the caching host allocator adds up under eager, beneath any later
+        # load; a per-tensor load gives everything back when it ends.
+        if plan.loading_mode == "eager":
+            transient = sum(kept) + max(held, default=0)
+        else:
+            transient = max(held + kept, default=0)
     else:
         transient = TRITON_COPIES_PER_TENSOR * max(
             (n for ks in key_sizes.values() for n in ks.values()), default=0)
