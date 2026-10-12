@@ -51,9 +51,8 @@ def test_a_container_without_a_latent_space_leaves_the_request_alone(tmp_path):
 
 
 def test_sana_video_is_priced_at_32():
-    if not (CACHE / "SANA-Video_2B_720p_diffusers").exists():
-        pytest.skip("SANA-Video_2B_720p_diffusers is not in this machine's cache")
-    assert PrismSolver._declared_vae_scale(_container(CACHE / "SANA-Video_2B_720p_diffusers")) == 32
+    from tests.conftest import installed_container
+    assert PrismSolver._declared_vae_scale(_container(installed_container("SANA-Video_2B_720p_diffusers"))) == 32
 
 
 def test_prism_and_the_runtime_agree_on_every_container_of_the_cache():

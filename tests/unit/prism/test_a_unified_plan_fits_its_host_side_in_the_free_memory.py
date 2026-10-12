@@ -18,10 +18,7 @@ READINGS = (10800, 11638, 12652)                         # the Mac's free readin
 
 def _plan(monkeypatch, model, free):
     pin_host(monkeypatch, 24576, free, "the Mac, 2026-10-03")
-    try:
-        c = NBXContainer.load(str(container_root(model)))
-    except Exception as e:                                # a machine without the container
-        pytest.skip(f"{model} not in this machine's cache: {e}")
+    c = NBXContainer.load(str(container_root(model)))     # absent: a skip that names it
     hw = CASES[model]
     return PrismSolver().solve_smart(c, profile(APPLE_M4_PRO), InputConfig(batch_size=1, height=hw, width=hw),
                                      mode="triton")

@@ -16,15 +16,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace as NS
 
-import pytest
+from tests.conftest import installed_container
 
 REPO = Path(__file__).resolve().parents[3]
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 MODEL = "TinyLlama-1.1B-Chat-v1.0"
 
 
-@pytest.mark.skipif(not (CACHE / MODEL).exists(), reason=f"{MODEL} is not in this catalogue")
 def test_a_streamed_plan_states_a_window_inside_its_rung():
+    installed_container(MODEL)
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
            "NBX_FORCE_STRATEGY": "layer_streaming", "NBX_PRISM_BUDGET_MB": "1024",
            "PYTHONPATH": str(REPO / "src"), "PYTHONNOUSERSITE": "1"}
