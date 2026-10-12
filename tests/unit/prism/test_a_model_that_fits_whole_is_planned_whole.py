@@ -72,8 +72,8 @@ def _plan(model: str, mode: str):
     from neurobrix.cli import create_parser
     from neurobrix.cli.commands.run import request_input_config
     flag = {"triton": "--triton", "triton_sequential": "--triton-sequential", "compiled": "--compiled"}[mode]
-    args = create_parser().parse_args(["run", "--model", model, *TR.derived_request(model), flag])
     c = NBXContainer.load(str(container_root(model)))
+    args = create_parser().parse_args(["run", "--model", model, *TR.derived_request(model), flag])
     man = c.get_manifest() or {}
     s = PrismSolver()
     return s.solve_smart(c, profile(APPLE_M4_PRO), request_input_config(args, man, man.get("family"), c.cache_path),

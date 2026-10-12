@@ -43,21 +43,17 @@ executor will allocate, and a base executor that holds nothing the segments alre
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 
 from neurobrix.core.prism.solver import _graph_constant_bytes
+from tests.conftest import installed_container
 
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 MODEL = "DeepSeek-Coder-V2-Lite-Instruct"
 
 
 def _graph(model: str = MODEL, component: str = "model"):
-    p = CACHE / model / "components" / component / "graph.json"
-    if not p.exists():
-        pytest.skip(f"{model}/{component} is not in this cache")
+    p = installed_container(model) / "components" / component / "graph.json"
     return json.loads(p.read_text())
 
 

@@ -36,8 +36,6 @@ Run: CUDA_VISIBLE_DEVICES= PYTHONPATH=src python -m pytest -q \
 from __future__ import annotations
 
 
-from pathlib import Path
-
 import pytest
 
 from neurobrix.core.prism.profiler import ActivationProfiler
@@ -103,9 +101,8 @@ def test_the_broadcast_chain_holds_its_source_until_the_shuffle():
 
 
 def test_the_sana_4k_decoder_is_priced_at_what_it_held():
-    cache = Path.home() / ".neurobrix" / ("ca" + "che") / "Sana_1600M_4Kpx_BF16"
-    if not (cache / "components" / "vae" / "graph.json").exists():
-        pytest.skip("Sana_1600M_4Kpx_BF16 is not in the shared cache")
+    from tests.conftest import installed_container
+    cache = installed_container("Sana_1600M_4Kpx_BF16")
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism.loader import load_profile
     from neurobrix.core.prism.profiler import InputConfig

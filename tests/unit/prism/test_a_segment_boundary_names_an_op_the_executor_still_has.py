@@ -36,30 +36,24 @@ one defect for another.
 from __future__ import annotations
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 
 from neurobrix.core.optim.passes.normalize import boundaries_present, normalize_for_branch
 from neurobrix.core.prism.layer_partition import LayerPartitioner
+from tests.conftest import installed_container
 
-CACHE = Path(os.path.expanduser("~/.neurobrix/ca" + "che"))
 MOE_MODEL = "DeepSeek-Coder-V2-Lite-Instruct"
 SEGMENT_BUDGET = 10112 * 1024 * 1024      # the real segment budget the rung produced
 
 
 def _graph(model: str, component: str = "model"):
-    p = CACHE / model / "components" / component / "graph.json"
-    if not p.exists():
-        pytest.skip(f"{model}/{component} is not in this cache")
+    p = installed_container(model) / "components" / component / "graph.json"
     return json.loads(p.read_text())
 
 
 def _family(model: str) -> str:
-    p = CACHE / model / "manifest.json"
-    if not p.exists():
-        pytest.skip(f"{model} has no manifest")
+    p = installed_container(model) / "manifest.json"
     # The family is in the MANIFEST, not the topology — reading the wrong one returns "",
     # which silently SKIPS the MoE fusion and makes the whole pass look inert.
     return str(json.loads(p.read_text()).get("family") or "")

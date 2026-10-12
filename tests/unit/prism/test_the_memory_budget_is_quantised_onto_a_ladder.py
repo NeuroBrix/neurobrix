@@ -33,13 +33,12 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.paths import cache_dir
 from neurobrix.core.prism.solver import (
     ComponentMemory, PrismSolver, memory_ladder_rung_mb,
 )
+from tests.conftest import installed_container
 
 MB = 1024 * 1024
-CACHE = cache_dir()
 MODEL = "real-esrgan-x8"
 
 
@@ -49,15 +48,14 @@ class _Container:
 
 
 def _spec(budget_mb):
-    if not (CACHE / MODEL).exists():
-        pytest.skip(f"{MODEL} is not in this machine's cache")
+    root = installed_container(MODEL)
     s = PrismSolver.__new__(PrismSolver)
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
     mem = ComponentMemory("model", 32 * MB, 16384 * MB, 821 * MB)
     # the tile derives from the RUNG (Hocine's tiling standard): a reading is rounded first
     return s._spatial_component_tiling(
-        _Container(CACHE / MODEL), "model", mem, memory_ladder_rung_mb(budget_mb))
+        _Container(root), "model", mem, memory_ladder_rung_mb(budget_mb))
 
 
 def test_the_ladder_rounds_free_down_and_never_up():

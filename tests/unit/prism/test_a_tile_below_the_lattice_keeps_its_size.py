@@ -13,11 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from neurobrix.core.paths import cache_dir
 from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
+from tests.conftest import installed_container
 
 MB = 1024 * 1024
-CACHE = cache_dir()
 MODEL = "CogVideoX-2b"
 
 
@@ -27,14 +26,13 @@ class _Container:
 
 
 def _spec(monkeypatch, lattice):
-    if not (CACHE / MODEL).exists():
-        pytest.skip(f"{MODEL} is not in this machine's cache")
+    root = installed_container(MODEL)
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: lattice))
     s = PrismSolver.__new__(PrismSolver)
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=2, height=352, width=720, num_frames=49, vae_scale=8)
     mem = ComponentMemory("vae", 471 * MB, 121275 * MB, 6087 * MB)       # the live plan's own figures
-    return s._spatial_component_tiling(_Container(CACHE / MODEL), "vae", mem, 12288)
+    return s._spatial_component_tiling(_Container(root), "vae", mem, 12288)
 
 
 def test_the_live_case_tiles_on_the_card(monkeypatch):

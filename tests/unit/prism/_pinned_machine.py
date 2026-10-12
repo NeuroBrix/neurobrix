@@ -8,9 +8,11 @@ of these gates found three things on the rack and silently needed them everywher
   door, `neurobrix.core.paths.cache_dir()` — `NEUROBRIX_CACHE`, then `~/.neurobrix/paths.json`,
   then the default — and on the Mac the models live on the mount that door names, not at the
   literal. Every cell skipped there, in silence;
-* a MISSING container answered with `pytest.skip`, so a machine without the model reported a
-  gate that proved nothing as a gate that did not fail. Here it FAILS, naming the path and who
-  configured it: a gate that cannot run its scenario has not passed;
+* a MISSING container answered with an anonymous `pytest.skip`, or (2026-09-24 to 2026-10-12) with a
+  FAIL — which on the M4 made 140 failures + 14 errors of containers that were simply not installed,
+  and a real red drowned in them. It is now `tests.conftest.installed_container`, the suite's one
+  answer: a skip that NAMES the container and the path the engine's door resolved, so the absence
+  is read in the summary and never counted as a pass or as a defect;
 * HARDWARE PROFILES read by id from `config/hardware/default-*.yml`, which are generated per
   machine and gitignored. The rack's `default-ff6008b7` does not exist on the Mac, and neither
   profile exists on a third machine. Here each profile is written from the values it had when
@@ -18,7 +20,7 @@ of these gates found three things on the rack and silently needed them everywher
   machine it plans for (vacuous-gates register 102).
 
 What remains the machine's own: the containers themselves. A gate about a real container's
-graph cannot be built without it; it must say so loudly when it is absent.
+graph cannot be built without it; it says so BY NAME when it is absent.
 """
 from __future__ import annotations
 
@@ -31,24 +33,16 @@ import yaml
 import neurobrix.core.host_memory as host_memory
 import neurobrix.core.prism.loader as profile_loader
 import neurobrix.core.prism.solver as solver_mod
-from neurobrix.core import paths
 from neurobrix.core.host_memory import MemoryState
 from neurobrix.core.prism.memory_budget import DeviceReading
+from tests.conftest import installed_container
 
 
 # ─────────────────────────────── the containers ───────────────────────────────
 
 def container_root(model: str) -> Path:
-    """The container's directory in the cache the ENGINE resolves; a failure when absent."""
-    root = paths.cache_dir() / model
-    if not (root / "components").is_dir():
-        said_by = paths.describe().get("cache", {}).get("said_by", "?")
-        pytest.fail(
-            f"{model} is not in this machine's cache ({paths.cache_dir()}, said by {said_by}). "
-            f"This gate plans that container and cannot run without it — point NEUROBRIX_CACHE "
-            f"or ~/.neurobrix/paths.json at a cache that holds it. A skip here would report a gate "
-            f"that proved nothing as one that did not fail.", pytrace=False)
-    return root
+    """The container's directory in the cache the ENGINE resolves; a named skip when absent."""
+    return installed_container(model)
 
 
 # ─────────────────────────────── the profiles ───────────────────────────────

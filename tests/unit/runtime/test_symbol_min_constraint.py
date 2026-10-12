@@ -137,10 +137,8 @@ def test_the_real_vace_table_refuses_the_extent_that_failed():
     from neurobrix.core.runtime.shape_resolver import (
         ShapeResolutionError, SymbolicShapeResolver)
 
-    g = os.path.expanduser("~/.neurobrix/cache/Wan2.1-VACE-1.3B"
-                           "/components/vae_encoder/graph.json")
-    if not os.path.exists(g):
-        pytest.skip("Wan2.1-VACE-1.3B container not extracted here")
+    from tests.conftest import installed_container
+    g = installed_container("Wan2.1-VACE-1.3B") / "components" / "vae_encoder" / "graph.json"
 
     ctx = json.load(open(g)).get("symbolic_context") or {}
     symbols = ctx.get("symbols") or {}
