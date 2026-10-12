@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from neurobrix.core.prism import InputConfig, PrismSolver
+from neurobrix.core.prism.solver import _graph_constant_bytes
 from neurobrix.nbx import NBXContainer
 from tests.unit.prism._pinned_machine import (APPLE_M4_PRO, V100_16GB, container_root, no_door,
                                               pin_host, pin_shared_card, profile)
@@ -57,7 +58,7 @@ def _solve(monkeypatch, model, serve):
 
 def _judge_expert_store(p, s, seen, c, model, dev):
     """A routed LM held as an expert store on the unified device (`_place_component` Strategy 2.5):
-    its dense part and its expert cache as granted, at least its profiled activations (without the
+    its dense part and its expert cache as granted, its graph constants, at least its profiled activations (without the
     KV estimate the check sizes itself) and its overhead, every other component whole, the cache as
     planned — within the usable part of the rung the store was placed against. A lower bound on what
     the plan holds, read from the plan and the component memory, never from the solver's own sums."""
@@ -68,7 +69,9 @@ def _judge_expert_store(p, s, seen, c, model, dev):
     store = (m.activation_bytes - kv_est + m.overhead_bytes
              + (a.resident_weight_mb + a.expert_cache_mb) * MB)
     beside = sum(q.total_bytes for n, q in seen.items() if n != lm)
-    held = (store + beside + p.kv_cache_plan.memory_bytes) / MB
+    consts = _graph_constant_bytes(next(x.graph for x in c.get_neural_components() if x.name == lm),
+                                   s._constants_store_fp64(dev))
+    held = (store + beside + consts + p.kv_cache_plan.memory_bytes) / MB
     assert a.expert_cache_mb > 0 and a.resident_weight_mb > 0, (a.resident_weight_mb, a.expert_cache_mb)
     assert held <= s._usable_mb(dev) + 1e-6, (
         f"{model}: dense {a.resident_weight_mb:.1f} + expert cache {a.expert_cache_mb:.1f} + activations, "
