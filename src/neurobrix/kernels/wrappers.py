@@ -8281,14 +8281,15 @@ def _flash_m8n8k4(q, k, v, bias, softmax_scale, gqa_groups, tile, has_bias, spli
     "split" representation, `launch_keys.unit_flash`), `tile` then a `matrix_unit.fp32_split.flash` row whose
     `block_k` head-dim columns the unit sums before each round-to-nearest add."""
     from .ops.flash_attention_m8n8k4 import flash_attention_m8n8k4_kernel, flash_layouts, head_parts
+    from .ops.mma_m8n8k4 import UNIT
     from neurobrix.triton.dtype import matrix_unit_split_scale
     batch, nheads, seqlen_q, headdim = q.shape
     seqlen_k = k.shape[2]
     MB, NS = tile["block_m"] // 16, tile["block_n"] // 16
     DA, DB = head_parts(headdim)
     hi_exp, lo_shift = matrix_unit_split_scale(_matrix_unit())
-    ksa = min(tile["block_k"], DA) // 4 if split else 1
-    ksb = min(tile["block_k"], DB) // 4 if split and DB else 1
+    ksa = min(tile["block_k"], DA) // UNIT["k"] if split else 1       # instructions per round-to-nearest add
+    ksb = min(tile["block_k"], DB) // UNIT["k"] if split and DB else 1
     o = NBXTensor.empty_like(q)
     seqlen_q_rounded = math.ceil(seqlen_q / (16 * MB)) * 16 * MB
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
