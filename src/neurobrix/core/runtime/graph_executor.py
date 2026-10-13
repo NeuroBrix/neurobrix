@@ -553,7 +553,24 @@ class GraphExecutor:
         self._moe_norm_topk_prob = norm_topk_prob
 
         from .graph.moe_fusion import detect_and_fuse_moe, unfused_routers
-        if self._dag and unfused_routers(self._dag):
+        src = self._component_from
+        if src is not None:
+            # A PIECE is a slice of its component's graph, fused and verified WHOLE under this
+            # declaration (the plan cut the fused graph: layer_streaming._graph_prism_cut). Its
+            # routers are judged on that whole graph, never on the slice: a multi-gate layer keeps
+            # its gates in the graph and binds them to its fused op by `gate_group`, and a seam may
+            # fall between the two — Ming-Lite-Omni-1.5's three modality gates per layer (36 ops
+            # before their fused op) sat in piece 0 with their block in piece 1, 16 GB, both
+            # engines, 2026-10-13: the piece re-ran the declared pass on its slice and refused
+            # "no matcher recognised an expert block behind it". A piece takes the flag; the
+            # component's own declaration has fused and refused before any piece runs.
+            left = unfused_routers(getattr(src, "_dag", None) or {})
+            if left:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: [MoE Fusion] the component this piece was cut from holds "
+                    f"{len(left)} unfused router(s) ({', '.join(left[:3])}) under a MoE declaration "
+                    f"— its own declaration must fuse or refuse them before a piece takes it.")
+        elif self._dag and unfused_routers(self._dag):
             def _n_fused():
                 return sum(1 for op in self._dag.get("ops", {}).values()
                            if op.get("op_type") == "custom::moe_fused")
