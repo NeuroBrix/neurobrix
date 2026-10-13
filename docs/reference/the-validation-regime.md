@@ -10,6 +10,9 @@ batch took a day. From the next batch:
    Prism LISTS, without executing anything, the models whose 16 GB plan differs from the 32 GB plan
    (strategy or streaming); only those get a 16 GB run, and only when the batch touches Prism, the
    streaming strategies or the tiling. One full 16 GB pass before the stable release, once.
+   **Precision (2026-10-13 18:05):** a model validates ONCE per distinct Prism plan, not per card class; two cards that
+   give the same plan make one run. The listing of plans is Prism's, computed without executing (the explained plan under
+   each saved profile), and the scheduler places a plan-identical cell on any card, the row naming the card it ran on.
 2. **A gate run lasts at most 10 minutes.** A gate proves rc 0, zero certified miss and the agreement of
    the arms — not quality. A video or image model's gate request is the smallest that exercises the
    path: the steps, the frames, the resolution at the model's floor. Quality is judged at the real
