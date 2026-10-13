@@ -331,6 +331,28 @@ class RuntimeExecutor:
                         "Install torch with MKL for 2-4x faster CPU inference."
                     )
 
+    def _arm_random_streams(self, inputs: Dict[str, Any], merged_defaults: Dict[str, Any]) -> None:
+        """Arm the run's random streams, once per request, in EVERY mode.
+
+        The shared run stream (`kernels/rng_stream`, torch-free) carries the request's seed
+        (`global.seed`, else the container's default) for both engines: THE ONE DRAW (owner
+        2026-10-13) — every seeded `init: randn` variable is the vendor's CPU draw from it,
+        the same bytes in the compiled and the Triton branch — and, in the Triton branch,
+        every draw the graph makes (a sampler's multinomial, a scheduler's noise, a vocoder's
+        random phase: `aten.rand` inside Kokoro's decoder was the one that escaped when only
+        two flows armed it). Armed for the Triton branch only, the compiled branch's seeded
+        run found the stream inactive and drew its initial noise unseeded (Wan2.1-I2V native,
+        2026-10-13 12:09: the Triton arm on the vendor's draw bit for bit, the native arm on
+        an uncorrelated one). The ATen branch's graph-level random ops keep drawing from the
+        run's sampling generator (graph/run_generator), the stream the scheduler noise comes
+        from, never from a second stream on the same seed. A seedless request keeps the
+        unseeded draw in each engine, as before."""
+        from neurobrix.kernels import rng_stream
+        rng_stream.set_run_seed(self.run_seed(inputs, merged_defaults))
+        if self.mode not in ("triton", "triton_sequential"):
+            from neurobrix.core.runtime.graph import run_generator
+            run_generator.arm(self.variable_resolver.sampling_generator)
+
     @staticmethod
     def run_seed(inputs: Dict[str, Any], merged_defaults: Dict[str, Any]):
         """The seed a request runs under: the request's `global.seed` when it
@@ -408,31 +430,7 @@ class RuntimeExecutor:
             binned_request=self._binned_request,
         )
 
-        # The Triton engine's random stream is armed here, once per request,
-        # for EVERY flow: the request's seed (`global.seed`, else the
-        # container's default) drives every draw the graph makes — a
-        # sampler's multinomial, a scheduler's noise, a vocoder's random
-        # phase (`aten.rand` inside Kokoro's decoder was the one that
-        # escaped: only two flows armed the stream themselves, so a tts
-        # request drew from Python's unseeded `random` and two runs at the
-        # same seed differed). R30 mirror of the ATen branch's
-        # `torch.manual_seed` at the CLI. A seedless request keeps the
-        # unseeded fallback, as before.
-        if self.mode in ("triton", "triton_sequential"):
-            from neurobrix.kernels import rng_stream
-            rng_stream.set_run_seed(self.run_seed(inputs, merged_defaults))
-            # The kernel sweep is never run inside a request: the model's
-            # certified autotune directory (an engine component) serves every
-            # shape it holds for the profile in force; a shape it lacks sweeps
-            # at runtime, announced, and lands in the local replay cache.
-        else:
-            # The ATen branch's mirror: the graph's own random ops (a traced
-            # posterior sample, a vocoder's phase) draw from the run's
-            # sampling generator — the one the initial and scheduler noise
-            # come from — never from a second stream on the same seed
-            # (graph/run_generator).
-            from neurobrix.core.runtime.graph import run_generator
-            run_generator.arm(self.variable_resolver.sampling_generator)
+        self._arm_random_streams(inputs, merged_defaults)
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         try:

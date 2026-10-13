@@ -147,7 +147,21 @@ class VariableResolver:
                 arr = np.load(fixed)
                 if tuple(arr.shape) == tuple(shape):
                     return NBXTensor.from_numpy(np.ascontiguousarray(arr)).to(dt)
-            _t = W.randn_wrapper(list(shape), dtype=dt, device=dev)
+            # THE ONE DRAW (owner 2026-10-13): the seeded run's initial noise is the shared run stream's
+            # draw (`kernels/rng_stream.init_draw`, the vendor's CPU draw), the same bytes as the compiled
+            # branch; the house randn kernel serves a seedless run and the hot loop's own draws.
+            from neurobrix.kernels import rng_stream as _rng
+            if _rng.active():
+                # from_numpy lands on the process's card (the Triton branch's one device); the dtype
+                # follows the variable's declared one.
+                _t = NBXTensor.from_numpy(np.ascontiguousarray(_rng.init_draw(shape))).to(dt)
+            elif self.defaults.get("seed") is not None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: '{name}' is a seeded run's initial draw (seed {self.defaults.get('seed')}) "
+                    "and the run stream is not armed — the executor arms it for every mode before any "
+                    "variable resolves (one draw for both engines).")
+            else:
+                _t = W.randn_wrapper(list(shape), dtype=dt, device=dev)
             _dump_init_latent(name, _t.numpy)
             return _t
         if init_type == "uniform":
@@ -386,13 +400,17 @@ class VariableResolver:
                         _ft = torch.load(_fl, map_location=self.device, weights_only=True)
                     if tuple(_ft.shape) == tuple(shape_tuple):
                         return _ft.to(dtype=dtype, device=self.device)
-                # Gaussian noise from the run-scoped sampling stream (vendor
-                # semantics: ONE seeded generator drives init + every later
-                # stochastic scheduler draw, in consumption order).
-                generator = self.sampling_generator()
-                if generator is not None:
-                    _t = torch.randn(shape_tuple, dtype=dtype, device=self.device,
-                                     generator=generator)
+                # THE ONE DRAW (owner 2026-10-13): a seeded run draws its initial noise from the shared
+                # run stream — the vendor's CPU draw, torch-free, the same bytes the Triton branch
+                # draws (`kernels/rng_stream.init_draw`); a seedless run keeps torch's unseeded draw.
+                from neurobrix.kernels import rng_stream as _rng
+                if _rng.active():
+                    _t = torch.from_numpy(_rng.init_draw(shape_tuple)).to(device=self.device, dtype=dtype)
+                elif self.defaults.get("seed") is not None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: '{name}' is a seeded run's initial draw (seed "
+                        f"{self.defaults.get('seed')}) and the run stream is not armed — the executor arms "
+                        "it for every mode before any variable resolves (one draw for both engines).")
                 else:
                     _t = torch.randn(shape_tuple, dtype=dtype, device=self.device)
                 _dump_init_latent(
