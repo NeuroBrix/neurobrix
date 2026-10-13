@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One initial draw for both engines, the vendor's.** A seeded run draws its initial noise (every
+  `init: randn` state variable) from one shared, torch-free generator that reproduces the vendor's
+  CPU draw — MT19937 seeded as `torch.Generator("cpu").manual_seed(seed)`, ATen's Box-Muller
+  blocks — so the compiled and the Triton branch start from the same bytes and the vendor's
+  pipeline from the same values within 4 ulp (measured: 98.8 % within 1 ulp). Before, each branch
+  drew with its own algorithm and a model could render on one branch's draw and not on the
+  other's at the same seed. A seedless run draws unseeded in each engine, as before.
+
 ### Fixed
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
