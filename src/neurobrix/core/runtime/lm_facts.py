@@ -72,6 +72,14 @@ def decode_lm_component(topology: Mapping[str, Any], component_names: Iterable[s
             src = (st.get("diffusion") or {}).get("condition_from")
             if src:
                 return src
+    # A flow that names its decoder outright (the VLM flow's `lm_component`: the thinker of an omni
+    # model, the language model of a VLM) — the KV-cached decoder is that component. Without it the
+    # plan charged Qwen3-Omni-30B's KV cache to no component and the expert store's grant took its
+    # room (32g triton, 2026-10-13).
+    for section in ("vlm", "multimodal", "audio_llm"):
+        named = (flow.get(section) or {}).get("lm_component")
+        if named and named in set(component_names):
+            return named
     return None
 
 
