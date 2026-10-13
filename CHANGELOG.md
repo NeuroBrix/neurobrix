@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A streamed piece takes its component's MoE declaration without re-fusing its slice** (`GraphExecutor.set_moe_config`): a piece's routers are judged on the component's whole fused graph, never on the slice, so a seam between a multi-gate layer's gates and its fused op no longer refuses the piece (Ming-Lite-Omni-1.5, 16 GB, both engines, 2026-10-13: three modality gates per layer kept in the graph by `gate_group`, their block in the next piece). A piece whose component still holds an unfused router is refused by name.
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
   LM of a flow that names it outright (a VLM's `lm_component`, an omni model's thinker) is now

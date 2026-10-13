@@ -21,24 +21,17 @@
 # stale: remove the entry). Gates are per machine AND per memory class (a certified entry serves only the class it was proven on):
 # one file per class, known-cause-reds.<class>.yml, named by that class's gate; the Mac keeps its own.
 reds:
-  - model: Allegro-TI2V
-    mode: triton
-    source_gate: /home/mlops/nbx/campaigns/2026_10_09_mq23/gate/matrix_16g
-    date: '2026-10-09T14:48:16Z'
-    engine: 8b139631
-    cause: "Triton step cost on Volta: >25 min/step vs native 8.6 at 720x1280 (mq24 2026-10-11); 6800 s cap since mq22; one-step profile owed"
-    red_cells: "Allegro-TI2V | engine cost"
   - model: Ming-Lite-Omni-1.5
     mode: native
     source_gate: /home/mlops/nbx/campaigns/2026_10_12_mq25_gate/landing/matrix_16g
     date: '2026-10-13T08:53:55Z'
     engine: 7a5fab71
-    cause: "container defect exposed by door 89717071 (moe-piece-declaration, Mac 2026-10-12) on the 16 GB plan: the MoE declaration reaches the language model's executor and the fusion matcher refuses 3 routers it cannot match (ZERO FALLBACK: [MoE Fusion] 3 router(s) of a declared MoE left unfused, aten.topk::6/7/8 native, ::27/28/29 triton — Ming's moe_infer unroll, 46 views, the Forge rule owed since 2026-10-11); the 32 GB plan runs resident and both modes are green there (landing 7a5fab71, 10:36/10:46). Fix: the Forge MoE fixed-point rule + Ming's retrace"
-    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, MoE declaration door"
+    cause: "engine defect, layer_streaming x multi-gate MoE fusion: Ming's language model keeps 3 modality gates (aten::topk) per layer in the fused graph, bound to the layer's custom::moe_fused op by gate_group, 36 ops before it; the 16 GB plan cut piece 0 between a layer's gates and its fused op (native layer 2, aten.topk::6/7/8; triton layer 9, aten.topk::27/28/29); the piece took the component's declaration (door 89717071), re-ran the declared fusion pass on its slice and refused 'no matcher recognised an expert block behind it' - the block is in piece 1. The whole graph fuses 28/28 layers (CPU, 2026-10-13 11:5x; the 32 GB cells are green). Fix: GraphExecutor.set_moe_config judges a piece's routers on its component's graph (branch a-piece-takes-its-components-fusion)"
+    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, a seam between a layer's gates and its fused op"
   - model: Ming-Lite-Omni-1.5
     mode: triton
     source_gate: /home/mlops/nbx/campaigns/2026_10_12_mq25_gate/landing/matrix_16g
     date: '2026-10-13T08:56:36Z'
     engine: 7a5fab71
-    cause: "container defect exposed by door 89717071 (moe-piece-declaration, Mac 2026-10-12) on the 16 GB plan: the MoE declaration reaches the language model's executor and the fusion matcher refuses 3 routers it cannot match (ZERO FALLBACK: [MoE Fusion] 3 router(s) of a declared MoE left unfused, aten.topk::6/7/8 native, ::27/28/29 triton — Ming's moe_infer unroll, 46 views, the Forge rule owed since 2026-10-11); the 32 GB plan runs resident and both modes are green there (landing 7a5fab71, 10:36/10:46). Fix: the Forge MoE fixed-point rule + Ming's retrace"
-    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, MoE declaration door"
+    cause: "engine defect, layer_streaming x multi-gate MoE fusion: Ming's language model keeps 3 modality gates (aten::topk) per layer in the fused graph, bound to the layer's custom::moe_fused op by gate_group, 36 ops before it; the 16 GB plan cut piece 0 between a layer's gates and its fused op (native layer 2, aten.topk::6/7/8; triton layer 9, aten.topk::27/28/29); the piece took the component's declaration (door 89717071), re-ran the declared fusion pass on its slice and refused 'no matcher recognised an expert block behind it' - the block is in piece 1. The whole graph fuses 28/28 layers (CPU, 2026-10-13 11:5x; the 32 GB cells are green). Fix: GraphExecutor.set_moe_config judges a piece's routers on its component's graph (branch a-piece-takes-its-components-fusion)"
+    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, a seam between a layer's gates and its fused op"
