@@ -10,7 +10,10 @@ draw).
 What this test does if the code is wrong: the bytes cell fails when the two resolvers' `randn`
 allocations differ for one seed (red before this change: two generators, two algorithms); the
 order cell fails if a second `init: randn` variable does not continue the same stream; the seedless
-cell fails if an unseeded run were made to raise instead of drawing unseeded in each engine.
+cell fails if an unseeded run were made to raise instead of drawing unseeded in each engine; the arming
+cell fails if the executor arms the shared stream for one engine only (red before 2026-10-13 12:1x: armed
+for the Triton branch alone, Wan2.1-I2V native drew unseeded while the Triton arm drew the vendor's
+bytes); the door cell fails if a seeded resolver with no armed stream draws unseeded in silence.
 
 Run: python -m pytest tests/unit/runtime/test_the_two_engines_draw_the_same_initial_noise.py
 """
@@ -72,3 +75,25 @@ def test_a_seedless_run_still_draws_in_each_engine():
     assert a.shape == (1, 4, 6, 8) and abs(float(a.std()) - 1.0) < 0.3
     with pytest.raises(RuntimeError, match="no seed"):
         rng_stream.init_draw((2, 2))
+
+
+@pytest.mark.parametrize("mode", ["compiled", "triton", "triton_sequential"])
+def test_the_executor_arms_the_shared_stream_for_every_engine(mode):
+    from neurobrix.core.runtime.executor import RuntimeExecutor
+    rng_stream.set_run_seed(None)
+    ex = RuntimeExecutor.__new__(RuntimeExecutor)
+    ex.mode = mode
+    ex.variable_resolver = _resolver(mode)
+    ex._arm_random_streams({"global.seed": 42}, {"seed": 7})
+    try:
+        assert rng_stream.active(), f"{mode}: the run stream is not armed"
+        assert np.array_equal(rng_stream.init_draw((2, 3)), mt_randn(42, (2, 3)))
+    finally:
+        rng_stream.set_run_seed(None)
+
+
+@pytest.mark.parametrize("mode", ["compiled", "triton"])
+def test_a_seeded_resolver_with_no_armed_stream_is_refused(mode):
+    rng_stream.set_run_seed(None)
+    with pytest.raises(RuntimeError, match="run stream is not armed"):
+        _resolver(mode)._resolve_single("global.latents", SPEC)
