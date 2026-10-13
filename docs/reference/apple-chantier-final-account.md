@@ -1,6 +1,6 @@
 # The Apple / Metal chantier — final account
 
-**2026-09-22 into 2026-09-23. Merged to main at `df8a4842`, both remotes.**
+**2026-09-22 into 2026-09-23. Merged to main at `a18df538`, both remotes.**
 
 ## What was asked, and where it stands
 
@@ -28,13 +28,13 @@ capability, 1 a Metal driver fix.
 
 | | |
 |---|---|
-| `a054ef6c` | the between-key pool drain resolved to `None` and never ran — on BOTH machines, for every certification either had ever run |
-| `393570c6` | `depthwise_conv2d` returned wrong numbers in bf16 with padding; the stencil multiplied in the operands' own dtype for every type except fp16 |
-| `17c96d16` | `__main__` discarded `main()`'s return, so no command could report failure by its exit status |
-| `bc541cb9` | the census recorded `" ".join(argv)`; a multi-word `--prompt` could not be replayed, and three verification cells had never run |
-| `263fbb4a` | `mm`/`addmm` band above 2^31 output elements, fixing a silent wrong answer (rows past `2**31 // N` came back zeros): deviation **1.0 -> 5.39e-07** |
-| `6dabcb36` | a shape over the screening budget is screened on named ROW WINDOWS instead of seated unverified |
-| `8485d9fb` | the divergence refusal divided by a tolerance that may legitimately be zero |
+| `c975971f` | the between-key pool drain resolved to `None` and never ran — on BOTH machines, for every certification either had ever run |
+| `1b869c9b` | `depthwise_conv2d` returned wrong numbers in bf16 with padding; the stencil multiplied in the operands' own dtype for every type except fp16 |
+| `230a0f7a` | `__main__` discarded `main()`'s return, so no command could report failure by its exit status |
+| `91dd933c` | the census recorded `" ".join(argv)`; a multi-word `--prompt` could not be replayed, and three verification cells had never run |
+| `104050a8` | `mm`/`addmm` band above 2^31 output elements, fixing a silent wrong answer (rows past `2**31 // N` came back zeros): deviation **1.0 -> 5.39e-07** |
+| `79ed7983` | a shape over the screening budget is screened on named ROW WINDOWS instead of seated unverified |
+| `d159853e` | the divergence refusal divided by a tolerance that may legitimately be zero |
 
 ## The one key not certified
 

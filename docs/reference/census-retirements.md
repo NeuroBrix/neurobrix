@@ -2,7 +2,7 @@
 
 Keys removed from a machine's replay-cache census because the certifier declared them UNREACHABLE — recorded by an older engine whose wrappers computed the key differently. One dated paragraph per retirement; append, never edit. Tool: `tools/census_retire_unreachable.py`.
 
-## 2026-09-13 01:07 UTC — 183 keys retired, engine `17a05e0`
+## 2026-09-13 01:07 UTC — 183 keys retired, engine `cae452d`
 
 Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a different key for inputs synthesised from the census key) in: `certify_baddbmm.log`, `certify_matmul.log`, `certify_addmm_conv.log`.
 
@@ -14,7 +14,7 @@ Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a differ
 
 Census 7314 → 7131 keys. Reversible record: `/home/mlops/nbx/campaigns/2026_09_12_night_catalogue/census_retired_20260913_010727.json`; backup: `autotune_configs_cuda-70.json.bak.20260913_010727`.
 
-## 2026-09-13 01:23 UTC — 2 keys retired, engine `06004e2`
+## 2026-09-13 01:23 UTC — 2 keys retired, engine `e864df3`
 
 Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a different key for inputs synthesised from the census key) or FAILED (inputs that cannot be synthesised) in: `certify_resume_card0.log`.
 
@@ -24,7 +24,7 @@ Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a differ
 
 Census 7131 → 7129 keys. Reversible record: `/home/mlops/nbx/campaigns/2026_09_12_night_catalogue/census_retired_20260913_012345.json`; backup: `autotune_configs_cuda-70.json.bak.20260913_012345`.
 
-## 2026-10-07 17:30 UTC — 2936 certified entries retired, engine `bdb7027c`
+## 2026-10-07 17:30 UTC — 2936 certified entries retired, engine `1e334be4`
 
 Not named by the census table `src/neurobrix/config/census/apple/apple_m4_pro/18g.jsonl` (6178 keys): certificates for shapes no catalogue container forms. Directory `src/neurobrix/config/autotune/apple/apple_m4_pro`: 8113 → 5177 entries (held: `baddbmm_kernel`, rows known wrong, not judged). Reversible record: `/Users/hocine/Workspace/nbx-atelier/campagnes/2026_09_22_apple/results/certify_derived_2026_10_07/retired/certified_retired_20261007_173028.json`.
 
@@ -2980,7 +2980,7 @@ Not named by the census table `src/neurobrix/config/census/apple/apple_m4_pro/18
 
 </details>
 
-## 2026-10-07 22:12 UTC — 680 certified entries retired, engine `38ec572d`
+## 2026-10-07 22:12 UTC — 680 certified entries retired, engine `107571af`
 
 Not named by the census table `src/neurobrix/config/census/apple/apple_m4_pro/18g.jsonl` (6179 keys): certificates for shapes no catalogue container forms. Directory `src/neurobrix/config/autotune/apple/apple_m4_pro`: 6818 → 6138 entries. Reversible record: `/Users/hocine/Workspace/nbx-atelier/campagnes/2026_09_22_apple/results/certify_baddbmm_2026_10_08/retired/certified_retired_20261007_221201.json`.
 

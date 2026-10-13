@@ -5,7 +5,7 @@ this file** — the other machine is mid-workstream, and this list exists so tha
 the merge happens it is an arbitration and not a discovery.
 
 **State**: `origin/metal-first-light` is **105 commits ahead** of `main` and **20
-behind**, from a merge base at `d5b64d6` (2026-09-11). It is the largest structural
+behind**, from a merge base at `fa1b5a6` (2026-09-11). It is the largest structural
 debt in the project: the trunk — the thing a user installs, and the thing this
 machine certifies — carries none of it.
 
@@ -88,18 +88,18 @@ re-reading the argument.
 None conflicts textually; each needs one read.
 
 * **`autotune_certify.py`** — the trunk added the clock door
-  (`rig_protocol_refusal`, `4043d39`) and the unreachable-key classification
-  (`392b663`); the Mac added +98 lines of its own. **Read for: does the Mac's
+  (`rig_protocol_refusal`, `3834305`) and the unreachable-key classification
+  (`c8f8ff5`); the Mac added +98 lines of its own. **Read for: does the Mac's
   work also touch `certify()`'s entry or its failure accounting?** Two entry
   conditions written independently will both be present and neither will know
   about the other.
 * **`precision_zoo_campaign.py`** — the trunk rewrote `cell_cost_estimate`
   (`arms`, `narrowest`, ended-vs-killed arms) and added `flightrec_refusal`
-  (`f29ff39`, `392b663`). **Read for: whether the Mac's +17 touch the same
+  (`7dc38d7`, `c8f8ff5`). **Read for: whether the Mac's +17 touch the same
   estimate**, because a cost function that two machines changed for two reasons
   is the kind of thing that merges cleanly and then reports a number neither
   machine intended.
-* **`executor.py`** — the trunk added the VAE-scale declaration read (`f0e573b`,
+* **`executor.py`** — the trunk added the VAE-scale declaration read (`034d9d3`,
   which changes no model's behaviour today). The Mac's +58 are unread here.
 * **`test_autotune_certified_directory.py`** — both added tests. Additive by
   nature; verify both suites run green together rather than assuming it.
@@ -108,7 +108,7 @@ None conflicts textually; each needs one read.
 
 From the owner's own account, and not yet verified line by line on this machine:
 
-* the CUDA fault channel — `f769f2e`. **Its proof is returned**; see
+* the CUDA fault channel — `bb68493`. **Its proof is returned**; see
   `docs/reference/owed-proofs.md`, one item outstanding (gate the buffer on a
   non-zero code).
 * the Prism fix that plans against what the machine actually has;

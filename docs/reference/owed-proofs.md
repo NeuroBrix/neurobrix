@@ -11,7 +11,7 @@ NEGATIVE stays here with its result — that is the most valuable kind.**
 
 ---
 
-## 1 — `f769f2e`, the second fault channel: CUDA proof owed to the Dell
+## 1 — `bb68493`, the second fault channel: CUDA proof owed to the Dell
 
 * **owed by** the Mac's agent · **returned by** the Dell, 2026-09-12
 * **the commit** is on `metal-first-light`, origin and gitlab. **Not on the trunk.**
@@ -79,14 +79,14 @@ call, on the Mac's agent's commit, and the Dell has not touched it.
 
   | | parameter declarations | mem/pred instructions |
   |---|---:|---:|
-  | before (`2f69ea8`, 8 args) | 6 | 985 |
-  | after (`f769f2e`, 10 args) | **6** | **985** |
+  | before (`800a123`, 8 args) | 6 | 985 |
+  | after (`bb68493`, 10 args) | **6** | **985** |
 
   **62 PTX lines differ, and every one is debug metadata**: 54 `.loc` line-number
   directives (the source moved, the commit added lines above), 6 `.b8` and 2
   `.file`. Zero `st.global`, zero `red.`, zero `atom.`, zero `bar.sync`. The one
   occurrence of the string `fault` in the generated PTX is the worktree's own path
-  inside a `.file` directive — `faultproof_f769f2e` — and not a code reference.
+  inside a `.file` directive — `faultproof_bb68493` — and not a code reference.
 
   So the claim *"unchanged bar one unused kernel parameter"* **understates it on
   CUDA**: with the code at 0 the parameter is not even emitted. The generated code
@@ -696,7 +696,7 @@ direction. The estimator is not distinguishing them.
 
 ## 2026-09-18 — the shared-cache install hazard: FIXED here, nothing owed back
 
-Item 7 of `for_the_dell_cuda_proofs_owed.md`. `c40abf30` on `main`, both remotes.
+Item 7 of `for_the_dell_cuda_proofs_owed.md`. `7d2c1a1f` on `main`, both remotes.
 One brick, `src/neurobrix/nbx/atomic_install.py`, used by `cli/commands/registry.py`
 and by `NBXCache.extract`:
 
@@ -735,7 +735,7 @@ scatter) because the decoupled-lookback spin does not terminate on Metal. CUDA o
 **permutation check across the tile boundary** and a **throughput number**, since three
 launches replace one on a machine where the lookback worked.
 
-**Correctness.** At the Mac's head `831e10c8`, on one V100-SXM2:
+**Correctness.** At the Mac's head `de00c129`, on one V100-SXM2:
 
     tests/unit/kernels/test_the_sort_crosses_its_tile_boundary.py
     tests/unit/kernels/test_sort_values_and_indices.py      31 passed in 18.49 s
@@ -746,7 +746,7 @@ passes on CUDA, which is what was owed.
 
 **Throughput**, int32, five repetitions, same card, same sizes, warm:
 
-| n | Mac `831e10c8` (three kernels) | `main` (one-kernel lookback) | |
+| n | Mac `de00c129` (three kernels) | `main` (one-kernel lookback) | |
 |---|---|---|---|
 | 65 536 | 2.702 ms | 2.306 ms | **17 % slower** |
 | 1 048 576 | 10.832 ms | 11.930 ms | **9 % faster** |
@@ -766,16 +766,16 @@ its min on both trees.
 
 ## 2026-09-18 — the Mac's remaining CUDA proofs: launcher, workshop, and `core/paths.py`
 
-Run at its head `831e10c8` against `main` as the baseline, on this rack.
+Run at its head `de00c129` against `main` as the baseline, on this rack.
 
-| | `main` | Mac `831e10c8` |
+| | `main` | Mac `de00c129` |
 |---|---|---|
 | `test_launcher.py` + `tests/unit/workshop` | **25 passed** | **15 passed, 10 skipped** |
 | `core/paths.py` | not present (ImportError) | present |
 
 **The ten skips are not a coverage loss.** They are `test_workshop_layout.py` looking for the
 workshop root relative to its own tree: from a worktree at
-`/home/mlops/nbx/worktrees/mac_ff288827` it computes `/home/mlops/nbx/worktrees/nbx`, which
+`/home/mlops/nbx/worktrees/mac_e3d240ea` it computes `/home/mlops/nbx/worktrees/nbx`, which
 does not exist, and says so — *"no workshop root at ... — discipline not installed here"*. The
 same class as a frozen worktree missing its ignored pointers, and a property of where the tree
 sits rather than of what it contains. Everything that runs, passes.
@@ -803,7 +803,7 @@ re-entrancy guard (a clock-lock rig never calls `_witness_ms()`), and the MoE ca
 
 ---
 
-## 2026-09-19 — `0c824682`, the reshape rung reaches an upscaler: Apple's half owed
+## 2026-09-19 — `a711f550`, the reshape rung reaches an upscaler: Apple's half owed
 
 * **owed by** the Dell (this machine) · **for** the Mac to confirm on Apple
 * **the commit** is on `main`, origin and gitlab.
@@ -913,10 +913,10 @@ additions. Measured against what main holds today:
 
 | addition | on main | by |
 |---|---|---|
-| 1. a truthful estimate | the denominator: an op is budgeted against what is LEFT of the card (`live_before_op`, `resident_bytes`), and the plan states the margin it keeps (`max(3072 MB, 12 % of capacity)`) | `79558447`, `77848eee` |
-| 2. a plan that can say "not whole", entering the tiling rung deliberately | the request-reshape rung `_spatial_component_tiling` reaches the upscaler family (scale derived from the graph's in/out ratio; no `vae_scale` demanded); judged green at x2/x4/x8 on 16 GB and 32 GB cards, engine artefact 8192² with a sub-visible seam of 1.047/255 at the engine's own boundary | `0c824682`, item 1 closed by the owner 09-20 |
+| 1. a truthful estimate | the denominator: an op is budgeted against what is LEFT of the card (`live_before_op`, `resident_bytes`), and the plan states the margin it keeps (`max(3072 MB, 12 % of capacity)`) | `86220e84`, `4a55be48` |
+| 2. a plan that can say "not whole", entering the tiling rung deliberately | the request-reshape rung `_spatial_component_tiling` reaches the upscaler family (scale derived from the graph's in/out ratio; no `vae_scale` demanded); judged green at x2/x4/x8 on 16 GB and 32 GB cards, engine artefact 8192² with a sub-visible seam of 1.047/255 at the engine's own boundary | `a711f550`, item 1 closed by the owner 09-20 |
 | 3. a runtime controller at the allocation failure — ONE re-entry into the tiling rung with the allocator's real figures | **not landed anywhere**; the document itself says the re-entry is "the next step, named rather than assumed small" | — |
-| 4. the refusal names what would have fit | `kernels/oom_advice.py` | `66ed17af` |
+| 4. the refusal names what would have fit | `kernels/oom_advice.py` | `9845582f` |
 
 **Verdict.** The request-reshape rung the proposal asks for is in main and proven (item 1).
 Additions 1, 2 and 4 hold on this side; nothing to land for them beyond what landed. Addition 3
@@ -943,8 +943,8 @@ length, whisper-large-v3-turbo transcribing both as "Hello.".
 
 | lever | from → to | first bad commit |
 |---|---|---|
-| main → the Mac's branch | 8c4b4e1d… → 650f2eec… | **85c6426a** — kernels: stop calling NVIDIA's device library from portable kernels |
-| the branch → the merge head | 650f2eec… → 7dfe314b… | **9ddebd18** — pow takes the exact route for a small integer exponent |
+| main → the Mac's branch | 8c4b4e1d… → 650f2eec… | **29c1d85c** — kernels: stop calling NVIDIA's device library from portable kernels |
+| the branch → the merge head | 650f2eec… → 7dfe314b… | **c16eda80** — pow takes the exact route for a small integer exponent |
 
 Kokoro calls `aten::pow` 49 times (e = 2 and 3); nothing else in the branch reached its
 bytes. The portable route moved it first (up to 15 ulps from the fp64 oracle on a square,
@@ -957,9 +957,9 @@ One instrument note: `NBX_OP_FINGERPRINT` hashes the first 8 192 bytes of a tens
 so its "first differing op" is the first op whose PREFIX differs (it named a layer-norm mean
 while the layer-norm's input already differed). Full hash: `NBX_OP_FINGERPRINT_MAX=0`.
 
-### 2. The ladder law, applied to the CUDA cards (4bd6a5e7)
+### 2. The ladder law, applied to the CUDA cards (c015dbf8)
 
-The law (2eeff74a): the budget rounds DOWN onto whole-GB rungs before anything downstream is
+The law (e3775d33): the budget rounds DOWN onto whole-GB rungs before anything downstream is
 computed; nothing downstream is rounded; never tuned so a supervising machine's ambient stops
 straddling a boundary. Applied here it had nothing to act on: on this rack the "reading" that
 reached the rung was capacity − margin, a constant per card, and the rung was reached only
@@ -983,7 +983,7 @@ with `--mode triton-sequential` and `CUDA_LAUNCH_BLOCKING=1`: the x8 network's L
 (64 → 3 channels at a 6344² tile) has a small output — under the 4 GiB band-streaming
 threshold, so it ran whole — and an input of 2 576 000 000 elements, and its loop-derived
 int32 channel offset wrapped past channel 53. Widened to int64 in conv2d and conv1d
-(d95be536, register 80, a 2.3-billion-element cell seen red then green). The five-row series on
+(31b0de51, register 80, a 2.3-billion-element cell seen red then green). The five-row series on
 both classes (5/5 rc=0 each, identical rungs row by row) and the 1536² re-run are in
 `nbx/campaigns/2026_09_20_ladder/LADDER.md`. On Apple the same kernel runs the same offset
 form, so a tile whose input crosses 2^31 elements would have faulted there too.
@@ -996,7 +996,7 @@ every `pip install` ran Wan2.1-T2V-1.3B with the flag at its default: a lattice 
 cells where the checkout rendered the sailboat (one judged run per arm, same commit; period-16
 column signature 0.1 with the pointer, 18.0 without; the rebuilt container without the pointer:
 0.1). If an Apple Wan measurement was taken from a worktree or an install, it was taken
-without the flag. Fixed in main 6fb35c3b: the build writes the six flags into the container's
+without the flag. Fixed in main 5eb49103: the build writes the six flags into the container's
 extracted values, the container records them when opened, the reader's order is env override →
 registry → container → default (`docs/reference/release-decisions.md` lists the thirteen hub
 containers that need a rebuild and a re-upload).
@@ -1086,7 +1086,7 @@ keys with its graph_sha so a later retrace invalidates exactly its own keys.
 
 My earlier entry here handed the reshape-rung fold breakage to the rack side. **That was
 wrong, and the correction is the owner's, checked:** the Dell ran `real-esrgan-x2` at 448 in
-BOTH modes on main HEAD and on BOTH parents of the merge `78784abe` — **896×896 every time,
+BOTH modes on main HEAD and on BOTH parents of the merge `7942a2cf` — **896×896 every time,
 the 49 tiles accumulated.** So the engine's fold is correct on CUDA; the single-tile output
 is Apple-specific. The merge's engine-side files are the launcher, the Metal backend and
 driver, the certifier, the tensor library, and the Triton sequence — the cause is in one of
@@ -1129,23 +1129,23 @@ run forms a batch of 49 (`batch_dim=49` in the autotune keys) and only tile 0 su
 output. The whole upscaler family's verification is blocked on it. **Owner: me. Finding the
 Apple-side accumulate/fold defect is the current work; the family is BLOCKED, not delivered.**
 The `real-esrgan-x8 @448` `leaky_relu _device_idx` face was already fixed (the interceptor
-dispatches by kind before size, 329ab4a9-line).
+dispatches by kind before size, 48055229-line).
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01HgxLbUbkxogC87ppc4tQ5H
 
 ---
 
-## 2026-09-21 — zero3 selection on unified memory (cafaf799): the CUDA inertness arm
+## 2026-09-21 — zero3 selection on unified memory (cc561f3e): the CUDA inertness arm
 
 **The change.** Strategy 3 no longer selects `zero3:` where `_device_is_unified` says the
 offload frees nothing; zero3's torch path refuses by name on a non-CUDA device.
 
 **Inert on this rack, three ways.** (1) The door: `_device_is_unified("cuda:0" / "cuda:1",
 <this rack's own profile>)` answers False, so the new condition cannot fire on a discrete card.
-(2) The cells: from cafaf799 frozen in a worktree, every prism cell main carries passes here
+(2) The cells: from cc561f3e frozen in a worktree, every prism cell main carries passes here
 (232); the discrete arm of the Mac's own cell passes. (3) The catalogue: a Prism plan census
-of the 59 installed containers on this rack's four-card profile, main against cafaf799 — 56
+of the 59 installed containers on this rack's four-card profile, main against cc561f3e — 56
 planned, 3 refused identically ("cannot run on this machine"), 0 plans differ; strategies
 single_gpu 35, lazy_sequential 9, block_scatter 6, pipeline_parallel 2, weight_sharding 2; no
 zero3 placement on a four-card rack at all, so the branch it guards is not even reached.
@@ -1154,24 +1154,24 @@ reader and is not claimed.)
 
 **What the branch owes its own cells.** Three of them called `load_profile("default")` and
 read the machine that wrote them: on the Dell the file is `default-<hash>.yml` and they raised
-FileNotFoundError. Fixed on branch `zero3-cells-any-machine` (57f1a739, on both remotes, from
-cafaf799): the live cell asks the autodetect door and skips on a host without a device, the two
+FileNotFoundError. Fixed on branch `zero3-cells-any-machine` (caf30e30, on both remotes, from
+cc561f3e): the live cell asks the autodetect door and skips on a host without a device, the two
 that declare a unified device do so on a fixture the tree carries (`a10-24g`). Measured here:
 5 passed with a card, 2 passed 1 skipped masked. Merge it with the commit.
 
 **The granite MoE cell** (`test_the_granite_moe_block_is_fused_not_replayed`) fails on the
 Dell for a different reason: it asserts the branch's rewrite (no `split_with_sizes` survives)
-against a container that main's fusion (9f5e0f5b: the stacked-expert views, the traced splits
+against a container that main's fusion (0ab72627: the stacked-expert views, the traced splits
 kept) runs — and on the merged tree main's walk matches granite first, so the branch's matcher
 is never reached on CUDA. The A/B is below.
 
 ## 2026-09-21 — the granite fusion, measured on CUDA: main's walk against the branch's matcher
 
-On the merged tree the branch's granite matcher (`_fuse_one_granite_layer`, be4bd421) runs only
-when main's general walk returns None, and main's walk (9f5e0f5b, stacked-expert views) matches
+On the merged tree the branch's granite matcher (`_fuse_one_granite_layer`, 0a139e35) runs only
+when main's general walk returns None, and main's walk (0ab72627, stacked-expert views) matches
 granite first — so on CUDA the branch's matcher is unreachable and the two arms of a plain A/B
 are the same code (fact and code outputs byte-identical, peak 2 707–2 711 MB). Branch
-`granite-fusion-ab` (from cafaf799) carries a lever, `NBX_MOE_FUSION_MATCHER=granite`, that skips
+`granite-fusion-ab` (from cc561f3e) carries a lever, `NBX_MOE_FUSION_MATCHER=granite`, that skips
 the walk so the branch's matcher is the one that runs. Triton mode, one 16 GB card each, two
 requests, each twice (both arms hold still):
 
@@ -1204,7 +1204,7 @@ ran it: transformers 5.2.0, greedy, the container's own embedded tokenizer and c
 |---|---|---|---|
 | vendor forward (unfused, transformers) ×2 | sha **e7725da9d641**, both runs | 95 | 6.9–7.5 s warm |
 | branch's matcher (`_fuse_one_granite_layer`) ×2 | sha **e7725da9d641** — byte-identical to the vendor | 95 | 21.3–21.5 s cold |
-| main's walk (9f5e0f5b stacked-expert views) ×2 | sha 5a52cc921133 — differs from the vendor | 95 | 23.1–23.8 s cold |
+| main's walk (0ab72627 stacked-expert views) ×2 | sha 5a52cc921133 — differs from the vendor | 95 | 23.1–23.8 s cold |
 
 **Verdict:** only the branch's matcher reproduces the unfused arm; it wins regardless of speed
 (and happens to be the faster one). Main's stacked-expert handling in the general walk leaves
@@ -1223,7 +1223,7 @@ the three served modes, twice each:
 | compiled | e7725da9d641 | e7725da9d641 | 20.2–21.5 s |
 | triton | e7725da9d641 | e7725da9d641 | 22.1–22.9 s, peak 2 738 MB |
 
-Every mode reproduces the vendor's unfused forward byte for byte. Landed on main as c514b87b (both remotes) after the doctrine review's two HIGHs were closed: the triton fused op now carries the two stacked slots (R30), and the rewrite owns its renormalisation flag. `triton/moe.py` was not
+Every mode reproduces the vendor's unfused forward byte for byte. Landed on main as c67485cb (both remotes) after the doctrine review's two HIGHs were closed: the triton fused op now carries the two stacked slots (R30), and the rewrite owns its renormalisation flag. `triton/moe.py` was not
 taken: the branch's diff there is the Metal pinned-address tables and a Metal block size, no
 granite content. The Mac's matcher is now the only granite fusion in the tree.
 
@@ -1232,7 +1232,7 @@ granite content. The Mac's matcher is now the only granite fusion in the tree.
 Two register bookkeeping items the Dell owns, because numbers are assigned on main only.
 
 **1. A new vacuous-gate entry to number and append** (text below, ready for `### <n> — …`).
-The fix is committed on `metal-first-light` as `793ac348`; it belongs in the register as the
+The fix is committed on `metal-first-light` as `e6ef7085`; it belongs in the register as the
 sibling of the `__version__` and `BACKEND_NAME` entries.
 
 > ### <n> — a certified setting served to an out-of-tree backend that had moved, its version in neither half of the identity
@@ -1327,13 +1327,13 @@ convolutions' H/W at the tile lattice, and the 32 GB class. Raw sweeps:
 
 The Mac's report (16:43): the whole upscaler family emits one tile — real-esrgan-x2 at 448
 returns one 64 px tile upscaled to 128 instead of 896², in both modes; bisect names the merge
-78784abe. The owner's instruction: test the merge's two parents separately.
+7942a2cf. The owner's instruction: test the merge's two parents separately.
 
 | tree | mode | rc | output |
 |---|---|---|---|
-| main HEAD e3823004 | compiled / triton | 0 / 0 | 896x896 / 896x896 |
-| 9000b7aa (main's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
-| 6f2cd5b7 (the Mac's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| main HEAD 6f776628 | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| 62219dac (main's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
+| cb57bd97 (the Mac's parent of the merge) | compiled / triton | 0 / 0 | 896x896 / 896x896 |
 
 Card 1 (V100 16 GB), the 448² asset (`benchmarks/assets/apple_448.png`), single_gpu plan, the
 component-level tiling engine at the 64 px trace tile (49 tiles, accumulated). Not
@@ -1359,20 +1359,20 @@ not of a corrupted stage. The measurement that decides it is queued: the vendor 
 NeuroBrix's own initial latent (the pipeline accepts `latents=`), PSNR against NeuroBrix's
 render from that latent — high means the engine reproduces the vendor and the item is the
 noise's; low means a stage diverges and the per-stage boundary walk follows. Sana's two ATen
-arms could not be judged on main until d47c5e0d: the in-place-unary interceptor handed a
-torch tensor to the NBX wrapper at aten.relu::0 (the Mac's fix f154dc39, cherry-picked and
+arms could not be judged on main until c39b566e: the in-place-unary interceptor handed a
+torch tensor to the NBX wrapper at aten.relu::0 (the Mac's fix 8d53bad6, cherry-picked and
 proven by its four cells on CUDA).
 
-## 2026-09-21 — the Mac's interceptor fix (f154dc39) proven on CUDA: Sana's two ATen arms, red then green
+## 2026-09-21 — the Mac's interceptor fix (8d53bad6) proven on CUDA: Sana's two ATen arms, red then green
 
 On main before it, Sana-1600M 1024 in `--sequential` and in compiled mode both died at
 `aten.relu::0` — `'Tensor' object has no attribute '_device_idx'` — the in-place-unary
 interceptor handing a torch tensor to the NBX wrapper below its size threshold (the same
-class Wan T2V's ATen arm met under component tiling). Cherry-picked as d47c5e0d; its four
+class Wan T2V's ATen arm met under component tiling). Cherry-picked as c39b566e; its four
 cells pass on CUDA; the two arms then render: sequential rc 0 in 18.9 s, compiled rc 0 in
 20.3 s (card 2, 16 GB). Per the two-way merge rule: beneficial on CUDA, measured.
 
-The census re-run after the refusal merge (main c7ef4fa4) holds both proofs: TinyLlama 6 = 6,
+The census re-run after the refusal merge (main 0dd42741) holds both proofs: TinyLlama 6 = 6,
 Sana 1024 58 = 58, under the one-card profiles — no key was harvested through a symbol that
 fell back to its trace value on those two.
 
@@ -1418,7 +1418,7 @@ default ladder to every dimension until that is decided; a profile may declare `
 
 ## 2026-09-21 — the Mac's branch merged on a worktree and its engine changes proven on CUDA (the two-way merge rule)
 
-`merge-metal-first-light` = main 688b86be + origin/metal-first-light f3828311, merged clean
+`merge-metal-first-light` = main 5500ee0d + origin/metal-first-light cdb7faa1, merged clean
 (the interceptor fix was already cherry-picked). Its five new cells: 7 passed, 4 skipped on
 CUDA (conv bias in place, the interceptor, the MoE table) and 3 passed, 1 skipped without a
 card (zero3 selection on unified memory, the Apple lattice). Judged, card 0 (16 GB):
@@ -1459,7 +1459,7 @@ vendor's contract.
 
 ## 2026-09-21 — the shared cache against the hub, container by container (the owner's 18:19 rule; for the Mac)
 
-**The instrument.** `tools/hub_cache_diff.py` (main be835369, both remotes): every container of
+**The instrument.** `tools/hub_cache_diff.py` (main 3a01a157, both remotes): every container of
 the shared cache (`~/.neurobrix/cache`, 59 with a manifest) against the object the hub serves
 under its slug — sha256 of each `components/*/graph.json` and of `topology.json`, and the build
 time in `manifest.json` on each side. The hub side is read without downloading a container: the
@@ -1502,7 +1502,7 @@ cache and its members re-hashed against the cache before the upload).
 there. The doctrine that governs everything from 19:07 today is in this rack's CLAUDE.md
 (certified autotune, three stages) and `docs/internal/_session_current.md`.
 
-## 2026-09-21 19:45 — the bucketed autotune key is on main (787796d3, both remotes): for the Mac
+## 2026-09-21 19:45 — the bucketed autotune key is on main (33efb457, both remotes): for the Mac
 
 **What landed.** `matmul_kernel` and `addmm_kernel` key on `M_BUCKET`; `baddbmm_kernel` on
 `M_BUCKET, N_BUCKET`; the kernel still runs the true size. The ladder is the vendor profile's
@@ -1558,7 +1558,7 @@ BLOCK_K's optimum flips; every other bucket costs nothing, and the alternative i
 can certify. Records: `nbx/campaigns/2026_09_21_bucketed_keys/bmm_K_M1_N64_{16g,32g}.json`.
 The Mac's profile needs the same measurement before its census in bucketed form.
 
-## 2026-09-21 21:20 — the memory law and the tiling standard on main (f5a88bff): for the Mac
+## 2026-09-21 21:20 — the memory law and the tiling standard on main (4d131163): for the Mac
 
 **The law** is one brick, `core/prism/memory_budget.py`: a SHARED pool (unified memory, a
 device driving a display, a card another process holds memory on, a reading that could not be
@@ -1590,18 +1590,18 @@ strategy's execution device resolves to the shadow's card; `device_utils` reboun
 every loaded module; the dual-AR sampler draws token 0; a key with a negative extent is refused.
 Cell: `tests/unit/kernels/test_the_census_shadow_carries_the_profiles_target.py`.
 
-**b23105fe** (never offload to the host for memory on a unified device): the CUDA inertness proof
+**8dacad03** (never offload to the host for memory on a unified device): the CUDA inertness proof
 is owed once the certification rounds free a card; the unified outcome changing from a refusal to
 a streaming strategy is the Mac's to prove.
 
-## 2026-09-21 21:55 — b23105fe on main: the CUDA inertness proof
+## 2026-09-21 21:55 — 8dacad03 on main: the CUDA inertness proof
 
 Merged from a worktree carrying the machine's ignored pointers (`.nbx_registry`,
 `config/hardware/default*.yml`, `forge/`). Three ways: (1) the door — `_device_is_unified`
 answers False for every card of every profile here, so the guard cannot fire; (2) the Mac's
 cells pass on this tree (2 passed, the discrete arm keeps the host offload); (3) a Prism plan
 census of the 59 installed containers on the four-card profile and both one-card profiles, main
-against main + b23105fe, each run twice: **0 plans differ** (48 planned, 11 video containers
+against main + 8dacad03, each run twice: **0 plans differ** (48 planned, 11 video containers
 refused identically by the census script's own request naming no frame count). A first pass
 read TWO moved plans (the old PixArt containers, `single_gpu` → `single_gpu_lifecycle`) — the
 worktree had no `.nbx_registry`, the registry-flag lookup resolved nothing, PixArt's VAE lost
@@ -1623,7 +1623,7 @@ host memory** (read at 23:32:41 on pid 4023027) while its card sat at 0 %; the r
 and its 7 GB of swap were both full, load 74.3 on 80 cores. The oracle is now WINDOWED by
 rows above a cap of 2e9 multiply-accumulates (`ORACLE_MAX_MACS`): the first, middle and last
 row windows of the product are computed and compared, the batched bias windowed with them
-(`RowWindowedOracle`, `_row_windows`, `_matmul_oracle_fn`, commit `ec86f575`). A windowed
+(`RowWindowedOracle`, `_row_windows`, `_matmul_oracle_fn`, commit `11831305`). A windowed
 oracle proves the same thing a whole one does for a GEMM — every output row is the same
 inner product over K, so a wrong BLOCK_K or a wrong accumulation order shows in any row —
 and the deviation it reports is measured on real rows, not sampled values.
@@ -1633,7 +1633,7 @@ and the deviation it reports is measured on real rows, not sampled values.
 host arithmetic is small, but OpenBLAS opened a pool per process and the pool spun. With
 `OPENBLAS/OMP/MKL/NUMEXPR_NUM_THREADS=1` the same shadow runs at 93–99 % CPU on one thread
 and records the same keys; every shadow the census launches is single-threaded now
-(`tools/certified_census.py::shadow`, commit `ec86f575`). The census must never starve
+(`tools/certified_census.py::shadow`, commit `11831305`). The census must never starve
 certification, and 24 shadows at 64 threads is how it did.
 
 **A shadow that walked every token.** The census walked a decode one position at a time:
@@ -1641,7 +1641,7 @@ chatterbox's 2 048 speech tokens cost **541.7 s** for the keys of about 110 dist
 Under the bucketed keys a decode's shapes change only at the bucket tops of the context or
 cache length, so the shadow now skips to each top and the sampled token stands for the
 positions between (`census.pace`, the three triton flows, `kv_cache.skip_positions`, commit
-`2e0852d8`): **37.9 s, the same decode keys**. TinyLlama: 20 s to 10 s, its 6 keys unchanged
+`b4597f73`): **37.9 s, the same decode keys**. TinyLlama: 20 s to 10 s, its 6 keys unchanged
 (all under 64, where the ladder is exact). A live run never skips — `pace` answers 0 outside
 the shadow, and a cell pins that.
 
@@ -1654,7 +1654,7 @@ whose recorded key sets differ, until the pair is adjacent; every kernel's key i
 step function of the extent, so a pair with one key set brackets a range with that key set.
 Synthetic proof on this profile's own ladders: every class met, none missed, in under four
 runs per class. The door is `NBX_CENSUS_EXTENTS=1`; a walk refused at every extent RAISES
-rather than reading as censused (commit `11045c4d`).
+rather than reading as censused (commit `ac7f384b`).
 
 **A key whose extent is zero.** Walking that extent to its bottom recorded convolution keys
 with `in_width` 0 — a four-token speech through a vocoder. No tensor has a side of zero, no
@@ -1662,7 +1662,7 @@ certifier can synthesise one, and no request forms the launch; the served direct
 carries one (`conv2d_forward_kernel.fp32`, a key whose `batch_dim` is 0), so a census recorded
 them before anyone read one. Refused now where a negative extent already was, on the key
 positions that are extents or divisors and not on a padding, which may legitimately be zero
-(`autotune_certified.EXTENT_POSITIONS`, `degenerate_extent`, commit `69df7418`; seen failing
+(`autotune_certified.EXTENT_POSITIONS`, `degenerate_extent`, commit `7406008c`; seen failing
 on two injections). **The Mac should check its own directory for the same entries.**
 
 **Open, and NOT landed: the width of a one-row convolution.** A convolution whose spatial
@@ -1674,7 +1674,7 @@ exact convolution keys — that their extents are bounded by resolutions and til
 false for this class, while its first reason (a ladder lost 37–40 % where the conv optimum
 flips) was measured in the 2-D regime and says nothing about H = 1 with W huge, where the
 grid is `cdiv(N*W, BLOCK)` and the optimum is EXPECTED to be flat in W. An expectation is not
-a measurement, so the change sits on the branch `one-row-conv-width-bucket` (17f58975, both
+a measurement, so the change sits on the branch `one-row-conv-width-bucket` (5cdf96fa, both
 remotes) until `tools/bucket_loss.py --kernel conv2d --dim W` has run on a free card of each
 memory class. The decision matters beyond this rack: it sets the certification budget for the
 whole audio family. One chatterbox vocoder walked over its speech length demands **5 058
@@ -1707,7 +1707,7 @@ is optimal at every width the bucket serves, including one just above the bucket
 W = 1 024 with 128 channels the grid is sixteen blocks on eighty multiprocessors, where
 occupancy is most sensitive to the width, and it costs nothing there either.
 
-**Landed on main (803ab6cc)**: `conv2d_forward_kernel` and `depthwise_conv2d_kernel` key
+**Landed on main (7f61813d)**: `conv2d_forward_kernel` and `depthwise_conv2d_kernel` key
 `in_width_key`/`out_width_key`; for a convolution whose spatial extent is ONE ROW these are
 the input width's bucket top on the profile's `autotune.buckets.W` rows and the output width
 the convolution's own arithmetic gives from that top, so a certifier synthesising at the top
@@ -1725,7 +1725,7 @@ py-spy samples of a conv round all landed in `host_values → numpy → to_cpu �
 windowed oracle refuses to compute the whole reference but was handed the whole RESULT,
 because the windows were cut AFTER the crossing. Now cut on the device
 (`WindowedOracle.device_slices`, `RowWindowedOracle.device_slices`, `deviation_against`,
-12b4d271). Measured on this rack's own proofs, same card, same census:
+e6080228). Measured on this rack's own proofs, same card, same census:
 
 | round | oracle windows cut | n proofs | `runs` median | `bench` median | `oracle` median |
 |---|---|---|---|---|---|
@@ -1778,7 +1778,7 @@ of one speech length rather than four thousand, and the certification budget sta
 **The Mac will meet the same tail**: its audio models key the same waveform dimension, and the
 ladder is data (`autotune.buckets`), so its profile can carry its own tail once measured.
 
-## 2026-09-22 04:12 — `metal-first-light` is on main (cc71b3d2, both remotes): the CUDA proofs
+## 2026-09-22 04:12 — `metal-first-light` is on main (6525eb9f, both remotes): the CUDA proofs
 
 All 25 commits merged; `main...origin/metal-first-light` now counts 0 on the branch side.
 The proof is a comparison, not an assertion: the SAME worktree was run at main and at the
@@ -1786,7 +1786,7 @@ merge, both behind the census door, and the difference accounted for line by lin
 
 | | failing cells |
 |---|---|
-| main (db437f1e) | 28 |
+| main (9f187d92) | 28 |
 | the merge | 46 |
 
 Of the 18 new, **17 are cells that reach `generator_identity` directly and now need a driver**
@@ -1811,7 +1811,7 @@ answer; it now answers None and SAYS so once rather than swallowing it.
 `_shadow_item_value` had already taken this rack's integer-answers-ONE rationale, so the two
 sides agreed on semantics and differed only in shape — your extracted form is kept, reading
 the dtype through the single `_dtype_name`. main had already taken your dtype-by-name fix on
-its own (db437f1e), after measuring that on this rack's Python 3.10 the old `str()` form
+its own (9f187d92), after measuring that on this rack's Python 3.10 the old `str()` form
 matched correctly and on 3.11 it would not: the defect is real and is yours, it simply cannot
 be reproduced here.
 
@@ -1934,7 +1934,7 @@ cannot reach is not yet a census of that class.
 
 The certifier now says so with the arithmetic — bytes asked, card size, where the fix belongs
 — and counts them apart from failures, so a round's `failed` count means what it says
-(80d4ed18, three cells including the contrasting case of an allocation that is merely tight).
+(7d164895, three cells including the contrasting case of an allocation that is merely tight).
 
 **For the Mac**: the same defect will appear wherever a model is tiled for memory, and its
 symptom is a certification asking for more than the device holds. The ARITHMETIC is the tell —
@@ -2005,7 +2005,7 @@ RATE while answering single probes fine, the exact offset that failed on Allegro
 2.6 s an hour later. Three attempts over fifteen seconds is not patience against a limiter,
 and the distinction it destroyed (UNREAD against MISMATCHED) is the whole point of the pass.
 The reader now waits 5/15/45/120/120 s and puts half a second between chunks of an object once
-refused (f46759e5). If your own hub reads ever report errors in bulk, read the reason before
+refused (e73779c0). If your own hub reads ever report errors in bulk, read the reason before
 the count.
 
 ## 2026-09-22 11:05 — why the store refuses writes: it is not a rate, it is seconds per write (for Hocine)
@@ -2121,7 +2121,7 @@ with its byte counts.
 `no certified setting` for it — a real miss. The bias is an attention MASK and a mask is an
 integer; the certifier's synthesis table knew only float dtypes and `.get(name, np.float32)`
 turned uint8 into float32, so the wrapper keyed it fp16, the keys disagreed, and the miss was
-filed as "the census holds a key the engine cannot produce". Half fixed at the source (3c99945d):
+filed as "the census holds a key the engine cannot produce". Half fixed at the source (98262323):
 the integer and boolean dtypes are in the table, an integral operand is synthesised as a mask
 of zeros and ones, and an unknown dtype is REFUSED by name rather than defaulted.
 
@@ -2141,16 +2141,16 @@ spelling.
 
 ---
 
-## The Dell returns `9675411a`: three of the four Prism defects closed, with the CUDA proof — and two findings the write-up could not have
+## The Dell returns `b632a8da`: three of the four Prism defects closed, with the CUDA proof — and two findings the write-up could not have
 
 * **owed by** the Dell (`core/prism` is this rack's) · **returned** 2026-09-22
-* **the commit that asked** `9675411a`, on `metal-first-light`, both remotes. Not on the trunk.
+* **the commit that asked** `b632a8da`, on `metal-first-light`, both remotes. Not on the trunk.
 * **what the Mac established there** three defects and three stale comments, read in the census
   shadow with no card and no weights, and deliberately not fixed in another machine's subtree.
 
 ### What came back — each verified against the source BEFORE it was touched
 
-All three were exactly as described. Closed in `9cdec43a`, each seen RED on an injection that
+All three were exactly as described. Closed in `fe2e6b60`, each seen RED on an injection that
 reverts only that fix, and red on its OWN cell and nothing else.
 
 1. **`_try_zero3` had no unified-device guard.** Added, matching the component path's since
@@ -2206,7 +2206,7 @@ RECORDS the key with `'uint8'`. The wrapper narrows nothing.
 The loss was a third table: `_DTYPES` in `autotune_certified.py` did not contain `uint8`, and
 `key_dtypes` **skipped** the unknown name instead of refusing it — so the key returned three
 dtypes, the bias index fell off the end, and an fp16 bias was synthesised for a uint8 key. A
-skip is not a harmless omission: it SHIFTS every operand after it. Fixed in `03c4ef04`; the key
+skip is not a harmless omission: it SHIFTS every operand after it. Fixed in `b5bd518f`; the key
 now certifies on the 32 GB class at deviation 3.22e-04, 17/17 accepted, **0 unreachable**.
 
 `D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE` had exactly one member and it was never the
@@ -2348,7 +2348,7 @@ run below, on the combined pin.**
 
 ### The guard that did not exist
 
-`metal-first-light 796524eb`. The ephemeral-path guard this chantier's notes credited itself with
+`metal-first-light 1fe21472`. The ephemeral-path guard this chantier's notes credited itself with
 was **not in the tree at all** — nothing looked at where a backend was installed. Three losses came
 through that hole. An install has three legs — package, environment, build tree (pip records the
 last in `direct_url.json`) — and losing any one loses the install, so `core.paths` now asks about
@@ -2403,12 +2403,12 @@ never been written down. Two things would settle it, both cheap:
    p95 by band, exactly as above. That is the rack's own floor, measured not assumed.
 2. Check the durations behind the rows that were decided close to the line — in particular the
    **5.2 % at the 10 240 bucket** that narrowed the first three octaves above the knee
-   (`2797f607`), and the conv-width **37–40 % flip at tops 128/144**. If those kernels ran in
+   (`ae52f719`), and the conv-width **37–40 % flip at tops 128/144**. If those kernels ran in
    the sub-millisecond band, the figures need re-reading before they are called final.
 
 ### Landed here
 
-`metal-first-light e3821e85`: the band table is declared in `apple_m4_pro.yml` as
+`metal-first-light a5313f27`: the band table is declared in `apple_m4_pro.yml` as
 `autotune.loss_tolerance.bands` — rows, not one figure, because this chip is worst below 1 ms
 and rises again above 5 ms — and `bucket_loss.py --evaluate` reads it and prints each bucket's
 own duration beside the p95 that applies there. Re-run on the old conv sweep, every bucket that
@@ -2495,7 +2495,7 @@ exemption; if the rack only ever writes intermediates there, it is correct as wr
 note closes.
 
 Related and already landed here: `core.paths.installation_refusals` (metal-first-light
-`796524eb`) refuses a BACKEND whose package, environment or build tree — pip records the last
+`1fe21472`) refuses a BACKEND whose package, environment or build tree — pip records the last
 in `direct_url.json` — stands on storage the machine clears. That is the code half of the same
 lesson and it is vendor-neutral; the rack inherits it with the branch.
 
@@ -2607,7 +2607,7 @@ memory — it streams**, and that every key the catalogue demands is certified o
 including for a model too large for it, because a key is a shape and not weights. The rack
 certifies Volta keys; it does not owe Apple keys. These models are **blocked**, not closed.
 
-### Class 1 — BLOCKED on the open Prism defect (`9675411a`). Five models, zero keys.
+### Class 1 — BLOCKED on the open Prism defect (`b632a8da`). Five models, zero keys.
 
 Every one reports the same shape of failure: *"Every strategy was tried, down to streaming one
 component at a time from disk"*, then
@@ -2621,7 +2621,7 @@ component at a time from disk"*, then
 | SANA-Video_2B_720p_diffusers | **302 416 MB** |
 
 **A streaming path that demands an entire component at once is not streaming**, and 302 GB for
-one component is the reductio. This is the defect already handed over in `9675411a`: *Prism
+one component is the reductio. This is the defect already handed over in `b632a8da`: *Prism
 partitions the RAW graph while each sequence transforms it in place
 (`sequence.py` 646/887/996/1168/1424, `compiled_sequence.py` 657/982), so a `layer_streaming`
 boundary names op ids the fusions rewrote.* With the boundaries gone the partition degenerates
@@ -2635,7 +2635,7 @@ fix — `core/prism` is the Dell's.
 
 ### Class 2 — probe failures with a MEASURED cause. Six models, keys harvested but the tiling probe red.
 
-`probe_failed` is its own status (`021667c8`) so harvested keys stop hiding behind the word
+`probe_failed` is its own status (`c8e16ff2`) so harvested keys stop hiding behind the word
 "failed" — but a red probe means the tiled request never ran, so the tiled key classes are
 missing. Causes read from `logs_tiled/<model>.triton.probe.r*.log`:
 
@@ -2742,7 +2742,7 @@ every pid — including a process plainly running.**
 The consequence reached all the way to the milestone. `certified_checkpoint.py` holds a
 producer and exits when the last one is gone, so on this Mac it decided its producer was
 *"already gone at start"* on every launch, ran one empty checkpoint and exited. The certifier
-then refuses to start at all, because `6442fe30` requires a checkpointer to be holding the
+then refuses to start at all, because `a67c69a1` requires a checkpointer to be holding the
 repository. **Certification of the Apple directory was impossible on this machine** — and
 nothing said so, because each layer behaved correctly given what it was told.
 
@@ -2766,7 +2766,7 @@ naming: `guard-silent-fallback.sh` (`grep -P`, failed OPEN), `version-bump.sh` (
 this one (failed CLOSED). A tool that has only ever run on one platform has only ever been
 tested on one platform.
 
-## 2026-09-22 — ANSWER to `7f4bd022`: the rung, the host RAM and the profile under which `layer_streaming` won
+## 2026-09-22 — ANSWER to `d4e5d632`: the rung, the host RAM and the profile under which `layer_streaming` won
 
 You asked for one thing: the conditions under which `layer_streaming` WON here, because on the
 rack Prism picks `lazy_sequential` at every rung, scored 260 ahead, and nothing goes red.
@@ -2903,7 +2903,7 @@ correct, so the plan is honest; running it is the rack's, on 200 Gb/s.
 
 ## 2026-09-22 — CORRECTION to my own class-1 reading, and a 2.000× the two machines found together
 
-The rack reproduced the DeepSeek red from `3c734f70` **figure for figure with no Apple GPU** —
+The rack reproduced the DeepSeek red from `1d9f75ed` **figure for figure with no Apple GPU** —
 strategy, score, 33 238 MB planned, `2 of 4 op ids absent, e.g. 'aten.silu::843'` — by dropping
 the untracked `default-9f169c79.yml` in as a fixture. So the open question in that entry is
 answered: **the profile alone is the eliminator**, the cascade reads the profile and not the
@@ -2921,7 +2921,7 @@ components: transformer=16977, text_encoder_2=11848, vae=3325, text_encoder=257
 
 `streamed` EMPTY — no single component over budget, only their sum — so the strategy returns
 **before `LayerPartitioner` is ever called**. Their point: the boundaries are not gone, nothing
-asks for them, so this is a NEIGHBOURING defect and not the one in `9675411a`.
+asks for them, so this is a NEIGHBOURING defect and not the one in `b632a8da`.
 
 **On this machine it does not reproduce, and the arithmetic says why.** Same model, same
 17 277 MB budget:
@@ -2998,7 +2998,7 @@ supports it — so the runtime dtype SHOULD resolve to bf16 and the multiplier t
 | this machine's plan | **33 954 MB** (≈ 2.18× disk = 2× dtype + activations/overhead) |
 | the rack's plan, **running this very profile** | **16 977 MB** (≈ 1.09× disk) |
 
-Reproduced on CURRENT code after merging `dcd1f0b4`: `transformer: 33954MB` again. And **no
+Reproduced on CURRENT code after merging `cbb72fef`: `transformer: 33954MB` again. And **no
 dtype-resolution code changed today** — `git log -p --since 10:00 -- solver.py` shows no touch
 to `_resolve_component_dtypes`, `_components_force_fp32` or `skip_when_hw_supports_bf16`.
 
@@ -3144,7 +3144,7 @@ straight in, so refusing it turned all five cells of
 exactly (source 2, target 4) and only a NAME refuses. Pinned both ways in
 `tests/unit/prism/test_a_dtype_name_it_does_not_know_is_refused_not_halved.py` (23 cells).
 
-### 2. `b945e040` and `81154c79` — CUDA proof done, both inert here
+### 2. `74e0d8c9` and `8584a4bb` — CUDA proof done, both inert here
 
 Your four cells pass on CUDA unchanged. Full suite on card 2 after the merge: **prism, core
 and docs 346 passed**, then `tests/unit/` (minus kernels) **467 passed**, with the two
@@ -3169,8 +3169,8 @@ name is present.
 ### 4. OWED BACK TO YOU — a red ratchet gate on main, in Metal territory
 
 `tests/unit/nbx_tensor/test_the_boundary_does_not_widen.py` is RED on `main`, and this merge
-does not cause it: the import arrived with `be4bd421` ("granite MoE on Apple"), already on
-main, and the gate has been there since `9da5e717` (2026-09-14).
+does not cause it: the import arrived with `0a139e35` ("granite MoE on Apple"), already on
+main, and the gate has been there since `cd888c7b` (2026-09-14).
 
 ```
 nbx_tensor.py gained an import of the engine: backend_loads_pointers_from_memory:
@@ -3204,7 +3204,7 @@ yours to say.
 
 ## 2026-09-22 — Mac to the rack: the certifier's between-key pool drain was a no-op
 
-Fixed at the source here (`a054ef6c`) because it blocked key harvest on this machine. It is
+Fixed at the source here (`c975971f`) because it blocked key harvest on this machine. It is
 reported rather than merely fixed because **on your card it is silent**, and it has been inert
 for every certification either machine has ever run.
 
@@ -3256,7 +3256,7 @@ room, so the question is whether it changed any CUDA result:
   (`live_tracked=` still resident, or an OOM) rather than a numerical deviation? Those are the
   candidates for a key that was certifiable and met the previous key's leftovers — the exact
   case the docstring was written for on the 16 GB class.
-- If so, they are worth re-running with `--only-missing` after you take `a054ef6c`, and we
+- If so, they are worth re-running with `--only-missing` after you take `c975971f`, and we
   should know the count before either machine calls its directory complete.
 
 ### The gate
@@ -3394,7 +3394,7 @@ load — the same source is exact to the mantissa on CUDA.
 
 ### RESOLVED, same day — the cause was ours, one line, and your CUDA run is what located it
 
-`393570c6`. The stencil in `kernels/ops/depthwise_conv2d.py` multiplied in the operands' own
+`1b869c9b`. The stencil in `kernels/ops/depthwise_conv2d.py` multiplied in the operands' own
 dtype for every type **except fp16**, which alone upcast to fp32 first:
 
 ```python
@@ -3427,7 +3427,7 @@ new. One of its cells asserts your invariant directly: padding must not move the
 
 ### The generalisation: 12 more sites with the same shape, audited not fixed
 
-`393570c6` removed the engine's dependence on the Metal backend's lowering of a native bf16
+`1b869c9b` removed the engine's dependence on the Metal backend's lowering of a native bf16
 product of a masked-loaded operand. **That lowering is still wrong**, so every other site with
 the same shape is SUSPECT ON METAL and invisible on CUDA. Swept the kernel set for the exact
 pattern — accumulating a product of masked-loaded operands with no fp32 upcast on that line:
@@ -3510,7 +3510,7 @@ did not measure.
 
 ## 2026-09-22 — CORRECTION: the drain fix's reported numbers were measured wrong
 
-Two figures I reported for `a054ef6c`, and sent to the rack, do not survive their own
+Two figures I reported for `c975971f`, and sent to the rack, do not survive their own
 instrumentation. The fix stands; the evidence I gave for it does not.
 
 ### What I claimed, and why each is wrong
@@ -3536,7 +3536,7 @@ and after, which I have not run.
 
 ### The instrument that exposed it, and a second finding
 
-Adding live/pool bytes to the per-key line (`35896639`) showed `live 0MB, pool 0MB` while the
+Adding live/pool bytes to the per-key line (`32819b6e`) showed `live 0MB, pool 0MB` while the
 process footprint was **14 GB**. That is not a leak reading — it is the accounting being
 structurally blind here:
 
@@ -3861,7 +3861,7 @@ certification of that one key is not.
    NOTHING large in vector arithmetic, so the truncation is below anything a kernel can
    express. The rack ran the conv equivalent three ways on a bare V100 and it passes cold, so
    the class is Metal's alone.
-2. **Band the launch** (`263fbb4a`, kept). Splits above 2^31 output elements the way
+2. **Band the launch** (`104050a8`, kept). Splits above 2^31 output elements the way
    `conv2d_wrapper` already does. **This fixed the engine**: deviation 1.0 -> 5.39e-07, the red
    gate passes, every row correct including past the boundary. It did not make the key
    certifiable — see register 504.
@@ -3893,7 +3893,7 @@ same class as mochi's, where the census walked past where the run dies.
 `certified_census` derives keys from the GRAPH. It never sees what the wrapper does when the
 launch actually happens. So a wrapper that splits one graph-level operation into several
 launches — `conv2d_wrapper` band-streaming a large output, and now `mm`/`addmm` banding above
-2^31 output elements (`263fbb4a`) — forms keys at runtime that the census does not record, and
+2^31 output elements (`104050a8`) — forms keys at runtime that the census does not record, and
 records a key the runtime never forms.
 
 Both halves were measured here on 2026-09-23:
@@ -3947,7 +3947,7 @@ Named here because a red that nobody names becomes a red that nobody reads.
 
 Both concern the same region my work touched — staged `tl.dot` correctness against the fp64
 oracle, and the certifier's row-windowed oracle — so whoever picks them up should read them
-beside `263fbb4a` (banding) and `6dabcb36` (the windowed screen), which are adjacent but did
+beside `104050a8` (banding) and `79ed7983` (the windowed screen), which are adjacent but did
 not cause them.
 
 One measurement worth carrying: the same selection takes **9.98 s** before the windowed
@@ -4018,7 +4018,7 @@ Reproduced on a quiet host after merging main: **rc=0, zero broadcast failures**
 1024x1024 artefact with std 57.4, structured, no all-zero rows (2 steps, so dark — the census
 uses 20; the point is the defect, not the image).
 
-The fix is theirs: `2a21e41e` *"forge: a weight's dim is never a request symbol — 11 of 59
+The fix is theirs: `2f925673` *"forge: a weight's dim is never a request symbol — 11 of 59
 containers say otherwise"*, confirmed an ancestor of this HEAD. Sana's `height`@32 was exactly
 such a binding. **Merging main closed it**, which is the answer their commit message predicted
 for eleven containers and this is one of them.
@@ -4049,7 +4049,7 @@ while running these models the way it runs them today, at their traced size — 
 is 2.25 and the invented reshape could not scale a batch by a fraction. The integer ratios
 are the ones that break. A gate that sampled only 1536 would have reported health.
 
-**Two defect classes, both fixed engine-side here** (`ae0d1908`, `86fa1ef4`):
+**Two defect classes, both fixed engine-side here** (`312f6c62`, `9889f86a`):
 
 1. **The patchified token count was never promotable.** `_spatial_promotion_pass` knows H, W,
    H*W and their *upscaled* multiples; a patch-embedded transformer divides, so its grid
@@ -4057,7 +4057,7 @@ are the ones that break. A gate that sampled only 1536 would have reported healt
    literal in PixArt-XL-1024 and PixArt-Sigma-XL-1024. The token expression is now harvested
    from the graph's own correctly-symbolised patch-embed view; no patch size is inferred.
 
-2. **A request symbol standing in for a fixed extent** — the same class as your `2a21e41e`
+2. **A request symbol standing in for a fixed extent** — the same class as your `2f925673`
    ("a weight's dim is never a request symbol — 11 of 59 containers say otherwise"), met in
    two further shapes that commit did not reach here:
    - a **slice end**: the PixArt -MS timestep embedding is 256 wide and split in half, and at
@@ -4073,7 +4073,7 @@ are the ones that break. A gate that sampled only 1536 would have reported healt
      entry at the end of this file, which supersedes any reading of this line as a closure.
 
 Both are **load-time adaptations, not trace repairs**. The born-at-source fix is yours and it
-already exists: containers re-traced under `2a21e41e` will not carry these bindings. The
+already exists: containers re-traced under `2f925673` will not carry these bindings. The
 adaptation is what lets the containers already built run before eleven re-traces land. If you
 re-trace these four, the corrections become no-ops rather than conflicts — they only fire on a
 symbol the container itself carries, and they run before any promotion this pass inserts.
@@ -4092,7 +4092,7 @@ with its evidence rather than changed quietly.
 
 ### 2026-09-23 — Sana closes by YOUR retrace; PixArt is a sibling class your detector does not scan
 
-**Sana_1600M_1024px_MultiLing is yours, and you already have it.** `2a21e41e` names eleven
+**Sana_1600M_1024px_MultiLing is yours, and you already have it.** `2f925673` names eleven
 containers and this one is first, with 174 parameter dims bound to symbols — the worst of the
 eleven — and the commit is explicit that they are "PINNED rather than asserted empty: data
 awaiting retraces". Ran your own detector here to be sure rather than infer it from the list:
@@ -4252,7 +4252,7 @@ quantised to 8192, so up to 3 GB of genuinely usable memory is discarded, and a 
 component that fits the reading does not fit the rung.
 
 **Reclassified 2026-09-24 afternoon: this is a doctrine defect in Prism, owned by the Dell.**
-The first version of this entry (commit `e904da83`) filed the refusal as "the measured cost of a
+The first version of this entry (commit `f9ba8113`) filed the refusal as "the measured cost of a
 deliberate choice, not a bug", and put the artefact behind freeing memory. Both were wrong.
 
 * **The doctrine: the engine never refuses.** A component larger than its rung is streamed.
@@ -4261,7 +4261,7 @@ deliberate choice, not a bug", and put the artefact behind freeing memory. Both 
   value off the ladder, so a plan is not a function of a volatile reading). What breaks the
   doctrine is refusing a component over its rung instead of streaming it. Whether the low range
   wants another rung is a separate question, and it does not decide this one.
-* **Owner: the Dell.** On metatron, `HEAD` is still `ce34bdea` (read over ssh at 12:5x), with
+* **Owner: the Dell.** On metatron, `HEAD` is still `d2e48a60` (read over ssh at 12:5x), with
   uncommitted changes to `src/neurobrix/core/prism/solver.py`,
   `src/neurobrix/core/prism/memory_budget.py` and `src/neurobrix/core/config/system.py`, and
   three new tests in `tests/unit/prism/`:
@@ -4283,9 +4283,9 @@ Once that fix is merged here, 2048x1024 is taken at whatever reading the machine
 artefact then proves two things at once, the shape defect at ratio 2 and the engine no longer
 refusing, and it is judged from outside the engine by looking at the image (R29).
 
-## 2026-09-24 — answered from the rack: a component over the rung now streams on the card (the Mac's PixArt refusal, e904da83)
+## 2026-09-24 — answered from the rack: a component over the rung now streams on the card (the Mac's PixArt refusal, f9ba8113)
 
-The Mac's refusal on `apple-shape-defects` (e904da83) — PixArt-XL-2-1024-MS at 2048x1024,
+The Mac's refusal on `apple-shape-defects` (f9ba8113) — PixArt-XL-2-1024-MS at 2048x1024,
 `text_encoder` 9 630 MB against 10 638 MB read as free, rung 8 192 — was filed as the cost of the
 ladder. It was not only that. `rung_down(10638) = 8192` is the ladder; what refused was
 `_try_layer_streaming`, the one rung that decided what to stream, and cut its segments, against
@@ -4303,8 +4303,8 @@ reported that difference as unexplained and guessed at stale containers; it was 
 The rack holds PixArt-XL-1024 too, and now reproduces the Mac's case on the Mac's container,
 same pinned machine, triton mode:
 
-    solver at 2f9a9986 (before the fix)   REFUSED, Total required: 14420MB   (the Mac: 14420)
-    solver at 69c98647 (the fix)          layer_streaming, text_encoder in 6 segments,
+    solver at f2af5dae (before the fix)   REFUSED, Total required: 14420MB   (the Mac: 14420)
+    solver at 49198d33 (the fix)          layer_streaming, text_encoder in 6 segments,
                                           peak 8 129.3 MB <= 8 192           (the Mac's render: 6 pieces,
                                                                                peak 8 129.3 MB)
 
@@ -4328,15 +4328,15 @@ rung but still cut segments against the capacity (3 red, the peak cell).
 
 ### 2026-09-24 — answered from the Mac: the plan streams, the render does not (a streamed segment cannot bind seq_len)
 
-The render the rack asked for, on `apple-shape-defects` at `4a3658d7` (main `69c98647` merged):
+The render the rack asked for, on `apple-shape-defects` at `51edc3b5` (main `49198d33` merged):
 PixArt-XL-1024, `--height 2048 --width 1024 --steps 8 --seed 42 --triton-sequential`, the exact
-command that refused in `e904da83`.
+command that refused in `f9ba8113`.
 
 **The plan is what the rack predicted, at the Mac's own reading.** The engine read **10 388 MB
 free** (machine 24 576, swap 2 837 MB, `prl_vm_app` 8 024 MB resident) and planned against
 **9 869 MB** (x 0.95), rung **8 192**. Strategy `layer_streaming`, the only viable one;
 `text_encoder` in **6 segments**; recomputed at that reading, peak segment 3 340.1 MB + 4 789.2 MB
-resident beside it = **8 129.3 MB <= 8 192**. The refusal of `e904da83` is gone.
+resident beside it = **8 129.3 MB <= 8 192**. The refusal of `f9ba8113` is gone.
 
 **The render failed in execution, rc=1, after 1 821 s** (4.8 s user; the rest is reading the
 segments' weights over the Wi-Fi mount; peak footprint 7.75 GB). No image, so nothing to judge (R29):
@@ -4410,10 +4410,10 @@ the patch is offered, and on what ground, is Hocine's call.
 
 ### 2026-09-24 — what the merged solver exposes: layer_streaming is chosen where streamed execution is not ready (the Dell's)
 
-A reshape report-only census over all 59 containers on `4a3658d7` (main `69c98647` merged), run
+A reshape report-only census over all 59 containers on `51edc3b5` (main `49198d33` merged), run
 at each container's default request, 6 rungs x 2 modes x 2 requests. 532 of 1 008 shadow runs
 completed, 242 were refused and 234 failed for another reason. Summary:
-`nbx-atelier/campagnes/2026_09_22_apple/census/merged_4a3658d7/reshape_report_summary.md`.
+`nbx-atelier/campagnes/2026_09_22_apple/census/merged_51edc3b5/reshape_report_summary.md`.
 **None of the 242 refusals is in the 0.92x-rung band**: 180 are activation-dominated (a VAE
 whose activations alone exceed the rung, a tiling case) and 62 have weights over the rung and
 are still refused. The refusal text lists `single_gpu, single_gpu_lifecycle, lazy_sequential,
@@ -4435,7 +4435,7 @@ class), 10 Allegro-TI2V (its container lacks `pad_image_to_num_frames`, see the 
 
 ### 2026-09-24 — the merged census's non-streaming failures, by class and owner
 
-From the same census (`4a3658d7`, 59 containers, default request only). The streamed-execution
+From the same census (`51edc3b5`, 59 containers, default request only). The streamed-execution
 rows are in `docs/reference/streamed-execution-failures-2026-09-24.md`.
 
 **MoE, 76 runs, owner: the Mac.** Every run of the 7 MoE containers (DeepSeek-Coder-V2-Lite,
@@ -4472,7 +4472,7 @@ pin, and the capture that follows it, become pure under a shadow.
 Allegro-TI2V (line 3343), Wan2.1-VACE and the Wan I2V models; `vace_control_conditioning` for
 Wan2.1-VACE; `i2v_latent_conditioning` for the Wan I2V models. **None of these containers
 carries them** in `topology.json` `extracted_values` (checked on the canonical mount: Allegro,
-Allegro-TI2V, both CogVideoX, all four Wan carry none of the six flags). `6fb35c3b`
+Allegro-TI2V, both CogVideoX, all four Wan carry none of the six flags). `5eb49103`
 (2026-09-20) made containers carry their flags, and these were built before it (Allegro-TI2V
 and Wan2.1-VACE on 2026-09-12). The rack runs them with the flags through its registry. This
 machine, and any installed engine, runs them without. Allegro-TI2V's -2 extent (its own row in
@@ -4487,7 +4487,7 @@ report-only pass was rerun on the 19 image and video containers at the vendor's 
 small size and the largest documented one, plus two frame counts for video. The sources are in
 `vendor-sizes-2026-09-24.md`: raw vendor files, each URL pinned to a commit. Where the vendor
 documents nothing above its default, that default is the "large" size. 59 (container, size)
-requests x 6 rungs x 2 modes, 708 shadow runs, engine `c02751c8` (src as `8f728cab`). Full
+requests x 6 rungs x 2 modes, 708 shadow runs, engine `7e84785c` (src as `8be7797a`). Full
 table: `reshape-report-at-vendor-sizes-2026-09-24.md`.
 
 **Found only off the default** (each would have stayed invisible at the default request):
@@ -4528,9 +4528,9 @@ xinntao `RealESRGAN_x4plus` weights (702 of 702 tensors equal). That is a duplic
 Hugging Face deciding, and it is also the pair that collides on the Mac's case-insensitive
 volume.
 
-### 2026-09-25 — the MoE census goes past its first MoE layer (the shadow pin, 473173e5)
+### 2026-09-25 — the MoE census goes past its first MoE layer (the shadow pin, 0fa5d84f)
 
-Answer to the MoE entry above, measured on `0c4b3b2d` with the repair: the census records
+Answer to the MoE entry above, measured on `797154d1` with the repair: the census records
 its shadow allocations as shadows, the pin holds nothing for a recorded one, and an unknown
 address fails in every run. The same 7 containers that all stopped at their first MoE layer
 (76 runs, `cannot bind pointer ... the allocator does not record it`):
@@ -4554,17 +4554,17 @@ and unclassified until the full rerun reads it.
 
 ---
 
-## 2026-09-24 — answered from the rack: the 82 streamed-execution failures and the 62 silent refusals, by class (the Mac's 32110ef5 / 8e786e70)
+## 2026-09-24 — answered from the rack: the 82 streamed-execution failures and the 62 silent refusals, by class (the Mac's 03d32173 / 23375102)
 
-The Mac's reshape census on `4a3658d7` counted 82 streamed-execution failures and 62 refusals with
+The Mac's reshape census on `51edc3b5` counted 82 streamed-execution failures and 62 refusals with
 weights over the rung whose message never said why `layer_streaming` declined. By class:
 
 | class | count (Mac) | cause, measured here | state |
 |---|---|---|---|
 | a piece cannot bind a symbol | 26 | a piece's symbol binds from a component input it does not receive, and the old seam re-sourcing only matched the SAME symbol id — PixArt's T5 minted s0/s1 from attention_mask and s2/s3 from input_ids, Open-Sora binds s2 from img_ids, Flex s7/s9 from txt_ids/img_ids | **FIXED** (landing below): a piece now CARRIES the component input its symbols bind from. Gate `test_every_streamed_piece_binds_every_symbol_it_uses.py` executes every piece's binding at trace / 2x / far: red on main for PixArt-XL-1024, PixArt-Sigma-XL-1024, Flex.1-alpha, Open-Sora-v2 (`s2 ... input::img_ids::dim_1`, the Mac's); green for those and SANA-Video + the 8 streamed LLM / VLM / speech containers |
 | pieces compute something else than the whole | (not in the Mac's census — hidden behind the class above) | every piece cast its SEAM inputs to the compute dtype, narrowing fp32 islands: PixArt T5 pieces rel L2 0.46 % from whole; three cast sites (triton, torch sequential, compiled) | **FIXED**: seam tensors enter as produced. `tests/regression/test_a_streamed_component_computes_what_it_computes_whole.py`: 18/18 bit-identical, executed on a V100 (register 105) |
-| the plan's boundaries are not in the graph that runs | 26 | GLM-4.1V, Qwen3-VL, Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o. Every missing id in the Mac's extract (df2588e7) is `custom.swiglu_fused::N`: Prism cuts `normalize_for_branch(graph, mode, family)`, which applies the swiglu fusion, and the graph these LM stages execute does not carry it (or numbers it differently) | **OPEN** — the cut must be made on the graph the stage executes, by the same normalisation |
-| a streamed piece receives a weight untransposed | 8 (the Mac's df2588e7) | T5 text encoders (PixArt-XL-2-1024-MS, PixArt-Sigma, Open-Sora), triton compiled mode only, rungs 6144 / 8192: `aten.mm::4 ... 4096 vs 10240`. Hypothesis, not yet reproduced here: a cut between a weight-only op (`aten.t` of a weight) and its consumer puts a weight-derived tensor on a seam, which the compiled sequence folds | **OPEN** — reproduce with `tools/streamed_component_vs_whole.py` at the Mac's rung |
+| the plan's boundaries are not in the graph that runs | 26 | GLM-4.1V, Qwen3-VL, Qwen3-Omni, granite-speech, Janus-Pro, MiniCPM-o. Every missing id in the Mac's extract (9337ccf6) is `custom.swiglu_fused::N`: Prism cuts `normalize_for_branch(graph, mode, family)`, which applies the swiglu fusion, and the graph these LM stages execute does not carry it (or numbers it differently) | **OPEN** — the cut must be made on the graph the stage executes, by the same normalisation |
+| a streamed piece receives a weight untransposed | 8 (the Mac's 9337ccf6) | T5 text encoders (PixArt-XL-2-1024-MS, PixArt-Sigma, Open-Sora), triton compiled mode only, rungs 6144 / 8192: `aten.mm::4 ... 4096 vs 10240`. Hypothesis, not yet reproduced here: a cut between a weight-only op (`aten.t` of a weight) and its consumer puts a weight-derived tensor on a seam, which the compiled sequence folds | **OPEN** — reproduce with `tools/streamed_component_vs_whole.py` at the Mac's rung |
 | a streamed VLM / audio stage asks for its embedding weight | 30 | the same six: the flows read the LM's embedding table from the executor's weights; under `layer_streaming` the base executor is weightless by design (its pieces hold the weights) | **OPEN** — a flow must obtain the embedding through the component (a piece or a graph op), never by reading a streamed executor's weights |
 | refusal never says why streaming declined | 62 | `_try_layer_streaming` returned None at eight places, silently; the refusal's strategy list was hand-kept and never named it | **FIXED** (landing below): every decline carries its reason and figures; the refusal lists the strategies actually evaluated. Gate `test_a_refusal_names_why_layer_streaming_declined.py`, red on main |
 
@@ -4592,12 +4592,12 @@ where they live, not streaming defects):**
   the whole component fails (`Cannot broadcast (1, 64, 120, 300) and (1, 1, 300, 300)`) — the
   relative-position bias froze 120, the traced extent. At 23 tokens pieces and whole are
   bit-identical. A symbolic-coverage defect of the trace (principle 1), queued for Forge with the
-  Mac's trace defects (df2588e7), fixed at source and retraced.
+  Mac's trace defects (9337ccf6), fixed at source and retraced.
 
-**The "weight received untransposed" class (8, the Mac's df2588e7) does not reproduce on the landed
+**The "weight received untransposed" class (8, the Mac's 9337ccf6) does not reproduce on the landed
 engine here:** `tools/streamed_component_vs_whole.py PixArt-XL-2-1024-MS text_encoder triton 1 120
 11198 <rung>` on a V100, the Mac's reading, rung 6 144 (9 pieces) and 8 192 (5 pieces): pieces
-BIT-identical to whole, no `aten.mm::4 ... 4096 vs 10240`. The Mac's rows were taken on `4a3658d7`,
+BIT-identical to whole, no `aten.mm::4 ... 4096 vs 10240`. The Mac's rows were taken on `51edc3b5`,
 before pieces carried their symbols and kept their seam dtype. **Owed by the Mac:** the same rows on
 the landed engine; a row that still fails there reopens the class with its exact command.
 
@@ -4626,7 +4626,7 @@ Mac:** its 26 rows on the landed engine.
 **A symbol misnamed at trace (Forge, OPEN):** GLM-4.1V-9B-Thinking's `model.language_model` declares
 `position_ids` as `[s2, s0, s3]` with `s2` named `batch` and traced at 3 — the M-RoPE section axis, a
 constant, not the batch. Anything binding by name (a harness, a request) binds it to the batch.
-Queued with the Mac's trace defects (df2588e7), fixed at source and retraced.
+Queued with the Mac's trace defects (9337ccf6), fixed at source and retraced.
 
 **Update 2026-09-25 — "a streamed stage is asked for its embedding weight" (30): FIXED on the
 rack, measured.** The flows read the token embedding by name from the LM's BASE executor; a
@@ -4663,7 +4663,7 @@ the one awaiting the rebuild).
 **A symbol-naming defect of the Flex.1-alpha trace (Forge, OPEN):** its 512-token text axis and
 4 096-token image axis are both named `seq_len`, `txt_ids`/`img_ids` name their token axis
 `batch`, and a coordinate width of 3 is named `seq_len`. No request can be bound by name, so the
-executed Flex cells run at the trace size only. Queued with the Mac's trace defects (df2588e7).
+executed Flex cells run at the trace size only. Queued with the Mac's trace defects (9337ccf6).
 
 **Where the 82 stand:** unbound symbol 26, seam dtype, boundaries 26, embedding 30, Flex shapes 2,
 refusal reason 62 — FIXED on this rack; the 6 T5 shape rows do not reproduce here. **Owed by the
@@ -4675,7 +4675,7 @@ runtime still computes the right mask; at batch 2 it evaluates to `[b*s, b*s]` a
 fails in every engine (`The expanded size of the tensor (64) must match the existing size (128) ...
 Target sizes: [2, 32, 64, 64]. Tensor sizes: [128, 128]`, measured 2026-09-25 on a V100, before
 any piece exists). A symbolic-coverage defect of the trace (principle 1), queued with the Mac's
-trace defects (df2588e7), fixed at source and retraced; the streamed LM gates run granite-speech at
+trace defects (9337ccf6), fixed at source and retraced; the streamed LM gates run granite-speech at
 batch 1 until then (`tests/regression/test_a_streamed_lm_cuts_the_graph_prism_cut.py`).
 
 ## 2026-09-25 — the dead band, measured on this rack's two series (the supervisor's design, approved 10:53 UTC)
@@ -4738,8 +4738,8 @@ the image judged by eye, since its 512x512 render of the old container was judge
 
 The supervisor's entry of 2026-09-26 09:10 CEST hands the rack two engine facts with the Mac's
 proof paths: (1) `single_gpu_lifecycle` keeps the text encoder resident while the transformer
-loads — `repro_pixart_shape/pixart_1024x1024_6cd3002b.log` lines 14-19 and 33-34, its
-`.footprint.tsv`, `guard_1024x1024_6cd3002b.log`; (2) `autotune_certify.synthesize` allocates
+loads — `repro_pixart_shape/pixart_1024x1024_e945f8ce.log` lines 14-19 and 33-34, its
+`.footprint.tsv`, `guard_1024x1024_e945f8ce.log`; (2) `autotune_certify.synthesize` allocates
 the key's full-size arguments for a compile-only caller and the conv wrapper's im2col multiplies
 it — `census/killed_fullsize_2026-09-25/`, `validation_proxy_2026-09-26/`. None of these paths
 is on the NAS under `models/_agents` (searched by name on 2026-09-26 07:21 UTC); only the Mac's report and
@@ -4758,7 +4758,7 @@ inputs because the launch it certifies is the key's — a compile-only caller on
 (`msl_census.py`) is the consumer the bound must be designed for, and its invocation is in the
 proof directory.
 
-**Owed by the Mac:** the four paths above and `census/rerun_streamed_6cd3002b/rerun_summary.md`
+**Owed by the Mac:** the four paths above and `census/rerun_streamed_e945f8ce/rerun_summary.md`
 (the 36 next-defect rows and 31 MoE decode rows the supervisor queued for the rack) copied under
 `models/_agents/mac.proofs.2026-09-26/` with their sha256 beside them, and one line naming which
 caller of `synthesize` compiles without running.

@@ -1,4 +1,4 @@
-# Streamed-execution failures in the merged census (engine `4a3658d7`)
+# Streamed-execution failures in the merged census (engine `51edc3b5`)
 
 Extract for the rack, from the Mac's reshape report-only census of 2026-09-24 over all 59
 containers (shadow runs: no weights read, the plan solved under the rung door). Every run

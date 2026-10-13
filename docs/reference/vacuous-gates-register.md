@@ -97,63 +97,63 @@ own numbered entry below and strike it from this group.
 * **date** 2026-09-09 · **machine** Dell · **site** the per-op recorder's single-output guard; audit tool `tools/observability_gap_audit.py`
 * **what it could not say** what 2 of 3 Wan VAE upsamples produced — a fusion proxy is not a Tensor, so the recorder skipped them on the guard meant for tuple-returning ops.
 * **how it surfaced** a cross-engine walk showed a gap where siblings of the same op type had recorded.
-* **closed by** `270da70` *a brick that replaces a call site reports what it replaced* and `e56b397` *the gate becomes decidable — the runtime's planned ops*.
+* **closed by** `86f4f63` *a brick that replaces a call site reports what it replaced* and `8b33798` *the gate becomes decidable — the runtime's planned ops*.
 
 ### 8 — `--skip-done` read a crash as a verdict
 
 * **date** 2026-09-10 · **machine** Dell · **site** `tools/precision_zoo_campaign.py`, the done test read only that `result.json` exists
 * **what it could not say** that a model had never actually been measured. Three models sat frozen out of every campaign on records carrying `gate.ran: false`, and each hid a distinct further defect.
 * **how it surfaced** a campaign that kept skipping models whose numbers nobody had ever seen.
-* **closed by** `098ce03` · **injection** a record with `gate.ran: false` is no longer "done".
+* **closed by** `860f51c` · **injection** a record with `gate.ran: false` is no longer "done".
 
 ### 9 — the flight recorder that did not write the flight
 
 * **date** 2026-09-10 · **machine** Dell · **site** `tools/flightrec.py`, `--log`
 * **what it could not say** anything at all: the flag recorded a path into the record and nothing ever wrote to it. Under a rack with no UPS, this is the instrument whose whole purpose is to survive a cut.
 * **how it surfaced** a resumed job whose log was empty.
-* **closed by** `3fa2984` — the child's output is now teed to the path.
+* **closed by** `2dd761c` — the child's output is now teed to the path.
 
 ### 10 — the flash-attention clamp that clamped nothing off Volta
 
 * **date** 2026-09-10 · **machine** Dell, from a user's A40 report · **site** `src/neurobrix/kernels/wrappers.py`, the `sdpa_thresholds` read (the reason is now written at `wrappers.py:8508`)
 * **what it could not say** that a tile did not fit. `sdpa_thresholds` exists only in the seven profiles this repository ships, so for **any** card whose profile is not shipped the clamp returned `(None, None)` and pruned nothing. Every language model refused to start on an sm_86.
 * **how it surfaced** a user, not a test. No card here could reproduce it.
-* **closed by** `f9893a6` (limit from the driver) and `372e1f5` (cost from the compiler) · **the number that settled the design** the same tile needs 98 304 bytes on sm_70 and 164 352 on sm_86 — the cost is a function of the target, so an analytic estimate cannot exist.
+* **closed by** `0454651` (limit from the driver) and `d32da18` (cost from the compiler) · **the number that settled the design** the same tile needs 98 304 bytes on sm_70 and 164 352 on sm_86 — the cost is a function of the target, so an analytic estimate cannot exist.
 
 ### 11 — the paired campaign whose control arm measured an empty sweep
 
 * **date** 2026-09-10 · **machine** Dell · **site** `tools/precision_zoo_campaign.py`, one replay directory shared across N repetitions
 * **what it could not say** that an arm had swept nothing. Repetition 1 swept and wrote; 2 and 3 read their own leftovers; the median landed on a repetition that did no work and reported `speedup 1.0288` on a cell whose first repetition read 67.01 against 95.94. **15 of 15 cells would have been measured empty**, whatever the disk held.
 * **how it surfaced** the owner reading `B.swept = 0` beside a speedup of 1.0287.
-* **closed by** `0614946` — replay isolated per repetition, plus a guard that gives NO ratio (rather than a ratio of one) to a lever arm that served nothing and swept nothing.
+* **closed by** `0b45378` — replay isolated per repetition, plus a guard that gives NO ratio (rather than a ratio of one) to a lever arm that served nothing and swept nothing.
 
 ### 12 — the test suite a fresh clone could not collect
 
 * **date** 2026-09-10 · **machine** Dell · **site** `tests/__init__.py`, untracked
 * **what it could not say** anything: a clone of the repository collected zero tests, so every gate in it was vacuous by construction for anyone who was not this working tree.
 * **how it surfaced** a clone into an empty directory, which is the only method that proves it.
-* **closed by** `910c6d2` · **proof** the clone now collects 1,529 tests, identical to the live tree.
+* **closed by** `7507773` · **proof** the clone now collects 1,529 tests, identical to the live tree.
 
 ### 13 — the device assert the backend computed and discarded
 
 * **date** 2026-09-10 · **machine** **Mac** · **site** the three gather/scatter kernels armed on 2026-09-02; `tl.device_assert` lowered into the IR under `debug=True` and elided at the Metal dispatch point
 * **what it could not say** that an index was out of range. Measured: the generated MSL carried `mask_5 = idx < 2` and never read it — the guard paid for in registers and not delivered. `index_select` wrote nothing and left the pool's residue; `embedding` read 4 floats past the weight; `index_put` **wrote 8 floats past the tensor**.
 * **how it surfaced** reading the generated code, on a machine that cannot execute the path.
-* **closed by** `f769f2e` (a capability-armed fault channel) · **CUDA proof owed and prepared**, `campaigns/prepared/03_cuda_fault_channel_proof.sh`, whose deciding cell runs FIRST: inert must never mean disarmed.
+* **closed by** `bb68493` (a capability-armed fault channel) · **CUDA proof owed and prepared**, `campaigns/prepared/03_cuda_fault_channel_proof.sh`, whose deciding cell runs FIRST: inert must never mean disarmed.
 
 ### 14 — the out-of-range test that passed for the wrong reason
 
 * **date** 2026-09-10 · **machine** **Mac** · **site** the permanent gather/scatter test's out-of-range case
 * **what it could not say** whether the KERNEL refused the index. Its numpy oracle `rows[idx]` raised on the out-of-range index before the kernel was ever questioned, so `returncode != 0` was satisfied by the oracle line.
-* **how it surfaced** the author of `f769f2e` re-reading the case it was about to rely on.
-* **closed by** `f769f2e` — the out-of-range case now takes no oracle at all.
+* **how it surfaced** the author of `bb68493` re-reading the case it was about to rely on.
+* **closed by** `bb68493` — the out-of-range case now takes no oracle at all.
 
 ### 15 — my own control cell, green for the wrong reason
 
 * **date** 2026-09-10 · **machine** Dell · **site** `tools/kernel_boolean_ir_equality.py`, first version, comparing raw TTIR
 * **what it could not say** whether two kernels compile to the same instructions. The two variants are written to different temporary files, so every `#loc` record carried a different path: all fourteen kernels reported DIFFERS, **and the control cell announced "the gate bites" for that same wrong reason** — it would have said so even if the precedence trap compiled identically.
 * **how it surfaced** running it. The door (`CUDA_VISIBLE_DEVICES=`) is the only reason it could be run at all before the campaign closed.
-* **closed by** `ad1916d` — comparison of the `tt.*` body with every location stripped; columns cannot be kept either, since the two forms put their operators at different columns.
+* **closed by** `0b5366f` — comparison of the `tt.*` body with every location stripped; columns cannot be kept either, since the two forms put their operators at different columns.
 * **worth recording plainly** this was a vacuous gate written inside the instrument built to catch vacuous gates, by the person who had spent the day cataloguing them.
 
 ### 16 — a comment that asserted a cost nobody had measured
@@ -161,11 +161,11 @@ own numbered entry below and strike it from this group.
 * **date** 2026-09-10 · **machine** Dell · **site** `src/neurobrix/kernels/ops/where.py`, the comment *"costs nothing"*
 * **what it could not say** — nothing, because it was not an instrument at all. That is the point: a claim of cost, neutrality or equivalence written in prose is an assertion with no gate behind it. `cond != 0` promotes the literal to i32 and buys an `arith.extsi` i8→i32 on every element, on the kernel **39 of the 56 installed containers** reach.
 * **how it surfaced** an IR harness written for a different purpose.
-* **closed by** `ad1916d` — `tl.where(cond.to(tl.int1), …)` emits exactly the cast the compiler already performed, TTIR identical to the pre-edit kernel, and the form is pinned by a test that says why two forms silence the warning and only one is free.
+* **closed by** `0b5366f` — `tl.where(cond.to(tl.int1), …)` emits exactly the cast the compiler already performed, TTIR identical to the pre-edit kernel, and the form is pinned by a test that says why two forms silence the warning and only one is free.
 
 ### 17 — an overrule with every test green and no seam
 
-* **date** 2026-09-10 · **machine** Dell · **site** `src/neurobrix/kernels/launcher.py`, `configs_agreeing_with_oracle` shipped in `137d78c`
+* **date** 2026-09-10 · **machine** Dell · **site** `src/neurobrix/kernels/launcher.py`, `configs_agreeing_with_oracle` shipped in `4e0a500`
 * **what it could not say** that the consensus screen had seated a wrong kernel — which is the entire reason it was written, and the subject of `docs/reference/what-certified-means.md`. The predicate takes ONE buffer; a screened result is a SNAPSHOT, a list of buffers with a dtype each. Nothing carried a snapshot to it, so it could not be called from its only caller. Six tests, all passing, all against the primitive.
 * **how it surfaced** trying to wire it: the first call from the screen's data raised `TypeError: a bytes-like object is required, not 'list'`.
 * **closed by** the snapshot adapter `_oracle_keeps` plus the provider hook `set_screen_oracle`, with a test that drives `screen_configs` itself rather than the predicate, and pins both failure modes the vote cannot see — a majority wrong in the same way, and a unanimous wrong space — plus the control that with no provider the default path is bit-for-bit the behaviour shipped since 2026-09-07.
@@ -176,7 +176,7 @@ own numbered entry below and strike it from this group.
 * **date** 2026-09-11 · **machine** Dell · **site** `tools/precision_zoo_campaign.py`, `frozen_src_refusal` called unconditionally
 * **what it could not say** that `--trees label=path,label=path` names a frozen worktree PER ARM. The door knew exactly one way of naming a frozen tree and turned away the invocation that satisfies its own rule by construction.
 * **why it belongs here** it is the mirror of the class rather than an exception to it: an instrument that cannot recognise the state it is checking for. The damage is not a wrong green, it is that the next person adds `--src` beside `--trees` to get past it — and a rule survives as a formality while the habit it was built for dies.
-* **closed by** `d5b64d6` — `frozen_trees_refusal`, same three checks per arm, naming the ARM in its refusal · **injection** an arm pointed into the live repo, and an unlabelled entry.
+* **closed by** `fa1b5a6` — `frozen_trees_refusal`, same three checks per arm, naming the ARM in its refusal · **injection** an arm pointed into the live repo, and an unlabelled entry.
 
 ### 19 — a gate that printed a table with no rows and was called finished
 
@@ -191,7 +191,7 @@ own numbered entry below and strike it from this group.
 * **date** 2026-09-11 · **machine** Dell · **site** `tools/certify_the_catalogue.py`, `_rig_busy`
 * **what it could not say** that a campaign was in flight. A campaign BETWEEN two of its runs holds no compute process; `nvidia-smi` returned an empty list and the check said "free" while a gate held GPU0 five seconds either side.
 * **how it surfaced** the tool answered 0 and the very next command showed a process on the card.
-* **closed by** `08fd48c` — free means no compute process AND no driver alive that is about to start one; a `--plan` invocation does not count itself.
+* **closed by** `5d5ae06` — free means no compute process AND no driver alive that is about to start one; a `--plan` invocation does not count itself.
 * **the precedent it repeated** 2026-09-10, a second instance launched onto a live measurement declared dead from a buffered log. The rule was "check the PID, never a log's size". This check obeyed the letter and missed the gap between two runs.
 
 ---
@@ -381,7 +381,7 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ## The Mac's entries
 
-Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
+Entries 13 and 14 are the Mac's, transcribed from `bb68493` because they are
 part of the count and the count had to be one list. **The Mac completes its own**
 — any instance found there that is not above should be appended here with the
 same fields, and any `?` in 13 or 14 corrected in place by the machine that has
@@ -1164,7 +1164,7 @@ nothing carried those files anywhere until the pass ended and a person
 committed them. Three mains cuts in three days (2026-09-11, 09-12, 09-13
 23:45 UTC) each found hundreds of certified entries on disk and nowhere else
 — 971 on the Friday, 1 222 on the Saturday night, every one verified whole
-after the cut (`88c8af0`). They survived by the file system's journal. A
+after the cut (`efa19f5`). They survived by the file system's journal. A
 truncated write at the wrong moment would have cost a file; a dead disk, the
 pass; and each cut cost the hours it took a person to come back, verify, and
 commit. The clock lock had the same shape: it was restored by the memory of
@@ -1196,7 +1196,7 @@ hand, `systemctl restart nbx-rig-clock`, all four cards read 1290.
 **Measured 2026-09-14 00:08-00:14 UTC, the measurement entry 56 said it did
 not contain** (`tools/memory_class_sample.py`, campaign
 `2026_09_13_certification_tail/sample_16_to_32`): the first 50 matmul census
-keys certified on card 2 (32 GB, pinned, tree d1def45, clocks 1290/877 read
+keys certified on card 2 (32 GB, pinned, tree 95c64aa, clocks 1290/877 read
 on every card, no throttle reason active) against the directory's 16 GB
 entries for the same keys (certified 2026-09-07 00:07-00:26, same engine
 0.5.3, same Triton 3.6.0): **37 keys choose the same configuration, 13 a
@@ -1222,7 +1222,7 @@ says, and the 11 configurations that differ are near-ties inside the timer's
 noise (the 32 GB draft differed from the 09-07 entries on 13, the same
 level). What differs is the 09-07 measurement itself: **5 628 of the
 directory's 8 515 proofs are of 2026-09-07 and record no clock** — they were
-made five days before the clock door (`71a0e7c`, 09-12) and the certifier of
+made five days before the clock door (`0a4dacb`, 09-12) and the certifier of
 that day did not write `clocks_mhz`. The ratio 1.176 is within 1 % of
 1530/1290 = 1.186, the V100's boost over the protocol lock; that the rig was
 unlocked on 09-07 is the likely reading and is NOT proven (nothing recorded
@@ -1296,7 +1296,7 @@ before the cast, and the 2.25e9-element fill still faulted on card 2
 (06:31). A gate that reads text proves the text; the GPU test beside it
 (`test_a_flat_kernel_beyond_two_billion_elements.py`: ones, a transposed
 materialisation, an add over 2 252 800 000 elements, the elements before,
-at and past 2^31 read back — RED on the tree of 90fefd4, GREEN after)
+at and past 2^31 read back — RED on the tree of a1d14f3, GREEN after)
 proves the arithmetic, and the gate now refuses both forms. Measured: four
 models byte-identical before and after with the setting pinned (TinyLlama,
 Kokoro, Sana MultiLing at 4 steps, whisper-large-v3-turbo, card 2), and
@@ -1319,8 +1319,8 @@ group_norm (N=1, C=64, HW=35.2e6).
 
 The certifier that re-certified the speech leg's keys on card 1 (07:09-07:38
 UTC) met, in the middle of its list, a matmul of 2 188 247 040 output
-elements on a tree whose kernel still wrapped (`suite_53012f7`, before
-90fefd4): CUDA error 700. The CUDA context is then dead — sticky — and
+elements on a tree whose kernel still wrapped (`suite_969eb9d`, before
+a1d14f3): CUDA error 700. The CUDA context is then dead — sticky — and
 every later launch and malloc in the process fails with the same code. The
 certifier counted the fault as one FAILED key and went on: **227 further
 keys were reported FAILED, each with "GPU malloc failed (error 700) for
@@ -1766,7 +1766,7 @@ integer in both namespaces and merely names different cards in each. Had the rac
 been laid out the other way round the same helper would have returned a plausible ordinal, the
 test would have passed, and it would have proven the 32G route using a 16G card.
 
-Found on 2026-09-17 while checking that the launcher change (27b05cc4) had not regressed
+Found on 2026-09-17 while checking that the launcher change (f941b9a6) had not regressed
 anything — so the cost was not only the red, it was a red sitting in the one suite being read
 as the verdict on an unrelated fix. That is the second time in one day that an always-red
 signal had to be cleared before a real question could be asked (see 70).
@@ -1971,7 +1971,7 @@ torch ships, and every later module that imports torch dies at import:
 
 | | tests collected | errors |
 |---|---|---|
-| `a1aaa1ec`, before the file | **1084** | 0 |
+| `29cc76c3`, before the file | **1084** | 0 |
 | with the file | **859** | **11** |
 | after the fix | **1096** | 0 |
 
@@ -2040,7 +2040,7 @@ log, and any `set -e` script whose final command is a printer.
 
 **Where.** `tests/regression/conftest.py::pytest_configure`, this rack, 2026-09-17 (the
 "battery candidate stack t38", flightrec `20260917_041647`) and again 2026-09-20 14:17
-(`20260920_141742_battery-candidate-stack-9000b7aa`, killed at 14:33 once seen).
+(`20260920_141742_battery-candidate-stack-62219dac`, killed at 14:33 once seen).
 
 **What was believed.** `5 failed, 79 passed` on 09-17 was read as the candidate stack —
 torch 2.14.0+cu126, Triton 3.8.0 — running the model zoo, and the switch case was built on
@@ -2074,7 +2074,7 @@ whose census names two interpreters has measured nothing attributable.
 
 ### 79 — three guards and a debt that outlived their premise by seventeen days
 
-**Where.** `tests/regression/test_serve_warm.py` (module guard, `ba34c374`, 2026-08-27),
+**Where.** `tests/regression/test_serve_warm.py` (module guard, `e5efd52c`, 2026-08-27),
 `tests/regression/test_upscale_offtrace.py` (the same guard ported, 2026-08-29),
 `tests/regression/warm_cell_runner.py` (the comment), and `DETTE.md`
 D-AUTODETECT-VISIBLE-MASK (filed 2026-08-26, fourth facet 2026-09-01).
@@ -2088,15 +2088,15 @@ container. Repeated by this session on 2026-09-20 14:5x as a fact about the engi
 
 | tree | mask | detected | placed | result |
 |---|---|---|---|---|
-| `ecebbebe` (the commit before the guard) | 1 | auto-4xv100-16gb-96.0g | cuda:2 | `CUDA error: invalid device ordinal` |
-| `ecebbebe` | 0,2 with DeepSeek-Coder-V2-Lite (spans cards) | the whole machine | pipeline_parallel → cuda:2 | invalid device ordinal |
-| main `f2da479a` | 1 | auto-v100-16gb-16g | cuda:0 | rc=0, real-esrgan-x4 and TinyLlama |
+| `e5171538` (the commit before the guard) | 1 | auto-4xv100-16gb-96.0g | cuda:2 | `CUDA error: invalid device ordinal` |
+| `e5171538` | 0,2 with DeepSeek-Coder-V2-Lite (spans cards) | the whole machine | pipeline_parallel → cuda:2 | invalid device ordinal |
+| main `1786c22c` | 1 | auto-v100-16gb-16g | cuda:0 | rc=0, real-esrgan-x4 and TinyLlama |
 | main | 2 (a 32 GB card as ordinal 0) | auto-v100-32gb-32g | cuda:0 | rc=0 — the fourth facet: the budget reads the masked card's own memory |
 | main | 0,2 with DeepSeek-Coder-V2-Lite | auto-2xv100-16gb-48.0g | component_placement cuda:0 + cuda:1, 33 238 MB planned | rc=0 |
 
 Red seen on the tree the guard was written against; green on main for every facet the debt
-named. The repair is `_apply_visible_filter` (`acd14637`, 2026-09-03: the visible set is
-re-indexed the way CUDA renumbers it) and the profile keyed by the visible set (`6efc8c3c`,
+named. The repair is `_apply_visible_filter` (`7a307287`, 2026-09-03: the visible set is
+re-indexed the way CUDA renumbers it) and the profile keyed by the visible set (`4d2d1a2f`,
 2026-09-05); `_describes_the_whole_machine` keeps a masked process from writing the shared
 `default.yml`. Nothing re-measured the guards after either landed, and four modules kept
 skipping on a sentence.
@@ -2369,7 +2369,7 @@ a check does NOT report, and print the count even when you cannot judge it.
 ### 89 — three cells whose subject is decided by a file that differs on every machine
 
 **Where.** `tests/unit/prism/test_the_census_imposes_a_rung_and_reads_no_ambient.py`, all
-three cells, from the file's birth (metal-first-light `81154c79`).
+three cells, from the file's birth (metal-first-light `8584a4bb`).
 
 **The shape.** The helper reads `load_profile("default")` — and `default.yml` is
 **gitignored**, generated per machine by hardware detection. The cell's own comment says
@@ -2518,7 +2518,7 @@ the whole second family, and its silence is indistinguishable from a clean stimu
 ### 92 — the stability witness proves the regime held, not that the ranking was decided quietly
 
 **Where.** The certifier's stability witness, leaned on by BOTH machines as evidence that a
-sweep was trustworthy. Named by the Mac on 2026-09-22 (`c1fd98d7`) after they quarantined 313
+sweep was trustworthy. Named by the Mac on 2026-09-22 (`298b99cf`) after they quarantined 313
 of their own entries; audited here the same day and found to be the larger problem of the two.
 
 **The shape.** The witness times a reference kernel before and after a sweep and compares at
@@ -2746,7 +2746,7 @@ either machine's.
 **Ranges from 2026-09-23: the rack takes 1-499, this Mac takes 500-999.**
 
 `88 -> 500` and `89 -> 501` above, with the old number kept in the heading so a citation made
-before the move still resolves — `17c96d16` cites 88 and `07416b4d` cites 89, and both commits
+before the move still resolves — `230a0f7a` cites 88 and `2cc31a30` cites 89, and both commits
 are already pushed. Nothing else is renumbered: entries below 88 are the rack's and stay.
 
 `115 -> 506` (2026-10-05, merge-queue-18): an entry written on this Mac inside the rack's range
@@ -3052,7 +3052,7 @@ recording only the winner makes an unfalsifiable claim out of a measurement alre
 
 ### 504 — the certifier cannot validate a launch the wrapper split, and reports it as divergence
 
-**2026-09-23.** `mm`/`addmm` now band their launch above 2^31 output elements (`263fbb4a`),
+**2026-09-23.** `mm`/`addmm` now band their launch above 2^31 output elements (`104050a8`),
 because the Metal lowering writes nothing past row `2**31 // N` in a single launch. The engine
 is correct after that change — measured 5.39e-07 against the fp64 oracle where it was 1.0.
 
@@ -3089,7 +3089,7 @@ fails loudly in the vocabulary of a numerical defect.
 ### 505 — the reshape report sat in the compiled op set, and the census that ran it measured mode 2
 
 **2026-09-24.** The first step of the owner's two-step decision on `_reshape` is a report-only
-pass over the 59 containers: which ones would a refusing reshape reject? `9a7bb368` put the
+pass over the 59 containers: which ones would a refusing reshape reject? `c59c81ad` put the
 instrument in `kernels/metadata_ops._reshape` and pinned it with
 `test_the_reshape_report_counts_inventions_not_inferences.py`: it fires on an invention, and it
 stays silent on an inference, on an exact match, and when unset. The test was green.
@@ -3098,7 +3098,7 @@ stays silent on an inference, on an exact match, and when unset. The test was gr
 `--modes triton,triton-sequential`. Mode 2 dispatches `aten::view`, `aten::reshape` and
 `aten::_unsafe_view` through `kernels/dispatch._resolve_view_shape`. `metadata_ops` is the
 compiled op set, which nothing under `triton/` imports. Mode 1 under a census shadow is a door
-that refuses (`9a7bb368` itself). So every container would have reported 0 sites, whatever
+that refuses (`c59c81ad` itself). So every container would have reported 0 sites, whatever
 its graph. Three did (Allegro-TI2V, Allegro, CogVideoX-2b: 18 shadow runs, 0 sites) before the
 pass was stopped. A Kokoro-82M census with the variable set never created the report file,
 and the file is opened in append mode, so its absence means the function was never entered.
@@ -3228,7 +3228,7 @@ component estimate, and asserts the INVARIANT — streamed peak plus what stays 
 
 ### 102 — a gate built to prove the Mac's fix skipped every cell on the Mac, because it found its machine instead of carrying it
 
-`tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py` at `69c98647` — the
+`tests/unit/prism/test_a_component_over_the_rung_is_streamed_on_the_card.py` at `49198d33` — the
 gate landed to prove the Mac's PixArt refusal was fixed — read three things off the rack:
 
 * the CACHE as a literal, `os.path.expanduser("~/.neurobrix/ca" + "che")`, the word split so a
@@ -3353,7 +3353,7 @@ test the second.
 
 Four gates stood over `layer_streaming` by 2026-09-24: the plan's strategy (101), its peak under the
 rung, the binding of every symbol in every piece at three sizes, and the plan census. All green on
-PixArt's T5. The Mac rendered the plan and it died on an unbound symbol (8e786e70) — the binding gate
+PixArt's T5. The Mac rendered the plan and it died on an unbound symbol (23375102) — the binding gate
 then caught that, red on main. But with the binding fixed, the pieces RAN and computed a different
 answer: rel L2 0.46 % from the same component run whole, while the whole component run twice was
 bit-identical. Each piece fed the whole run's own seam values diverged 0.15-0.25 % by itself: the
@@ -3385,7 +3385,7 @@ graph, looked up in the SAME normalised graph. True by construction. The graph t
 assumed to be the normalised one because a sequence rewrites its graph in place; but a streamed
 component's base executor holds no weights and never compiles, so the graph `layer_streaming`
 checks is the one LOADED. The Mac then counted 26 refusals, six models, both triton engines
-(df2588e7): `the plan's segment boundaries are not in 'language_model's graph (1 of 14 op ids
+(9337ccf6): `the plan's segment boundaries are not in 'language_model's graph (1 of 14 op ids
 absent, e.g. 'custom.swiglu_fused::18')` — every absent id a fused op, every other boundary
 present. Two more holes behind the same assumption: `triton_sequential` never fuses, so its plans
 were cut on a graph it does not run; and a MoE LM packaged under `multimodal` is fused by the
@@ -3430,7 +3430,7 @@ must be the graph the other side actually holds.
 By 2026-09-25 four gates stood over `layer_streaming` and executed real pieces: the binding of every
 symbol (A), whole-against-pieces bit identity (105), the cut on the graph Prism cut (106) and the
 plan's reserves. All green. The Mac then counted 30 streamed VLM and audio-LLM runs refused before
-their first piece (df2588e7): `Audio-LLM stage 'language_model' requires embed_tokens weight.` A
+their first piece (9337ccf6): `Audio-LLM stage 'language_model' requires embed_tokens weight.` A
 flow reads the token embedding BY NAME from its LM's executor, outside the graph; a whole
 executor holds it because the loader keeps every non-block key for that reader; a streamed base
 held nothing. Behind it, a second defect no gate could see either: every PIECE loaded every
@@ -3466,7 +3466,7 @@ reads are part of its contract, and a gate that feeds it by hand cannot see them
 `test_every_streamed_piece_binds_every_symbol_it_uses.py` (A) walked every symbol reference of
 every piece and required it bound, at three sizes, for twelve streamed containers — green,
 Flex.1-alpha among them. The Mac's two Flex rows then failed in the pieces, triton-sequential
-(df2588e7): `Cannot broadcast (1, 24, 512, 128) and (1, 1, 4608, 128)`. Flex's joint attention
+(9337ccf6): `Cannot broadcast (1, 24, 512, 128) and (1, 1, 4608, 128)`. Flex's joint attention
 concatenates its text and image queries through a `tensor_tuple` argument (`aten.cat::19`); the
 image half was a seam, held by the piece as `input::aten.mul::97::out_0`, while the list still
 named `aten.mul::97::out_0` — the seam builder aliased a single `tensor_id` and nothing inside a
@@ -3539,7 +3539,7 @@ row-windowed on the launch's M) — band-agnostic by construction, one brick for
 a later launch of an already certified key inside one wrapper call runs the chosen
 configuration; the proof records the launch count. Gate
 `tests/unit/kernels/test_the_certifier_measures_the_launch_it_sees.py`: with the band door
-lowered so a (256 x 32) product streams in two bands, red on d2285fc2, green after. The key
+lowered so a (256 x 32) product streams in two bands, red on 0aeef1b0, green after. The key
 certified at once (deviation 7.4e-7, 17 of 17 accepted).
 
 **The lesson, in one line.** An oracle belongs to the launch it judges: compute it from what the
@@ -3580,13 +3580,13 @@ and tiled on the card, so every reproduction without a card disagreed with the r
 
 What the test would have done with the code wrong: pass — it never called the code. The solver's own
 cell now exists (`test_a_tile_below_the_lattice_keeps_its_size.py`: the live figures, lattice 16,
-tile 12 kept; red on c657c7bf), and the helper mirrors the corrected rule with a pointer to it.
+tile 12 kept; red on dd4e5e0d), and the helper mirrors the corrected rule with a pointer to it.
 
 **The lesson, in one line.** A test that re-implements the rule it guards guards the re-implementation.
 
 ### 113 — the certifier's unified-memory flag was tested on a stub whose method the real class does not have
 
-`a-unified-certifier-counts-the-host-copies` (73b04e10) read the certifying device's memory kind
+`a-unified-certifier-counts-the-host-copies` (8d7c6735) read the certifying device's memory kind
 with `dev.has_unified_memory()`. `DeviceSpec.has_unified_memory` is a `@property`: on every real
 hardware profile the call raised "'bool' object is not callable" before the first key. The gate
 built the device as a `SimpleNamespace` whose `has_unified_memory` was a lambda — callable, as the
@@ -3597,7 +3597,7 @@ code assumed — and was green against that stub only. Found by the Mac's certif
 agrees with the code under test.
 
 **Repair.** The code reads the property; the gate builds a real `DeviceSpec(unified_memory=...)`
-and is red on 73b04e10 ("'bool' object is not callable"), green after.
+and is red on 8d7c6735 ("'bool' object is not callable"), green after.
 
 **The lesson, in one line.** A test double of a project class is built from the class, never from
 the call the code happens to make on it.
@@ -3751,7 +3751,7 @@ reaches its data; keep the real reader and starve its table.
 
 ### 506 (was 115 — renumbered, see note) — the re-prove flag's help promised a serving the runtime refuses
 
-`neurobrix autotune certify --reprove-generator` said, until `9e637c2b` (2026-09-28 19:29 CEST),
+`neurobrix autotune certify --reprove-generator` said, until `a402d364` (2026-09-28 19:29 CEST),
 that a proof made under another code generator "stays correct and served meanwhile". The runtime
 does the opposite and says so at every run under a new generator (`kernels/autotune_certified.py`,
 the generator door): "a configuration is a property of the compiler that produced it" — the entry

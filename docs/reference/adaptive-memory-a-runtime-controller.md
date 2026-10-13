@@ -130,12 +130,12 @@ So the controller's shape is fixed by this:
 * it may not live in a wrapper, because a wrapper cannot change its own output contract;
 * it enters at the op-failure seam, where the op_uid and the allocator's real figures are
   both in hand (`DeviceOOMError` now carries requested / live / pool_cached / driver_free /
-  shortfall, `bd96c7b1`);
+  shortfall, `b4b85a0a`);
 * it re-enters at the op-level tiling rung for THAT op_uid, which already owns the
   downstream-aware machinery (`OpLevelTilingPlan`, `register_op_uid_interceptors`, mirrored
   into both sequences);
 * one re-entry, then a refusal that names what would have fit — which is already there
-  (`kernels/oom_advice.py`, `66ed17af`) and already says, on this exact failure:
+  (`kernels/oom_advice.py`, `9845582f`) and already says, on this exact failure:
   `what would have fit: short by 594 MB; it would fit in 2 bands of about 4,096 MB`.
 
 The remaining work is the re-entry itself: building a one-op `OpLevelTilingPlan` from the

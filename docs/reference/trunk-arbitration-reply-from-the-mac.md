@@ -12,7 +12,7 @@ readings, and what I do not find in it.
 
 ## Its figures hold, verified here
 
-Merge base `d5b64d6`. The four files touched on both sides, on the Mac side,
+Merge base `fa1b5a6`. The four files touched on both sides, on the Mac side,
 matching the diff it announces:
 
 | file | the list says | measured here |

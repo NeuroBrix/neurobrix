@@ -1,4 +1,4 @@
-# Reshape report-only pass at vendor-sourced sizes (engine `c02751c8`)
+# Reshape report-only pass at vendor-sourced sizes (engine `7e84785c`)
 
 Hocine's rule 1: every shape proof at two sizes other than the trace size, one far from it. Sizes per container are the vendor's, with sources in `vendor-sizes-2026-09-24.md`; `largeDefault` / `frames_largeDefault` mark the vendor's default where it documents nothing larger. Each size ran at 6 rungs x 2 modes in census shadow (no weights read).
 

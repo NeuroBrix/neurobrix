@@ -5,7 +5,7 @@ tracker issue #9 ("Tracker: engine capabilities Studio needs — accepted,
 being fixed at the source"), its integration plan
 (`docs/studio-engine-integration-plan.md` in `NeuroBrix/neurobrix-studio`),
 and issues #5 and #8. Each request below was re-checked against this engine's
-source at `46479ae` on the day it was written; the line says what the engine
+source at `10cb515` on the day it was written; the line says what the engine
 does today, what the request needs from it, and which architecture rule it
 touches. **Nothing here is scheduled by this document** — it exists so the
 requests are visible when someone decides.
@@ -16,7 +16,7 @@ killing the daemon in place of cancellation, no polling workaround for the
 blocked socket, no temporary shim. Where a Studio feature depends on one of
 these, it reports the capability unavailable with a reason.
 
-| # | request | what the engine does today (read at 46479ae) | what it needs | rule it touches |
+| # | request | what the engine does today (read at 10cb515) | what it needs | rule it touches |
 |---|---|---|---|---|
 | 1 | **Machine-readable discovery without loading a model** — engine version, protocol version, endpoint, supported operations, where things live on disk | The daemon answers `status` (`serving/server.py:404`) once it is up with a model; there is no version or protocol field in the envelope (`serving/protocol.py`: `method` + `params`, no ids, no negotiation); the CLI's `registry` output is human-facing (`cli/commands/registry.py`), `--json` exists on `validate` only (`cli/__init__.py:512`) | One command and one daemon method that report the same record, read from the engine's own sources of truth (`pyproject` version, the protocol module's constant, the cache root the registry uses) — no constant duplicated in Studio | Data-driven: the record is read, never typed twice. R34 unaffected. **Landed 2026-09-16 (CLI half):** `neurobrix info --json` — version, paths, models, hardware profiles, compute stack (`docs/reference/json-output.md`). **Daemon half landed the same day:** `status` returns the same identity record (`serving/engine.py::daemon_identity`: engine, protocol, endpoint, operations) and every envelope carries `protocol` + `engine`. |
 | 2 | **Decoded text deltas in the live stream** | The streaming callback emits `{"step", "n", "token": token_id, "done"}` (`serving/server.py:338-342`); the full text arrives with the terminal response (`:386`) | The stream carries the text the engine's own tokenizer decodes for each delta; both engines (compiled, triton) — the tokenizer runner is engine-internal already (Tokenizer Engine) | R30 (mode universality): one seam in each generator, same event shape. R34: decoding stays inside the engine; Studio never ships a tokenizer. **Landed 2026-09-16:** every stream event of a text family carries `text` (the delta to append, decoded by the engine's tokenizer; a split multi-byte character is held until complete) and `rewind` (characters to take back when a later token rewrites emitted text); the family's own declaration (output format) decides, not its name (`serving/text_stream.py`, `serving/server.py::stream_listener`, both engines through the one listener). |

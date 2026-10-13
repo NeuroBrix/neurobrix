@@ -17,7 +17,7 @@ Everything below is measured. Where a number is quoted, the command that produce
 | 2 | PixArt-Sigma-XL-1024 | same | **closed**, censused + certified |
 | 3 | PixArt-XL-2-1024-MS | `addmm::0 AssertionError:` (empty) | **closed**, censused + certified |
 | 4 | PixArt-Sigma-XL-2-1024-MS | same | **closed**, censused + certified |
-| 5 | Sana-1600M-MultiLing | `Cannot broadcast (1,32,128,128) and (1,128,128,32)` | **closed** by the rack's `2a21e41e` |
+| 5 | Sana-1600M-MultiLing | `Cannot broadcast (1,32,128,128) and (1,128,128,32)` | **closed** by the rack's `2f925673` |
 | 6 | Sana_1600M_1024px_MultiLing | `bmm shape mismatch: (140,33,16384) @ (35,16384,128)` | **named** — 3 of 4 defects fixed, closes by the rack's retrace |
 | 7 | Allegro-TI2V | `None of the sources resolved: ['global.image']` | harness **closed**; memory + a new `slice::55` defect named |
 | 8 | CogVideoX-5b-I2V | same | harness **closed**; memory only — APPLE (memory / rung) |
@@ -36,7 +36,7 @@ with a measured cause. Nothing is unclassified and nothing is guessed.
 Three defect classes, not one. The six "shape defects" of the mandate were three mechanisms
 across two model families, and separating them was most of the work.
 
-**1. A patchified token count the spatial pass could not see** (`ae0d1908`).
+**1. A patchified token count the spatial pass could not see** (`312f6c62`).
 `_spatial_promotion_pass` knows H, W, H·W and their *upscaled* multiples; it was written for
 VAE decoders, which scale up. A patch-embedded transformer **divides**: its grid is
 (H/p)·(W/p), so PixArt's 64, 4096 and 8192 matched nothing and 224 target groups stayed
@@ -58,7 +58,7 @@ Measured before and after on the census shadow:
 by a fraction. The clean integer ratios were the broken ones — a gate that sampled only 1536
 would have reported health.
 
-**2. A request symbol standing in for a fixed extent** (`86fa1ef4`, `15a1fbfb`, `c76a4620`).
+**2. A request symbol standing in for a fixed extent** (`9889f86a`, `c98309cb`, `61352400`).
 Three shapes of the same mistake, each needing a different discriminator:
 
 * a **slice end** — PixArt's timestep embedding is 256 wide, split in half; at 1024 px the
@@ -76,13 +76,13 @@ The rule was shaped by measurement, not applied and hoped for: Sana's VAE `aten.
 broken the decoder at every size but the traced one. Blast radius, measured on all five image
 containers: **Sana 243 entries changed, all four PixArt containers 0.**
 
-**3. A latent hazard closed before it was met** (`a4361cf5`). `_walk_shape_list` is shared with
+**3. A latent hazard closed before it was met** (`292f2130`). `_walk_shape_list` is shared with
 `aten::expand`, where `-1` means *keep this dimension*, not *infer it*. The token-collapse
 rewrite had no op-type guard, so it could have changed an op's meaning rather than its extent.
 No container triggered it — 0 expand targets carry a `-1` after the pass — so this is a hazard
 closed, not a regression fixed.
 
-**4. A census that silently dropped a required input** (`96cc16ea`). `_declares_image_input`
+**4. A census that silently dropped a required input** (`e9333630`). `_declares_image_input`
 answered `except OSError: return False`, making *"I could not read the topology"*
 indistinguishable from *"this model needs no image"*. On this Mac the container cache is NFS
 over Wi-Fi. The evidence that this is the path, and the only one: the recorded command carries
@@ -91,7 +91,7 @@ models declare `global.image` and `request_args` supplies one; and the block pre
 census. Re-censused with the mount healthy, the image is now in every request and
 `global.image` appears in `CLI inputs`.
 
-**5. Two bare assertions given their numbers** (in `ae0d1908`). `addmm` and `baddbmm` asserted
+**5. Two bare assertions given their numbers** (in `312f6c62`). `addmm` and `baddbmm` asserted
 `K == K2` with no message, so the census received `AssertionError:` with nothing in it and two
 models' causes cost a reproduction run to learn.
 
@@ -165,7 +165,7 @@ NBXTensor and the house kernel family, and neither is a half-hour's work.
   here to confirm rather than infer). Their detector is *right*: PixArt's misattribution lives
   in an activation shape arg and a slice bound, which it does not scan. The rack's PixArt green
   is **unexercised above 1024 px, not evidence of absence**.
-* **Sana** — the rack already knows. `2a21e41e` names eleven containers awaiting retraces and
+* **Sana** — the rack already knows. `2f925673` names eleven containers awaiting retraces and
   Sana_1600M_1024px_MultiLing is **first, with 174 parameter dims**.
 
 What is genuinely Apple-only is the **rung ladder** that exposed all of it.
@@ -190,7 +190,7 @@ PixArt containers, in `--compiled` as well as the triton modes.
    load-bearing for CFG batch 2→1. **Filed with its evidence rather than changed quietly**; it
    needs a measured pass over the catalogue, which is a chantier of its own.
 
-3. **`NBX_CENSUS=1 --compiled` is a crash, not a refusal** (`9d3ab07e`). Under a shadow the
+3. **`NBX_CENSUS=1 --compiled` is a crash, not a refusal** (`fd44599a`). Under a shadow the
    host-availability clamp is deliberately skipped, so the plan is accepted where a real run
    refuses, and compiled mode then **loads weights** — which a shadow must never do. Those are
    mmap'd safetensors on NFS, so an undeliverable page is SIGBUS: no traceback, every buffered
@@ -252,7 +252,7 @@ that span is quantised down to 8192 and up to 3 GB of usable memory is discarded
 of a deliberate choice", said the artefact needed a reading above 11 264 MB, and asked Hocine
 to free memory. That was wrong on both counts. **It is a Prism doctrine defect: the engine
 never refuses, and a component larger than its rung is streamed.** The Dell owns the fix. It
-is uncommitted on metatron at `ce34bdea` (`core/prism/solver.py`, `core/prism/memory_budget.py`,
+is uncommitted on metatron at `d2e48a60` (`core/prism/solver.py`, `core/prism/memory_budget.py`,
 `core/config/system.py`, plus three tests), and this machine does not touch `core/prism`. Memory
 was never the way out. The engine's own reading at 12:51 was 10 407 MB available, with
 `prl_vm_app` holding 8 400 MB resident. Swap (2 885 MB) is not part of that reading. With the

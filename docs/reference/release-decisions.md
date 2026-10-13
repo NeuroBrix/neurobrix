@@ -9,7 +9,7 @@ CHANGELOG entry that closed them.
 ### A compiler upgrade inherits a directory proven under the previous compiler (2026-09-20)
 
 **Measured.** The certified autotune directory `nvidia/volta` shipped in 0.5.4 records
-Triton 3.6.0 in every one of its 9 655 proofs. The generator gate (`ec938641`) serves a
+Triton 3.6.0 in every one of its 9 655 proofs. The generator gate (`418d2968`) serves a
 certified setting only to the compiler that proved it, which is right. So an installation
 that upgrades to Triton 3.8.0 — which `pip install torch==2.14` does by itself — gets a
 first run in which **every kernel shape sweeps at execution time**: on this rack, a
@@ -39,7 +39,7 @@ serve only to that one — the directory gate without the cache gate is half a d
 A user in a container, on a shared server or under a scheduler runs masked as the normal
 case. Three regression guards (`test_serve_warm.py`, `warm_cell_runner.py`,
 `test_upscale_offtrace.py`, 2026-08-27) and debt entry D-AUTODETECT-VISIBLE-MASK say the
-engine mis-places under a mask; `_apply_visible_filter` (`acd14637`, 2026-09-03) re-indexes
+engine mis-places under a mask; `_apply_visible_filter` (`7a307287`, 2026-09-03) re-indexes
 the visible set and the profile is keyed by it since. Whether a facet remains — the profile
 index against the runtime ordinal — was measured the same day: red on the tree before the
 guard for one card and for two, green on main for one card, for a 32 GB card as ordinal 0
@@ -63,7 +63,7 @@ read remains the developer's override. The four hub containers that declare the 
 (Wan2.1-T2V-1.3B, Wan2.1-I2V-14B-480P, Wan2.1-VACE-1.3B, Wan2.2-I2V-A14B) must be rebuilt and
 re-uploaded — no re-trace, the graphs are unchanged.
 
-**The class, closed in the engine and the build the same day (6fb35c3b).** Five other readers
+**The class, closed in the engine and the build the same day (5eb49103).** Five other readers
 took a flag only from the registry — `i2v_latent_conditioning`, `vace_control_conditioning`
 (both engines), the two precision pins Prism reads in `solver.py` (`requires_fp32_compute`,
 `fp16_conv_cascade_safe`), and the vision input processor's `pad_image_to_num_frames`. The build
@@ -155,5 +155,5 @@ each with its source. No compute wasted, no errors, problems treated at the sour
 compute certificates and run the anti-regression are named as the origin of many problems: the Dell writes their
 contracts and tests, one implementation for both machines; the Mac reviews what arrives on the peer channel
 against Metal. Raised by the day's measurements: a settle step written around Prism's host reading (removed, the
-reading fixed at the source, `e8998f58`), a census walk whose dtype placement was the door's (Voxtral), and a
+reading fixed at the source, `2db23385`), a census walk whose dtype placement was the door's (Voxtral), and a
 zero-miss column read as a judged image (renamed; images judged from outside).

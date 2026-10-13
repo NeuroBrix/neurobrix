@@ -73,4 +73,4 @@ produced a CLEAN-looking answer:
 Once the cells could actually run, they formed **73 keys the 3 106-key census never named**
 — 65 from chatterbox in `--triton-sequential`, 8 from Kokoro in `--triton`. The census
 shadow reads graphs without executing, so it under-predicts what a real run forms. All 73
-were certified (`e279922a`), and this run confirms them on a cold cache.
+were certified (`61bba7fe`), and this run confirms them on a cold cache.

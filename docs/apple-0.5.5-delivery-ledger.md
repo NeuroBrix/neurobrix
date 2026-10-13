@@ -129,7 +129,7 @@ whole component. The 11 models below are therefore **SCHEDULED**, not refused:
 they run by weight block-streaming, throughput bounded by the storage read
 (local NVMe / shared cache, not the 7–9 MB/s hub link). Implementing that
 cascade tail on unified is the adaptive-memory workstream (this branch; the
-`return None` guard in `b23105fe` is the placeholder it replaces).
+`return None` guard in `8dacad03` is the placeholder it replaces).
 
 **Scheduled — weight block-streaming on unified (11, weights exceed 22 GB usable
 so they cannot be resident; resident cost = one streamed block):**
@@ -185,14 +185,14 @@ so they cannot be resident; resident cost = one streamed block):**
 **CogVideoX/PixArt "FAILED" root-caused — a chain of engine defects, not request gaps
 (2026-09-21):** the shadow was diverging from the real plan and dying, not missing a
 request field. Each fix let the shadow reach further and harvest more keys.
-- **Fix 1 — Prism host-offload on unified (`b23105fe`, red→green):** Strategy 4 placed
+- **Fix 1 — Prism host-offload on unified (`8dacad03`, red→green):** Strategy 4 placed
   the text_encoder on `cpu` to "save memory" on a unified device, where host==device so
   it frees nothing, and the Metal path then had nothing to trace. Root cause: asymmetric
   accounting — GPU checked against live-free (~10.7 GB, VM up), CPU against the profile's
-  24 GB, on ONE physical pool. Same family as zero3-on-unified (`cafaf799`). Guarded:
+  24 GB, on ONE physical pool. Same family as zero3-on-unified (`cc561f3e`). Guarded:
   on unified, Strategy 4 returns None → refuse-by-arithmetic. Keys: CogVideoX 0→8,
   PixArt 0→5.
-- **Fix 2 — NBX dtype read by name (`ac10eddf`, red→green):** Triton input synthesis
+- **Fix 2 — NBX dtype read by name (`8955e981`, red→green):** Triton input synthesis
   read `str(val.nbx_dtype).split(".")[-1]`; NBXDtype is an IntEnum so this yielded the
   VALUE ("0"), and `np.dtype("0")` raised `data type '' not understood`. Read
   `.name` instead. Latent on ANY triton run that synthesizes an input. Keys:
