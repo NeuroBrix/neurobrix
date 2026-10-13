@@ -604,6 +604,13 @@ def run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path
     return row
 
 
+def cell_argv(model: str, mode: str, art, req: list = None) -> list:
+    """The argv of a cell's `python -m neurobrix` — ONE definition, the one `_run_cell` launches and the one
+    the computed gate scope (tools/gate_scope.py) parses with the engine's own parser."""
+    req = cell_request(model) if req is None else req
+    return ["run", "--model", model, *req, *MODES[mode], "--certified-only", "--output", str(art)]
+
+
 def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Path) -> dict:
     family = Z.family_of(model)
     req = cell_request(model)
@@ -621,8 +628,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
     # python), written in the row: a matrix measures ONE stack, and the stack is part of the cell.
     # Every cell is a CONFIRMATION run (the owner's method, 2026-09-28 20:06): served entirely from
     # the certified directory, a missing key an error naming its census row — never a runtime sweep.
-    cmd = [sys.executable, "-m", "neurobrix", "run", "--model", model, *req, *MODES[mode],
-           "--certified-only", "--output", str(art)]
+    cmd = [sys.executable, "-m", "neurobrix", *cell_argv(model, mode, art, req)]
     rc, wall = Z.run(cmd, env, log, timeout, stack_at_timeout=True)
     tree = src.parent
     misses = missing_keys(log)
