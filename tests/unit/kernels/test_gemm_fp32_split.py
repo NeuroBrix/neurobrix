@@ -21,15 +21,24 @@ from neurobrix.kernels import wrappers as W
 from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
 
 
-def _split_declared() -> bool:
+def _no_gpu_reason():
+    """Why these cells cannot run here, or None. Only the ABSENCE of a device or of the profile's split rows skips: a
+    broken kernel module, a refused profile or a failing allocator raises at collection, never reads as a skip."""
+    from neurobrix.kernels.nbx_tensor import _gpu_runtime
     try:
-        DeviceAllocator.set_device(0)
-        return bool(((W._matrix_unit() or {}).get("fp32_split") or {}).get("mm"))
-    except Exception:
-        return False
+        _gpu_runtime()
+    except (OSError, RuntimeError) as exc:           # no CUDA/HIP runtime library on this host
+        return f"no GPU runtime: {exc}"
+    if DeviceAllocator.device_count() < 1:           # a runtime with no visible device (CUDA_VISIBLE_DEVICES="")
+        return "the process sees no device"
+    DeviceAllocator.set_device(0)
+    if not ((W._matrix_unit() or {}).get("fp32_split") or {}).get("mm"):
+        return "the hardware profile declares no matrix_unit.fp32_split"
+    return None
 
 
-pytestmark = pytest.mark.skipif(not _split_declared(), reason="the hardware profile declares no matrix_unit.fp32_split")
+_SKIP = _no_gpu_reason()
+pytestmark = pytest.mark.skipif(_SKIP is not None, reason=_SKIP or "")
 
 _SLACK = 4 * float(np.finfo(np.float32).eps)
 
@@ -126,6 +135,41 @@ def test_range_edges(edge, monkeypatch):
     if edge == "zero rows":
         assert (split[::3] == 0).all(), "a zero row must stay exactly zero"
     _judge(split, fma, ref)
+
+
+def test_a_bfloat16_operand_through_the_split_rounds_to_the_oracle(monkeypatch):
+    """`fp32_split.operands` lists bfloat16: a bf16 x bf16 GEMM takes the split (flags True, True) and its bf16 output
+    is the correctly rounded fp64 product on all but the elements within the inside's fp32-level error of a rounding
+    boundary: at most 1 % of them, each by one bf16 ulp of the binade the oracle or the result lies in, plus the
+    inside's fp32-level error against the uncancelled sum sum_k |a_ik w_kj| (a dot product's error scales with that
+    sum, not with its result; first measurement 2026-10-12: 0.010 % off, max exactly 2.00 'ulp' — the gate's ulp
+    constant was 2^-8 where bfloat16's spacing is 2^-7, so a one-ulp element read as two). An fp16-level inside would put half the elements off. The FMA path on the
+    same inputs is held to the same bound."""
+    from neurobrix.kernels.nbx_tensor import NBXDtype, bf16_carrier_to_float32, float32_to_bf16_bits
+
+    def bf16(x):
+        bits = float32_to_bf16_bits(np.ascontiguousarray(x, dtype=np.float32))
+        return bf16_carrier_to_float32(np.asarray(bits, dtype=np.uint16).view("V2")).astype(np.float64)
+    rng = np.random.default_rng(16)
+    M, K, N = 512, 1024, 256
+    a = bf16(rng.standard_normal((M, K)))
+    w = bf16(rng.standard_normal((K, N)) / np.sqrt(K))
+    A, Wb = _nb(a.astype(np.float32)).to(NBXDtype.bfloat16), _nb(w.astype(np.float32)).to(NBXDtype.bfloat16)
+    ref = a @ w
+    uncancelled = np.abs(a) @ np.abs(w)
+    split, flags, fma = _both(lambda: W.mm(A, Wb).to(NBXDtype.float32), monkeypatch)
+    assert flags == (True, True)
+    for name, got in (("split", split), ("FMA", fma)):
+        off = np.abs(got - bf16(ref))
+        ulp = 2.0 ** -7 * 2.0 ** np.floor(np.log2(np.maximum(np.maximum(np.abs(ref), np.abs(got)), 1e-300)))   # bf16: 7 stored bits
+        bound = ulp + _SLACK * uncancelled
+        frac = float((off > 0).mean())
+        print(f"\n  bf16 {name}: {frac * 100:.3f} % off the rounded oracle, max {float((off / ulp).max()):.2f} ulp of the "
+              f"binade, max {float((off / bound).max()):.2f} of the bound")
+        assert np.isfinite(got).all()
+        assert (off <= bound * (1 + 1e-9)).all(), \
+            f"{name}: an element further from the rounded oracle than one ulp of its binade plus the inside's error on the uncancelled sum"
+        assert frac <= 0.01, f"{name}: {frac * 100:.2f} % of the elements off the correctly rounded oracle"
 
 
 def test_without_the_split_an_fp32_operand_keeps_the_exact_path(monkeypatch):
