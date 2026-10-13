@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An expert store is granted only the room the plan did not promise elsewhere.** The decode
+  LM of a flow that names it outright (a VLM's `lm_component`, an omni model's thinker) is now
+  the component its KV cache is charged to; before, it was charged to nobody and the store took
+  that room. The grant also leaves the hardware profile's deferred-drain cliff. Measured on
+  Qwen3-Omni-30B-A3B-Instruct on a 32 GB V100 (triton): the cell died at the lm_head copy with
+  206 MB free.
+
 ### Added
 
 - **The serving daemon answers while it generates, and a generation can be cancelled.** `status`,

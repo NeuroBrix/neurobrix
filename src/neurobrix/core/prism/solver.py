@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.host_memory import MemoryState, memory_state
-from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
+from neurobrix.core.prism.memory_budget import (DeviceReading, deferred_drain_policy_of, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
                                                 rung_down_mb, describe as _describe_budget, read_device_sharing,
                                                 host_budget_mb as _host_budget_mb_read)
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
@@ -1040,8 +1040,14 @@ class PrismSolver:
             window_mb = 0.0 if unified else 2.0 * max(
                 self._parse_blocks(container, name).get("block_sizes", {}).values(), default=0.0) * mult
             room_mb = self._usable_mb(dev) - held_mb - window_mb
+            # The Triton hot loop's dead-tensor queue is a plan promise too: a card whose room the store
+            # takes whole drains at a cliff of 0 (`_assign_drain_cliffs`), and the engine still needs the
+            # profile's cliff between two drains — the store's grant leaves it (the supervisor's rule,
+            # 2026-10-13 02:05: never a cache granted on memory the plan has already promised).
+            memory = self._drain_profile_memory(dev)
+            cliff_mb = (deferred_drain_policy_of(memory)[0] / mib) if memory is not None else 0.0
             weight_mb = plan.component_memory[name].weight_mb * mult
-            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
+            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb - cliff_mb, mult)
             if unified:
                 self._refuse_unheld_expert_files(container, name, alloc)
                 if store is None:
@@ -3228,11 +3234,18 @@ class PrismSolver:
             if lm_config:
                 lm_component_name = lm_config.get("component_name")
             if not lm_component_name:
+                # The component the flow decodes with, read from the flow (`lm_facts.decode_lm_component`):
+                # an omni model's thinker (`thinker.model`) carried the KV plan under no name, so the plan
+                # charged its KV cache to nobody and the expert store's grant took that room
+                # (Qwen3-Omni-30B 32g triton, 2026-10-13). The historical names stay as the last reading.
+                from neurobrix.core.runtime.lm_facts import decode_lm_component
                 comp_names = [c.name for c in components]
-                for candidate in ("language_model", "model", "llm"):
-                    if candidate in comp_names:
-                        lm_component_name = candidate
-                        break
+                lm_component_name = decode_lm_component(self._flow_topology(container), comp_names)
+                if not lm_component_name:
+                    for candidate in ("language_model", "model", "llm"):
+                        if candidate in comp_names:
+                            lm_component_name = candidate
+                            break
 
         # Kept: the post-scoring KV check must know which component's estimate carries the cache.
         self._lm_component_name = lm_component_name
