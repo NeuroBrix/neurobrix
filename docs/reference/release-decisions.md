@@ -157,3 +157,69 @@ contracts and tests, one implementation for both machines; the Mac reviews what 
 against Metal. Raised by the day's measurements: a settle step written around Prism's host reading (removed, the
 reading fixed at the source, `2db23385`), a census walk whose dtype placement was the door's (Voxtral), and a
 zero-miss column read as a judged image (renamed; images judged from outside).
+
+## 2026-10-12 15:25 — NOTHING IS LOST (the owner, via the supervisor)
+
+Four sub-agents ran on the Dell all night, never collected; their work was found nowhere.
+
+1. Every job launched (sub-agent, chain, script, GPU run) has, before it starts, a line in the agent's report — what, where it writes, how its end is known — and an end watcher. No work runs unreported.
+2. A sub-agent writes its own deliverable to disk in the campaign, at a path fixed when it is launched, not only in its reply. It is collected and closed in the turn it ends.
+3. At every wake, every context compaction and every turn end, the live sub-agents and chains are listed and compared with the report; a gap is fixed and noted.
+4. Every sub-agent and chain of the last 48 h has its deliverable on disk and in the report, or is recovered from the campaign and the session logs under RECOVERED.
+5. A job that ran unreported is a fault of method, not an incident.
+
+## 2026-10-12 15:30 — FORGE guidelines (the owner, via the supervisor)
+
+Forge is the proprietary tool that traces our models.
+
+- It is used explicitly through its entry point and documented commands (its repository README and the CLAUDE.md at its root). It has its own git branch, and Forge main is the only line.
+- A model is never traced with a custom script.
+- Forge stays portable and traces every model we own: a lost container is retraced by Forge into an exact copy.
+- Every specification stays in force:
+  - NeuroTax 5.0;
+  - symbolic shapes are mandatory, with no frozen dimension;
+  - one algebraic-function tool for symbolic shapes, extended and fixed as needed;
+  - unified VMM for every trace.
+- A fix never breaks another model's trace. The trace suite of the whole catalogue is the proof before a Forge fix lands.
+- Hard code is allowed in Forge, a private tool, but is not desirable.
+
+## 2026-10-12 18:20 — CONFIDENTIALITY and ECONOMY (the owner, via the supervisor)
+
+Confidentiality: the work is confidential. Never /feedback, /bug, or any send to the model vendor beyond the
+model calls themselves. No session-link trailer and no co-author trailer in any commit message (the engine
+repository is public). Agent settings disable non-essential traffic, telemetry, error reports and co-author
+lines on all three machines from their next session start.
+
+Economy: sub-agents only in extreme necessity, the reason written in the report before launch (zero by default);
+never a turn spent checking that a job progresses (a shell watcher wakes the agent at its end); scripts written
+once into the campaign and re-run by path, never pasted; one command per step with truncated output; the report
+is rewritten on disk, not repeated in the conversation; anything not visible in the owner's terminal is closed.
+
+## 2026-10-12 19:50 — CHAIN OF COMMAND, CLI-ONLY TESTS, LAST DATED PROOF, CODE HYGIENE (the owner, URGENT, via the supervisor)
+
+0. **Chain of command.** The supervisors steer, not the agent. An inbox entry marked URGENT is executed before any
+   other action, at once, and acknowledged on the first line of the report; orders run in the order given.
+1. **Tests are the engine's command line, nothing else.** A model is tested as a user does: the `neurobrix` entry point
+   with the command and flags its request needs (model, prompt, resolution, steps, frames, temperature, audio or image
+   input), then the output is looked at. No custom test script. A script may only chain many identical commands, or
+   measure a dimension outside the engine's workflow; it lives in the campaign, never in this repository, and invents
+   no execution path. The gate harness only orchestrates that exact command, written in every result row so it can be
+   replayed by hand. Test scripts that do not respect this are inventoried and deleted.
+2. **"Validated many times, broken today."** Before a validated model is announced broken, it is compared with its last
+   dated proof under the same CLI command and flags, naming which of the three changed: the container (sha), the engine
+   (commit) or the request/test. If the test changed, the defect is the test. No fix breaks something else: each fix is
+   proven at the CLI on the fixed model and on a neighbouring validated model before it lands.
+3. **Code hygiene.** A change is complete or does not exist: no unwired fragment, no old code path left beside the new
+   one, the touched file cleaned, every change committed and pushed to both remotes (git history is the only way back).
+
+## 2026-10-13 02:15 — THE DTYPE IS PER COMPONENT (the owner, via the supervisor)
+
+1. Each component of a model runs in the dtype its safetensors headers give, and Forge declares it as is, per component,
+   in the container. There is no "dominant dtype" voted across components: a vote, a tie or a walk order never decides a
+   dtype. The state dtype in `runtime/defaults.json` is derived per component, never global.
+2. The only exception: a value beyond the hardware's precision margin (fp16 overflow on V100) forces fp32. That decision
+   belongs to the DtypeEngine at run time, from the hardware profile and the tensor itself, never by model name, and it
+   is never written into the container: the container stays portable (Apple and Hopper do not share a margin).
+3. No GPU on a known defect: every container whose state dtype differs from its components' header dtypes is found by
+   reading the manifests and headers (zero execution), corrected by Forge (metadata rewrite, no retrace when the graph is
+   right), then its dated proof is replayed at the CLI. The Mac's reading of 2026-10-13 flagged 20 of 49 containers.
