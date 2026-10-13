@@ -602,6 +602,22 @@ class GraphExecutor:
                         continue
                     _a["norm_topk_prob"] = norm_topk_prob
 
+    def _take_the_component_moe_declaration(self) -> None:
+        """A `layer_streaming` piece routes its experts under its COMPONENT's declaration.
+
+        The flow declares on the component's executor (`set_moe_config`), after the strategy cut
+        the pieces from a graph an `llm` load had already fused at the default True — and that
+        executor's `run` walks the pieces, so its patched graph never runs. Read from the base
+        as it is now (`_component_from`), at every run, like the rest of the component's state:
+        DeepSeek-Coder-V2-Lite (`norm_topk_prob` false) streamed every piece renormalising its
+        top-6, and left the vendor's greedy ids at step 2 (2026-10-12). Nothing to do for a
+        whole executor, or for a component nothing declared."""
+        src = self._component_from
+        if src is None or not hasattr(src, "_moe_norm_topk_prob"):
+            return
+        if not hasattr(self, "_moe_norm_topk_prob") or self._moe_norm_topk_prob != src._moe_norm_topk_prob:
+            self.set_moe_config(norm_topk_prob=src._moe_norm_topk_prob)
+
     def _load_what_the_rewrite_added(self) -> None:
         """After a DAG rewrite that adds consumers (the declared MoE fusion),
         load the weights the graph now reads and did not before, through the
@@ -2864,6 +2880,7 @@ class GraphExecutor:
             Output tensors
         """
         _save_inputs_if_asked(getattr(self, "_component_name", None) or "?", inputs, getattr(self, "mode", "?"))
+        self._take_the_component_moe_declaration()
         # Explicit per-call callback wins over the persistent one
         # (installed by zero3). _execute_compiled_graph consumes via
         # self._pre_op_callback — reset in finally so the instance
