@@ -179,3 +179,15 @@ is rewritten on disk, not repeated in the conversation; anything not visible in 
    proven at the CLI on the fixed model and on a neighbouring validated model before it lands.
 3. **Code hygiene.** A change is complete or does not exist: no unwired fragment, no old code path left beside the new
    one, the touched file cleaned, every change committed and pushed to both remotes (git history is the only way back).
+
+## 2026-10-13 02:15 — THE DTYPE IS PER COMPONENT (the owner, via the supervisor)
+
+1. Each component of a model runs in the dtype its safetensors headers give, and Forge declares it as is, per component,
+   in the container. There is no "dominant dtype" voted across components: a vote, a tie or a walk order never decides a
+   dtype. The state dtype in `runtime/defaults.json` is derived per component, never global.
+2. The only exception: a value beyond the hardware's precision margin (fp16 overflow on V100) forces fp32. That decision
+   belongs to the DtypeEngine at run time, from the hardware profile and the tensor itself, never by model name, and it
+   is never written into the container: the container stays portable (Apple and Hopper do not share a margin).
+3. No GPU on a known defect: every container whose state dtype differs from its components' header dtypes is found by
+   reading the manifests and headers (zero execution), corrected by Forge (metadata rewrite, no retrace when the graph is
+   right), then its dated proof is replayed at the CLI. The Mac's reading of 2026-10-13 flagged 20 of 49 containers.
