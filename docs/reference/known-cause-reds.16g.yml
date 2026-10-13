@@ -20,18 +20,4 @@
 # engine or date differ from the entry, or when it is not red (a green source row means the record is
 # stale: remove the entry). Gates are per machine AND per memory class (a certified entry serves only the class it was proven on):
 # one file per class, known-cause-reds.<class>.yml, named by that class's gate; the Mac keeps its own.
-reds:
-  - model: Ming-Lite-Omni-1.5
-    mode: native
-    source_gate: /home/mlops/nbx/campaigns/2026_10_12_mq25_gate/landing/matrix_16g
-    date: '2026-10-13T08:53:55Z'
-    engine: 7a5fab71
-    cause: "engine defect, layer_streaming x multi-gate MoE fusion: Ming's language model keeps 3 modality gates (aten::topk) per layer in the fused graph, bound to the layer's custom::moe_fused op by gate_group, 36 ops before it; the 16 GB plan cut piece 0 between a layer's gates and its fused op (native layer 2, aten.topk::6/7/8; triton layer 9, aten.topk::27/28/29); the piece took the component's declaration (door 89717071), re-ran the declared fusion pass on its slice and refused 'no matcher recognised an expert block behind it' - the block is in piece 1. The whole graph fuses 28/28 layers (CPU, 2026-10-13 11:5x; the 32 GB cells are green). Fix: GraphExecutor.set_moe_config judges a piece's routers on its component's graph (branch a-piece-takes-its-components-fusion)"
-    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, a seam between a layer's gates and its fused op"
-  - model: Ming-Lite-Omni-1.5
-    mode: triton
-    source_gate: /home/mlops/nbx/campaigns/2026_10_12_mq25_gate/landing/matrix_16g
-    date: '2026-10-13T08:56:36Z'
-    engine: 7a5fab71
-    cause: "engine defect, layer_streaming x multi-gate MoE fusion: Ming's language model keeps 3 modality gates (aten::topk) per layer in the fused graph, bound to the layer's custom::moe_fused op by gate_group, 36 ops before it; the 16 GB plan cut piece 0 between a layer's gates and its fused op (native layer 2, aten.topk::6/7/8; triton layer 9, aten.topk::27/28/29); the piece took the component's declaration (door 89717071), re-ran the declared fusion pass on its slice and refused 'no matcher recognised an expert block behind it' - the block is in piece 1. The whole graph fuses 28/28 layers (CPU, 2026-10-13 11:5x; the 32 GB cells are green). Fix: GraphExecutor.set_moe_config judges a piece's routers on its component's graph (branch a-piece-takes-its-components-fusion)"
-    red_cells: "Ming-Lite-Omni-1.5 | 16 GB, a seam between a layer's gates and its fused op"
+reds: []
