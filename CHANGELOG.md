@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pipeline from the same values within 4 ulp (measured: 98.8 % within 1 ulp). Before, each branch
   drew with its own algorithm and a model could render on one branch's draw and not on the
   other's at the same seed. A seedless run draws unseeded in each engine, as before.
+  The executor arms the shared stream in EVERY mode (armed for the Triton branch only, the compiled branch's seeded run
+  drew its initial noise unseeded: Wan2.1-I2V native 2026-10-13 12:09); a seeded resolver with no armed stream is refused by name.
 
 ### Fixed
 

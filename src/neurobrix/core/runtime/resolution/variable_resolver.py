@@ -155,6 +155,11 @@ class VariableResolver:
                 # from_numpy lands on the process's card (the Triton branch's one device); the dtype
                 # follows the variable's declared one.
                 _t = NBXTensor.from_numpy(np.ascontiguousarray(_rng.init_draw(shape))).to(dt)
+            elif self.defaults.get("seed") is not None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: '{name}' is a seeded run's initial draw (seed {self.defaults.get('seed')}) "
+                    "and the run stream is not armed — the executor arms it for every mode before any "
+                    "variable resolves (one draw for both engines).")
             else:
                 _t = W.randn_wrapper(list(shape), dtype=dt, device=dev)
             _dump_init_latent(name, _t.numpy)
@@ -401,6 +406,11 @@ class VariableResolver:
                 from neurobrix.kernels import rng_stream as _rng
                 if _rng.active():
                     _t = torch.from_numpy(_rng.init_draw(shape_tuple)).to(device=self.device, dtype=dtype)
+                elif self.defaults.get("seed") is not None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: '{name}' is a seeded run's initial draw (seed "
+                        f"{self.defaults.get('seed')}) and the run stream is not armed — the executor arms "
+                        "it for every mode before any variable resolves (one draw for both engines).")
                 else:
                     _t = torch.randn(shape_tuple, dtype=dtype, device=self.device)
                 _dump_init_latent(
