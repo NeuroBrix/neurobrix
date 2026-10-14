@@ -5970,8 +5970,15 @@ class GraphExecutor:
             self._pieces_capture = {}
 
         # Step 2: Use centralized memory manager
+        _released = len(self._weights or {})
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
+        # The load says when a component arrives; the release says when it leaves — the two lines a
+        # per-second memory trace is aligned on to read which components a peak held (the Mac's unified
+        # overruns peaked at a component load, 2026-10-14; nothing said whether the previous one had left).
+        if _released:
+            print(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "
+                  f"'{getattr(self, '_component_name', '?')}': released {_released} weights", flush=True)
         # Step 3: the last run's context goes with them. It holds the weight dict the run was
         # built on (`ExecutionContext.weights`), which `_reconcile_weight_keys` had replaced on
         # the executor by the time the step above cleared it — so every weight of the load
