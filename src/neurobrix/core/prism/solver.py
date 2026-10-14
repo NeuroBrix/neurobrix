@@ -1173,7 +1173,7 @@ class PrismSolver:
         floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
         return dense_mb, floor_mb, routed_mb
 
-    def _peak_loaded_bytes(self, container, plan) -> int:
+    def _peak_loaded_bytes(self, container, plan, devices=None) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
         each component's total); the KV cache, priced inside its owner's total, stays allocated in
         the phases that no longer hold the owner.
@@ -1190,6 +1190,19 @@ class PrismSolver:
             if missing:
                 raise KeyError(f"layer_streaming rung priced no cost for {missing}")
             totals = {n: int(cost[n]) for n in totals if n not in streamed}
+        else:
+            # A plan that is not streamed holds a TILED component at its tile, as the placement priced it
+            # (`_tiled_component_mb`: its weights at the card's cost multiplier and one tile's activations),
+            # never at its untiled activations: Allegro's VAE under the Mac's profile is tiled to 6.7 GB per
+            # tile and was priced at 415 GB — a 436 GB unified device figure, a 419 GB host reservation
+            # (2026-10-14).
+            by_name = {d.device_string: d for d in (devices or [])}
+            for n, spec in (getattr(plan, "component_tiling", None) or {}).items():
+                a = plan.components.get(n)
+                dev = by_name.get(str(a.device)) if a is not None else None
+                if n in totals and dev is not None and n in plan.component_memory:
+                    totals[n] = int(self._tiled_component_mb(container, n, plan.component_memory[n], dev, spec)
+                                    * 1024 * 1024)
         for n, a in plan.components.items():
             if a.strategy == "expert_store" and n in totals:
                 # its dense part and its expert cache beside its activations: the routed experts
@@ -2500,7 +2513,7 @@ class PrismSolver:
             plan, self._weight_sizes_by_component(container), container.get_shard_sizes(), _engine,
             _base, _itemsize.itemsize_table(), is_block_key, self._stored_dtypes_by_component(container),
             resident_bytes=process_footprint_now(), output_bytes=self._output_bytes(container),
-            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan)),
+            device_bytes=unified_device_bytes(plan, profile, self._peak_loaded_bytes(container, plan, devices)),
             file_backed=self._file_backed_experts(plan, profile), **self._streamed_loads(plan))
 
         # Step 7.10: the routed working set, STATED beside the plan's figures (expert_topology.py) —

@@ -29,7 +29,10 @@ def test_every_phase_of_a_streamed_plan_is_inside_its_unified_device_price(monke
     from neurobrix.core.prism import PrismSolver
     from neurobrix.nbx import NBXContainer
     pin_host(monkeypatch, 24576, 16981, "the CogVideoX-2b native run's reading, 2026-10-08")
-    monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
+    # The streamed plan is this file's subject, so it is asked for by name. Prism chose it by itself until
+    # 2026-10-14; it now plans this request lazy_sequential, its tiled VAE priced at its tile in the dearest phase
+    # (test_a_tiled_component_is_held_at_its_tile.py) instead of its untiled activations.
+    monkeypatch.setenv("NBX_FORCE_STRATEGY", "layer_streaming")
     container = NBXContainer.load(str(container_root(MODEL)))
     manifest = container.get_manifest() or {}
     args = create_parser().parse_args(["run", "--model", MODEL, *REQUEST])
