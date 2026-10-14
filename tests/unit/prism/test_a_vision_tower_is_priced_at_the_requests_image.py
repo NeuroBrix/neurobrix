@@ -66,3 +66,21 @@ def test_the_towers_activations_are_priced_at_the_image():
     cfg = InputConfig(batch_size=1, height=448, width=448, flow=fb, dtype="bfloat16", vae_scale=8, mode="text")
     ap = ActivationProfiler(fb.graph(vis)).estimate_peak_memory(input_config=cfg, dtype_bytes=2, placement_floor=True)
     assert ap.peak_bytes < 1 << 30, f"{ap.peak_bytes / 2**30:.2f} GiB for a 1 024-patch image"
+
+
+def test_a_staged_tower_binds_the_processors_three_outputs():
+    """The STAGED contract (the tower declares `all_pixel_values`, MiniCPM-o-4_5): the tower takes the processor's
+    pixel rows, patch mask and `tgt_sizes`, whose values bind its grid symbols (the first version of the rule fed it
+    the splice contract's two inputs and refused the request, 2026-10-14 23:46)."""
+    from neurobrix.core.prism.flow_bindings import FlowBindings
+    root = container_root("MiniCPM-o-4_5")
+    topo = json.loads((root / "topology.json").read_text())
+    name = json.loads((root / "manifest.json").read_text()).get("model_name")
+    fb = FlowBindings(topo, root, name, image_path=str(IMAGE))
+    vis = topo["flow"]["vlm"]["vision_component"]
+    feed = fb.vision_inputs(vis)
+    assert sorted(feed) == ["all_pixel_values", "patch_attention_mask", "tgt_sizes"]
+    dag = fb.graph(vis)
+    syms = dag["symbolic_context"]["symbols"]
+    got = {syms[s]["source"]: v for s, v in fb.overrides(dag, None).items()}
+    assert got.get("input::tgt_sizes::val_0") == 32 and got.get("input::tgt_sizes::val_1") == 32, got

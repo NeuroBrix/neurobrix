@@ -148,14 +148,24 @@ class FlowBindings:
         if comp != v.get("vision_component") or not self.image_path or self.cache_path is None:
             return None
         from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+        import numpy as np
         in_cfg = v.get("input") or {}
         ins = prepare_image_inputs(self.topology, self.container_name, str(self.image_path), self.cache_path)
+        if "input::all_pixel_values" in (self.graph(comp).get("tensors") or {}):
+            # the STAGED contract (the flow's own detection, TritonVLMEngine._execute_staged_splice): the tower
+            # takes the processor's three outputs, `tgt_sizes` binding by its values (MiniCPM-o-4_5)
+            names = ("all_pixel_values", "patch_attention_mask", "tgt_sizes")
+            missing = [n for n in names if f"global.{n}" not in ins]
+            if missing:
+                raise ValueError(f"ZERO FALLBACK: the build's processor gave {sorted(ins)} for the request's "
+                                 f"image — no {missing} for the staged vision tower '{comp}'")
+            return {n: np.asarray(ins[f"global.{n}"].cpu().numpy() if hasattr(ins[f"global.{n}"], "cpu")
+                                  else ins[f"global.{n}"]) for n in names}
         pix = ins.get(in_cfg.get("image_variable", "global.pixel_values"))
         grid = ins.get(in_cfg.get("grid_variable", "global.image_grid_thw"))
         if pix is None or grid is None:
             raise ValueError(f"ZERO FALLBACK: the build's processor gave {sorted(ins)} for the request's image — "
                              f"no patch rows or grid for the vision tower '{comp}'")
-        import numpy as np
         grid = np.asarray(grid.cpu().numpy() if hasattr(grid, "cpu") else grid)
         return {"hidden_states": tuple(int(d) for d in pix.shape), "grid_thw": grid}
 
