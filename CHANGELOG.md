@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drew its initial noise unseeded: Wan2.1-I2V native 2026-10-13 12:09); a seeded resolver with no armed stream is refused by name.
 
 ### Fixed
+- **The derivation derives a VLM's vision tower and projector, and an audio LLM's forward stages, under the profile it derives for** (`tools/derived_census.py` extent sites): the profile's native-bf16 flag and attention budget reach `run_at_inputs`, which the sites called with `False, (0, 1, 1)` — the V100's profile by coincidence, wrong on the Mac's M4 Pro, where the vision tower's output was derived fp32 and MiniCPM-o-4_5's projector keyed `fp32,fp32,bf16,fp32` while the run asked bf16 (2026-10-14).
 - **A streamed piece takes its component's MoE declaration without re-fusing its slice** (`GraphExecutor.set_moe_config`): a piece's routers are judged on the component's whole fused graph, never on the slice, so a seam between a multi-gate layer's gates and its fused op no longer refuses the piece (Ming-Lite-Omni-1.5, 16 GB, both engines, 2026-10-13: three modality gates per layer kept in the graph by `gate_group`, their block in the next piece). A piece whose component still holds an unfused router is refused by name.
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
