@@ -160,10 +160,34 @@ def _fixed_tensors(g: dict) -> set:
     for uid_ in g["execution_order"]:
         o_ = ops[uid_]
         ins_ = o_.get("input_tensor_ids") or []
-        if ins_ and all(t in fixed for t in ins_):
+        # An op whose ARGUMENTS carry a symbol shapes its output by the request even when every
+        # tensor it reads is a parameter: MiniCPM-o's resampler repeats its learned query by the
+        # image-slice count (`repeat(1, s0, 1)` then `view(64 * s0, 4096)`), and the derivation
+        # keyed its addmm at the trace's three slices (192 rows) for a one-slice request (64 rows)
+        # — the Mac's miss, 2026-10-14. Such an output is free; its dims resolve at the binding.
+        if ins_ and all(t in fixed for t in ins_) and not _args_carry_a_symbol(o_):
             fixed.update(o_.get("output_tensor_ids") or [])
     _FIXED[key] = (g, fixed)
     return fixed
+
+
+def _args_carry_a_symbol(op: dict) -> bool:
+    """True when any argument of the op (its attributes' args or kwargs, at any depth) is a symbol
+    or a symbolic expression of the shared vocabulary (core/runtime/symexpr)."""
+    from neurobrix.core.runtime.symexpr import is_symbolic
+
+    def walk(node) -> bool:
+        if is_symbolic(node):
+            return True
+        if isinstance(node, dict):
+            if node.get("type") == "tensor":
+                return False
+            return any(walk(v) for v in node.values())
+        if isinstance(node, (list, tuple)):
+            return any(walk(v) for v in node)
+        return False
+    at = op.get("attributes") or {}
+    return walk(at.get("args")) or walk(at.get("kwargs"))
 
 
 _FIXED = {}

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drew its initial noise unseeded: Wan2.1-I2V native 2026-10-13 12:09); a seeded resolver with no armed stream is refused by name.
 
 ### Fixed
+- **A tensor shaped by a symbol in an op's arguments is not fixed** (`tools/derived_census._fixed_tensors`): a parameter's child whose producing op carries a symbol or a symbolic expression in its arguments follows the request; MiniCPM-o-4_5's resampler repeats its learned query by the image-slice count and the derivation keyed its addmm at the trace's three slices (192 rows) for a one-slice request (64 rows) — the Mac's miss (2026-10-14).
 - **A streamed piece takes its component's MoE declaration without re-fusing its slice** (`GraphExecutor.set_moe_config`): a piece's routers are judged on the component's whole fused graph, never on the slice, so a seam between a multi-gate layer's gates and its fused op no longer refuses the piece (Ming-Lite-Omni-1.5, 16 GB, both engines, 2026-10-13: three modality gates per layer kept in the graph by `gate_group`, their block in the next piece). A piece whose component still holds an unfused router is refused by name.
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
