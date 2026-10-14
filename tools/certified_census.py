@@ -335,7 +335,14 @@ def census_requests(model: str, fam: str, extra: list, table) -> list:
             f"{model}: --extra carries {', '.join(stray)} — a size is the container's trace's "
             f"({_trace.size_text(want)}), never a flag appended to every request; drop it from --extra")
     if not table:
-        return [derived + list(extra)]
+        # the gate cell's request too, when the model's container states gate values (trace_request.gate_request):
+        # the certified-only gate forms its keys (fewer frames are other shapes)
+        gate = _trace.gate_request(model, fam)
+        if _trace.requested_size(gate) != want:
+            raise RequestRefused(f"{model}: the gate request asks for {_trace.size_text(_trace.requested_size(gate))}, "
+                                 f"the judging request for {_trace.size_text(want)} — a census table is taken for one "
+                                 f"size per model; state the gate's frames and steps, not another size")
+        return [derived + list(extra)] + ([gate + list(extra)] if gate != derived else [])
     reqs = []
     for i, req in enumerate(table):
         req = list(req) + list(extra)

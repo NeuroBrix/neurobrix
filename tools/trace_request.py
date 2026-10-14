@@ -27,6 +27,13 @@ So the derivation lives here and both tools import it:
   smallest request where the vendor's own pipeline gives a correct output — Allegro's vendor is
   blank at the video family's 4 steps and recognisable at 10. The model carries its value; no
   model is named here.
+* `gate_request(model, family)` — the request a GATE cell runs (the validation regime, Hocine 2026-10-13 14:20,
+  rule 2): the derived request with the model's gate values (`model_gate`: the container's own
+  `extracted_values["_global"]["gate"]`, written by the build from the registry with its source) over it —
+  the fewest steps, frames and pixels that still exercise the path, a gate run lasting at most ten minutes.
+  A gate proves rc 0, zero certified miss and the arms' agreement; quality is judged once per model and branch at
+  the derived (judging) request, recorded in docs/reference/judgments.jsonl. A model whose container states no
+  gate value is gated at its judging request.
 * `requested_size(request)` — the (height, width) a request asks for, as the CLI reads it.
 
 The container is read through `core.paths.cache_dir()` at call time — the same door the engine
@@ -100,6 +107,44 @@ def model_confirmation(family: str, topology: dict) -> dict:
                          f"confirmation section knows {sorted(fam)} (config/families/{family}.yml) — a "
                          f"request value is named there first")
     return {**fam, **values}
+
+
+def model_gate(family: str, topology: dict) -> dict:
+    """The gate values of ONE model: the container's own (extracted_values["_global"]["gate"]), each a key the
+    family's confirmation section names ({} when the container states none). A key the family does not name is
+    refused by name; half a size is refused by `gate_request`."""
+    own = ((topology.get("extracted_values") or {}).get("_global") or {}).get("gate")
+    if own is None:
+        return {}
+    if not isinstance(own, dict):
+        raise ValueError(f"the container's _global.gate is {type(own).__name__} {own!r}, not a mapping of the "
+                         f"{family} family's request values")
+    values = {k: v for k, v in own.items() if k != SOURCE}
+    fam = confirmation(family)
+    unknown = sorted(set(values) - (set(fam) - {"size_fraction"}))
+    if unknown:
+        raise ValueError(f"the container's _global.gate names {unknown}: a gate value is one of the {family} "
+                         f"family's request values {sorted(set(fam) - {'size_fraction'})} (config/families/"
+                         f"{family}.yml)")
+    return values
+
+
+def gate_request(model: str, family: Optional[str] = None) -> list:
+    """The request a gate cell runs: the derived (judging) request with the model's gate values over it — the
+    model's floor (rule 2 of the validation regime). The derived request when the container states none."""
+    family = family or Z.family_of(model)
+    req = derived_request(model, family)
+    values = model_gate(family, container_topology(model))
+    if not values:
+        return req
+    req = _with_flags(req, {k: v for k, v in values.items() if k not in ("height", "width") and v is not None})
+    size = (values.get("height"), values.get("width"))
+    if any(v is not None for v in size):
+        if not all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in size):
+            raise ValueError(f"{model}: the container's gate states height {size[0]!r} and width {size[1]!r} — a "
+                             "gate size names both, as positive integers")
+        req = _with_flags(req, {"height": size[0], "width": size[1]})
+    return req
 
 
 def off_trace_size(model: str, family: str) -> Optional[Tuple[int, int]]:

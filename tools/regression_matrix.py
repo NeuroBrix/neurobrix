@@ -73,7 +73,7 @@ import precision_zoo_campaign as Z  # noqa: E402  the judged request, the output
 from judge_artefact import image_degeneracy, text_degeneracy, video_degeneracy  # noqa: E402
 # The request a cell runs at is DERIVED from the current container's trace, in ONE place the
 # certification census imports too: a census and the verification it serves ask for one request.
-from trace_request import derived_request, off_trace_size  # noqa: E402
+from trace_request import derived_request, gate_request, off_trace_size  # noqa: E402
 
 from container_renames import by_current_name, current_name  # noqa: E402
 
@@ -488,9 +488,10 @@ def release_host(out: Path) -> None:
 
 def cell_request(model: str) -> list:
     """The request a cell runs, and the one its plan is asked for: THE shared derivation
-    (tools/trace_request.derived_request — the family's confirmation request at its confirmation
-    size), the same the census takes, so the table holds what a cell forms."""
-    return derived_request(model, Z.family_of(model))
+    (tools/trace_request.gate_request — the model's floor where its container states gate values, else the
+    family's confirmation request at its confirmation size), which the census covers too, so the table holds
+    what a cell forms. Quality is judged once per model and branch at the judging request (derived_request)."""
+    return gate_request(model, Z.family_of(model))
 
 
 @functools.lru_cache(maxsize=None)
