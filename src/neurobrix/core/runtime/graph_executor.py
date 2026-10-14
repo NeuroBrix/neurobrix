@@ -2169,16 +2169,33 @@ class GraphExecutor:
                 return (sf_of[nbx_dtype_to_torch(held_dtype(torch_of[sf], compute_dtype, "compiled"))]
                         if sf in torch_of else sf)
 
+            pages = {}
+
             def build(m, span, key):
                 dt = torch_of[span.dtype]
                 n = span.nbytes // torch.empty((), dtype=dt).element_size()
-                return torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
+                t = torch.frombuffer(m, dtype=dt, count=n, offset=span.offset).view(span.shape)
+                pages[t.data_ptr()] = (m, span.offset, span.nbytes)      # the span behind the view
+                return t
         views, maps = bind_views(spans, held_as, build)
         self._expert_maps = maps
+        if self.mode not in ("triton", "triton_sequential"):
+            self._expert_pages = pages
         print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] '{component}': "
               f"{len(views)} routed expert weights mapped from {len(maps)} shard(s), "
               f"{sum(s.nbytes for s in spans.values()) / 2**20:.0f} MB left in the files", flush=True)
         return views
+
+    def _release_expert_pages(self, view) -> None:
+        """A file-backed expert's bytes sit in a device slot: give the kernel back the pages of its
+        span (`expert_files.drop_pages`). Called by the torch store after each copy on a device
+        without CUDA streams (a unified device: the pages a copy touched stay in the one pool)."""
+        from neurobrix.core.runtime.expert_files import drop_pages
+        span = (getattr(self, "_expert_pages", None) or {}).get(view.data_ptr())
+        if span is None:
+            raise RuntimeError("ZERO FALLBACK: the expert store copied a host tensor that is no view of a mapped "
+                               "expert file — nothing to give back, and nothing should have been copied from it")
+        drop_pages(*span)
 
     def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""

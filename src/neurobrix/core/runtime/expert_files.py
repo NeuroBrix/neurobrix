@@ -152,3 +152,22 @@ def bind_views(spans: Dict[str, ExpertFileSpan], held_as: Callable[[str], str],
                 f"a file-backed expert must be stored in its compute dtype")
         views[key] = build(maps.map(span.shard), span, key)
     return views, maps
+
+
+def drop_pages(m: mmap.mmap, offset: int, nbytes: int) -> Tuple[int, int]:
+    """Give the kernel back the pages of one expert's span in its private shard map, once its bytes
+    sit in a device slot: `madvise(MADV_DONTNEED)` over the page-aligned range (a private, never
+    written mapping re-reads the file on the next miss). The pages a copy touched otherwise stay
+    counted against the pool on a unified device: the Mac, 2026-10-14, Qwen3-30B-A3B-Thinking native —
+    the process's own footprint flat at 8.6 GB while free memory fell and swap grew 7 GB during the
+    first forward's misses over 55 GB of mapped experts. Returns (start, length) of the range given
+    back. A platform whose mmap cannot advise is refused by name, never left to swap."""
+    if not hasattr(m, "madvise") or not hasattr(mmap, "MADV_DONTNEED"):
+        raise RuntimeError("ZERO FALLBACK: this platform's mmap carries no madvise/MADV_DONTNEED — a file-backed "
+                           "expert store cannot give its pages back after a copy")
+    page = mmap.PAGESIZE
+    start = offset - offset % page
+    length = (offset + nbytes) - start
+    m.madvise(mmap.MADV_DONTNEED, start, length)
+    return start, length
+

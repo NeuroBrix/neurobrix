@@ -21,7 +21,7 @@ closure waits only on the events it is given.
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Tuple
+from typing import Optional, Callable, Dict, List, Tuple
 
 import torch
 
@@ -31,8 +31,16 @@ Triple = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]
 
 
 class TorchExpertStore:
-    def __init__(self, residency: ExpertResidency, device: torch.device, like: Triple):
+    def __init__(self, residency: ExpertResidency, device: torch.device, like: Triple, release=None):
         self.residency = residency
+        # A unified device (no CUDA streams): a missed expert is copied through ONE host staging
+        # buffer per projection, allocated once, never through a device buffer over the file's own
+        # pages, and `release(view)` gives the kernel back the expert's pages after each copy
+        # (`GraphExecutor._release_expert_pages`). The Mac, 2026-10-14, Qwen3-30B-A3B-Thinking native:
+        # the process's footprint flat, free memory gone and swap +7 GB during the first forward's
+        # misses over 55 GB of mapped experts — memory outside the process, held by the copies.
+        self._release = release
+        self._staging: Optional[Triple] = None
         self.device = torch.device(device)
         self._shape = tuple((tuple(t.shape), t.dtype) for t in like)
         self.slots: List[Triple] = [
@@ -72,7 +80,16 @@ class TorchExpertStore:
                     f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is "
                     f"{tuple(s.shape)} {s.dtype} contiguous={s.is_contiguous()}; the store's "
                     f"slots are {self._shape[i]} contiguous — one geometry per component")
-            d.copy_(s, non_blocking=self._stream is not None)
+            if self._stream is None:
+                if self._staging is None:
+                    self._staging = tuple(torch.empty(sh, dtype=dt) for sh, dt in self._shape)
+                st = self._staging[i]
+                st.copy_(s)
+                d.copy_(st)
+                if self._release is not None:
+                    self._release(s)
+            else:
+                d.copy_(s, non_blocking=True)
             self.bytes_in += s.numel() * s.element_size()
 
     def release(self) -> None:
