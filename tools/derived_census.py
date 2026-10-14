@@ -1183,7 +1183,8 @@ def run_at_inputs(model: str, comp: str, cdtype: str, mode: str, inputs: dict, h
 
 
 def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str = "",
-                 audio_path=None, max_tokens_req=None, image_path=None):
+                 audio_path=None, max_tokens_req=None, image_path=None, has_native_bf16: bool = False,
+                 sdpa=(0, 1, 1)):
     """The flows' value-derived extents — each site of `census.walk_extent` in the Triton flows —
     as (name, lo, hi, chain) with chain(n) = [(component, {input: shape} | callable of the
     previous stage's outputs)], built from the flows' own functions and bounds."""
@@ -1327,7 +1328,8 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # over the WHOLE context every step — the chat-templated prompt around the modality span
     # (`tokenize_around_span`) with the vision tokens spliced in: L0 .. L0 + max_tokens - 1.
     if flow.get("type") == "vlm" and image_path and prompt:
-        sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req))
+        sites.extend(_vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req,
+                                has_native_bf16, sdpa))
     # encoder_decoder (triton/flow/encoder_decoder.py `_decode_one_window`): the decoder runs ONE
     # token per step on the encoder's frames — its self-attentions through the KV cache (step 1 a
     # prefill of one token, then the cache's 2 .. max_tokens - 1), its cross-attentions native
@@ -1339,7 +1341,8 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
     # prefix and suffix ids, then the language model over the WHOLE context every step — its
     # length from L0 to L0 + max_tokens - 1.
     if flow.get("type") == "audio_llm" and audio_path:
-        sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req))
+        sites.extend(_audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req,
+                                      has_native_bf16, sdpa))
     return sites
 
 
@@ -1473,12 +1476,15 @@ def _vlm_flow_stub(model: str):
                            variable_resolver=_Stub(resolved={})))
 
 
-def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16=False,
+               sdpa=(0, 1, 1)):
     contract = vlm_contract(model, topo)
     if contract == "staged":
-        return _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req)
+        return _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req,
+                                 has_native_bf16, sdpa)
     if contract == "masked":
-        return _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req)
+        return _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req,
+                                 has_native_bf16, sdpa)
     if contract != "splice":
         return []
     import numpy as np
@@ -1493,7 +1499,7 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
     grid = np.asarray(ins[in_cfg.get("grid_variable", "global.image_grid_thw")])
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     step = (vis, {"hidden_states": list(pix.shape), "grid_thw": grid})
-    _l, outs = run_at_inputs(model, vis, dtypes[vis], "triton", step[1], False, (0, 1, 1),
+    _l, outs = run_at_inputs(model, vis, dtypes[vis], "triton", step[1], has_native_bf16, sdpa,
                              collections.Counter())
     emb = outs["output_0"]
     n_modal = int(emb[-2]) if len(emb) >= 2 else int(emb[0])
@@ -1528,7 +1534,8 @@ def _vlm_context_site(lm, L0, mt, feed):
     return (f"{lm} context", L0, L0 + int(mt) - 1, lambda n: [(lm, feed(n))])
 
 
-def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16=False,
+                      sdpa=(0, 1, 1)):
     """The M-RoPE masked-splice contract (`TritonVLMEngine._execute_mrope_masked_splice`), image
     request: the vision tower on the processor's patch grid, the projection on the tower's rows
     (`vis_out.reshape(-1, D)`), the ids by the flow's own `_build_masked_splice_ids`, then the LM
@@ -1548,14 +1555,14 @@ def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_token
     grid = np.asarray(ins[in_cfg.get("grid_variable", "global.image_grid_thw")])
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     vstep = (vis, {"hidden_states": list(pix.shape), "grid_thw": grid})
-    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], False, (0, 1, 1),
+    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], has_native_bf16, sdpa,
                               collections.Counter())
     vo = vouts["output_0"]
     rows = 1
     for d in vo[:-1]:
         rows *= int(d)
     pstep = (vproj, {"image_embeds": [rows, int(vo[-1])]})
-    _l, pouts = run_at_inputs(model, vproj, dtypes[vproj], "triton", pstep[1], False, (0, 1, 1),
+    _l, pouts = run_at_inputs(model, vproj, dtypes[vproj], "triton", pstep[1], has_native_bf16, sdpa,
                               collections.Counter())
     po = pouts["output_0"]
     n_img = 1
@@ -1583,7 +1590,8 @@ def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_token
             _vlm_context_site(lm, L0, mt, feed)]
 
 
-def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req):
+def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16=False,
+                      sdpa=(0, 1, 1)):
     """The staged-splice contract (`TritonVLMEngine._execute_staged_splice`), image request: the
     vision tower on the processor's three outputs, the projection on the tower's hidden states
     with the same `tgt_sizes`, the ids by the flow's own `_tokenize_with_placeholder_run`, then
@@ -1605,10 +1613,10 @@ def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_token
     tgt = np.asarray(ins["global.tgt_sizes"])
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     vstep = (vis, {n: np.asarray(ins[f"global.{n}"]) for n in names})
-    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], False, (0, 1, 1),
+    _l, vouts = run_at_inputs(model, vis, dtypes[vis], "triton", vstep[1], has_native_bf16, sdpa,
                               collections.Counter())
     pstep = (proj, {"x": vouts["output_0"], "tgt_sizes": tgt})
-    _l, pouts = run_at_inputs(model, proj, dtypes[proj], "triton", pstep[1], False, (0, 1, 1),
+    _l, pouts = run_at_inputs(model, proj, dtypes[proj], "triton", pstep[1], has_native_bf16, sdpa,
                               collections.Counter())
     po = pouts["output_0"]
     n_modal = 1
@@ -1631,7 +1639,8 @@ def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_token
             _vlm_context_site(lm, L0, mt, feed)]
 
 
-def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
+def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req, has_native_bf16=False,
+                     sdpa=(0, 1, 1)):
     from neurobrix.core.module.audio.mel_dsp import extract_features_np, fixed_window_mels
     from neurobrix.core.runtime.decode_bound import decode_bound
     from neurobrix.triton import audio_frontend as AF
@@ -1686,7 +1695,7 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req):
     for comp in fwd:
         fwd_steps.append((comp, feeds(comp, produced)))
         _l, outs = run_at_inputs(model, comp, {c["name"]: c["dtype"] for c in plan["components"]}[comp],
-                                 "triton", fwd_steps[-1][1], False, (0, 1, 1), collections.Counter())
+                                 "triton", fwd_steps[-1][1], has_native_bf16, sdpa, collections.Counter())
         for name, shp in outs.items():
             produced[f"{comp}.{name}"] = shp
     last_out = next(iter(v for k, v in produced.items() if k.startswith(fwd[-1] + ".")))
@@ -1709,7 +1718,7 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
     dtypes = {c["name"]: c["dtype"] for c in plan["components"]}
     found = set()
     for name, lo, hi, chain in extent_sites(model, topo, defaults, plan, prompt, audio_path,
-                                            max_tokens_req, image_path):
+                                            max_tokens_req, image_path, has_native_bf16, sdpa):
         seen = {}
 
         def at(n):
@@ -1833,7 +1842,8 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
     _mt_req = args.max_tokens if getattr(args, "max_tokens", None) is not None else None
     _image = getattr(args, "input_image", None)
     covered = {comp for _n, lo, _h, chain in extent_sites(a.model, topo, _defaults, plan, _prompt,
-                                                           _audio, _mt_req, _image)
+                                                           _audio, _mt_req, _image, prof.has_native_bf16,
+                                                           (budget, min_rows, max_chunks))
                for comp, _f in chain(lo)
                if not (isinstance(_f, dict) and "__decode__" in _f)}   # decode ADDS to the prefill
     for c in plan["components"]:
