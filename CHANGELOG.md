@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **A model carries its own judging size** (`tools/trace_request.derived_request`, the video family's `confirmation:` section naming `height`, `width`, `num_frames`): a registry-stated size replaces the off-trace size and the frame count keeps the request away from the trace; half a size is refused by name; a null family key is never a flag. mochi-1-preview is the first: the vendor and both engines render at 480x848 with 25 frames and 4 steps and scramble at the family's half size (2026-10-13).
 
 - **One initial draw for both engines, the vendor's.** A seeded run draws its initial noise (every
   `init: randn` state variable) from one shared, torch-free generator that reproduces the vendor's

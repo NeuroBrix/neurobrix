@@ -17,7 +17,11 @@ What would this file do if the code were wrong?
   * the family's value dropped when the container declares none, or the family's other keys lost
     when it declares one -> the first and second fail;
   * an unknown key passed through as a flag -> the third fails;
-  * the citation (`source`) emitted as a request flag -> the end-to-end test fails on `--source`.
+  * the citation (`source`) emitted as a request flag -> the end-to-end test fails on `--source`;
+  * a model's own judging size (height, width, num_frames: mochi-1-preview renders only at 480x848,
+    2026-10-13) ignored -> the own-size test fails on the off-trace 256x640 (seen RED before the
+    family named the keys); half a size accepted -> its last cell fails; a null family key emitted
+    as a flag -> the first end-to-end cell fails on `--num-frames None`.
 """
 from __future__ import annotations
 
@@ -117,3 +121,18 @@ def test_the_derived_request_carries_the_containers_steps_at_its_envelope(cache)
 def test_a_model_absent_from_the_cache_is_refused_by_name(cache):
     with pytest.raises(FileNotFoundError, match="Absent-Model"):
         T.container_topology("Absent-Model")
+
+
+def test_a_model_carries_its_own_judging_size_and_frame_count(cache):
+    # the model states where its vendor renders: that size, as stated, the frame count a flag
+    cache(_topo({"steps": 4, "height": 480, "width": 848, "num_frames": 25, "source": SRC}))
+    req = T.derived_request(MODEL, "video")
+    assert (_flag(req, "--steps"), _flag(req, "--height"), _flag(req, "--width"), _flag(req, "--num-frames")) == ("4", "480", "848", "25"), req
+    # a family key no one states is never a flag
+    cache(_topo({"steps": 4, "source": SRC}))
+    req = T.derived_request(MODEL, "video")
+    assert "--num-frames" not in req and "None" not in req, req
+    # half a size is refused by name
+    cache(_topo({"height": 480, "source": SRC}))
+    with pytest.raises(ValueError, match="height 480 and width None"):
+        T.derived_request(MODEL, "video")
