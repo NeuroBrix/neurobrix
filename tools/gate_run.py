@@ -110,6 +110,28 @@ def carried(C: Path) -> int:
     return len((yaml.safe_load(f.read_text()) or {}).get("carries") or [])
 
 
+def check_carries(tree: Path, C: Path) -> int:
+    """Every entry of the gate's carry record, checked by the HARNESS's own reader (`record_carries` of the tree
+    under test: the source row exists and is the measurement the entry names) before any card is spent. The
+    reduction gate of 2026-10-15 lost two rounds to a record whose source rows had moved, then named the wrong
+    engine: the harness refused each carried line only after the scheduler had placed it. Returns the entries."""
+    f = rows_root(C) / "carries.yml"
+    if not f.is_file():
+        return 0
+    import importlib.util
+    import yaml
+    spec = importlib.util.spec_from_file_location("_gate_harness", tree / "tools" / "regression_matrix.py")
+    rm = importlib.util.module_from_spec(spec)
+    sys.path[:0] = [str(tree / "tools"), str(tree / "src")]
+    spec.loader.exec_module(rm)
+    asked = {(e["model"], e["mode"]) for e in (yaml.safe_load(f.read_text()) or {}).get("carries") or []}
+    try:
+        got = rm.record_carries(f, asked, str(tree))
+    except SystemExit as e:
+        raise Refused(f"the carry record {f}: {e}") from e
+    return len(got)
+
+
 def steps(a) -> list:
     C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
     lay = layout()
@@ -173,6 +195,7 @@ def run(a) -> int:
             if not (C / d).is_dir():
                 raise Refused(f"--resume: {C / d} is not there — the gate never split; run it without --resume")
         say(run_md, f"{label} GATE RESUME tree {head} class {a.cls}: the scope and the split on disk are kept")
+        say(run_md, f"{label} carry record checked by the harness: {check_carries(W, C)} entries")
         return _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=True)
     say(run_md, f"{label} GATE START tree {head} class {a.cls} base {B}")
     # 1. the scope
@@ -196,6 +219,7 @@ def run(a) -> int:
         (C / "gate2_any" / f"queue_{other}.txt").write_text("".join(l + "\n" for l in anyc))
     say(run_md, f"{label} split: {len(own)} lines on the {a.cls} cards + {len(anyc)} plan-identical lines on the "
                 f"{','.join(any_card_classes(a.cls))} cards; {carried(C)} cells carried by record")
+    say(run_md, f"{label} carry record checked by the harness: {check_carries(W, C)} entries")
     return _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=bool(anyc), own_lines=bool(own))
 
 

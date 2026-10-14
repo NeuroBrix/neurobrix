@@ -222,3 +222,23 @@ def test_the_gate_tool_and_the_tally_read_the_scope_tools_layout(tmp_path):
     lay = yaml.safe_load((ROOT / "tools" / "gate_scope.yml").read_text())["gate"]
     assert gate_run.layout() == lay and gate_tally.layout() == lay
     assert gate_run.rows_root(tmp_path) / "matrix_32g" == tmp_path / lay["rows"].format(cls="32g")
+
+
+def test_a_carry_record_is_checked_by_the_harness_before_any_card(tmp_path):
+    """An entry whose source row is not the measurement it names is refused by the gate, before scheduling (the
+    harness refused each carried line only once placed: two lost rounds, 2026-10-15 01:09)."""
+    src = tmp_path / "src_gate" / "gate" / "matrix_32g"
+    src.mkdir(parents=True)
+    (src / "rows_card2.jsonl").write_text(json.dumps({"model": "Allegro", "mode": "native", "rc": 0, "wall_s": 1784,
+                                                       "engine": "7a5fab71", "date": "2026-10-14T18:54:25Z"}) + "\n")
+    C = tmp_path / "c"
+    (C / "gate").mkdir(parents=True)
+    entry = {"model": "Allegro", "mode": "native", "source_gate": str(src), "date": "2026-10-14T18:54:25Z",
+             "engine": "9e1684d8", "reason": "rule 2"}
+    import yaml
+    (C / "gate" / "carries.yml").write_text(yaml.safe_dump({"carries": [entry]}))
+    with pytest.raises(gate_run.Refused, match="not the measurement the record names"):
+        gate_run.check_carries(ROOT, C)
+    entry["engine"] = "7a5fab71"
+    (C / "gate" / "carries.yml").write_text(yaml.safe_dump({"carries": [entry]}))
+    assert gate_run.check_carries(ROOT, C) == 1
