@@ -5,7 +5,13 @@ Mode 2 (NBXTensor, zero torch — R33). The compiled engine has its own
 (`core/runtime/expert_residency.py`, no tensor library) and no compute code.
 
 The component's expert weights stay on pinned host memory; the store preallocates `n_slots`
-(gate, up, down) device triples at the experts' own shape and dtype. `execute_moe_fused` reads the
+(gate, up, down) device triples at the experts' own shape and dtype — in ONE device allocation, the
+arena, carved into 256-byte-aligned views: a driver rounds every allocation to its own granule (2 MiB
+on CUDA, measured on the rig 2026-10-14: a 3 MiB block costs 4 MiB), and 2 163 slots as 6 489 separate
+3 MiB mallocs carried 6.3 GB no table of the engine knew about (Qwen3-Omni-30B-A3B-Instruct, 32 GB
+V100: 31.6 GB used for 24.8 GB allocated). One arena is rounded once, so the store's device bytes are
+Prism's figure to within one granule, on every platform, with no number of any platform written here.
+`execute_moe_fused` reads the
 routed experts once on the host, then `acquire` copies every miss into its slot with
 `memcpy_async` on the store's stream — after that stream waited for the compute stream, so a slot
 is rewritten only once the kernels reading its former expert have run — and makes the compute
@@ -23,7 +29,20 @@ from __future__ import annotations
 from typing import Callable, List, Tuple
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
-from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA, NBXTensor
+from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA, NBXDtype, NBXTensor, dtype_size
+
+_ALIGN = 256   # every projection starts on a 256-byte boundary (the widest vector load of any backend)
+
+
+def _aligned(nbytes: int) -> int:
+    return -(-int(nbytes) // _ALIGN) * _ALIGN
+
+
+def _numel(shape) -> int:
+    n = 1
+    for d in shape:
+        n *= int(d)
+    return n
 
 
 class NBXExpertStore:
@@ -37,15 +56,32 @@ class NBXExpertStore:
                     "(a quantized expert carries packed weights + scales — not this store's geometry)")
         self._shape = tuple((tuple(t.shape), t._dtype) for t in like)
         DA.set_device(self.device_idx)
-        self.slots: List[Tuple[NBXTensor, NBXTensor, NBXTensor]] = [
-            tuple(NBXTensor.empty(s, dtype=d, device=f"cuda:{self.device_idx}") for s, d in self._shape)
-            for _ in range(residency.n_slots)]
+        # The arena: one allocation for every slot, each projection a 256-byte-aligned view into it.
+        proj_bytes = [_aligned(_numel(s) * dtype_size(d)) for s, d in self._shape]
+        stride = sum(proj_bytes)
+        self._arena = NBXTensor.empty((stride * residency.n_slots,), dtype=NBXDtype.uint8,
+                                      device=f"cuda:{self.device_idx}")
+        base = self._arena.data_ptr()
+        self.slots: List[Tuple[NBXTensor, NBXTensor, NBXTensor]] = []
+        for k in range(residency.n_slots):
+            off = base + k * stride
+            views = []
+            for (s, d), nb in zip(self._shape, proj_bytes):
+                views.append(NBXTensor.from_raw(off, s, d, "cuda", owns_data=False,
+                                                device_idx=self.device_idx, base=self._arena))
+                off += nb
+            self.slots.append(tuple(views))
         self._stream = DA.create_stream()
         self.bytes_in = 0
 
     @property
     def slot_bytes(self) -> int:
         return sum(t._nbytes for t in self.slots[0]) if self.slots else 0
+
+    @property
+    def device_bytes(self) -> int:
+        """What the store holds on the device: the arena, one allocation (the driver rounds it once)."""
+        return self._arena._nbytes if self._arena is not None else 0
 
     def acquire(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
         """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`."""
@@ -83,4 +119,5 @@ class NBXExpertStore:
         DA.destroy_stream(self._stream)
         self._stream = 0
         self.slots = []
+        self._arena = None
         self.residency.clear()
