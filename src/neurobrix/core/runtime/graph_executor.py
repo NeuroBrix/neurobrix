@@ -195,6 +195,39 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
         except Exception as exc:                                       # noqa: BLE001
             print(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})", flush=True)
 
+def _held_line(loaded, device) -> str:
+    """What a compiled load holds, said beside its load line: the loaded tensors' bytes (each storage once), how
+    many sit on the HOST rather than the device, and the device allocator's own figures (CUDA allocated /
+    reserved, MPS allocated / driver). The Mac's unified overruns (2026-10-14): each loaded bf16 piece cost ~2x its
+    stored bytes, and nothing the run printed could tell a host copy, allocator overhead or a wider dtype apart."""
+    import torch
+    seen, nbytes, on_host, n = set(), 0, 0, 0
+    for t in (loaded or {}).values():
+        if not isinstance(t, torch.Tensor):
+            continue
+        n += 1
+        if t.device.type == "cpu":
+            on_host += 1
+        try:
+            key = (t.device.type, t.untyped_storage().data_ptr())
+        except Exception:
+            key = (t.device.type, id(t))
+        if key in seen:
+            continue
+        seen.add(key)
+        nbytes += t.untyped_storage().nbytes() if hasattr(t, "untyped_storage") else t.numel() * t.element_size()
+    dev = str(device or "")
+    alloc = ""
+    if dev.startswith("cuda") and torch.cuda.is_available():
+        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
+        alloc = (f"; device allocated {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB, "
+                 f"reserved {torch.cuda.memory_reserved(idx) / 2**20:.0f} MB")
+    elif dev.startswith("mps") and hasattr(torch, "mps"):
+        alloc = (f"; device allocated {torch.mps.current_allocated_memory() / 2**20:.0f} MB, "
+                 f"driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB")
+    return f"{n} tensors, {nbytes / 2**20:.0f} MB, {on_host} on the host{alloc}"
+
+
 class GraphExecutor:
     """
     Execute TensorDAG directly.
@@ -2251,6 +2284,7 @@ class GraphExecutor:
         if _only is not None:
             print(f"   [Compiled] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
+        print(f"   [Compiled] '{component}': holds {_held_line(loaded, self.device)}", flush=True)
 
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
