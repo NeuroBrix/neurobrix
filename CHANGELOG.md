@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drew its initial noise unseeded: Wan2.1-I2V native 2026-10-13 12:09); a seeded resolver with no armed stream is refused by name.
 
 ### Fixed
+- **A unified expert store copies a missed expert through one host staging buffer per projection and gives its file pages back** (`TorchExpertStore`, `GraphExecutor._release_expert_pages`, `expert_files.drop_pages`): on a device without CUDA streams the copy from the `torch.frombuffer` view over the private shard map goes through a staging tensor allocated once, and the expert's page-aligned span is `madvise(MADV_DONTNEED)`-ed after the copy. The Mac, 2026-10-14: Qwen3-30B-A3B-Thinking native's process footprint stayed flat at 8.6 GB while free memory vanished and swap grew 7 GB during the first forward's misses over 55 GB of mapped experts.
 - **A streamed piece takes its component's MoE declaration without re-fusing its slice** (`GraphExecutor.set_moe_config`): a piece's routers are judged on the component's whole fused graph, never on the slice, so a seam between a multi-gate layer's gates and its fused op no longer refuses the piece (Ming-Lite-Omni-1.5, 16 GB, both engines, 2026-10-13: three modality gates per layer kept in the graph by `gate_group`, their block in the next piece). A piece whose component still holds an unfused router is refused by name.
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
