@@ -189,3 +189,25 @@ def test_the_planning_workers_are_bound_to_the_instance(tmp_path, monkeypatch):
     with ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"), initializer=gate_sched.configure,
                              initargs=seen["initargs"]) as ex:
         assert ex.submit(gate_sched.OUT, "16g").result() == "32g"
+
+
+def test_a_gate_carries_every_class_list_and_the_timeouts_forward(tmp_path, monkeypatch):
+    B = tmp_path / "base"
+    (B / "gate2").mkdir(parents=True)
+    (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
+    (B / "gate2" / "gate_16g.list").write_text("A native,triton\nB native\n")
+    (B / "matrix_32g").mkdir()
+    (B / "timeouts.txt").write_text("A 600\n")
+    ident = tmp_path / "plan-identical.txt"
+    ident.write_text("A\n")
+    C = tmp_path / "c"
+    a = gate_run.build_parser().parse_args([
+        "--campaign", str(C), "--tree", str(ROOT), "--base-gate", str(B), "--plan-identical", str(ident),
+        "--run-md", str(tmp_path / "RUN.md"), "--holds", str(tmp_path / "h"), "--hardware", "rig",
+        "--class-split-mib", "24576", "--heavy-share", "0.25", "--need-workers", "1"])
+    monkeypatch.setattr(gate_run, "git", lambda tree, *args: "abc1234")
+    monkeypatch.setattr(gate_run.subprocess, "run", lambda *x, **k: (_ for _ in ()).throw(SystemExit("stop at the scope")))
+    with pytest.raises(SystemExit, match="stop at the scope"):
+        gate_run.run(a)
+    assert (C / "gate2" / "gate_16g.list").read_text() == "A native,triton\nB native\n"
+    assert (C / "gate2" / "gate_32g.list").is_file() and (C / "timeouts.txt").read_text() == "A 600\n"

@@ -136,8 +136,13 @@ def run(a) -> int:
     for d in ("gate2", "gate2_any", "sched", "sched_any", "scope"):
         (C / d).mkdir(exist_ok=True)
     # the gate's list is the base gate's: the same cells wanted, judged against the same reference
-    (C / "gate2" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
-    (C / "gate2_any" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
+    # every class's list is carried forward (the scope tool reads them all, the gated class's and the others'):
+    # the second gate built on the first refused for want of its 16g list (2026-10-14 22:27)
+    for lst in sorted((B / "gate2").glob("gate_*.list")):
+        (C / "gate2" / lst.name).write_text(lst.read_text())
+        (C / "gate2_any" / lst.name).write_text(lst.read_text())
+    if (B / "timeouts.txt").is_file() and not (C / "timeouts.txt").is_file():
+        (C / "timeouts.txt").write_text((B / "timeouts.txt").read_text())
     label = a.label
     head = git(W, "rev-parse", "--short", "HEAD")
     if a.resume:
