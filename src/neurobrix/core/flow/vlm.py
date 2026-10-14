@@ -423,7 +423,6 @@ class VLMEngine(FlowHandler):
             "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
             _samp_cfg, explicit=_samp_explicit)
 
-        self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion (mirror of the AR flow's setup — the Stage-1
         # wall-5 class: without it only the trace-fired experts of a
         # 128-expert MoE run and the logits go near-uniform ⇒ degenerate
@@ -437,6 +436,9 @@ class VLMEngine(FlowHandler):
                     "ZERO FALLBACK: norm_topk_prob missing from lm_config "
                     "for MoE model — add moe.norm_topk_prob to the registry.")
             lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
+        # The MoE is declared first: the load reads the graph that runs (an expert-files plan reads the routed
+        # experts off the FUSED graph — Qwen3-Omni on unified memory, 2026-10-14).
+        self._ensure_weights_loaded(lm_name)
         embed_weight = self._get_embed_weight(lm_name)
         if embed_weight is None:
             raise RuntimeError(
@@ -909,7 +911,6 @@ class VLMEngine(FlowHandler):
             "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
             _samp_cfg, explicit=_samp_explicit)
 
-        self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
         lm_cfg = defaults.get("lm_config", {})
         _n_exp = lm_cfg.get("num_experts")
@@ -920,6 +921,9 @@ class VLMEngine(FlowHandler):
                     "ZERO FALLBACK: norm_topk_prob missing from lm_config "
                     "for MoE model — add moe.norm_topk_prob to the registry.")
             lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
+        # The MoE is declared first: the load reads the graph that runs (an expert-files plan reads the routed
+        # experts off the FUSED graph — Qwen3-Omni on unified memory, 2026-10-14).
+        self._ensure_weights_loaded(lm_name)
         embed_weight = self._get_embed_weight(lm_name)
         if embed_weight is None:
             raise RuntimeError(
@@ -1408,7 +1412,6 @@ class VLMEngine(FlowHandler):
             "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
             _samp_cfg, explicit=_samp_explicit)
 
-        self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion (data-driven; no-op on dense builds) — same
         # call as every other branch of this engine.
         lm_cfg = defaults.get("lm_config", {})
@@ -1420,6 +1423,9 @@ class VLMEngine(FlowHandler):
                     "ZERO FALLBACK: norm_topk_prob missing from lm_config "
                     "for MoE model — add moe.norm_topk_prob to the registry.")
             lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
+        # The MoE is declared first: the load reads the graph that runs (an expert-files plan reads the routed
+        # experts off the FUSED graph — Qwen3-Omni on unified memory, 2026-10-14).
+        self._ensure_weights_loaded(lm_name)
         embed_weight = self._get_embed_weight(lm_name)
         if embed_weight is None:
             raise RuntimeError(
