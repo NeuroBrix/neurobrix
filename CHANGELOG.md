@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   206 MB free.
 
 ### Added
+- **`tools/plan_listing.py` — Prism lists the models whose plan differs between hardware profiles, without executing** (the validation regime: one validation per distinct plan). The cell's own request explained under each profile (`--explain-plan --json --hardware`), plan signatures compared (strategy, loading, placement, expert store, tiling, kv cache); plan_identical / plan_differs / plan_unknown lists, a refused explanation named. The campaign listing of 2026-10-13 (25 of 49 models plan-identical between the rack's 16 GB and 32 GB profiles) is this tool.
 
 - **The serving daemon answers while it generates, and a generation can be cancelled.** `status`,
   `cancel` and `shutdown` are answered while a generation runs. Generations still run one at a
