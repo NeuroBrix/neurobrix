@@ -52,3 +52,16 @@ def test_a_load_says_what_it_holds_each_storage_once_and_what_sits_on_the_host()
     assert line.startswith("3 tensors, 0 MB, 3 on the host"), line
     big = torch.zeros(1 << 20, dtype=torch.bfloat16)          # 2 MB
     assert _held_line({"x": big, "y": big[1:]}, "cpu").startswith("2 tensors, 2 MB"), "one storage, counted once"
+
+
+def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeypatch):
+    """After each streamed segment computes, before its release: the device allocator's figures, the compiled
+    branch's from torch, the Triton branch's from its own allocator (no torch there). The Mac, 2026-10-15 01:58:
+    a 1.3 GB segment computed under a 19 GB wired footprint, and nothing said whether that was live tensors or a cache."""
+    from types import SimpleNamespace as NS
+    from neurobrix.core.strategies.layer_streaming import _segment_memory_line
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    monkeypatch.setattr(DA, "_cuda_live_bytes", {2: 3 << 30})
+    monkeypatch.setattr(DA, "_pool_cached_bytes", {2: 1 << 30})
+    assert _segment_memory_line(NS(device="cuda:2", mode="triton")) == "device live 3072 MB, pool cached 1024 MB"
+    assert _segment_memory_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")

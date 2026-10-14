@@ -47,6 +47,30 @@ def _piece_input(values: Dict[str, Any], name: str) -> Any:
     return cur
 
 
+
+def _segment_memory_line(seg_exec) -> str:
+    """The device memory a streamed segment leaves when it has computed, before its release — said per segment so a
+    per-second trace can tell live tensors from an allocator's cache (the Mac, 2026-10-15 01:58: Allegro's first
+    transformer segment held 1.3 GB of weights while the footprint sat at 19 GB wired during its compute). The
+    compiled branch reads torch's allocator (CUDA allocated / reserved, MPS allocated / driver); the Triton branch
+    its own (DeviceAllocator live and pool-cached bytes) — no torch on that branch (R33)."""
+    dev = str(getattr(seg_exec, "device", "") or "")
+    if str(getattr(seg_exec, "mode", "")).startswith("triton"):
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+        idx = int(dev.split(":")[1]) if ":" in dev else 0
+        return (f"device live {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB, "
+                f"pool cached {DA._pool_cached_bytes.get(idx, 0) / 2**20:.0f} MB")
+    import torch
+    if dev.startswith("cuda") and torch.cuda.is_available():
+        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
+        return (f"device allocated {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB, "
+                f"reserved {torch.cuda.memory_reserved(idx) / 2**20:.0f} MB, "
+                f"peak allocated {torch.cuda.max_memory_allocated(idx) / 2**20:.0f} MB")
+    if dev.startswith("mps") and hasattr(torch, "mps"):
+        return (f"device allocated {torch.mps.current_allocated_memory() / 2**20:.0f} MB, "
+                f"driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB")
+    return f"no device allocator figures on {dev or 'this device'}"
+
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
 
@@ -447,6 +471,8 @@ class LayerStreamingStrategy(ExecutionStrategy):
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
                 capture.update(seg_exec.tensors_of_last_run(kept & produced))
+                print(f"   [{component_name}] segment {sub.get('segment_index')} computed: "
+                      f"{_segment_memory_line(seg_exec)}", flush=True)
             finally:
                 # Released before the next piece loads. This is the residency the plan was
                 # budgeted against.
