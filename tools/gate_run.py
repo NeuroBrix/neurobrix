@@ -76,7 +76,9 @@ def split_queue(lines: list, identical: set) -> tuple:
 def steps(a) -> list:
     C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
     for p, what in ((W / "tools" / "gate_scope.py", "the scope tool"), (B / "gate2" / f"gate_{a.cls}.list", "the base gate's list"),
-                    (B / f"matrix_{a.cls}", "the base gate's rows")):
+                    (B / f"matrix_{a.cls}", "the base gate's rows"),
+                    (B / "timeouts.txt", "the base gate's per-model timeouts (the scope tool refuses a gate without them, "
+                                         "after computing — 27 min lost on 2026-10-14)")):
         if not p.exists():
             raise Refused(f"{p}: {what} is not there; nothing scheduled")
     identical = read_list(Path(a.plan_identical))

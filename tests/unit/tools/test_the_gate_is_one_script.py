@@ -125,3 +125,18 @@ def test_the_tally_names_the_unjudged_pairs_without_counting_them_red(tmp_path, 
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "2 green / 0 red" in out and "judged 1 / not judged 1" in out and "NOT JUDGED A:triton" in out
+
+
+def test_a_base_gate_without_its_timeouts_is_refused_before_any_scope(tmp_path):
+    B = tmp_path / "base"
+    (B / "gate2").mkdir(parents=True)
+    (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
+    (B / "matrix_32g").mkdir()
+    ident = tmp_path / "plan-identical.txt"
+    ident.write_text("A\n")
+    a = gate_run.build_parser().parse_args([
+        "--campaign", str(tmp_path / "c"), "--tree", str(ROOT), "--base-gate", str(B), "--plan-identical", str(ident),
+        "--run-md", str(tmp_path / "RUN.md"), "--holds", str(tmp_path / "h"), "--hardware", "rig",
+        "--class-split-mib", "24576", "--heavy-share", "0.25", "--need-workers", "1", "--plan"])
+    with pytest.raises(gate_run.Refused, match="timeouts"):
+        gate_run.steps(a)
