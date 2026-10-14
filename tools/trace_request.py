@@ -173,8 +173,18 @@ def derived_request(model: str, family: Optional[str] = None) -> list:
     confirmation size (no size flag for a family that has none)."""
     family = family or Z.family_of(model)
     values = model_confirmation(family, container_topology(model))
+    # a null value is a key the family names and no one states: never a flag
     req = _with_flags(Z.request_args(model, family, []),
-                      {k: v for k, v in values.items() if k != "size_fraction"})
+                      {k: v for k, v in values.items() if k not in ("size_fraction", "height", "width") and v is not None})
+    own = (values.get("height"), values.get("width"))
+    if any(v is not None for v in own):
+        # THE MODEL'S OWN JUDGING SIZE (registry, with its source): the vendor renders only there —
+        # mochi-1-preview at 480x848 (2026-10-13) — so it replaces the off-trace size; its frame
+        # count (or step count) is what keeps the request away from the trace. Half a size is refused.
+        if not all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in own):
+            raise ValueError(f"{model}: the container's confirmation states height {own[0]!r} and width {own[1]!r} — "
+                             "a judging size names both, as positive integers")
+        return req + ["--height", str(own[0]), "--width", str(own[1])]
     size = off_trace_size(model, family)
     if size is not None:
         req = req + ["--height", str(size[0]), "--width", str(size[1])]

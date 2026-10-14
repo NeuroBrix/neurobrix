@@ -87,3 +87,11 @@ confirmation:
   # tools/trace_request.model_confirmation — a key it names must be named here first.
   steps: 4
   size_fraction: 0.5
+  # A model whose vendor renders only at its documented size carries that size and a frame count
+  # (mochi-1-preview, 2026-10-13: the vendor and both engines render a red sphere at 480x848 with
+  # 25 frames and 4 steps, and scramble at the half size 160x416): a stated height and width replace
+  # the off-trace size, the frame count then keeps the request away from the trace. Null here = the
+  # family states none; a model states them in the registry, with its source.
+  height: null
+  width: null
+  num_frames: null
