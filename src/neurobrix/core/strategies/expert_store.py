@@ -111,7 +111,9 @@ def build_expert_store_state(z3: Any, component_name: str, executor: Any, seq: A
     else:
         import torch
         from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
-        store = TorchExpertStore(residency, torch.device(z3.exec_device), like)
+        store = TorchExpertStore(residency, torch.device(z3.exec_device), like,
+                                 release=(executor._release_expert_pages
+                                          if holds_expert_files(z3.context.allocations, component_name) else None))
     seq._expert_store = store
     executor._expert_store = store
 

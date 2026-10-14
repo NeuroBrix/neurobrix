@@ -30,8 +30,7 @@ batch took a day. From the next batch:
    not narrated.
 
 What exists today and what this changes: `tools/regression_matrix.py` (rows, carries, known-cause
-records), `tools/gate_scope.py` (the computed scope), the campaign scheduler and tally. Owed by this
-regime: the Prism listing of "16 GB plan differs from 32 GB plan" (a CPU tool over the containers'
-plans, no execution), the per-model gate requests at the model's floor (data-driven, in the family and
+records), `tools/gate_scope.py` (the computed scope), the campaign scheduler and tally. Done: the Prism listing of "16 GB plan differs from 32 GB plan" is `tools/plan_listing.py` (the cell's request
+explained under each profile, no execution; the Triton explanation needs a visible card). Owed by this regime: the per-model gate requests at the model's floor (data-driven, in the family and
 model registries, never in a tool), `judgments.jsonl` as the one record of quality per model and branch,
 and the gate as one script with one wake.

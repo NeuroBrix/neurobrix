@@ -601,6 +601,13 @@ class Cells:
         self.RM, self.dir, self.cfg = RM, Path(gate_dir), cfg
         g = cfg["gate"]
         self.cells, self.rows, self.request = {}, {}, {}
+        # THE CLASSES THIS GATE HOLDS: a class whose rows directory the gate has. A gate of one class
+        # (the validation regime, 2026-10-13: the card's real VRAM, the other class only where the plan
+        # differs) says nothing about the other class's cells — it never judged them — so no cell of
+        # that class is "without a gate row" here. Before, a 32 GB-only base made the tool mark every
+        # model "no gate row" on its 16 GB cell and replay the whole catalogue in both classes
+        # (batch C, 2026-10-14 07:59: 0 changed units, 0 reached, 98 + 98 cells queued).
+        self.gated = set()
         for cls in cfg["classes"]:
             lst = self.dir / g["lists"].format(cls=cls)
             if not lst.is_file():
@@ -609,8 +616,12 @@ class Cells:
             # harness's own rename record, `container_renames.current_name`, as `load_rows` reads rows)
             self.cells[cls] = {(self.name(m), mo) for m, mo in RM.cells_of_lists([lst]) if mo in RM.GATE_MODES}
             rd = self.dir / g["rows"].format(cls=cls)
+            if rd.is_dir():
+                self.gated.add(cls)
             self.rows[cls] = {(self.name(r.get("recorded_as", r["model"])), r["mode"]): r
                               for r in RM.load_rows(rd)} if rd.is_dir() else {}
+        if not self.gated:
+            raise SystemExit(f"REFUSED: the gate {self.dir} holds rows for no class ({g['rows']}): nothing was judged there")
             for (m, _), r in self.rows[cls].items():
                 if r.get("request") is not None:
                     self.request.setdefault(m, r["request"])
@@ -627,7 +638,7 @@ class Cells:
         # a container whose graphs are newer than the gate's row of it was retraced after the gate ran: the gate
         # judged another container, so every cell of it is replayed, whatever the diff
         self.retraced = {}
-        for cls in self.cells:
+        for cls in sorted(self.gated):                     # a class the gate never judged says nothing
             for (m, mo) in self.cells[cls]:
                 r = self.rows[cls].get((m, mo))
                 t = RM._row_time(r) if r else 0.0
@@ -1793,9 +1804,13 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
             sel[cls].setdefault(c, []).append(why)
 
     report["retraced"] = cells.retraced
+    report["gated_classes"] = sorted(cells.gated)
+    for cls in cfg["classes"]:
+        if cls not in cells.gated:
+            log(f"class {cls}: the gate {cells.dir} holds no rows for it — not gated here, no cell of it is queued")
     for m, why in sorted(cells.retraced.items()):
         log(f"container changed since the gate ran: {m} ({why}): every cell of it")
-        for cls in cfg["classes"]:
+        for cls in sorted(cells.gated):
             pick(cls, {c for c in cells.cells[cls] if c[0] == m}, f"container changed since the gate ran: {why}")
 
     for a, b in pairs:
@@ -1878,7 +1893,19 @@ def compute(pairs: list, gate_dir: Path, cfg: dict, prunes=(), log=print) -> dic
         if sel[cls].pop((model, mode), None) is not None:
             report["prunes"].append({"class": cls, "cell": f"{model}/{mode}", "reason": reason})
     report["selected"] = {cls: {f"{m}/{mo}": w for (m, mo), w in sorted(s.items())} for cls, s in sel.items()}
+    _only_gated(sel, cells, log)
     return {"cells": cells, "sel": sel, "report": report}
+
+
+def _only_gated(sel: dict, cells, log=print) -> dict:
+    """A class the gate holds no rows for is not gated here: whatever the diff reaches in it is dropped
+    from the queues, said once per class — the one-class gate of the validation regime (2026-10-13)."""
+    for cls in list(sel):
+        if cls not in cells.gated and sel[cls]:
+            log(f"class {cls}: {len(sel[cls])} reached cell(s) dropped — the gate {cells.dir} holds no rows for "
+                f"{cls}, it is not gated here")
+            sel[cls] = {}
+    return sel
 
 
 def write_outputs(res: dict, out: Path, cfg: dict) -> None:
