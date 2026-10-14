@@ -19,6 +19,13 @@
   of the build's own processor (`input_processor.prepare_image_inputs`, `image_dsp.clip_view_shape`),
   whatever the request's height and width: Wan2.1-I2V's image encoder runs at 224x224. Its height and
   width symbols bound by name took the request's latent grid (60x104 at 480x832).
+* **A vision-language model's vision tower** — the request's image reaches it as the build's processor
+  makes it (`input_processor.prepare_image_inputs`, the function the CLI runs): `hidden_states` the patch rows,
+  `grid_thw` the grid whose VALUES bind its grid symbols (the flow's contract, core/flow/vlm.py and
+  triton/flow/vlm.py). Unbound, every one of them took its trace extent under the placement floor:
+  Ming-Lite-Omni-1.5's tower was priced at its trace's 17 020 patches (4 x 17 020 x 17 020 fp32 attention, 9.9 GB
+  of activations) for a 448x448 image of about a thousand, and its Triton plan was refused on the Mac and on a
+  16 GB card (2026-10-14).
 * **A VACE control encoder's pair** — under the loop component's `vace_control_conditioning`
   flag the run feeds the component `global.image` reaches the (inactive, reactive) clips stacked on
   its batch (`image_dsp.VACE_CONTROL_CLIPS`, the CLI's `vace_control_pair_np`).
@@ -40,11 +47,26 @@ class _Shape:
         self.shape = tuple(int(d) for d in shape)
 
 
+class _Values(_Shape):
+    """An input whose VALUES bind symbols too (`input::<name>::val_<i>`): its shape and its data, as the
+    runtime's binder reads them (`.shape`, `.numpy()`)."""
+
+    def __init__(self, array):
+        import numpy as np
+        self._a = np.asarray(array)
+        super().__init__(self._a.shape)
+
+    def numpy(self):
+        return self._a
+
+
 def bind_from_shapes(dag: Dict[str, Any], inputs: Dict[str, Any]) -> Dict[str, int]:
-    """{symbol: value} of a graph fed `inputs` {input name: shape} — the runtime's own binder."""
+    """{symbol: value} of a graph fed `inputs` {input name: shape, or an array whose values bind symbols}
+    — the runtime's own binder."""
     from neurobrix.triton.symbols import SymbolResolver
     res = SymbolResolver(dag.get("symbolic_context") or {})
-    feed = {f"input::{k}": _Shape(v) for k, v in inputs.items()}
+    feed = {f"input::{k}": (v if isinstance(v, _Shape) else
+                            _Values(v) if hasattr(v, "dtype") else _Shape(v)) for k, v in inputs.items()}
     res.bind_from_inputs(feed, list(feed), dag.get("tensors") or {})
     return dict(res.bindings)
 
@@ -54,8 +76,10 @@ class FlowBindings:
     topology (`run.request_input_config`), asked per component graph by `build_symbol_map`."""
 
     def __init__(self, topology: Dict[str, Any], cache_path, container_name: Optional[str] = None,
-                 cfg_split_components=()):
+                 cfg_split_components=(), image_path: Optional[str] = None):
         self.topology = topology or {}
+        # the request's image (`--input-image`): what a vision tower is fed, through the build's processor
+        self.image_path = image_path
         self.cache_path = Path(cache_path) if cache_path is not None else None
         # the name the container registers its flags under: its MANIFEST model_name, never the
         # name the request used (a path, an alias)
@@ -114,6 +138,26 @@ class FlowBindings:
         from neurobrix.core.module.vision.image_dsp import clip_view_shape
         shape = clip_view_shape(json.loads(cfg.read_text()))
         return {n: shape for n in names}
+
+    def vision_inputs(self, comp: str) -> Optional[Dict[str, Any]]:
+        """{input name: shape or values} the VLM flow feeds its vision tower `comp` for the request's image —
+        `hidden_states` (the patch rows) and `grid_thw` (the grid, whose values bind symbols), the build's own
+        preprocessing (`input_processor.prepare_image_inputs`); None for any other component, or a request
+        with no image."""
+        v = self.flow.get("vlm") or {}
+        if comp != v.get("vision_component") or not self.image_path or self.cache_path is None:
+            return None
+        from neurobrix.core.module.vision.input_processor import prepare_image_inputs
+        in_cfg = v.get("input") or {}
+        ins = prepare_image_inputs(self.topology, self.container_name, str(self.image_path), self.cache_path)
+        pix = ins.get(in_cfg.get("image_variable", "global.pixel_values"))
+        grid = ins.get(in_cfg.get("grid_variable", "global.image_grid_thw"))
+        if pix is None or grid is None:
+            raise ValueError(f"ZERO FALLBACK: the build's processor gave {sorted(ins)} for the request's image — "
+                             f"no patch rows or grid for the vision tower '{comp}'")
+        import numpy as np
+        grid = np.asarray(grid.cpu().numpy() if hasattr(grid, "cpu") else grid)
+        return {"hidden_states": tuple(int(d) for d in pix.shape), "grid_thw": grid}
 
     def text_axes(self, input_config) -> Dict[tuple, int]:
         """{(loop component, input name): finalized length} — each pre-loop encoder's HIDDEN STATE
@@ -223,6 +267,11 @@ class FlowBindings:
             return {}
         table = (dag.get("symbolic_context") or {}).get("symbols") or {}
         out: Dict[str, int] = {}
+        vis = self.vision_inputs(comp)
+        if vis:
+            # every symbol the runtime binder binds from the tower's inputs, the patch-row axis included (the
+            # tracer names `hidden_states`'s dim 0 `batch`; a vision tower runs no guidance batch to keep apart)
+            out.update(bind_from_shapes(dag, vis))
         view = self.pixel_view(comp)
         if view:
             out.update({sid: v for sid, v in bind_from_shapes(dag, view).items()
