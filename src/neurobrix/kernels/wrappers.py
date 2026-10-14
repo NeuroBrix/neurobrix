@@ -3176,9 +3176,12 @@ def _reduce_over_dims(single_fn, x, dims, keepdim, **kw):
     return out
 
 
-def mean_wrapper(x, dim=None, keepdim=False) :
+def mean_wrapper(x, dim=None, keepdim=False, dtype=None) :
     """Mean reduction. Reduces over one dim, a 1-elem list, or (via
-    _reduce_over_dims) an arbitrary list of dims."""
+    _reduce_over_dims) an arbitrary list of dims. `dtype`: aten::mean's keyword, the input cast to it first."""
+    dtype = _reduction_dtype("mean", dtype)
+    if dtype is not None and x._dtype != dtype:
+        x = x.to(dtype)
     if isinstance(dim, (list, tuple)) and len(dim) > 1:
         return _reduce_over_dims(mean_wrapper, x, dim, keepdim)
     if dim is None:
@@ -3218,7 +3221,22 @@ def mean_wrapper(x, dim=None, keepdim=False) :
     return output.to(x.dtype).view(shape)
 
 
-def sum_wrapper(x, dim=None, keepdim=False) :
+def _reduction_dtype(op, dtype):
+    """The `dtype` keyword of aten::sum / aten::mean as an NBXDtype (None when absent). ATen casts the INPUT to it
+    before reducing, and the result carries it (`sum(x, -1, keepdim=True, dtype=torch.float32)` over a bf16 router's
+    top-k weights, Ming-Lite-Omni-1.5's language model, 2026-10-14). A string the NBX dtypes do not know is refused."""
+    if dtype is None or isinstance(dtype, NBXDtype):
+        return dtype
+    if isinstance(dtype, dict) and dtype.get("type") == "dtype":
+        dtype = dtype.get("value")
+    name = str(dtype).replace("torch.", "")
+    nbx = getattr(NBXDtype, name, None)
+    if nbx is None:
+        raise RuntimeError(f"ZERO FALLBACK: {op} dtype {dtype!r} is not a known NBXDtype.")
+    return nbx
+
+
+def sum_wrapper(x, dim=None, keepdim=False, dtype=None) :
     """Sum reduction.
 
     Output dtype follows PyTorch ``torch.sum`` promotion: floating inputs keep
@@ -3232,6 +3250,9 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     grid-size sum over [0,1,2,4]) is reduced atomically via _reduce_over_dims;
     a single dim / 1-elem list keeps the fast path below unchanged.
     """
+    dtype = _reduction_dtype("sum", dtype)
+    if dtype is not None and x._dtype != dtype:
+        x = x.to(dtype)
     if isinstance(dim, (list, tuple)) and len(dim) > 1:
         return _reduce_over_dims(sum_wrapper, x, dim, keepdim)
     # Complex sum = (sum real, sum imag), summed over the same dim. The flat
