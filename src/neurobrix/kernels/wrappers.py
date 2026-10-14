@@ -6982,6 +6982,21 @@ def _draw_seed() -> int:
     return __import__("random").randint(0, 2**31 - 1)
 
 
+def _stream_draw(kind, shape, dtype, device):
+    """A seeded run's draw (kernels/rng_stream: the vendor's CPU stream, continued in consumption order — the same
+    values the compiled branch draws), as an NBXTensor of `dtype` on `device`; None when the run has no seed."""
+    from . import rng_stream
+    if not rng_stream.active():
+        return None
+    arr = rng_stream.next_normal(shape) if kind == "normal" else rng_stream.next_uniform(shape)
+    if isinstance(device, NBXTensor):            # a tensor is its own device context (NBXTensor.device)
+        DeviceAllocator.set_device(int(device._device_idx))
+    elif device is not None and ":" in str(device):
+        DeviceAllocator.set_device(int(str(device).split(":")[1]))
+    out = NBXTensor.from_numpy(arr)
+    return out if out._dtype == dtype else out.to(dtype)
+
+
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
     from .ops.rand_op import rand_kernel
@@ -6996,6 +7011,9 @@ def rand_wrapper(*args, **kwargs) :
         device = str('cuda')
     if pinned_seed() is not None:
         return NBXTensor.from_numpy(pinned_uniform(size)).to(dtype)
+    drawn = _stream_draw("uniform", size, dtype, device)
+    if drawn is not None:
+        return drawn
     output = NBXTensor.empty(size, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -7016,6 +7034,9 @@ def randn_wrapper(*args, **kwargs) :
     device = kwargs.get('device', None)
     if device is None:
         device = str('cuda')
+    drawn = _stream_draw("normal", size, dtype, device)
+    if drawn is not None:
+        return drawn
     output = NBXTensor.empty(size, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -7031,6 +7052,9 @@ def rand_like_wrapper(x, **kwargs) :
     from .ops.rand_op import rand_kernel
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
+    drawn = _stream_draw("uniform", x.shape, kwargs.get('dtype', x._dtype), device)
+    if drawn is not None:
+        return drawn
     output = NBXTensor.empty(x.shape, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -7049,6 +7073,9 @@ def randn_like_wrapper(x, **kwargs) :
     device = kwargs.get('device', x.device)
     if pinned_seed() is not None:
         return NBXTensor.from_numpy(pinned_normal(x.shape)).to(dtype)
+    drawn = _stream_draw("normal", x.shape, kwargs.get('dtype', x._dtype), device)
+    if drawn is not None:
+        return drawn
     output = NBXTensor.empty(x.shape, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -7074,13 +7101,15 @@ def normal_wrapper(*args, **kwargs) :
     device = kwargs.get('device', None)
     if device is None:
         device = str('cuda')
-    output = NBXTensor.empty(size, dtype=dtype, device=device)
-    n = output.numel()
-    if n == 0:
-        return output
-    seed = _draw_seed()
-    _set_device(output)
-    randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    output = _stream_draw("normal", size, dtype, device)
+    if output is None:
+        output = NBXTensor.empty(size, dtype=dtype, device=device)
+        n = output.numel()
+        if n == 0:
+            return output
+        seed = _draw_seed()
+        _set_device(output)
+        randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     # Transform N(0,1) → N(mean, std)
     if std != 1.0:
         output.mul_(std)

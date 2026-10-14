@@ -53,6 +53,12 @@ def draw(op_name: str, shape: Sequence[int], dtype: torch.dtype,
     `op_name` is one of DRAW_OPS; anything else is refused by name."""
     if op_name not in DRAW_OPS:
         raise ValueError(f"run_generator.draw: {op_name!r} is not one of {DRAW_OPS}")
+    # A seeded run: the vendor's CPU stream, continued (kernels/rng_stream) — the same values the Triton branch
+    # draws for the same op, in the same order.
+    from neurobrix.kernels import rng_stream
+    if rng_stream.active():
+        arr = (rng_stream.next_uniform(shape) if op_name in UNIFORM_OPS else rng_stream.next_normal(shape))
+        return torch.from_numpy(arr).to(device=device, dtype=dtype)
     gen = generator()
     if gen is None:
         return None

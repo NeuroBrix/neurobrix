@@ -445,13 +445,20 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
             # Draw on the generator's device then move — diffusers
             # randn_tensor semantics (a torch.Generator is device-bound; on a
             # multi-device plan the sample may live elsewhere).
-            _rand_device = generator.device if generator is not None else sample.device
-            noise = torch.randn(
-                sample.shape,
-                generator=generator,
-                device=_rand_device,
-                dtype=_out_dtype
-            ).to(sample.device)
+            from neurobrix.kernels import rng_stream
+            if rng_stream.active() and not _aseed:
+                # A seeded run: the step's noise is the run stream's next draw (kernels/rng_stream), the same
+                # values the Triton scheduler adds — the vendor's one generator, continued.
+                noise = torch.from_numpy(rng_stream.next_normal(tuple(sample.shape))).to(
+                    device=sample.device, dtype=_out_dtype)
+            else:
+                _rand_device = generator.device if generator is not None else sample.device
+                noise = torch.randn(
+                    sample.shape,
+                    generator=generator,
+                    device=_rand_device,
+                    dtype=_out_dtype
+                ).to(sample.device)
             prev_sample = prev_sample + sigma_up * noise.to(torch.float32)
 
         prev_sample = prev_sample.to(_out_dtype)

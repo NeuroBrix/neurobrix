@@ -28,6 +28,17 @@ engines take it from `init_draw(shape)` below — the vendor's CPU draw reproduc
 variable, in consumption order. The per-draw Philox seeds above still serve the Triton random
 kernels of the hot loop (scheduler noise); the compiled branch's scheduler draws keep its generator.
 Cross-engine bit-equality of the INITIAL draw is the contract from here on.
+
+EVERY DRAW OF A SEEDED RUN (2026-10-14): the vendor threads ONE generator through every draw of a run — an
+image encoder's posterior sample (`retrieve_latents(vae.encode(x), generator)`), the initial noise, each
+ancestral step's noise (`EulerAncestralDiscreteScheduler.step(..., generator)`). Measured on Allegro-TI2V at
+its gate request: the two engines rendered the same clip at one step (mean |a - b| under 1 of 255 per frame)
+and different content at ten, the ancestral noise being the only difference (torch's device generator in the
+compiled branch, Philox in the Triton branch); on CogVideoX-5b-I2V the first op that departs between the
+kernel oracle and the Triton branch is the posterior sample `vae_encoder/aten.randn_like::0`. So every draw of a
+seeded run — graph random ops and scheduler noise, in both engines — is the run stream's next normal
+(`next_normal`) or uniform (`next_uniform`) values, in consumption order. The per-draw Philox seeds
+(`next_seed`) serve only what is not a seeded run's draw.
 """
 
 _RUN_SEED = None
@@ -41,6 +52,36 @@ def set_run_seed(seed):
     _RUN_SEED = int(seed) if seed is not None else None
     _COUNTER = 0
     _MT = None
+
+
+def _mt():
+    global _MT
+    if _RUN_SEED is None:
+        raise RuntimeError("rng_stream: a draw while inactive: the run has no seed")
+    if _MT is None:
+        from neurobrix.kernels.mt_randn import MT19937
+        _MT = MT19937(_RUN_SEED)
+    return _MT
+
+
+def _count(shape):
+    n = 1
+    for x in shape:
+        n *= int(x)
+    return n
+
+
+def next_normal(shape):
+    """The run stream's next standard normals as a float32 numpy array of `shape` (torch's CPU `randn` for the
+    run's seed, continued): the draw of every seeded random op of either engine."""
+    shape = tuple(int(x) for x in shape)
+    return _mt().randn(_count(shape)).reshape(shape)
+
+
+def next_uniform(shape):
+    """The run stream's next [0, 1) uniforms as a float32 numpy array of `shape` (torch's CPU `rand`, continued)."""
+    shape = tuple(int(x) for x in shape)
+    return _mt().uniform_f32(_count(shape)).reshape(shape)
 
 
 def init_draw(shape):

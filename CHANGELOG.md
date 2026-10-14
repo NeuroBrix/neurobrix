@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Every draw of a seeded run is the vendor's stream, in both engines** (`kernels/rng_stream.next_normal` / `next_uniform`): the graph's random ops (`randn`, `randn_like`, `rand`, `rand_like`, `normal`) and the schedulers' step noise (Euler Ancestral, DDIM eta > 0) continue the generator the initial draw started — torch's CPU `randn`/`rand` for the run's seed, the vendor's one generator — in consumption order, the same values in the compiled and the Triton branch. Before, the compiled branch drew them on torch's device generator and the Triton branch with Philox: Allegro-TI2V rendered the same clip in both engines at one step and different content at ten (2026-10-14); CogVideoX-5b-I2V departed at its posterior sample. A seedless run draws as before.
 - **A model carries its own judging size** (`tools/trace_request.derived_request`, the video family's `confirmation:` section naming `height`, `width`, `num_frames`): a registry-stated size replaces the off-trace size and the frame count keeps the request away from the trace; half a size is refused by name; a null family key is never a flag. mochi-1-preview is the first: the vendor and both engines render at 480x848 with 25 frames and 4 steps and scramble at the family's half size (2026-10-13).
 
 - **One initial draw for both engines, the vendor's.** A seeded run draws its initial noise (every
