@@ -140,3 +140,28 @@ def test_a_base_gate_without_its_timeouts_is_refused_before_any_scope(tmp_path):
         "--class-split-mib", "24576", "--heavy-share", "0.25", "--need-workers", "1", "--plan"])
     with pytest.raises(gate_run.Refused, match="timeouts"):
         gate_run.steps(a)
+
+
+def test_the_any_card_instance_serves_the_other_class_and_reads_the_shared_holds(tmp_path):
+    assert gate_run.any_card_classes("32g") == ["16g"] and gate_run.any_card_classes("16g") == ["32g"]
+    with pytest.raises(gate_run.Refused, match="not one the scheduler knows"):
+        gate_run.any_card_classes("24g")
+    B = tmp_path / "base"
+    (B / "gate2").mkdir(parents=True)
+    (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
+    (B / "matrix_32g").mkdir()
+    (B / "timeouts.txt").write_text("A 600\n")
+    ident = tmp_path / "plan-identical.txt"
+    ident.write_text("A\n")
+    a = gate_run.build_parser().parse_args([
+        "--campaign", str(tmp_path / "c"), "--tree", str(ROOT), "--base-gate", str(B), "--plan-identical", str(ident),
+        "--run-md", str(tmp_path / "RUN.md"), "--holds", str(tmp_path / "shared_holds"), "--hardware", "rig",
+        "--class-split-mib", "24576", "--heavy-share", "0.25", "--need-workers", "1", "--plan"])
+    for name, cmd, *_ in gate_run.steps(a):
+        if name in ("sched", "sched_any"):
+            assert cmd[cmd.index("--holds") + 1] == str(tmp_path / "shared_holds"), f"{name} reads private holds"
+
+
+def test_the_carry_count_reads_the_record(tmp_path):
+    (tmp_path / "carries.yml").write_text("carries:\n- model: A\n  mode: native\n- model: B\n  mode: triton\n")
+    assert gate_run.carried(tmp_path) == 2 and gate_run.carried(tmp_path / "none") == 0

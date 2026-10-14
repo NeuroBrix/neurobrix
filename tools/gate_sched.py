@@ -111,10 +111,13 @@ def say(msg):
     print(msg, flush=True)
 
 
+CLASS_LABELS = ("16g", "32g")   # a card's class: below --class-split-mib, or at or above it
+
+
 def cards():
     out = subprocess.run(["nvidia-smi", "--query-gpu=index,memory.total", "--format=csv,noheader,nounits"],
                          capture_output=True, text=True, check=True).stdout
-    return {int(i): ("16g" if int(m) < a.class_split_mib else "32g") for i, m in
+    return {int(i): (CLASS_LABELS[0] if int(m) < a.class_split_mib else CLASS_LABELS[1]) for i, m in
             (l.split(",") for l in out.strip().splitlines())}
 
 

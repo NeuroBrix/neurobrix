@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 
 
 class Refused(RuntimeError):
@@ -73,6 +74,23 @@ def split_queue(lines: list, identical: set) -> tuple:
     return own, anyc
 
 
+def any_card_classes(cls: str) -> list:
+    """The card classes the any-card instance serves: every class the scheduler knows but the gate's."""
+    import gate_sched
+    if cls not in gate_sched.CLASS_LABELS:
+        raise Refused(f"class {cls!r} is not one the scheduler knows {gate_sched.CLASS_LABELS}")
+    return [c for c in gate_sched.CLASS_LABELS if c != cls]
+
+
+def carried(C: Path) -> int:
+    """The cells the gate's carry record names (<gate>/carries.yml), 0 without one."""
+    f = C / "carries.yml"
+    if not f.is_file():
+        return 0
+    import yaml
+    return len((yaml.safe_load(f.read_text()) or {}).get("carries") or [])
+
+
 def steps(a) -> list:
     C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
     for p, what in ((W / "tools" / "gate_scope.py", "the scope tool"), (B / "gate2" / f"gate_{a.cls}.list", "the base gate's list"),
@@ -97,7 +115,7 @@ def steps(a) -> list:
                    "--state", str(C / "sched"), "--label", a.label, "--python", py]
                   + sum((["--peak-rows", x] for x in a.peak_rows), []), env, W),
         ("sched_any", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2_any"), "--gate", str(C), "--tree", str(W),
-                       "--run-md", str(a.run_md), "--holds", str(C / "holds_any"), "--hardware", a.hardware, "--class-split-mib",
+                       "--run-md", str(a.run_md), "--holds", str(a.holds), "--hardware", a.hardware, "--class-split-mib",
                        str(a.class_split_mib), "--heavy-share", str(a.heavy_share), "--need-workers", str(max(1, a.need_workers // 2)),
                        "--state", str(C / "sched_any"), "--out-class", a.cls, "--label", a.label, "--python", py]
                       + sum((["--peak-rows", x] for x in a.peak_rows), []), env, W),
@@ -115,7 +133,7 @@ def run(a) -> int:
             print(name, ":", " ".join(cmd) if isinstance(cmd, list) else f"plan-identical models: {len(cmd)}")
         return 0
     C.mkdir(parents=True, exist_ok=True)
-    for d in ("gate2", "gate2_any", "holds_any", "sched", "sched_any", "scope"):
+    for d in ("gate2", "gate2_any", "sched", "sched_any", "scope"):
         (C / d).mkdir(exist_ok=True)
     # the gate's list is the base gate's: the same cells wanted, judged against the same reference
     (C / "gate2" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
@@ -137,9 +155,13 @@ def run(a) -> int:
     # 2. the split: plan-identical models to any card, the others to the class's cards
     own, anyc = split_queue(lines, plan[1][1])
     (C / "gate2" / f"queue_{a.cls}.txt").write_text("".join(l + "\n" for l in own))
-    (C / "gate2_any" / f"queue_{a.cls}.txt").write_text("".join(l + "\n" for l in anyc))
-    say(run_md, f"{label} split: {len(own)} lines on the {a.cls} cards + {len(anyc)} plan-identical lines on any card; "
-                f"{(C / 'carries.yml').is_file() and sum(1 for l in (C / 'carries.yml').read_text().splitlines() if '  - model' in l) or 0} cells carried by record")
+    # the any-card instance serves the cards of the OTHER class (a scheduler reads the queue named after the class of
+    # the card it places on): the class instance and it never share a card, and both read the shared holds — the
+    # first run gave the any-card lines the gate's own class and private holds, and placed two cells on a held card
+    for other in any_card_classes(a.cls):
+        (C / "gate2_any" / f"queue_{other}.txt").write_text("".join(l + "\n" for l in anyc))
+    say(run_md, f"{label} split: {len(own)} lines on the {a.cls} cards + {len(anyc)} plan-identical lines on the "
+                f"{','.join(any_card_classes(a.cls))} cards; {carried(C)} cells carried by record")
     # 3. the two scheduler instances, together
     procs = []
     for name, cmd, env, cwd in plan[2:4]:
