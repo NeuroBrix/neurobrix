@@ -165,3 +165,27 @@ def test_the_any_card_instance_serves_the_other_class_and_reads_the_shared_holds
 def test_the_carry_count_reads_the_record(tmp_path):
     (tmp_path / "carries.yml").write_text("carries:\n- model: A\n  mode: native\n- model: B\n  mode: triton\n")
     assert gate_run.carried(tmp_path) == 2 and gate_run.carried(tmp_path / "none") == 0
+
+
+def test_the_planning_workers_are_bound_to_the_instance(tmp_path, monkeypatch):
+    """The workers that price a cell are spawned processes: each must be configured with the instance's arguments
+    (the any-card instance died at its first unplanned need, its workers' harness reader left None)."""
+    seen = {}
+
+    class Pool:
+        def __init__(self, n, **kw):
+            seen.update(kw)
+            raise SystemExit("stop after the pool")
+    monkeypatch.setattr(gate_sched, "ProcessPoolExecutor", Pool)
+    argv = ["--gate2", str(tmp_path / "g2"), "--gate", str(tmp_path / "g"), "--tree", str(ROOT), "--run-md",
+            str(tmp_path / "RUN.md"), "--holds", str(tmp_path / "h"), "--class-split-mib", "24576", "--heavy-share",
+            "0.25", "--hardware", "rig", "--need-workers", "1", "--state", str(tmp_path / "s"), "--out-class", "32g"]
+    with pytest.raises(SystemExit, match="stop after the pool"):
+        gate_sched.main(argv)
+    assert seen.get("initializer") is gate_sched.configure and seen["initargs"][0].out_class == "32g"
+    # and a worker so bound answers with the instance's class
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn"), initializer=gate_sched.configure,
+                             initargs=seen["initargs"]) as ex:
+        assert ex.submit(gate_sched.OUT, "16g").result() == "32g"

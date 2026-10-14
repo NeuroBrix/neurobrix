@@ -373,7 +373,11 @@ def main(argv=None):
     # SPAWNED workers: a forked worker born inside pick_gate's flock inherits the lock's open file description and holds
     # it after the parent closes it — every later pick_gate then waits forever (mq24, 2026-10-10 22:09: 18 h, no cell;
     # lock_proof.py: fork relock BLOCKED, spawn relock OK). A spawned worker inherits no descriptor.
-    POOL = ProcessPoolExecutor(a.need_workers, mp_context=multiprocessing.get_context("spawn"))
+    # each spawned worker binds itself to this instance's arguments: a worker imports this module afresh, and the
+    # harness reader (RM) is bound by `configure` — the first port left it None in the workers and the any-card
+    # instance died at its first need not yet planned (2026-10-14 20:3x)
+    POOL = ProcessPoolExecutor(a.need_workers, mp_context=multiprocessing.get_context("spawn"),
+                               initializer=configure, initargs=(a,))
     cmap = cards()
     for l in (HERE / "needs.jsonl").read_text().splitlines() if (HERE / "needs.jsonl").exists() else []:
         r = json.loads(l)

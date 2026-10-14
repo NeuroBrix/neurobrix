@@ -140,6 +140,13 @@ def run(a) -> int:
     (C / "gate2_any" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
     label = a.label
     head = git(W, "rev-parse", "--short", "HEAD")
+    if a.resume:
+        # the scope and the split are already on disk (a stopped run): the two instances take their own queues back
+        for d in ("sched", "sched_any"):
+            if not (C / d).is_dir():
+                raise Refused(f"--resume: {C / d} is not there — the gate never split; run it without --resume")
+        say(run_md, f"{label} GATE RESUME tree {head} class {a.cls}: the scope and the split on disk are kept")
+        return _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=True)
     say(run_md, f"{label} GATE START tree {head} class {a.cls} base {B}")
     # 1. the scope
     name, cmd, env, cwd = plan[0]
@@ -162,12 +169,16 @@ def run(a) -> int:
         (C / "gate2_any" / f"queue_{other}.txt").write_text("".join(l + "\n" for l in anyc))
     say(run_md, f"{label} split: {len(own)} lines on the {a.cls} cards + {len(anyc)} plan-identical lines on the "
                 f"{','.join(any_card_classes(a.cls))} cards; {carried(C)} cells carried by record")
+    return _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=bool(anyc), own_lines=bool(own))
+
+
+def _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=True, own_lines=True) -> int:
     # 3. the two scheduler instances, together
     procs = []
     for name, cmd, env, cwd in plan[2:4]:
-        if name == "sched_any" and not anyc:
+        if name == "sched_any" and not any_lines:
             continue
-        if name == "sched" and not own:
+        if name == "sched" and not own_lines:
             continue
         with open(C / f"{name}.log", "a") as log:
             procs.append((name, subprocess.Popen(cmd, env=env, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT)))
@@ -202,6 +213,8 @@ def build_parser():
     ap.add_argument("--scope-timeout", type=int, default=7200)
     ap.add_argument("--python", default=os.environ.get("NEUROBRIX_PYTHON") or os.environ.get("NBX_PYTHON") or sys.executable)
     ap.add_argument("--plan", action="store_true", help="print the steps, run nothing")
+    ap.add_argument("--resume", action="store_true",
+                    help="a stopped gate: keep the scope and the split on disk, run the two instances and the tally")
     return ap
 
 
