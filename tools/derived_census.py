@@ -41,14 +41,24 @@ CACHE = _cache_dir()
 MODE_FLAGS = {"triton": "--triton", "triton-sequential": "--triton-sequential"}
 
 
-def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) -> dict:
-    """The plan the runtime would receive, from the engine's own `--explain-plan --json`."""
+def shadow_env(src, rung=None) -> dict:
+    """The environment a plan is explained in AT THE PROFILE, never at the room: the census shadow (no
+    device visible, `NBX_CENSUS` / `NBX_CENSUS_DEVICES`), the engine tree `src` on PYTHONPATH, one BLAS
+    thread, and the rung's budget when one is named. ONE definition: the derivation (`plan_record`) and
+    the plan listing (tools/plan_listing.py) explain the same way — a plan explained beside a free
+    card reads the room and a 32 GB profile planned as a 16 GB one (2026-10-14 11:1x)."""
     env = dict(os.environ)
     env.update({"CUDA_VISIBLE_DEVICES": "", "NBX_CENSUS": "1", "NBX_CENSUS_DEVICES": "1",
-                "PYTHONPATH": str(REPO / "src"),
+                "PYTHONPATH": str(src),
                 "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"})
     if rung is not None:
         env["NBX_PRISM_BUDGET_MB"] = str(int(rung))
+    return env
+
+
+def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) -> dict:
+    """The plan the runtime would receive, from the engine's own `--explain-plan --json`."""
+    env = shadow_env(REPO / "src", rung)
     r = subprocess.run([sys.executable, "-m", "neurobrix", "run", "--model", model, *request,
                         MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
