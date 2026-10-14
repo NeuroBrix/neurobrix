@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drew its initial noise unseeded: Wan2.1-I2V native 2026-10-13 12:09); a seeded resolver with no armed stream is refused by name.
 
 ### Fixed
+- **A class's census ladder ends at the profile's own rung** (`tools/certified_census.rungs_for`): the card's capacity is appended when the commercial ladder does not name it, so the rung a run with the whole card plans at is derived. The Mac's M4 Pro (17.8 GB) planned above the ladder's 16 384 MB: CogVideoX-5b-I2V's guidance split at every ladder rung and not at the card's budget, the run asked addmm at M=480 and the table held M=240 only (2026-10-14).
 - **A streamed piece takes its component's MoE declaration without re-fusing its slice** (`GraphExecutor.set_moe_config`): a piece's routers are judged on the component's whole fused graph, never on the slice, so a seam between a multi-gate layer's gates and its fused op no longer refuses the piece (Ming-Lite-Omni-1.5, 16 GB, both engines, 2026-10-13: three modality gates per layer kept in the graph by `gate_group`, their block in the next piece). A piece whose component still holds an unfused router is refused by name.
 
 - **An expert store is granted only the room the plan did not promise elsewhere.** The decode
