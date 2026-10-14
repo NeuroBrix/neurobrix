@@ -11,7 +11,7 @@
    `tools/plan_listing.py` without executing) have ONE cell, which the ANY-CARD scheduler instance places on the
    cards of the other class and records under the gate's class; the other models run on the class's cards.
    A model validates once per distinct Prism plan, not per card class.
-3. Cells above ten minutes at their last measurement are carried by record (`<gate>/carries.yml`, written by the
+3. Cells above ten minutes at their last measurement are carried by record (`<gate>/gate/carries.yml`, beside the rows, written by the
    caller with provenance) until the gate request at the model's floor lands in the registries.
 4. The tally (`tools/gate_tally.py`): replayed, carried, missing, never measured, judged / not judged, against the
    committed references; its first line is the gate's verdict line in RUN.md.
@@ -82,9 +82,28 @@ def any_card_classes(cls: str) -> list:
     return [c for c in gate_sched.CLASS_LABELS if c != cls]
 
 
+def layout() -> dict:
+    """THE gate layout, the scope tool's (tools/gate_scope.yml `gate:`): lists, rows, timeouts, relative to a gate's
+    directory. One definition: the scope tool reads a base gate where this tool writes it."""
+    import yaml
+    lay = (yaml.safe_load((HERE / "gate_scope.yml").read_text()) or {}).get("gate") or {}
+    for k in ("lists", "rows", "timeouts"):
+        if k not in lay:
+            raise Refused(f"tools/gate_scope.yml names no gate.{k}: the gate layout is read there")
+    if not lay["rows"].endswith("matrix_{cls}"):
+        raise Refused(f"gate.rows {lay['rows']!r}: the scheduler writes <dir>/matrix_<cls>, the layout must end so")
+    return lay
+
+
+def rows_root(C: Path) -> Path:
+    """The directory whose matrix_<cls>/ holds a gate's rows (the scheduler's --gate), and its carries.yml."""
+    rel = layout()["rows"][:-len("matrix_{cls}")].rstrip("/")
+    return C / rel if rel else C
+
+
 def carried(C: Path) -> int:
-    """The cells the gate's carry record names (<gate>/carries.yml), 0 without one."""
-    f = C / "carries.yml"
+    """The cells the gate's carry record names (<rows root>/carries.yml), 0 without one."""
+    f = rows_root(C) / "carries.yml"
     if not f.is_file():
         return 0
     import yaml
@@ -93,9 +112,10 @@ def carried(C: Path) -> int:
 
 def steps(a) -> list:
     C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
-    for p, what in ((W / "tools" / "gate_scope.py", "the scope tool"), (B / "gate2" / f"gate_{a.cls}.list", "the base gate's list"),
-                    (B / f"matrix_{a.cls}", "the base gate's rows"),
-                    (B / "timeouts.txt", "the base gate's per-model timeouts (the scope tool refuses a gate without them, "
+    lay = layout()
+    for p, what in ((W / "tools" / "gate_scope.py", "the scope tool"), (B / lay["lists"].format(cls=a.cls), "the base gate's list"),
+                    (B / lay["rows"].format(cls=a.cls), "the base gate's rows"),
+                    (B / lay["timeouts"], "the base gate's per-model timeouts (the scope tool refuses a gate without them, "
                                          "after computing — 27 min lost on 2026-10-14)")):
         if not p.exists():
             raise Refused(f"{p}: {what} is not there; nothing scheduled")
@@ -109,12 +129,12 @@ def steps(a) -> list:
         ("scope", [py, str(W / "tools" / "gate_scope.py"), "--base", base_sha, "--head", head, "--gate-dir", str(B),
                    "--out", str(scope)], dict(env, CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(W / "src")), W),
         ("split", identical, scope, None),
-        ("sched", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2"), "--gate", str(C), "--tree", str(W),
+        ("sched", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2"), "--gate", str(rows_root(C)), "--tree", str(W),
                    "--run-md", str(a.run_md), "--holds", str(a.holds), "--hardware", a.hardware, "--class-split-mib",
                    str(a.class_split_mib), "--heavy-share", str(a.heavy_share), "--need-workers", str(a.need_workers),
                    "--state", str(C / "sched"), "--label", a.label, "--python", py]
                   + sum((["--peak-rows", x] for x in a.peak_rows), []), env, W),
-        ("sched_any", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2_any"), "--gate", str(C), "--tree", str(W),
+        ("sched_any", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2_any"), "--gate", str(rows_root(C)), "--tree", str(W),
                        "--run-md", str(a.run_md), "--holds", str(a.holds), "--hardware", a.hardware, "--class-split-mib",
                        str(a.class_split_mib), "--heavy-share", str(a.heavy_share), "--need-workers", str(max(1, a.need_workers // 2)),
                        "--state", str(C / "sched_any"), "--out-class", a.cls, "--label", a.label, "--python", py]
@@ -135,14 +155,16 @@ def run(a) -> int:
     C.mkdir(parents=True, exist_ok=True)
     for d in ("gate2", "gate2_any", "sched", "sched_any", "scope"):
         (C / d).mkdir(exist_ok=True)
+    rows_root(C).mkdir(parents=True, exist_ok=True)
     # the gate's list is the base gate's: the same cells wanted, judged against the same reference
     # every class's list is carried forward (the scope tool reads them all, the gated class's and the others'):
     # the second gate built on the first refused for want of its 16g list (2026-10-14 22:27)
-    for lst in sorted((B / "gate2").glob("gate_*.list")):
+    for lst in sorted((B / Path(layout()["lists"]).parent).glob("gate_*.list")):
         (C / "gate2" / lst.name).write_text(lst.read_text())
         (C / "gate2_any" / lst.name).write_text(lst.read_text())
-    if (B / "timeouts.txt").is_file() and not (C / "timeouts.txt").is_file():
-        (C / "timeouts.txt").write_text((B / "timeouts.txt").read_text())
+    tmo = layout()["timeouts"]
+    if (B / tmo).is_file() and not (C / tmo).is_file():
+        (C / tmo).write_text((B / tmo).read_text())
     label = a.label
     head = git(W, "rev-parse", "--short", "HEAD")
     if a.resume:
@@ -201,7 +223,7 @@ def _schedule_and_tally(a, C, B, run_md, plan, label, any_lines=True, own_lines=
 
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--campaign", required=True, help="this gate's directory (created): scope/, gate2/, gate2_any/, sched/, matrix_<cls>/")
+    ap.add_argument("--campaign", required=True, help="this gate's directory (created), in the scope tool's layout (tools/gate_scope.yml gate:): gate2/, gate/matrix_<cls>/, timeouts.txt; and scope/, gate2_any/, sched/, sched_any/")
     ap.add_argument("--tree", required=True, help="the worktree under test")
     ap.add_argument("--trunk", default="origin/main", help="the ref the scope's base is the merge-base with")
     ap.add_argument("--base-gate", required=True, help="the last gate of the class: gate2/gate_<cls>.list, matrix_<cls>/ rows")

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """gate_tally.py — THE gate tally, committed (CPU, reads only).
 
-Per class (the validation regime: ONE class per gate, the card's real VRAM): the gate's wanted cells
-(<gate>/gate2/gate_<cls>.list, native + triton), the cells this gate REPLAYED (latest row per (model, mode)
-under <gate>/matrix_<cls>), the cells it had to replay (the computed scope, <scope>/queue_<cls>.txt), and for
+Per class (the validation regime: ONE class per gate, the card's real VRAM), in the scope tool's gate layout
+(tools/gate_scope.yml `gate:`): the gate's wanted cells (<gate>/gate2/gate_<cls>.list, native + triton), the cells
+this gate REPLAYED (latest row per (model, mode) under <gate>/gate/matrix_<cls>), the cells it had to replay (the computed scope, <scope>/queue_<cls>.txt), and for
 every wanted cell not replayed the row CARRIED from the base gate with its provenance. A scope cell with no row
 is MISSING (an error, never a pass). A red is named; a carried red is accepted only when the TREE's committed
 per-class record (docs/reference/known-cause-reds.<cls>.yml) names it. The tally compares against the committed
@@ -11,7 +11,7 @@ reference, never against itself.
 
 Quality (rule 2): every wanted (model, mode) is read against the committed judgments record
 (--judgments, default <tree>/docs/reference/judgments.jsonl, tools/judgments.py) and the gate's own
-<gate>/matrix_<cls>/judgments.jsonl; the pairs no judgment covers are NAMED ("NOT JUDGED"). A judgment is made
+<gate>/gate/matrix_<cls>/judgments.jsonl; the pairs no judgment covers are NAMED ("NOT JUDGED"). A judgment is made
 once, outside the gate, so a missing one is named, not counted as a red.
 
     gate_tally.py --gate <campaign gate dir> --base <base gate dir> --tree <tree> --classes 32g [--scope <dir>]
@@ -91,22 +91,30 @@ def cell(r):
     return f"rc{r['rc']} {r.get('wall_s', '?')}s {r.get('date', '')[:16]}"
 
 
+def layout() -> dict:
+    """THE gate layout (tools/gate_scope.yml `gate:`), the one the scope tool and gate_run read."""
+    import yaml
+    return (yaml.safe_load((Path(__file__).resolve().parent / "gate_scope.yml").read_text()) or {})["gate"]
+
+
 def tally(a) -> int:
     rc = 0
+    lay = layout()
     modes = tuple(a.modes.split(","))
     for cls in a.classes.split(","):
-        want = wanted(f"{a.gate}/gate2/gate_{cls}.list", modes)
-        rows = latest_rows(f"{a.gate}/matrix_{cls}")
+        want = wanted(f"{a.gate}/{lay['lists'].format(cls=cls)}", modes)
+        rows_dir = f"{a.gate}/{lay['rows'].format(cls=cls)}"
+        rows = latest_rows(rows_dir)
         overlaid = 0
         if a.overlay:
-            for k, r in latest_rows(f"{a.overlay}/matrix_{cls}").items():
+            for k, r in latest_rows(f"{a.overlay}/{lay['rows'].format(cls=cls)}").items():
                 rows[k] = r
                 overlaid += 1
-        base = latest_rows(f"{a.base}/matrix_{cls}")
+        base = latest_rows(f"{a.base}/{lay['rows'].format(cls=cls)}")
         kn = known(f"{a.tree}/docs/reference/known-cause-reds.{cls}.yml", cls)
         scope = scope_cells(f"{a.scope}/queue_{cls}.txt") if a.scope else None
         judged = judgments([a.judgments or f"{a.tree}/docs/reference/judgments.jsonl",
-                            f"{a.gate}/matrix_{cls}/judgments.jsonl"])
+                            f"{rows_dir}/judgments.jsonl"])
         green, red, carried_g, carried_r, missing, never, unjudged = 0, [], 0, [], [], [], []
         for m, ms in sorted(want.items()):
             for x in ms:
@@ -160,8 +168,8 @@ def tally(a) -> int:
 
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--gate", required=True, help="the gate: gate2/gate_<cls>.list and matrix_<cls>/ rows")
-    ap.add_argument("--base", required=True, help="the base gate the unreplayed cells are carried from (its matrix_<cls>/)")
+    ap.add_argument("--gate", required=True, help="the gate, in the scope tool's layout: gate2/gate_<cls>.list, gate/matrix_<cls>/ rows")
+    ap.add_argument("--base", required=True, help="the base gate the unreplayed cells are carried from (same layout)")
     ap.add_argument("--scope", default=None, help="the computed scope: <dir>/queue_<cls>.txt")
     # the landing tree's own rows (a candidate's replay/confirm): they take precedence over the frozen tree's row
     # for the same cell, so the tally judges the tree that lands, not the one the delta started from

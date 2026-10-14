@@ -68,7 +68,7 @@ def test_a_missing_plan_identical_list_is_refused_by_name(tmp_path):
 
 
 def _matrix(tmp_path, name, cls, rows=(), judged=()):
-    d = tmp_path / name / f"matrix_{cls}"
+    d = tmp_path / name / "gate" / f"matrix_{cls}"
     d.mkdir(parents=True)
     if rows:
         (d / "rows_card0.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -84,12 +84,12 @@ def test_the_judgments_record_keeps_the_latest_per_model_and_mode_and_refuses_an
     _matrix(tmp_path, "old", "32g", judged=[j1, j3])
     _matrix(tmp_path, "new", "32g", judged=[j2])
     rec = tmp_path / "docs" / "judgments.jsonl"
-    assert judgments.main(["collect", "--record", str(rec), str(tmp_path / "old"), str(tmp_path / "new")]) == 0
+    assert judgments.main(["collect", "--record", str(rec), str(tmp_path / "old" / "gate"), str(tmp_path / "new" / "gate")]) == 0
     rows = judgments.read_jsonl(rec)
     assert [(r["model"], r["mode"], r["verdict"]) for r in rows] == [("A", "native", "broken"), ("A", "triton", "works")]
-    assert rows[0]["class"] == "32g" and rows[0]["source"].endswith("new/matrix_32g")
+    assert rows[0]["class"] == "32g" and rows[0]["source"].endswith("new/gate/matrix_32g")
     before = rec.read_text()
-    assert judgments.main(["collect", "--record", str(rec), str(tmp_path / "old"), str(tmp_path / "new")]) == 0
+    assert judgments.main(["collect", "--record", str(rec), str(tmp_path / "old" / "gate"), str(tmp_path / "new" / "gate")]) == 0
     assert rec.read_text() == before, "a second run over the same inputs changes nothing"
     (tmp_path / "empty").mkdir()
     assert judgments.main(["collect", "--record", str(rec), str(tmp_path / "empty")]) == 2
@@ -131,7 +131,7 @@ def test_a_base_gate_without_its_timeouts_is_refused_before_any_scope(tmp_path):
     B = tmp_path / "base"
     (B / "gate2").mkdir(parents=True)
     (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
-    (B / "matrix_32g").mkdir()
+    (B / "gate" / "matrix_32g").mkdir(parents=True)
     ident = tmp_path / "plan-identical.txt"
     ident.write_text("A\n")
     a = gate_run.build_parser().parse_args([
@@ -149,7 +149,7 @@ def test_the_any_card_instance_serves_the_other_class_and_reads_the_shared_holds
     B = tmp_path / "base"
     (B / "gate2").mkdir(parents=True)
     (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
-    (B / "matrix_32g").mkdir()
+    (B / "gate" / "matrix_32g").mkdir(parents=True)
     (B / "timeouts.txt").write_text("A 600\n")
     ident = tmp_path / "plan-identical.txt"
     ident.write_text("A\n")
@@ -163,7 +163,8 @@ def test_the_any_card_instance_serves_the_other_class_and_reads_the_shared_holds
 
 
 def test_the_carry_count_reads_the_record(tmp_path):
-    (tmp_path / "carries.yml").write_text("carries:\n- model: A\n  mode: native\n- model: B\n  mode: triton\n")
+    (tmp_path / "gate").mkdir()
+    (tmp_path / "gate" / "carries.yml").write_text("carries:\n- model: A\n  mode: native\n- model: B\n  mode: triton\n")
     assert gate_run.carried(tmp_path) == 2 and gate_run.carried(tmp_path / "none") == 0
 
 
@@ -196,7 +197,7 @@ def test_a_gate_carries_every_class_list_and_the_timeouts_forward(tmp_path, monk
     (B / "gate2").mkdir(parents=True)
     (B / "gate2" / "gate_32g.list").write_text("A native,triton\n")
     (B / "gate2" / "gate_16g.list").write_text("A native,triton\nB native\n")
-    (B / "matrix_32g").mkdir()
+    (B / "gate" / "matrix_32g").mkdir(parents=True)
     (B / "timeouts.txt").write_text("A 600\n")
     ident = tmp_path / "plan-identical.txt"
     ident.write_text("A\n")
@@ -211,3 +212,13 @@ def test_a_gate_carries_every_class_list_and_the_timeouts_forward(tmp_path, monk
         gate_run.run(a)
     assert (C / "gate2" / "gate_16g.list").read_text() == "A native,triton\nB native\n"
     assert (C / "gate2" / "gate_32g.list").is_file() and (C / "timeouts.txt").read_text() == "A 600\n"
+
+
+
+def test_the_gate_tool_and_the_tally_read_the_scope_tools_layout(tmp_path):
+    """A gate this tool writes is a gate the scope tool reads: rows under gate/matrix_<cls> (the second gate was refused
+    by the scope tool, 'holds rows for no class', when they sat at the gate's root, 2026-10-14 22:28)."""
+    import yaml
+    lay = yaml.safe_load((ROOT / "tools" / "gate_scope.yml").read_text())["gate"]
+    assert gate_run.layout() == lay and gate_tally.layout() == lay
+    assert gate_run.rows_root(tmp_path) / "matrix_32g" == tmp_path / lay["rows"].format(cls="32g")
