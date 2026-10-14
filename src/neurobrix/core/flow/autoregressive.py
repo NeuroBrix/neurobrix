@@ -843,8 +843,6 @@ class AutoregressiveHandler(FlowHandler):
         # Ensure weights loaded (serve TTFT reconciliation stamps — R30
         # mirror of the triton _create_session: weights_ensured / kv_ready)
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
-        self._ensure_weights_loaded(lm_name)
-        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
 
         # Get lm_config
         from neurobrix.core.runtime.lm_facts import lm_config_of
@@ -861,6 +859,10 @@ class AutoregressiveHandler(FlowHandler):
                 )
             executor.set_moe_config(norm_topk_prob=norm_topk)
 
+        # The MoE is declared first: the load reads the graph that runs (a plan mapping the routed experts from
+        # their files reads them off the FUSED graph — core/runtime/expert_files.expert_loader_keys).
+        self._ensure_weights_loaded(lm_name)
+        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
         # Detect SDPA ops
         sdpa_op_types = {
             "aten::scaled_dot_product_attention",
