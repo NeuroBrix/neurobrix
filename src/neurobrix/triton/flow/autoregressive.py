@@ -621,8 +621,6 @@ class TritonAutoregressiveHandler:
         # In triton mode, load_weights() routes to _load_weights_triton
         # which loads as NBXTensor directly. Same lifecycle, different format.
         from neurobrix.core.runtime.phase_trace import mark as _phase_mark
-        self._ensure_weights_loaded(lm_name)
-        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
 
         # Get executor from context
         executor = self.ctx.executors.get(lm_name)
@@ -652,6 +650,10 @@ class TritonAutoregressiveHandler:
                         "Add to the model registry: moe.norm_topk_prob")
                 executor.set_moe_config(norm_topk_prob=norm_topk)
 
+        # The MoE is declared first: the load reads the graph that runs (a plan mapping the routed experts from
+        # their files reads them off the FUSED graph — core/runtime/expert_files.expert_loader_keys).
+        self._ensure_weights_loaded(lm_name)
+        _phase_mark("flow.session.weights_ensured", None, _phase_mem_note)
         hidden_dim = lm_config.get("hidden_size")
         num_heads = lm_config.get("num_heads")
         if not hidden_dim or not num_heads:
