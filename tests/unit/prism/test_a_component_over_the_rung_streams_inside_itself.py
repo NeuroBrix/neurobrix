@@ -68,8 +68,13 @@ MODES = ["triton", "triton_sequential", "compiled"]
 #: Wan2.1-I2V-14B-480P and Allegro-TI2V joined on 2026-10-05: Forge re-traced their `vae_encoder`
 #: with a symbolic time axis (topologies of 2026-10-04 23:31 and 23:18), the frozen-encoder door
 #: below turned red as it was written to, and both now plan layer_streaming at the top rung.
-STREAMED = ["CogVideoX-5b-I2V", "Ming-Lite-Omni-1.5", "Wan2.2-I2V-A14B-Diffusers",
+STREAMED = ["CogVideoX-5b-I2V", "Wan2.2-I2V-A14B-Diffusers",
             "Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
+#: Ming-Lite-Omni-1.5 left STREAMED on 2026-10-14: its vision tower was priced at its TRACE's 17 020 patches
+#: (9.65 GiB of activations) because no flow rule bound it to the request's image; priced at the image
+#: (1 024 patches, 0.05 GiB — test_a_vision_tower_is_priced_at_the_requests_image.py) its components fit and
+#: the plan holds them on the device, never streamed, never refused, never on the host.
+WHOLE_AT_THE_IMAGE = ["Ming-Lite-Omni-1.5"]
 #: The encoders the door named, now re-traced: their time axis is ONE symbol (asserted below).
 RETRACED_ENCODER = ["Wan2.1-I2V-14B-480P-Diffusers", "Allegro-TI2V"]
 
@@ -120,14 +125,11 @@ def test_at_the_top_rung_the_component_streams_inside_itself(monkeypatch, model,
         f"{model} [{mode}]: window {p.device_window_mb} MB over the usable {usable:.0f} MB")
 
 
-#: OWED by the token-axis brick (this branch, prism-an-oversized-op-is-split-at-the-source): Ming's
-#: vision tower adds its mask to [heads, N, N] attention scores — 4 420 MB in, 4 420 MB out, alive
-#: together: 9 878 MB while that op runs (`LayerPartitioner.op_peak_curve`), against 1 946 MB of
-#: segment budget on the busy Mac. Priced after the op (5 458 MB), the plan streamed it and
-#: under-priced the run by the score tensor. The slice that serves it runs the queries in slices with
-#: the keys whole, which `chunked_region` does not yet do ("S on both operands' free dimensions").
-#: Strict: the day the slice lands this cell turns red and the mark is removed.
-OWED_BUSY = {"Ming-Lite-Omni-1.5": "attention scores sliced on the query axis (chunked_region)"}
+#: Ming's busy-Mac cell was marked owed (strict xfail) for a query-axis slice of its vision tower's
+#: [heads, N, N] attention scores — 4 420 MB each, at the TRACE's N = 17 020 patches. At the request's image
+#: N is 1 024 and the scores are 16 MB: the debt was the mispricing (2026-10-14), not a missing slice. The
+#: cell moved to WHOLE_AT_THE_IMAGE below.
+OWED_BUSY = {}
 
 
 @pytest.mark.parametrize("model", [pytest.param(m, marks=pytest.mark.xfail(strict=True, reason=OWED_BUSY[m]))
@@ -138,6 +140,21 @@ def test_on_the_busy_mac_the_plan_streams_at_the_rung_its_reading_gives(monkeypa
     pin_host(monkeypatch, 24576, 12000, "the Mac with ~12 GB free")
     p, _ = _plan(model, "triton")
     assert p.strategy == "layer_streaming", f"{model} planned {p.strategy!r}"
+
+
+def test_a_vlm_priced_at_its_image_is_held_on_the_device(monkeypatch):
+    for model in WHOLE_AT_THE_IMAGE:
+        for mode in ("triton", "triton_sequential"):
+            pin_host(monkeypatch, 24576, 18186, "the Mac's idle reading, its profile's capacity")
+            impose_rung(monkeypatch, 16384)
+            p, _ = _plan(model, mode)
+            assert p.strategy not in ("cpu_execution", "cpu_streaming"), f"{model} [{mode}] planned {p.strategy!r}"
+            assert all(not d.startswith("cpu") for a in p.components.values() for d in a.devices), (
+                {n: a.devices for n, a in p.components.items()})
+        no_door(monkeypatch)
+        pin_host(monkeypatch, 24576, 12000, "the Mac with ~12 GB free")
+        p, _ = _plan(model, "triton")
+        assert p.strategy not in ("cpu_execution", "cpu_streaming"), f"{model} busy: {p.strategy!r}"
 
 
 @pytest.mark.parametrize("model", RETRACED_ENCODER)

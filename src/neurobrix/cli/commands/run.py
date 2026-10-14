@@ -317,7 +317,8 @@ def request_input_config(args, manifest: dict, family, cache_path):
     # text axis, a FLUX denoiser's packed inputs) — `core.prism.flow_bindings`, one for the plan
     # and the derived census.
     from neurobrix.core.prism.flow_bindings import FlowBindings
-    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"))
+    _flow = (FlowBindings(json.load(open(_topo_path)), cache_path, manifest.get("model_name"),
+                          image_path=getattr(args, "input_image", None))
              if _topo_path.exists() else None)
 
     # The request's output mode, resolved as `cmd_run` resolves it for the flow (`global.mode`): it
