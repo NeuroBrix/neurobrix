@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""gate_run.py — THE gate, one script, one wake (the validation regime, Hocine 2026-10-14 14:20 / 18:05).
+
+    computed scope (CPU)  →  ONE class (the card's real VRAM)  →  two scheduler instances  →  the tally.
+
+1. The scope: `tools/gate_scope.py` from the tree's merge-base with its trunk to its head, against the base gate
+   (the last gate of the class, whose rows the unreached cells are carried from). Everything or nothing is never
+   a scope: the tool names the units a cell reaches.
+2. One class per gate: the class the base gate holds rows for (default 32g). The other class is not executed: the
+   models whose Prism plan is IDENTICAL under both profiles (the committed list `--plan-identical`, written by
+   `tools/plan_listing.py` without executing) have ONE cell, which the ANY-CARD scheduler instance places on the
+   cards of the other class and records under the gate's class; the other models run on the class's cards.
+   A model validates once per distinct Prism plan, not per card class.
+3. Cells above ten minutes at their last measurement are carried by record (`<gate>/carries.yml`, written by the
+   caller with provenance) until the gate request at the model's floor lands in the registries.
+4. The tally (`tools/gate_tally.py`): replayed, carried, missing, never measured, judged / not judged, against the
+   committed references; its first line is the gate's verdict line in RUN.md.
+
+Every step appends one line to RUN.md and the whole run ends with "<label> GATE DONE": one waiter, one wake.
+`--plan` prints the steps and runs nothing.
+
+    gate_run.py --campaign <dir> --tree <worktree> --base-gate <dir> --plan-identical <file> --run-md <RUN.md>
+                --holds <dir> --hardware <id> --class-split-mib 24576 --heavy-share 0.25 --need-workers 16
+                [--cls 32g] [--peak-rows <pattern>]... [--label <word>] [--plan]
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+class Refused(RuntimeError):
+    pass
+
+
+def now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def say(run_md: Path, msg: str) -> None:
+    with open(run_md, "a") as f:
+        f.write(f"{msg} {now()}\n")
+    print(msg, flush=True)
+
+
+def git(tree: Path, *args: str) -> str:
+    r = subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise Refused(f"git {' '.join(args)} in {tree}: {(r.stderr or r.stdout).strip()[-200:]}")
+    return r.stdout.strip()
+
+
+def read_list(path: Path) -> set:
+    if not path.is_file():
+        raise Refused(f"{path}: the plan-identical list is not there — tools/plan_listing.py writes it; nothing scheduled")
+    return {l.split()[0] for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")}
+
+
+def split_queue(lines: list, identical: set) -> tuple:
+    """(lines for the class's cards, lines for any card): a queue line's model in the plan-identical list goes to
+    the any-card instance, every other line to the class's cards. Comments and blanks are dropped."""
+    own, anyc = [], []
+    for l in lines:
+        if not l.strip() or l.startswith("#"):
+            continue
+        (anyc if l.split()[0] in identical else own).append(l)
+    return own, anyc
+
+
+def steps(a) -> list:
+    C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
+    for p, what in ((W / "tools" / "gate_scope.py", "the scope tool"), (B / "gate2" / f"gate_{a.cls}.list", "the base gate's list"),
+                    (B / f"matrix_{a.cls}", "the base gate's rows")):
+        if not p.exists():
+            raise Refused(f"{p}: {what} is not there; nothing scheduled")
+    identical = read_list(Path(a.plan_identical))
+    base_sha = git(W, "merge-base", a.trunk, "HEAD")
+    head = git(W, "rev-parse", "--short", "HEAD")
+    scope = C / "scope"
+    py = a.python
+    env = dict(os.environ, PYTHONNOUSERSITE="1", NEUROBRIX_PYTHON=py, NBX_PYTHON=py)
+    return [
+        ("scope", [py, str(W / "tools" / "gate_scope.py"), "--base", base_sha, "--head", head, "--gate-dir", str(B),
+                   "--out", str(scope)], dict(env, CUDA_VISIBLE_DEVICES="", PYTHONPATH=str(W / "src")), W),
+        ("split", identical, scope, None),
+        ("sched", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2"), "--gate", str(C), "--tree", str(W),
+                   "--run-md", str(a.run_md), "--holds", str(a.holds), "--hardware", a.hardware, "--class-split-mib",
+                   str(a.class_split_mib), "--heavy-share", str(a.heavy_share), "--need-workers", str(a.need_workers),
+                   "--state", str(C / "sched"), "--label", a.label, "--python", py]
+                  + sum((["--peak-rows", x] for x in a.peak_rows), []), env, W),
+        ("sched_any", [py, str(HERE / "gate_sched.py"), "--gate2", str(C / "gate2_any"), "--gate", str(C), "--tree", str(W),
+                       "--run-md", str(a.run_md), "--holds", str(C / "holds_any"), "--hardware", a.hardware, "--class-split-mib",
+                       str(a.class_split_mib), "--heavy-share", str(a.heavy_share), "--need-workers", str(max(1, a.need_workers // 2)),
+                       "--state", str(C / "sched_any"), "--out-class", a.cls, "--label", a.label, "--python", py]
+                      + sum((["--peak-rows", x] for x in a.peak_rows), []), env, W),
+        ("tally", [py, str(HERE / "gate_tally.py"), "--gate", str(C), "--base", str(B), "--scope", str(scope), "--tree", str(W),
+                   "--classes", a.cls], dict(env, CUDA_VISIBLE_DEVICES=""), C),
+    ]
+
+
+def run(a) -> int:
+    C, W, B = Path(a.campaign), Path(a.tree), Path(a.base_gate)
+    run_md = Path(a.run_md)
+    plan = steps(a)
+    if a.plan:
+        for name, cmd, *_ in plan:
+            print(name, ":", " ".join(cmd) if isinstance(cmd, list) else f"plan-identical models: {len(cmd)}")
+        return 0
+    C.mkdir(parents=True, exist_ok=True)
+    for d in ("gate2", "gate2_any", "holds_any", "sched", "sched_any", "scope"):
+        (C / d).mkdir(exist_ok=True)
+    # the gate's list is the base gate's: the same cells wanted, judged against the same reference
+    (C / "gate2" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
+    (C / "gate2_any" / f"gate_{a.cls}.list").write_text((B / "gate2" / f"gate_{a.cls}.list").read_text())
+    label = a.label
+    head = git(W, "rev-parse", "--short", "HEAD")
+    say(run_md, f"{label} GATE START tree {head} class {a.cls} base {B}")
+    # 1. the scope
+    name, cmd, env, cwd = plan[0]
+    (C / "scope").mkdir(exist_ok=True)
+    with open(C / "scope" / "scope.log", "w") as log:
+        rc = subprocess.run(cmd, env=env, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT, timeout=a.scope_timeout).returncode
+    queue = C / "scope" / f"queue_{a.cls}.txt"
+    lines = queue.read_text().splitlines() if queue.is_file() else []
+    say(run_md, f"{label} scope rc={rc} {len(lines)} lines {a.cls}")
+    if rc != 0:
+        say(run_md, f"{label} GATE DONE (scope refused: see {C / 'scope' / 'scope.log'})")
+        return 1
+    # 2. the split: plan-identical models to any card, the others to the class's cards
+    own, anyc = split_queue(lines, plan[1][1])
+    (C / "gate2" / f"queue_{a.cls}.txt").write_text("".join(l + "\n" for l in own))
+    (C / "gate2_any" / f"queue_{a.cls}.txt").write_text("".join(l + "\n" for l in anyc))
+    say(run_md, f"{label} split: {len(own)} lines on the {a.cls} cards + {len(anyc)} plan-identical lines on any card; "
+                f"{(C / 'carries.yml').is_file() and sum(1 for l in (C / 'carries.yml').read_text().splitlines() if '  - model' in l) or 0} cells carried by record")
+    # 3. the two scheduler instances, together
+    procs = []
+    for name, cmd, env, cwd in plan[2:4]:
+        if name == "sched_any" and not anyc:
+            continue
+        if name == "sched" and not own:
+            continue
+        with open(C / f"{name}.log", "a") as log:
+            procs.append((name, subprocess.Popen(cmd, env=env, cwd=str(cwd), stdout=log, stderr=subprocess.STDOUT)))
+    rcs = {name: p.wait() for name, p in procs}
+    say(run_md, f"{label} sched rc={rcs}")
+    # 4. the tally
+    name, cmd, env, cwd = plan[4]
+    with open(C / "tally.txt", "w") as out:
+        rc = subprocess.run(cmd, env=env, cwd=str(cwd), stdout=out, stderr=subprocess.STDOUT).returncode
+    first = (C / "tally.txt").read_text().splitlines()[:1]
+    say(run_md, f"{label} TALLY rc={rc} {first[0][:200] if first else ''}")
+    say(run_md, f"{label} GATE DONE")
+    return rc
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--campaign", required=True, help="this gate's directory (created): scope/, gate2/, gate2_any/, sched/, matrix_<cls>/")
+    ap.add_argument("--tree", required=True, help="the worktree under test")
+    ap.add_argument("--trunk", default="origin/main", help="the ref the scope's base is the merge-base with")
+    ap.add_argument("--base-gate", required=True, help="the last gate of the class: gate2/gate_<cls>.list, matrix_<cls>/ rows")
+    ap.add_argument("--plan-identical", required=True, help="the committed list of models whose plan is identical under both profiles")
+    ap.add_argument("--cls", default="32g")
+    ap.add_argument("--run-md", required=True)
+    ap.add_argument("--holds", required=True)
+    ap.add_argument("--hardware", required=True)
+    ap.add_argument("--class-split-mib", type=int, required=True)
+    ap.add_argument("--heavy-share", type=float, required=True)
+    ap.add_argument("--need-workers", type=int, required=True)
+    ap.add_argument("--peak-rows", action="append", default=[])
+    ap.add_argument("--label", default="gate")
+    ap.add_argument("--scope-timeout", type=int, default=7200)
+    ap.add_argument("--python", default=os.environ.get("NEUROBRIX_PYTHON") or os.environ.get("NBX_PYTHON") or sys.executable)
+    ap.add_argument("--plan", action="store_true", help="print the steps, run nothing")
+    return ap
+
+
+def main(argv=None) -> int:
+    a = build_parser().parse_args(argv)
+    try:
+        return run(a)
+    except Refused as e:
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
