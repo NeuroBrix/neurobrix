@@ -348,3 +348,104 @@ its engine commit.
 | whisper-large-v3-turbo | triton | 32g | one plan, two cards | 2026-10-15, 6b8edbfd1 | 6.5 | 3.5 | 4.2 | 12.70 | 1 | 6.5 | 6.5 | `--audio jfk_11s.wav` |
 | whisper-large-v3-turbo | triton-sequential | 16g | one plan, two cards | 2026-10-09, 8b139631 | 6.0 |  | 4.0 |  | 1 | 6.0 | 6.0 | `--audio jfk_11s.wav` |
 | whisper-large-v3-turbo | triton-sequential | 32g | one plan, two cards | 2026-10-09, 8b139631 | 7.3 |  | 5.1 |  | 1 | 7.3 | 7.3 | `--audio jfk_11s.wav` |
+
+## Mac M4 Pro 24 GB (Metal)
+
+| model | mode | card | plan | latest (date, engine) | wall s | load s | exec s | tok/s | runs at this request | first wall s | fastest s | request |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Allegro | triton | 18g | per card | 2026-10-04, 1e94a1dc | 1610.0 |  | 1605.7 |  | 1 | 1610.0 | 1610.0 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 256` |
+| CogVideoX-2b | triton | 18g | per card | 2026-10-05, 843ae908 | 1467.2 |  | 1463.5 |  | 1 | 1467.2 | 1467.2 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 480` |
+| CogVideoX-5b-I2V | native | 18g | per card | 2026-10-13, eccd49b0 | 726.5 | 12.4 | 720.5 |  | 1 | 726.5 | 726.5 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --input-image apple_44` |
+| CogVideoX-5b-I2V | triton | 18g | per card | 2026-10-14, 4375db75 | 2172.6 | 9.4 | 2163.3 |  | 1 | 2172.6 | 2172.6 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --input-image apple_44` |
+| DeepSeek-Coder-V2-Lite-Instruct | native | 18g | per card | 2026-10-14, 3702d86b | 96.6 | 9.8 | 91.3 | 0.38 | 1 | 96.6 | 96.6 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| DeepSeek-Coder-V2-Lite-Instruct | triton | 18g | per card | 2026-10-08, ec8a54bc | 604.3 |  | 597.6 |  | 2 | 629.6 | 604.3 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| Flex.1-alpha | native | 18g | per card | 2026-10-14, 0cf61571 | 104.5 | 2.4 | 102.4 |  | 4 | 114.5 | 103.9 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 384 --width 512` |
+| Flex.1-alpha | triton | 18g | per card | 2026-10-14, 0cf61571 | 127.4 | 4.8 | 124.5 |  | 8 | 289.6 | 127.4 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 384 --width 512` |
+| GLM-4.1V-9B-Thinking | native | 18g | per card | 2026-10-13, 7609be94 | 317.4 | 9.6 | 309.9 | 0.10 | 2 | 346.9 | 317.4 | `--input-image apple_448.png --prompt Describe this image in one sentence. --max-tokens 32 ` |
+| GLM-4.1V-9B-Thinking | triton | 18g | per card | 2026-10-13, 7609be94 | 271.4 | 3.3 | 268.6 | 0.12 | 2 | 271.7 | 271.4 | `--input-image apple_448.png --prompt Describe this image in one sentence. --max-tokens 32 ` |
+| Janus-Pro-7B | triton | 18g | per card | 2026-10-14, 2b14c024 | 825.2 | 5.1 | 822.9 | 0.71 | 1 | 825.2 | 825.2 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Kokoro-82M | native | 18g | per card | 2026-10-07, 2c52f576 | 4.2 |  | 2.7 |  | 1 | 4.2 | 4.2 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42 --speaker af_alloy` |
+| Kokoro-82M | triton | 18g | per card | 2026-10-05, 843ae908 | 14.2 |  | 12.7 |  | 1 | 14.2 | 14.2 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42 --speaker af_alloy` |
+| Ming-Lite-Omni-1.5 | native | 18g | per card | 2026-10-14, 7413ca21 | 558.5 | 31.8 | 531.8 | 0.05 | 1 | 558.5 | 558.5 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Ming-Lite-Omni-1.5 | triton | 18g | per card | 2026-10-14, 7413ca21 | 337.2 | 17.4 | 327.9 | 0.08 | 1 | 337.2 | 337.2 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| MiniCPM-o-4_5 | native | 18g | per card | 2026-10-13, eccd49b0 | 220.4 | 5.1 | 217.6 | 0.13 | 1 | 220.4 | 220.4 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| MiniCPM-o-4_5 | triton | 18g | per card | 2026-10-14, 4375db75 | 167.7 | 4.2 | 165.1 | 0.15 | 1 | 167.7 | 167.7 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Open-Sora-v2 | native | 18g | per card | 2026-10-14, b93f7d79 | 198.8 | 20.5 | 192.4 |  | 4 | 228.3 | 198.8 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 192` |
+| Open-Sora-v2 | triton | 18g | per card | 2026-10-14, b93f7d79 | 392.5 | 14.7 | 388.4 |  | 4 | 2747.9 | 392.5 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 192` |
+| PixArt-Sigma-XL-2-1024-MS | native | 18g | per card | 2026-10-14, b93f7d79 | 40.6 | 14.6 | 38.4 |  | 2 | 118.9 | 40.6 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| PixArt-Sigma-XL-2-1024-MS | triton | 18g | per card | 2026-10-14, b93f7d79 | 151.3 | 12.8 | 148.9 |  | 2 | 156.1 | 151.3 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| PixArt-XL-2-1024-MS | native | 18g | per card | 2026-10-14, b93f7d79 | 40.0 | 14.9 | 37.8 |  | 2 | 123.2 | 40.0 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| PixArt-XL-2-1024-MS | triton | 18g | per card | 2026-10-14, b93f7d79 | 142.2 | 13.0 | 139.9 |  | 2 | 149.8 | 142.2 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| Qwen3-30B-A3B-Thinking-2507 | native | 18g | per card | 2026-10-14, 3702d86b | 182.6 | 31.1 | 157.7 | 0.22 | 1 | 182.6 | 182.6 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| Qwen3-30B-A3B-Thinking-2507 | triton | 18g | per card | 2026-10-13, 5b35b686 | 210.5 | 30.8 | 183.8 | 0.18 | 1 | 210.5 | 210.5 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| Qwen3-Coder-30B-A3B-Instruct | native | 18g | per card | 2026-10-14, 3702d86b | 163.1 | 31.2 | 138.1 | 0.25 | 1 | 163.1 | 163.1 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| Qwen3-Coder-30B-A3B-Instruct | triton | 18g | per card | 2026-10-13, 5b35b686 | 186.0 | 30.8 | 159.7 | 0.21 | 1 | 186.0 | 186.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| Qwen3-Omni-30B-A3B-Instruct | native | 18g | per card | 2026-10-14, 91222594 | 2129.3 | 13.7 | 2120.0 | 0.01 | 1 | 2129.3 | 2129.3 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Qwen3-VL-30B-A3B-Thinking | native | 18g | per card | 2026-10-13, 5b35b686 | 1219.4 | 5.4 | 1215.4 | 0.03 | 1 | 1219.4 | 1219.4 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Qwen3-VL-30B-A3B-Thinking | triton | 18g | per card | 2026-10-13, 5b35b686 | 832.1 | 3.2 | 829.1 | 0.04 | 1 | 832.1 | 832.1 | `--prompt a red apple on a wooden table --seed 42 --max-tokens 32 --temperature 0.0 --mode ` |
+| Real-ESRGAN-RealESRGAN_x2 | native | 18g | per card | 2026-10-07, 2c52f576 | 2.6 |  | 1.4 |  | 1 | 2.6 | 2.6 | `--input-image apple_448.png` |
+| Real-ESRGAN-RealESRGAN_x2 | triton | 18g | per card | 2026-10-05, 035a8f4e | 3.3 |  | 1.9 |  | 1 | 3.3 | 3.3 | `--input-image apple_448.png` |
+| Real-ESRGAN-RealESRGAN_x4plus | native | 18g | per card | 2026-10-07, 2c52f576 | 3.6 |  | 2.3 |  | 1 | 3.6 | 3.6 | `--input-image apple_448.png` |
+| Real-ESRGAN-RealESRGAN_x4plus | triton | 18g | per card | 2026-10-05, 035a8f4e | 6.2 |  | 4.7 |  | 1 | 6.2 | 6.2 | `--input-image apple_448.png` |
+| Real-ESRGAN-RealESRGAN_x8 | native | 18g | per card | 2026-10-07, 2c52f576 | 4.7 |  | 3.0 |  | 1 | 4.7 | 4.7 | `--input-image apple_448.png` |
+| Real-ESRGAN-RealESRGAN_x8 | triton | 18g | per card | 2026-10-05, 035a8f4e | 12.9 |  | 11.1 |  | 1 | 12.9 | 12.9 | `--input-image apple_448.png` |
+| SANA-Video_2B_720p | native | 18g | per card | 2026-10-14, b93f7d79 | 134.5 | 10.2 | 131.8 |  | 2 | 181.5 | 134.5 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 256` |
+| SANA-Video_2B_720p | triton | 18g | per card | 2026-10-14, b93f7d79 | 386.8 | 7.8 | 383.7 |  | 2 | 391.0 | 386.8 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 256` |
+| SANA-Video_2B_720p_diffusers | triton | 18g | per card | 2026-10-08, 63d5a87d | 387.6 |  | 385.7 |  | 1 | 387.6 | 387.6 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 256` |
+| Sana_1600M_1024px_MultiLing | native | 18g | per card | 2026-10-14, b93f7d79 | 20.3 | 6.5 | 18.8 |  | 4 | 26.8 | 20.3 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| Sana_1600M_1024px_MultiLing | triton | 18g | per card | 2026-10-14, b93f7d79 | 47.6 | 6.1 | 45.3 |  | 3 | 52.4 | 47.6 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 320 --width 512` |
+| Sana_1600M_4Kpx_BF16 | native | 18g | per card | 2026-10-14, b93f7d79 | 211.9 | 9.0 | 206.4 |  | 2 | 263.3 | 211.9 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 1408 --width 2048` |
+| Sana_1600M_4Kpx_BF16 | triton | 18g | per card | 2026-10-14, b93f7d79 | 612.1 | 6.3 | 607.0 |  | 2 | 681.6 | 612.1 | `--prompt a red apple on a wooden table --seed 42 --steps 8 --height 1408 --width 2048` |
+| SwinIR-swinir_x2 | native | 18g | per card | 2026-10-07, 2c52f576 | 11.6 |  | 10.3 |  | 1 | 11.6 | 11.6 | `--input-image apple_448.png` |
+| SwinIR-swinir_x2 | triton | 18g | per card | 2026-10-05, 035a8f4e | 28.1 |  | 26.6 |  | 1 | 28.1 | 28.1 | `--input-image apple_448.png` |
+| SwinIR-swinir_x4 | native | 18g | per card | 2026-10-07, 2c52f576 | 11.7 |  | 10.3 |  | 1 | 11.7 | 11.7 | `--input-image apple_448.png` |
+| SwinIR-swinir_x4 | triton | 18g | per card | 2026-10-05, 035a8f4e | 29.6 |  | 28.1 |  | 1 | 29.6 | 29.6 | `--input-image apple_448.png` |
+| TinyLlama-1.1B-Chat-v1.0 | native | 18g | per card | 2026-10-07, 2c52f576 | 5.0 |  | 3.8 |  | 1 | 5.0 | 5.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| TinyLlama-1.1B-Chat-v1.0 | triton | 18g | per card | 2026-10-05, 035a8f4e | 9.3 |  | 7.8 |  | 3 | 10.8 | 8.7 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| VibeVoice-1.5B | native | 18g | per card | 2026-10-13, eccd49b0 | 10.1 | 4.0 | 8.7 |  | 1 | 10.1 | 10.1 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| VibeVoice-1.5B | triton | 18g | per card | 2026-10-13, eccd49b0 | 76.3 | 2.3 | 74.6 |  | 4 | 86.8 | 76.3 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| Voxtral-Mini-3B-2507 | native | 18g | per card | 2026-10-13, eccd49b0 | 25.0 | 6.1 | 23.6 | 1.41 | 1 | 25.0 | 25.0 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| Voxtral-Mini-3B-2507 | triton | 18g | per card | 2026-10-13, eccd49b0 | 43.3 | 3.7 | 41.1 | 0.70 | 1 | 43.3 | 43.3 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| Wan2.1-T2V-1.3B | native | 18g | per card | 2026-10-13, 5b35b686 | 1582.4 | 7.5 | 1577.0 |  | 1 | 1582.4 | 1582.4 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 12 --height 48` |
+| Wan2.1-T2V-1.3B-Diffusers | native | 18g | per card | 2026-10-11, c6ff415a | 2206.4 |  | 2197.8 |  | 1 | 2206.4 | 2206.4 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 480` |
+| Wan2.1-T2V-1.3B-Diffusers | triton | 18g | per card | 2026-10-08, 63d5a87d | 4075.5 |  | 4069.5 |  | 1 | 4075.5 | 4075.5 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 480` |
+| Wan2.1-VACE-1.3B-diffusers | triton | 18g | per card | 2026-10-05, 035a8f4e | 474.9 |  | 472.1 |  | 1 | 474.9 | 474.9 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --input-image apple_44` |
+| canary-qwen-2.5b | native | 18g | per card | 2026-10-07, 2c52f576 | 33.0 |  | 29.5 |  | 1 | 33.0 | 33.0 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| canary-qwen-2.5b | triton | 18g | per card | 2026-10-08, ec8a54bc | 29.1 |  | 27.3 |  | 1 | 29.1 | 29.1 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| chatterbox | native | 18g | per card | 2026-10-13, fcc436f3 | 11.5 | 3.5 | 9.9 |  | 3 | 14.5 | 11.5 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| chatterbox | triton | 18g | per card | 2026-10-13, fcc436f3 | 97.6 | 2.9 | 95.8 |  | 2 | 106.7 | 97.6 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| deepseek-moe-16b-chat | native | 18g | per card | 2026-10-14, 3702d86b | 77.9 | 6.2 | 73.3 | 0.46 | 1 | 77.9 | 77.9 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| deepseek-moe-16b-chat | triton | 18g | per card | 2026-10-14, 15f54b3d | 145.9 | 5.4 | 140.8 | 0.23 | 4 | 412.3 | 145.9 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| granite-3.1-1b-a400m-instruct | native | 18g | per card | 2026-10-07, 2c52f576 | 7.0 |  | 5.1 |  | 1 | 7.0 | 7.0 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| granite-3.1-1b-a400m-instruct | triton | 18g | per card | 2026-10-05, 035a8f4e | 13.0 |  | 10.8 |  | 3 | 10.9 | 10.9 | `--prompt Explain in three sentences why the sky is blue and the sunset red. --max-tokens 3` |
+| granite-speech-3.3-8b | native | 18g | per card | 2026-10-13, eccd49b0 | 243.1 | 2.8 | 241.0 | 0.11 | 1 | 243.1 | 243.1 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| granite-speech-3.3-8b | triton | 18g | per card | 2026-10-13, eccd49b0 | 182.1 | 2.2 | 179.5 | 0.15 | 1 | 182.1 | 182.1 | `--audio jfk_11s.wav --prompt Transcribe this audio. --max-tokens 32` |
+| hat-l-x4 | triton | 18g | per card | 2026-10-04, 30efce4a | 112.5 |  | 110.7 |  | 4 | 116.5 | 112.5 | `--input-image apple_448.png` |
+| hat-s-x4 | triton | 18g | per card | 2026-10-04, 30efce4a | 48.9 |  | 47.4 |  | 4 | 50.9 | 48.9 | `--input-image apple_448.png` |
+| mochi-1-preview | triton | 18g | per card | 2026-10-05, 035a8f4e | 808.6 |  | 803.8 |  | 1 | 808.6 | 808.6 | `--prompt a red apple rolling slowly across a wooden table --seed 42 --steps 4 --height 160` |
+| openaudio-s1-mini | native | 18g | per card | 2026-10-13, fcc436f3 | 13.1 | 4.5 | 11.2 |  | 2 | 13.3 | 13.1 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| openaudio-s1-mini | triton | 18g | per card | 2026-10-13, fcc436f3 | 114.0 | 3.9 | 111.9 |  | 3 | 130.3 | 112.8 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| orpheus-3b-0.1-ft | native | 18g | per card | 2026-10-13, eccd49b0 | 34.8 | 10.0 | 33.0 | 11.20 | 1 | 34.8 | 34.8 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| orpheus-3b-0.1-ft | triton | 18g | per card | 2026-10-13, eccd49b0 | 101.7 | 10.5 | 99.4 | 2.66 | 1 | 101.7 | 101.7 | `--prompt The quick brown fox jumps over the lazy dog. --seed 42` |
+| parakeet-tdt-1.1b | native | 18g | per card | 2026-10-12, 17ad5b6b | 5.8 | 4.2 | 4.1 |  | 1 | 5.8 | 5.8 | `--audio jfk_11s.wav` |
+| parakeet-tdt-1.1b | triton | 18g | per card | 2026-10-12, 17ad5b6b | 7.3 | 3.2 | 5.6 |  | 1 | 7.3 | 7.3 | `--audio jfk_11s.wav` |
+| real-esrgan-x2 | triton | 18g | per card | 2026-10-04, 30efce4a | 3.0 |  | 1.8 |  | 4 | 3.1 | 3.0 | `--input-image apple_448.png` |
+| real-esrgan-x4 | triton | 18g | per card | 2026-10-04, 30efce4a | 5.9 |  | 4.5 |  | 4 | 6.0 | 5.9 | `--input-image apple_448.png` |
+| real-esrgan-x8 | triton | 18g | per card | 2026-10-04, 30efce4a | 12.1 |  | 10.4 |  | 4 | 12.3 | 12.1 | `--input-image apple_448.png` |
+| swin2SR-classical-sr-x2-64 | native | 18g | per card | 2026-10-07, 2c52f576 | 10.9 |  | 9.4 |  | 1 | 10.9 | 10.9 | `--input-image apple_448.png` |
+| swin2SR-classical-sr-x2-64 | triton | 18g | per card | 2026-10-05, 035a8f4e | 39.2 |  | 37.6 |  | 5 | 39.0 | 39.0 | `--input-image apple_448.png` |
+| swin2SR-classical-sr-x4-64 | native | 18g | per card | 2026-10-07, 2c52f576 | 11.0 |  | 9.5 |  | 1 | 11.0 | 11.0 | `--input-image apple_448.png` |
+| swin2SR-classical-sr-x4-64 | triton | 18g | per card | 2026-10-05, 035a8f4e | 39.4 |  | 37.8 |  | 5 | 39.4 | 39.4 | `--input-image apple_448.png` |
+| swin2SR-realworld-sr-x4-64-bsrgan-psnr | native | 18g | per card | 2026-10-07, 2c52f576 | 11.2 |  | 9.6 |  | 1 | 11.2 | 11.2 | `--input-image apple_448.png` |
+| swin2SR-realworld-sr-x4-64-bsrgan-psnr | triton | 18g | per card | 2026-10-05, 035a8f4e | 39.4 |  | 37.8 |  | 4 | 39.4 | 39.4 | `--input-image apple_448.png` |
+| swinir-classical-x2 | triton | 18g | per card | 2026-10-04, 30efce4a | 28.1 |  | 26.7 |  | 4 | 27.6 | 27.6 | `--input-image apple_448.png` |
+| swinir-classical-x2 | triton-sequential | 18g | per card | 2026-10-03, 1c96103f | 29.2 |  | 27.8 |  | 1 | 29.2 | 29.2 | `--input-image apple_448.png` |
+| swinir-classical-x4 | triton | 18g | per card | 2026-10-04, 30efce4a | 28.8 |  | 27.3 |  | 4 | 28.7 | 28.2 | `--input-image apple_448.png` |
+| upscale_models-hat_l_x4 | native | 18g | per card | 2026-10-07, 2c52f576 | 33.4 |  | 31.5 |  | 1 | 33.4 | 33.4 | `--input-image apple_448.png` |
+| upscale_models-hat_l_x4 | triton | 18g | per card | 2026-10-05, 035a8f4e | 115.2 |  | 113.4 |  | 1 | 115.2 | 115.2 | `--input-image apple_448.png` |
+| upscale_models-hat_s_x4 | native | 18g | per card | 2026-10-07, 2c52f576 | 14.8 |  | 13.3 |  | 1 | 14.8 | 14.8 | `--input-image apple_448.png` |
+| upscale_models-hat_s_x4 | triton | 18g | per card | 2026-10-05, 035a8f4e | 50.2 |  | 48.6 |  | 1 | 50.2 | 50.2 | `--input-image apple_448.png` |
+| whisper-large | native | 18g | per card | 2026-10-08, 2c52f576 | 9.1 |  | 7.5 |  | 1 | 9.1 | 9.1 | `--audio jfk_11s.wav` |
+| whisper-large | triton | 18g | per card | 2026-10-08, ec8a54bc | 41.2 |  | 39.3 |  | 1 | 41.2 | 41.2 | `--audio jfk_11s.wav` |
+| whisper-large-v3-turbo | native | 18g | per card | 2026-10-07, 2c52f576 | 4.4 |  | 3.2 |  | 1 | 4.4 | 4.4 | `--audio jfk_11s.wav` |
+| whisper-large-v3-turbo | triton | 18g | per card | 2026-10-05, 035a8f4e | 9.0 |  | 7.7 |  | 5 | 18.3 | 8.6 | `--audio jfk_11s.wav` |
