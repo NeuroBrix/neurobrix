@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.host_memory import MemoryState, memory_state
-from neurobrix.core.prism.memory_budget import (DeviceReading, deferred_drain_policy_of, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
+from neurobrix.core.prism.memory_budget import (DeviceReading, budget_mb as _budget_mb, tile_rung_mb as _tile_rung_mb,
                                                 rung_down_mb, describe as _describe_budget, read_device_sharing,
                                                 host_budget_mb as _host_budget_mb_read)
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
@@ -949,7 +949,7 @@ class PrismSolver:
                 continue
             if name in streamed or name in tiled or name not in plan.component_memory:
                 continue
-            cost = self._whole_component_mb(container, name, plan.component_memory[name], dev)
+            cost = self._held_component_mb(container, name, plan.component_memory[name], dev, alloc)
             whole_mb[dev.device_string] = max(whole_mb.get(dev.device_string, 0.0), cost)
         # A streamed plan holds its WINDOW on the card (resident beside + constants + flow reads +
         # KV + the largest piece): a held cost like a whole component. Cut against the profile's
@@ -1039,15 +1039,16 @@ class PrismSolver:
             mult = dev.get_cost_multiplier(self._get_component_dtype(container, name))
             window_mb = 0.0 if unified else 2.0 * max(
                 self._parse_blocks(container, name).get("block_sizes", {}).values(), default=0.0) * mult
+            # The Triton hot loop's dead-tensor queue is a plan promise too (the supervisor's rule,
+            # 2026-10-13 02:05: never a cache granted on memory the plan has already promised): the usable
+            # part is net of the profile's cliff (`_usable_mb`), and the store's device keeps that cliff
+            # because `_assign_drain_cliffs` prices a store at what it holds (`_held_component_mb`). The
+            # grant subtracted the cliff a second time from 2026-10-13 and the served KV check, sized against
+            # the usable part, took the store's floor: DeepSeek-Coder-V2-Lite served on the Mac's profile
+            # descended 16 384 -> 8 192 and streamed.
             room_mb = self._usable_mb(dev) - held_mb - window_mb
-            # The Triton hot loop's dead-tensor queue is a plan promise too: a card whose room the store
-            # takes whole drains at a cliff of 0 (`_assign_drain_cliffs`), and the engine still needs the
-            # profile's cliff between two drains — the store's grant leaves it (the supervisor's rule,
-            # 2026-10-13 02:05: never a cache granted on memory the plan has already promised).
-            memory = self._drain_profile_memory(dev)
-            cliff_mb = (deferred_drain_policy_of(memory)[0] / mib) if memory is not None else 0.0
             weight_mb = plan.component_memory[name].weight_mb * mult
-            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb - cliff_mb, mult)
+            store = self._expert_store_budget(name, weight_mb, room_mb + window_mb, mult)
             if unified:
                 self._refuse_unheld_expert_files(container, name, alloc)
                 if store is None:
@@ -1475,6 +1476,20 @@ class PrismSolver:
         if str(getattr(self, "_mode", "compiled")).startswith("triton"):
             return float(mem.activation_mb) * float(get_prism_defaults()["triton_arena_activation_factor"])
         return float(mem.activation_mb)
+
+    def _held_component_mb(self, container, comp_name: str, mem: "ComponentMemory", dev: "DeviceState",
+                           alloc: "ComponentAllocation") -> float:
+        """What a component the plan places on `dev` holds there: an expert store its dense part and its expert cache
+        as granted beside its activations as the arena holds them (and its graph constants on a unified device,
+        `_place_component` Strategy 2.5) — never its routed experts, which stay in pinned host memory or in the
+        container's pages; any other component its whole cost (`_whole_component_mb`). Priced at its whole weights,
+        a store left its card a drain cliff of 0 (Qwen3-Omni-30B 32g triton, 2026-10-13)."""
+        if alloc.strategy != "expert_store":
+            return self._whole_component_mb(container, comp_name, mem, dev)
+        consts = (self._graph_constants_mb(container, comp_name, dev)
+                  if getattr(getattr(dev, "spec", None), "has_unified_memory", False) else 0.0)
+        return (float(alloc.resident_weight_mb) + float(alloc.expert_cache_mb) + self._live_activation_mb(mem)
+                + consts)
 
     def _whole_component_mb(self, container, comp_name: str, mem: "ComponentMemory",
                             dev: "DeviceState") -> float:
