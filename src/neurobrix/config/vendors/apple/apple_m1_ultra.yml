@@ -227,6 +227,11 @@ memory:
   # a multiple of this file's sdpa_math_min_chunk_rows.
   compiled_sdpa_full_scores: true
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
+  # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
+  # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of
+  # 1.8 GB -> 21.3 GB of IOAccelerator buffers within one second, flat at the allocator's cap). The engine waits for the
+  # device every this many chunks, and Prism prices that many chunks' scores within the budget.
+  compiled_sdpa_chunks_in_flight: 2              # provenance: one chunk computing while the next is enqueued
 
   # Allocator pool: fraction of device memory the free-list may keep parked.
   # Apple Silicon is UNIFIED memory — the "device" budget is system RAM

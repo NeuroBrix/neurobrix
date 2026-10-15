@@ -46,7 +46,7 @@ def scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p: float = 0.0
     if hardware is None:
         raise ValueError(f"ZERO FALLBACK: an attention on {q.device} was given no hardware — whether its device writes "
                          f"its full scores is read from the vendor file of the plan's device, never assumed")
-    from neurobrix.core.prism.attention_scratch import writes_full_scores, chunk_plan
+    from neurobrix.core.prism.attention_scratch import writes_full_scores, chunk_plan, chunks_in_flight
     memory = _memory(hardware)
     if not writes_full_scores(memory):
         return _plain(q, k, v, attn_mask, dropout_p, is_causal, scale)
@@ -65,13 +65,15 @@ def scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p: float = 0.0
                          f"its chunks are cut on [B, H, T, D] or [B, T, D]")
     b, h, tq, tk = int(q.shape[0]), int(q.shape[1]), int(q.shape[-2]), int(k.shape[-2])
     plan = chunk_plan(memory, budget, b, h, tq, tk)
-    _say(b, h, tq, tk, budget, plan)
+    in_flight = chunks_in_flight(memory) if plan is not None else None
+    _say(b, h, tq, tk, budget, plan, in_flight)
     if plan is None:
         return _plain(q, k, v, attn_mask, dropout_p, is_causal, scale)
-    return attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, plan[1], heads=plan[0])
+    return attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, plan[1], heads=plan[0],
+                               in_flight=in_flight)
 
 
-def _say(b, h, tq, tk, budget, plan):
+def _say(b, h, tq, tk, budget, plan, in_flight=None):
     """One line per distinct cut: what the attention writes and at what budget — the evidence that it ran cut."""
     key = (b, h, tq, tk, budget)
     if key in _SAID:
@@ -86,8 +88,8 @@ def _say(b, h, tq, tk, budget, plan):
     group, rows = plan
     n = -(-(b * h) // group) * -(-tq // rows)
     print(f"[attention] {b} x {h} heads, {tq} x {tk}: {n} chunks of {group} head(s) x {rows} rows, scores "
-          f"{sdpa_scores_bytes(1, group, rows, tk) / 2**20:.0f} MB a chunk (whole {whole:.0f} MB) within the plan's "
-          f"budget {budget / 2**20:.0f} MB", flush=True)
+          f"{sdpa_scores_bytes(1, group, rows, tk) / 2**20:.0f} MB a chunk, {in_flight} in flight (whole {whole:.0f} MB) "
+          f"within the plan's budget {budget / 2**20:.0f} MB", flush=True)
 
 
 def _heads(t, bi, h0, h1, b, h):
@@ -101,9 +103,12 @@ def _heads(t, bi, h0, h1, b, h):
                      f"neither the query's heads nor a broadcast one")
 
 
-def attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, rows: int, heads: Optional[int] = None):
+def attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, rows: int, heads: Optional[int] = None,
+                        in_flight: Optional[int] = None):
     """The attention cut into groups of `heads` (batch, head) slices by bands of `rows` query rows, each band attending
-    every key, reassembled in place."""
+    every key, reassembled in place. With `in_flight`, the engine waits for the device every that many chunks: on an
+    asynchronous device a chunk's freed scores are reusable only once the device has run it."""
+    done = 0
     b, h, tq, tk = int(q.shape[0]), int(q.shape[1]), int(q.shape[-2]), int(k.shape[-2])
     group = heads or b * h
     out = torch.empty(q.shape[:-1] + (v.shape[-1],), dtype=q.dtype, device=q.device)
@@ -126,4 +131,7 @@ def attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, rows: i
                                                      else mask.masked_fill(~tri, float("-inf")))
                 out[bi:bi + 1, h0:h1, i:j] = F.scaled_dot_product_attention(
                     qs[..., i:j, :], ks, vs, attn_mask=mask, dropout_p=dropout_p, is_causal=False, scale=scale)
+                done += 1
+                if in_flight and done % in_flight == 0:
+                    torch.accelerator.synchronize(q.device)
     return out

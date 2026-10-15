@@ -50,17 +50,32 @@ def scores_budget(memory: Dict[str, Any], device_memory_mb) -> Optional[int]:
     return int(float(device_memory_mb) * _MIB * float(memory["compiled_sdpa_scores_device_fraction"]))
 
 
+def chunks_in_flight(memory: Dict[str, Any]) -> int:
+    """How many chunks the device holds at once: the engine waits for it every that many chunks (the vendor's
+    `memory.compiled_sdpa_chunks_in_flight`, refused by name when a device writing full scores does not state it)."""
+    if "compiled_sdpa_chunks_in_flight" not in memory:
+        raise KeyError("ZERO FALLBACK: the vendor file states compiled_sdpa_full_scores and no "
+                       "memory.compiled_sdpa_chunks_in_flight — how many chunks its device holds at once is stated")
+    n = int(memory["compiled_sdpa_chunks_in_flight"])
+    if n < 1:
+        raise ValueError(f"ZERO FALLBACK: memory.compiled_sdpa_chunks_in_flight is {n}; at least one chunk runs")
+    return n
+
+
 def chunk_plan(memory: Dict[str, Any], budget: int, batch: int, heads: int, tq: int, tk: int):
     """(slices per chunk, query rows per chunk), or None when the whole attention's scores fit the budget
-    (`tiling_sizes.sdpa_chunk_plan`). Refused by name when one slice of one row block exceeds the budget."""
-    from neurobrix.core.module.tiling_sizes import sdpa_chunk_plan
+    (`tiling_sizes.sdpa_chunk_plan`). A chunk is sized at the budget shared by the chunks in flight. Refused by name
+    when one slice of one row block exceeds that share."""
+    from neurobrix.core.module.tiling_sizes import sdpa_chunk_plan, sdpa_scores_bytes
+    if sdpa_scores_bytes(batch, heads, tq, tk) <= budget:
+        return None
     block = int(memory["sdpa_math_min_chunk_rows"])
-    group, rows = sdpa_chunk_plan(int(budget), batch, heads, tq, tk, block)
+    share = int(budget) // chunks_in_flight(memory)
+    group, rows = sdpa_chunk_plan(share, batch, heads, tq, tk, block)
     if rows == 0:
         raise ValueError(f"ZERO FALLBACK: one head's {block}-row block of an attention over {tk} keys writes "
-                         f"{block * tk * 4 / 2**20:.0f} MiB of scores, over the {budget / 2**20:.0f} MiB budget")
-    if group == batch * heads and rows == tq:
-        return None
+                         f"{block * tk * 4 / 2**20:.0f} MiB of scores, over the {share / 2**20:.0f} MiB share of "
+                         f"each chunk in flight")
     return group, rows
 
 
@@ -74,4 +89,4 @@ def scratch_bytes(memory: Dict[str, Any], budget: Optional[int], batch: int, hea
     if plan is None:
         return sdpa_scores_bytes(batch, heads, tq, tk)
     group, rows = plan
-    return sdpa_scores_bytes(1, group, rows, tk)
+    return chunks_in_flight(memory) * sdpa_scores_bytes(1, group, rows, tk)

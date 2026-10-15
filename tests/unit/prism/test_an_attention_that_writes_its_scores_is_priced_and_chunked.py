@@ -66,21 +66,25 @@ def test_every_vendor_file_states_whether_its_compiled_attention_writes_its_scor
         assert m["compiled_sdpa_full_scores"] is ("/apple/" in f), f
         if m["compiled_sdpa_full_scores"]:
             assert 0 < m["compiled_sdpa_scores_device_fraction"] < 1 and m["sdpa_math_min_chunk_rows"] > 0, f
+            assert m["compiled_sdpa_chunks_in_flight"] >= 1, f
 
 
 def test_the_price_is_what_a_device_writes():
     from neurobrix.core.prism.attention_scratch import scores_budget, scratch_bytes
     apple = {"compiled_sdpa_full_scores": True, "compiled_sdpa_scores_device_fraction": 0.1,
-             "sdpa_math_min_chunk_rows": 128}
+             "sdpa_math_min_chunk_rows": 128, "compiled_sdpa_chunks_in_flight": 2}
     budget = scores_budget(apple, 18186)
     assert budget == int(18186 * 1024 * 1024 * 0.1)
     from neurobrix.core.prism.attention_scratch import chunk_plan
     full = 2 * 24 * 79200 * 79200 * 4
     # Allegro at 720x1280: 79 200 tokens, 2 x 24 heads — one 128-row band of all heads is over budget, so the cut is
-    # one head by bands of 6 016 rows (1.91 GB / 316 800 B a row, in 128-row blocks): 48 x 14 = 672 chunks
-    assert chunk_plan(apple, budget, 2, 24, 79200, 79200) == (1, 6016)
+    # two chunks in flight share the 1.91 GB: one head by bands of 2 944 rows (0.95 GB / 316 800 B a row, in 128-row
+    # blocks), 48 x 27 chunks; the price is the two chunks the device holds at once
+    assert chunk_plan(apple, budget, 2, 24, 79200, 79200) == (1, 2944)
     got = scratch_bytes(apple, budget, 2, 24, 79200, 79200)
-    assert got == 6016 * 79200 * 4 and 0 < got <= budget < full, (got, budget, full)
+    assert got == 2 * 2944 * 79200 * 4 and 0 < got <= budget < full, (got, budget, full)
+    with pytest.raises(KeyError, match="compiled_sdpa_chunks_in_flight"):
+        chunk_plan({k: v for k, v in apple.items() if k != "compiled_sdpa_chunks_in_flight"}, budget, 2, 24, 79200, 79200)
     assert scratch_bytes(apple, budget, 1, 2, 64, 64) == 1 * 2 * 64 * 64 * 4, "small scores: the whole, unchunked"
     assert scores_budget({"compiled_sdpa_full_scores": False}, None) is None
     with pytest.raises(KeyError, match="states no memory.compiled_sdpa_full_scores"):
@@ -172,3 +176,18 @@ def test_the_compiled_resolvers_attention_op_reaches_the_cut(monkeypatch):
     fn = r.get_op_func("_scaled_dot_product_efficient_attention", {"args": []})
     fn(q, q, q, None, False)
     assert seen, "the resolver's attention ran whole on a device that writes its scores, over the plan's budget"
+
+
+def test_the_engine_waits_for_the_device_every_in_flight_chunks(monkeypatch):
+    """An asynchronous device reuses a chunk's freed scores only once it ran it (MPS, the Mac 2026-10-15 08:01: 672
+    chunks enqueued -> 21.3 GB held): the cut waits every `in_flight` chunks, and its result is the whole attention."""
+    waits = []
+    monkeypatch.setattr(torch.accelerator, "synchronize", lambda device=None: waits.append(device))
+    q, k, v = _qkv()
+    out = attention_in_chunks(q, k, v, None, 0.0, False, None, 5, heads=2, in_flight=3)
+    chunks = (1 + 2 + 1) * 8            # 6 slices by 2: the middle group spans both batch entries (2 calls); 8 bands
+    assert len(waits) == chunks // 3, (len(waits), chunks)
+    torch.testing.assert_close(out, F.scaled_dot_product_attention(q, k, v))
+    waits.clear()
+    attention_in_chunks(q, k, v, None, 0.0, False, None, 5, heads=2)
+    assert not waits, "no stated in-flight bound, no wait (a device that writes no scores never cuts)"
