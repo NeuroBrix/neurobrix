@@ -9,6 +9,7 @@ Algorithm: Best-Fit-Decreasing with Activation-Aware Memory Estimation
 - Per-GPU contextual dtype conversion costing
 """
 
+import copy
 import json
 import logging
 import math
@@ -787,9 +788,46 @@ class PrismSolver:
         """
         return max(int(self.oom_reserve_mb), int(capacity_mb * self.reading_volatility))
 
+    @staticmethod
+    def _alloc_devices(alloc) -> set:
+        """The device strings an allocation occupies: its device (a `zero3:` prefix stripped: the compute card),
+        and every device of its shard map."""
+        devs = set()
+        if alloc is None:
+            return devs
+        parts = alloc if isinstance(alloc, tuple) else (alloc,)
+        for p in parts:
+            if isinstance(p, str):
+                devs.add(p.split(":", 1)[1] if p.startswith("zero3:") else p)
+            elif isinstance(p, dict):
+                devs.update(str(v) for v in p.values() if isinstance(v, str) and not v.startswith("cpu"))
+        return devs
+
+    def _kv_stripped(self, component_memory: Dict, kv_bytes: int) -> Dict:
+        """`component_memory` with the decoder's KV estimate taken out of ITS activation and total bytes (the estimate
+        sits in the decoder's activations, `_compute_memory`): the cache this check sizes is not held twice, and a MAX
+        over components then compares what each really holds."""
+        lm = self._lm_component_name
+        if lm is None or lm not in component_memory or not kv_bytes:
+            return component_memory
+        out = dict(component_memory)
+        m = copy.copy(out[lm])
+        m.activation_bytes = max(int(m.activation_bytes) - int(kv_bytes), 0)
+        out[lm] = m
+        return out
+
+    def _kv_devices(self, strat_allocs: Dict) -> Optional[set]:
+        """The cards the decode cache lives on: the decoder's own (the cache sits beside the layers that read it), or
+        None when no decoder is named."""
+        lm = self._lm_component_name
+        if lm is None or lm not in strat_allocs:
+            return None
+        return self._alloc_devices(strat_allocs[lm]) or None
+
     def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
                                      component_memory: Dict, profile,
-                                     kv_already_counted: int = 0, container=None) -> int:
+                                     kv_already_counted: int = 0, container=None,
+                                     only_devices: Optional[set] = None) -> int:
         """What `strat_name` holds on the accelerator at its peak, for the KV-cache check.
 
         Each component costs what its allocation keeps resident: a `layer_streaming` segment's
@@ -818,6 +856,9 @@ class PrismSolver:
 
         Combined only after every cost is known, so the result does not depend on the order the
         components are visited in — an in-loop `max(total, x)` beside `total += y` did.
+
+        `only_devices`: count only the components placed on those devices — the cards the decode cache
+        lives on (`_kv_devices`); a component on another card holds none of their memory.
         """
         partitions = (getattr(self, "_layer_stream_partitions", {}) or {}) \
             if strat_name == "layer_streaming" else {}
@@ -829,6 +870,8 @@ class PrismSolver:
                 continue
             alloc = strat_allocs.get(name)
             dev = alloc[0] if isinstance(alloc, tuple) else alloc
+            if only_devices is not None and not (self._alloc_devices(alloc) & only_devices):
+                continue
             part = partitions.get(name)
             if part is not None:
                 costs[name] = int(part.peak_resident_bytes)   # a segment never held the cache
@@ -1874,28 +1917,11 @@ class PrismSolver:
         else:
             self._model_category = "diffusion"
 
-        # every flow that opens a decode session has its cache planned, whatever its family
-        # declares (the sessions refuse a plan without one): core/runtime/lm_facts
-        from neurobrix.core.runtime.lm_facts import decode_lm_component
-        _decoder = decode_lm_component(topology, list((topology.get("components") or {}).keys()))
-        self._needs_kv_cache = self._model_category in ("llm", "image_vq") or _decoder is not None
-        # A flow that opens a decode session has its cache sized from the decoder's facts
-        # (`_read_lm_config`: the package's runtime/defaults.json, its `lm_config` or the flow's LM
-        # facts), and its session refuses a plan without one. Without them
-        # `_compute_kv_cache_plan` answered None, and the plan went out with NO cache while every
-        # figure that subtracts the KV estimate read 0: Qwen3-Coder-30B-A3B on the Mac's profile,
-        # its package without runtime/defaults.json, planned layer_streaming with
-        # `kv_cache_plan=None` in run and serve (the whole package plans an expert store, 2026-10-12).
-        # Flows that open no decode session (`_decoder` None) keep their caches their own way.
-        if _decoder is not None and not has_lm_config:
-            _defaults = (container.cache_path / "runtime" / "defaults.json"
-                         if container.cache_path else None)
-            raise PlanNotComputable(
-                f"the container '{manifest.get('model_name', '?')}' (family {family!r}) runs a "
-                f"KV-cached decoder, and its decoder facts cannot be read — "
-                f"{_defaults if _defaults else 'no cache path'}"
-                f"{'' if _defaults is None or _defaults.exists() else ' is absent'}: the cache "
-                f"cannot be sized, so the plan cannot be computed. The package is incomplete.")
+        # A plan needs a decode cache exactly when the container declares the KV its flow's decoder keeps
+        # (core/state/price.py, the build's `state` section): a flow that decodes with an undeclared component is
+        # refused by name there. The family's category no longer decides it: Prism priced a cache for every
+        # `has_kv_cache` family, flows that allocate none included (docs/design/state-engine.md §1).
+        self._needs_kv_cache = self._kv_declared(container) is not None
 
         # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
         # and the genuine all-fp32 fallback below).
@@ -2249,15 +2275,17 @@ class PrismSolver:
                                           if getattr(self, "_layer_stream_cut_against_floor", False)
                                           else self._usable_mb(strat_devices[0])) * 1024 * 1024)
                 else:
-                    # Every other GPU strategy: the RUNGS of its devices, not their raw capacity —
-                    # the raw figure ignores both the ladder and memory another process holds on a
-                    # shared card. OPEN DEFECT OF MAIN, narrowed here, not closed: this sums every
-                    # device the strategy returned, while the cache lives beside the LM on its own
-                    # card(s). Failure shape: serve mode, a multi-card lazy_sequential /
-                    # pipeline_parallel / component_placement plan — the cache is sized from memory
-                    # on cards other than the LM's, and the LM's own card is over-committed.
+                    # Every other GPU strategy: the RUNGS of the cards the cache lives on — the decoder's
+                    # own (`_kv_devices`), not every card the strategy returned. Summed over every card, a
+                    # multi-card plan sized the cache from memory on cards other than the decoder's, and
+                    # the decoder's card was over-committed (the open defect of main, closed with the state
+                    # engine's price, docs/design/state-engine.md §4.2). Its resident figure below counts
+                    # the same cards only.
+                    _kv_cards = self._kv_devices(strat_allocs)
+                    _cards = [d for d in strat_devices
+                              if _kv_cards is None or d.device_string in _kv_cards] or list(strat_devices)
                     total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
-                                         for d in strat_devices)
+                                         for d in _cards)
                     # An expert store on a unified device (`_place_component` Strategy 2.5) is
                     # accepted against the USABLE part of its device's rung, and its expert cache is
                     # granted from that same figure after the cache (`_zero3_resident_budgets`). Sized
@@ -2295,6 +2323,8 @@ class PrismSolver:
                         total_allocated = sum(m.activation_bytes + m.overhead_bytes
                                               for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
+                    # the decoder's KV estimate comes out of ITS figures before any MAX (`_kv_stripped`)
+                    component_memory = self._kv_stripped(component_memory, kv_already_counted)
                     persistent, transient = self._classify_lifecycle(container)
                     # Persistent: all weights resident + peak activation
                     persistent_weights = sum(
@@ -2312,7 +2342,9 @@ class PrismSolver:
                     )
                     total_allocated = persistent_weights + persistent_max_act + max_transient
                 elif strat_name == "single_gpu":
-                    # Hot/cold budget must match _try_single_gpu's decision
+                    # Hot/cold budget must match _try_single_gpu's decision; the decoder's KV estimate comes
+                    # out of ITS figures before any MAX (`_kv_stripped`)
+                    component_memory = self._kv_stripped(component_memory, kv_already_counted)
                     serve_mode = getattr(self, '_serve_mode', False)
                     if serve_mode:
                         # Hot: all weights resident + peak activations
@@ -2333,16 +2365,14 @@ class PrismSolver:
                     # cpu_execution on a GPU node).
                     total_allocated = self._resident_bytes_for_kv_check(
                         strat_name, strat_allocs, component_memory, profile, kv_already_counted,
-                        container=container)
+                        container=container, only_devices=self._kv_devices(strat_allocs))
 
 
-                if strat_name in ("zero3", "single_gpu", "single_gpu_lifecycle"):
-                    # main's arithmetic, unchanged except that nothing is subtracted when no LM is
-                    # named (the estimate was then added to no component). OPEN, not fixed here:
-                    # where the figure above is a MAX (single_gpu cold `max(total)`, hot `max(act)`,
-                    # lifecycle `max(transient)`) the MAX can be ANOTHER component's and the
-                    # subtraction then comes off the wrong one — the defect
-                    # `_resident_bytes_for_kv_check` fixes for every other strategy.
+                if strat_name == "zero3":
+                    # a SUM of every component: the decoder's estimate comes off it exactly. single_gpu and
+                    # its lifecycle took it out of the decoder's own figures above, before their MAX: taken
+                    # off the MAX, it came off another component's when that one was the largest (the open
+                    # defect of main, closed with the state engine's price).
                     if self._lm_component_name is not None:
                         total_allocated = max(total_allocated - kv_already_counted, 0)
                 elif strat_name == "layer_streaming":
@@ -3739,9 +3769,21 @@ class PrismSolver:
         from neurobrix.core.runtime.lm_facts import decode_sequences
         return decode_sequences(self._flow_topology(container), self._read_defaults(container) or {})
 
-    def _kv_token_bytes(self, container, lm_config: Dict[str, Any], dtype_str: str) -> int:
-        """Bytes one cached position costs across every sequence the cache holds."""
-        return self._kv_per_token_bytes(lm_config, dtype_str) * self._kv_sequences(container)
+    def _kv_declared(self, container):
+        """(decoder, its declared KV state) — the container's `state` section (core/state/price.py) — or None when the
+        flow decodes nothing. Refused by name when it decodes with a component the container declares no KV for."""
+        from neurobrix.core.state.price import kv_declaration
+        topology = self._flow_topology(container)
+        return kv_declaration(topology, list((topology.get("components") or {}).keys()))
+
+    def _kv_token_bytes(self, container, dtype_str: str) -> int:
+        """Bytes one cached position costs across every sequence the cache holds (core/state/price.py), 0 when the flow
+        decodes nothing."""
+        from neurobrix.core.state.price import kv_token_bytes
+        declared = self._kv_declared(container)
+        if declared is None:
+            return 0
+        return kv_token_bytes(declared[1], dtype_str, self._kv_sequences(container))
 
 
     #: How a declared symbol's NAME maps onto the request that will be run.
@@ -3961,140 +4003,54 @@ class PrismSolver:
 
 
     def _estimate_kv_cache_bytes(self, container, target_dtype_str: str) -> int:
-        """Estimate KV cache memory for budget planning.
-        Serve mode: target full context window (max_position_embeddings).
-        Run mode: target max_tokens + prompt_margin."""
-        lm_config = self._read_lm_config(container)
-        if not lm_config:
+        """The KV bytes a strategy is priced for before the cache is sized (core/state/price.py): max_tokens + margin
+        positions, else the declared window, at the compute dtype, across every sequence. 0 when the flow decodes
+        nothing. The cache itself is sized later by `_compute_kv_cache_plan`, within the remaining budget."""
+        from neurobrix.core.state.price import kv_estimate_tokens
+        declared = self._kv_declared(container)
+        if declared is None:
             return 0
-
-        defaults = self._read_defaults(container)
-        max_tokens = defaults.get("max_tokens") if defaults else None
-        max_pos = lm_config.get("max_position_embeddings", 0)
-        prompt_margin = defaults.get("prompt_margin", 128) if defaults else 128
-
-        # Strategy evaluation estimate: use max_tokens + margin (not full context window).
-        # Actual KV cache is sized later by _compute_kv_cache_plan() which constrains to VRAM.
-        # Using max_position_embeddings here would reject valid strategies (e.g., FGP for Qwen3-30B
-        # where max_pos=262144 adds ~25GB vs max_tokens=32768 adding ~3.2GB).
-        cache_len = (max_tokens + prompt_margin) if max_tokens else max_pos
-
-        return cache_len * self._kv_token_bytes(container, lm_config, target_dtype_str)
-
-    @staticmethod
-    def _kv_per_token_bytes(lm_config: Dict[str, Any], dtype_str: str) -> int:
-        """Bytes one cached token costs: layers x kv_heads x (k_head_dim + v_head_dim) x the dtype's
-        width from the engine's dtype table. ONE brick: three copies of this arithmetic disagreed
-        on a zero `num_kv_heads` / `head_dim` and carried a `2 if fp16 else 4` width rule."""
-        num_heads = lm_config.get("num_heads", 0)
-        hidden_size = lm_config.get("hidden_size", 0)
-        num_kv_heads = lm_config.get("num_kv_heads", 0) or num_heads
-        head_dim = lm_config.get("head_dim", 0) or (hidden_size // max(num_heads, 1))
-        k_head_dim = lm_config.get("k_head_dim", head_dim)
-        v_head_dim = lm_config.get("v_head_dim", head_dim)
-        width = _itemsize.itemsize(dtype_str)          # an unknown dtype is refused by name, never a guess
-        return lm_config.get("num_layers", 0) * num_kv_heads * (k_head_dim + v_head_dim) * width
+        defaults = self._read_defaults(container) or {}
+        tokens = kv_estimate_tokens(declared[1], defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128))
+        return tokens * self._kv_token_bytes(container, target_dtype_str)
 
     def _kv_min_tokens(self, container) -> int:
-        """The fewest cache tokens a plan is accepted with — `_compute_kv_cache_plan` refuses
-        below it. Serve: two full turns (2 x max_tokens + margin); run: one (max_tokens + margin);
-        64 when the container declares no max_tokens. One authority, because `_try_layer_streaming`
-        must reserve at least this much beside its segments or the plan it cuts is refused (or,
-        judged against a looser capacity, overruns the device)."""
-        defaults = self._read_defaults(container)
-        max_tokens = (defaults.get("max_tokens") if defaults else None) or 0
-        prompt_margin = (defaults.get("prompt_margin", 128) if defaults else 128)
-        if not max_tokens:
-            return 64
-        return max_tokens * (2 if self._serve_requested else 1) + prompt_margin
+        """The fewest cache positions a plan is accepted with (core/state/price.kv_min_tokens): one turn, two when
+        serving, 64 without max_tokens. One authority: `_try_layer_streaming` reserves at least this beside its
+        segments, or the plan it cuts is refused."""
+        from neurobrix.core.state.price import kv_min_tokens
+        defaults = self._read_defaults(container) or {}
+        return kv_min_tokens(defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128), bool(self._serve_requested))
 
     def _kv_min_bytes(self, container, dtype_str: str) -> int:
-        """`_kv_min_tokens` in bytes, at the per-token cost `_compute_kv_cache_plan` uses."""
-        lm_config = self._read_lm_config(container)
-        if not lm_config:
-            return 0
-        return self._kv_min_tokens(container) * self._kv_token_bytes(container, lm_config, dtype_str)
+        """`_kv_min_tokens` in bytes, at the per-position cost `_compute_kv_cache_plan` uses."""
+        return self._kv_min_tokens(container) * self._kv_token_bytes(container, dtype_str)
 
     def _compute_kv_cache_plan(
         self, container, target_dtype: str, remaining_vram_bytes: int
     ) -> Optional[KVCachePlan]:
-        """
-        Compute KV cache allocation from lm_config. ZERO FALLBACK.
-
-        remaining_vram_bytes = total device capacity - weights - overhead
-        Prism decides max_cache_len from the remaining budget.
-        """
-        lm_config = self._read_lm_config(container)
-        if not lm_config:
+        """The decode cache, sized from the container's declared KV state (core/state/price.py) within the remaining
+        budget: as many positions as it affords, bounded by the request (run) or the declared window (serve), never
+        beyond the window. None when the flow decodes nothing; refused by name below the minimum. ZERO FALLBACK."""
+        from neurobrix.core.state.price import kv_cache_size
+        declared = self._kv_declared(container)
+        if declared is None:
             return None
-
-        num_layers: int = lm_config.get("num_layers", 0)
-        num_heads: int = lm_config.get("num_heads", 0)
-        hidden_size: int = lm_config.get("hidden_size", 0)
-        if not all([num_layers, num_heads, hidden_size]):
-            raise RuntimeError(
-                "ZERO FALLBACK: lm_config missing num_layers/num_heads/hidden_size.\n"
-                "Model data incomplete. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
-            )
-
-        num_kv_heads: int = lm_config.get("num_kv_heads", 0) or num_heads
-        head_dim: int = lm_config.get("head_dim", 0) or (hidden_size // num_heads)
-        k_head_dim: int = lm_config.get("k_head_dim", head_dim)
-        v_head_dim_val: int = lm_config.get("v_head_dim", head_dim)
-        max_pos: int = lm_config.get("max_position_embeddings") or 0
-
-        # every sequence the cache holds (the guidance batch, a negative context) at once
-        per_token_bytes: int = self._kv_token_bytes(container, lm_config, target_dtype)
-
-        # Prism decides max_cache_len from remaining VRAM budget
-        defaults = self._read_defaults(container)
-        max_tokens = (defaults.get("max_tokens") if defaults else None) or 0
-        max_affordable = remaining_vram_bytes // per_token_bytes if per_token_bytes > 0 else 0
-        prompt_margin = (defaults.get("prompt_margin", 128) if defaults else 128)
-
-        if getattr(self, '_serve_mode', False):
-            # Serve mode: target full context window, VRAM is the constraint
-            if not max_pos:
-                raise RuntimeError(
-                    f"ZERO FALLBACK: serving plans the decoder's full context window, and this "
-                    f"container declares none for '{lm_config.get('component_name', 'its LM')}' "
-                    f"(no max_position_embeddings in its LM facts) — its build must record it.")
-            upper_bound = max_pos
-        else:
-            # Run mode: single-shot, only need max_tokens + margin
-            upper_bound = (max_tokens + prompt_margin) if max_tokens else max_pos
-        min_tokens = self._kv_min_tokens(container)
-
-        max_cache_len = min(max_affordable, upper_bound)
-
-        if max_cache_len < min_tokens:
-            raise RuntimeError(
-                f"ZERO FALLBACK: KV cache budget insuffisant.\n"
-                f"Remaining VRAM: {remaining_vram_bytes / 1e6:.0f}MB, "
-                f"need ≥{min_tokens * per_token_bytes / 1e6:.0f}MB for {min_tokens} tokens.\n"
-                f"Consider using a GPU with more VRAM or a multi-GPU setup."
-            )
-
-        memory_bytes = max_cache_len * per_token_bytes
-
-        # Initial buffer: start small, grow on demand up to max_cache_len
-        # Run mode: allocate at max right away (single-shot, known size)
-        # Serve mode: start at max_tokens + margin, grow as user generates longer
-        if getattr(self, '_serve_mode', False) and max_tokens:
-            initial_len = min(max_tokens + prompt_margin, max_cache_len)
-        else:
-            initial_len = 0  # 0 = allocate at max_cache_len (legacy behavior for run)
-
+        decoder, entry = declared
+        defaults = self._read_defaults(container) or {}
+        per_token_bytes = self._kv_token_bytes(container, target_dtype)
+        size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128),
+                             bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes)
         return KVCachePlan(
-            max_cache_len=max_cache_len,
-            num_layers=int(num_layers),
-            num_kv_heads=int(num_kv_heads),
-            k_head_dim=int(k_head_dim),
-            v_head_dim=int(v_head_dim_val),
+            max_cache_len=size["max_cache_len"],
+            num_layers=int(entry["layers"]),
+            num_kv_heads=int(entry["kv_heads"]),
+            k_head_dim=int(entry["k_dim"]),
+            v_head_dim=int(entry["v_dim"]),
             dtype=target_dtype,
-            memory_bytes=memory_bytes,
+            memory_bytes=size["memory_bytes"],
             per_token_bytes=per_token_bytes,
-            initial_cache_len=initial_len,
+            initial_cache_len=size["initial_cache_len"],
         )
 
     def _apply_attention_correction(
