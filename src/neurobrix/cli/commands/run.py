@@ -338,6 +338,12 @@ def request_input_config(args, manifest: dict, family, cache_path):
         temporal_compression=temporal_compression,
     )
 
+    # The loop must keep its state's shape at THIS request, read from its graph — refused by name before anything
+    # loads (core/prism/loop_state.py: Allegro at 360x640 ran a step and died in the scheduler, 45 vs 44).
+    if _flow is not None:
+        from neurobrix.core.prism.loop_state import refuse_a_state_the_loop_cannot_keep
+        refuse_a_state_the_loop_cannot_keep(_flow.topology, _flow.graph, input_config, manifest.get("model_name"))
+
     return input_config
 
 
