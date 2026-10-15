@@ -363,6 +363,9 @@ class GraphExecutor:
         # Prism's deferred-drain cliff for this component's device (`ComponentAllocation.
         # deferred_drain_cliff_bytes`), handed to the Triton sequence; None drains at the profile's.
         self._deferred_drain_cliff_bytes: Optional[int] = None
+        # Prism's attention scores budget for this component (`ComponentAllocation.attention_scores_budget_bytes`),
+        # handed to the compiled engines; None where the plan states none.
+        self._attention_scores_budget_bytes: Optional[int] = None
         self._compiled_seq: Optional["CompiledSequence"] = None  # For compiled mode (zero-overhead)
         self._compiled_exec_count = 0  # Track executions for verbose control
 
@@ -1770,6 +1773,7 @@ class GraphExecutor:
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
             narrow_op_uids=self._dtype_engine.narrow_op_uids,
             hardware=self._dtype_engine.hardware,
+            attention_budget=self._attention_scores_budget_bytes,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -5219,7 +5223,8 @@ class GraphExecutor:
 
         if self._sequential_dispatcher is None:
             self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self._placement_torch_dtype(),
-                                                               dtype_engine=self._dtype_engine)
+                                                               dtype_engine=self._dtype_engine,
+                                                               attention_budget=self._attention_scores_budget_bytes)
 
         # FUSED MoE OP: Execute via custom handler (bypasses TensorResolver)
         # Must be checked BEFORE resolve_args — fused op's args list contains 192+

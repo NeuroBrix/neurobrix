@@ -428,6 +428,8 @@ class ExecutorFactory:
         executor._cache_path = cache_path
         # The drain cliff Prism planned for this device (Triton engine), as resident_weight_mb rides.
         executor._deferred_drain_cliff_bytes = getattr(allocation, "deferred_drain_cliff_bytes", None)
+        # The attention scores budget Prism priced this component at (compiled engine, a device writing full scores).
+        executor._attention_scores_budget_bytes = getattr(allocation, "attention_scores_budget_bytes", None)
 
         # Load DAG directly (NO reconstruction)
         executor.load_graph_from_dict(dag)

@@ -19,6 +19,8 @@ ZERO DEPENDENCY: This module does NOT import from sequential_dispatcher.py
 import math
 import torch
 import torch.nn.functional as F
+
+from neurobrix.core.runtime.graph.device_attention import scaled_dot_product_attention as _device_sdpa
 from typing import Any, Callable, Dict, Optional
 
 
@@ -195,8 +197,11 @@ class CompiledOpResolver:
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, use_triton: bool = False,
                  activations_fp16_safe: bool = False, fp32_op_uids=None,
-                 narrow_op_uids=None, hardware=None):
+                 narrow_op_uids=None, hardware=None, attention_budget=None):
         self.device = device
+        # Prism's attention scores budget (core/prism/attention_scratch.py): the figure a device writing full scores
+        # cuts its attention at; None where the plan states none.
+        self.attention_budget = attention_budget
         self.dtype = dtype
         self.use_triton = False  # triton mode now uses triton/ package directly
         self._op_cache: Dict[str, Callable] = {}
@@ -609,8 +614,8 @@ class CompiledOpResolver:
                     k = k.transpose(-2, -1)
                 scale = kwargs.get("scale", None)
                 attn_mask = _cast_attn_mask(kwargs.get("attn_mask", None), q)
-                output = F.scaled_dot_product_attention(
-                    q, k, v,
+                output = _device_sdpa(
+                    q, k, v, hardware=self.dtype_engine.hardware, budget=self.attention_budget,
                     attn_mask=attn_mask,
                     dropout_p=_safe_dropout(dropout_p),
                     is_causal=_safe_is_causal(is_causal),
@@ -641,8 +646,8 @@ class CompiledOpResolver:
                 if v.stride(-1) != 1:
                     v = v.contiguous()
                 attn_bias = _cast_attn_mask(attn_bias, q)
-                output = F.scaled_dot_product_attention(
-                    q, k, v,
+                output = _device_sdpa(
+                    q, k, v, hardware=self.dtype_engine.hardware, budget=self.attention_budget,
                     attn_mask=attn_bias,
                     dropout_p=_safe_dropout(dropout_p),
                     is_causal=_safe_is_causal(is_causal),
@@ -702,8 +707,8 @@ class CompiledOpResolver:
                 # mask already encodes causality, so the flag is redundant here.
                 is_causal = False
 
-            return F.scaled_dot_product_attention(
-                q, k, v, attn_mask=attn_mask,
+            return _device_sdpa(
+                q, k, v, attn_mask=attn_mask, hardware=self.dtype_engine.hardware, budget=self.attention_budget,
                 is_causal=is_causal, scale=scale,
             )
         return standard_attention

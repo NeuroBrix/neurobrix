@@ -23,6 +23,12 @@ from neurobrix.core.runtime import symexpr as _symexpr
 from neurobrix.core.runtime import liveness as _liveness
 
 
+def _is_attention(op_type) -> bool:
+    """An attention op, by the canonical op names the runtime widths read (core/prism/runtime_widths._SDPA)."""
+    from neurobrix.core.prism.runtime_widths import _SDPA
+    return str(op_type or "").split("::")[-1].split(".")[0] in _SDPA
+
+
 @dataclass
 class InputConfig:
     """Runtime input configuration for activation profiling.
@@ -816,6 +822,21 @@ class ActivationProfiler:
             "peak_op_uid": request_profile.peak_op_uid,
         }
 
+    def _attention_scratch_of(self, op, symbol_map, attention_scratch) -> int:
+        """The scores an attention op writes, from its query [B, H, Tq, D] (or [B, Tq, D]) and value at the request."""
+        ins = op.get("input_tensor_ids") or []
+        if len(ins) < 3:
+            return 0
+        q = self._resolve_shape(self.tensors.get(ins[0], {}), symbol_map)
+        v = self._resolve_shape(self.tensors.get(ins[2], {}), symbol_map)
+        if len(q) < 3 or len(v) < 3:
+            return 0
+        heads = int(q[-3]) if len(q) >= 4 else 1          # [B, H, T, D], or [B, T, D]: one head
+        batch = 1
+        for d in (q[:-3] if len(q) >= 4 else q[:-2]):
+            batch *= int(d)
+        return int(attention_scratch(batch, heads, int(q[-2]), int(v[-2])))
+
     def estimate_peak_memory(
         self,
         input_config: Optional[InputConfig] = None,
@@ -830,9 +851,14 @@ class ActivationProfiler:
         source_holding_uids: Optional[set] = None,
         placement_floor: bool = False,
         in_place_weight_reads: bool = False,
+        attention_scratch=None,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
+
+        `attention_scratch(batch, heads, Tq, Tk) -> bytes`: the scores an attention op writes WHILE it runs on a device
+        whose compiled attention writes them (core/prism/attention_scratch.py; None elsewhere — the memory-efficient
+        kernels write none), added to that op's in-op figure.
 
         Args:
             input_config: Runtime input configuration (batch, height, width)
@@ -1071,6 +1097,8 @@ class ActivationProfiler:
             # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
             in_op = (live_before_op[op_uid] if op.get("op_type") in VIEW_OP_TYPES
                      else current_bytes)
+            if attention_scratch is not None and _is_attention(op.get("op_type")):
+                in_op += self._attention_scratch_of(op, symbol_map, attention_scratch)
             if in_op > peak_bytes:
                 peak_bytes = in_op
                 peak_op_uid = op_uid

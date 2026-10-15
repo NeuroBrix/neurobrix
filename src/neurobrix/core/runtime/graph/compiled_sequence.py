@@ -376,6 +376,7 @@ class CompiledSequence:
         fp32_op_uids=None,
         narrow_op_uids=None,
         hardware=None,
+        attention_budget=None,
     ):
         """
         Initialize CompiledSequence.
@@ -413,7 +414,8 @@ class CompiledSequence:
                                               activations_fp16_safe=activations_fp16_safe,
                                               fp32_op_uids=fp32_op_uids,
                                               narrow_op_uids=narrow_op_uids,
-                                              hardware=hardware)
+                                              hardware=hardware,
+                                              attention_budget=attention_budget)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -948,6 +950,7 @@ class CompiledSequence:
             sub_dag, self.device, self.dtype,
             amp_enabled=self.op_resolver.dtype_engine.amp_enabled,
             hardware=self.op_resolver.dtype_engine.hardware,
+            attention_budget=self.op_resolver.attention_budget,
         )
         seq.compile()
         seq.bind_weights(weights)

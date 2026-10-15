@@ -219,6 +219,15 @@ memory:
   # real hardware.
   sdpa_math_max_scores_bytes: 0
   sdpa_math_min_chunk_rows: 128
+  # THE COMPILED ENGINE'S ATTENTION. PyTorch's MPS scaled_dot_product_attention is "just the math implementation,
+  # but fused into a single MPSGraph or Metal shader" — "not an implementation of the Flash Attention algorithm"; no
+  # memory-efficient kernel on MPS (pytorch/pytorch#179294, maintainer, 2026-04). It writes the full [B, H, Tq, Tk]
+  # scores: Allegro native at 720x1280 (79 200 tokens) added ~13 GB in the transformer's first second on an M4 Pro
+  # (the Mac, 2026-10-15). Prism prices those scores and the compiled engine runs such an attention in query chunks
+  # (core/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
+  # a multiple of this file's sdpa_math_min_chunk_rows.
+  compiled_sdpa_full_scores: true
+  compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
 
   # Allocator pool: fraction of device memory the free-list may keep parked.
   # Apple Silicon is UNIFIED memory — the "device" budget is system RAM

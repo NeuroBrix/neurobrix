@@ -63,6 +63,12 @@ OVER = [
 ]
 IDS = [c[0] for c in OVER]
 
+# The engine whose graph a case's window is constructed on. Flex.1-alpha's compiled transformer sits OVER the capacity
+# since the Mac's compiled attention writes its scores and Prism prices them (2026-10-15: 16 740.2 -> 18 466.8 MB, one
+# chunk of 22 heads x 4 608 x 4 608 fp32 scores within a tenth of the 18 186 MB device); its Triton graph, which writes
+# none, still sits in the window (16 944.5 MB). Both are streamed on the card (the law cells, both engines).
+WINDOW_MODE = {"Flex.1-alpha": "triton"}
+
 
 def _pin_machine(monkeypatch, host_free_mb: int, rung_mb: int) -> None:
     pin_host(monkeypatch, 24576, host_free_mb, "the Mac's reading this case was measured at")
@@ -106,10 +112,17 @@ def _plan(model, height, width, spec=APPLE, refusal_ok=False, mode="compiled"):
 def test_the_largest_component_sits_between_the_rung_and_the_capacity(monkeypatch, model, h, w,
                                                                      host_free, rung):
     _pin_machine(monkeypatch, host_free, rung)
-    _, s, seen = _plan(model, h, w, refusal_ok=True)
+    mode = WINDOW_MODE.get(model, "compiled")
+    _, s, seen = _plan(model, h, w, refusal_ok=True, mode=mode)
     dev = s._prepare_devices(profile(APPLE))[0]
     largest = max(m.total_bytes for m in seen.values()) / MB
     assert dev.budget_mb == rung, f"the door did not impose the rung: {dev.budget_mb}"
+    if mode != "compiled":
+        _, s_c, seen_c = _plan(model, h, w, refusal_ok=True, mode="compiled")
+        over = max(m.total_bytes for m in seen_c.values()) / MB
+        assert over > dev.capacity_mb, (
+            f"{model}: its compiled graph's largest component {over:.1f} MB is no longer over the capacity "
+            f"{dev.capacity_mb:.1f} — the attention scores the device writes are not priced; WINDOW_MODE is stale")
     # Over what a WHOLE component may occupy at the rung (`_usable_mb`, the one authority for
     # "does it fit whole") and under the capacity. The bound was the rung itself until 2026-10-04:
     # granite-speech's language model read 16 4xx MB while the transposes of its weights were

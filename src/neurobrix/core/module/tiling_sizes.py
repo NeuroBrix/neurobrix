@@ -149,6 +149,23 @@ def sdpa_chunk_rows(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
     return 0
 
 
+def sdpa_chunk_plan(bound: int, batch: int, nheads: int, Tq: int, Tk: int,
+                    min_chunk_rows: int) -> Tuple[int, int]:
+    """(slices per chunk, query rows per chunk) that keep each chunk's fp32 scores within `bound`: the rows as many as
+    fit with one (batch, head) slice, a multiple of the arch's row block (`memory.sdpa_math_min_chunk_rows`) or the
+    whole query; then as many slices as fit beside them. Every slice and every query row is its own softmax, so any
+    such cut is exact. (batch x nheads, Tq) when the whole scores fit; (0, 0) when one slice of one row block exceeds
+    `bound`."""
+    slices = batch * nheads
+    if sdpa_scores_bytes(batch, nheads, Tq, Tk) <= bound:
+        return slices, Tq
+    per_row = Tk * _SCORES_BYTES
+    rows = min(Tq, (bound // per_row) // min_chunk_rows * min_chunk_rows) if min_chunk_rows else 0
+    if rows <= 0:
+        return 0, 0
+    return max(1, min(slices, bound // (rows * per_row))), rows
+
+
 def sdpa_device_scores_budget(base_bytes: int, device_fraction: float, device_memory_mb) -> int:
     """The scores budget on one device: min(the arch's byte budget, `device_fraction` of THIS
     device's memory) — the 2026-08-31 xlong-prefill OOM proved a per-arch byte budget alone is

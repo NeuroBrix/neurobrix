@@ -204,6 +204,10 @@ class ComponentAllocation:
     # planned_drain_cliff_bytes`): the profile's cliff, or less where the plan holds a component
     # whole with less room beside it. None — a compiled plan, a host device — drains at the profile's.
     deferred_drain_cliff_bytes: Optional[int] = None
+    # Compiled engine only, on a device whose compiled attention writes its full scores (the vendor's
+    # `memory.compiled_sdpa_full_scores`): the bytes of scores one chunk of an attention may write
+    # (`PrismSolver._attention_budget`), the figure Prism priced each attention at. None: the device writes none.
+    attention_scores_budget_bytes: Optional[int] = None
     # expert_store only (a routed zero3 component, `_zero3_resident_budgets`): the MB of device
     # slots holding recently routed experts beside the resident dense part (`resident_weight_mb`).
     expert_cache_mb: float = 0.0
@@ -505,6 +509,7 @@ class ExecutionPlan:
                     "shard_map": alloc.shard_map,
                     "resident_weight_mb": alloc.resident_weight_mb,
                     "deferred_drain_cliff_bytes": alloc.deferred_drain_cliff_bytes,
+                    "attention_scores_budget_bytes": alloc.attention_scores_budget_bytes,
                     "strategy": alloc.strategy,
                     "expert_cache_mb": alloc.expert_cache_mb,
                 }
@@ -560,6 +565,8 @@ class ExecutionPlan:
                 resident_weight_mb=float(comp.get("resident_weight_mb", 0.0)),
                 # a plan saved before the field drained at the profile's cliff: None is that meaning
                 deferred_drain_cliff_bytes=comp.get("deferred_drain_cliff_bytes"),
+                # a plan saved before the field states no budget: the engine refuses it on a device that writes scores
+                attention_scores_budget_bytes=comp.get("attention_scores_budget_bytes"),
                 # a plan saved before these fields carried no component strategy: the dataclass default
                 strategy=comp.get("strategy", "single_gpu"),
                 expert_cache_mb=float(comp.get("expert_cache_mb", 0.0)),
@@ -1173,6 +1180,39 @@ class PrismSolver:
         dense_mb = float(math.ceil(weight_mb - routed_mb))
         floor_mb = max(l.top_k * l.expert_bytes for l in topo.layers) / mib * mult
         return dense_mb, floor_mb, routed_mb
+
+    def _attention_budget(self, profile):
+        """(vendor memory, the bytes of scores one chunk of an attention may write) on this profile, or None where the
+        compiled attention writes none (core/prism/attention_scratch.py, the vendor's `memory.compiled_sdpa_full_scores`).
+        ONE figure for the whole plan: the smallest device's — every attention is priced at it and every component
+        placed on such a device carries it (`_assign_attention_budgets`), so the engine cuts what Prism priced. The
+        Triton engine runs its own attention kernels: None."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
+            return None
+        from neurobrix.core.prism.attention_scratch import vendor_memory, scores_budget, writes_full_scores
+        dev = min(profile.devices, key=lambda d: d.memory_mb)
+        memory = vendor_memory(dev)
+        if not writes_full_scores(memory):
+            return None
+        return memory, scores_budget(memory, dev.memory_mb)
+
+    def _attention_scratch(self, profile):
+        """(batch, heads, Tq, Tk) -> the scores the compiled attention writes at the plan's budget, or None."""
+        found = self._attention_budget(profile)
+        if found is None:
+            return None
+        from neurobrix.core.prism.attention_scratch import scratch_bytes
+        memory, budget = found
+        return lambda b, h, tq, tk: scratch_bytes(memory, budget, b, h, tq, tk)
+
+    def _assign_attention_budgets(self, plan, profile) -> None:
+        """The budget every attention was priced at, stated on each component the plan computes on an accelerator
+        (`ComponentAllocation.attention_scores_budget_bytes`); None on a host and where the device writes no scores."""
+        found = self._attention_budget(profile)
+        for alloc in plan.components.values():
+            on_host = str(alloc.device).startswith("cpu") and alloc.strategy != "zero3"
+            alloc.attention_scores_budget_bytes = None if (found is None or on_host) else found[1]
 
     def _peak_loaded_bytes(self, container, plan, devices=None) -> int:
         """What a plan that loads on demand holds on its device at one moment (`_phase_peak` over
@@ -2429,6 +2469,7 @@ class PrismSolver:
             plan.component_tiling = dict(plan.component_tiling or {})
             plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
         self._assign_drain_cliffs(container, plan, devices)
+        self._assign_attention_budgets(plan, profile)
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
         # intermediate tensor would OOM the assigned GPU. Decision happens
@@ -3389,6 +3430,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile),
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -3442,6 +3484,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -3464,6 +3507,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
+                        attention_scratch=self._attention_scratch(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -8090,6 +8134,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
             entry["expert_store"] = {"resident_weight_mb": float(alloc.resident_weight_mb),
                                      "expert_cache_mb": float(alloc.expert_cache_mb),
                                      "expert_files": bool(getattr(alloc, "expert_files", False))}
+        if getattr(alloc, "attention_scores_budget_bytes", None) is not None:
+            entry["attention_scores_budget_bytes"] = int(alloc.attention_scores_budget_bytes)
         if mem is not None:
             entry.update({"weight_bytes": int(mem.weight_bytes), "activation_bytes": int(mem.activation_bytes),
                           "overhead_bytes": int(mem.overhead_bytes), "peak_op_uid": mem.peak_op_uid or None,

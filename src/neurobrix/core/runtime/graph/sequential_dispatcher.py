@@ -11,6 +11,8 @@ def placement_device(value) -> "torch.device":
         return torch.device("cuda", torch.cuda.current_device())
     return torch.device(kind)
 import torch.nn.functional as F
+
+from neurobrix.core.runtime.graph.device_attention import scaled_dot_product_attention as _device_sdpa
 import logging
 from typing import List, Any, Dict, Optional, Callable
 
@@ -53,7 +55,9 @@ class NativeATenDispatcher:
     # No local DTYPE_MAP — uses neurobrix.core.dtype.config.parse_dtype()
 
     def __init__(self, device: Optional[str] = None, compute_dtype: Optional[torch.dtype] = None,
-                 dtype_engine=None):
+                 dtype_engine=None, attention_budget=None):
+        # Prism's attention scores budget for this component (core/prism/attention_scratch.py); None: none stated.
+        self._attention_budget = attention_budget
         # The executor's DtypeEngine: attention operands that disagree are aligned by ITS
         # decision (`align_attention_operands`), the compiled engine's own.
         self._dtype_engine = dtype_engine
@@ -284,8 +288,9 @@ class NativeATenDispatcher:
                 is_causal = bool(inputs[4]) if len(inputs) > 4 else False
                 scale = attributes.get("kwargs", {}).get("scale", None)
 
-                output = F.scaled_dot_product_attention(
-                    q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale
+                output = _device_sdpa(
+                    q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale,
+                    hardware=(self._dtype_engine.hardware if self._dtype_engine is not None else None), budget=self._attention_budget,
                 )
 
                 # Create dummy logsumexp [batch, heads, seq_len]
@@ -329,8 +334,8 @@ class NativeATenDispatcher:
                 if attn_mask is not None and isinstance(attn_mask, torch.Tensor) and attn_mask.dtype != q.dtype:
                     attn_mask = attn_mask.to(q.dtype)
 
-                output = F.scaled_dot_product_attention(
-                    q, k, v,
+                output = _device_sdpa(
+                    q, k, v, hardware=(self._dtype_engine.hardware if self._dtype_engine is not None else None), budget=self._attention_budget,
                     attn_mask=attn_mask,
                     dropout_p=dropout_p if isinstance(dropout_p, float) else 0.0,
                     is_causal=is_causal if isinstance(is_causal, bool) else False,

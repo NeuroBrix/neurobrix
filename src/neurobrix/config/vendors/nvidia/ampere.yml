@@ -118,6 +118,10 @@ memory:
   # math prefill; the chunk-halving retry on a refused allocation
   # never goes below it.
   sdpa_math_min_chunk_rows: 128
+  # THE COMPILED ENGINE'S ATTENTION: PyTorch dispatches scaled_dot_product_attention on this device to its flash or
+  # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
+  # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
+  compiled_sdpa_full_scores: false
   # Allocator pool: bytes the free-list may keep PARKED per device as a
   # fraction of that device's memory (2026-09-02, pool default-on gate).
   # Beyond it the largest parked blocks go back to the driver, bounding
