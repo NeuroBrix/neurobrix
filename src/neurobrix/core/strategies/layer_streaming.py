@@ -367,6 +367,13 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # each load (`GraphExecutor._component_from`): a computable buffer is computed from it.
         seg_exec._component_from = base
         seg_exec._flow_reads_weights = False
+        # A piece computes under its COMPONENT's plan figures, which the factory gives the base only: the attention
+        # scores budget its device's compiled attention is cut at (`ComponentAllocation.attention_scores_budget_bytes`)
+        # and the drain cliff its Triton hot loop drains at (`deferred_drain_cliff_bytes`). Unset, a streamed
+        # transformer's pieces reached their attention with no budget and were refused on the Mac (Allegro 720x1280,
+        # 2026-10-15 16:02), and drained at the profile's cliff instead of the plan's.
+        seg_exec._attention_scores_budget_bytes = getattr(base, "_attention_scores_budget_bytes", None)
+        seg_exec._deferred_drain_cliff_bytes = getattr(base, "_deferred_drain_cliff_bytes", None)
         # A piece loads what its own ops consume, and BORROWS any key it consumes that its
         # lender holds: the base's non-block weights, resident for the flow's by-name reads
         # (`_ensure_flow_reads`) — one copy; before, every piece reloaded every non-block weight
