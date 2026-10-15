@@ -232,6 +232,11 @@ memory:
   # 1.8 GB -> 21.3 GB of IOAccelerator buffers within one second, flat at the allocator's cap). The engine waits for the
   # device every this many chunks, and Prism prices that many chunks' scores within the budget.
   compiled_sdpa_chunks_in_flight: 2              # provenance: one chunk computing while the next is enqueued
+  # How far the compiled engine's MPS pool may grow, a fraction of the device's recommended working set
+  # (core/runtime/torch_allocator.py). torch's default 1.7 let the pool keep the freed buffers of a cut attention and
+  # grow past the working set into swap (Allegro 720x1280: 23.7 GB footprint on a 17.8 GB working set, the Mac,
+  # 2026-10-15 08:30); bounded, the allocator releases its cached blocks before it grows.
+  compiled_allocator_memory_fraction: 1.0           # provenance: the device's own working set, the figure Prism plans in
 
   # Allocator pool: fraction of device memory the free-list may keep parked.
   # Apple Silicon is UNIFIED memory — the "device" budget is system RAM
