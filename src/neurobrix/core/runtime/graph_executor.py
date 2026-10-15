@@ -195,6 +195,52 @@ def _save_inputs_if_asked(component: str, inputs: Dict[str, Any], mode: str) -> 
         except Exception as exc:                                       # noqa: BLE001
             print(f"[save-inputs] {component} ({mode}) {name}: NOT saved ({type(exc).__name__}: {exc})", flush=True)
 
+def _reset_cuda_peak(device) -> None:
+    """Restart CUDA's peak counter once a compiled component is loaded: its release then states the component's own
+    worst op (a whole-component plan prints no segment line)."""
+    dev = str(device or "")
+    if not dev.startswith("cuda"):
+        return
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device())
+
+
+def _left_after_release(device, mode) -> str:
+    """'; the device still holds A MB' after a compiled release, read after the device drained: what crosses into the
+    next component (the Mac, 2026-10-15 04:57: 5.3 GiB live at the transformer's load after the text encoder's release,
+    ~4 GB more than one segment). The Triton branch reads its own allocator."""
+    dev = str(device or "")
+    from neurobrix.core.device_utils import device_sync
+    if dev:
+        device_sync(dev)
+    if str(mode or "").startswith("triton"):
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+        idx = int(dev.split(":")[1]) if ":" in dev else 0
+        return f"; the device still holds {DA._cuda_live_bytes.get(idx, 0) / 2**20:.0f} MB live"
+    import torch
+    if dev.startswith("cuda") and torch.cuda.is_available():
+        idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
+        return f"; the device still holds {torch.cuda.memory_allocated(idx) / 2**20:.0f} MB allocated"
+    if dev.startswith("mps") and hasattr(torch, "mps"):
+        return (f"; the device still holds {torch.mps.current_allocated_memory() / 2**20:.0f} MB allocated "
+                f"(driver {torch.mps.driver_allocated_memory() / 2**20:.0f} MB)")
+    return ""
+
+
+def _cuda_peak_since_load(device, mode) -> str:
+    """', peak allocated since its load N MB' on the compiled branch on CUDA; '' elsewhere (MPS keeps no peak; the
+    Triton branch never imports torch)."""
+    dev = str(device or "")
+    if str(mode or "").startswith("triton") or not dev.startswith("cuda"):
+        return ""
+    import torch
+    if not torch.cuda.is_available():
+        return ""
+    idx = int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device()
+    return f", peak allocated since its load {torch.cuda.max_memory_allocated(idx) / 2**20:.0f} MB"
+
+
 def _held_line(loaded, device) -> str:
     """What a compiled load holds, said beside its load line: the loaded tensors' bytes (each storage once), how
     many sit on the HOST rather than the device, and the device allocator's own figures (CUDA allocated /
@@ -2285,6 +2331,7 @@ class GraphExecutor:
             print(f"   [Compiled] '{component}': loading {len(_only)} weights "
                   f"the graph or the flow reads", flush=True)
         print(f"   [Compiled] '{component}': holds {_held_line(loaded, self.device)}", flush=True)
+        _reset_cuda_peak(self.device)        # the release line then says this component's own worst op
 
     def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
@@ -6012,7 +6059,9 @@ class GraphExecutor:
         # overruns peaked at a component load, 2026-10-14; nothing said whether the previous one had left).
         if _released:
             print(f"   [{'Triton' if str(self.mode).startswith('triton') else 'Compiled'}] "
-                  f"'{getattr(self, '_component_name', '?')}': released {_released} weights", flush=True)
+                  f"'{getattr(self, '_component_name', '?')}': released {_released} weights"
+                  f"{_cuda_peak_since_load(getattr(self, 'device', ''), self.mode)}{_left_after_release(getattr(self, 'device', ''), self.mode)}",
+                  flush=True)
         # Step 3: the last run's context goes with them. It holds the weight dict the run was
         # built on (`ExecutionContext.weights`), which `_reconcile_weight_keys` had replaced on
         # the executor by the time the step above cleared it — so every weight of the load

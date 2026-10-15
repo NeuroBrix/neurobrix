@@ -69,3 +69,15 @@ def test_a_streamed_segment_says_what_the_device_holds_after_it_computed(monkeyp
     assert _segment_memory_line(NS(device="cuda:2", mode="triton")) == "device live 3072 MB, pool cached 1024 MB"
     assert synced == ["cuda:2"], "the device is synchronised before its figures are read"
     assert _segment_memory_line(NS(device="cpu", mode="compiled")).startswith("no device allocator figures")
+
+
+def test_a_release_says_what_the_device_still_holds(monkeypatch, capsys):
+    """After the release, the device's own figure, read after it drained: what crosses into the next component."""
+    import neurobrix.core.device_utils as du
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+    monkeypatch.setattr(du, "device_sync", lambda d=None: None)
+    monkeypatch.setattr(DA, "_cuda_live_bytes", {0: 4 << 30})
+    ex = _executor("triton", {"a": 1}, monkeypatch)
+    ex.device = "cuda:0"
+    ex.unload_weights()
+    assert "'transformer': released 1 weights; the device still holds 4096 MB live" in capsys.readouterr().out
