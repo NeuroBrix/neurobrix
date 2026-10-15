@@ -816,13 +816,17 @@ class PrismSolver:
         out[lm] = m
         return out
 
-    def _kv_devices(self, strat_allocs: Dict) -> Optional[set]:
-        """The cards the decode cache lives on: the decoder's own (the cache sits beside the layers that read it), or
-        None when no decoder is named."""
+    def _kv_devices(self, strat_allocs: Dict, profile=None) -> Optional[set]:
+        """The memory pools the decode cache lives in: the decoder's own cards (the cache sits beside the layers that
+        read it), and the host with them when a card is unified — one pool, so a component placed on the host holds the
+        same memory (the Mac: MiniCPM-o's towers on the host, 2026-10-15). None when no decoder is named."""
         lm = self._lm_component_name
         if lm is None or lm not in strat_allocs:
             return None
-        return self._alloc_devices(strat_allocs[lm]) or None
+        devs = self._alloc_devices(strat_allocs[lm])
+        if any(_device_is_unified(d, profile) for d in devs if not d.startswith("cpu")):
+            devs = devs | {"cpu"}
+        return devs or None
 
     def _resident_bytes_for_kv_check(self, strat_name: str, strat_allocs: Dict,
                                      component_memory: Dict, profile,
@@ -870,7 +874,7 @@ class PrismSolver:
                 continue
             alloc = strat_allocs.get(name)
             dev = alloc[0] if isinstance(alloc, tuple) else alloc
-            if only_devices is not None and not (self._alloc_devices(alloc) & only_devices):
+            if only_devices is not None and alloc is not None and not (self._alloc_devices(alloc) & only_devices):
                 continue
             part = partitions.get(name)
             if part is not None:
@@ -1922,6 +1926,17 @@ class PrismSolver:
         # refused by name there. The family's category no longer decides it: Prism priced a cache for every
         # `has_kv_cache` family, flows that allocate none included (docs/design/state-engine.md §1).
         self._needs_kv_cache = self._kv_declared(container) is not None
+        # The cache is sized for the request the package declares (runtime/defaults.json: max_tokens, its margin); a
+        # decoding package without that file has no request to size it for. Planned anyway, its estimate fell to the
+        # decoder's whole window (Qwen3-Coder-30B-A3B on the Mac, its package without runtime/defaults.json: 24 GB of
+        # KV reserve, 2026-10-12): refused, naming the file.
+        if self._needs_kv_cache:
+            _defaults = (container.cache_path / "runtime" / "defaults.json" if container.cache_path else None)
+            if _defaults is None or not _defaults.exists():
+                raise PlanNotComputable(
+                    f"the container '{manifest.get('model_name', '?')}' (family {family!r}) runs a KV-cached decoder, "
+                    f"and its request facts cannot be read — {_defaults if _defaults else 'no cache path'} is absent: "
+                    f"the cache cannot be sized, so the plan cannot be computed. The package is incomplete.")
 
         # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
         # and the genuine all-fp32 fallback below).
@@ -2281,7 +2296,7 @@ class PrismSolver:
                     # the decoder's card was over-committed (the open defect of main, closed with the state
                     # engine's price, docs/design/state-engine.md §4.2). Its resident figure below counts
                     # the same cards only.
-                    _kv_cards = self._kv_devices(strat_allocs)
+                    _kv_cards = self._kv_devices(strat_allocs, profile)
                     _cards = [d for d in strat_devices
                               if _kv_cards is None or d.device_string in _kv_cards] or list(strat_devices)
                     total_capacity = sum(int(self._effective_capacity_mb(d) * 1024 * 1024)
@@ -2324,36 +2339,36 @@ class PrismSolver:
                                               for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
                     # the decoder's KV estimate comes out of ITS figures before any MAX (`_kv_stripped`)
-                    component_memory = self._kv_stripped(component_memory, kv_already_counted)
+                    _mem = self._kv_stripped(component_memory, kv_already_counted)   # a local copy: the loop's figures stay whole
                     persistent, transient = self._classify_lifecycle(container)
                     # Persistent: all weights resident + peak activation
                     persistent_weights = sum(
-                        m.weight_bytes for name, m in component_memory.items()
+                        m.weight_bytes for name, m in _mem.items()
                         if name in persistent
                     )
                     persistent_max_act = max(
-                        (m.activation_bytes for name, m in component_memory.items() if name in persistent),
+                        (m.activation_bytes for name, m in _mem.items() if name in persistent),
                         default=0
                     )
                     # Transient: max one at a time (weight + activation)
                     max_transient = max(
-                        (m.total_bytes for name, m in component_memory.items() if name in transient),
+                        (m.total_bytes for name, m in _mem.items() if name in transient),
                         default=0
                     )
                     total_allocated = persistent_weights + persistent_max_act + max_transient
                 elif strat_name == "single_gpu":
                     # Hot/cold budget must match _try_single_gpu's decision; the decoder's KV estimate comes
                     # out of ITS figures before any MAX (`_kv_stripped`)
-                    component_memory = self._kv_stripped(component_memory, kv_already_counted)
+                    _mem = self._kv_stripped(component_memory, kv_already_counted)   # a local copy: the loop's figures stay whole
                     serve_mode = getattr(self, '_serve_mode', False)
                     if serve_mode:
                         # Hot: all weights resident + peak activations
-                        total_weights = sum(m.weight_bytes for m in component_memory.values())
-                        max_act = max((m.activation_bytes for m in component_memory.values()), default=0)
+                        total_weights = sum(m.weight_bytes for m in _mem.values())
+                        max_act = max((m.activation_bytes for m in _mem.values()), default=0)
                         total_allocated = total_weights + max_act
                     else:
                         # Cold: peak of one component at a time
-                        total_allocated = max(m.total_bytes for m in component_memory.values())
+                        total_allocated = max(m.total_bytes for m in _mem.values())
                 else:
                     # Allocation-aware GPU residency: a component mapped to
                     # zero3:* keeps its weights on CPU pinned memory — only
@@ -2365,7 +2380,7 @@ class PrismSolver:
                     # cpu_execution on a GPU node).
                     total_allocated = self._resident_bytes_for_kv_check(
                         strat_name, strat_allocs, component_memory, profile, kv_already_counted,
-                        container=container, only_devices=self._kv_devices(strat_allocs))
+                        container=container, only_devices=self._kv_devices(strat_allocs, profile))
 
 
                 if strat_name == "zero3":

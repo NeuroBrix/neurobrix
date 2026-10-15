@@ -29,6 +29,9 @@ VIBEVOICE_TOPO = {
     "extracted_values": {"model.language_model": {"num_layers": 28, "num_heads": 12,
                                                   "hidden_size": 1536}},
 }
+# the state the build declares for each decoder (core/state/price.py): what Prism prices the cache from
+VIBEVOICE_KV = {"kind": "kv", "layers": 28, "kv_heads": 12, "k_dim": 128, "v_dim": 128, "dtype": "bfloat16"}
+JANUS_KV = {"kind": "kv", "layers": 30, "kv_heads": 32, "k_dim": 128, "v_dim": 128, "dtype": "bfloat16", "window": 16384}
 JANUS_TOPO = {"components": {"language_model": {}, "gen_head": {}},
               "flow": {"type": "autoregressive_generation",
                        "generation": {"type": "autoregressive_image",
@@ -75,21 +78,21 @@ class _Container:
 
 def test_prism_prices_the_next_token_diffusion_cache_for_both_contexts(tmp_path):
     from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.core.state.price import kv_token_bytes
     solver = PrismSolver.__new__(PrismSolver)
-    c = _Container(tmp_path, VIBEVOICE_TOPO, {"cfg_scale": 1.3, "max_tokens": 2048})
-    lmc = solver._read_lm_config(c)
-    assert lmc and lmc["component_name"] == "model.language_model" and lmc["num_layers"] == 28
-    one = PrismSolver._kv_per_token_bytes(lmc, "float16")
+    c = _Container(tmp_path, {**VIBEVOICE_TOPO, "state": {"model.language_model": [VIBEVOICE_KV]}},
+                   {"cfg_scale": 1.3, "max_tokens": 2048})
+    one = kv_token_bytes(VIBEVOICE_KV, "float16", 1)
     assert one == 28 * 12 * (128 + 128) * 2
-    assert solver._kv_token_bytes(c, lmc, "float16") == 2 * one
+    assert solver._kv_token_bytes(c, "float16") == 2 * one
 
 
 def test_prism_prices_the_image_generation_cache_at_the_guidance_batch(tmp_path):
     from neurobrix.core.prism.solver import PrismSolver
+    from neurobrix.core.state.price import kv_token_bytes
     solver = PrismSolver.__new__(PrismSolver)
-    lmc = {"num_layers": 30, "num_heads": 32, "hidden_size": 4096}
-    c = _Container(tmp_path, JANUS_TOPO, {"guidance_scale": 5.0, "lm_config": lmc})
-    assert solver._kv_token_bytes(c, lmc, "float16") == 2 * PrismSolver._kv_per_token_bytes(lmc, "float16")
+    c = _Container(tmp_path, {**JANUS_TOPO, "state": {"language_model": [JANUS_KV]}}, {"guidance_scale": 5.0})
+    assert solver._kv_token_bytes(c, "float16") == 2 * kv_token_bytes(JANUS_KV, "float16", 1)
 
 
 def test_both_sessions_read_the_one_brick():
@@ -129,14 +132,14 @@ def test_a_decoder_without_its_facts_is_refused_by_name():
 
 
 def test_serving_a_decoder_without_a_declared_window_is_refused_by_that_name(tmp_path):
-    """Serve plans the full context window; VibeVoice's decoder declares none (its extracted
-    values carry no max_position_embeddings). The plan said 'no strategy can fit model + KV cache'
-    — a budget — where the cause is the missing window."""
+    """Serve plans the full context window; VibeVoice's decoder declares none (its declared KV state carries no
+    window). The plan said 'no strategy can fit model + KV cache' — a budget — where the cause is the missing window."""
     import pytest
     from neurobrix.core.prism.solver import PrismSolver
     solver = PrismSolver.__new__(PrismSolver)
     solver._serve_mode = True
     solver._serve_requested = True
-    c = _Container(tmp_path, VIBEVOICE_TOPO, {"cfg_scale": 1.3, "max_tokens": 2048})
-    with pytest.raises(RuntimeError, match="declares none for 'model.language_model'"):
+    c = _Container(tmp_path, {**VIBEVOICE_TOPO, "state": {"model.language_model": [VIBEVOICE_KV]}},
+                   {"cfg_scale": 1.3, "max_tokens": 2048})
+    with pytest.raises(RuntimeError, match="whole window, and its KV state declares none"):
         solver._compute_kv_cache_plan(c, "float16", 16 * 2 ** 30)
