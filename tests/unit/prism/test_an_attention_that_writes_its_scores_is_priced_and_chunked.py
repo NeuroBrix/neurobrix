@@ -157,3 +157,18 @@ def test_the_plan_states_the_budget_its_attention_was_priced_at():
             assert s._attention_scratch(prof)(2, 24, 79200, 79200) <= want
     s._mode = "triton"
     assert s._attention_budget(profile(APPLE_M4_PRO)) is None, "the Triton engine runs its own attention kernels"
+
+
+def test_the_compiled_resolvers_attention_op_reaches_the_cut(monkeypatch):
+    """The compiled engine's own op (`CompiledOpResolver`, the graph's `_scaled_dot_product_efficient_attention`, as
+    Allegro's transformer traces it) cuts at the budget it was given — the path a run takes, not the entry alone."""
+    from neurobrix.core.runtime.graph import device_attention as DA
+    from neurobrix.core.runtime.graph.compiled_ops import CompiledOpResolver
+    seen = []
+    monkeypatch.setattr(DA, "attention_in_chunks", lambda *a, **k: seen.append((a[7], k.get("heads"))) or a[0])
+    q = torch.empty(2, 24, 4096, 64, device="meta", dtype=torch.float16)
+    r = CompiledOpResolver(torch.device("meta"), torch.float16, hardware=("apple", "apple_m4_pro"),
+                           attention_budget=2 * 24 * 4096 * 4096 * 4 // 8)
+    fn = r.get_op_func("_scaled_dot_product_efficient_attention", {"args": []})
+    fn(q, q, q, None, False)
+    assert seen, "the resolver's attention ran whole on a device that writes its scores, over the plan's budget"

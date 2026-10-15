@@ -21,6 +21,7 @@ import torch
 import torch.nn.functional as F
 
 _MEMORY = {}          # (vendor, architecture) -> the vendor file's memory section
+_SAID = set()         # the (shape, budget) cuts already said: one line per distinct cut, never one per call
 
 
 def _memory(hardware):
@@ -64,9 +65,29 @@ def scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p: float = 0.0
                          f"its chunks are cut on [B, H, T, D] or [B, T, D]")
     b, h, tq, tk = int(q.shape[0]), int(q.shape[1]), int(q.shape[-2]), int(k.shape[-2])
     plan = chunk_plan(memory, budget, b, h, tq, tk)
+    _say(b, h, tq, tk, budget, plan)
     if plan is None:
         return _plain(q, k, v, attn_mask, dropout_p, is_causal, scale)
     return attention_in_chunks(q, k, v, attn_mask, dropout_p, is_causal, scale, plan[1], heads=plan[0])
+
+
+def _say(b, h, tq, tk, budget, plan):
+    """One line per distinct cut: what the attention writes and at what budget — the evidence that it ran cut."""
+    key = (b, h, tq, tk, budget)
+    if key in _SAID:
+        return
+    _SAID.add(key)
+    from neurobrix.core.module.tiling_sizes import sdpa_scores_bytes
+    whole = sdpa_scores_bytes(b, h, tq, tk) / 2**20
+    if plan is None:
+        print(f"[attention] {b} x {h} heads, {tq} x {tk}: whole, scores {whole:.0f} MB within the plan's budget "
+              f"{budget / 2**20:.0f} MB", flush=True)
+        return
+    group, rows = plan
+    n = -(-(b * h) // group) * -(-tq // rows)
+    print(f"[attention] {b} x {h} heads, {tq} x {tk}: {n} chunks of {group} head(s) x {rows} rows, scores "
+          f"{sdpa_scores_bytes(1, group, rows, tk) / 2**20:.0f} MB a chunk (whole {whole:.0f} MB) within the plan's "
+          f"budget {budget / 2**20:.0f} MB", flush=True)
 
 
 def _heads(t, bi, h0, h1, b, h):
