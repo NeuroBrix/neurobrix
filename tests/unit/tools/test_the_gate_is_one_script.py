@@ -124,7 +124,7 @@ def test_the_tally_names_the_unjudged_pairs_without_counting_them_red(tmp_path, 
     rc = gate_tally.main(["--gate", str(gate), "--base", str(tmp_path / "base"), "--tree", str(tmp_path / "tree"), "--classes", "32g"])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert "2 green / 0 red" in out and "judged 1 / not judged 1" in out and "NOT JUDGED A:triton" in out
+    assert "2 ran clean (rc 0, zero miss) / 0 red" in out and "judged 1 / not judged 1" in out and "NOT JUDGED A:triton" in out
 
 
 def test_a_base_gate_without_its_timeouts_is_refused_before_any_scope(tmp_path):

@@ -145,8 +145,8 @@ def tally(a) -> int:
                     missing.append(f"{m}:{x} (in the computed scope but NOT in the gate list)")
         n_replayed = sum(1 for (m, x) in rows if m in want and x in want[m])
         n_want = sum(len(v) for v in want.values())
-        print(f"{cls}: wanted {n_want} cells; replayed {n_replayed}: {green} green / {len(red)} red; "
-              f"carried from base {carried_g + len(carried_r)}: {carried_g} green / {len(carried_r)} red; "
+        print(f"{cls}: wanted {n_want} cells; replayed {n_replayed}: {green} ran clean (rc 0, zero miss) / {len(red)} red; "
+              f"carried from base {carried_g + len(carried_r)}: {carried_g} ran clean / {len(carried_r)} red; "
               f"missing {len(missing)}; never measured {len(never)}"
               + (f"; scope cells {len(scope)}" if scope is not None else "; scope not given")
               + (f"; overlay rows {overlaid}" if a.overlay else "")
