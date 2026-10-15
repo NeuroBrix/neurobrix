@@ -2,8 +2,8 @@
 
 Ordered by the supervisor on 2026-10-15 17:25, validated by the owner: one sub-engine that owns all the memory a model
 KEEPS between two steps. The transient activations of a step stay with Prism and the TilingEngine. Written on main
-333bc9a7c. Dell: the engine map, CUDA and the proposal. Mac: the Metal, MLX and unified-memory section (§3), folded in as
-written.
+333bc9a7c. Dell: the engine map, CUDA and the proposal. Mac: the Metal, MLX and unified-memory section (§3),
+condensed from the Mac's text and accepted by the Mac (2026-10-15).
 
 State, in this document, is:
 - **(a)** the KV cache of autoregressive decoders (LLM, VLM, autoregressive TTS, DualAR);
@@ -205,7 +205,8 @@ The expert store's grant (`solver.py:989-1112`) charges the planned KV to the de
 
 ## 3. Metal, MLX and unified memory (the Mac's section)
 
-Written 2026-10-15 by the Mac on main 333bc9a7c. The sources are the files themselves, fetched and read.
+Written 2026-10-15 by the Mac on main 333bc9a7c, condensed here (the Mac's text, accepted by the Mac). The sources are
+the files themselves, fetched and read.
 
 ### 3.1 Where state lives on Metal today
 
