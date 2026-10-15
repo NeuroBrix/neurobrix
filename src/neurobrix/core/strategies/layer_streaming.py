@@ -48,6 +48,17 @@ def _piece_input(values: Dict[str, Any], name: str) -> Any:
 
 
 
+def _reset_segment_peak(seg_exec) -> None:
+    """The compiled branch on CUDA counts its peak from the segment's start, so the line says THIS segment's worst
+    op: an allocator keeps what that op needed, and the figures at the end cannot tell it from a fragmented cache."""
+    dev = str(getattr(seg_exec, "device", "") or "")
+    if str(getattr(seg_exec, "mode", "")).startswith("triton") or not dev.startswith("cuda"):
+        return
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(int(dev.split(":")[1]) if ":" in dev else torch.cuda.current_device())
+
+
 def _segment_memory_line(seg_exec) -> str:
     """The device memory a streamed segment leaves when it has computed, before its release — said per segment so a
     per-second trace can tell live tensors from an allocator's cache (the Mac, 2026-10-15 01:58: Allegro's first
@@ -55,6 +66,11 @@ def _segment_memory_line(seg_exec) -> str:
     compiled branch reads torch's allocator (CUDA allocated / reserved, MPS allocated / driver); the Triton branch
     its own (DeviceAllocator live and pool-cached bytes) — no torch on that branch (R33)."""
     dev = str(getattr(seg_exec, "device", "") or "")
+    # read after the device's queue drained: the line follows the run's last LAUNCH (the Mac, 2026-10-15 04:21:
+    # MPS printed it the second the segment's weights arrived)
+    from neurobrix.core.device_utils import device_sync
+    if dev:
+        device_sync(dev)
     if str(getattr(seg_exec, "mode", "")).startswith("triton"):
         from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
         idx = int(dev.split(":")[1]) if ":" in dev else 0
@@ -468,6 +484,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
             # This piece's weights, and only this piece's: the executor asks its own dag
             # what it consumes.
             seg_exec.load_weights(nbx_path, component_name)
+            _reset_segment_peak(seg_exec)
             try:
                 out = seg_exec.run(feed, *args, **kwargs) or {}
                 capture.update(seg_exec.tensors_of_last_run(kept & produced))
