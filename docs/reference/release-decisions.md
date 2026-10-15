@@ -223,3 +223,17 @@ is rewritten on disk, not repeated in the conversation; anything not visible in 
 3. No GPU on a known defect: every container whose state dtype differs from its components' header dtypes is found by
    reading the manifests and headers (zero execution), corrected by Forge (metadata rewrite, no retrace when the graph is
    right), then its dated proof is replayed at the CLI. The Mac's reading of 2026-10-13 flagged 20 of 49 containers.
+
+## 2026-10-15 17:15 — CALL TO ORDER AND THE STABLE HEADING (the owner, via the supervisor)
+
+1. A green run is green only with its quality judged from outside (the artefact read: image or video looked at, audio
+   transcribed, text read against the request), written in the same result line and in the report.
+2. A known cause is applied at once to every model that carries it; open defects are resolved before the tag, not listed.
+3. When the graph and the kernels are right and the result is wrong, the cause is in the glue around the graph (request,
+   noise draw, metadata dtype, CFG ids, streaming seam, unreleased tensors): anchor on the vendor at equal seed and request,
+   compare op by op to the first deviation, name the faulty brick (flow, CFG, Prism, Tiling, KV, Forge metadata) and fix it
+   once for every family.
+4. A model is proven once per distinct Prism plan; the 16 GB pass exists only where the plan changes.
+5. The ExpertStore is finished and wired into the stable (cache and prefetch, CPU experts at decode).
+6. Unified memory foresees clusters of linked Macs (nodes, links, a budget per node) in Prism's abstraction, without a special case.
+7. The KV cache is a design proposal to the supervisor before any code.
