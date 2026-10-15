@@ -2,7 +2,8 @@
 """docs/reference/benchmarks.md from the measurements already recorded — the gates' rows, no GPU (supervisor 2026-10-15 18:00).
 
 Every rc 0 row of the given rows files (`regression_matrix.py run` rows: wall_s, load_s, exec_s, ttft_s, tok_s, tokens,
-date, engine, request) is one measurement of (model, mode, machine, card class). The card class is the matrix
+date, engine, request) is one measurement of (model, mode, machine, card class). An outside verdict (--judgments, docs/reference/artefact-judgments.jsonl) is printed beside each latest time, or
+"not judged". Run again for a machine, its section is replaced in place and the other machines' sections are kept. The card class is the matrix
 directory's (`matrix_16g`, `matrix_32g`, ...) or, for a directory that names none, the card's (`--card-class 0=16g,...`,
 the machine's own table). Duplicates — a row carried by record into later gates — count once (same model, mode, class,
 engine and wall time; it takes the carrying gate's date, so its earliest date is kept). Per (model, mode, class): the latest measurement with its request and engine commit, and the evolution
@@ -38,6 +39,8 @@ def main(argv=None) -> int:
     ap.add_argument("--card-class", required=True)
     ap.add_argument("--plans", default=None)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--judgments", default=None,
+                    help="docs/reference/artefact-judgments.jsonl: the outside verdict printed beside each latest time")
     ap.add_argument("--append", action="store_true",
                     help="append this machine's section to an existing file (the second machine's data), header kept")
     ap.add_argument("rows", nargs="+")
@@ -46,6 +49,15 @@ def main(argv=None) -> int:
     identical = set()
     if a.plans:
         identical = {l.split()[0] for l in (Path(a.plans) / "plan_identical.txt").read_text().splitlines() if l.strip()}
+    verdicts, by_run = {}, {}
+    if a.judgments:
+        for line in Path(a.judgments).read_text().splitlines():
+            if not line.strip():
+                continue
+            j = json.loads(line)
+            if j.get("sha256"):
+                verdicts[j["sha256"]] = j["verdict"]
+            by_run[(j["model"], j["mode"], str(j.get("engine", ""))[:8], str(j.get("run_date", ""))[:16])] = j["verdict"]
     meas = {}
     for f in a.rows:
         f = Path(f)
@@ -77,8 +89,8 @@ def main(argv=None) -> int:
            ""]
     out = [f"## {a.machine}",
            "",
-           "| model | mode | card | plan | latest (date, engine) | wall s | load s | exec s | tok/s | runs at this request | first wall s | fastest s | request |",
-           "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+           "| model | mode | card | plan | judged (outside) | latest (date, engine) | wall s | load s | exec s | tok/s | runs at this request | first wall s | fastest s | request |",
+           "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for (m, mode, cls) in sorted(by):
         rs = sorted(by[(m, mode, cls)], key=lambda r: r.get("date", ""))
         last = rs[-1]
@@ -91,16 +103,26 @@ def main(argv=None) -> int:
         tok = f"{last['tok_s']:.2f}" if isinstance(last.get("tok_s"), (int, float)) else ""
         fmt = lambda v: f"{v:.1f}" if isinstance(v, (int, float)) else ""
         plan = "one plan, two cards" if m in identical else "per card"
-        out.append(f"| {m} | {mode} | {cls} | {plan} | {last.get('date','')[:10]}, {str(last.get('engine',''))[:9]} | "
+        verdict = verdicts.get(last.get("sha256")) or by_run.get(
+            (m, mode, str(last.get("engine", ""))[:8], str(last.get("date", ""))[:16])) or "not judged"
+        out.append(f"| {m} | {mode} | {cls} | {plan} | {verdict} | {last.get('date','')[:10]}, {str(last.get('engine',''))[:9]} | "
                    f"{fmt(last.get('wall_s'))} | {fmt(last.get('load_s'))} | {fmt(last.get('exec_s'))} | {tok} | {len(rs)} | "
                    f"{fmt(first.get('wall_s'))} | {fmt(fastest)} | `{req}` |")
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    if a.append:
-        if not Path(a.out).is_file():
-            print(f"REFUSED: --append and {a.out} does not exist", file=sys.stderr)
-            return 2
-        with open(a.out, "a") as f:
-            f.write("\n" + "\n".join(out) + "\n")
+    section = "\n".join(out) + "\n"
+    if Path(a.out).is_file():
+        # one section per machine: this machine's is replaced in place, every other machine's kept as it is
+        text = Path(a.out).read_text()
+        start = text.find(out[0] + "\n")
+        if start >= 0:
+            nxt = text.find("\n## ", start + len(out[0]))
+            text = text[:start] + section + (text[nxt + 1:] if nxt >= 0 else "")
+        else:
+            text = text.rstrip("\n") + "\n\n" + section
+        Path(a.out).write_text(text)
+    elif a.append:
+        print(f"REFUSED: --append and {a.out} does not exist", file=sys.stderr)
+        return 2
     else:
         Path(a.out).write_text("\n".join(head + out) + "\n")
     print(f"{a.out}: {len(by)} (model, mode, card) lines from {len(meas)} measurements in {len(a.rows)} files")
