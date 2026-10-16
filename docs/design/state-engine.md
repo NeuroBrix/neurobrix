@@ -324,6 +324,32 @@ computes its own.
 - A page is released as a queue event. On an asynchronous device (the vendor states `memory.async_release: true`; MPS does,
   per §3.1) a page returns to the pool only after a fence past its last use.
 
+### 4.3.1 Step 2 on CUDA — how the pages replace both containers (Dell, 2026-10-16; for the Mac to check)
+
+Shared (core/state/pages.py, the Mac's): PagePool per node, PageTable per sequence, slots(), block_table(), the release
+queue. Kernels (kernels/ops/paged_decode_attn.py, written once): `paged_kv_append` through the slot mapping, and
+`paged_decode_attention` through the block table, tile among `PAGED_DECODE_TILE_CANDIDATES`.
+
+Triton engine (`triton/kv_cache.py`):
+- `TritonKVCache` holds, per layer, a K pool and a V pool `[num_pages, kv_heads, page_tokens, D]` from the node's state
+  budget (Prism's plan), one `PagePool` for the node, one `PageTable` per sequence (a CFG negative branch is its own
+  table; its shared prompt pages by copy-on-write come with step 3).
+- A step reserves its new positions ONCE for all layers (`table.reserve`), uploads the slot mapping into a fixed device
+  buffer, and every layer appends through it (`paged_kv_append`). The block table and the sequence lengths live in fixed
+  device buffers too, rewritten in place: the replay plans record constant launch tuples (the B3 contract of the
+  contiguous cache: addresses survive steps and requests, only contents change).
+- Decode (Tq = 1) reads through the table (`paged_decode_attention`); the bucket-padded views and the additive pad mask
+  of the contiguous cache are not needed (each row reads its own length). Prefill attends over its own full K / V as
+  today and appends them to the pages.
+- `clear()` releases the sequence's pages to the pool (CUDA: at once; async devices: under the fence).
+
+Compiled engine (`core/runtime/graph/kv_cache_wrapper.py`): the same pools as torch tensors; decode gathers the
+sequence's pages through the block table into the K / V the attention reads (`index_select` over pages), the append is
+an index_copy through the slot mapping. One gather per layer per step; the paged read kernel stays the Triton branch's.
+
+Proofs: decode tokens equal to the contiguous cache's and to the oracle (5-10 tokens) on TinyLlama, whisper-large-v3-turbo
+and one GQA decoder, both engines; the cache's memory equals pages granted x page bytes (never max_len); the gate.
+
 ### 4.4 Policies, chosen by score and always stated
 
 When the full-precision, whole-context state does not fit the node, the engine offers policies, scored like Prism's
