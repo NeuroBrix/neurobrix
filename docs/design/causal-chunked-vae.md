@@ -94,6 +94,8 @@ What this gives, as one rule over the graph:
    Wan and CogVideoX) the graph's own `(t - 1) // s + 1` arithmetic.
 4. Prism prices one chunk plus the caches; it walks chunk lengths down from the whole clip, every one exact by 2.
 
-Consequence measured in the graphs: our CogVideoX untiled whole-clip decode normalises over all frames, the vendor
-over each 2-frame batch — the whole pass is NOT the vendor's function; the declared chunking restores it. The proof
-(chunked = vendor float32 to dtype noise, both branches) covers it.
+Consequence for CogVideoX: our untiled whole-clip decode normalises over all frames. It is bit-exact against the
+vendor's own single-chunk path (`num_latent_frames_batch_size = num_frames`), and 8.2e-2 max / 2.7e-3 mean off the
+vendor's DEFAULT 2-frame batches (Forge's record, `forge/tracer/video_vae_patches.py:156-173`). Decision 21:30 names the
+vendor's temporal batches as CogVideoX's declared reference, so the declared chunking reproduces the vendor's default
+pipeline; the proof (chunked = vendor float32 at its default, to dtype noise, both branches) covers it.
