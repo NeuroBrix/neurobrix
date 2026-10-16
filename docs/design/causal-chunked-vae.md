@@ -55,5 +55,9 @@ untiled single pass equals it to 1.1e-6, which is why the trace is right).
 ## Questions
 
 - The registry key names for the chunk schedule and the tiled-reference geometry (Forge side).
-- Whether other causal video VAEs in the catalogue (HunyuanVideo, Mochi, LTX, CogVideoX) take the same mechanism — to
-  be read from their vendor code before the Forge rule is written, so the rule is one, not Wan's.
+- Read 2026-10-16 in the vendor code (diffusers 0.37, `models/autoencoders/`), so the rule is one, not Wan's:
+  `autoencoder_kl_wan.py`, `autoencoder_kl_cogvideox.py` and `autoencoder_kl_mochi.py` run temporal chunks carrying a
+  conv cache (`feat_cache` / `conv_cache`: 78, 92 and 70 sites) — the same mechanism, three catalogue families;
+  `autoencoder_kl_hunyuan_video.py` and `autoencoder_kl_ltx.py` batch frames without a cache (framewise
+  encoding/decoding: to be read for exactness before they take it); `autoencoder_kl_allegro.py` has neither, and its
+  encode is tiled by construction. Every one defaults to untiled (`self.use_tiling = False`).
