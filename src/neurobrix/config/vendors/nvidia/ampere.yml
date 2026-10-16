@@ -122,6 +122,15 @@ memory:
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
   # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
   compiled_sdpa_full_scores: false
+  # The state engine's pages (docs/design/state-engine.md §4.3, core/state/price.page_tokens): a page of one layer is
+  # raised to at least this many bytes. Each layer's pool is one contiguous allocation, so the granule that matters is
+  # the global-memory transaction a page row is read in: 128-byte lines (NVIDIA CUDA C++ Best Practices Guide,
+  # "Coalesced Access to Global Memory": a warp's accesses are served by 32-byte segments of 128-byte cache lines).
+  state_page_granule_bytes: 128
+  # A released page returns to the pool at once: kernels on one stream run in issue order, so a page granted again is
+  # written only after the reads already issued against it (CUDA Programming Guide, "Streams": operations in a stream
+  # execute in order). core/state/pages.PagePool(async_release=...).
+  async_release: false
   # Allocator pool: bytes the free-list may keep PARKED per device as a
   # fraction of that device's memory (2026-09-02, pool default-on gate).
   # Beyond it the largest parked blocks go back to the driver, bounding

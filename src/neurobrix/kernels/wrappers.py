@@ -8169,14 +8169,16 @@ def paged_kv_append(new, pool, slot_mapping):
     return pool
 
 
-def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, block_n):
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, block_n,
+                           q_round=None):
     """Decode attention (one query position) read through the page table — the vector split-KV kernel of
     ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
 
     q [B, H, 1, D] contiguous · k_pool / v_pool [num_pages, H_kv, page_tokens, D] · block_table [B, max_pages] int32
     (-1 past each sequence) · seq_lens [B] int32 · max_seq_len: the longest of seq_lens (sizes the splits; read by the
     caller from its page tables, never from the device) · block_n: the position tile, one of
-    PAGED_DECODE_TILE_CANDIDATES dividing page_tokens. Output [B, H, 1, D_v] in q's dtype."""
+    PAGED_DECODE_TILE_CANDIDATES dividing page_tokens · q_round: the dtype Q is read in (the cache's), rounded on load
+    as `_decode_attn_vec` does; the output is written in it. Output [B, H, 1, D_v] in q_round, else q's dtype."""
     from .ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
                                         PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS)
     from .ops.flash_decode import flash_decode_reduce_kernel
@@ -8208,7 +8210,11 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
     opart = NBXTensor.empty((bhq, split, d_v), dtype=NBXDtype.float32, device=dev)
     mpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
     lpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
-    out = NBXTensor.empty((bhq, 1, d_v), dtype=q.nbx_dtype, device=dev)
+    out_dtype = q_round if q_round is not None else q.nbx_dtype
+    q_to = _TL_DTYPE[q_round] if q_round is not None else None
+    q_saturate = (q_round == NBXDtype.float16
+                  and q.nbx_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
+    out = NBXTensor.empty((bhq, 1, d_v), dtype=out_dtype, device=dev)
     _set_device(q)
     paged_decode_attn_split_kernel[(bhq, split)](
         q2, k_pool, v_pool, block_table, seq_lens,
@@ -8221,6 +8227,7 @@ def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_sca
         opart.stride(0), opart.stride(1),
         mpart.stride(0),
         GQA_GROUPS=groups, BLOCK_N=block_n, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v,
+        Q_TO=q_to, Q_SATURATE=q_saturate,
         num_warps=4, num_stages=1)
     flash_decode_reduce_kernel[(bhq,)](
         opart, mpart, lpart, out,

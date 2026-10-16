@@ -20,6 +20,8 @@ Pure @triton.jit, no tl.dot (sm_70: the vector kernel's measured structure), one
 import triton
 import triton.language as tl
 
+from neurobrix.kernels.ops.decode_attn_vec import _round_q
+
 
 # The position tiles the paged read is compiled for: powers of two, each dividing the largest, so a page sized from the
 # largest holds a whole number of tiles of every candidate. 32 is the vector decode kernel's judged tile (its locked
@@ -84,6 +86,8 @@ def paged_decode_attn_split_kernel(
     BLOCK_D: tl.constexpr,
     D: tl.constexpr,
     D_V: tl.constexpr,
+    Q_TO: tl.constexpr = None,        # a dtype: Q is rounded to it on load (the cache's), as the contiguous read does
+    Q_SATURATE: tl.constexpr = False,
 ):
     pid_q = tl.program_id(0).to(tl.int64)        # b * H_q + h_q
     pid_s = tl.program_id(1).to(tl.int64)        # split index
@@ -93,7 +97,7 @@ def paged_decode_attn_split_kernel(
     offs_d = tl.arange(0, BLOCK_D)
     mask_d = offs_d < D
     mask_dv = offs_d < D_V
-    q = tl.load(q_ptr + pid_q * stride_qh + offs_d, mask=mask_d, other=0.0).to(tl.float32)
+    q = _round_q(tl.load(q_ptr + pid_q * stride_qh + offs_d, mask=mask_d, other=0.0), Q_TO, Q_SATURATE)
 
     T_b = tl.load(seq_lens_ptr + b).to(tl.int32)
     seg_start = (pid_s * seg_len).to(tl.int32)   # 32-bit loop bounds (the Metal lowering refuses a 64-bit scf.for bound)
@@ -131,3 +135,45 @@ def paged_decode_attn_split_kernel(
     tl.store(opart_ptr + pid_q * stride_oh + pid_s * stride_os + offs_d, acc, mask=mask_dv)
     tl.store(mpart_ptr + pid_q * stride_mh + pid_s, m_i)
     tl.store(lpart_ptr + pid_q * stride_mh + pid_s, l_i)
+
+
+@triton.jit
+def paged_kv_append_step_kernel(
+    k_new_ptr, v_new_ptr,   # [B, H_kv, D] / [B, H_kv, D_v] the step's one new position per sequence
+    k_pool_ptr, v_pool_ptr, # [num_pages, H_kv, page_tokens, D(_v)]
+    block_table_ptr,        # [B, max_pages] int32
+    lens_ptr,               # [B] int32: the layer's positions held — the step writes at lens[b]
+    page_tokens,
+    stride_kb, stride_kh, stride_vb, stride_vh,
+    stride_kp, stride_kph, stride_ks,
+    stride_vp, stride_vph, stride_vs,
+    stride_bt,
+    BLOCK_D: tl.constexpr,
+    D_K: tl.constexpr,
+    D_V: tl.constexpr,
+):
+    """A decode step's append with no host input: the position is read from the layer's DEVICE length and its page from
+    the block table, so the launch's arguments are the same at every step (a recorded replay replays it unchanged). One
+    program per (sequence, KV head); `paged_lens_advance_kernel`, launched after it on the same stream, moves the
+    length."""
+    pid_b = tl.program_id(0).to(tl.int64)
+    pid_h = tl.program_id(1).to(tl.int64)
+    pos = tl.load(lens_ptr + pid_b).to(tl.int64)
+    page = tl.load(block_table_ptr + pid_b * stride_bt + pos // page_tokens).to(tl.int64)
+    slot = pos % page_tokens
+    offs = tl.arange(0, BLOCK_D)
+    mk = offs < D_K
+    mv = offs < D_V
+    k = tl.load(k_new_ptr + pid_b * stride_kb + pid_h * stride_kh + offs, mask=mk, other=0.0)
+    v = tl.load(v_new_ptr + pid_b * stride_vb + pid_h * stride_vh + offs, mask=mv, other=0.0)
+    tl.store(k_pool_ptr + page * stride_kp + pid_h * stride_kph + slot * stride_ks + offs,
+             k.to(k_pool_ptr.dtype.element_ty), mask=mk)
+    tl.store(v_pool_ptr + page * stride_vp + pid_h * stride_vph + slot * stride_vs + offs,
+             v.to(v_pool_ptr.dtype.element_ty), mask=mv)
+
+
+@triton.jit
+def paged_lens_advance_kernel(lens_ptr, n):
+    """lens[b] += n for every sequence: one program per sequence, after the step's append (stream order)."""
+    b = tl.program_id(0)
+    tl.store(lens_ptr + b, tl.load(lens_ptr + b) + n)

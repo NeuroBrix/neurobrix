@@ -1310,16 +1310,12 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         if n_r[sig] % 50 == 1:
             _mem_diag(f"replay #{n_r[sig]}")
         if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1" and owners:
-            import ctypes as _c
             for o in owners:
-                lay = next(iter(o.cache._layers.values()), None)
-                if lay is None or lay.pos_counter is None:
+                got = o.cache.replay_position_diag()
+                if got is None:
                     continue
-                b = (_c.c_int32 * 1)()
-                DeviceAllocator.memcpy(_c.addressof(b),
-                                       lay.pos_counter.data_ptr(), 4, 2)
-                print(f"[Replay][GRAPH] post-replay dev_pos={b[0]} "
-                      f"host_len={lay.current_len}", flush=True)
+                print(f"[Replay][GRAPH] post-replay dev_pos={got[0]} "
+                      f"host_len={got[1]}", flush=True)
         return True
     if isinstance(state, tuple) and state[0] == "VERIFY":
         # verify-first-replay (universal guard, battery adjudication

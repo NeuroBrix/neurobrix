@@ -346,6 +346,57 @@ class TritonKVCache:
         for layer in self._layers.values():
             layer.clear()
 
+    # -- what the interceptor asks the cache (one protocol, every cache implements it) -------------------------------
+    def get_cache_len(self) -> int:
+        """Positions held (the first layer's — every layer holds the same)."""
+        for layer in self._layers.values():
+            return layer.current_len
+        return 0
+
+    def skip_positions(self, n: int) -> None:
+        """A census shadow skips `n` positions at once: every layer's length moves as if `n` were written."""
+        for layer in self._layers.values():
+            layer.current_len += int(n)
+
+    def replay_key(self, bucket: int):
+        """The decode step's replay-bucket contribution, or None while a recorded replay could not reproduce it: every
+        layer on the constant-tuple append (batch 1, device counter and mask live)."""
+        if not self._layers:
+            return None
+        for layer in self._layers.values():
+            if (layer.batch_size != 1 or layer.mask_buffer is None
+                    or layer.pos_counter is None or not layer._synced):
+                return None
+        length = self.get_cache_len()
+        buffer_len = next(iter(self._layers.values()))._buffer_len
+        # The bucket THIS step will compute in: the append advances current_len before the padded views are taken.
+        padded = min(((length + 1 + bucket - 1) // bucket) * bucket, buffer_len)
+        # Buffer identity in the bucket key: a layer replacement (longer request on a warm cache) changes the
+        # generation, so no plan recorded against the old buffers can ever match again.
+        return ("kv_decode", bucket, padded, self._uid, self.generation)
+
+    def replay_advance(self) -> None:
+        """The replayed launches appended one position per layer and advanced every device counter: mirror it on the
+        host authority."""
+        for layer in self._layers.values():
+            layer.current_len += 1
+
+    def replay_restore(self) -> None:
+        """Rewind the device counters to the host authority before the verify pass's normal re-run."""
+        for layer in self._layers.values():
+            if layer.pos_counter is not None:
+                layer._write_pos(layer.current_len)
+
+    def replay_position_diag(self):
+        """(device write position, host length) of the first layer, or None — the NBX_REPLAY_GRAPH_DUMP readback."""
+        import ctypes as _c
+        lay = next(iter(self._layers.values()), None)
+        if lay is None or lay.pos_counter is None:
+            return None
+        b = (_c.c_int32 * 1)()
+        DeviceAllocator.memcpy(_c.addressof(b), lay.pos_counter.data_ptr(), 4, 2)
+        return int(b[0]), lay.current_len
+
 
 class KVBranch:
     """One decode context's state on an attention interceptor: its cache and
@@ -633,10 +684,8 @@ class TritonAttentionInterceptor:
         return _create_arange(*args, **kwargs)
 
     def get_cache_len(self) -> int:
-        """Return current cache length from first layer."""
-        for layer in self.cache._layers.values():
-            return layer.current_len
-        return 0
+        """The cache's current length (the cache answers; every cache implements the protocol)."""
+        return self.cache.get_cache_len()
 
     # ------------------------------------------------------------------
     # Replay registration contract (P-REPLAY-KV-DECODE) — the refined
@@ -673,46 +722,26 @@ class TritonAttentionInterceptor:
             return None
         if os.environ.get("NBX_REPLAY_KV_DECODE") != "1":
             return None
-        bucket = int(os.environ.get("NBX_KV_BUCKET", "256"))
-        if not self.cache._layers:
-            return None
-        for layer in self.cache._layers.values():
-            if (layer.batch_size != 1 or layer.mask_buffer is None
-                    or layer.pos_counter is None or not layer._synced):
-                return None
-        length = self.get_cache_len()
-        buffer_len = next(iter(self.cache._layers.values()))._buffer_len
-        # The bucket THIS step will compute in: the append advances
-        # current_len before the padded views are taken.
-        padded = min(((length + 1 + bucket - 1) // bucket) * bucket,
-                     buffer_len)
-        # Buffer identity in the bucket key: a layer replacement (longer
-        # request on a warm cache) changes the generation, so no plan
-        # recorded against the old buffers can ever match again.
-        return ("kv_decode", bucket, padded, self.cache._uid, self.cache.generation)
+        return self.cache.replay_key(int(os.environ.get("NBX_KV_BUCKET", "256")))
 
     def skip_positions(self, n: int) -> None:
         """A census shadow skips `n` positions of the decode at once (kernels/census.py::pace):
         every layer's counter moves as if `n` tokens had been written. Never on a live run —
         the caller asks the shadow first; here the counters simply move."""
-        for layer in self.cache._layers.values():
-            layer.current_len += int(n)
+        self.cache.skip_positions(n)
 
     def replay_advance(self):
         """The replayed launches appended one position per layer and
         advanced every device counter; mirror on the host authority
         (position_ids and the bucket signature read current_len)."""
-        for layer in self.cache._layers.values():
-            layer.current_len += 1
+        self.cache.replay_advance()
 
     def replay_restore(self):
         """Rewind the device counters to the host authority so the
         verify pass's normal re-run appends at the same position the
         replayed pass wrote (identical inputs -> idempotent k/v/mask
         writes; only the counter increment needs undoing)."""
-        for layer in self.cache._layers.values():
-            if layer.pos_counter is not None:
-                layer._write_pos(layer.current_len)
+        self.cache.replay_restore()
 
 
 # Phase 1 opt-in cleanup: mark the interceptor's underlying function
