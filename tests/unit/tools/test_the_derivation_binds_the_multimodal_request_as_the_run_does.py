@@ -12,7 +12,14 @@ one sentence.", 32 tokens).
 
 Injections, each seen RED: `_vlm_sites` returning [] for a non-splice contract (the gate as it
 was) -> both site tests fail; `vlm_runs` without the projection -> the runs test fails;
-`baddbmm_launches` keyed with HAS_BIAS False -> the baddbmm test fails."""
+`baddbmm_launches` keyed with HAS_BIAS False -> the baddbmm test fails.
+
+The site tests bind a committed hardware profile the way the census's own entry does
+(`derive_keys`: `load_profile`, `census._bind_target`, `wrappers.set_hardware_profile`): the census
+path asks the profile whether the Triton branch stores float64 and refuses, rightly, under none
+("ZERO FALLBACK: no hardware profile with a device"). Before 2026-10-16 these two tests bound none
+and failed on that refusal whenever no earlier test in the process had left a profile bound. The
+values asserted are profile-independent (token and patch counts); the binding is restored after."""
 import ast
 import inspect
 import sys
@@ -25,6 +32,31 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tools"))
 
 import derived_census as D  # noqa: E402
+
+
+#: A committed profile, bound as the census entry binds `--hardware` (any profile with a device serves:
+#: the asserted counts do not depend on it).
+HARDWARE = "v100-32g"
+
+
+@pytest.fixture
+def census_hardware(monkeypatch):
+    """Bind HARDWARE as `derived_census.derive_keys` does; every global it sets is restored after."""
+    from neurobrix.core.prism.loader import load_profile
+    from neurobrix.kernels import census as _census
+    from neurobrix.kernels import launcher as _launcher
+    from neurobrix.kernels import nbx_tensor as T
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.ops import _configs
+    for mod, name in ((W, "_NBX_HW_PROFILE"), (W, "_NBX_HAS_NATIVE_BF16"), (T, "_BACKEND_HAS_FP64"),
+                      (_launcher, "_TARGET")):
+        monkeypatch.setattr(mod, name, getattr(mod, name))
+    monkeypatch.setattr(_configs, "_ACTIVE_PROFILE", dict(_configs._ACTIVE_PROFILE))
+    prof = load_profile(HARDWARE)
+    _census._bind_target(HARDWARE, None)
+    W.set_hardware_profile(prof)
+    assert W.get_hardware_profile() is prof
+    yield prof
 
 
 def _request_sites(model):
@@ -48,7 +80,8 @@ def _request_sites(model):
     ("Ming-Lite-Omni-1.5", "masked", [1024, 1176], 256, 275, "model.model", "image_embeds"),
     ("MiniCPM-o-4_5", "staged", None, 64, 82, "llm.model", "vision_hidden_states"),
 ])
-def test_the_vlm_request_is_bound_by_its_contract(model, contract, vis_rows, n_modal, L0, lm, embeds):
+def test_the_vlm_request_is_bound_by_its_contract(census_hardware, model, contract, vis_rows, n_modal, L0, lm,
+                                                 embeds):
     topo, sites = _request_sites(model)
     assert D.vlm_contract(model, topo) == contract
     by_name = {s[0]: s for s in sites}

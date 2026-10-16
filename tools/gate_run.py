@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -53,7 +54,7 @@ def say(run_md: Path, msg: str) -> None:
 def git(tree: Path, *args: str) -> str:
     r = subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
-        raise Refused(f"git {' '.join(args)} in {tree}: {(r.stderr or r.stdout).strip()[-200:]}")
+        raise Refused(f"git {shlex.join(args)} in {tree}: {(r.stderr or r.stdout).strip()[-200:]}")
     return r.stdout.strip()
 
 
@@ -172,7 +173,7 @@ def run(a) -> int:
     plan = steps(a)
     if a.plan:
         for name, cmd, *_ in plan:
-            print(name, ":", " ".join(cmd) if isinstance(cmd, list) else f"plan-identical models: {len(cmd)}")
+            print(name, ":", shlex.join(map(str, cmd)) if isinstance(cmd, list) else f"plan-identical models: {len(cmd)}")
         return 0
     C.mkdir(parents=True, exist_ok=True)
     for d in ("gate2", "gate2_any", "sched", "sched_any", "scope"):

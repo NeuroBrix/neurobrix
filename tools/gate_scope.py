@@ -41,6 +41,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -75,7 +76,7 @@ def load_cfg(path: Path = CFG_PATH) -> dict:
 def git(repo: Path, *args) -> str:
     r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if r.returncode != 0:
-        raise SystemExit(f"REFUSED: git {' '.join(args)} failed: {r.stderr.strip()[:200]}")
+        raise SystemExit(f"REFUSED: git {shlex.join(map(str, args))} failed: {r.stderr.strip()[:200]}")
     return r.stdout
 
 
