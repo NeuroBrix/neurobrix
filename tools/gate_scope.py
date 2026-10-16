@@ -1638,7 +1638,8 @@ def explain_plan(tree: Tree, hw: str, argv: list, cfg: dict) -> dict:
     """The tree's `--explain-plan --json` for one cell's argv on one class's profile (no card; cached)."""
     argv = [a for i, a in enumerate(argv) if a != "--output" and (i == 0 or argv[i - 1] != "--output")]
     cmd = ["-m", cfg["package"], *argv, "--hardware", hw, "--explain-plan", "--json"]
-    key = hashlib.sha256(json.dumps([tree.sha, cmd]).encode()).hexdigest()[:24]
+    # the cached view holds only the compared fields: a change to that list is a different view, never a reuse
+    key = hashlib.sha256(json.dumps([tree.sha, cmd, cfg["planner"]["plan_fields"]]).encode()).hexdigest()[:24]
     cf = SCRATCH / "plans" / f"{key}.json"
     if cf.is_file():
         return json.loads(cf.read_text())

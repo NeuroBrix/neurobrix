@@ -392,7 +392,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-128 entries, 121 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 123 carry a site. Two
+129 entries, 122 in the rack's block (1-499) and 7 in the Mac's (500-999) — numbers are allocated per machine since 2026-09-22, when the same number was appended twice in one day for two different defects — of which five are placeholders and 124 carry a site. Two
 machines, two weeks of concentrated looking. Almost every one produced silence
 or a green rather than an error — and two do the opposite, which is why they are
 here rather than elsewhere: **65** (a door that held a COPY of its authority's
@@ -3791,3 +3791,31 @@ rests on its output, judged from outside.
 
 **The lesson, in one line.** A count of a diagnostic's lines measures the diagnostic's switch
 before it measures the event; prove the count non-zero once on a case that must print.
+
+### 122 — the gate's plan differential compared a list of plan fields that left out the KV cache
+
+**Gate**: `tools/gate_scope.py` `plan_differential`, fed by `tools/gate_scope.yml` `planner.plan_fields`. A
+planner change is judged by the plan each cell receives (old tree against new tree), but only on the
+listed fields. `kv_cache`, `deferred_drain_cliffs`, `layer_stream_chunks`, `expert_working_set` and
+`cpu_ram_mb` were absent from that list, though `core/prism/solver.plan_record` emits all five. The views
+it caches (`/home/mlops/nbx/tmp/gate_scope/plans`) were keyed by tree and command, not by the field
+list, so adding a field would have reused the old views without it.
+
+**What the gate said about the defect**: 0 cells. Found 2026-10-16 on the rack: the state engine's
+step 1 (`a-container-declares-the-state-it-keeps`, landed e83b3d1e2 at 08:44) moves whisper's KV cache
+plan from 576 to 448 positions (the declared window). Its gate (`gate_statep`) scoped "16g 0 cells,
+32g 0 cells" over 20 changed planner units and landed on a clean tally of nothing. It surfaced by
+contradiction: the branch's own proof had measured the 576 -> 448 change.
+
+**Repair.** Branch `the-gate-sees-the-kv-cache-plan`. The five fields are compared, and the list of
+what the record says ABOUT the choice (`why`, `candidates`, `refused`, `unified_rungs_tried`) is named
+in `planner.explanation_fields`. The cached view's key carries the field list.
+`tests/unit/tools/test_the_gate_compares_every_decision_the_plan_carries.py` builds a plan with every
+optional section and refuses any key that is neither compared nor an explanation. It also proves that a
+longer list never reuses a shorter list's view. On the old code it fails naming the five fields, and
+"DID NOT RAISE" for the reused view. The scope over 30189a577..e83b3d1e2 rerun with the fix names
+4 cells (32g: whisper-large and whisper-large-v3-turbo, native and triton). They ran on main and were
+judged afterwards.
+
+**The lesson, in one line.** A differential over a hand-kept list of fields proves only those fields;
+derive the list from the record or refuse what it leaves out.
