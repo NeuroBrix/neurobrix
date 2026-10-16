@@ -100,28 +100,92 @@ def test_a_graph_whose_spatial_extent_is_frozen_cannot_be_read():
     assert uid == "" and "not symbols" in why, why
 
 
-def _decide(tmp_path, mid_op):
+def _decide(tmp_path, mid_op, activation_bytes=80 * GB, vendor_tiling=None):
     comp = tmp_path / "components" / "enc"
     comp.mkdir(parents=True)
     (comp / "graph.json").write_text(json.dumps(_encoder_graph(mid_op)))
-    (comp / "profile.json").write_text(json.dumps({"config": {"block_out_channels": [1, 2, 3, 4]}}))
+    profile = {"config": {"block_out_channels": [1, 2, 3, 4]}}
+    if vendor_tiling is not None:
+        profile["vendor_tiling"] = vendor_tiling
+    (comp / "profile.json").write_text(json.dumps(profile))
     s = PrismSolver()
     s._input_config = InputConfig(batch_size=1, height=480, width=832, num_frames=17,
                                   temporal_compression=4)
     mem = ComponentMemory(component_name="enc", weight_bytes=int(0.2 * GB),
-                          activation_bytes=80 * GB, overhead_bytes=0)
+                          activation_bytes=int(activation_bytes), overhead_bytes=0)
     return s, s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
 
 
-def test_an_encoder_with_a_spatial_attention_is_not_tiled_in_space(tmp_path):
+def test_a_coupled_encoder_past_the_card_is_not_tiled_and_prism_descends(tmp_path):
+    """Hocine, 2026-10-16 18:40 / 18:42: Prism chooses only exact cuts, and refuses only at the bottom of the ladder.
+    A coupled encoder whose untiled activations exceed the card gets no tile — never a cut into another function —
+    and no refusal here: the plan descends the exact strategies (the refusal is `_fail_error`'s alone)."""
     s, spec = _decide(tmp_path, "attention")
+    assert spec is None, f"a coupled encoder was tiled: {spec}"
+    assert s._tiling_exactness["enc"]["exact"] is False
+
+
+def test_a_coupled_encoder_within_the_card_is_not_tiled_and_the_plan_says_why(tmp_path):
+    # over the tile budget (0.40 of the rung), within the rung: the tile is declined, the encoder placed untiled
+    s, spec = _decide(tmp_path, "attention", activation_bytes=int(0.7 * RUNG_MB * 1024 * 1024))
     assert spec is None, f"an encoder whose attention spans the spatial extent was tiled: {spec}"
     why = s._tiling_declined.get("enc", "")
-    assert "attn" in why and "not the untiled encoder" in why, why
+    assert "attn" in why and "not the untiled component" in why, why
+    rec = s._tiling_exactness["enc"]
+    assert rec["exact"] is False and "attn" in (rec["op"] or ""), rec
+
+
+def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path):
+    """The single exception: the vendor's own reference tiles (Allegro's VAE has no untiled encode), declared by the
+    build from the registry with its source."""
+    s, spec = _decide(tmp_path, "attention", vendor_tiling={"source": "autoencoder_kl_allegro.py:804"})
+    assert spec is not None, "a declared vendor-tiled encoder lost its tile"
+    assert s._tiling_exactness["enc"]["exact"] is True and "allegro" in s._tiling_exactness["enc"]["why"]
 
 
 def test_an_encoder_local_in_space_is_still_tiled(tmp_path):
     """The decline is the coupling, nothing else: the same encoder with a per-position channel norm
     keeps its spatial tile (the causal-encoder rule, test_a_causal_encoder_is_tiled_in_space_...)."""
-    _, spec = _decide(tmp_path, "channel_norm")
+    s, spec = _decide(tmp_path, "channel_norm")
     assert spec is not None and spec["downscale"] is True and "t_tile" not in spec, spec
+    assert s._tiling_exactness["enc"] == {"exact": True, "why": "no op couples space"}
+
+
+def _decoder_graph():
+    """A video decoder [1, 16, T, h, w] -> [1, 3, T, 8h, 8w] whose mid block attends over every latent position of a
+    frame, as the Wan decoder does: the decode-side tiling path (the upscale branch)."""
+    h, w = _sym("s2", 14), _sym("s3", 22)
+    hw = _op("mul", h, w, 14 * 22)
+    tensors = {
+        "z": _tensor("z", [1, 16, 3, 14, 22], [B, 16, T, h, w]),
+        "x": _tensor("x", [1, 3, 3, 112, 176], [B, 3, T, _op("mul", h, 8, 112), _op("mul", w, 8, 176)]),
+    }
+    for n in ("q", "k", "v"):
+        tensors[n] = _tensor(n, [3, 1, 14 * 22, 384], [T, 1, hw, 384])
+    ops = {"attn": {"op_type": "aten::_scaled_dot_product_efficient_attention",
+                    "input_tensor_ids": ["q", "k", "v"], "attributes": {"args": []}}}
+    return {"input_tensor_ids": ["z"], "output_tensor_ids": ["x"], "tensors": tensors, "ops": ops,
+            "execution_order": list(ops)}
+
+
+def _decide_decoder(tmp_path, activation_bytes):
+    comp = tmp_path / "components" / "dec"
+    comp.mkdir(parents=True)
+    (comp / "graph.json").write_text(json.dumps(_decoder_graph()))
+    (comp / "profile.json").write_text(json.dumps({"config": {"block_out_channels": [1, 2, 3, 4]}}))
+    s = PrismSolver()
+    s._input_config = InputConfig(batch_size=1, height=480, width=832, num_frames=17, temporal_compression=4,
+                                  vae_scale=8)
+    mem = ComponentMemory(component_name="dec", weight_bytes=int(0.2 * GB), activation_bytes=int(activation_bytes),
+                          overhead_bytes=0)
+    return s, s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "dec", mem, RUNG_MB)
+
+
+def test_a_coupled_decoder_is_never_tiled_either(tmp_path):
+    """The decode side takes the same rule: the Wan VAE decoder's mid-block attention spans the frame, and the plans
+    that tiled the encoder tiled the decoder too."""
+    s, spec = _decide_decoder(tmp_path, int(0.7 * RUNG_MB * 1024 * 1024))
+    assert spec is None, f"a decoder whose attention spans the frame was tiled: {spec}"
+    assert s._tiling_exactness["dec"]["exact"] is False
+    s2, spec2 = _decide_decoder(tmp_path / "b", 80 * GB)       # past the card: still no tile, no refusal here
+    assert spec2 is None and s2._tiling_exactness["dec"]["exact"] is False

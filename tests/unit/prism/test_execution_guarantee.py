@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from neurobrix.core.prism.solver import PrismSolver
+from neurobrix.core.prism.solver import ComponentMemory, PrismSolver
 
 
 class _Mem:
@@ -174,3 +174,27 @@ def test_the_remaining_refusal_names_the_blocking_component(solver):
     assert "90000MB" in message.replace(",", "")
     assert "cpu_streaming" in message, "must show the ladder was exhausted"
     assert "More host RAM" in message, "must say what would fix it"
+
+
+def test_the_one_refusal_names_the_card_and_the_host_memory():
+    """Hocine, 2026-10-16 18:42: NeuroBrix refuses only when even the last resort cannot run the model, and then says
+    so with the memory required and available — the host's too, which the last rung (execution on the CPU) uses."""
+    solver = PrismSolver()
+    comps = [("enormous", ComponentMemory(component_name="enormous", weight_bytes=90000 * 1024 * 1024,
+                                          activation_bytes=0, overhead_bytes=0))]
+    with pytest.raises(RuntimeError) as excinfo:
+        solver._fail_error(comps, [], host_mb=24576)
+    message = str(excinfo.value)
+    assert "This model cannot run on this machine" in message
+    assert "Host RAM available to the last rung: 24576MB" in message
+
+
+def test_the_capacity_refusal_is_raised_from_one_place_only():
+    """One place emits "cannot run on this machine" (`PrismSolver._fail_error`): a second would be a refusal above the
+    bottom of the ladder."""
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+    raised = 'f"This model cannot run on this machine.'      # the message as raised (comments may name it)
+    sites = [(str(p.relative_to(src)), p.read_text(errors="replace").count(raised)) for p in src.rglob("*.py")
+             if raised in p.read_text(errors="replace")]
+    assert sites == [("core/prism/solver.py", 1)], sites
