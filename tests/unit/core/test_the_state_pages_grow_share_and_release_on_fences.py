@@ -76,3 +76,23 @@ def test_a_grant_the_pool_cannot_cover_takes_nothing_and_is_refused_by_name():
     with pytest.raises(StateExhausted, match="ZERO FALLBACK: the state pool has 3 free pages of 8 positions, 4 asked"):
         t.reserve(25)
     assert pool.free_pages == 3 and t.pages == [] and t.length == 0
+
+
+def test_the_kernels_read_flat_slots_and_a_padded_block_table():
+    from neurobrix.core.state.pages import block_table
+    pool = PagePool(num_pages=8, tokens_per_page=4, async_release=False)
+    a, b = PageTable(pool), PageTable(pool)
+    a.reserve(6)                                     # pages 0, 1
+    b.reserve(2)                                     # page 2
+    assert list(a.slots([0, 3, 4, 5])) == [0, 3, 4, 5] and list(b.slots([0, 1])) == [8, 9]
+    rows, width = block_table([a, b])
+    assert width == 2 and list(rows) == [0, 1, 2, -1] and rows.itemsize == 4
+
+
+def test_the_page_size_is_derived_from_the_tile_the_granule_and_the_token_bytes():
+    from neurobrix.core.state.price import StateUndeclared, page_tokens
+    assert page_tokens(token_bytes=131072, position_tile=16, allocation_granule=16384, rung_bytes=18 << 30) == 16
+    assert page_tokens(token_bytes=512, position_tile=16, allocation_granule=16384, rung_bytes=18 << 30) == 32
+    assert page_tokens(token_bytes=512, position_tile=64, allocation_granule=2 << 20, rung_bytes=18 << 30) == 4096
+    with pytest.raises(StateUndeclared, match="exceeds the rung"):
+        page_tokens(token_bytes=1 << 20, position_tile=16, allocation_granule=1, rung_bytes=8 << 20)

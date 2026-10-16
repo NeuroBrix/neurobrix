@@ -13,7 +13,8 @@ reports that fence completed. On a device that does not (CUDA: stream order) it 
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from array import array
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 class StateExhausted(RuntimeError):
@@ -142,6 +143,26 @@ class PageTable:
             self.pool.release(p, fence)
         self.pages, self.length = [], 0
 
+    def slots(self, positions: Iterable[int]) -> array:
+        """The flat slot of each position, page x tokens_per_page + slot (int32): where an append writes."""
+        tpp = self.pool.tokens_per_page
+        out = array("i")
+        for pos in positions:
+            page, s = self.slot(pos)
+            out.append(page * tpp + s)
+        return out
+
     def table(self) -> Dict[str, object]:
         """What a kernel reads: the page ids in position order, the positions held and the page size."""
         return {"pages": list(self.pages), "length": self.length, "tokens_per_page": self.pool.tokens_per_page}
+
+
+def block_table(tables: Sequence[PageTable]) -> Tuple[array, int]:
+    """What the paged attention read takes for a batch: one row per sequence of its page ids in position order, rows
+    padded with -1 to the longest (int32, row-major), and the row width."""
+    width = max((len(t.pages) for t in tables), default=0)
+    out = array("i")
+    for t in tables:
+        out.extend(t.pages)
+        out.extend([-1] * (width - len(t.pages)))
+    return out, width
