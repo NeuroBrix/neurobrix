@@ -115,3 +115,21 @@ def page_tokens(token_bytes_per_layer: int, tile_candidates, granule_bytes: int,
             f"ZERO FALLBACK: one state page ({tokens} positions x {token_bytes_per_layer} B) exceeds the rung's "
             f"{rung_bytes / 1e6:.0f} MB")
     return tokens
+
+
+def paged_cache_params(num_kv_heads: int, k_head_dim: int, v_head_dim: int, dtype: str, vendor_memory,
+                       cache_bytes: int, tile_candidates) -> Tuple[int, bool]:
+    """(positions per page, whether a released page waits for a fence) of a paged KV cache — the one derivation both
+    engines take (step 2): one layer's position bytes from the declared geometry and the compute dtype, the paged read's
+    tile candidates, the card's page granule (vendor file memory.state_page_granule_bytes) and the cache's bytes as the
+    bound; the release rule is the vendor file's memory.async_release. A key the vendor file does not state is refused
+    by name."""
+    memory = vendor_memory or {}
+    missing = [k for k in ("state_page_granule_bytes", "async_release") if k not in memory]
+    if missing:
+        raise StateUndeclared(f"ZERO FALLBACK: the executing card's vendor file states no memory."
+                              f"{', memory.'.join(missing)} — the paged KV cache's page size and release rule are vendor "
+                              f"facts, never assumed")
+    token_bytes = int(num_kv_heads) * (int(k_head_dim) + int(v_head_dim)) * _itemsize.itemsize(dtype)
+    tokens = page_tokens(token_bytes, tile_candidates, int(memory["state_page_granule_bytes"]), int(cache_bytes))
+    return tokens, bool(memory["async_release"])

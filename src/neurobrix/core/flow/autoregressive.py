@@ -887,7 +887,8 @@ class AutoregressiveHandler(FlowHandler):
         else:
             # The KV cache, behind the same gate as the Triton session (R30): a graph without
             # SDPA, or the recompute reference, never asks for one.
-            kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype)
+            kv_wrapper = StateCacheFactory.create(self.ctx, lm_config, device, dtype,
+                                                  hardware=(getattr(executor, 'vendor', None), getattr(executor, 'arch', None)))
             # Register interceptors
             if hasattr(executor, 'register_op_interceptors'):
                 interceptors = kv_wrapper.get_interceptors()

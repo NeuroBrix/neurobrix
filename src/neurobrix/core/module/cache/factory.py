@@ -21,6 +21,22 @@ if TYPE_CHECKING:
     from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper
 
 
+def paged_params(num_kv_heads, k_head_dim, v_head_dim, dtype, hardware, kv_plan):
+    """(page_tokens, async_release) of the compiled paged KV cache on the executing card `hardware` = (vendor,
+    architecture): core/state/price.paged_cache_params with that card's vendor file and the plan's cache bytes. A cache
+    placed on no hardware is refused by name."""
+    if not hardware or not all(hardware):
+        raise RuntimeError("ZERO FALLBACK: the KV cache's executor names no hardware (vendor, architecture) — its page "
+                           "size and release rule are read from that card's vendor file")
+    from neurobrix.core.config.loader import get_vendor_config
+    from neurobrix.core.state.price import paged_cache_params
+    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
+    dtype_name = str(dtype).replace("torch.", "")
+    return paged_cache_params(num_kv_heads, k_head_dim, v_head_dim, dtype_name,
+                              get_vendor_config(*hardware).get("memory"),
+                              int(getattr(kv_plan, "memory_bytes", 0) or 0), PAGED_DECODE_TILE_CANDIDATES)
+
+
 class StateCacheFactory:
     """
     Factory for creating KV cache wrappers from runtime data.
@@ -35,6 +51,7 @@ class StateCacheFactory:
         lm_config: Dict[str, Any],
         device: str,
         dtype: torch.dtype,
+        hardware=None,
     ) -> 'KVCacheAttentionWrapper':
         """
         Create KV cache wrapper using optimal path.
@@ -86,6 +103,8 @@ class StateCacheFactory:
                 initial = initial or max_len
                 max_len = window
                 ceiling_is_window = True
+            page_tokens, async_release = paged_params(kv_plan.num_kv_heads, kv_plan.k_head_dim, kv_plan.v_head_dim,
+                                                      kv_plan.dtype, hardware, kv_plan)
             config = KVCacheConfig(
                 num_layers=kv_plan.num_layers,
                 num_kv_heads=kv_plan.num_kv_heads,
@@ -95,6 +114,8 @@ class StateCacheFactory:
                 dtype=kv_plan.dtype,
                 initial_cache_len=initial,
                 ceiling_is_window=ceiling_is_window,
+                page_tokens=page_tokens,
+                async_release=async_release,
             )
             wrapper = KVCacheAttentionWrapper(config)
             return wrapper

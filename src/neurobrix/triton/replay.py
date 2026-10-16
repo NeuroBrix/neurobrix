@@ -503,7 +503,7 @@ def drop_plans_by_contribution(pred) -> int:
     satisfies `pred(contribution)` — frozen plans and pending VERIFY
     plans (slab retired, captured graph destroyed), plus the measuring /
     unreplayable states behind the same keys. Returns the number of keys
-    dropped. Called by `TritonKVCache` at a buffer replacement with a
+    dropped. Called by `PagedTritonKVCache` at a pool growth with a
     predicate scoped to THAT cache's previous generation."""
     dropped = 0
     for seq in list(_PLAN_SEQS):

@@ -35,14 +35,15 @@ PROBE = textwrap.dedent("""
     census._ACTIVE["census"] = False
     live = {n: census.pace(n) for n in (64, 1024)}
     from neurobrix.triton import kv_cache as kvc
-    # the interceptor asks its cache to skip (the cache protocol, triton/kv_cache.py): every layer's length moves
+    # the interceptor asks its cache to skip (the cache protocol, triton/kv_cache.py): the paged cache's length moves
+    from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+    from neurobrix.kernels.nbx_tensor import NBXDtype
     w = kvc.TritonAttentionInterceptor.__new__(kvc.TritonAttentionInterceptor)
-    layers = {i: type("L", (), {"current_len": 5})() for i in range(2)}
-    cache = kvc.TritonKVCache.__new__(kvc.TritonKVCache)
-    cache._layers = layers
+    cache = PagedTritonKVCache(2, 2, 8, 8, 1024, NBXDtype.float16, page_tokens=16, async_release=False)
+    cache.length = 5
     w.cache = cache
     w.skip_positions(12)
-    print(json.dumps({"paced": paced, "live": live, "kv": [l.current_len for l in layers.values()]}))
+    print(json.dumps({"paced": paced, "live": live, "kv": [cache.get_cache_len(), w.get_cache_len()]}))
 """)
 
 

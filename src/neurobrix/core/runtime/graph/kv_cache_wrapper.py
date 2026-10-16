@@ -1,11 +1,9 @@
 """
-Distributed Lazy KV-Cache for Multi-GPU LLM Inference.
+The compiled engine's KV attention interceptor over the state engine's paged cache (step 2).
 
-ARCHITECTURE: "Enterprise-Grade" KV Cache System
-- LOCALITY RULE: Cache lives where attention computation happens
-- LAZY ALLOCATION: Allocate on-demand based on incoming q tensor's device
-- PRE-ALLOCATED BUFFERS: No torch.cat, use indexed writes for O(1) updates
-- SYMBOLIC SHAPES: Return views for dynamic seq_len support
+The cache is core/runtime/graph/paged_kv_cache.PagedKVCache: per-layer pools of fixed pages on the device that layer's
+attention runs on (LOCALITY: a model split across cards keeps each layer's state on its card), granted as sequences
+grow, the sequence's K / V gathered through the page tables into what the attention reads.
 
 STRATEGY COMPATIBILITY:
 - Single GPU: All cache on cuda:0
@@ -46,315 +44,13 @@ class KVCacheConfig:
     dtype: str                  # Dtype string — converted to torch.dtype at allocation boundaries
     initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max, on-demand growth)
     ceiling_is_window: bool = False  # True when max_cache_len is the MODEL's context window (prompt-aware sizing) — the overflow message names the right authority
+    page_tokens: int = 0             # positions per state page (core/state/price.paged_cache_params); the paged cache
+    async_release: bool = False      # the vendor file's memory.async_release (read with page_tokens, never assumed)
 
     @property
     def head_dim(self) -> int:
         """Backward compat for code that reads .head_dim"""
         return self.k_head_dim
-
-
-class KVCacheLayer:
-    """
-    On-demand growing KV cache buffer for a single transformer layer.
-
-    DESIGN:
-    - Start small, grow when needed — don't waste VRAM on unused capacity
-    - Indexed writes: O(1) update instead of O(n) concat
-    - View-based returns: Support symbolic shapes
-    - Growth policy: double buffer size when 80% full, up to ceiling
-
-    Storage format: K: [batch, num_kv_heads, buffer_len, k_head_dim], V: [..., v_head_dim]
-    """
-
-    __slots__ = ('device', 'dtype', 'k_buffer', 'v_buffer', 'current_len',
-                 '_buffer_len', 'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim',
-                 'batch_size', '_dtype_verified', '_growth_threshold',
-                 '_ceiling_is_window')
-
-    # Growth threshold: grow when buffer is this fraction full
-    _GROWTH_RATIO = 0.80
-
-    def __init__(
-        self,
-        device: torch.device,
-        dtype: torch.dtype,
-        max_len: int,
-        num_kv_heads: int,
-        k_head_dim: int,
-        v_head_dim: int,
-        batch_size: int = 1,
-        initial_len: int = 0,
-        ceiling_is_window: bool = False,
-    ):
-        """
-        Initialize KV cache buffers on the specified device.
-
-        Args:
-            device: Device where this layer's attention runs
-            dtype: Data type for cache tensors
-            max_len: Maximum sequence length ceiling (Prism budget)
-            num_kv_heads: Number of key-value heads
-            k_head_dim: Dimension per K head
-            v_head_dim: Dimension per V head
-            batch_size: Batch size (can be expanded later if needed)
-            initial_len: Initial buffer capacity. 0 = allocate at max_len (legacy).
-        """
-        self.device = device
-        self.dtype = dtype
-        self._ceiling_is_window = bool(ceiling_is_window)
-        self.max_len = max_len
-        self.num_kv_heads = num_kv_heads
-        self.k_head_dim = k_head_dim
-        self.v_head_dim = v_head_dim
-        self.batch_size = batch_size
-        self.current_len = 0
-        self._dtype_verified = False
-        # Detect triton mode from input types at first update
-
-        # Buffer starts at initial_len. 0 means legacy: allocate full max_len.
-        if initial_len > 0 and initial_len < max_len:
-            self._buffer_len = initial_len
-        else:
-            self._buffer_len = max_len
-
-        self._growth_threshold = int(self._buffer_len * self._GROWTH_RATIO)
-
-        # Allocate initial buffers (deferred if initial_len is 0 — lazy allocation)
-        k_shape = (batch_size, num_kv_heads, self._buffer_len, k_head_dim)
-        v_shape = (batch_size, num_kv_heads, self._buffer_len, v_head_dim)
-        self.k_buffer = self._alloc_zeros(k_shape)
-        self.v_buffer = self._alloc_zeros(v_shape)
-
-
-    def _alloc_zeros(self, shape):
-        """Allocate zero-filled buffer. mode-specific allocation."""
-        return torch.zeros(shape, dtype=self.dtype, device=self.device)
-
-    def update(self, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Write new K/V to buffer and return view of cached values.
-
-        If buffer is near capacity, grows automatically (up to max_len ceiling).
-        ZERO COPY: Indexed write directly into pre-allocated buffer.
-        SYMBOLIC SHAPE: Returns view buffer[:, :, :current_len, :]
-
-        Args:
-            k: New keys [batch, num_kv_heads, new_len, head_dim]
-            v: New values [batch, num_kv_heads, new_len, head_dim]
-
-        Returns:
-            (k_cached, v_cached): Views of cached K/V up to current position
-        """
-        batch_size, num_kv_heads, new_len, head_dim = k.shape
-
-        # Expand batch dimension if needed (e.g., CFG with batch=2)
-        if batch_size > self.batch_size:
-            self._expand_batch(batch_size)
-
-        # Dtype/device check: run once, skip for all subsequent tokens
-        if not self._dtype_verified:
-            if k.device != self.device:
-                k = k.to(self.device)
-                v = v.to(self.device)
-            if k.dtype != self.dtype:
-                k = k.to(self.dtype)
-                v = v.to(self.dtype)
-            self._dtype_verified = True
-
-        # Check if growth needed before writing
-        end_pos = self.current_len + new_len
-        if end_pos > self._buffer_len:
-            if end_pos > self.max_len:
-                _authority = (
-                    "the model's own context window — its limit, not an "
-                    "engine budget" if self._ceiling_is_window
-                    else "Prism VRAM budget exceeded")
-                raise RuntimeError(
-                    f"KV cache overflow: current_len={self.current_len}, new_len={new_len}, "
-                    f"max_len={self.max_len}. {_authority}."
-                )
-            self._grow_buffer(end_pos)
-
-        # Indexed write: buffer[..., start:end, :] = new_values
-        self.k_buffer[:batch_size, :, self.current_len:end_pos, :] = k
-        self.v_buffer[:batch_size, :, self.current_len:end_pos, :] = v
-
-        # Update position
-        self.current_len = end_pos
-
-        # Proactive growth: if we're past threshold, grow ahead of time
-        # so next update doesn't need to grow mid-compute
-        if self.current_len >= self._growth_threshold and self._buffer_len < self.max_len:
-            self._grow_buffer(self.current_len)
-
-        # Return VIEW (not copy) of cached values - supports symbolic shapes
-        k_cached = self.k_buffer[:batch_size, :, :self.current_len, :]
-        v_cached = self.v_buffer[:batch_size, :, :self.current_len, :]
-
-        return k_cached, v_cached
-
-    def _grow_buffer(self, min_required: int) -> None:
-        """
-        Grow buffer capacity. Double current size, capped at max_len.
-
-        Args:
-            min_required: Minimum capacity needed after growth
-        """
-        # Double current buffer, at least min_required, at most max_len
-        new_len = min(max(self._buffer_len * 2, min_required), self.max_len)
-        if new_len <= self._buffer_len:
-            return
-
-        # Allocate new buffers
-        new_k = self._alloc_zeros(
-            (self.batch_size, self.num_kv_heads, new_len, self.k_head_dim))
-        new_v = self._alloc_zeros(
-            (self.batch_size, self.num_kv_heads, new_len, self.v_head_dim))
-
-        # Copy existing cached data
-        if self.current_len > 0:
-            new_k[:, :, :self.current_len, :] = self.k_buffer[:, :, :self.current_len, :]
-            new_v[:, :, :self.current_len, :] = self.v_buffer[:, :, :self.current_len, :]
-
-        # Swap buffers
-        self.k_buffer = new_k
-        self.v_buffer = new_v
-        self._buffer_len = new_len
-        self._growth_threshold = int(new_len * self._GROWTH_RATIO)
-
-    def _expand_batch(self, new_batch_size: int) -> None:
-        """Expand buffer batch dimension if CFG or other batching is enabled."""
-        if new_batch_size <= self.batch_size:
-            return
-
-        # Create new larger buffers (K and V may have different head dims)
-        new_k = self._alloc_zeros(
-            (new_batch_size, self.num_kv_heads, self._buffer_len, self.k_head_dim))
-        new_v = self._alloc_zeros(
-            (new_batch_size, self.num_kv_heads, self._buffer_len, self.v_head_dim))
-
-        # Copy existing data
-        if self.current_len > 0:
-            new_k[:self.batch_size, :, :self.current_len, :] = \
-                self.k_buffer[:, :, :self.current_len, :]
-            new_v[:self.batch_size, :, :self.current_len, :] = \
-                self.v_buffer[:, :, :self.current_len, :]
-
-        # Replace buffers
-        self.k_buffer = new_k
-        self.v_buffer = new_v
-        self.batch_size = new_batch_size
-
-    def clear(self) -> None:
-        """Reset cache for new sequence (keeps buffers allocated at current size)."""
-        self.current_len = 0
-        self._dtype_verified = False
-
-
-class DistributedKVCache:
-    """
-    Distributed Key-Value cache manager for multi-GPU setups.
-
-    DESIGN PRINCIPLES:
-    1. LAZY ALLOCATION: Layers are created on-demand when first accessed
-    2. LOCALITY: Each layer's cache lives on the device where attention runs
-    3. NO GLOBAL DEVICE: Device is inferred from incoming q tensor
-
-    This enables automatic support for:
-    - FGP: Layer 0 on cuda:0, Layer 15 on cuda:1 → caches follow
-    - TP: Each GPU handles a subset of heads
-    - Single GPU: Everything on cuda:0
-    """
-
-    def __init__(self, config: KVCacheConfig):
-        """
-        Initialize distributed cache manager.
-
-        Args:
-            config: Cache configuration (no device - determined lazily)
-        """
-        self.config = config
-        # Dict mapping layer_idx -> KVCacheLayer (lazy allocation)
-        self._layers: Dict[int, KVCacheLayer] = {}
-        self._seq_len = 0
-
-    def update(
-        self,
-        layer_idx: int,
-        k: torch.Tensor,
-        v: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Update cache for a specific layer.
-
-        LAZY ALLOCATION: If this layer's cache doesn't exist, create it
-        on the same device as the incoming k tensor.
-
-        Args:
-            layer_idx: Transformer layer index
-            k: Key tensor [batch, num_kv_heads, new_seq, head_dim]
-            v: Value tensor [batch, num_kv_heads, new_seq, head_dim]
-
-        Returns:
-            (k_full, v_full): Cached K/V with all previous + new tokens
-        """
-        if layer_idx < 0 or layer_idx >= self.config.num_layers:
-            raise RuntimeError(
-                f"ZERO FALLBACK: layer_idx {layer_idx} out of range [0, {self.config.num_layers})"
-            )
-
-        # LAZY ALLOCATION: Create cache layer on k's device if not exists
-        if layer_idx not in self._layers:
-            device = k.device
-            batch_size = k.shape[0]
-
-            layer = KVCacheLayer(
-                device=device,
-                dtype=get_torch_dtype(self.config.dtype),
-                max_len=self.config.max_cache_len,
-                num_kv_heads=self.config.num_kv_heads,
-                k_head_dim=self.config.k_head_dim,
-                v_head_dim=self.config.v_head_dim,
-                batch_size=batch_size,
-                initial_len=self.config.initial_cache_len,
-                ceiling_is_window=getattr(self.config, 'ceiling_is_window', False),
-            )
-            self._layers[layer_idx] = layer
-
-        # Update cache and get full K/V
-        k_full, v_full = self._layers[layer_idx].update(k, v)
-
-        # Track sequence length from layer 0
-        if layer_idx == 0:
-            self._seq_len = self._layers[0].current_len
-
-        return k_full, v_full
-
-    def get_seq_len(self) -> int:
-        """Current cached sequence length."""
-        return self._seq_len
-
-    def get_cache(self, layer_idx: int) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Get cached K/V for a specific layer."""
-        if layer_idx in self._layers:
-            layer = self._layers[layer_idx]
-            if layer.current_len > 0:
-                batch = layer.batch_size
-                return (
-                    layer.k_buffer[:batch, :, :layer.current_len, :],
-                    layer.v_buffer[:batch, :, :layer.current_len, :]
-                )
-        return None, None
-
-    def clear(self) -> None:
-        """Clear cache for new sequence."""
-        for layer in self._layers.values():
-            layer.clear()
-        self._seq_len = 0
-
-    def get_layer_devices(self) -> Dict[int, torch.device]:
-        """Get mapping of layer_idx to device (for debugging)."""
-        return {idx: layer.device for idx, layer in self._layers.items()}
 
 
 class KVBranch:
@@ -376,7 +72,7 @@ class KVCacheAttentionWrapper:
     Intercepts scaled_dot_product_attention for KV cache injection.
 
     DISTRIBUTED ARCHITECTURE:
-    - Uses DistributedKVCache for multi-GPU support
+    - Uses the paged cache (per-layer pools on each layer's device) for multi-GPU support
     - Device determined from incoming q tensor (lazy allocation)
     - Works automatically with FGP, TP, PP, Single GPU
 
@@ -398,7 +94,7 @@ class KVCacheAttentionWrapper:
                        If 0, auto-detected from first Q tensor.
         """
         self.config = config
-        self.cache = DistributedKVCache(config)
+        self.cache = self._new_cache()
         self._is_prefill = True
         self._call_count = 0
         self._num_layers = config.num_layers
@@ -419,8 +115,17 @@ class KVCacheAttentionWrapper:
                                     getattr(self, "_decode_actual_seq_len", None))
         return self._branch
 
+    def _new_cache(self):
+        """The state engine's paged cache (step 2) over the plan's cache: its page size is derived by the factory from
+        the vendor file and carried by the config. A config without one is refused by name."""
+        if not self.config.page_tokens:
+            raise RuntimeError("ZERO FALLBACK: the KV cache config carries no page size — the factory derives it "
+                               "(core/state/price.paged_cache_params) from the executing card's vendor file")
+        from neurobrix.core.runtime.graph.paged_kv_cache import PagedKVCache
+        return PagedKVCache(self.config, self.config.page_tokens, self.config.async_release)
+
     def new_branch(self) -> "KVBranch":
-        return KVBranch(DistributedKVCache(self.config), True, 0, 0, None)
+        return KVBranch(self._new_cache(), True, 0, 0, None)
 
     def use_branch(self, st: "KVBranch") -> None:
         self._sync_branch()

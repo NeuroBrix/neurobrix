@@ -180,7 +180,7 @@ def image_token_count(defaults: Dict) -> int:
 
 
 def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any]:
-    """`TritonKVCache`'s parameters: the Prism plan's cache. The derived census keys the decode
+    """The session KV cache's parameters: the Prism plan's cache. The derived census keys the decode
     from the same. A plan without a cache for a decoding flow is refused by name: Prism prices
     every cache a flow opens (`core.runtime.lm_facts`), so a missing one is a plan that did not
     see this flow — the constant-sized cache that stood here (22 layers, 32 heads, float16) ran
@@ -207,26 +207,18 @@ def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any
 
 
 def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
-    """The session's KV cache: the state engine's paged cache (step 2, triton/paged_kv_cache.py) over the plan's cache.
-    Its page size is derived (core/state/price.page_tokens): one layer's position bytes from the declared geometry,
-    the paged read's tile candidates, the executing card's page granule (vendor file memory.state_page_granule_bytes)
-    and the plan's cache bytes as the bound; whether a released page waits for a fence is the vendor's
-    memory.async_release. A key the vendor file does not state is refused by name."""
-    from neurobrix.core.state.price import page_tokens
-    from neurobrix.kernels.nbx_tensor import dtype_size
+    """The session's KV cache: the state engine's paged cache (step 2, triton/paged_kv_cache.py) over the plan's cache,
+    its page size and release rule derived by core/state/price.paged_cache_params from the executing card's vendor
+    file (the derivation the compiled engine takes too)."""
+    from neurobrix.core.state.price import paged_cache_params
     from neurobrix.kernels.ops._configs import active_vendor_profile
     from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
     from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
-    memory = (active_vendor_profile() or {}).get("memory") or {}
-    missing = [k for k in ("state_page_granule_bytes", "async_release") if k not in memory]
-    if missing:
-        raise RuntimeError(f"ZERO FALLBACK: the executing card's vendor file states no memory.{', memory.'.join(missing)} "
-                           f"— the paged KV cache's page size and release rule are vendor facts, never assumed")
-    token_bytes = kv_params["num_kv_heads"] * (kv_params["k_head_dim"] + kv_params["v_head_dim"]) \
-        * dtype_size(kv_params["dtype"])
-    tokens = page_tokens(token_bytes, PAGED_DECODE_TILE_CANDIDATES, int(memory["state_page_granule_bytes"]),
-                         int(getattr(kv_plan, "memory_bytes", 0) or 0))
-    return PagedTritonKVCache(page_tokens=tokens, async_release=bool(memory["async_release"]), **kv_params)
+    tokens, async_release = paged_cache_params(
+        kv_params["num_kv_heads"], kv_params["k_head_dim"], kv_params["v_head_dim"], kv_params["dtype"].name,
+        (active_vendor_profile() or {}).get("memory"), int(getattr(kv_plan, "memory_bytes", 0) or 0),
+        PAGED_DECODE_TILE_CANDIDATES)
+    return PagedTritonKVCache(page_tokens=tokens, async_release=async_release, **kv_params)
 
 
 class TritonAutoregressiveHandler:
@@ -743,13 +735,13 @@ class TritonAutoregressiveHandler:
         kv_interceptor = None
         if has_sdpa and self.ctx.mode in ("triton", "triton_sequential") \
                 and _os_kv.environ.get("NBX_KV_RECOMPUTE") != "1":
-            from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
+            from neurobrix.triton.kv_cache import TritonAttentionInterceptor
 
             # Prompt-aware sizing inputs (S1 finding TINYLLAMA-KVCAP):
             # the model window bounds the cache and the decode budget
             # sizes the first-prefill allocation when the prompt
             # exceeds the plan's margin — both data-driven, read here
-            # and consumed by TritonKVCache at lazy layer creation.
+            # and consumed by the paged cache when it sizes its pools at the prefill.
             from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
             _window = int(lm_config.get("max_position_embeddings") or 0)
             # Decode budget mirrors the generator's resolver cascade

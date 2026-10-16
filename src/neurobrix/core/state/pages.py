@@ -59,6 +59,17 @@ class PagePool:
             self._refs[p] = 1
         return pages
 
+    def grow(self, n: int) -> range:
+        """`n` more pages, appended free at the end (ids num_pages .. num_pages+n-1): the engine has extended its raw
+        allocation by as many pages (the compiled engine's pool growing toward its ceiling). Returns the new ids."""
+        if n <= 0:
+            raise ValueError(f"PagePool.grow: {n} pages")
+        first = self.num_pages
+        self.num_pages += int(n)
+        self._refs.extend([0] * int(n))
+        self._free[:0] = list(range(self.num_pages - 1, first - 1, -1))   # granted after the pages already free
+        return range(first, self.num_pages)
+
     def hold(self, page: int) -> None:
         if self._refs[page] <= 0:
             raise RuntimeError(f"PagePool.hold: page {page} is not granted")

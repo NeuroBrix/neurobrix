@@ -12,6 +12,8 @@ from tests.unit.flow.test_decoder_kv_plan import _dag
 
 class _Executor:
     dtype = "float16"
+    # the card the decoder runs on: its vendor file gives the paged KV cache's page size and release rule
+    vendor, arch = "nvidia", "volta"
 
     def __init__(self):
         self._dag = _dag()
@@ -34,7 +36,7 @@ def _handler(executor, with_plan=True, max_cache_len=448):
     facts = decoder_cache_facts(executor._dag)
     kv_plan = None if not with_plan or facts is None else types.SimpleNamespace(
         num_layers=facts["num_layers"], num_kv_heads=facts["num_heads"], k_head_dim=facts["head_dim"],
-        v_head_dim=facts["head_dim"], max_cache_len=max_cache_len)
+        v_head_dim=facts["head_dim"], max_cache_len=max_cache_len, memory_bytes=1 << 30)
     h.ctx = types.SimpleNamespace(executors={"dec": executor}, plan=types.SimpleNamespace(kv_cache_plan=kv_plan))
     return h
 

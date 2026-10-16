@@ -19,7 +19,7 @@ H, D, T = 2, 4, 5            # heads, head dim, the frozen trace extent of the m
 
 def _wrapper():
     cfg = KVCacheConfig(num_layers=1, num_kv_heads=H, k_head_dim=D, v_head_dim=D,
-                        max_cache_len=64, dtype="float32")
+                        max_cache_len=64, dtype="float32", page_tokens=16, async_release=False)
     return KVCacheAttentionWrapper(cfg, num_heads=H)
 
 

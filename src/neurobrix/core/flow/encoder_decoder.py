@@ -207,10 +207,16 @@ class EncoderDecoderEngine(FlowHandler):
             from neurobrix.core.runtime.lm_facts import decoder_cache_facts, encoder_decoder_cache_from_plan
             kv = encoder_decoder_cache_from_plan(getattr(self.ctx.plan, "kv_cache_plan", None),
                                                  decoder_cache_facts(dag), max_tokens, dec_name)
+            from neurobrix.core.module.cache.factory import paged_params
+            page_tokens, async_release = paged_params(
+                kv.num_kv_heads, kv.k_head_dim, kv.v_head_dim, dtype,
+                (getattr(executor, "vendor", None), getattr(executor, "arch", None)),
+                getattr(self.ctx.plan, "kv_cache_plan", None))
             config = KVCacheConfig(
                 num_layers=kv.num_layers, num_kv_heads=kv.num_kv_heads,
                 k_head_dim=kv.k_head_dim, v_head_dim=kv.v_head_dim,
-                max_cache_len=int(kv.max_cache_len), dtype=str(dtype))
+                max_cache_len=int(kv.max_cache_len), dtype=str(dtype),
+                page_tokens=page_tokens, async_release=async_release)
             wrapper = KVCacheAttentionWrapper(config, num_heads=plan["num_heads"])
             by_type = wrapper.get_interceptors()
             per_uid = {}

@@ -177,5 +177,5 @@ def paged_kv_append_step_kernel(
 @triton.jit
 def paged_lens_advance_kernel(lens_ptr, n):
     """lens[b] += n for every sequence: one program per sequence, after the step's append (stream order)."""
-    b = tl.program_id(0)
+    b = tl.program_id(0).to(tl.int64)
     tl.store(lens_ptr + b, tl.load(lens_ptr + b) + n)

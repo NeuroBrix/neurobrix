@@ -57,15 +57,22 @@ class PagedTritonKVCache:
         self.block_table_dev: Optional[NBXTensor] = None                    # device int32 [B, pages_per_seq]
         self.length = 0                                                     # host authority: positions held
         self._published_pages = -1
+        self.capacity = 0                                                   # positions per sequence the pools hold
+        self._uid = next(PagedTritonKVCache._uids)
+        self.generation = 0                                                 # moves when the pools are reallocated
+        self.regrowths = 0
 
     # -- allocation ---------------------------------------------------------------------------------------------------
+    import itertools as _itertools
+    _uids = _itertools.count(1)
+
     @property
     def pages_per_sequence(self) -> int:
-        return -(-self.max_cache_len // self.page_tokens)
+        return -(-self.capacity // self.page_tokens)
 
     def _ensure(self, k) -> None:
-        """The pools, sized at the first prefill: `batch` sequences of at most max_cache_len positions each (the plan's
-        cache) — the pool's capacity, granted page by page as sequences grow."""
+        """The pools, at the first prefill: `batch` sequences of `capacity` positions — the plan's initial size (serve
+        plans) or its cache — granted page by page as sequences grow; a request needing more grows them (`_grow`)."""
         batch = int(k.shape[0])
         if self.pool is not None:
             if batch != self.batch:
@@ -73,18 +80,48 @@ class PagedTritonKVCache:
                                    f"{batch}")
             return
         self.batch, self.device_idx = batch, int(k._device_idx)
+        self.capacity = self.initial_cache_len or self.max_cache_len
         num_pages = batch * self.pages_per_sequence
         self.pool = PagePool(num_pages, self.page_tokens, async_release=self.async_release)
         self.tables = [PageTable(self.pool) for _ in range(batch)]
-        dev = f"cuda:{self.device_idx}"
         DeviceAllocator.set_device(self.device_idx)
         for i in range(self.num_layers):
-            self.k_pools[i] = NBXTensor.zeros((num_pages, self.num_kv_heads, self.page_tokens, self.k_head_dim),
-                                              dtype=self.dtype, device=dev)
-            self.v_pools[i] = NBXTensor.zeros((num_pages, self.num_kv_heads, self.page_tokens, self.v_head_dim),
-                                              dtype=self.dtype, device=dev)
+            self.k_pools[i], self.v_pools[i] = self._new_pools(num_pages)
             self.lens[i] = NBXTensor.from_numpy(np.zeros((batch,), dtype=np.int32))
         self.block_table_dev = NBXTensor.from_numpy(np.full((batch, self.pages_per_sequence), -1, dtype=np.int32))
+
+    def _new_pools(self, num_pages: int):
+        dev = f"cuda:{self.device_idx}"
+        return (NBXTensor.zeros((num_pages, self.num_kv_heads, self.page_tokens, self.k_head_dim), dtype=self.dtype,
+                                device=dev),
+                NBXTensor.zeros((num_pages, self.num_kv_heads, self.page_tokens, self.v_head_dim), dtype=self.dtype,
+                                device=dev))
+
+    def _grow(self, positions: int) -> None:
+        """Every sequence may hold `positions`: the pools reallocated at that size with the pages held copied in place
+        (page ids unchanged), the block table widened. Addresses change, so the generation moves once and every
+        replay plan recorded under the previous one is retired (their tuples bake the old addresses)."""
+        old_pages = self.pool.num_pages
+        self.capacity = int(positions)
+        new_pages = self.batch * self.pages_per_sequence
+        self.pool.grow(new_pages - old_pages)
+        DeviceAllocator.set_device(self.device_idx)
+        for i in range(self.num_layers):
+            kp, vp = self._new_pools(new_pages)
+            DeviceAllocator.memcpy(kp.data_ptr(), self.k_pools[i].data_ptr(),
+                                   self.k_pools[i].numel() * self.k_pools[i].element_size(), 3)
+            DeviceAllocator.memcpy(vp.data_ptr(), self.v_pools[i].data_ptr(),
+                                   self.v_pools[i].numel() * self.v_pools[i].element_size(), 3)
+            self.k_pools[i], self.v_pools[i] = kp, vp
+        self.block_table_dev = NBXTensor.from_numpy(np.full((self.batch, self.pages_per_sequence), -1, dtype=np.int32))
+        self._published_pages = -1
+        old_gen, uid = self.generation, self._uid
+        self.generation += 1
+        self.regrowths += 1
+        from neurobrix.triton import replay as _replay
+        _replay.drop_plans_by_contribution(
+            lambda c: (isinstance(c, tuple) and len(c) >= 5 and c[0] == "kv_decode_paged"
+                       and c[3] == uid and c[4] == old_gen))
 
     def _write_in_place(self, dst: NBXTensor, host: np.ndarray) -> None:
         """Rewrite a fixed device buffer's contents (its address never changes: replay tuples point at it)."""
@@ -97,11 +134,10 @@ class PagedTritonKVCache:
             self.fence.record()
 
     def _reserve(self, length: int) -> None:
-        """Every sequence holds `length` positions' pages (never beyond the plan's cache); the block table republished
-        when a page was granted."""
-        if length > self.max_cache_len:
-            raise RuntimeError(f"ZERO FALLBACK: the paged KV cache holds at most {self.max_cache_len} positions per "
-                               f"sequence (the plan's cache), {length} asked")
+        """Every sequence holds `length` positions' pages, the pools grown first when they cannot; the block table
+        republished when a page was granted."""
+        if length > self.capacity:
+            self._grow(length)
         for t in self.tables:
             t.reserve(length)
         if len(self.tables[0].pages) != self._published_pages:
@@ -111,6 +147,24 @@ class PagedTritonKVCache:
             self._write_in_place(self.block_table_dev, table)
             self._published_pages = len(self.tables[0].pages)
 
+    def capacity_for(self, prompt_end: int) -> int:
+        """Positions per sequence the pools hold once a request whose prompt ends at `prompt_end` is prefilled: the
+        current capacity (first: the plan's initial size, else its cache) or the request's need when larger."""
+        base = self.capacity or self.initial_cache_len or self.max_cache_len
+        return max(base, self._request_length(prompt_end))
+
+    def _request_length(self, prompt_end: int) -> int:
+        """Positions a request reserves at its prefill — the contiguous cache's prompt-aware rule (S1
+        TINYLLAMA-KVCAP, 2026-09-01): the prompt and its decode budget, at least the plan's size; bounded by the
+        model's window, and a prompt reaching the window is the model's own limit, refused by name."""
+        if self.window_ceiling and prompt_end >= self.window_ceiling:
+            raise RuntimeError(f"Prompt length {prompt_end} reaches the model's context window "
+                               f"({self.window_ceiling} positions) — this is the model's own limit, not an engine budget.")
+        need = prompt_end + self.decode_budget if self.decode_budget else prompt_end + 1
+        if self.window_ceiling:
+            need = min(need, self.window_ceiling)
+        return need
+
     # -- the steps ----------------------------------------------------------------------------------------------------
     def prefill(self, layer_idx: int, k, v) -> None:
         """Append a prompt's K / V `[B, H_kv, T, D]` (positions length .. length+T-1). Layer 0 starts the request's
@@ -119,9 +173,7 @@ class PagedTritonKVCache:
         self._ensure(k)
         t = int(k.shape[2])
         if layer_idx == 0:
-            # the prompt (refused by name past the plan's cache) and its decode budget, capped at the plan's cache
-            need = self.length + t
-            self._reserve(need if need > self.max_cache_len else min(need + self.decode_budget, self.max_cache_len))
+            self._reserve(self._request_length(self.length + t))
         start = self.length
         for b in range(self.batch):
             slots = np.asarray(self.tables[b].slots(range(start, start + t)), dtype=np.int32)
@@ -181,8 +233,8 @@ class PagedTritonKVCache:
     def replay_key(self, bucket: int):
         """The decode step's replay-bucket contribution, or None when a recorded replay could not reproduce it: the next
         position must lie in a page already reserved (a replayed step runs no host code, so it grants no page). The key
-        carries the split count (the read's grid) — the block table and lengths are read on the device, their
-        addresses fixed for the cache's lifetime, so no generation is needed."""
+        carries the split count (the read's grid) and the pools' identity (uid, generation): a growth reallocates them
+        and retires every plan recorded against the old addresses."""
         from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS
         if self.pool is None or not self.tables:
             return None
@@ -190,7 +242,7 @@ class PagedTritonKVCache:
         if nxt > len(self.tables[0].pages) * self.page_tokens:
             return None
         split = max(1, min(-(-nxt // PAGED_DECODE_SPLIT_POSITIONS), PAGED_DECODE_MAX_SPLITS))
-        return ("kv_decode_paged", split, self.batch, id(self))
+        return ("kv_decode_paged", split, self.batch, self._uid, self.generation)
 
     def replay_advance(self) -> None:
         """The replayed launches appended one position per layer and advanced every device length: mirror it."""
