@@ -194,16 +194,18 @@ class TritonEncoderDecoderEngine:
                   f"arange and no positional-table slice the cache could offset — "
                   f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
             return None
-        from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
+        from neurobrix.triton.kv_cache import TritonAttentionInterceptor
         interceptor = getattr(executor, "_decoder_kv_interceptor", None)
         if interceptor is None:
             dtype = parse_dtype(str(getattr(executor, "dtype", None) or "float16"))
             from neurobrix.core.runtime.lm_facts import decoder_cache_facts, encoder_decoder_cache_from_plan
             kv = encoder_decoder_cache_from_plan(getattr(self.ctx.plan, "kv_cache_plan", None),
                                                  decoder_cache_facts(dag), max_tokens, dec_name)
-            cache = TritonKVCache(num_layers=kv.num_layers, num_kv_heads=kv.num_kv_heads,
-                                  k_head_dim=kv.k_head_dim, v_head_dim=kv.v_head_dim,
-                                  max_cache_len=int(kv.max_cache_len), dtype=dtype)
+            from neurobrix.triton.flow.autoregressive import paged_kv_cache
+            cache = paged_kv_cache(dict(num_layers=kv.num_layers, num_kv_heads=kv.num_kv_heads,
+                                        k_head_dim=kv.k_head_dim, v_head_dim=kv.v_head_dim,
+                                        max_cache_len=int(kv.max_cache_len), dtype=dtype),
+                                   getattr(self.ctx.plan, "kv_cache_plan", None))
             interceptor = TritonAttentionInterceptor(cache=cache, num_heads=plan["num_heads"])
             variant = {
                 "aten::_scaled_dot_product_efficient_attention": interceptor.intercept_efficient,

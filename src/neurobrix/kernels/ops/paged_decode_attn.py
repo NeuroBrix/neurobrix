@@ -28,6 +28,8 @@ from neurobrix.kernels.ops.decode_attn_vec import _round_q
 # protocol of 2026-08-23: seg 256 / BLOCK_N 32 / 4 warps won at all three contexts, ops/decode_attn_vec.py,
 # kernels/wrappers.py `_decode_attn_vec`); 16 and 64 are its neighbours, the range the certified directory chooses in.
 PAGED_DECODE_TILE_CANDIDATES = (16, 32, 64)
+# The tile the read runs at until the certified directory chooses among the candidates: the judged one.
+PAGED_DECODE_JUDGED_TILE = 32
 
 # The split shape: positions per split and the most splits one launch makes — the vector decode kernel's judged config
 # (its locked protocol of 2026-08-23, the defaults of `_decode_attn_vec`'s NBX_DV_SEG and its 64-split cap), so the

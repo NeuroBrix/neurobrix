@@ -206,6 +206,29 @@ def session_kv_params(kv_plan, window: int, decode_budget: int) -> Dict[str, Any
     )
 
 
+def paged_kv_cache(kv_params: Dict[str, Any], kv_plan):
+    """The session's KV cache: the state engine's paged cache (step 2, triton/paged_kv_cache.py) over the plan's cache.
+    Its page size is derived (core/state/price.page_tokens): one layer's position bytes from the declared geometry,
+    the paged read's tile candidates, the executing card's page granule (vendor file memory.state_page_granule_bytes)
+    and the plan's cache bytes as the bound; whether a released page waits for a fence is the vendor's
+    memory.async_release. A key the vendor file does not state is refused by name."""
+    from neurobrix.core.state.price import page_tokens
+    from neurobrix.kernels.nbx_tensor import dtype_size
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+    from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_TILE_CANDIDATES
+    from neurobrix.triton.paged_kv_cache import PagedTritonKVCache
+    memory = (active_vendor_profile() or {}).get("memory") or {}
+    missing = [k for k in ("state_page_granule_bytes", "async_release") if k not in memory]
+    if missing:
+        raise RuntimeError(f"ZERO FALLBACK: the executing card's vendor file states no memory.{', memory.'.join(missing)} "
+                           f"— the paged KV cache's page size and release rule are vendor facts, never assumed")
+    token_bytes = kv_params["num_kv_heads"] * (kv_params["k_head_dim"] + kv_params["v_head_dim"]) \
+        * dtype_size(kv_params["dtype"])
+    tokens = page_tokens(token_bytes, PAGED_DECODE_TILE_CANDIDATES, int(memory["state_page_granule_bytes"]),
+                         int(getattr(kv_plan, "memory_bytes", 0) or 0))
+    return PagedTritonKVCache(page_tokens=tokens, async_release=bool(memory["async_release"]), **kv_params)
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -771,7 +794,7 @@ class TritonAutoregressiveHandler:
             memo = executor.__dict__.setdefault("_kv_cache_memo", {})
             kv_cache = memo.get(key)
             if kv_cache is None:
-                kv_cache = TritonKVCache(**kv_params)
+                kv_cache = paged_kv_cache(kv_params, getattr(self.ctx.plan, 'kv_cache_plan', None))
                 memo[key] = kv_cache
             else:
                 # Warm hit: the per-request sizing inputs follow THIS

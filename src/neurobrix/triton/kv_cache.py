@@ -512,8 +512,11 @@ class TritonAttentionInterceptor:
                 v_for_cache = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])
                 v_for_cache = v_for_cache.select(2, 0).contiguous()
 
-            # Store in cache for decode
-            self.cache.update(layer_idx, k_for_cache, v_for_cache)
+            # Store in cache for decode (the paged cache: into its pages, granted for the request)
+            if getattr(self.cache, "paged", False):
+                self.cache.prefill(layer_idx, k_for_cache, v_for_cache)
+            else:
+                self.cache.update(layer_idx, k_for_cache, v_for_cache)
 
             # Run SDPA with full Q/K/V (graph-expanded, not cache)
             if hasattr(q, '_dtype') and hasattr(k, '_dtype') and q._dtype != k._dtype:
@@ -537,6 +540,21 @@ class TritonAttentionInterceptor:
             batch, _, seq_len, head_dim = k.shape
             k = k.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, head_dim)[:, :, 0]
             v = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])[:, :, 0]
+
+        if getattr(self.cache, "paged", False):
+            # The paged cache: append at the device length, read through the block table (state engine step 2).
+            # Each sequence reads its own length, so no pad mask exists. The graph's own decode mask covers only the
+            # step's keys (the traced causal mask over the new position, [.., 1, 1] for one token): one query at the
+            # last position sees every cached position, which the paged read does. A mask over MORE keys than the step
+            # brought would constrain the cache and cannot be honoured: refused by name, never dropped.
+            if attn_mask is not None and int(attn_mask.shape[-1]) != int(k.shape[2]):
+                raise RuntimeError(
+                    "ZERO FALLBACK: a decode step's attention carries a mask over the cache the paged KV read does not "
+                    f"apply ({tuple(attn_mask.shape)}); the paged cache reads each sequence's own length")
+            import math
+            from neurobrix.kernels.ops.paged_decode_attn import PAGED_DECODE_JUDGED_TILE
+            s = float(scale) if scale is not None else 1.0 / math.sqrt(int(q.shape[-1]))
+            return self.cache.decode(layer_idx, q, k, v, s, PAGED_DECODE_JUDGED_TILE, q_round=self.cache.dtype)
 
         # Update cache. B2' (NBX_REPLAY_KV_DECODE): bucket-padded views
         # + persistent additive pad mask — padding never changes the
