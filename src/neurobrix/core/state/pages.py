@@ -6,10 +6,12 @@ pair's shared prompt and beam prefixes), and when a released page may be granted
 The raw allocation behind the pages and the kernels that read through the table are per engine; nothing here touches
 a device or imports torch (R33: the Triton branch imports this too).
 
-Release is a queue event, not a call (§3.3 point 3): on a device that releases asynchronously (the vendor file's
-`memory.async_release`; MPS reuses a buffer only once the command that used it completed) a page whose last holder let
-it go waits in the release queue under the fence the engine names, and returns to the free list only when the engine
-reports that fence completed. On a device that does not (CUDA: stream order) it returns at once.
+Release is a queue event when it has to be (§3.3 point 3). In a fixed pool whose pages are written only by GPU work on
+the same queue that reads them, a page granted again is written after the earlier reads in queue order, and release is
+immediate (CUDA; both Metal engines as built, 2026-10-16). A device or path where a page is written outside that order
+(by the host, or by a copy on another queue) declares `async_release`: a page whose last holder let it go waits in the
+release queue under the fence the engine names, and returns to the free list only when the engine reports that fence
+completed.
 """
 from __future__ import annotations
 
