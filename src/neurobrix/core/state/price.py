@@ -89,3 +89,23 @@ def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, p
             f"{floor * token_bytes / 1e6:.0f} MB are needed for {floor} positions.")
     initial = min(int(max_tokens) + int(prompt_margin), length) if (serve and max_tokens) else 0
     return {"max_cache_len": length, "initial_cache_len": initial, "memory_bytes": length * int(token_bytes)}
+
+
+def page_tokens(token_bytes: int, position_tile: int, allocation_granule: int, rung_bytes: int) -> int:
+    """Positions per state page (step 2; owner 2026-10-15 Q2: derived, never a hand value). Every input is named and
+    sourced, no constant inside: `position_tile` is the paged attention read's tile on the position axis (a kernel fact,
+    so a page never splits a tile), `allocation_granule` the device's allocation unit (a vendor fact), `token_bytes` this
+    container's declared KV per position (kv_token_bytes). The page is the smallest power-of-two multiple of the tile whose
+    bytes reach the granule (no page smaller than what the device allocates), refused by name when one page exceeds the
+    rung."""
+    if min(token_bytes, position_tile, allocation_granule, rung_bytes) <= 0:
+        raise ValueError(f"page_tokens: token_bytes {token_bytes}, position_tile {position_tile}, "
+                         f"allocation_granule {allocation_granule}, rung_bytes {rung_bytes}")
+    tokens = int(position_tile)
+    while tokens * int(token_bytes) < int(allocation_granule):
+        tokens *= 2
+    if tokens * int(token_bytes) > int(rung_bytes):
+        raise StateUndeclared(
+            f"ZERO FALLBACK: one state page ({tokens} positions x {token_bytes} B) exceeds the rung's "
+            f"{rung_bytes / 1e6:.0f} MB")
+    return tokens
