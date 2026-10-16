@@ -221,6 +221,16 @@ memory:
   # grow past the working set into swap (Allegro 720x1280: 23.7 GB footprint on a 17.8 GB working set, the Mac,
   # 2026-10-15 08:30); bounded, the allocator releases its cached blocks before it grows.
   compiled_allocator_memory_fraction: 1.0           # provenance: the device's own working set, the figure Prism plans in
+  # State pages (state engine step 2, core/state/price.paged_cache_params). The compiled engine resolves this file
+  # (apple / apple_silicon) on the M4 Pro, so the keys stated in apple_m4_pro.yml are stated here too, with the same source.
+  # MEASURED 2026-10-16 on the M4 Pro: `MTLDevice.heapBufferSizeAndAlignWithLength:options:` (shared storage) returns
+  # align 256 for every length from 1 B to 1 MiB — the placement unit Metal itself uses for a buffer in a heap.
+  state_page_granule_bytes: 256
+  # A released page returns to the pool at once: the pool is fixed and every write into a page is GPU work on the queue
+  # that reads it (Triton: kernels on the Apple backend's queue; compiled: index_copy on the one MPS stream), and Metal
+  # runs one queue's command buffers in enqueue order (MTLCommandBuffer.commit documentation). A path that wrote a page
+  # from the host or another queue would need true here and a fence (triton/state_fence.py, core/state/mps_fence.py).
+  async_release: false
 
   # Allocator pool: fraction of device memory the free-list may keep parked.
   # Apple Silicon is UNIFIED memory — the "device" budget is system RAM
