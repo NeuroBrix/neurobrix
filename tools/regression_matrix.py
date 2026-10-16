@@ -486,12 +486,21 @@ def release_host(out: Path) -> None:
     _ledger(out, lambda led: led.pop(str(os.getpid()), None))
 
 
+# The request every cell of this run makes: "gate" (the model's floor) or "judging" (the request its quality is judged
+# at). Set once by `run --request`, before any cell; one run, one kind.
+REQUEST_KINDS = ("gate", "judging")
+REQUEST_KIND = "gate"
+
+
 def cell_request(model: str) -> list:
-    """The request a cell runs, and the one its plan is asked for: THE shared derivation
-    (tools/trace_request.gate_request — the model's floor where its container states gate values, else the
-    family's confirmation request at its confirmation size), which the census covers too, so the table holds
-    what a cell forms. Quality is judged once per model and branch at the judging request (derived_request)."""
-    return gate_request(model, Z.family_of(model))
+    """The request a cell runs, and the one its plan is asked for: THE shared derivation, which the census covers
+    too, so the table holds what a cell forms. A gate run makes tools/trace_request.gate_request (the model's floor
+    where its container states gate values, else the family's confirmation request at its confirmation size); a
+    judging run makes derived_request — the request quality is judged at, the container's own confirmation values
+    (registry, with their source) over the family's — so the judged artefact is a row like every other, with its
+    wall time, its misses and its engine."""
+    family = Z.family_of(model)
+    return derived_request(model, family) if REQUEST_KIND == "judging" else gate_request(model, family)
 
 
 @functools.lru_cache(maxsize=None)
@@ -638,7 +647,7 @@ def _run_cell(model: str, mode: str, gpu: str, out: Path, timeout: int, src: Pat
            # tested through the engine's entry point and nothing else; the harness only orchestrates it)
            "command": shlex.join(cmd),
            **container_identity(model),
-           "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req,
+           "wall_s": round(wall, 1), "exec_s": Z.exec_time(log), "request": req, "request_kind": REQUEST_KIND,
            "off_trace_size": list(size) if size else None, "log": str(log),
            "python": sys.executable,
            "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1016,6 +1025,9 @@ def cmd_run(a) -> int:
         if not getattr(a, "known_reds", None):
             return refuse("a gate names its known-cause record (--known-reds FILE; `reds: []` when it holds none): "
                           "a red with an identified cause is carried, never replayed, until a batch claims it")
+    if getattr(a, "gate_lists", None) and getattr(a, "request", "gate") != "gate":
+        return refuse(f"--request {a.request} in a gate — a gate runs every cell at its gate request; quality is judged "
+                      f"in a run of its own (--request judging, its own --out)")
     if getattr(a, "claims_fix", None) and not getattr(a, "known_reds", None):
         return refuse("--claims-fix without --known-reds: a claim is checked against the known-cause record")
     if bool(getattr(a, "base_gate", None)) != bool(getattr(a, "base_sha", None)):
@@ -1046,6 +1058,15 @@ def cmd_run(a) -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     rows_path = out / f"rows_card{a.gpu}.jsonl"
+    # One kind of request per matrix directory: a cell's row is keyed by model and mode, so a gate row and a judging
+    # row side by side would supersede each other. A row written before the field existed is a gate row.
+    other = sorted({r.get("request_kind", "gate") for f in out.glob("rows_card*.jsonl") for r in read_jsonl(f)}
+                   - {getattr(a, "request", "gate")})
+    if other:
+        return refuse(f"--out {out} holds {', '.join(other)} rows and this run makes the {getattr(a, 'request', 'gate')} request: one "
+                      f"kind per matrix directory (a cell's row is keyed by model and mode) — give it its own --out")
+    global REQUEST_KIND
+    REQUEST_KIND = getattr(a, "request", "gate")
     # The matrix is one: a cell with a row on ANY card is done, so a model's remaining cells can be
     # handed to another card without running its finished ones twice.
     latest = {}
@@ -1383,6 +1404,9 @@ def main() -> int:
                    help="the commit the base gate measured; the diff SHA..HEAD of the engine tree is classified")
     r.add_argument("--branches", default=str(GATE_BRANCHES), metavar="YAML",
                    help="the engine-branch mapping the diff is classified with")
+    r.add_argument("--request", choices=REQUEST_KINDS, default="gate",
+                   help="the request every cell makes: gate (the model's floor, the default) or judging (the request "
+                        "its quality is judged at, the container's confirmation values; never a gate, its own --out)")
     r.add_argument("--timeout", type=int, default=900)
     r.add_argument("--defer-after", type=float, default=None, metavar="SECONDS",
                    help="a cell the host cannot take for this long leaves the run without a row, named DEFERRED, "
