@@ -99,3 +99,32 @@ vendor's own single-chunk path (`num_latent_frames_batch_size = num_frames`), an
 vendor's DEFAULT 2-frame batches (Forge's record, `forge/tracer/video_vae_patches.py:156-173`). Decision 21:30 names the
 vendor's temporal batches as CogVideoX's declared reference, so the declared chunking reproduces the vendor's default
 pipeline; the proof (chunked = vendor float32 at its default, to dtype noise, both branches) covers it.
+
+## The derivation, op by op (2026-10-17)
+
+Forge reads the traced clip graph (`graph.json`, symbolic in time) and writes two graphs beside it, both pure ATen,
+sharing the component's parameters by name: **`first`** = the clip graph plus one output per carried state, and
+**`next`** = the graph of a chunk that does not start the clip, the states as inputs and outputs. The time axis of a
+tensor is the dim (or the factor of a folded dim) whose expression holds the input's time symbol. Every op that is not
+pointwise along it falls in one of four classes, and anything else is refused by name with its op:
+
+| class | read in the graph | `next` | carried state |
+|---|---|---|---|
+| causal pad | a pad (constant or replication) adding f > 0 frames at the front of time and none at the back; or a cat on time whose leading operands are slices of the same tensor's first frame (CogVideoX) | `cat(state_in, x)` on time, then the spatial part of the pad | the last f frames of the time-padded input |
+| strided window | a convolution with time kernel k > 1, time padding 0, stride s <= k (Wan's encoder downsample) | `conv(cat(state_in, x))` | the last k - s frames; a chunk is aligned when (state + length - k) % s == 0 |
+| absolute slice | a slice or select on time with constant bounds (the clip's first frame, mochi's dropped leading frames) | resolved at the chunk's offset p >= the bound: an end-bounded slice is empty (its operand leaves the cat that rejoins it), a start-bounded one is the whole chunk | — |
+| time-local | pointwise ops, convolutions with time kernel 1, a nearest upsample, time folded into the batch | unchanged | — |
+
+The `next` graph's dims are the clip graph's with each tensor's time sub-expression replaced by its chunk expression,
+computed op by op from the four classes' arithmetic; a dim or an argument holding the time symbol that the replacement
+does not reach is refused. The chunk schedule is a condition, not a number: Forge writes, per strided window and per
+absolute slice, the inequality or the congruence the first and next lengths must satisfy, and Prism chooses the
+largest exact lengths that fit (or the vendor's declared ones). Whether the chunked function equals the clip function
+is the exactness analysis of decision (1) on the time axis: no op global over time between input and output, or the
+vendor's own chunked reference declared with its source.
+
+Proofs owed before any container carries the two graphs: (a) on every causal VAE graph of the catalogue, float64 with
+random parameters, CPU: `first` then `next` over a clip = the clip graph, at three clip lengths and two schedules —
+weight-independent, so it proves the rewrite; (b) the dims of `next` evaluated = the shapes its execution produces;
+(c) at the engine's command line, both branches, the chunked run = the whole run to dtype noise where both fit, and the
+judged video at the judging request.
