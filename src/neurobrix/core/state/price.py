@@ -91,21 +91,27 @@ def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, p
     return {"max_cache_len": length, "initial_cache_len": initial, "memory_bytes": length * int(token_bytes)}
 
 
-def page_tokens(token_bytes: int, position_tile: int, allocation_granule: int, rung_bytes: int) -> int:
-    """Positions per state page (step 2; owner 2026-10-15 Q2: derived, never a hand value). Every input is named and
-    sourced, no constant inside: `position_tile` is the paged attention read's tile on the position axis (a kernel fact,
-    so a page never splits a tile), `allocation_granule` the device's allocation unit (a vendor fact), `token_bytes` this
-    container's declared KV per position (kv_token_bytes). The page is the smallest power-of-two multiple of the tile whose
-    bytes reach the granule (no page smaller than what the device allocates), refused by name when one page exceeds the
-    rung."""
-    if min(token_bytes, position_tile, allocation_granule, rung_bytes) <= 0:
-        raise ValueError(f"page_tokens: token_bytes {token_bytes}, position_tile {position_tile}, "
-                         f"allocation_granule {allocation_granule}, rung_bytes {rung_bytes}")
-    tokens = int(position_tile)
-    while tokens * int(token_bytes) < int(allocation_granule):
+def page_tokens(token_bytes_per_layer: int, tile_candidates, granule_bytes: int, rung_bytes: int) -> int:
+    """Positions per state page (step 2; owner 2026-10-15 Q2: derived, never a hand value; agreed with the Dell 10:16).
+    Every input is named and sourced, no constant inside:
+    - `tile_candidates`: the position tiles the paged attention read declares (a kernel fact, one source for every
+      backend). The page starts at the largest, so every candidate divides it and a tile never straddles two pages; the
+      tile is then chosen among candidates that divide the page, never autotuned against it.
+    - `granule_bytes`: the backend's allocation granule (a cited vendor fact per backend).
+    - `token_bytes_per_layer`: kv_heads x (k_dim + v_dim) x itemsize of the declared KV, one layer's position.
+    The page is that largest tile doubled until one layer's page reaches the granule; refused by name when one page of
+    every layer exceeds the rung."""
+    tiles = [int(c) for c in tile_candidates]
+    if not tiles or min(tiles) <= 0 or token_bytes_per_layer <= 0 or granule_bytes <= 0 or rung_bytes <= 0:
+        raise ValueError(f"page_tokens: token_bytes_per_layer {token_bytes_per_layer}, tile_candidates {tiles}, "
+                         f"granule_bytes {granule_bytes}, rung_bytes {rung_bytes}")
+    tokens = max(tiles)
+    if any(tokens % c for c in tiles):
+        raise ValueError(f"page_tokens: the tile candidates {tiles} do not all divide the largest")
+    while tokens * int(token_bytes_per_layer) < int(granule_bytes):
         tokens *= 2
-    if tokens * int(token_bytes) > int(rung_bytes):
+    if tokens * int(token_bytes_per_layer) > int(rung_bytes):
         raise StateUndeclared(
-            f"ZERO FALLBACK: one state page ({tokens} positions x {token_bytes} B) exceeds the rung's "
+            f"ZERO FALLBACK: one state page ({tokens} positions x {token_bytes_per_layer} B) exceeds the rung's "
             f"{rung_bytes / 1e6:.0f} MB")
     return tokens

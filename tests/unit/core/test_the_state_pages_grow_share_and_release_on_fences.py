@@ -89,10 +89,13 @@ def test_the_kernels_read_flat_slots_and_a_padded_block_table():
     assert width == 2 and list(rows) == [0, 1, 2, -1] and rows.itemsize == 4
 
 
-def test_the_page_size_is_derived_from_the_tile_the_granule_and_the_token_bytes():
+def test_the_page_size_is_derived_from_the_tile_candidates_the_granule_and_the_layer_bytes():
     from neurobrix.core.state.price import StateUndeclared, page_tokens
-    assert page_tokens(token_bytes=131072, position_tile=16, allocation_granule=16384, rung_bytes=18 << 30) == 16
-    assert page_tokens(token_bytes=512, position_tile=16, allocation_granule=16384, rung_bytes=18 << 30) == 32
-    assert page_tokens(token_bytes=512, position_tile=64, allocation_granule=2 << 20, rung_bytes=18 << 30) == 4096
+    layer = 4 * (64 + 64) * 2                        # kv_heads 4, k/v 64, bf16: 1 KiB a position per layer
+    assert page_tokens(layer, [16, 32, 64], granule_bytes=16384, rung_bytes=18 << 30) == 64, "the largest tile covers it"
+    assert page_tokens(layer, [16, 32], granule_bytes=65536, rung_bytes=18 << 30) == 64, "doubled to reach the granule"
+    assert page_tokens(layer, [16], granule_bytes=2 << 20, rung_bytes=18 << 30) == 2048
+    with pytest.raises(ValueError, match="do not all divide"):
+        page_tokens(layer, [32, 48], granule_bytes=1, rung_bytes=18 << 30)
     with pytest.raises(StateUndeclared, match="exceeds the rung"):
-        page_tokens(token_bytes=1 << 20, position_tile=16, allocation_granule=1, rung_bytes=8 << 20)
+        page_tokens(1 << 20, [16], granule_bytes=1, rung_bytes=8 << 20)
