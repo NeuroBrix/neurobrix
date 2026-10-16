@@ -458,6 +458,14 @@ class ExecutionPlan:
     #: considered for tiling, {"exact": bool, "why": text, "op": the op that couples space or None}. A component
     #: whose entry is not exact is never tiled (owner, 2026-10-16: Prism chooses only exact cuts, read from the graph).
     tiling_exactness: Dict = field(default_factory=dict)
+    #: The components run in TEMPORAL CHUNKS through the stream Forge derived from their graph
+    #: (`core/prism/temporal_stream.py`): {component: {"schedule": [first, next...] input frames, "frames": the
+    #: request's, "reference": "clip" (chunked = the clip graph, no op global over time) | "vendor" (the vendor's own
+    #: chunked function, declared with its source), "activation_bytes", "states"}}. The runtime runs the first chunk
+    #: graph, then the next one carrying the states (`core/module/temporal_stream_runner.py`), both engines.
+    component_stream: Dict = field(default_factory=dict)
+    #: Why a component with a stream was not streamed ({component: reason}).
+    stream_declined: Dict = field(default_factory=dict)
     #: The loop components whose classifier-free guidance runs its branches ONE PASS EACH instead of
     #: one batch holding both (`_split_guidance_batch`). Set only when no plan holds the request on
     #: the accelerator at the guidance batch and one does at the batch of a single branch: the
@@ -999,7 +1007,7 @@ class PrismSolver:
         mib = 1024 * 1024
         by_name = {d.device_string: d for d in (devices or [])}
         streamed = set(plan.layer_stream_plan or {})
-        tiled = set(plan.component_tiling or {})
+        tiled = set(plan.component_tiling or {}) | set(getattr(plan, "component_stream", None) or {})
         whole_mb: Dict[str, float] = {}
         for name, alloc in plan.components.items():
             dev = by_name.get(str(alloc.device))
@@ -1967,6 +1975,9 @@ class PrismSolver:
         # the tile sizer can read the runtime spatial extent.
         self._component_tiling = {}
         self._tiling_exactness = {}
+        # The components run in temporal chunks ({component: spec}) and why one was not (`_temporal_stream`).
+        self._component_stream = {}
+        self._stream_declined = {}
         # The expert stores the lazy_sequential pass places on a unified device (`_place_component`).
         self._unified_expert_stores = {}
         # The host rungs' own device sizing under the Triton engine (`_size_host_placement_on_device`),
@@ -1989,6 +2000,9 @@ class PrismSolver:
             container, neural_components, input_config, target_dtype_str,
             profile=profile, component_dtypes=component_dtypes,
         )
+        # A component whose vendor's own reference runs in temporal chunks runs so at every request: its
+        # activations are one chunk's (`_declared_streams`).
+        self._declared_streams(container, component_memory, profile)
         sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
         # Step 3: Prepare devices
@@ -2520,6 +2534,10 @@ class PrismSolver:
             plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
         plan.tiling_exactness = {cn: dict(v) for cn, v in (getattr(self, "_tiling_exactness", {}) or {}).items()
                                  if cn in plan.components}
+        plan.component_stream = {cn: dict(v) for cn, v in (getattr(self, "_component_stream", {}) or {}).items()
+                                 if cn in plan.components}
+        plan.stream_declined = {cn: str(v) for cn, v in (getattr(self, "_stream_declined", {}) or {}).items()
+                                if cn in plan.components and cn not in plan.component_stream}
         self._assign_drain_cliffs(container, plan, devices)
         self._assign_attention_budgets(plan, profile)
 
@@ -5016,6 +5034,8 @@ class PrismSolver:
         # attempt never leaves stale entries (the chosen pass repopulates).
         self._component_tiling = {}
         self._tiling_exactness = {}
+        self._component_stream = {cn: sp for cn, sp in (getattr(self, "_component_stream", {}) or {}).items()
+                                  if sp.get("reference") == "vendor"}
         # Likewise the expert stores this pass places on a unified device ({component: dense + floor
         # MB}, `_place_component` Strategy 2.5), read by the KV check and `_build_plan`.
         self._unified_expert_stores = {}
@@ -5075,6 +5095,135 @@ class PrismSolver:
             return
         self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
         self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
+
+    def _stream_declaration(self, container, comp_name: str):
+        """The component's temporal stream declaration with its two graphs (`temporal_stream.load`), read once per
+        solve; None when the container carries none."""
+        from neurobrix.core.prism import temporal_stream as _ts
+        cache_path = getattr(container, "_cache_path", None)
+        if cache_path is None:
+            return None
+        memo = self.__dict__.setdefault("_stream_decls", {})
+        key = (str(cache_path), comp_name)
+        if key not in memo:
+            memo[key] = _ts.load(cache_path, comp_name)
+        return memo[key]
+
+    def _temporal_stream(self, container, comp_name: str, room_bytes: Optional[int]):
+        """The temporal stream `comp_name` runs this request in, or None (the reason recorded in
+        `_stream_declined`): its vendor's chunks when its declaration carries them, else the exact schedule of the
+        longest chunk whose activations fit `room_bytes` (None: no fit asked — the vendor's chunks are its function).
+
+        Priced as a whole component is: the activation profiler on each chunk graph, its time symbol bound to the
+        chunk (`InputConfig.chunk_frames`), at the widths the engine executes; plus the clip's input and output the
+        chunks read and fill, and the states carried between chunks."""
+        import dataclasses
+        import json as _json
+        from types import SimpleNamespace
+        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        decl = self._stream_declaration(container, comp_name)
+        if decl is None:
+            return None
+        declined = self.__dict__.setdefault("_stream_declined", {})
+        if decl.get("coupling") and not decl.get("vendor_chunks"):
+            declined[comp_name] = (f"its time is coupled ({decl['coupling']['why']} at {decl['coupling']['op']}) "
+                                   f"and its vendor's reference does not chunk it")
+            return None
+        ic = self._input_config
+        cache_path = getattr(container, "_cache_path")
+        clip = _json.loads((cache_path / "components" / comp_name / "graph.json").read_text())
+        smap = ActivationProfiler(clip).build_symbol_map(ic)
+        frames = smap.get(decl["symbol"])
+        if not isinstance(frames, int) or frames < 1:
+            declined[comp_name] = f"the request binds no frame count to its time symbol {decl['symbol']}"
+            return None
+        comp_dtype = self._get_component_dtype(container, comp_name)
+        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+
+        def tensor_bytes(dag, tid):
+            from neurobrix.core.runtime import symexpr as _symexpr
+            n = 1
+            for d in dag["tensors"][tid]["symbolic_shape"]["dims"]:
+                n *= int(_symexpr.evaluate(d, lambda sid, _n: smap[sid], _symexpr.SHAPE))
+            return n * dtype_bytes
+
+        # Held for the whole stream: the clip's input the chunks are sliced from and the clip's output they fill.
+        held = (tensor_bytes(clip, decl["output"])
+                + sum(tensor_bytes(clip, t) for t in clip.get("input_tensor_ids", [])
+                      if t in clip["tensors"] and not clip["tensors"][t].get("is_parameter")))
+        # The carried states: inside a chunk they are its graph's inputs and outputs, which the chunk's profile
+        # counts while they live; between two chunks the runner copies each state out of the run that made it
+        # (`temporal_stream_runner`), so the states then exist twice beside that chunk's output.
+        states = _ts.state_bytes(decl, smap, dtype_bytes)
+        profile = getattr(self, "_profile", None)
+        peaks: Dict[tuple, int] = {}
+
+        def peak(kind: str, length: int) -> int:
+            if (kind, length) not in peaks:
+                dag = decl["dags"][kind]
+                prof = ActivationProfiler(dag)
+                cic = dataclasses.replace(ic, chunk_frames=int(length))
+                widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=dag), container, prof, cic,
+                                                 comp_dtype, profile)
+                peaks[(kind, length)] = int(prof.estimate_peak_memory(
+                    input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
+                    attention_scratch=self._attention_scratch(profile)).peak_bytes)
+            return peaks[(kind, length)]
+
+        def chunk_out(kind: str, length: int) -> int:
+            return tensor_bytes(clip, decl["output"]) * _ts.output_frames(decl, kind, length) // max(
+                1, _ts.clip_output_frames(clip, decl, smap))
+
+        def cost(sched) -> int:
+            per = [(peak("first" if i == 0 else "next", n), chunk_out("first" if i == 0 else "next", n))
+                   for i, n in enumerate(sched)]
+            c = held + max(max(p, y + 2 * states) for p, y in per)
+            if os.environ.get("NBX_PRISM_STREAM_DIAG") == "1":
+                print(f"[PRISM-STREAM-DIAG] {comp_name}: schedule {sched} held {held / 2**20:,.0f} MB, states "
+                      f"{states / 2**20:,.0f} MB, chunk peaks {[round(p / 2**20) for p, _ in per]} MB -> "
+                      f"{c / 2**20:,.0f} MB", flush=True)
+            return c
+
+        sched = _ts.choose(decl, frames, (lambda sc: cost(sc) <= room_bytes) if room_bytes is not None
+                           else (lambda sc: True))
+        if sched is None:
+            declined[comp_name] = (f"no exact chunk of its {frames} frames fits {room_bytes / 2**20:,.0f} MB "
+                                   f"(one frame per chunk needs {cost(_ts.exact_schedule(decl, frames, 1) or [1]) / 2**20:,.0f} MB)"
+                                   if room_bytes is not None else f"no exact schedule of its {frames} frames")
+            return None
+        bad = _ts.broken(decl, sched)
+        if bad:
+            declined[comp_name] = f"its vendor's chunks {sched} are not exact for its derived graphs: {bad}"
+            return None
+        vc = decl.get("vendor_chunks")
+        spec = {"schedule": list(sched), "frames": frames, "reference": "vendor" if vc else "clip",
+                "source": (vc or {}).get("source") or "derived from the clip graph (Forge temporal_stream)",
+                "activation_bytes": cost(sched), "states": len(decl["states"])}
+        if room_bytes is not None and spec["activation_bytes"] > room_bytes:
+            declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB "
+                                   f"of the {room_bytes / 2**20:,.0f} MB left")
+            return None
+        declined.pop(comp_name, None)
+        return spec
+
+    def _declared_streams(self, container, component_memory, profile) -> None:
+        """Every component whose stream declares its vendor's chunks runs in them at every request — that chunked
+        function IS its reference (CogVideoX's `_decode`, decision 2026-10-16 21:30) — so its activations are
+        one chunk's, before any rung prices it."""
+        self._profile = profile
+        for name, mem in component_memory.items():
+            decl = self._stream_declaration(container, name)
+            if decl is None or not decl.get("vendor_chunks"):
+                continue
+            spec = self._temporal_stream(container, name, None)
+            if spec is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: {name}'s vendor runs it in temporal chunks (its declared reference), and no "
+                    f"schedule of them is read for this request: {self._stream_declined.get(name)}")
+            self._component_stream[name] = spec
+            mem.activation_bytes = int(spec["activation_bytes"])
+            mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
 
     def _tile_only_if_exact(self, comp_name: str, graph: Dict[str, Any], profile_j: Dict[str, Any],
                             full_act: int, rung_mb: int):
@@ -5764,6 +5913,17 @@ class PrismSolver:
         # function of (request, rung) and the spec names the rung it stood on.
         # The live reading itself: the rung inside rounds it ONCE (the law
         # forbids a second rounding of an already-quantised figure).
+        # Strategy 3.4: a temporal stream — the component in exact time chunks carrying its causal states
+        # (Forge-derived from its graph, `core/prism/temporal_stream.py`). Above spatial tiling: every chunk
+        # is the clip's function exactly (or the vendor's own), and the card keeps the whole component.
+        if comp_name not in self._component_stream and self._stream_declaration(container, comp_name):
+            cost_mult = largest.get_cost_multiplier(self._get_component_dtype(container, comp_name))
+            room = int((usable - mem.weight_mb * cost_mult) * 1024 * 1024 / (1.0 + self.overhead_factor))
+            stream = self._temporal_stream(container, comp_name, room) if room > 0 else None
+            if stream is not None:
+                self._component_stream[comp_name] = stream
+                shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
         tiling = self._spatial_component_tiling(
             container, comp_name, mem, largest.tile_rung_mb or rung_down_mb(largest.free_mb))
         if tiling is not None:
@@ -6040,7 +6200,8 @@ class PrismSolver:
     #: cascade on another request and puts these back when it does not keep the result, so a
     #: declined split leaves the plan exactly as the guidance batch made it.
     _RUNG_STATE = (
-        "_strategies_tried", "_layer_streaming_declined", "_rejected", "_component_tiling",
+        "_strategies_tried", "_layer_streaming_declined", "_rejected", "_component_tiling", "_component_stream",
+        "_stream_declined",
         "_host_device_tilings", "_host_device_overflow", "_host_device_card", "_tiling_declined",
         "_tiling_declined_by_rung", "_arena_declined", "_tiling_rung_figure", "_input_config",
         "_output_elements", "_op_tiling_declined", "_op_tiling_plans", "_op_tiling_from_rung",
@@ -8184,7 +8345,9 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                for cn, tp in (plan.runtime_op_tiling or {}).items()},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
                                 for k, v in (plan.component_tiling or {}).items()},
-           "tiling_exactness": {k: dict(v) for k, v in (getattr(plan, "tiling_exactness", None) or {}).items()}}
+           "tiling_exactness": {k: dict(v) for k, v in (getattr(plan, "tiling_exactness", None) or {}).items()},
+           "component_stream": {k: dict(v) for k, v in (getattr(plan, "component_stream", None) or {}).items()},
+           "stream_declined": dict(getattr(plan, "stream_declined", None) or {})}
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype,
@@ -8301,6 +8464,11 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     for name, spec in (plan.component_tiling or {}).items():
         short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
         lines.append(f"component tiling {name}: {short}")
+    for name, spec in (getattr(plan, "component_stream", None) or {}).items():
+        lines.append(f"temporal stream {name}: chunks {spec.get('schedule')} of {spec.get('frames')} frames, "
+                     f"reference {spec.get('reference')}, {spec.get('states')} states")
+    for name, why in (getattr(plan, "stream_declined", None) or {}).items():
+        lines.append(f"temporal stream {name}: not run — {why}")
     if not plan.runtime_op_tiling and not plan.component_tiling:
         lines.append("tiling          none planned")
         # WHY, not just "none". `_op_tiling_declined` was assigned in three

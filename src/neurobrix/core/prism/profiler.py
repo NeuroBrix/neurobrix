@@ -55,6 +55,10 @@ class InputConfig:
     # VAE convention); temporal_compression comes from the model's
     # defaults.json (`temporal_compression_ratio`), data-driven.
     num_frames: Optional[int] = None
+    # One chunk of a temporal stream (`core/prism/temporal_stream.py`): the time extent, in the component's own input
+    # frames, of the chunk a stream graph is priced at — its time symbol binds to it, whatever the request's frames.
+    # None: the component runs its clip whole.
+    chunk_frames: Optional[int] = None
     temporal_compression: Optional[int] = None
     # The request's flow (`core.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
     # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
@@ -763,6 +767,9 @@ class ActivationProfiler:
             name = info.get("name")
             trace = info.get("trace_value")
             if pixel_space and name in ("time", "height", "width"):
+                if name == "time" and input_config.chunk_frames is not None:
+                    symbol_map[sid] = int(input_config.chunk_frames)
+                    continue
                 if name == "time" and input_config.num_frames:
                     symbol_map[sid] = input_config.num_frames
                     continue
@@ -784,6 +791,8 @@ class ActivationProfiler:
                 # Matches the legacy concrete-shape behavior exactly.
                 symbol_map[sid] = trace if isinstance(trace, int) else (
                     input_config.batch_size)
+            elif name == "time" and input_config.chunk_frames is not None:
+                symbol_map[sid] = int(input_config.chunk_frames)
             elif name == "time":
                 if latent_t is None:
                     raise MissingRuntimeValue(

@@ -1211,6 +1211,12 @@ class RuntimeExecutor:
         # Execute: Check for tiling first, then TP, then normal
         output = None
 
+        # TEMPORAL STREAM: the plan runs this component in exact time chunks (Prism Strategy 3.4, or the
+        # chunks its vendor's own reference runs in) through the two graphs Forge derived from its clip graph.
+        stream = (getattr(self.plan, "component_stream", None) or {}).get(comp_name)
+        if output is None and stream is not None:
+            output = self._run_temporal_stream(comp_name, executor, comp_inputs, stream)
+
         # UNIVERSAL TILING: Any component with a TilingEngine gets tiled
         # when its spatial input exceeds trace size
         tiling = self._component_tiling.get(comp_name)
@@ -1364,6 +1370,43 @@ class RuntimeExecutor:
         return None
 
     # ========== WEIGHT MANAGEMENT ==========
+
+    def _run_temporal_stream(self, comp_name: str, executor, comp_inputs: Dict[str, Any], spec: Dict[str, Any]):
+        """The component's output, computed in the plan's temporal chunks (`core/module/temporal_stream_runner.py`).
+        The two chunk graphs run on piece executors that BORROW the component's loaded weights (one copy, the
+        layer-streaming pieces' rule), on its device, in the run's engine."""
+        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.core.module.temporal_stream_runner import run_stream
+        from neurobrix.core.strategies.layer_streaming import LayerStreamingStrategy
+        cache_path = ensure_extracted(Path(self._nbx_path_str))
+        memo = self.__dict__.setdefault("_stream_runtime", {})
+        if comp_name not in memo:
+            decl = _ts.load(cache_path, comp_name)
+            if decl is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the plan runs '{comp_name}' as a temporal stream and its container carries "
+                    f"no stream declaration (components/{comp_name}/stream.json)")
+            pieces = {k: LayerStreamingStrategy._piece_executor(executor, decl["dags"][k], comp_name, executor)
+                      for k in ("first", "next")}
+            memo[comp_name] = (decl, pieces)
+        decl, pieces = memo[comp_name]
+        params = getattr(executor, "_weight_loading_params", None) or {}
+        for p in pieces.values():
+            p.load_weights(params.get("nbx_path", self._nbx_path_str), comp_name, params.get("shard_map"))
+        input_name = decl["dags"]["first"]["tensors"][decl["input"]].get("input_name")
+        if input_name not in comp_inputs:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' streams its input {input_name!r} and the run gave "
+                               f"{sorted(comp_inputs)}")
+        extra = sorted(set(comp_inputs) - {input_name})
+        if extra:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' streams one input, {input_name!r}; the run also gives "
+                               f"{extra}, which no chunk graph reads")
+        try:
+            return run_stream(decl, list(spec["schedule"]), comp_inputs[input_name], input_name,
+                              pieces["first"].run, pieces["next"].run)
+        finally:
+            for p in pieces.values():
+                p.unload_weights()
 
     def _ensure_weights_loaded(self, comp_name: str) -> None:
         """Lazily load weights for a component if not already loaded."""
