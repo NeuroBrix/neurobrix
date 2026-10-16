@@ -347,6 +347,13 @@ Compiled engine (`core/runtime/graph/kv_cache_wrapper.py`): the same pools as to
 sequence's pages through the block table into the K / V the attention reads (`index_select` over pages), the append is
 an index_copy through the slot mapping. One gather per layer per step; the paged read kernel stays the Triton branch's.
 
+Fences (the Mac's check, 2026-10-16 12:08): page REUSE needs none on CUDA nor on either Metal engine — the pool is fixed,
+never returned to an allocator, and every write into a page is GPU work on the queue that reads it (the append and a
+copy-on-write copy are kernels, never a host write or a blit on another queue). What can need one is the host REWRITING a
+fixed device buffer (slot mapping, block table, sequence lengths) that a queued kernel may still read: the caches take an
+optional `fence` (`record()` / `drain(...)`) at that rewrite. Today it is idle on Metal only because the Apple driver
+waits after every launch (triton_ext_driver.py:345); when that wait goes, these rewrites need the fence or double buffers.
+
 Proofs: decode tokens equal to the contiguous cache's and to the oracle (5-10 tokens) on TinyLlama, whisper-large-v3-turbo
 and one GQA decoder, both engines; the cache's memory equals pages granted x page bytes (never max_len); the gate.
 
