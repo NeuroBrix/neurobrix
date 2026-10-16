@@ -47,27 +47,29 @@ GB = 1024 ** 3
 REAL_ENCODERS = ["Allegro-TI2V", "CogVideoX-5b-I2V", "Wan2.1-VACE-1.3B-diffusers"]
 
 
-def _decide(container, comp, activation_bytes):
+def _decide(container, comp, activation_bytes, solver=False):
     s = PrismSolver()
     # 720 x 1280, 88 frames: on every lattice these encoders declare (8 spatial, 4 temporal).
     s._input_config = InputConfig(batch_size=1, height=720, width=1280, num_frames=88,
                                   temporal_compression=4)
     mem = ComponentMemory(component_name=comp, weight_bytes=int(0.3 * GB),
                           activation_bytes=activation_bytes, overhead_bytes=0)
-    return s._spatial_component_tiling(container, comp, mem, RUNG_MB)
+    spec = s._spatial_component_tiling(container, comp, mem, RUNG_MB)
+    return (s, spec) if solver else spec
 
 
-@pytest.mark.parametrize("model,tiled", [("Allegro-TI2V", True), ("CogVideoX-5b-I2V", False),
-                                         ("Wan2.1-VACE-1.3B-diffusers", True)])
-def test_a_real_encoder_reaching_the_branch_gets_a_decision_not_a_crash(model, tiled):
+#: Since 2026-10-16 no real encoder of this cache is tiled in space: each one couples its spatial
+#: extent (Allegro-TI2V and CogVideoX-5b-I2V a group norm, Wan2.1-VACE a mid-block attention over
+#: H x W), so a tile is not the encoder (test_an_encoder_that_couples_space_is_never_tiled_in_space).
+#: The branch is still reached and still decides — a decline that names its reason, never a crash.
+@pytest.mark.parametrize("model,why", [("Allegro-TI2V", "group_norm"),
+                                       ("CogVideoX-5b-I2V", "group_norm"),
+                                       ("Wan2.1-VACE-1.3B-diffusers", "attention")])
+def test_a_real_encoder_reaching_the_branch_gets_a_decision_not_a_crash(model, why):
     container = SimpleNamespace(_cache_path=container_root(model))
-    spec = _decide(container, "vae_encoder", 80 * GB)
-    if tiled:
-        assert spec is not None and "t_tile" not in spec, (
-            f"{model}'s encoder is tiled in space with the whole clip: {spec}")
-        assert {k: spec[k] for k in SPACE_TILED} == SPACE_TILED_AT_THE_RUNG, (model, spec)
-    else:
-        assert spec is None, f"{model}'s encoder has no time map the engine tiles: {spec}"
+    s, spec = _decide(container, "vae_encoder", 80 * GB, solver=True)
+    assert spec is None, f"{model}'s encoder couples its spatial extent and was tiled: {spec}"
+    assert why in s._tiling_declined.get("vae_encoder", ""), (model, s._tiling_declined)
 
 
 #: The spec of a down-map encoder tiled in space with the whole clip in every tile, at 720 x 1280

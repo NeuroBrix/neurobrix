@@ -290,6 +290,103 @@ def temporal_causal_downscale_ratio(dag: Dict) -> Optional[tuple]:
     return None
 
 
+def _symbols_of(node, out: Optional[set] = None) -> set:
+    """Every symbol id a symbolic dim expression tree references."""
+    out = set() if out is None else out
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            out.add(node.get("id"))
+        for key in ("left", "right", "operand"):
+            if key in node:
+                _symbols_of(node[key], out)
+        for f in node.get("factors", ()) or ():
+            _symbols_of(f, out)
+    return out
+
+
+#: Ops whose result at one position reads EVERY position of the axes they reduce — (op name, index
+#: of the dim argument in `attributes.args`, or None for "every axis past the channel one").
+_REDUCING_OPS = {
+    "mean": 1, "sum": 1, "amax": 1, "amin": 1, "var": 1, "std": 1, "logsumexp": 1, "var_mean": 1,
+    "std_mean": 1, "linalg_vector_norm": 2, "_softmax": 1, "softmax": 1, "_log_softmax": 1,
+    "log_softmax": 1, "native_group_norm": None, "group_norm": None,
+}
+_CONTRACTING_OPS = frozenset({"mm", "bmm", "matmul", "baddbmm", "addbmm"})
+
+
+def spatial_coupling(dag: Dict) -> Optional[tuple]:
+    """The first op of `dag` whose output at one position reads every position of the spatial
+    extent a spatial tile would cut, or None when no op does.
+
+    A spatial tile (`TilingEngine`) runs the component on a window of the input's height and width:
+    exact only where every op is local in space (a convolution's window, a per-position op). An
+    attention whose keys span the spatial extent, a softmax, a reduction or a group norm over it,
+    a matmul contracting it, computes something else on a tile — every position of the tile then
+    reads the tile instead of the whole extent (diffusers says the same of its own tiled encode:
+    "The end result of tiled encoding is different from non-tiled encoding because each tile uses
+    a different encoder", AutoencoderKL.tiled_encode). Read from the graph's symbolic shapes: the
+    spatial symbols are those of the rank-4/5 input's last two dims, and an axis couples space when
+    its extent's expression references one of them.
+
+    Returns (op_uid, reason) — the op and what it reduces — or, when the input's spatial dims are not
+    symbols (coupling cannot be read), ("", reason). None: no op couples the spatial extent."""
+    tensors = dag.get("tensors", {})
+    spatial = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) in (4, 5):
+            spatial = set()
+            for d in dims[-2:]:
+                if not (isinstance(d, dict) and d.get("type") == "symbol"):
+                    return ("", f"its input {iid}'s height and width are not symbols, so whether an op "
+                                f"couples them cannot be read")
+                spatial.add(d.get("id"))
+            break
+    if spatial is None:
+        return ("", "its graph has no rank-4 or rank-5 input")
+
+    def couples(tid, axes):
+        dims = _symbolic_dims(tensors, tid)
+        for a in axes:
+            if -len(dims) <= a < len(dims) and _symbols_of(dims[a]) & spatial:
+                return True
+        return False
+
+    ops = dag.get("ops", {})
+    for uid in dag.get("execution_order", []) or list(ops):
+        op = ops.get(uid) or {}
+        name = str(op.get("op_type") or "").split("::")[-1].split(".")[0]
+        ins = op.get("input_tensor_ids") or []
+        if not ins:
+            continue
+        if _is_attention(op.get("op_type")):
+            # the keys' sequence axis (-2 of [B, H, S, D] or [B, S, D]) is what every query attends
+            if len(ins) > 1 and couples(ins[1], (-2,)):
+                return (uid, "an attention whose keys span the spatial extent")
+            continue
+        if name in _CONTRACTING_OPS:
+            first = ins[1] if name in ("baddbmm", "addbmm") and len(ins) > 1 else ins[0]
+            if couples(first, (-1,)):
+                return (uid, "a matmul contracting the spatial extent")
+            continue
+        if name in _REDUCING_OPS:
+            rank = len(_symbolic_dims(tensors, ins[0]))
+            at = _REDUCING_OPS[name]
+            if at is None:
+                axes = tuple(range(2, rank))
+            else:
+                args = (op.get("attributes") or {}).get("args") or []
+                arg = args[at] if at < len(args) else None
+                val = arg.get("value") if isinstance(arg, dict) else None
+                if val is None:
+                    axes = tuple(range(rank))         # no dim: the whole tensor is reduced
+                else:
+                    axes = tuple(val) if isinstance(val, (list, tuple)) else (val,)
+            if couples(ins[0], axes):
+                return (uid, f"a {name} over the spatial extent")
+    return None
+
+
 def render_symbolic_expr(node) -> str:
     """A symbolic dim expression tree as text — `((s1+1)//2)` — for a refusal that must name it."""
     if isinstance(node, dict):

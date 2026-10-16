@@ -5407,8 +5407,8 @@ class PrismSolver:
           class (the causal class carries the whole clip in every tile).
         """
         import math
-        from neurobrix.core.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
-                                                   temporal_map_unread)
+        from neurobrix.core.prism.profiler import (spatial_coupling, temporal_causal_downscale_ratio,
+                                                   temporal_downscale_ratio, temporal_map_unread)
 
         ic = getattr(self, "_input_config", None)
         if ic is None:
@@ -5417,6 +5417,21 @@ class PrismSolver:
         full_act = mem.activation_bytes
         if full_act <= budget_bytes or full_act <= 0:
             return None  # fits untiled — guard's decline stands
+
+        # A spatial tile is the untiled encoder only where every op is local in space. An attention,
+        # a softmax, a reduction or a group norm over the spatial extent reads every position of it,
+        # so on a tile each position reads the tile instead (`spatial_coupling`): the latents differ
+        # everywhere, most at the seams, and a conditioning latent carries that error into every
+        # step that reads it (Wan2.2-I2V at 17 frames on a 16 GB card, 2026-10-16: the tiled encode
+        # 0.54% from the untiled one, 2.8% on a seam; the transformer's first projection 10x the
+        # untiled run's error, the step-1 velocity 3.4% from the float32 vendor against 0.3%).
+        coupled = spatial_coupling(graph)
+        if coupled is not None:
+            uid, what = coupled
+            return self._tiling_decline(
+                comp_name, f"a spatial tile is not the untiled encoder: {what}"
+                           + (f" at {uid}" if uid else "")
+                           + " — every position of a tile would read the tile, not the whole extent")
 
         tmap = temporal_downscale_ratio(graph)
         causal = False
