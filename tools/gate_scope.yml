@@ -60,7 +60,8 @@ planner:
   # its gate scoped 0 cells.
   plan_fields: [strategy, loading_mode, dtype, planned_memory_mb, device_window_mb, components, op_level_tiling,
                 conv3d_chunks, op_level_tiling_ops, component_tiling, cfg_split_components, host_footprint,
-                kv_cache, deferred_drain_cliffs, layer_stream_chunks, expert_working_set, cpu_ram_mb]
+                kv_cache, deferred_drain_cliffs, layer_stream_chunks, expert_working_set, cpu_ram_mb,
+                tiling_exactness]
   # what the plan record says ABOUT the choice (why, what it beat, what it refused, the rungs it searched) — never
   # what runs. Every key of core/prism/solver.plan_record is in plan_fields or here
   # (tests/unit/tools/test_the_gate_compares_every_decision_the_plan_carries.py).

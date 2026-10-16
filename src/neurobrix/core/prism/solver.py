@@ -454,6 +454,10 @@ class ExecutionPlan:
     # resolution; reuses the R31 TilingEngine brick). Each entry:
     # {"tile_size", "scale_factor", "overlap", "window_alignment"}.
     component_tiling: Dict = field(default_factory=dict)
+    #: Whether a spatial tile of a component is that component (`PrismSolver._tile_only_if_exact`): per component
+    #: considered for tiling, {"exact": bool, "why": text, "op": the op that couples space or None}. A component
+    #: whose entry is not exact is never tiled (owner, 2026-10-16: Prism chooses only exact cuts, read from the graph).
+    tiling_exactness: Dict = field(default_factory=dict)
     #: The loop components whose classifier-free guidance runs its branches ONE PASS EACH instead of
     #: one batch holding both (`_split_guidance_batch`). Set only when no plan holds the request on
     #: the accelerator at the guidance batch and one does at the batch of a single branch: the
@@ -1962,6 +1966,7 @@ class PrismSolver:
         # executor to instantiate a TilingEngine. _input_config is stashed so
         # the tile sizer can read the runtime spatial extent.
         self._component_tiling = {}
+        self._tiling_exactness = {}
         # The expert stores the lazy_sequential pass places on a unified device (`_place_component`).
         self._unified_expert_stores = {}
         # The host rungs' own device sizing under the Triton engine (`_size_host_placement_on_device`),
@@ -2175,7 +2180,7 @@ class PrismSolver:
                 )
 
         if not candidates:
-            self._fail_error(sorted_components, devices)
+            self._fail_error(sorted_components, devices, host_mb=self._host_budget_mb(profile))
 
         # TILING BEATS OFFLOADING THE SAME COMPONENT.
         #
@@ -2513,6 +2518,8 @@ class PrismSolver:
         if _host_t:
             plan.component_tiling = dict(plan.component_tiling or {})
             plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
+        plan.tiling_exactness = {cn: dict(v) for cn, v in (getattr(self, "_tiling_exactness", {}) or {}).items()
+                                 if cn in plan.components}
         self._assign_drain_cliffs(container, plan, devices)
         self._assign_attention_budgets(plan, profile)
 
@@ -5008,6 +5015,7 @@ class PrismSolver:
         # Reset component-tiling flags for this placement pass so a rejected
         # attempt never leaves stale entries (the chosen pass repopulates).
         self._component_tiling = {}
+        self._tiling_exactness = {}
         # Likewise the expert stores this pass places on a unified device ({component: dense + floor
         # MB}, `_place_component` Strategy 2.5), read by the KV check and `_build_plan`.
         self._unified_expert_stores = {}
@@ -5067,6 +5075,33 @@ class PrismSolver:
             return
         self.__dict__.setdefault("_tiling_declined_by_rung", {}).setdefault(rung, {})[comp_name] = why
         self.__dict__.setdefault("_tiling_rung_figure", {})[rung] = (card, float(usable_mb))
+
+    def _tile_only_if_exact(self, comp_name: str, graph: Dict[str, Any], profile_j: Dict[str, Any],
+                            full_act: int, rung_mb: int):
+        """None when a spatial tile of `comp_name` is the untiled component (no op couples its spatial extent, or its
+        vendor's own reference is tiled and declared so); else what stops the tile — and then the plan never tiles it
+        (owner, 2026-10-16 18:40: Prism chooses only exact cuts, exactness read from the graph, never from a model list).
+
+        The record goes into the plan (`ExecutionPlan.tiling_exactness`). A coupled component is never tiled: Prism
+        descends the ladder of EXACT strategies for it (Hocine, 2026-10-16 18:42) and refuses only at its bottom
+        (`machine_cannot_run`)."""
+        from neurobrix.core.prism.profiler import spatial_coupling
+        declared = (profile_j.get("vendor_tiling") or None)
+        if declared:
+            # The vendor's reference itself tiles (its untiled path does not exist): the declaration, with its
+            # source, written by the build from the registry, is the one exception.
+            self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {
+                "exact": True, "why": f"its vendor's reference tiles ({declared.get('source', 'declared')})"}
+            return None
+        coupled = spatial_coupling(graph)
+        if coupled is None:
+            self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {"exact": True, "why": "no op couples space"}
+            return None
+        uid, what = coupled
+        why = (f"a spatial tile is not the untiled component: {what}" + (f" at {uid}" if uid else "")
+               + " — every position of a tile would read the tile, not the whole extent")
+        self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {"exact": False, "op": uid or None, "why": why}
+        return why
 
     def _spatial_component_tiling(
         self, container: "NBXContainer", comp_name: str,
@@ -5227,6 +5262,9 @@ class PrismSolver:
                   f"-> {'TILE' if full_act > budget_bytes else 'native'}", flush=True)
         if full_act <= budget_bytes or full_act <= 0:
             return None  # fits untiled — no tiling needed
+        inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)
+        if inexact is not None:
+            return self._tiling_decline(comp_name, inexact)
 
         # Runtime latent spatial extent (the input space the tiles cover).
         # `or 8` and `or 1024` stood here: a tiling decision taken against an
@@ -5407,8 +5445,8 @@ class PrismSolver:
           class (the causal class carries the whole clip in every tile).
         """
         import math
-        from neurobrix.core.prism.profiler import (spatial_coupling, temporal_causal_downscale_ratio,
-                                                   temporal_downscale_ratio, temporal_map_unread)
+        from neurobrix.core.prism.profiler import (temporal_causal_downscale_ratio, temporal_downscale_ratio,
+                                                   temporal_map_unread)
 
         ic = getattr(self, "_input_config", None)
         if ic is None:
@@ -5425,13 +5463,9 @@ class PrismSolver:
         # step that reads it (Wan2.2-I2V at 17 frames on a 16 GB card, 2026-10-16: the tiled encode
         # 0.54% from the untiled one, 2.8% on a seam; the transformer's first projection 10x the
         # untiled run's error, the step-1 velocity 3.4% from the float32 vendor against 0.3%).
-        coupled = spatial_coupling(graph)
-        if coupled is not None:
-            uid, what = coupled
-            return self._tiling_decline(
-                comp_name, f"a spatial tile is not the untiled encoder: {what}"
-                           + (f" at {uid}" if uid else "")
-                           + " — every position of a tile would read the tile, not the whole extent")
+        inexact = self._tile_only_if_exact(comp_name, graph, profile_j, full_act, rung_mb)
+        if inexact is not None:
+            return self._tiling_decline(comp_name, inexact)
 
         tmap = temporal_downscale_ratio(graph)
         causal = False
@@ -7925,7 +7959,10 @@ class PrismSolver:
     def _empty_plan(self, profile: PrismProfile) -> ExecutionPlan:
         return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
 
-    def _fail_error(self, sorted_comps, devices):
+    def _fail_error(self, sorted_comps, devices, host_mb: Optional[float] = None):
+        """THE one refusal of a plan for capacity (Hocine, 2026-10-16 18:42): reached only when every exact strategy,
+        down to the last resort on the CPU, cannot run the model; it says so — "This model cannot run on this machine"
+        — with the memory required and the memory available, card and host."""
         total_req = sum(m.total_mb for _, m in sorted_comps)
         total_avail = sum(d.capacity_mb for d in devices)
         comp_info = "\n".join(f"  {n}: {m.total_mb:.0f}MB (W={m.weight_mb:.0f}, A={m.activation_mb:.0f})" for n, m in sorted_comps)
@@ -8057,7 +8094,8 @@ class PrismSolver:
             f"Components:\n{comp_info}\n\n"
             f"Total required: {total_req:.0f}MB\n\n"
             f"GPUs:\n{dev_info}\n\n"
-            f"Total GPU available: {total_avail:.0f}MB\n\n"
+            f"Total GPU available: {total_avail:.0f}MB\n"
+            + (f"Host RAM available to the last rung: {host_mb:.0f}MB\n\n" if host_mb else "\n") +
             f"What would make it run:\n"
             + (f"  1. More memory — the streaming path above says what it lacked\n" if (_unified or _triton) else
                f"  1. More host RAM — the streaming path needs {peak_mb:.0f}MB for that one component\n") +
@@ -8145,7 +8183,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                     "tiled_ops": sorted([str(u), int(tf)] for u, _t, tf in getattr(tp, "tiled_ops", []) or [])}
                for cn, tp in (plan.runtime_op_tiling or {}).items()},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
-                                for k, v in (plan.component_tiling or {}).items()}}
+                                for k, v in (plan.component_tiling or {}).items()},
+           "tiling_exactness": {k: dict(v) for k, v in (getattr(plan, "tiling_exactness", None) or {}).items()}}
     if plan.kv_cache_plan is not None:
         kv = plan.kv_cache_plan
         rec["kv_cache"] = {"max_cache_len": kv.max_cache_len, "memory_bytes": int(kv.memory_bytes), "dtype": kv.dtype,
