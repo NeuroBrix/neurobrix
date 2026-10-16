@@ -8142,6 +8142,97 @@ def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                             batch, nheads, nheads_k, seqlen_k, headdim, q_round=q_round)
 
 
+def paged_kv_append(new, pool, slot_mapping):
+    """Write new positions into a layer's paged pool (state engine step 2, ops/paged_decode_attn.py).
+
+    new [N_tok, H_kv, D] (any float dtype, last dim contiguous) · pool [num_pages, H_kv, page_tokens, D] · slot_mapping
+    [N_tok] int32 (core/state/pages.PageTable.slots: page * page_tokens + position in page). Cast to the pool's dtype on
+    store. Returns the pool."""
+    from .ops.paged_decode_attn import paged_kv_append_kernel
+    n_tok, h_kv, d = (int(x) for x in new.shape)
+    if tuple(pool.shape[1:2]) != (h_kv,) or int(pool.shape[3]) != d:
+        raise ValueError(f"paged_kv_append: new {list(new.shape)} does not fit the pool {list(pool.shape)}")
+    if slot_mapping.nbx_dtype != NBXDtype.int32 or int(slot_mapping.numel()) != n_tok:
+        raise ValueError(f"paged_kv_append: slot_mapping must be int32 [{n_tok}], got {slot_mapping.nbx_dtype} "
+                         f"{list(slot_mapping.shape)}")
+    if new.stride(2) != 1 or pool.stride(3) != 1:
+        raise ValueError("paged_kv_append: the head dim must be contiguous in the new positions and in the pool")
+    if n_tok == 0:
+        return pool
+    _set_device(pool)
+    paged_kv_append_kernel[(n_tok, h_kv)](
+        new, pool, slot_mapping, int(pool.shape[2]),
+        new.stride(0), new.stride(1),
+        pool.stride(0), pool.stride(1), pool.stride(2),
+        BLOCK_D=max(triton.next_power_of_2(d), _fa_min_tile()), D=d,
+        num_warps=1)
+    return pool
+
+
+def paged_decode_attention(q, k_pool, v_pool, block_table, seq_lens, softmax_scale, max_seq_len, block_n):
+    """Decode attention (one query position) read through the page table — the vector split-KV kernel of
+    ops/decode_attn_vec.py on paged K / V, merged by the fixed-order `flash_decode_reduce_kernel`.
+
+    q [B, H, 1, D] contiguous · k_pool / v_pool [num_pages, H_kv, page_tokens, D] · block_table [B, max_pages] int32
+    (-1 past each sequence) · seq_lens [B] int32 · max_seq_len: the longest of seq_lens (sizes the splits; read by the
+    caller from its page tables, never from the device) · block_n: the position tile, one of
+    PAGED_DECODE_TILE_CANDIDATES dividing page_tokens. Output [B, H, 1, D_v] in q's dtype."""
+    from .ops.paged_decode_attn import (paged_decode_attn_split_kernel, PAGED_DECODE_TILE_CANDIDATES,
+                                        PAGED_DECODE_SPLIT_POSITIONS, PAGED_DECODE_MAX_SPLITS)
+    from .ops.flash_decode import flash_decode_reduce_kernel
+    batch, nheads, tq, headdim = (int(x) for x in q.shape)
+    num_pages, nheads_k, page_tokens, d_k = (int(x) for x in k_pool.shape)
+    d_v = int(v_pool.shape[3])
+    if tq != 1 or d_k != headdim or nheads % nheads_k:
+        raise ValueError(f"paged_decode_attention: q {list(q.shape)} against the pool {list(k_pool.shape)}")
+    if block_n not in PAGED_DECODE_TILE_CANDIDATES or page_tokens % block_n:
+        raise ValueError(f"ZERO FALLBACK: tile {block_n} is not a declared candidate {PAGED_DECODE_TILE_CANDIDATES} "
+                         f"dividing the page of {page_tokens} positions — a tile would straddle two pages")
+    for name, t in (("block_table", block_table), ("seq_lens", seq_lens)):
+        if t.nbx_dtype != NBXDtype.int32:
+            raise ValueError(f"paged_decode_attention: {name} must be int32, got {t.nbx_dtype}")
+    if int(block_table.shape[0]) != batch or int(seq_lens.numel()) != batch:
+        raise ValueError(f"paged_decode_attention: block_table {list(block_table.shape)} / seq_lens "
+                         f"{list(seq_lens.shape)} for a batch of {batch}")
+    groups = nheads // nheads_k
+    bhq = batch * nheads
+    BLOCK_D = max(triton.next_power_of_2(max(headdim, d_v)), _fa_min_tile())
+    # The vector decode kernel's split shape (ops/paged_decode_attn.py), each split a whole number of tiles so a split
+    # never starts inside a tile.
+    longest = max(int(max_seq_len), 1)
+    split = max(1, min(int(triton.cdiv(longest, PAGED_DECODE_SPLIT_POSITIONS)), PAGED_DECODE_MAX_SPLITS))
+    seg_len = int(triton.cdiv(int(triton.cdiv(longest, split)), block_n)) * block_n
+
+    q2 = q.reshape(bhq, headdim)
+    dev = f"cuda:{q._device_idx}"
+    opart = NBXTensor.empty((bhq, split, d_v), dtype=NBXDtype.float32, device=dev)
+    mpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
+    lpart = NBXTensor.empty((bhq, split), dtype=NBXDtype.float32, device=dev)
+    out = NBXTensor.empty((bhq, 1, d_v), dtype=q.nbx_dtype, device=dev)
+    _set_device(q)
+    paged_decode_attn_split_kernel[(bhq, split)](
+        q2, k_pool, v_pool, block_table, seq_lens,
+        opart, mpart, lpart,
+        seg_len, page_tokens, float(softmax_scale), nheads,
+        q2.stride(0),
+        k_pool.stride(0), k_pool.stride(1), k_pool.stride(2),
+        v_pool.stride(0), v_pool.stride(1), v_pool.stride(2),
+        block_table.stride(0),
+        opart.stride(0), opart.stride(1),
+        mpart.stride(0),
+        GQA_GROUPS=groups, BLOCK_N=block_n, BLOCK_D=BLOCK_D, D=headdim, D_V=d_v,
+        num_warps=4, num_stages=1)
+    flash_decode_reduce_kernel[(bhq,)](
+        opart, mpart, lpart, out,
+        opart.stride(0), opart.stride(1), d_v,
+        mpart.stride(0), mpart.stride(1),
+        out.stride(0), out.stride(1),
+        SPLIT=split, GROUPS=1, BLOCK_G=max(16, _fa_min_tile()),
+        BLOCK_D=BLOCK_D, D=d_v,
+        num_warps=4)
+    return out.reshape(batch, nheads, 1, d_v)
+
+
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
                      batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Vector (SIMT) decode attention launch pair — see
