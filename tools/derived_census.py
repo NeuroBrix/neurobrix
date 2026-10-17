@@ -1978,7 +1978,9 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
         for comp_v, b in cut_bindings(a.model, comp, g, syms, plan):
-            view, tiled_tf = plan_tiling(plan, comp)
+            # A temporal stream's chunks run on piece executors that carry no op-level tiling (the plan's op-level
+            # cut was sized on the clip's whole extent; the chunk is priced and run untiled): derived untiled too.
+            view, tiled_tf = plan_tiling({} if VARIANT in comp_v else plan, comp)
             for uid, q_, key in derive_component(a.model, comp_v, c["dtype"], a.mode, b,
                                                 prof.has_native_bf16, budget, min_rows, max_chunks,
                                                 unhandled, tiling=view, tiled_tf=tiled_tf):
