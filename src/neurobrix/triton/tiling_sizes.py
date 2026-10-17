@@ -89,13 +89,34 @@ def conv3d_need(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding,
     frame = max(fold_in, fold_out) // max(1, t_out)
     if max(fold_in, fold_out) <= conv3d_chunk_bytes():
         return 0, frame
+    return conv3d_one_shot_peak(x_shape, w_shape, stride, padding, dilation, in_bytes, out_bytes), frame
+
+
+def conv3d_one_shot_peak(x_shape: Sequence[int], w_shape: Sequence[int], stride, padding, dilation,
+                         in_bytes: int, out_bytes: int) -> int:
+    """The bytes the one-shot conv3d path (`_conv3d_via_conv2d`) holds at its peak BESIDE its input: the temporal pad
+    copy, then the larger of (input fold + output fold [+ a band] [+ the kt accumulator]) and (two output folds [+ the
+    accumulator]), and the slack. Its result is among them (one output fold). `conv3d_need` decides the chunking from
+    it; Prism's activation profile prices the op's in-op figure from it on the Triton engines — measured 2026-10-17 on
+    Wan2.1-T2V's VAE: 5,276 MB beside a 1,755 MB output, the formula's 3 x 1,755."""
+    B, Cin, T, H, W = (int(d) for d in x_shape)
+    Cout, _Cg, kt, kh, kw = (int(d) for d in w_shape)
+    st, sh, sw = _triple(stride)
+    pt, ph, pw = _triple(padding)
+    dt, dh, dw = _triple(dilation)
+    t_out = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
+    if t_out <= 0:
+        return 0
+    oh = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+    ow = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    fold_in = B * t_out * Cin * H * W * in_bytes
+    fold_out = B * t_out * Cout * oh * ow * out_bytes
     band = conv2d_band_bytes()
     pad_bytes = B * Cin * (T + 2 * pt) * H * W * in_bytes if pt > 0 else 0
     band_extra = band if fold_out > band else 0
     acc_extra = fold_out if kt >= 2 else 0
-    need = (pad_bytes + max(fold_out + fold_in + band_extra + acc_extra, 2 * fold_out + acc_extra)
+    return (pad_bytes + max(fold_out + fold_in + band_extra + acc_extra, 2 * fold_out + acc_extra)
             + int(_value("conv3d", "slack_bytes")))
-    return need, frame
 
 
 def chunk_frames(frame_bytes: int) -> int:

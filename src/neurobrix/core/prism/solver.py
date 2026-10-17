@@ -1266,16 +1266,32 @@ class PrismSolver:
         return lambda b, h, tq, tk: scratch_bytes(memory, budget, b, h, tq, tk)
 
     def _conv3d_workspace(self, profile):
-        """() -> the fraction of its input's bytes the compiled engine's conv3d takes as workspace on this profile's
-        smallest device (core/prism/op_workspace.py, the vendor file's figure), read at the first conv3d priced; None
-        under the Triton engine (its own kernels) and with no device."""
+        """(x_shape, w_shape, attrs, x_width, out_width) -> the bytes a 3-D convolution holds beside its input and
+        output while it runs, by the engine this plan is for: the compiled engine's cuDNN workspace as the vendor file
+        states it (core/prism/op_workspace.py, read at the first conv3d priced), the Triton engines' own temporal
+        decomposition (`tiling_sizes.conv3d_one_shot_peak`: the folds and the accumulator, one output fold of them being
+        the result itself). None with no device."""
         from neurobrix.core.prism.host_footprint import engine_of
-        if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
+        if profile is None or not profile.devices:
             return None
+        if engine_of(getattr(self, "_mode", "compiled")) == "triton":
+            from neurobrix.core.module.tiling_sizes import conv3d_one_shot_peak
+
+            def triton_folds(x_shape, w_shape, attrs, x_width, out_width):
+                # the folds at the width the conv reads its input at (its cast's) and writes its output at
+                return conv3d_one_shot_peak(x_shape, w_shape, attrs.get("stride", 1), attrs.get("padding", 0),
+                                            attrs.get("dilation", 1), int(x_width), int(out_width))
+            return triton_folds
         from neurobrix.core.prism.attention_scratch import vendor_memory
         from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
         memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
-        return lambda: conv3d_workspace_fraction(memory)
+
+        def cudnn(x_shape, w_shape, attrs, x_width, out_width):
+            n = 1
+            for d in x_shape:
+                n *= int(d)
+            return int(n * int(x_width) * conv3d_workspace_fraction(memory))
+        return cudnn
 
     def _assign_attention_budgets(self, plan, profile) -> None:
         """The budget every attention was priced at, stated on each component the plan computes on an accelerator

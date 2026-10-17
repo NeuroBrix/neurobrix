@@ -115,8 +115,38 @@ def test_a_conv3d_is_priced_with_the_workspace_its_vendor_states():
     w = _widths(g, "compiled")
     assert w.casts.get("conv::0") == [("input::x", 2)], w.casts           # the fp32 seam cast to fp16 by its wrapper
     base = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
-    ws = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w, conv3d_workspace=lambda: 1.0)
+    def one_input(x_shape, w_shape, attrs, x_width, out_width):          # the vendor rule at fraction 1.0
+        n = 1
+        for d in x_shape:
+            n *= d
+        return n * x_width
+    ws = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w, conv3d_workspace=one_input)
     assert ws.peak_bytes - base.peak_bytes == 1 * 4 * 3 * 8 * 8 * 2       # the input's numel at its cast width
+
+
+def test_the_triton_conv3d_is_priced_with_its_folds():
+    """The Triton engines run conv3d as kt conv2d launches over the folded frames, holding the input fold, the output
+    fold and the accumulator at once (`tiling_sizes.conv3d_one_shot_peak`): 3 output-sized buffers measured beside a
+    1,755 MB output on Wan2.1's VAE (2026-10-17). The same function decides the op's chunking; the profile prices from
+    it. Red if the profile adds anything else than that function's figure."""
+    from neurobrix.core.module.tiling_sizes import conv3d_one_shot_peak
+    from neurobrix.core.prism import PrismSolver
+    from types import SimpleNamespace
+    T = {"input::x": _t([1, 4, 6, 8, 8], is_input=True, seam_alias_of="test"), "param::w": _t([4, 4, 3, 3, 3]),
+         "c": _t([1, 4, 4, 6, 6])}
+    op = _op("conv::0", "aten::convolution", ["input::x", "param::w"], ["c"], stride=[1, 1, 1], padding=[0, 0, 0],
+             dilation=[1, 1, 1])
+    g = _dag(T, [op], ["input::x"], ["c"])
+    S = PrismSolver(); S._mode = "triton"
+    prof = SimpleNamespace(devices=[SimpleNamespace(memory_mb=16384, architecture="volta", brand="nvidia", index=0)])
+    hook = S._conv3d_workspace(prof)
+    w = _widths(g, "triton")
+    base = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
+    priced = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w, conv3d_workspace=hook)
+    x_width = dict(w.casts.get("conv::0", [])).get("input::x", w["input::x"])                 # the conv reads its cast copy's width
+    expect = conv3d_one_shot_peak([1, 4, 6, 8, 8], [4, 4, 3, 3, 3], [1, 1, 1], [0, 0, 0], [1, 1, 1], x_width, w["c"])
+    assert priced.peak_bytes - base.peak_bytes == expect
+    assert expect > 0
 
 
 def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():

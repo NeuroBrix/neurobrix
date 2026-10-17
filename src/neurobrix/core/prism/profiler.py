@@ -972,9 +972,10 @@ class ActivationProfiler:
         """
         Simulate execution to find peak activation memory.
 
-        `conv3d_workspace() -> fraction`: the workspace the engine's 3-D convolution takes beside its input and output,
-        as a fraction of the input's bytes it convolves (core/prism/op_workspace.py, the vendor file's figure), asked at
-        the first 5-D convolution; None: none priced.
+        `conv3d_workspace(x_shape, w_shape, attrs, x_width, out_width) -> bytes`: what the engine's 3-D convolution
+        holds BESIDE its input and its output while it runs — cuDNN's workspace as the vendor file states it
+        (core/prism/op_workspace.py), or the Triton engines' own folds (`tiling_sizes.conv3d_one_shot_peak`) — asked
+        at every 5-D convolution; None: none priced.
 
         `handed_inputs`: the graph's `input::` tensors are its run's (`GraphExecutor._consumed_input_tids`), live
         before its first op and freed at their last use. False: they are its caller's, priced by the caller.
@@ -1246,15 +1247,16 @@ class ActivationProfiler:
                     and op.get("input_tensor_ids")):
                 x_tid = op["input_tensor_ids"][0]
                 x_shape = self._resolve_shape(self.tensors.get(x_tid, {}), symbol_map)
-                if len(x_shape) == 5:
+                if len(x_shape) == 5 and len(op["input_tensor_ids"]) >= 2:
                     x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
                     if x_width is None:
                         x_width = (widths[x_tid] if widths is not None
                                    else self._compute_size([1], self.tensors.get(x_tid, {}), dtype_bytes))
-                    n_x = 1
-                    for dim in x_shape:
-                        n_x *= dim
-                    in_op += int(n_x * x_width * conv3d_workspace())
+                    out_tid0 = output_tids[0]
+                    out_width = (widths[out_tid0] if widths is not None
+                                 else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
+                    w_shape = self._resolve_shape(self.tensors.get(op["input_tensor_ids"][1], {}), symbol_map)
+                    in_op += int(conv3d_workspace(x_shape, w_shape, op.get("attributes") or {}, x_width, out_width))
             # the operand copies the engine's precision wrapper makes while the op runs (`ExecutedWidths.casts`)
             for cast_tid, cast_width in (op_casts.get(op_uid, ()) if not op_is_zero_alloc else ()):
                 n_cast = 1

@@ -7215,7 +7215,7 @@ def multinomial_wrapper(x, num_samples: int,
 
 def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
     """constant_pad_nd via Triton kernel."""
-    from .ops.pad_op import constant_pad_2d_kernel, constant_pad_1d_kernel
+    from .ops.pad_op import constant_pad_2d_kernel, constant_pad_1d_kernel, constant_pad_nd_kernel
     x = _ensure_cuda(x).contiguous()
 
     ndim = x.ndim
@@ -7234,6 +7234,8 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
     for i in range(ndim):
         out_shape[i] += pad_before[i] + pad_after[i]
 
+    if ndim > 5:
+        raise NotImplementedError(f"constant_pad_nd: {ndim}-D input; the one-pass kernel takes up to 5 dims")
     output = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
     total = output.numel()
 
@@ -7275,35 +7277,20 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
         )
     else:
-        # General N-D constant pad (pads any combination of dims, e.g. a middle
-        # temporal dim in a 5D [B,C,T,H,W] conv3d). The optimized 1D/2D kernels
-        # above only touch the last 1/2 dims; this branch handled everything
-        # else but ONLY ever padded the last dim (silent garbage when padding a
-        # middle dim — pad_before[-1] is 0 for e.g. [0,0,0,0,pt,pt]). Decompose
-        # into cat-of-constant-blocks per padded dim: R33-pure (NBXTensor.zeros
-        # /fill_ + NBXTensor.cat, which dispatches cat_copy_kernel for dim>0).
-        # Every padded region is `value`, so corners (padded on 2+ dims) come
-        # out correct regardless of dim order.
-        def _const_block(width, dim_idx, ref):
-            shp = list(ref.shape); shp[dim_idx] = width
-            blk = NBXTensor.zeros(tuple(shp), dtype=ref.dtype, device=ref.device)
-            if float(value) != 0.0:
-                blk.fill_(float(value))
-            return blk
-
-        result = x
-        for d in range(ndim):
-            b, a = pad_before[d], pad_after[d]
-            if b == 0 and a == 0:
-                continue
-            parts = []
-            if b > 0:
-                parts.append(_const_block(b, d, result))
-            parts.append(result)
-            if a > 0:
-                parts.append(_const_block(a, d, result))
-            result = NBXTensor.cat(parts, dim=d)
-        return result.contiguous()
+        # General N-D constant pad in ONE pass (any dims, a middle temporal dim of a 5-D [B,C,T,H,W] causal pad
+        # included): every output element reads its input element or the value. The former path padded one dim at
+        # a time through `cat`, holding one output-sized copy per padded dim beside an unused output buffer: 3 extra
+        # outputs on Wan2.1's causal pad (6,182 MB beside a 2,060 MB result, 2026-10-17), unpriced by any plan.
+        dims_in = [1] * (5 - ndim) + list(x.shape)
+        dims_out = [1] * (5 - ndim) + list(out_shape)
+        strides = [0] * (5 - ndim) + [x.stride(i) for i in range(ndim)]
+        before = [0] * (5 - ndim) + list(pad_before)
+        constant_pad_nd_kernel[_1d_grid(total)](
+            x, output, total,
+            *dims_in, *dims_out, *strides, *before,
+            float(value),
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        )
 
     return output
 

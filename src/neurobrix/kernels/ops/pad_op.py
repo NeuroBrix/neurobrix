@@ -73,3 +73,40 @@ def constant_pad_1d_kernel(
 
     out_offset = batch_idx * out_size + out_idx
     tl.store(output_ptr + out_offset, val, mask=mask)
+
+
+@triton.jit
+def constant_pad_nd_kernel(
+    x_ptr, output_ptr,
+    total,
+    in0, in1, in2, in3, in4,
+    out0, out1, out2, out3, out4,
+    xs0, xs1, xs2, xs3, xs4,
+    pb0, pb1, pb2, pb3, pb4,
+    pad_value,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Constant pad of up to 5 dims in ONE pass: each output element maps to its input element (any dim padded,
+    a middle one included) or to `pad_value`. Dims a tensor lacks are given extent 1 and pad 0 by the wrapper, so one
+    kernel serves 1-D to 5-D. The input is read through its strides (xs*); the output is written contiguous."""
+    pid = tl.program_id(0).to(tl.int64)
+    offsets = pid.to(tl.int64) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < total
+    o4 = offsets % out4
+    t = offsets // out4
+    o3 = t % out3
+    t = t // out3
+    o2 = t % out2
+    t = t // out2
+    o1 = t % out1
+    o0 = t // out1
+    i0 = o0 - pb0
+    i1 = o1 - pb1
+    i2 = o2 - pb2
+    i3 = o3 - pb3
+    i4 = o4 - pb4
+    inside = ((i0 >= 0) & (i0 < in0) & (i1 >= 0) & (i1 < in1) & (i2 >= 0) & (i2 < in2)
+              & (i3 >= 0) & (i3 < in3) & (i4 >= 0) & (i4 < in4))
+    src = i0 * xs0 + i1 * xs1 + i2 * xs2 + i3 * xs3 + i4 * xs4
+    val = tl.load(x_ptr + src, mask=mask & inside, other=pad_value)
+    tl.store(output_ptr + offsets, val, mask=mask)
