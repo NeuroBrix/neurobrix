@@ -29,22 +29,28 @@ def _spec(monkeypatch, lattice):
     root = installed_container(MODEL)
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: lattice))
     s = PrismSolver.__new__(PrismSolver)
+    s._mode = "compiled"
+    # the stub container names no components: the dtype a real container declares for the VAE
+    monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)
+    monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None, raising=False)   # the stub has no profile
     from neurobrix.core.prism.profiler import InputConfig
-    s._input_config = InputConfig(batch_size=2, height=352, width=720, num_frames=49, vae_scale=8)
+    s._input_config = InputConfig(batch_size=2, height=352, width=720, num_frames=49, vae_scale=8,
+                                  temporal_compression=4)
     mem = ComponentMemory("vae", 471 * MB, 121275 * MB, 6087 * MB)       # the live plan's own figures
     return s._spatial_component_tiling(_Container(root), "vae", mem, 12288)
 
 
 def test_the_live_case_tiles_on_the_card(monkeypatch):
+    """The live case stays on the card — since 2026-10-17 in its VENDOR's tiles (CogVideoX's declared tiled_decode,
+    each tile in the vendor's frame batches): its group norm makes an engine tile another function."""
     spec = _spec(monkeypatch, 16)
     assert spec is not None, "a tile that fits was traded for host execution"
-    assert spec["tile_size"] == 12 and spec["tiled_activation_bytes"] <= int(12288 * 0.40 * MB), spec
+    assert spec.get("vendor") == "ramp_crop" and spec.get("tile_stream"), spec
+    assert spec["tiled_activation_bytes"] <= 12288 * MB, spec
 
 
-def test_a_tile_at_or_above_the_unit_is_still_snapped_down(monkeypatch):
-    big = _spec(monkeypatch, 8)          # 12 on a lattice of 8 -> 8, never more
-    assert big is not None and big["tile_size"] == 8, big
-
-
-def test_no_lattice_is_the_sized_tile(monkeypatch):
-    assert _spec(monkeypatch, 0)["tile_size"] == 12
+def test_the_vendor_cut_does_not_follow_the_engine_lattice(monkeypatch):
+    """The lattice is the ENGINE tile's alignment; the vendor's tiles are the vendor's numbers, at every lattice."""
+    specs = [_spec(monkeypatch, lattice) for lattice in (0, 8, 16)]
+    assert all(sp is not None and sp.get("vendor") == "ramp_crop" for sp in specs), specs
+    assert len({(sp["tiled_activation_bytes"], tuple(sp["tile_stream"])) for sp in specs}) == 1, specs

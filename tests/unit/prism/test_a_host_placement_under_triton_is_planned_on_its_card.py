@@ -47,9 +47,12 @@ def test_the_triton_host_rung_says_where_it_computes(monkeypatch):
 
 
 def test_the_compiled_host_rung_computes_on_the_host_untiled(monkeypatch):
+    """No ENGINE tile on the host. Allegro's decoder keeps its VENDOR's tiles there (its vendor has no untiled
+    decode — `components/vae/vendor_tiling.json`, decision 2026-10-16 18:40): that is its function on any device."""
     plan = _plan(monkeypatch, "compiled")
     assert plan.strategy == "cpu_streaming", plan.strategy
-    assert not (getattr(plan, "component_tiling", None) or {}), plan.component_tiling
+    tiling = getattr(plan, "component_tiling", None) or {}
+    assert all(isinstance(v, dict) and v.get("vendor") for v in tiling.values()), tiling
 
 
 def _stub(mode="triton"):

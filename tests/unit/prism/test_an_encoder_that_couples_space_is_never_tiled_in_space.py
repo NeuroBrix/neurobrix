@@ -78,6 +78,11 @@ def _encoder_graph(mid_op=None):
                                              {"type": "scalar", "value": False}]}}
     order = list(ops)
     return {"input_tensor_ids": ["x"], "output_tensor_ids": ["z"], "tensors": tensors,
+            "symbolic_context": {"symbols": {
+                "s0": {"name": "batch", "trace_value": 1, "source": "x::dim_0"},
+                "s1": {"name": "time", "trace_value": T_IN, "source": "x::dim_2"},
+                "s2": {"name": "height", "trace_value": H_IN, "source": "x::dim_3"},
+                "s3": {"name": "width", "trace_value": W_IN, "source": "x::dim_4"}}},
             "ops": ops, "execution_order": order}
 
 
@@ -100,19 +105,25 @@ def test_a_graph_whose_spatial_extent_is_frozen_cannot_be_read():
     assert uid == "" and "not symbols" in why, why
 
 
-def _decide(tmp_path, mid_op, activation_bytes=80 * GB, vendor_tiling=None):
+def _decide_files(tmp_path, mid_op):
     comp = tmp_path / "components" / "enc"
     comp.mkdir(parents=True)
     (comp / "graph.json").write_text(json.dumps(_encoder_graph(mid_op)))
-    profile = {"config": {"block_out_channels": [1, 2, 3, 4]}}
-    if vendor_tiling is not None:
-        profile["vendor_tiling"] = vendor_tiling
-    (comp / "profile.json").write_text(json.dumps(profile))
+    (comp / "profile.json").write_text(json.dumps({"config": {"block_out_channels": [1, 2, 3, 4]}}))
+
+
+def _solver(activation_bytes=80 * GB):
     s = PrismSolver()
     s._input_config = InputConfig(batch_size=1, height=480, width=832, num_frames=17,
                                   temporal_compression=4)
     mem = ComponentMemory(component_name="enc", weight_bytes=int(0.2 * GB),
                           activation_bytes=int(activation_bytes), overhead_bytes=0)
+    return s, mem
+
+
+def _decide(tmp_path, mid_op, activation_bytes=80 * GB):
+    _decide_files(tmp_path, mid_op)
+    s, mem = _solver(activation_bytes)
     return s, s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
 
 
@@ -135,12 +146,31 @@ def test_a_coupled_encoder_within_the_card_is_not_tiled_and_the_plan_says_why(tm
     assert rec["exact"] is False and "attn" in (rec["op"] or ""), rec
 
 
-def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path):
-    """The single exception: the vendor's own reference tiles (Allegro's VAE has no untiled encode), declared by the
-    build from the registry with its source."""
-    s, spec = _decide(tmp_path, "attention", vendor_tiling={"source": "autoencoder_kl_allegro.py:804"})
-    assert spec is not None, "a declared vendor-tiled encoder lost its tile"
+def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path, monkeypatch):
+    """The single exception: the vendor's own reference tiles (Allegro's VAE has no untiled encode), declared by Forge
+    from the registry with its source (`components/<c>/vendor_tiling.json`, its clip graph's digest beside it) — and
+    then the cut is the VENDOR's: the spec names its method, never a tile size Prism chose."""
+    import hashlib
+    _decide_files(tmp_path, "attention")
+    comp = tmp_path / "components" / "enc"
+    decl = {"format": "vendor_tiling", "version": 1, "method": "mask_sum", "when": "always",
+            "clip_graph_sha256": hashlib.sha256((comp / "graph.json").read_bytes()).hexdigest(),
+            "tile_in": [8, 128, 128], "stride_in": [4, 96, 96], "tile_out": [2, 16, 16], "stride_out": [1, 12, 12],
+            "in_axes": [2, 3, 4], "out_axes": [2, 3, 4], "out_scale": [[1, 4], [1, 8], [1, 8]],
+            "source": ["autoencoder_kl_allegro.py:804"]}
+    (comp / "vendor_tiling.json").write_text(json.dumps(decl))
+    s, mem = _solver()
+    monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32")
+    monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None)
+    spec = s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
+    assert spec is not None and spec.get("vendor") == "mask_sum", f"a declared vendor-tiled encoder lost its tile: {spec}"
     assert s._tiling_exactness["enc"]["exact"] is True and "allegro" in s._tiling_exactness["enc"]["why"]
+    decl["clip_graph_sha256"] = "0" * 64
+    (comp / "vendor_tiling.json").write_text(json.dumps(decl))
+    s, mem = _solver()
+    from neurobrix.core.prism.temporal_stream import StreamDeclarationError
+    with pytest.raises(StreamDeclarationError, match="re-derive"):
+        s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
 
 
 def test_an_encoder_local_in_space_is_still_tiled(tmp_path):

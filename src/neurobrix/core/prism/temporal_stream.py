@@ -143,3 +143,30 @@ def clip_output_frames(clip: Dict[str, Any], decl: Dict[str, Any], smap: Dict[st
     """The clip's output time extent at the request's binding."""
     node = clip["tensors"][decl["output"]]["symbolic_shape"]["dims"][int(decl["output_axis"])]
     return int(_symexpr.evaluate(node, lambda sid, _n: smap[sid], _symexpr.SHAPE))
+
+
+def load_vendor_tiling(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
+    """The component's vendor tiling declaration (`components/<c>/vendor_tiling.json`, Forge
+    `tracer/vendor_tiling.py`): the cut its vendor's own reference makes, with its source. None when it carries none;
+    refused by name when derived from another graph than the component's."""
+    d = Path(cache_path) / "components" / comp
+    path = d / "vendor_tiling.json"
+    if not path.exists():
+        return None
+    decl = json.loads(path.read_text())
+    if decl.get("format") != "vendor_tiling" or decl.get("version") != 1:
+        raise StreamDeclarationError(f"{path}: format {decl.get('format')!r} version {decl.get('version')!r} is not "
+                                     f"the vendor_tiling v1 this engine reads")
+    sha = hashlib.sha256((d / "graph.json").read_bytes()).hexdigest()
+    if sha != decl.get("clip_graph_sha256"):
+        raise StreamDeclarationError(f"{path}: derived from a graph of sha256 {decl.get('clip_graph_sha256')}, the "
+                                     f"component's graph.json is {sha}; re-derive it")
+    return decl
+
+
+def vendor_tile_extent(decl: Dict[str, Any]) -> Dict[str, int]:
+    """The input extent of one vendor tile, per tiled axis name ("time" for mask_sum, "height", "width")."""
+    if decl["method"] == "ramp_crop":
+        return {"height": int(decl["tile"][0]), "width": int(decl["tile"][1])}
+    t, h, w = decl["tile_in"]
+    return {"time": int(t), "height": int(h), "width": int(w)}

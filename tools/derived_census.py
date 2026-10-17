@@ -369,8 +369,19 @@ def _contract(model: str, comp: str, g: dict, cdtype: str):
     from neurobrix.core.prism import runtime_widths as RW
     key = (model, comp, str(cdtype))
     if key not in _CONTRACTS:
-        _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, comp, g, cdtype)
+        _CONTRACTS[key] = RW.plan_time_contract(CACHE / model, component_file(comp)[0], g, cdtype)
     return _CONTRACTS[key]
+
+
+#: A component's chunk graphs (its temporal stream, `core/prism/temporal_stream.py`) are derived as variants of it:
+#: "<component>#stream_first" reads components/<component>/stream_first.json.
+VARIANT = "#"
+
+
+def component_file(comp: str):
+    """(the component's directory name, the graph file this name reads)."""
+    base, _, variant = comp.partition(VARIANT)
+    return base, (f"{variant}.json" if variant else "graph.json")
 
 
 def raw_graph(model: str, comp: str) -> dict:
@@ -381,7 +392,8 @@ def raw_graph(model: str, comp: str) -> dict:
     Callers never mutate it; `runtime_graph` keeps its own parse, which its load-time passes rewrite."""
     key = (model, comp)
     if key not in _RAW_GRAPHS:
-        _RAW_GRAPHS[key] = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+        base, fname = component_file(comp)
+        _RAW_GRAPHS[key] = json.loads((CACHE / model / "components" / base / fname).read_text())
     return _RAW_GRAPHS[key]
 
 
@@ -395,7 +407,8 @@ def runtime_graph(model: str, comp: str) -> dict:
     if key not in _RUNTIME_GRAPHS:
         from neurobrix.core.runtime.graph_executor import GraphExecutor
         from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
-        g = json.loads((CACHE / model / "components" / comp / "graph.json").read_text())
+        base, fname = component_file(comp)
+        g = json.loads((CACHE / model / "components" / base / fname).read_text())
         stub = _Stub(_dag=g, _SDPA_LAYOUT_PASSTHROUGH=GraphExecutor._SDPA_LAYOUT_PASSTHROUGH,
                      _SDPA_OP_TYPES=GraphExecutor._SDPA_OP_TYPES)
         GraphExecutor._normalize_sdpa_scaling(stub)
@@ -1071,6 +1084,49 @@ def walked_pairs(walked: Path, model: str, mode: str, rung):
         m = _MG.migrated(_C.parse_key(k)) if q_ == _MG.KERNEL else None
         fixed.add((op, q_, _C.key_repr(m) if m else k))
     return fixed
+
+
+def cut_bindings(model: str, comp: str, g: dict, syms: dict, plan: dict) -> list:
+    """[(component name to derive, symbol binding)] the plan runs `comp` at: its temporal stream's chunk graphs at
+    each chunk length (`plan.component_stream`), its vendor's tiles at each tile extent the request makes
+    (`plan.component_tiling[comp]["vendor"]`, `core/module/vendor_tiling.py`), each tile in its stream when the plan
+    streams it; an engine tile (`tile_bindings`); else the component whole at the request."""
+    from neurobrix.core.prism import temporal_stream as _ts
+    table = (g.get("symbolic_context") or {}).get("symbols") or {}
+    by_name = {v.get("name"): k for k, v in table.items()}
+    tilings = plan.get("component_tiling") or {}
+    stream = (plan.get("component_stream") or {}).get(comp)
+    spec = tilings.get(comp)
+
+    def streamed(b, schedule):
+        t = by_name.get("time")
+        out = [(f"{comp}{VARIANT}stream_first", dict(b, **{t: int(schedule[0])}))]
+        out += [(f"{comp}{VARIANT}stream_next", dict(b, **{t: int(n)})) for n in sorted(set(schedule[1:]))]
+        return out
+
+    if isinstance(spec, dict) and spec.get("vendor"):
+        decl = _ts.load_vendor_tiling(CACHE / model, comp)
+        tile = _ts.vendor_tile_extent(decl)
+        steps = dict(zip(["height", "width"], decl["stride"])) if decl["method"] == "ramp_crop" else {}
+        per_axis = {}
+        for axis, n in tile.items():
+            sid = by_name.get(axis)
+            full = int(syms[sid])
+            if axis in steps:                       # ramp_crop: every position, the last ones cut short
+                per_axis[sid] = sorted({min(int(n), full - i) for i in range(0, full, int(steps[axis]))})
+            else:                                   # mask_sum: whole tiles only
+                per_axis[sid] = [min(int(n), full)]
+        bindings = [dict(syms)]
+        for sid, vals in per_axis.items():
+            bindings = [dict(b, **{sid: v}) for b in bindings for v in vals]
+        if spec.get("tile_stream"):
+            return [x for b in bindings for x in streamed(b, spec["tile_stream"])]
+        return [(comp, b) for b in bindings]
+    if stream is not None:
+        return streamed(dict(syms), stream["schedule"])
+    if comp in tilings:
+        return [(comp, b) for b in tile_bindings(g, syms, tilings[comp])]
+    return [(comp, syms)]
 
 
 def tile_bindings(g: dict, syms: dict, spec: dict) -> list:
@@ -1908,9 +1964,9 @@ def derive_keys(model: str, hardware: str, mode: str, rung, request: list):
             # InputConfig carries `core.prism.flow_bindings.FlowBindings`, the plan's own rules.
         if len(syms) < len(((g.get("symbolic_context") or {}).get("symbols") or {})):
             continue
-        for b in (tile_bindings(g, syms, tilings[comp]) if comp in tilings else [syms]):
+        for comp_v, b in cut_bindings(a.model, comp, g, syms, plan):
             view, tiled_tf = plan_tiling(plan, comp)
-            for uid, q_, key in derive_component(a.model, comp, c["dtype"], a.mode, b,
+            for uid, q_, key in derive_component(a.model, comp_v, c["dtype"], a.mode, b,
                                                 prof.has_native_bf16, budget, min_rows, max_chunks,
                                                 unhandled, tiling=view, tiled_tf=tiled_tf):
                 derived.add((uid, q_, C.key_repr(key)))

@@ -59,6 +59,10 @@ class InputConfig:
     # frames, of the chunk a stream graph is priced at — its time symbol binds to it, whatever the request's frames.
     # None: the component runs its clip whole.
     chunk_frames: Optional[int] = None
+    # One tile of a VENDOR tiling (`core/prism/temporal_stream.vendor_tile_extent`): {symbol name ("time", "height",
+    # "width"): the tile's extent in the component's own input units} — each named symbol binds to it, whatever the
+    # request. None: the component runs at the request's extents.
+    cut_extents: Optional[Dict[str, int]] = None
     temporal_compression: Optional[int] = None
     # The request's flow (`core.prism.flow_bindings.FlowBindings`, set by `run.request_input_config`):
     # the per-component bindings no symbol name carries — the CFG batch of the loop denoiser, a
@@ -840,6 +844,10 @@ class ActivationProfiler:
         if flow and getattr(input_config, "flow", None) is not None:
             for sid, v in input_config.flow.overrides(self.dag, input_config).items():
                 symbol_map[sid] = int(v)
+        if getattr(input_config, "cut_extents", None):
+            for sid, info in syms.items():
+                if isinstance(info, dict) and info.get("name") in input_config.cut_extents:
+                    symbol_map[sid] = int(input_config.cut_extents[info["name"]])
         return symbol_map
 
     def trace_symbol_map(self) -> Dict[str, int]:

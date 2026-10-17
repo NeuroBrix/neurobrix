@@ -44,7 +44,12 @@ def test_layer_streaming_says_its_tile_and_weights_overflow_the_rung(monkeypatch
         PrismSolver().solve_smart(c, profile(small_host), request, mode="compiled")
     msg = str(exc.value)
     line = next((l for l in msg.splitlines() if l.strip().startswith("layer_streaming: no component tile")), "")
-    assert "cuda:0 (589 MB usable)" in line and "vae: its tile and weights still need" in line, msg
+    # The VAE's reason, whichever its container gives: an engine tile its weights take over the rung, the exact-
+    # cut rule's decline of a tile its group norm would not see whole (2026-10-16 18:40), or the vendor's own
+    # tiles (Allegro's declared reference, once its container carries the declaration) over the rung.
+    reasons = ("vae: its tile and weights still need", "vae: a spatial tile is not the untiled component",
+               "vae: its vendor's tiles (mask_sum) need")
+    assert "cuda:0 (589 MB usable)" in line and any(r in line for r in reasons), msg
 
 
 def _encoder(tmp_path):

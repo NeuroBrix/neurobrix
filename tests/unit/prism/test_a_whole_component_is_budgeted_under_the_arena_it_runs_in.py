@@ -52,9 +52,13 @@ def _plan(monkeypatch, mode):
 
 def test_the_vae_that_died_whole_under_triton_is_tiled_by_the_plan(monkeypatch):
     plan = _plan(monkeypatch, "triton")
+    # Since 2026-10-17 the VAE is cut in its exact TIME chunks (the stream Forge derives from its graph), no longer
+    # in spatial tiles its group norms would not see whole: either way not whole, and under what the card refused.
     tiling = getattr(plan, "component_tiling", None) or {}
-    assert "vae" in tiling, f"the VAE is placed whole again — the plan the card refused: {tiling}"
-    assert tiling["vae"]["tiled_activation_bytes"] < 24_561 * 2 ** 20, tiling["vae"]
+    stream = getattr(plan, "component_stream", None) or {}
+    assert "vae" in tiling or "vae" in stream, f"the VAE is placed whole again — the plan the card refused: {tiling}"
+    cut = stream["vae"]["activation_bytes"] if "vae" in stream else tiling["vae"]["tiled_activation_bytes"]
+    assert cut < 24_561 * 2 ** 20, (stream, tiling)
 
 
 def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
@@ -112,7 +116,8 @@ def test_the_vae_is_planned_at_the_width_the_card_measured(monkeypatch):
                                      placement_floor=True).peak_bytes
     assert seen["vae"].activation_bytes == s._scale_activations_to_request(comp, peak, request), (
         seen["vae"].activation_bytes / 2 ** 20, peak / 2 ** 20)
-    assert "vae" in (getattr(plan, "component_tiling", None) or {}), plan.component_tiling
+    assert "vae" in (getattr(plan, "component_tiling", None) or {}) or "vae" in (
+        getattr(plan, "component_stream", None) or {}), (plan.component_tiling, plan.component_stream)
 
 
 def test_the_factor_is_data_with_its_provenance():

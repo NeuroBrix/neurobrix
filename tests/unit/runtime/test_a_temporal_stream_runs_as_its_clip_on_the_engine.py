@@ -58,7 +58,32 @@ def _executor(container, comp, dag, mode, device):
     return ex
 
 
-@pytest.mark.parametrize("mode,device", [("compiled", "cpu"), ("sequential", "cpu")])
+def _cuda() -> bool:
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+MODES = [("compiled", "cpu"), ("sequential", "cpu")] + (
+    [("compiled", "cuda"), ("triton", "cuda"), ("triton_sequential", "cuda")] if _cuda() else [])
+
+
+def _input(x, mode, device):
+    """The run's own tensor kind: torch for the two torch engines, NBXTensor for the two Triton ones (R30/R33)."""
+    if mode.startswith("triton"):
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        return NBXTensor.from_numpy(x.numpy()).to_cuda()
+    return x.to(device)
+
+
+def _host(t):
+    if hasattr(t, "to_cuda") and hasattr(t, "_device"):          # an NBXTensor: read back to the host
+        return torch.from_numpy(t.numpy()).float()
+    return t.detach().float().cpu()
+
+
+@pytest.mark.parametrize("mode,device", MODES)
 @pytest.mark.parametrize("model,comp,shape,schedule", CASES, ids=[f"{m}/{c}" for m, c, _, _ in CASES])
 def test_the_engine_runs_the_stream_as_the_clip(model, comp, shape, schedule, mode, device):
     container, decl = _case(model, comp)
@@ -72,11 +97,11 @@ def test_the_engine_runs_the_stream_as_the_clip(model, comp, shape, schedule, mo
     input_name = clip_dag["tensors"][decl["input"]]["input_name"]
     out_name = clip_dag["tensors"][decl["output"]].get("output_name") or decl["output"]
     torch.manual_seed(0)
-    x = torch.randn(shape, dtype=torch.float32, device=device)
-    ref = whole.run({input_name: x})[out_name]
-    got = run_stream(decl, schedule, x, input_name, pieces["first"].run, pieces["next"].run)
+    x = _input(torch.randn(shape, dtype=torch.float32), mode, device)
+    ref = _host(whole.run({input_name: x})[out_name])
+    got = _host(run_stream(decl, schedule, x, input_name, pieces["first"].run, pieces["next"].run))
     assert tuple(got.shape) == tuple(ref.shape), (tuple(got.shape), tuple(ref.shape))
-    rel = float((got.float() - ref.float()).abs().max() / ref.float().abs().max())
+    rel = float((got - ref).abs().max() / ref.abs().max())
     assert rel < BOUND, f"{model}/{comp} {mode}: the stream differs from the clip by {rel:.2e}"
 
 

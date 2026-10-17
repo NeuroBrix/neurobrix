@@ -616,6 +616,10 @@ class RuntimeExecutor:
         # symbolic / spatial-adaptive graphs, so this is how a symbolic VAE
         # gets a TilingEngine with the Prism-chosen tile_size.
         for comp_name, spec in (getattr(self.plan, 'component_tiling', None) or {}).items():
+            if spec.get("vendor"):
+                # The vendor's own cut (`core/module/vendor_tiling.py`), run by `_run_vendor_tiling`.
+                self._component_tiling.pop(comp_name, None)
+                continue
             self._component_tiling[comp_name] = TilingEngine(
                 trace_size=spec["trace_size"],
                 overlap=spec["overlap"],
@@ -1211,6 +1215,12 @@ class RuntimeExecutor:
         # Execute: Check for tiling first, then TP, then normal
         output = None
 
+        # VENDOR TILING: the cut the component's vendor's own reference makes (declared with its source), each
+        # tile run whole or in its temporal stream.
+        vendor_tiling = (getattr(self.plan, "component_tiling", None) or {}).get(comp_name)
+        if output is None and vendor_tiling is not None and vendor_tiling.get("vendor"):
+            output = self._run_vendor_tiling(comp_name, executor, comp_inputs, vendor_tiling)
+
         # TEMPORAL STREAM: the plan runs this component in exact time chunks (Prism Strategy 3.4, or the
         # chunks its vendor's own reference runs in) through the two graphs Forge derived from its clip graph.
         stream = (getattr(self.plan, "component_stream", None) or {}).get(comp_name)
@@ -1407,6 +1417,34 @@ class RuntimeExecutor:
         finally:
             for p in pieces.values():
                 p.unload_weights()
+
+    def _run_vendor_tiling(self, comp_name: str, executor, comp_inputs: Dict[str, Any], spec: Dict[str, Any]):
+        """The component's output through its vendor's own tiling (`core/module/vendor_tiling.py`): each tile run
+        by the component's executor, or in the plan's temporal stream for that tile (CogVideoX's tiles in its
+        frame batches)."""
+        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.core.module.vendor_tiling import run_vendor_tiling
+        cache_path = ensure_extracted(Path(self._nbx_path_str))
+        decl = _ts.load_vendor_tiling(cache_path, comp_name)
+        if decl is None:
+            raise RuntimeError(f"ZERO FALLBACK: the plan tiles '{comp_name}' as its vendor does and its container "
+                               f"carries no vendor_tiling.json")
+        dag = executor._dag
+        input_name = dag["tensors"][dag["input_tensor_ids"][0]].get("input_name")
+        out_tid = dag["output_tensor_ids"][0]
+        out_key = dag["tensors"][out_tid].get("output_name") or out_tid
+        if input_name not in comp_inputs or len(comp_inputs) != 1:
+            raise RuntimeError(f"ZERO FALLBACK: '{comp_name}' tiles one input, {input_name!r}; the run gives "
+                               f"{sorted(comp_inputs)}")
+        if spec.get("tile_stream"):
+            stream_spec = dict(spec, schedule=list(spec["tile_stream"]))
+
+            def run_tile(tile):
+                return self._run_temporal_stream(comp_name, executor, {input_name: tile}, stream_spec)
+        else:
+            def run_tile(tile):
+                return executor.run({input_name: tile})[out_key]
+        return run_vendor_tiling(comp_inputs[input_name], decl, run_tile)
 
     def _ensure_weights_loaded(self, comp_name: str) -> None:
         """Lazily load weights for a component if not already loaded."""

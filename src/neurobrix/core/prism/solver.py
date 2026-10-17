@@ -2521,10 +2521,13 @@ class PrismSolver:
 
         _ct = getattr(self, "_component_tiling", {}) or {}
         if _ct:
+            # A vendor tiling the vendor has no other path for is the component's function on any device, the
+            # host included; an engine tile only where a card computes it.
             plan.component_tiling = {
                 cn: spec for cn, spec in _ct.items()
                 if cn in plan.components
-                and not str(plan.components[cn].device).startswith("cpu")
+                and (not str(plan.components[cn].device).startswith("cpu")
+                     or (isinstance(spec, dict) and spec.get("when") == "always"))
             }
         # A host rung under the Triton engine computes its cpu-placed components on the card: the
         # tilings that rung sized there are the plan's (`_size_host_placement_on_device`).
@@ -5032,7 +5035,8 @@ class PrismSolver:
 
         # Reset component-tiling flags for this placement pass so a rejected
         # attempt never leaves stale entries (the chosen pass repopulates).
-        self._component_tiling = {}
+        self._component_tiling = {cn: sp for cn, sp in (getattr(self, "_component_tiling", {}) or {}).items()
+                                  if isinstance(sp, dict) and sp.get("when") == "always"}
         self._tiling_exactness = {}
         self._component_stream = {cn: sp for cn, sp in (getattr(self, "_component_stream", {}) or {}).items()
                                   if sp.get("reference") == "vendor"}
@@ -5185,12 +5189,14 @@ class PrismSolver:
                       f"{c / 2**20:,.0f} MB", flush=True)
             return c
 
-        sched = _ts.choose(decl, frames, (lambda sc: cost(sc) <= room_bytes) if room_bytes is not None
-                           else (lambda sc: True))
+        fits_cost = (room_bytes if callable(room_bytes) else
+                     (lambda c: c <= room_bytes) if room_bytes is not None else (lambda c: True))
+        sched = _ts.choose(decl, frames, lambda sc: fits_cost(cost(sc)))
         if sched is None:
-            declined[comp_name] = (f"no exact chunk of its {frames} frames fits {room_bytes / 2**20:,.0f} MB "
-                                   f"(one frame per chunk needs {cost(_ts.exact_schedule(decl, frames, 1) or [1]) / 2**20:,.0f} MB)"
-                                   if room_bytes is not None else f"no exact schedule of its {frames} frames")
+            least = _ts.exact_schedule(decl, frames, 1)
+            declined[comp_name] = (f"no exact chunk of its {frames} frames fits the card (the shortest chunks need "
+                                   f"{cost(least) / 2**20:,.0f} MB)" if least else
+                                   f"no exact schedule of its {frames} frames")
             return None
         bad = _ts.broken(decl, sched)
         if bad:
@@ -5200,11 +5206,98 @@ class PrismSolver:
         spec = {"schedule": list(sched), "frames": frames, "reference": "vendor" if vc else "clip",
                 "source": (vc or {}).get("source") or "derived from the clip graph (Forge temporal_stream)",
                 "activation_bytes": cost(sched), "states": len(decl["states"])}
-        if room_bytes is not None and spec["activation_bytes"] > room_bytes:
+        if room_bytes is not None and not fits_cost(spec["activation_bytes"]):
             declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB "
                                    f"of the {room_bytes / 2**20:,.0f} MB left")
             return None
         declined.pop(comp_name, None)
+        return spec
+
+    def _vendor_tiling_declaration(self, comp_name: str):
+        """The component's vendor tiling declaration (`temporal_stream.load_vendor_tiling`), read once per solve."""
+        from neurobrix.core.prism import temporal_stream as _ts
+        container = getattr(self, "_container_for_cuts", None)
+        cache_path = getattr(container, "_cache_path", None) if container is not None else None
+        if cache_path is None:
+            return None
+        memo = self.__dict__.setdefault("_vendor_tiling_decls", {})
+        key = (str(cache_path), comp_name)
+        if key not in memo:
+            memo[key] = _ts.load_vendor_tiling(cache_path, comp_name)
+        return memo[key]
+
+    def _vendor_tiling(self, container, comp_name: str, room_bytes: Optional[int]):
+        """The vendor's own tiled run of `comp_name` (`core/module/vendor_tiling.py`) priced for this request, or
+        None (the reason recorded): one tile's run — whole, or in the component's temporal stream when it carries
+        one — at the tile's extent, plus the clip's input and output and the decoded tiles the vendor keeps until
+        it blends them. `room_bytes` None: no fit asked (the vendor has no other path)."""
+        import dataclasses
+        import json as _json
+        from types import SimpleNamespace
+        from neurobrix.core.prism import temporal_stream as _ts
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.core.runtime import symexpr as _symexpr
+        decl = self._vendor_tiling_declaration(comp_name)
+        ic = self._input_config
+        cache_path = getattr(container, "_cache_path")
+        clip = _json.loads((cache_path / "components" / comp_name / "graph.json").read_text())
+        prof = ActivationProfiler(clip)
+        smap = prof.build_symbol_map(ic)
+        syms = {v.get("name"): k for k, v in (clip.get("symbolic_context") or {}).get("symbols", {}).items()}
+        tile = _ts.vendor_tile_extent(decl)
+        cut = {}
+        for axis, n in tile.items():                  # a tile never exceeds the request's own extent
+            have = smap.get(syms.get(axis))
+            cut[axis] = min(int(n), int(have)) if isinstance(have, int) else int(n)
+        tic = dataclasses.replace(ic, cut_extents=cut)
+        comp_dtype = self._get_component_dtype(container, comp_name)
+        from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
+        dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+
+        def tensor_bytes(tid, binding):
+            n = 1
+            for d in clip["tensors"][tid]["symbolic_shape"]["dims"]:
+                n *= int(_symexpr.evaluate(d, lambda sid, _n: binding[sid], _symexpr.SHAPE))
+            return n * dtype_bytes
+
+        out_bytes = tensor_bytes(clip["output_tensor_ids"][0], smap)
+        in_bytes = sum(tensor_bytes(t, smap) for t in clip.get("input_tensor_ids", [])
+                       if not clip["tensors"][t].get("is_parameter"))
+        # ramp_crop keeps every decoded tile until it blends: the output once more, times the overlap's share
+        if decl["method"] == "ramp_crop":
+            ov = 1.0
+            for k, (t_, s_) in enumerate(zip(decl["tile"], decl["stride"])):
+                ov *= t_ / s_
+            kept = int(out_bytes * ov)
+        else:
+            kept = 0
+        stream_spec = None
+        saved_ic = self._input_config
+        try:
+            self._input_config = tic
+            if self._stream_declaration(container, comp_name) is not None:
+                stream_spec = self._temporal_stream(container, comp_name, None)
+                if stream_spec is None:
+                    return self._tiling_decline(comp_name, f"its vendor tile cannot run its temporal stream: "
+                                                           f"{self._stream_declined.get(comp_name)}")
+                tile_cost = int(stream_spec["activation_bytes"])
+            else:
+                tprof = ActivationProfiler(clip)
+                widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=clip), container, tprof, tic,
+                                                 comp_dtype, getattr(self, "_profile", None))
+                tile_cost = int(tprof.estimate_peak_memory(
+                    input_config=tic, dtype_bytes=dtype_bytes, widths=widths,
+                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None))).peak_bytes)
+        finally:
+            self._input_config = saved_ic
+        cost = tile_cost + out_bytes + in_bytes + kept
+        if room_bytes is not None and cost > room_bytes:
+            return self._tiling_decline(comp_name, f"its vendor's tiles ({decl['method']}) need {cost / 2**20:,.0f} "
+                                                   f"MB of the {room_bytes / 2**20:,.0f} MB the rung leaves")
+        spec = {"vendor": decl["method"], "when": decl["when"], "source": decl["source"],
+                "tiled_activation_bytes": cost, "tile_extent": tile}
+        if stream_spec is not None:
+            spec["tile_stream"] = stream_spec["schedule"]
         return spec
 
     def _declared_streams(self, container, component_memory, profile) -> None:
@@ -5212,7 +5305,19 @@ class PrismSolver:
         function IS its reference (CogVideoX's `_decode`, decision 2026-10-16 21:30) — so its activations are
         one chunk's, before any rung prices it."""
         self._profile = profile
+        self._container_for_cuts = container
         for name, mem in component_memory.items():
+            vt = self._vendor_tiling_declaration(name)
+            if vt is not None and vt.get("when") == "always":
+                spec = self._vendor_tiling(container, name, None)
+                if spec is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: {name}'s vendor has no untiled path and its tiles are not read for this "
+                        f"request: {self._tiling_declined.get(name)}")
+                self._component_tiling[name] = spec
+                mem.activation_bytes = int(spec["tiled_activation_bytes"])
+                mem.overhead_bytes = int((mem.weight_bytes + mem.activation_bytes) * self.overhead_factor)
+                continue
             decl = self._stream_declaration(container, name)
             if decl is None or not decl.get("vendor_chunks"):
                 continue
@@ -5235,12 +5340,13 @@ class PrismSolver:
         descends the ladder of EXACT strategies for it (Hocine, 2026-10-16 18:42) and refuses only at its bottom
         (`machine_cannot_run`)."""
         from neurobrix.core.prism.profiler import spatial_coupling
-        declared = (profile_j.get("vendor_tiling") or None)
+        declared = self._vendor_tiling_declaration(comp_name)
         if declared:
-            # The vendor's reference itself tiles (its untiled path does not exist): the declaration, with its
-            # source, written by the build from the registry, is the one exception.
+            # The vendor's reference itself tiles: the declaration, with its source, written by Forge from the
+            # registry, is the one exception — and then the cut is the vendor's (`_vendor_tiling`), never a size
+            # Prism chooses.
             self.__dict__.setdefault("_tiling_exactness", {})[comp_name] = {
-                "exact": True, "why": f"its vendor's reference tiles ({declared.get('source', 'declared')})"}
+                "exact": True, "why": f"its vendor's reference tiles ({'; '.join(declared.get('source') or [])})"}
             return None
         coupled = spatial_coupling(graph)
         if coupled is None:
@@ -5271,6 +5377,7 @@ class PrismSolver:
         import json, math
         cache_path = getattr(container, "_cache_path", None)
         ic = getattr(self, "_input_config", None)
+        self._container_for_cuts = container             # the vendor declarations are read from its files
         self.__dict__.setdefault("_tiling_declined", {}).pop(comp_name, None)
         if cache_path is None or ic is None:
             return self._tiling_decline(comp_name, "the plan holds no container path or no request")
@@ -5292,6 +5399,11 @@ class PrismSolver:
                 f"its trace size is unknown and no tiling decision can be taken "
                 f"for it."
             ) from exc
+
+        # A vendor whose reference tiles: its own cut, priced per tile — never a tile Prism sizes.
+        if self._vendor_tiling_declaration(comp_name) is not None:
+            self._tile_only_if_exact(comp_name, graph, profile_j, 0, int(tile_rung_mb))   # records the exception
+            return self._vendor_tiling(container, comp_name, int(int(tile_rung_mb) * 1024 * 1024))
 
         # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
         tensors = graph.get("tensors", {})
@@ -5916,12 +6028,19 @@ class PrismSolver:
         # Strategy 3.4: a temporal stream — the component in exact time chunks carrying its causal states
         # (Forge-derived from its graph, `core/prism/temporal_stream.py`). Above spatial tiling: every chunk
         # is the clip's function exactly (or the vendor's own), and the card keeps the whole component.
-        if comp_name not in self._component_stream and self._stream_declaration(container, comp_name):
-            cost_mult = largest.get_cost_multiplier(self._get_component_dtype(container, comp_name))
-            room = int((usable - mem.weight_mb * cost_mult) * 1024 * 1024 / (1.0 + self.overhead_factor))
-            stream = self._temporal_stream(container, comp_name, room) if room > 0 else None
+        streams = self.__dict__.setdefault("_component_stream", {})
+        if comp_name not in streams and self._stream_declaration(container, comp_name):
+            import dataclasses as _dc
+
+            def held_whole_at(activation: int) -> bool:
+                # a chunk is the component held whole at the chunk's activations: the whole rule decides
+                # (the rung's whole part, the Triton arena's factor, the device's largest allocation)
+                m = _dc.replace(mem, activation_bytes=int(activation),
+                                overhead_bytes=int((mem.weight_bytes + activation) * self.overhead_factor))
+                return self._holds_whole(container, comp_name, m, largest)
+            stream = self._temporal_stream(container, comp_name, held_whole_at)
             if stream is not None:
-                self._component_stream[comp_name] = stream
+                streams[comp_name] = stream
                 shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
                 return (largest.device_string, shard_map)
         tiling = self._spatial_component_tiling(

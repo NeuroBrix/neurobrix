@@ -62,14 +62,28 @@ def _decide(container, comp, activation_bytes, solver=False):
 #: extent (Allegro-TI2V and CogVideoX-5b-I2V a group norm, Wan2.1-VACE a mid-block attention over
 #: H x W), so a tile is not the encoder (test_an_encoder_that_couples_space_is_never_tiled_in_space).
 #: The branch is still reached and still decides — a decline that names its reason, never a crash.
-@pytest.mark.parametrize("model,why", [("Allegro-TI2V", "group_norm"),
-                                       ("CogVideoX-5b-I2V", "group_norm"),
+@pytest.mark.parametrize("model,why", [("CogVideoX-5b-I2V", "group_norm"),
                                        ("Wan2.1-VACE-1.3B-diffusers", "attention")])
 def test_a_real_encoder_reaching_the_branch_gets_a_decision_not_a_crash(model, why):
     container = SimpleNamespace(_cache_path=container_root(model))
     s, spec = _decide(container, "vae_encoder", 80 * GB, solver=True)
     assert spec is None, f"{model}'s encoder couples its spatial extent and was tiled: {spec}"
     assert why in s._tiling_declined.get("vae_encoder", ""), (model, s._tiling_declined)
+
+
+def test_an_encoder_whose_vendor_tiles_takes_its_vendors_tiles(monkeypatch):
+    """Allegro-TI2V's encoder couples space too (a group norm), and its vendor encodes only in tiles: the one
+    exception, declared with its source (`components/vae_encoder/vendor_tiling.json`) — the cut is the vendor's."""
+    container = SimpleNamespace(_cache_path=container_root("Allegro-TI2V"))
+    s = PrismSolver()
+    monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32")
+    monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None)     # never solved: no profile, no mode
+    s._input_config = InputConfig(batch_size=1, height=720, width=1280, num_frames=88, temporal_compression=4)
+    mem = ComponentMemory(component_name="vae_encoder", weight_bytes=int(0.3 * GB), activation_bytes=80 * GB,
+                          overhead_bytes=0)
+    spec = s._spatial_component_tiling(container, "vae_encoder", mem, RUNG_MB)
+    assert spec is not None and spec.get("vendor") == "mask_sum", spec
+    assert s._tiling_exactness["vae_encoder"]["exact"] is True, s._tiling_exactness
 
 
 #: The spec of a down-map encoder tiled in space with the whole clip in every tile, at 720 x 1280
