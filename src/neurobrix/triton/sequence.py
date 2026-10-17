@@ -414,6 +414,9 @@ class TritonSequence:
         self._loader_consumers: Optional[Dict[str, str]] = None
         self._input_ids: List[str] = []
         self._output_ids: List[str] = []
+        # Inputs the caller HANDS OVER (`GraphExecutor._consumed_input_tids`): their slots die at their last use
+        # like an intermediate's, set before compile()
+        self._consumed_input_tids: frozenset = frozenset()
 
         # Slot counts
         self._num_weights: int = 0
@@ -1889,8 +1892,10 @@ class TritonSequence:
         for i in range(self._num_weights):
             protected.add(i)
         input_start = self._num_weights
+        handed = {self._tid_to_slot.get(t) for t in self._consumed_input_tids}
         for i in range(self._num_inputs):
-            protected.add(input_start + i)
+            if input_start + i not in handed:
+                protected.add(input_start + i)
         for tid in self._output_ids:
             s = self._tid_to_slot.get(tid)
             if s is not None:

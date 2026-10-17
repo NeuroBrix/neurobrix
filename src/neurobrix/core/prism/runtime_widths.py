@@ -312,25 +312,44 @@ def _explicit_dtype(op: Dict[str, Any]) -> Optional[str]:
 # The pass
 # ---------------------------------------------------------------------------
 
+class ExecutedWidths(dict):
+    """{tensor_id: bytes per element at runtime}, and `casts`: {op uid: [(tensor id, bytes per element)]} — the
+    copies an op's precision wrapper makes of its operands (`_Rules.operand_casts`), each of that tensor's numel at
+    that width, alive while the op runs and freed when it returns. The profiler adds them to the op's in-op figure."""
+    casts: Dict[str, List[Tuple[str, int]]]
+    dtypes: Dict[str, str]          # the same tensors' dtype names (`runtime_dtypes`)
+
+
 def runtime_widths(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                    has_native_bf16: bool, attention_operands: str, contract: PrecisionContract,
                    stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
-                   shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, int]:
+                   shape_of: Optional[Callable[[str], List[int]]] = None,
+                   seams: Optional[Mapping[str, str]] = None) -> ExecutedWidths:
     """{tensor_id: bytes per element at runtime} for every tensor of `dag` — see
-    `runtime_dtypes`."""
-    return {tid: get_dtype_bytes_per_element(n) for tid, n in runtime_dtypes(
+    `runtime_dtypes` — with the operand casts each op makes while it runs (`ExecutedWidths.casts`)."""
+    casts: Dict[str, List[Tuple[str, str]]] = {}
+    names = runtime_dtypes(
         dag, compute_dtype, engine, has_native_bf16=has_native_bf16,
         attention_operands=attention_operands, contract=contract,
-        stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of).items()}
+        stores_fp64=stores_fp64, tiling=tiling, shape_of=shape_of, casts=casts, seams=seams)
+    w = ExecutedWidths((tid, get_dtype_bytes_per_element(n)) for tid, n in names.items())
+    w.dtypes = names
+    w.casts = {uid: [(t, get_dtype_bytes_per_element(d)) for t, d in cs] for uid, cs in casts.items()}
+    return w
 
 
 def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
                    has_native_bf16: bool, attention_operands: str, contract: PrecisionContract,
                    stores_fp64: bool,
                    tiling: Optional[TilingView] = None,
-                   shape_of: Optional[Callable[[str], List[int]]] = None) -> Dict[str, str]:
-    """{tensor_id: dtype name at runtime}. `shape_of(tid)` answers a tensor's shape at the
+                   shape_of: Optional[Callable[[str], List[int]]] = None,
+                   casts: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+                   seams: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """{tensor_id: dtype name at runtime}; `casts`, when given, is filled with each op's operand casts
+    ({uid: [(tensor id, dtype name)]}, `_Rules.operand_casts`). `seams`: {seam input tid: the dtype its producer
+    runs at}, from the caller that priced the producing graph — a seam enters in that dtype; absent, its traced
+    one. `shape_of(tid)` answers a tensor's shape at the
     request (the matmul store rule reads M); absent, the traced shape answers. `stores_fp64`:
     whether the engine priced holds float64 / complex128 on the profile, read by its OWN branch
     (`triton.dtype.triton_stores_fp64` for the Triton engines, `core.dtype.config.
@@ -381,7 +400,7 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             # A component input is cast to C (TritonDtypeEngine.cast_runtime_inputs,
             # triton/dtype.py:427-487; GraphExecutor._prepare_execution on the ATen branch);
             # a SEAM enters in the dtype its producer gave it (dtype.py:467-476).
-            out[tid] = name if is_seam_tensor(meta) else c
+            out[tid] = ((seams or {}).get(tid, name) if is_seam_tensor(meta) else c)
         else:
             out[tid] = rule.weight_dtype(tid, name)
 
@@ -406,6 +425,10 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             if result is None:
                 result = rule.op_dtype(uid, op, ins, out)
             out[tid] = result
+        if casts is not None:
+            made = rule.operand_casts(uid, op, ins, out)
+            if made:
+                casts[uid] = made
     if engine in ATEN_ENGINES and not stores_fp64:
         out = {tid: rule.storage_dtype_name(name) for tid, name in out.items()}
     return out
@@ -458,6 +481,14 @@ class _Rules:
             cons = consumers.get(o[0], [])
             if len(cons) == 1 and "convolution" in self.ops[cons[0]].get("op_type", ""):
                 self.fusable.setdefault(cons[0], u)
+
+    def operand_casts(self, uid, op, ins, w) -> List[Tuple[str, str]]:
+        """The copies the engine makes of this op's operands while it runs: [(tensor id, dtype)], each a buffer of
+        that tensor's numel at that dtype. Each engine answers with its own rules."""
+        raise NotImplementedError
+
+    def _copies(self, fl, target) -> List[Tuple[str, str]]:
+        return [(t, target) for t, d in fl if d != target]
 
     # -- operand views ---------------------------------------------------
     def floats(self, ins: Iterable[str], w: Dict[str, str]) -> List[Tuple[str, str, bool]]:
@@ -669,6 +700,60 @@ class _TritonRules(_Rules):
             r = _wider(r, self.remap_explicit(explicit))
         return r
 
+    def operand_casts(self, uid, op, ins, w) -> List[Tuple[str, str]]:
+        """`TritonDtypeEngine.wrap_op`'s wrapper (triton/dtype.py), in its order, and the copies it makes — `_wrap_fp32`
+        and the fp32-internal wrap `.to(float32)` every half operand, `_wrap_lower_precision` `.to(C)`s every operand
+        not at C, `_wrap_promote` widens the narrower ones (no wrapper reads its loads wide today:
+        `_nbx_widens_on_load` is set on none) — then a self-managed wrapper's own operand alignment, the very
+        functions it calls (`launch_keys.conv_dtypes`, `mm_dtypes`, `addmm_dtypes`, `bmm_dtypes`). Measured: mochi's
+        VAE chunk on the Triton engine, its fp32 conv input cast to fp16 by the lower-precision wrap, 1.2 GB over its
+        price (2026-10-17). A non-contiguous operand's `.contiguous()` copy is not priced: the graph holds no strides."""
+        c = self.c
+        name = op.get("op_type", "").split("::")[-1].split(".")[0]
+        fl = [(t, d) for t, d, zero in self.floats(ins, w) if not zero]
+        if not fl or name in _CASTS:
+            return []
+        seq_rms = self.tseq and op.get("op_type") == "custom::rms_norm"
+        if self.half and not seq_rms and (uid in self.contract.fp32_op_uids or (
+                uid in self.contract.narrow_op_uids and name in _tdt.AMP_FP32_OPS)):
+            return self._copies(fl, "float32")
+        if name in _tdt.AMP_SCALAR_FILL_OPS or name in _tdt.AMP_CREATION_FILL_OPS or name == "where":
+            return []
+        if name in _tdt._SELF_MANAGED_OPS:
+            return self._aligned(name, fl, ins)
+        if not self.half:
+            return []
+        if name in _tdt.AMP_FP32_OPS:
+            return self._copies(fl, "float32")
+        if name in _tdt.AMP_FP16_OPS:
+            if c == "float16" and name in _tdt._FP16_NEED_FP32:
+                return self._copies(fl, "float32")
+            return self._copies(fl, c)
+        if name in _tdt.AMP_PROMOTE_OPS:
+            widest = self.widest([(t, d, False) for t, d in fl])
+            return self._copies(fl, widest) if widest and get_dtype_bytes_per_element(widest) > 2 else []
+        return []
+
+    def _aligned(self, name, fl, ins) -> List[Tuple[str, str]]:
+        """A self-managed wrapper's operands at launch, by the function it calls; a copy for each one moved."""
+        from neurobrix.kernels import launch_keys as _lk
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        d = dict(fl)
+        at = lambda t: NBXDtype[d[t]] if t in d else None
+        if name in ("conv2d", "_convolution") and len(ins) >= 2 and at(ins[0]) and at(ins[1]):
+            launched = _lk.conv_dtypes(at(ins[0]), at(ins[1]))
+            pairs = zip(ins[:2], launched)
+        elif name in ("mm", "mm_epilogue") and len(ins) >= 2 and at(ins[0]) and at(ins[1]):
+            pairs = zip(ins[:2], _lk.mm_dtypes(at(ins[0]), at(ins[1]), self.native_bf16)[:2])
+        elif name == "bmm" and len(ins) >= 2 and at(ins[0]) and at(ins[1]):
+            pairs = zip(ins[:2], _lk.bmm_dtypes(at(ins[0]), at(ins[1]), self.native_bf16)[:2])
+        elif name in ("addmm", "addmm_epilogue") and len(ins) >= 3 and all(at(t) for t in ins[:3]):
+            a, b, bias = _lk.addmm_dtypes(at(ins[1]), at(ins[2]), at(ins[0]), self.native_bf16)[:3]
+            pairs = zip((ins[1], ins[2], ins[0]), (a, b, bias))
+        else:
+            return []
+        return [(t, to.name) for t, to in pairs if to.name != d[t]]
+
     def _class_rule(self, uid, op, name, fl, ins) -> str:
         c = self.c
         if name in _tdt.AMP_SCALAR_FILL_OPS:                               # :545-546
@@ -800,6 +885,50 @@ class _AtenRules(_Rules):
         if self.embedded_constant(tid):
             return compiled_constant_dtype(traced, self.c, self.graph_dtype)
         return compiled_weight_dtype(traced, self.c)
+
+    def operand_casts(self, uid, op, ins, w) -> List[Tuple[str, str]]:
+        """`DtypeEngine.compile_op`'s wrapper for this op, in its order, and the operand copies it makes: an fp32
+        wrapper `.float()`s every half operand, the lower-precision one `.to(C)`s every operand not at C, the
+        promote one widens every narrower operand, the fp16 squaring guard upcasts both of `x * x`; the
+        `custom::rms_norm` kernel (`rms_norm_fp32`) holds x in fp32, its normed fp32 and that at the weight's
+        dtype while it writes its output. Measured: mochi's VAE chunk, an fp32 conv input cast to fp16 (1.4 GB)
+        and an fp16 matmul operand upcast (1.2 GB, the op its run died at) — unpriced, 2026-10-17."""
+        c = self.c
+        name = op.get("op_type", "").split("::")[-1].split(".")[0]
+        fl = [(t, d) for t, d, zero in self.floats(ins, w) if not zero]
+        if not fl or name in _CASTS or name in ATEN_AMP_CREATION_FILL_OPS:
+            return []
+
+        def to(target):
+            return [(t, target) for t, d in fl if d != target]
+        if uid in self.contract.fp32_op_uids:                               # :851-854
+            return to("float32")
+        if name == "rms_norm":
+            x, d = fl[0]
+            weight = fl[1][1] if len(fl) > 1 else d
+            held = ([(x, "float32")] if d != "float32" else []) + [(x, "float32")]
+            return held + ([(x, weight)] if weight != "float32" else [])
+        if not self.half:                                                   # :870-871
+            return []
+        if name in _CONV and self.fused_input(uid) is not None:
+            return []                       # the fused kernel reads its operands as they are
+        contract = self.contract.safe and c == "float16"
+        if name in ATEN_AMP_FP32_OPS:
+            return to(c) if (contract and name in ATEN_FP32_OPS_HALF_IO) else to("float32")
+        if name in ATEN_AMP_FP16_OPS:
+            if c == "float16" and name in ATEN_FP16_NEED_FP32:
+                if contract and (name in ATEN_FP16_GEMM_OPS or uid in self.contract.narrow_op_uids):
+                    return to(c)
+                return to("float32")
+            return to(c)
+        if name in ATEN_AMP_PROMOTE_OPS:
+            widest = self.widest([(t, d, False) for t, d in fl])
+            return to(widest) if widest is not None and get_dtype_bytes_per_element(widest) > 2 else []
+        if name == "mul" and c == "float16":
+            a = op.get("input_tensor_ids") or [None, None]
+            if len(a) >= 2 and a[0] == a[1] and fl[0][1] == "float16":
+                return [(a[0], "float32"), (a[0], "float32")]
+        return []
 
     def op_dtype(self, uid, op, ins, w) -> str:
         c = self.c

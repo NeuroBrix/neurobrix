@@ -77,6 +77,7 @@ def test_an_encoder_whose_vendor_tiles_takes_its_vendors_tiles(monkeypatch):
     container = SimpleNamespace(_cache_path=container_root("Allegro-TI2V"))
     s = PrismSolver()
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32")
+    monkeypatch.setattr(s, "_run_dtype", lambda n: "float32", raising=False)   # the dtype the cut runs at
     monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None)     # never solved: no profile, no mode
     s._input_config = InputConfig(batch_size=1, height=720, width=1280, num_frames=88, temporal_compression=4)
     mem = ComponentMemory(component_name="vae_encoder", weight_bytes=int(0.3 * GB), activation_bytes=80 * GB,

@@ -91,8 +91,10 @@ def test_the_engine_runs_the_stream_as_the_clip(model, comp, shape, schedule, mo
     clip_dag = json.loads((container / "components" / comp / "graph.json").read_text())
     whole = _executor(container, comp, clip_dag, mode, device)
     whole.load_weights(str(container), comp)
-    pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], comp, whole) for k in ("first", "next")}
-    from neurobrix.core.module.temporal_stream_runner import state_interceptors
+    from neurobrix.core.module.temporal_stream_runner import handed_inputs, state_interceptors
+    pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], comp, whole,
+                                                        consumed_inputs=handed_inputs(decl["dags"][k]))
+              for k in ("first", "next")}     # as the runtime builds them (`Executor._run_temporal_stream`)
     for p in pieces.values():
         p.register_op_uid_interceptors(state_interceptors(decl))       # as the runtime runs them
     for p in pieces.values():
@@ -164,3 +166,56 @@ def test_a_states_source_dies_at_its_last_consumer_in_the_compiled_engine():
         if seq._tensor_id_to_slot.get(src) in seq._ops[idx].kill_slots:
             killed += 1
     assert killed > 0, "no state's source is freed after its state op: the output protection pinned them all"
+
+
+@pytest.mark.parametrize("mode,device", MODES)
+def test_a_handed_state_is_freed_at_its_last_use(mode, device):
+    """The runner HANDS a chunk and its states to the run (`handed_inputs`, `GraphExecutor._consumed_input_tids`): the
+    run takes them out of the caller's dict and each is freed at its last use, as Prism prices them
+    (`handed_inputs=True`). Held as protected inputs they lived through the whole chunk: mochi's 5 GB of states
+    beside a 13 GB chunk, 18.2 GB measured on a card the plan had priced at 13.1 (2026-10-17). Red if the run keeps
+    them: torch engines — a state still referenced once the run returned, before any release; Triton engines — the
+    device still holding the states' bytes then."""
+    container, decl = _case("Wan2.1-T2V-1.3B", "vae")
+    from neurobrix.core.module.temporal_stream_runner import handed_inputs, state_interceptors
+    clip_dag = json.loads((container / "components" / "vae" / "graph.json").read_text())
+    whole = _executor(container, "vae", clip_dag, mode, device)
+    whole.load_weights(str(container), "vae")
+    pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], "vae", whole,
+                                                        consumed_inputs=handed_inputs(decl["dags"][k]))
+              for k in ("first", "next")}
+    for p in pieces.values():
+        p.register_op_uid_interceptors(state_interceptors(decl))
+        p.load_weights(str(container), "vae")
+    torch.manual_seed(0)
+
+    def chunk_inputs():
+        out = pieces["first"].run({"z": _input(torch.randn(1, 16, 2, 4, 4), mode, device)})
+        ins = {s["name"]: out.pop(s["name"]) for s in decl["states"]}
+        pieces["first"].release_run_tensors()
+        ins["z"] = _input(torch.randn(1, 16, 1, 4, 4), mode, device)
+        return ins
+    # one warm run first: what a piece builds once and keeps across runs (its bound constants) is no run's tensor
+    pieces["next"].run(chunk_inputs())
+    pieces["next"].release_run_tensors()
+    inputs = chunk_inputs()
+    if mode.startswith("triton"):
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
+        state_bytes = sum(int(v.numel()) * int(v.element_size()) for k, v in inputs.items() if k != "z")
+        DA.empty_cache_pool()
+        before = DA.memory_allocated()
+        result = pieces["next"].run(inputs)
+        DA.empty_cache_pool()
+        kept = DA.memory_allocated() - before
+        out_bytes = sum(int(v.numel()) * int(v.element_size()) for v in result.values())
+        assert not inputs, f"the run left {sorted(inputs)} in its caller's dict"
+        assert kept <= out_bytes, (f"{mode}: the device holds {kept} B after the run, its outputs are {out_bytes} B: "
+                                   f"the handed states ({state_bytes} B) were kept")
+        return
+    import weakref
+    refs = {k: weakref.ref(v) for k, v in inputs.items()}
+    result = pieces["next"].run(inputs)
+    assert not inputs, f"the run left {sorted(inputs)} in its caller's dict"
+    alive = sorted(k for k, r in refs.items() if r() is not None)
+    assert not alive, f"{mode}: {len(alive)} handed input(s) still alive once the run returned, e.g. {alive[:3]}"
+    assert result

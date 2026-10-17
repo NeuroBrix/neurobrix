@@ -1967,6 +1967,7 @@ class PrismSolver:
         # downstream (`_resolve_component_dtypes`, Step 5).
         component_dtypes = self._resolve_component_dtypes(
             neural_components, profile, container)
+        self._component_dtypes = component_dtypes
 
         # Component-level spatial tiling accumulator. Populated by
         # _place_component when a spatial-overflow component is kept on GPU
@@ -2458,6 +2459,7 @@ class PrismSolver:
 
         # Step 5: Resolve per-component dtypes
         component_dtypes = self._resolve_component_dtypes(neural_components, profile, container)
+        self._component_dtypes = component_dtypes
 
         # Step 7: Build plan
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
@@ -3689,7 +3691,7 @@ class PrismSolver:
             return json.load(f)
 
     def _activation_widths(self, comp, container, profiler, input_config,
-                           compute_dtype: str, profile) -> Dict[str, int]:
+                           compute_dtype: str, profile, seams=None) -> Dict[str, int]:
         """{tensor_id: bytes per element} this component's activations are EXECUTED at,
         under the engine this plan is for (`self._mode`) — core/prism/runtime_widths.
 
@@ -3735,7 +3737,7 @@ class PrismSolver:
         return runtime_widths(
             comp.graph, compute_dtype, self._mode, has_native_bf16=native_bf16,
             attention_operands=operands, contract=contract, stores_fp64=stores_fp64, tiling=None,
-            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map))
+            shape_of=lambda tid: profiler._resolve_shape(tensors[tid], symbol_map), seams=seams)
 
     def _graph_as_executed(self, comp, container):
         """The component as the engines will run it: with the declared-MoE
@@ -5143,25 +5145,59 @@ class PrismSolver:
         if not isinstance(frames, int) or frames < 1:
             declined[comp_name] = f"the request binds no frame count to its time symbol {decl['symbol']}"
             return None
-        comp_dtype = self._get_component_dtype(container, comp_name)
+        comp_dtype = self._run_dtype(comp_name)
         dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
+
+        # The carried states. Inside a chunk they are its graph's outputs and inputs: the runner HANDS the states
+        # and the chunk to the run that reads them, which frees each at its last use (`GraphExecutor.
+        # _consumed_input_tids`), so the chunk's profile counts its inputs from before its first op to their last
+        # use (`handed_inputs`). Uncounted, mochi's 5 GB of states — held by the run for the whole chunk then — were
+        # missing from a 13.1 GB price measured at 18.2 GB (2026-10-17). Between two chunks the runner copies each
+        # state out of the run that made it (`temporal_stream_runner`), so the states then exist twice beside that
+        # chunk's output.
+        # Every tensor at the width the engine runs it at, read on the first chunk's graph (the clip plus its state
+        # outputs: the clip's input and output are its tensors): a state holds the dtype its producer runs at and
+        # enters the next chunk as a SEAM in that dtype (Forge marks it so) — mochi's fp32 states under an fp16 VAE
+        # were priced at the compute dtype's half (2026-10-17).
+        profile = getattr(self, "_profile", None)
+        first_dag = decl["dags"]["first"]
+        first_prof = ActivationProfiler(first_dag)
+        state_out = {first_dag["tensors"][t].get("output_name"): t for t in first_dag.get("output_tensor_ids", [])}
+        missing = [s["name"] for s in decl["states"] if s["name"] not in state_out]
+        if missing:
+            raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s first chunk graph outputs no state {missing[0]!r}")
+        first_w = self._activation_widths(SimpleNamespace(name=comp_name, graph=first_dag), container, first_prof,
+                                          dataclasses.replace(ic, chunk_frames=1), comp_dtype, profile)
+        # (no widths: every tensor at the traced dtype, the profiler's own `widths=None` convention)
+        width = (lambda tid: first_w[tid]) if first_w is not None else (lambda tid: dtype_bytes)
 
         def tensor_bytes(dag, tid):
             from neurobrix.core.runtime import symexpr as _symexpr
             n = 1
             for d in dag["tensors"][tid]["symbolic_shape"]["dims"]:
                 n *= int(_symexpr.evaluate(d, lambda sid, _n: smap[sid], _symexpr.SHAPE))
-            return n * dtype_bytes
+            return n * width(tid)
 
         # Held for the whole stream: the clip's input the chunks are sliced from and the clip's output they fill.
         held = (tensor_bytes(clip, decl["output"])
                 + sum(tensor_bytes(clip, t) for t in clip.get("input_tensor_ids", [])
                       if t in clip["tensors"] and not clip["tensors"][t].get("is_parameter")))
-        # The carried states: inside a chunk they are its graph's inputs and outputs, which the chunk's profile
-        # counts while they live; between two chunks the runner copies each state out of the run that made it
-        # (`temporal_stream_runner`), so the states then exist twice beside that chunk's output.
-        states = _ts.state_bytes(decl, smap, dtype_bytes)
-        profile = getattr(self, "_profile", None)
+        seams = ({f"input::{s['name']}": first_w.dtypes[state_out[s["name"]]] for s in decl["states"]}
+                 if first_w is not None else None)
+        states = sum(_ts.state_bytes({"states": [s]}, smap, width(state_out[s["name"]])) for s in decl["states"])
+        if seams is not None:
+            # A fixed point: the next chunk, fed its states in those dtypes, makes its own in the same ones — the
+            # third chunk then reads what the second read. A dtype that moves is a chain the price does not hold.
+            nxt = decl["dags"]["next"]
+            nxt_w = self._activation_widths(SimpleNamespace(name=comp_name, graph=nxt), container,
+                                            ActivationProfiler(nxt), dataclasses.replace(ic, chunk_frames=1),
+                                            comp_dtype, profile, seams=seams)
+            nxt_out = {nxt["tensors"][t].get("output_name"): t for t in nxt.get("output_tensor_ids", [])}
+            moved = [(s["name"], seams[f"input::{s['name']}"], nxt_w.dtypes.get(nxt_out.get(s["name"])))
+                     for s in decl["states"] if nxt_w.dtypes.get(nxt_out.get(s["name"])) != seams[f"input::{s['name']}"]]
+            if moved:
+                raise RuntimeError(f"ZERO FALLBACK: {comp_name}'s state {moved[0][0]} enters the next chunk as "
+                                   f"{moved[0][1]} and leaves it as {moved[0][2]}: its chunks do not carry one dtype")
         peaks: Dict[tuple, int] = {}
 
         def peak(kind: str, length: int) -> int:
@@ -5170,10 +5206,10 @@ class PrismSolver:
                 prof = ActivationProfiler(dag)
                 cic = dataclasses.replace(ic, chunk_frames=int(length))
                 widths = self._activation_widths(SimpleNamespace(name=comp_name, graph=dag), container, prof, cic,
-                                                 comp_dtype, profile)
+                                                 comp_dtype, profile, seams=seams if kind == "next" else None)
                 peaks[(kind, length)] = int(prof.estimate_peak_memory(
                     input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(profile)).peak_bytes)
+                    attention_scratch=self._attention_scratch(profile), handed_inputs=True).peak_bytes)
             return peaks[(kind, length)]
 
         def chunk_out(kind: str, length: int) -> int:
@@ -5251,7 +5287,7 @@ class PrismSolver:
             have = smap.get(syms.get(axis))
             cut[axis] = min(int(n), int(have)) if isinstance(have, int) else int(n)
         tic = dataclasses.replace(ic, cut_extents=cut)
-        comp_dtype = self._get_component_dtype(container, comp_name)
+        comp_dtype = self._run_dtype(comp_name)
         from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
         dtype_bytes = get_dtype_bytes_per_element(comp_dtype)
 
@@ -5300,6 +5336,22 @@ class PrismSolver:
         if stream_spec is not None:
             spec["tile_stream"] = stream_spec["schedule"]
         return spec
+
+    def _run_dtype(self, comp_name: str) -> str:
+        """The dtype `comp_name` RUNS at under this solve (`_resolve_component_dtypes`, the map the executor
+        receives) — never the container's declared one: mochi's VAE, declared fp32 and run fp16 on a V100, had its
+        chunks priced at fp32 widths, where the fp16 run's operand casts are (2026-10-17)."""
+        dtypes = getattr(self, "_component_dtypes", None) or {}
+        container = getattr(self, "_container_for_cuts", None)
+        profile = getattr(self, "_profile", None)
+        if comp_name not in dtypes and container is not None and profile is not None:
+            # a cut priced outside a whole solve (a rung asked directly): the same resolution the solve makes
+            dtypes = self._component_dtypes = self._resolve_component_dtypes(
+                container.get_neural_components(), profile, container)
+        if comp_name not in dtypes:
+            raise RuntimeError(f"ZERO FALLBACK: no run dtype is resolved for {comp_name!r} in this solve "
+                               f"(resolved: {sorted(dtypes)}); its cut cannot be priced at a dtype it may not run")
+        return dtypes[comp_name]
 
     def _declared_streams(self, container, component_memory, profile) -> None:
         """Every component whose stream declares its vendor's chunks runs in them at every request — that chunked

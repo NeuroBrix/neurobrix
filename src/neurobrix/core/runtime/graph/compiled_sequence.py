@@ -350,6 +350,7 @@ class CompiledSequence:
         '_shape_resolver',  # SymbolicShapeResolver for runtime symbol resolution
         '_is_multi_device',  # FGP: True when weights span multiple devices
         '_persistent_tensor_ids',  # Protected from liveness GC (e.g., hidden states for LLM)
+        '_consumed_input_tids',  # inputs handed over to the run: freed at their last use, not protected
         '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
@@ -451,6 +452,9 @@ class CompiledSequence:
 
         # Persistent tensor IDs: protected from liveness GC (e.g., hidden states for LLM)
         self._persistent_tensor_ids: set = set()
+        # Inputs the caller HANDS OVER (`GraphExecutor._consumed_input_tids`): their slots die at their last use
+        # like an intermediate's, set before compile()
+        self._consumed_input_tids: frozenset = frozenset()
 
         # Op interceptors for KV cache injection (maps op_type -> interceptor callable)
         self._op_interceptors: Dict[str, Callable] = {}
@@ -1802,10 +1806,12 @@ class CompiledSequence:
         for i in range(self._num_weights):
             protected_slots.add(i)
 
-        # Inputs are slots num_weights..num_weights+num_inputs-1
+        # Inputs are slots num_weights..num_weights+num_inputs-1 — except those handed over to the run
         input_start = self._num_weights
+        handed = {self._tensor_id_to_slot.get(t) for t in self._consumed_input_tids}
         for i in range(self._num_inputs):
-            protected_slots.add(input_start + i)
+            if input_start + i not in handed:
+                protected_slots.add(input_start + i)
 
         # Outputs (marked in DAG)
         for tensor_id in self._output_tensor_ids:

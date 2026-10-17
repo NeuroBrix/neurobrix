@@ -161,6 +161,7 @@ def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path,
     (comp / "vendor_tiling.json").write_text(json.dumps(decl))
     s, mem = _solver()
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32")
+    monkeypatch.setattr(s, "_run_dtype", lambda n: "float32", raising=False)   # the dtype the cut runs at
     monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None)
     spec = s._spatial_component_tiling(SimpleNamespace(_cache_path=tmp_path), "enc", mem, RUNG_MB)
     assert spec is not None and spec.get("vendor") == "mask_sum", f"a declared vendor-tiled encoder lost its tile: {spec}"

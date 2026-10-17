@@ -32,6 +32,7 @@ def _spec(monkeypatch, lattice):
     s._mode = "compiled"
     # the stub container names no components: the dtype a real container declares for the VAE
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)
+    monkeypatch.setattr(s, "_run_dtype", lambda n: "float32", raising=False)   # the dtype the cut runs at
     monkeypatch.setattr(s, "_activation_widths", lambda *a, **k: None, raising=False)   # the stub has no profile
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=2, height=352, width=720, num_frames=49, vae_scale=8,

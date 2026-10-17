@@ -294,6 +294,10 @@ class GraphExecutor:
         outputs = executor.run(inputs)
     """
 
+    # Inputs a caller hands over to each run (see `__init__`): none unless the caller declares them — a class
+    # default, immutable, so an executor made without `__init__` (a test double) means the same.
+    _consumed_input_tids: frozenset = frozenset()
+
     #: Whether this executor serves the FLOW's by-name reads (the token embedding, the head,
     #: the norms, outside the graph) — so its load keeps every non-block key. False for a
     #: `layer_streaming` piece: the flow reads its component's BASE executor, which holds those
@@ -405,6 +409,10 @@ class GraphExecutor:
 
         # Persistent tensor IDs - prevent GC for specific tensors (e.g., hidden_states)
         self._persistent_tensor_ids: set = set()
+        # Inputs the caller HANDS OVER to each run (`input::` tids): taken out of the caller's dict, each freed at
+        # its last use in every engine instead of held for the whole run (a temporal stream's states and chunk —
+        # mochi's 5 GB of states alive through every 13 GB chunk, 2026-10-17). Set before the graph compiles.
+        self._consumed_input_tids: frozenset = frozenset()
 
         # Pre-compiled dispatch table: op_uid -> OpExecution type
         # Computed once in _init_from_dag(), avoids per-op get_execution_type() calls
@@ -1784,6 +1792,7 @@ class GraphExecutor:
             for op_uid, interceptor in self._op_uid_interceptors.items():
                 self._compiled_seq.register_op_uid_interceptor(op_uid, interceptor)
 
+        self._compiled_seq._consumed_input_tids = self._consumed_input_tids
         self._compiled_seq.compile()
         self._interceptors_dirty = False
 
@@ -2999,6 +3008,7 @@ class GraphExecutor:
             Output tensors
         """
         _save_inputs_if_asked(getattr(self, "_component_name", None) or "?", inputs, getattr(self, "mode", "?"))
+        inputs = self._take_handed_inputs(inputs)
         self._take_the_component_moe_declaration()
         # Explicit per-call callback wins over the persistent one
         # (installed by zero3). _execute_compiled_graph consumes via
@@ -3015,18 +3025,44 @@ class GraphExecutor:
             import torch
             with torch.inference_mode():
                 self._ctx = self._prepare_execution(inputs)
+                self._drop_handed_inputs()
                 self._resolver = TensorResolver(self._ctx)
                 stats = self._execute_all_ops()
                 outputs = self._gather_outputs()
                 self._last_stats = stats
                 return outputs
         finally:
+            self._handed = None
             self._pre_op_callback = None
             # Post-run hook runs unconditionally (even on exception) so
             # zero3 can evict the current block back to CPU and leave
             # the arena in a clean state for the next call.
             if self._post_run_hook is not None:
                 self._post_run_hook()
+
+    def _take_handed_inputs(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """The run's own dict of `inputs`, the handed-over ones (`_consumed_input_tids`) taken out of the caller's:
+        from here only this dict and the engine's binding hold them, and `_drop_handed_inputs` lets go of this dict's
+        reference once they are bound, so each frees at its last use."""
+        if not self._consumed_input_tids:
+            return inputs
+        own = dict(inputs)
+        for tid in self._consumed_input_tids:
+            inputs.pop(tid[len("input::"):], None)
+        self._handed = own
+        return own
+
+    def _drop_handed_inputs(self, *bound: Dict[str, Any]) -> None:
+        """Forget every reference the run holds to its handed-over inputs once they are bound: in its own dict and
+        in each binding map given (keyed by tensor id or by input name)."""
+        handed = getattr(self, "_handed", None)
+        for tid in self._consumed_input_tids:
+            name = tid[len("input::"):]
+            if handed is not None:
+                handed.pop(name, None)
+            for m in bound:
+                m.pop(tid, None)
+                m.pop(name, None)
 
     def _graph_input_tids(self, tensors_meta: dict) -> list:
         """`input::` tensor ids of the current DAG, cached.
@@ -3188,6 +3224,8 @@ class GraphExecutor:
                     _cands.append(_pos)
             if len(_cands) == 1:
                 input_map[tid] = val.unsqueeze(_cands[0])
+        value = val = None              # the loops' last input, held by this frame otherwise
+        self._drop_handed_inputs()
 
         if self.mode == "triton_sequential":
             raw_outputs, num_ops = self._run_triton_sequential(
@@ -3281,6 +3319,7 @@ class GraphExecutor:
         self._triton_seq.bind_inputs(input_map)
         self._triton_seq.bind_symbols(input_map)
         self._triton_seq.update_seq_dependent_constants()
+        self._drop_handed_inputs(input_map)
 
         effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
@@ -3387,6 +3426,8 @@ class GraphExecutor:
         cast_input_map = dispatcher.bind_inputs(input_map, tensors)
         for tid, tensor in cast_input_map.items():
             store[tid] = tensor
+        tensor = None
+        self._drop_handed_inputs(input_map, cast_input_map)
 
         # The store as the sequence surface a weight-pipelining strategy drives (zero3): one
         # view per graph, handed this pass's store, so its ratchet rebinds the weights the
@@ -3414,7 +3455,7 @@ class GraphExecutor:
         protected: set = set()
         for tid in tensors:
             if tid.startswith("param::") or tid.startswith("buffer::") \
-                    or tid.startswith("input::"):
+                    or (tid.startswith("input::") and tid not in self._consumed_input_tids):
                 protected.add(tid)
         for tid in self._dag.get("output_tensor_ids", []):
             protected.add(tid)
@@ -4091,6 +4132,7 @@ class GraphExecutor:
             "float16" if str(self.dtype) in ("float16", "torch.float16") else "float32")
         self._triton_seq.set_precision_contract(bool(_safe), _pins, _narrow)
 
+        self._triton_seq._consumed_input_tids = self._consumed_input_tids
         self._triton_seq.compile()
 
         # Weights already loaded as NBXTensor by load_weights(). The constants
@@ -4927,6 +4969,8 @@ class GraphExecutor:
 
         assert self._compiled_seq is not None
         self._compiled_seq.bind_inputs(input_map)
+        value = None                    # the loop's last input, held by this frame otherwise
+        self._drop_handed_inputs(input_map, self._ctx.inputs)
 
         # Bind symbolic shape resolver to CompiledSequence
         # This enables dynamic symbol resolution for ops like view([s0, dim])
@@ -5154,6 +5198,8 @@ class GraphExecutor:
                     + list(op_data.get("output_tensor_ids", []))):
             if tid in last_use_tid and last_use_tid[tid] <= op_idx:
                 # Check if this is NOT a model output and NOT persistent
+                if tid in self._consumed_input_tids:
+                    self._ctx.inputs.pop(tid[len("input::"):], None)
                 if tid not in self._ctx.output_tensor_ids and tid not in self._persistent_tensor_ids:
                     # Phase 2+3: If memory pooling enabled, release to pool instead of deleting
                     if self._use_memory_pool and self._memory_pool is not None:

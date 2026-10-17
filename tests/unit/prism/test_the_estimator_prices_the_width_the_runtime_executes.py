@@ -300,7 +300,7 @@ def test_the_estimate_sizes_an_fp32_activation_at_four_bytes():
     g = _block()
     ap_old = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2)   # traced (fp32) sizing
     w = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, stores_fp64=False, contract=NONE)
-    ap = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
+    ap = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=dict(w))   # the widths alone: the copies are priced in test_a_chunk_prices_its_handed_inputs_and_its_casts
     level = {t: (2 if b in (2, 4) else b) for t, b in w.items()}      # the former levelling to C
     ap_c = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=level)
     # the peak op holds an fp32 128-element tensor beside another: priced wider than at C
@@ -308,7 +308,7 @@ def test_the_estimate_sizes_an_fp32_activation_at_four_bytes():
     assert ap_c.peak_bytes * 2 == ap_old.peak_bytes          # all-fp32 trace, all-C level
     w_ = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, stores_fp64=False,
                         contract=PrecisionContract(True, frozenset(), frozenset({"rms::0"})))
-    assert ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w_).peak_bytes == ap_c.peak_bytes
+    assert ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=dict(w_)).peak_bytes == ap_c.peak_bytes
 
 
 def test_an_in_place_add_into_a_narrower_buffer_is_a_new_buffer():
@@ -324,8 +324,8 @@ def test_an_in_place_add_into_a_narrower_buffer_is_a_new_buffer():
     w = runtime_widths(g, "float16", "triton", attention_operands="narrowest", has_native_bf16=False, stores_fp64=False, contract=NONE)
     assert (w["c"], w["e"], w["a"]) == (2, 4, 4)
     p = ActivationProfiler(g)
-    into_narrow = p.estimate_peak_memory(dtype_bytes=2, widths=w, inplace_adds=[("add::0", 0)])
-    into_wide = p.estimate_peak_memory(dtype_bytes=2, widths=w, inplace_adds=[("add::0", 1)])
+    into_narrow = p.estimate_peak_memory(dtype_bytes=2, widths=dict(w), inplace_adds=[("add::0", 0)])
+    into_wide = p.estimate_peak_memory(dtype_bytes=2, widths=dict(w), inplace_adds=[("add::0", 1)])
     # target c (fp16) is narrower than the fp32 result: at add::0 c + e + a NEW a = 10 KiB
     assert into_narrow.peak_bytes == 1024 * (2 + 4 + 4)
     # target e (fp32): a IS e's buffer — add::0 holds c + e = 6 KiB, neg::0 e + n = 8 KiB

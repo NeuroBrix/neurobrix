@@ -342,8 +342,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
         return executors
 
     @staticmethod
-    def _piece_executor(base: Any, sub: Dict[str, Any], component_name: str, lender: Any) -> Any:
-        """An executor over a piece's graph `sub`, borrowing what `lender` holds."""
+    def _piece_executor(base: Any, sub: Dict[str, Any], component_name: str, lender: Any,
+                        consumed_inputs: frozenset = frozenset()) -> Any:
+        """An executor over a piece's graph `sub`, borrowing what `lender` holds; `consumed_inputs`, the `input::`
+        tids its caller hands over to each run (`GraphExecutor._consumed_input_tids`)."""
         seg_exec = type(base)(
             family=getattr(base, "family", None),
             vendor=getattr(base, "vendor", None),
@@ -380,6 +382,11 @@ class LayerStreamingStrategy(ExecutionStrategy):
         # with every run, the embedding into pieces that never read it, in no plan's budget. A
         # pass of a sliced stretch (`ChunkedPiece`) borrows its whole stretch's from the piece.
         seg_exec._borrow_from = lender
+        stray = sorted(set(consumed_inputs) - set(sub.get("input_tensor_ids") or ()))
+        if stray:
+            raise ValueError(f"ZERO FALLBACK: {component_name}: inputs handed to a piece that reads none of them: "
+                             f"{stray[:3]}")
+        seg_exec._consumed_input_tids = frozenset(consumed_inputs)
         seg_exec.load_graph_from_dict(sub)
         seg_exec._component_name = component_name
         return seg_exec

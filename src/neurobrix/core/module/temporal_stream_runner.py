@@ -79,6 +79,12 @@ def _key(t_meta: Dict[str, Any], tid: str) -> str:
     return (t_meta or {}).get("output_name") or tid
 
 
+def handed_inputs(dag: Dict[str, Any]) -> frozenset:
+    """The inputs of a chunk graph the runner HANDS to the run that reads them — every one: the chunk and the states
+    (`GraphExecutor._consumed_input_tids`), so each frees at its last use there, as the plan prices them."""
+    return frozenset(t for t in dag.get("input_tensor_ids", []) if str(t).startswith("input::"))
+
+
 def run_stream(decl: Dict[str, Any], schedule: List[int], x: Any, input_name: str,
                run_first: Callable[[Dict[str, Any]], Dict[str, Any]],
                run_next: Callable[[Dict[str, Any]], Dict[str, Any]],
@@ -100,13 +106,14 @@ def run_stream(decl: Dict[str, Any], schedule: List[int], x: Any, input_name: st
     for i, n in enumerate(schedule):
         sl = [slice(None)] * len(x.shape)
         sl[2] = slice(pos, pos + n)
-        chunk = x[tuple(sl)].contiguous()
         pos += n
-        inputs = {input_name: chunk}
+        # The chunk and the states are HANDED to the run (no other reference here): an engine that takes them over
+        # (`GraphExecutor._consumed_input_tids`) frees each at its last use, as the plan prices them.
+        inputs = {input_name: x[tuple(sl)].contiguous()}
         inputs.update(states)
-        states = {}                     # the run holds the states it reads: the plan prices them as its inputs
+        states = {}
         result = run_first(inputs) if i == 0 else run_next(inputs)
-        del inputs, chunk
+        del inputs
         kind = "first" if i == 0 else "next"
         y = result.get(out_key[kind])
         if y is None:

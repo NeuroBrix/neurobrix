@@ -966,9 +966,13 @@ class ActivationProfiler:
         placement_floor: bool = False,
         in_place_weight_reads: bool = False,
         attention_scratch=None,
+        handed_inputs: bool = False,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
+
+        `handed_inputs`: the graph's `input::` tensors are its run's (`GraphExecutor._consumed_input_tids`), live
+        before its first op and freed at their last use. False: they are its caller's, priced by the caller.
 
         `attention_scratch(batch, heads, Tq, Tk) -> bytes`: the scores an attention op writes WHILE it runs on a device
         whose compiled attention writes them (core/prism/attention_scratch.py; None elsewhere — the memory-efficient
@@ -1165,6 +1169,27 @@ class ActivationProfiler:
         # none of it. The overflow scan below needs the number, so it is recorded
         # here rather than recomputed there.
         live_before_op: Dict[str, int] = {}
+        # the engine's operand copies come with its widths (`ExecutedWidths`); a plain {tid: width} — a levelled
+        # figure a caller builds — states none
+        from neurobrix.core.prism.runtime_widths import ExecutedWidths
+        op_casts = widths.casts if isinstance(widths, ExecutedWidths) else {}
+
+        if handed_inputs:
+            for tid in self.dag.get("input_tensor_ids", []):
+                if not str(tid).startswith("input::") or tid in live_tensors:
+                    continue
+                tensor_meta = self.tensors.get(tid, {})
+                shape = self._resolve_shape(tensor_meta, symbol_map)
+                if widths is not None:
+                    numel = 1
+                    for dim in shape:
+                        numel *= dim
+                    size = numel * widths[tid]
+                else:
+                    size = self._compute_size(shape, tensor_meta, dtype_bytes)
+                live_tensors[tid] = size
+                current_bytes += size
+            peak_bytes = current_bytes
 
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
@@ -1211,6 +1236,12 @@ class ActivationProfiler:
             # its in-op figure is the live set before it (the partitioner's `op_peak_curve`).
             in_op = (live_before_op[op_uid] if op.get("op_type") in VIEW_OP_TYPES
                      else current_bytes)
+            # the operand copies the engine's precision wrapper makes while the op runs (`ExecutedWidths.casts`)
+            for cast_tid, cast_width in (op_casts.get(op_uid, ()) if not op_is_zero_alloc else ()):
+                n_cast = 1
+                for dim in self._resolve_shape(self.tensors.get(cast_tid, {}), symbol_map):
+                    n_cast *= dim
+                in_op += n_cast * cast_width
             if attention_scratch is not None and _is_attention(op.get("op_type")):
                 in_op += self._attention_scratch_of(op, symbol_map, attention_scratch)
             if in_op > peak_bytes:
