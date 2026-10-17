@@ -3294,6 +3294,13 @@ class CompiledSequence:
             return
         state["seen"].add(_key)
         try:
+            # PROBE ONLY (branch probe-token-norms-2026-10-17, never landed): NBX_PROBE_TOKEN_NORMS=<dir> saves, for each
+            # dumped op whose output is [B, T, C], the per-token mean |x| over C ([B, T] float32) -> <dir>/<op_uid>.pt, so
+            # two machines can compare WHERE (which tokens) an op departs, not only head10/l2.
+            _tn_dir = _os_d.environ.get("NBX_PROBE_TOKEN_NORMS")
+            if _tn_dir and isinstance(tensor, torch.Tensor) and tensor.dim() == 3 and tensor.shape[1] > 1024:
+                _os_d.makedirs(_tn_dir, exist_ok=True)
+                torch.save(tensor.detach().float().abs().mean(-1).cpu(), f"{_tn_dir}/{op.op_uid.replace(':', '_')}.pt")
             if not isinstance(tensor, torch.Tensor):
                 # THE RULE: a brick that replaces a call site preserves that
                 # site's observability. Anything standing in for an op — a
