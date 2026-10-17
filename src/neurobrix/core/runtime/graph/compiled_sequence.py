@@ -3289,7 +3289,17 @@ class CompiledSequence:
         # (every op once in that pass) — the per-step differential for a
         # decode divergence located at step k. Without it: first pass only.
         _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
-        if _pass_sel is not None and state.get("pass", 0) not in {int(v) for v in str(_pass_sel).split(",")}:   # PROBE: a list
+        # PROBE: the pass is counted per op_uid across instances (layer_streaming rebuilds its segment sequences every
+        # pass, so a per-instance counter stays at 0): the k-th execution of an op is its pass k-1.
+        global _PROBE_OP_RUNS
+        try:
+            _PROBE_OP_RUNS
+        except NameError:
+            _PROBE_OP_RUNS = {}
+        _op_pass = _PROBE_OP_RUNS.get(op.op_uid, 0)
+        _PROBE_OP_RUNS[op.op_uid] = _op_pass + 1
+        state["pass"] = _op_pass
+        if _pass_sel is not None and _op_pass not in {int(v) for v in str(_pass_sel).split(",")}:   # PROBE: a list
             return
         # Dedup by op_uid, NOT tid: CompiledSequence reuses arena slots, so many
         # distinct ops share one slot → one tid. Keying by tid silently dropped
