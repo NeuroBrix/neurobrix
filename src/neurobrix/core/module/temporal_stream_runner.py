@@ -81,8 +81,11 @@ def _key(t_meta: Dict[str, Any], tid: str) -> str:
 
 def run_stream(decl: Dict[str, Any], schedule: List[int], x: Any, input_name: str,
                run_first: Callable[[Dict[str, Any]], Dict[str, Any]],
-               run_next: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Any:
-    """The component's output over the whole input `x` ([B, C, T, ...], time on axis 2), computed chunk by chunk."""
+               run_next: Callable[[Dict[str, Any]], Dict[str, Any]],
+               release: Callable[[str], None] = None) -> Any:
+    """The component's output over the whole input `x` ([B, C, T, ...], time on axis 2), computed chunk by chunk.
+    `release(kind)`, when given, is called once a chunk's outputs are copied out: the executor that ran it ("first"
+    or "next") drops what its run left behind."""
     total = int(x.shape[2])
     if sum(schedule) != total:
         raise ValueError(f"temporal stream: the schedule {schedule} covers {sum(schedule)} frames of an input of "
@@ -124,4 +127,7 @@ def run_stream(decl: Dict[str, Any], schedule: List[int], x: Any, input_name: st
         if missing:
             raise KeyError(f"temporal stream: chunk {i} returned no state {missing[0]!r}")
         states = {s["name"]: _copy(result[s["name"]]) for s in decl["states"]}
+        del result, y
+        if release is not None:
+            release(kind)
     return out

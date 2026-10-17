@@ -6006,6 +6006,24 @@ class GraphExecutor:
 
     get_embed_weight = get_embed_tokens
 
+    def release_run_tensors(self) -> None:
+        """Drop what the last run left in the arena — its inputs and its intermediates, outputs included — keeping
+        the weights bound. A caller that has consumed a run's outputs and runs the executor again (a temporal
+        stream's chunks) frees the run's memory here: an arena keeps its slots to the next run, and two chunk
+        executors each kept a whole chunk's tensors (CogVideoX-5b-I2V's VAE: 8.3 GB held after its first chunk)."""
+        for seq in (self._compiled_seq, getattr(self, "_triton_seq", None)):
+            arena = getattr(seq, "_arena", None) if seq is not None else None
+            if arena is not None:
+                arena.clear_intermediates()
+                arena.clear_inputs()
+        # the run's context and its resolver hold the run's tensor store (its outputs included), and the Triton
+        # sequential path its captured tensors
+        self._ctx = None
+        if hasattr(self, "_resolver"):
+            self._resolver = None
+        if hasattr(self, "_tritonseq_captured"):
+            self._tritonseq_captured = {}
+
     def unload_weights(self) -> None:
         """
         Unload all weights from GPU to free memory.

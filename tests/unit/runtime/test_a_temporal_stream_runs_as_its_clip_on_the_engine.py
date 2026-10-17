@@ -138,3 +138,29 @@ def test_every_state_is_copied_by_its_own_op(mode):
     first.load_weights(str(container), "vae")
     first.run({"z": torch.randn(1, 16, 2, 4, 4)})
     assert len(calls) == len(decl["states"]), (len(calls), len(decl["states"]))
+
+
+def test_a_states_source_dies_at_its_last_consumer_in_the_compiled_engine():
+    """The compiled engine pins the storage chain of each graph output through view ops (UMT5's reassembled norm,
+    graph_executor's output protection). A state's slice is copied by its interceptor, so its source must still be
+    freed after it: each `stream.state_out::<k>` op kills its source's slot. Red without the interceptor stop in
+    `_protect_storage_chain`: the kills are removed, and every causal site's input lives to the chunk's end (Wan's
+    VAE, a 2-frame chunk: 17.3 GB on the card against 6.0 GB with the stop)."""
+    container, decl = _case("Wan2.1-T2V-1.3B", "vae")
+    from neurobrix.core.module.temporal_stream_runner import state_interceptors
+    clip_dag = json.loads((container / "components" / "vae" / "graph.json").read_text())
+    whole = _executor(container, "vae", clip_dag, "compiled", "cpu")
+    whole.load_weights(str(container), "vae")
+    first = LayerStreamingStrategy._piece_executor(whole, decl["dags"]["first"], "vae", whole)
+    first.register_op_uid_interceptors(state_interceptors(decl))
+    first.load_weights(str(container), "vae")
+    first.run({"z": torch.randn(1, 16, 2, 4, 4)})
+    seq = first._compiled_seq
+    order = first._dag["execution_order"]
+    killed = 0
+    for k in range(len(decl["states"])):
+        idx = order.index(f"stream.state_out::{k}")
+        src = first._dag["ops"][f"stream.state_out::{k}"]["input_tensor_ids"][0]
+        if seq._tensor_id_to_slot.get(src) in seq._ops[idx].kill_slots:
+            killed += 1
+    assert killed > 0, "no state's source is freed after its state op: the output protection pinned them all"

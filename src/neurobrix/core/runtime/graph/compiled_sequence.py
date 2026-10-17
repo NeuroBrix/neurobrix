@@ -4093,6 +4093,12 @@ class CompiledSequence:
             op_type = op_data.get("op_type", "")
             if op_type not in self._VIEW_OPS:
                 return  # Hit a non-view op — storage is owned here, stop
+            if op_uid in self._op_uid_interceptors:
+                # An intercepted op returns what its interceptor returns, never a view the graph can see: a temporal
+                # stream's state is a slice COPIED where it is produced (`temporal_stream_runner.materialize_state`).
+                # Pinning its source here kept every causal site's input alive to the end of the chunk (Wan's VAE:
+                # a 2-frame chunk peaked at 17.3 GB where the same graph without its states peaks at 2.9 GB).
+                return
 
             # This op is a view — its first input shares storage
             input_tids = op_data.get("input_tensor_ids", [])

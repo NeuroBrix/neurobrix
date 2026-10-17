@@ -1417,7 +1417,8 @@ class RuntimeExecutor:
                                f"{extra}, which no chunk graph reads")
         try:
             return run_stream(decl, list(spec["schedule"]), comp_inputs[input_name], input_name,
-                              pieces["first"].run, pieces["next"].run)
+                              pieces["first"].run, pieces["next"].run,
+                              release=lambda kind: pieces[kind].release_run_tensors())
         finally:
             for p in pieces.values():
                 p.unload_weights()
