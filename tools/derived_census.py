@@ -63,8 +63,20 @@ def plan_record(model: str, request: list, mode: str, hardware: str, rung: int) 
                         MODE_FLAGS[mode], "--hardware", hardware, "--explain-plan", "--json"],
                        env=env, capture_output=True, text=True, timeout=600, cwd=str(REPO))
     if r.returncode != 0:
+        if CANNOT_RUN in r.stderr:
+            # Prism's one refusal (`PrismSolver._fail_error`): the exact ladder is exhausted for this mode on this
+            # class — a fact of the catalogue, not a defect of the derivation; the model forms no key here
+            raise PlanRefused(f"{model}: {CANNOT_RUN} ({mode}, {hardware}, rung {rung})")
         raise SystemExit(f"{model}: the plan could not be read (rc {r.returncode}): {r.stderr[-800:]}")
     return json.loads(r.stdout)
+
+
+#: Prism's single refusal sentence (`PrismSolver._fail_error`), the one place the engine says a model does not run.
+CANNOT_RUN = "This model cannot run on this machine"
+
+
+class PlanRefused(SystemExit):
+    """The plan is Prism's bottom-of-ladder refusal: no key, by the engine's own verdict."""
 
 
 def container_tokenizer(model: str):
@@ -2091,11 +2103,16 @@ def table(a) -> int:
             reqs.append(probe)
         container = CC._graph_sha(model)
         rows, refused, notes, keyless = [], [], collections.Counter(), 0
+        unrunnable = []                    # (mode, rung): Prism's own refusal — the model does not run there
         for mode in modes:
             for ri, req in enumerate(reqs):
                 for rung in rungs:
                     try:
                         derived, _plan, _P, unhandled = derive_keys(model, hw, mode, rung, req)
+                    except PlanRefused as e:
+                        if rung == rungs[-1] and not ri:
+                            unrunnable.append(f"{mode} r{rung}: {e}")
+                        continue
                     except SystemExit as e:
                         if rung != rungs[-1] or ri:
                             continue          # refused below the top rung, or the probe: no key there
@@ -2118,7 +2135,7 @@ def table(a) -> int:
                         rows.append({"model": model, "container": container, "mode": mode,
                                      "rungs_mb": [int(rung)], "ops": [uid], "kernel": q_, "key": key,
                                      "dtype": T.dtypes_of(key), "tool": f"derived_census {rev}"})
-        if not rows and not refused and not keyless:
+        if not rows and not refused and not keyless and not unrunnable:
             refused.append("every request, mode and rung derived no key and placed no keyless op — not the "
                            "knowledge that the model forms none")
         if refused:
@@ -2129,11 +2146,13 @@ def table(a) -> int:
             for line in refused[:30]:
                 print(f"   {line}")
             continue
-        removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else keyless)
+        removed, _ = T.replace_model(path, model, rows, keyless_ops=0 if rows else max(keyless, len(unrunnable)))
         written = len({(r["mode"], r["kernel"], r["key"]) for r in rows})
         print(f"[derived table] {model}: {written} row(s) written ({removed} replaced; {keyless} keyless op(s) "
               f"placed) into {path.name} "
               f"({len(reqs)} request(s) x {len(modes)} mode(s) x {len(rungs)} rung(s))", flush=True)
+        for line in unrunnable:
+            print(f"   does not run on this class, by Prism's own refusal — no key: {line}")
         for why, n in notes.most_common():
             print(f"   derived from the op's contract, the annotation named: {n} x {why}")
     return worst
