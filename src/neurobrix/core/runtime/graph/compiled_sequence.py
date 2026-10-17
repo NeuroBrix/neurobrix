@@ -40,6 +40,19 @@ from neurobrix.kernels.oom_advice import annotate as _oom_annotate
 # keyed by id(self)).
 _DUMP_STATE_NATIVE: Dict[int, Dict[str, Any]] = {}
 
+
+def _dump_state_native(seq) -> Dict[str, Any]:
+    """The dump state of THIS sequence. Keyed by id(), an entry outlived its sequence and a later one at the same
+    address inherited its passes and seen set (a reused id read as the same sequence); each entry now holds its
+    sequence (so its id is not reused while the entry lives — a diagnostic's cost, only under NBX_DUMP_TIDS) and
+    is reset when the address belongs to another."""
+    st = _DUMP_STATE_NATIVE.get(id(seq))
+    if st is None or st.get("owner") is not seq:
+        st = {"owner": seq, "seen": set(), "records": [],
+              "slot_to_tid": {s_: t_ for t_, s_ in seq._tensor_id_to_slot.items()}}
+        _DUMP_STATE_NATIVE[id(seq)] = st
+    return st
+
 # ============================================================================
 # DEBUG FLAGS — read once at import time, not per-step
 # ============================================================================
@@ -3207,9 +3220,7 @@ class CompiledSequence:
                 # (pass 0 = the first run of this sequence; a decode step k
                 # of an autoregressive flow is pass k).
                 global _DUMP_STATE_NATIVE
-                _st = _DUMP_STATE_NATIVE.setdefault(id(self),
-                    {"seen": set(), "records": [],
-                     "slot_to_tid": {s_: t_ for t_, s_ in self._tensor_id_to_slot.items()}})
+                _st = _dump_state_native(self)
                 _st["pass"] = _st.get("pass", -1) + 1
             # Precision calibration: the component's census, None outside a
             # calibration — one lookup per run, nothing per op.
@@ -3269,9 +3280,7 @@ class CompiledSequence:
         dump_path = _os_d.environ.get("NBX_DUMP_TIDS")
         if not dump_path:
             return
-        state = _DUMP_STATE_NATIVE.setdefault(id(self),
-            {"seen": set(), "records": [],
-             "slot_to_tid": {s: t for t, s in self._tensor_id_to_slot.items()}})
+        state = _dump_state_native(self)
         tid = state["slot_to_tid"].get(out_slot, f"slot::{out_slot}")
         filters = [f for f in _os_d.environ.get(
             "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
