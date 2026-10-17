@@ -10,12 +10,15 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
-if not torch.cuda.is_available():
-    pytest.skip("the Triton pad runs on a card", allow_module_level=True)
+torch = pytest.importorskip("torch")                       # the oracle only: torch.nn.functional.pad
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator as DA  # noqa: E402
 from neurobrix.kernels import wrappers as W  # noqa: E402
+
+# the engine's own device gate (CUDA, ROCm or Metal — the Triton tests' gate), never torch.cuda's: gated on CUDA the
+# test skipped on the Mac, and a test that never runs on a backend proves nothing for it (the Mac, 2026-10-17 23:04)
+if DA.device_count() <= 0:
+    pytest.skip("the Triton pad runs on a device", allow_module_level=True)
 
 CASES = [
     ((1, 4, 6, 8, 10), [1, 1, 1, 1, 2, 0], 0.0),      # a causal 5-D pad: W, H and the middle time dim
