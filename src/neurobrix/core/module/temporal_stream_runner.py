@@ -52,6 +52,29 @@ def _copy(t: Any) -> Any:
     return buf
 
 
+def materialize_state(x: Any, dim: int, start: int, end: int, step: int = 1, *rest, **kwargs) -> Any:
+    """A state's suffix slice, COPIED where it is produced. As the slice view an engine makes of `aten::slice`, a
+    chunk's state kept its whole source alive to the end of the run — every causal site's input at the chunk's full
+    extent (mochi's VAE: 14.5 GB at a chunk Prism priced at 10.2 GB, its 38 sources pinned). Copied, the source dies at
+    its last consumer, as the chunk's profile assumes. Registered on each state's op uid (`stream.state_out::<k>`)."""
+    rank = len(x.shape)
+    d = int(dim) % rank
+    n = int(x.shape[d])
+    lo = int(start) + n if int(start) < 0 else int(start)
+    hi = n if int(end) >= n else (int(end) + n if int(end) < 0 else int(end))
+    sl = [slice(None)] * rank
+    sl[d] = slice(lo, hi, int(step) if step else 1)
+    return x[tuple(sl)].clone()
+
+
+materialize_state.self_manages_dtype = True        # a copy keeps its source's dtype; no AMP rule applies
+
+
+def state_interceptors(decl: Dict[str, Any]) -> Dict[str, Any]:
+    """The interceptors a chunk executor runs its state outputs through: {op uid: materialize_state}."""
+    return {f"stream.state_out::{k}": materialize_state for k in range(len(decl["states"]))}
+
+
 def _key(t_meta: Dict[str, Any], tid: str) -> str:
     return (t_meta or {}).get("output_name") or tid
 

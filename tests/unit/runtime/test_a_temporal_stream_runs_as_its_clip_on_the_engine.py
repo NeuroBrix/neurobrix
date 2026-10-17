@@ -92,6 +92,9 @@ def test_the_engine_runs_the_stream_as_the_clip(model, comp, shape, schedule, mo
     whole = _executor(container, comp, clip_dag, mode, device)
     whole.load_weights(str(container), comp)
     pieces = {k: LayerStreamingStrategy._piece_executor(whole, decl["dags"][k], comp, whole) for k in ("first", "next")}
+    from neurobrix.core.module.temporal_stream_runner import state_interceptors
+    for p in pieces.values():
+        p.register_op_uid_interceptors(state_interceptors(decl))       # as the runtime runs them
     for p in pieces.values():
         p.load_weights(str(container), comp)
     input_name = clip_dag["tensors"][decl["input"]]["input_name"]
@@ -110,3 +113,28 @@ def test_a_schedule_that_does_not_cover_the_input_is_refused():
     x = torch.zeros(1, 16, 5, 4, 4)
     with pytest.raises(ValueError, match="covers 4 frames of an input of 5"):
         run_stream(decl, [2, 2], x, "z", lambda i: {}, lambda i: {})
+
+
+@pytest.mark.parametrize("mode", ["compiled", "sequential"])
+def test_every_state_is_copied_by_its_own_op(mode):
+    """A state the runtime carries is COPIED where its op produces it (`state_interceptors`): as a slice view it kept
+    its whole source — a causal site's full input — alive to the end of the chunk (mochi: 14.5 GB at a chunk priced at
+    10.2 GB). The copy is the interceptor's: each state's op must run through it once per chunk. Red if the
+    interceptor is not registered or not reached (the run's outputs alone cannot tell: an executor may copy its
+    outputs at the end, after the source was pinned the whole run)."""
+    container, decl = _case("Wan2.1-T2V-1.3B", "vae")
+    from neurobrix.core.module import temporal_stream_runner as R
+    calls = []
+
+    def spy(*a, **k):
+        calls.append(1)
+        return R.materialize_state(*a, **k)
+    spy.self_manages_dtype = True
+    clip_dag = json.loads((container / "components" / "vae" / "graph.json").read_text())
+    whole = _executor(container, "vae", clip_dag, mode, "cpu")
+    whole.load_weights(str(container), "vae")
+    first = LayerStreamingStrategy._piece_executor(whole, decl["dags"]["first"], "vae", whole)
+    first.register_op_uid_interceptors({uid: spy for uid in R.state_interceptors(decl)})
+    first.load_weights(str(container), "vae")
+    first.run({"z": torch.randn(1, 16, 2, 4, 4)})
+    assert len(calls) == len(decl["states"]), (len(calls), len(decl["states"]))

@@ -1396,8 +1396,12 @@ class RuntimeExecutor:
                 raise RuntimeError(
                     f"ZERO FALLBACK: the plan runs '{comp_name}' as a temporal stream and its container carries "
                     f"no stream declaration (components/{comp_name}/stream.json)")
+            from neurobrix.core.module.temporal_stream_runner import state_interceptors
             pieces = {k: LayerStreamingStrategy._piece_executor(executor, decl["dags"][k], comp_name, executor)
                       for k in ("first", "next")}
+            for p in pieces.values():
+                # each state copied where it is produced, so its source frees at its last consumer
+                p.register_op_uid_interceptors(state_interceptors(decl))
             memo[comp_name] = (decl, pieces)
         decl, pieces = memo[comp_name]
         params = getattr(executor, "_weight_loading_params", None) or {}
