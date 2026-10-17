@@ -3298,6 +3298,8 @@ class CompiledSequence:
             _PROBE_OP_RUNS = {}
         _op_pass = _PROBE_OP_RUNS.get(op.op_uid, 0)
         _PROBE_OP_RUNS[op.op_uid] = _op_pass + 1
+        if _os_d.environ.get("NBX_PROBE_PASS_MODE") == "instance":
+            _op_pass = state.get("pass", 0)         # the sequence's own run counter (one persistent sequence per step)
         state["pass"] = _op_pass
         if _pass_sel is not None and _op_pass not in {int(v) for v in str(_pass_sel).split(",")}:   # PROBE: a list
             return
