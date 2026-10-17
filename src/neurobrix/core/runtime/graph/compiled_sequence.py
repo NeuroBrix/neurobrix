@@ -3289,7 +3289,7 @@ class CompiledSequence:
         # (every op once in that pass) — the per-step differential for a
         # decode divergence located at step k. Without it: first pass only.
         _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
-        if _pass_sel is not None and state.get("pass", 0) != int(_pass_sel):
+        if _pass_sel is not None and state.get("pass", 0) not in {int(v) for v in str(_pass_sel).split(",")}:   # PROBE: a list
             return
         # Dedup by op_uid, NOT tid: CompiledSequence reuses arena slots, so many
         # distinct ops share one slot → one tid. Keying by tid silently dropped
@@ -3306,7 +3306,7 @@ class CompiledSequence:
             _tn_dir = _os_d.environ.get("NBX_PROBE_TOKEN_NORMS")
             if _tn_dir and isinstance(tensor, torch.Tensor) and tensor.dim() == 3 and tensor.shape[1] > 1024:
                 _os_d.makedirs(_tn_dir, exist_ok=True)
-                torch.save(tensor.detach().float().abs().mean(-1).cpu(), f"{_tn_dir}/{op.op_uid.replace(':', '_')}.pt")
+                torch.save(tensor.detach().float().abs().mean(-1).cpu(), f"{_tn_dir}/p{state.get('pass', 0)}_{op.op_uid.replace(':', '_')}.pt")
             if not isinstance(tensor, torch.Tensor):
                 # THE RULE: a brick that replaces a call site preserves that
                 # site's observability. Anything standing in for an op — a
