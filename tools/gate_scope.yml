@@ -61,11 +61,12 @@ planner:
   plan_fields: [strategy, loading_mode, dtype, planned_memory_mb, device_window_mb, components, op_level_tiling,
                 conv3d_chunks, op_level_tiling_ops, component_tiling, cfg_split_components, host_footprint,
                 kv_cache, deferred_drain_cliffs, layer_stream_chunks, expert_working_set, cpu_ram_mb,
-                tiling_exactness]
+                tiling_exactness,
+                component_stream]
   # what the plan record says ABOUT the choice (why, what it beat, what it refused, the rungs it searched) — never
   # what runs. Every key of core/prism/solver.plan_record is in plan_fields or here
   # (tests/unit/tools/test_the_gate_compares_every_decision_the_plan_carries.py).
-  explanation_fields: [why, candidates, refused, unified_rungs_tried]
+  explanation_fields: [why, candidates, refused, unified_rungs_tried, stream_declined]
   # what the planning process measures of itself, and the fields that add it (source: core/prism/host_footprint.py,
   # `resident_bytes` "what the planning process holds when it prices (the caller measures it)", summed into
   # `total_bytes`): it moves with any change to the process, never with the plan

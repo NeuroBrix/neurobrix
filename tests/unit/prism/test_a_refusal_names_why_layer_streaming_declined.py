@@ -65,20 +65,24 @@ def _refusal(monkeypatch, rung, force):
     return str(err.value)
 
 
-def test_the_retraced_container_plans_what_the_old_one_refused(monkeypatch):
-    # A strict xfail until release-candidate-1 (2026-09-28): main's 3-segment plan sized its
-    # activations at the trace; with the partition sized at the request (38751c12) it plans.
-    """The Mac's 2048x1024 refusal (14 420 MB against the rung) was the OLD container's: its
-    transformer declared `seq_len` at two symbol ids, and the reserve followed. The re-traced
-    container plans batch 2 at 2048x1024 under layer_streaming at the 4096 MB rung — a claim
-    the Mac can now check on its own card."""
+@pytest.mark.parametrize("mode", ["compiled", "triton"])
+def test_pixart_at_2048x1024_batch_2_on_the_pinned_mac_is_refused_from_the_single_site_naming_the_vae(monkeypatch, mode):
+    """Until 2026-10-17 this request planned under layer_streaming: the VAE took its vendor's tiled decode. That
+    declaration is retired (decision 20:08: a vendor declaration is the vendor's reference cut or none — PixArt's model
+    card decodes whole), and the VAE's mid-block attention couples space, so no exact cut exists; at batch 2 its
+    activations peak at 5,120 MB against this pinned Mac's 3,768 MB rung, and the host as pinned (11,198 MB free)
+    cannot hold the CPU rungs either. The exact ladder is exhausted, so Prism refuses from its ONE site, naming the
+    component and the figure — in both engines. A wrong cut is never the way down."""
     pin_host(monkeypatch, 24576, 11198, "the Mac's reading")
     impose_rung(monkeypatch, 4096)
     monkeypatch.delenv("NBX_FORCE_STRATEGY", raising=False)
-    plan = PrismSolver().solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))),
-                                     profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024),
-                                     mode="triton")
-    assert "layer_streaming" in str(getattr(plan, "strategy", plan)), plan
+    with pytest.raises(RuntimeError) as err:
+        PrismSolver().solve_smart(NBXContainer.load(str(container_root("PixArt-XL-2-1024-MS"))),
+                                  profile(APPLE_M4_PRO), InputConfig(batch_size=2, height=2048, width=1024), mode=mode)
+    text = str(err.value)
+    assert "This model cannot run on this machine" in text, text[:300]
+    assert "cpu_streaming" in text.split("ALL FAILED")[0], "the ladder was not descended to the CPU"
+    assert "'vae'" in text and "MB" in text, text[-600:]
 
 
 def test_a_forced_streaming_refusal_says_why_it_declined(monkeypatch):
