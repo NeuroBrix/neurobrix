@@ -28,7 +28,7 @@ class _Container:
 def _spec(monkeypatch, lattice):
     root = installed_container(MODEL)
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: lattice))
-    s = PrismSolver.__new__(PrismSolver)
+    s = PrismSolver()
     s._mode = "compiled"
     # the stub container names no components: the dtype a real container declares for the VAE
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)

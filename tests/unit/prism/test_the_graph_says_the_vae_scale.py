@@ -28,7 +28,7 @@ def _spec(monkeypatch, model, h, w, frames, weights_mb, act_mb, over_mb, rung_mb
     root = installed_container(model)
     # The factor does not depend on the extent lattice; none, so the lattice's own rules stay out.
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: 0))
-    s = PrismSolver.__new__(PrismSolver)
+    s = PrismSolver()
     s._mode = "compiled"
     # the stub container names no components: the dtype a real container declares for the VAE
     monkeypatch.setattr(s, "_get_component_dtype", lambda c, n: "float32", raising=False)
@@ -50,7 +50,8 @@ def test_a_vae_whose_heuristic_agrees_keeps_its_factor(monkeypatch):
     spec = _spec(monkeypatch, "CogVideoX-2b", 352, 720, 49, 471, 121275, 6087, 12288)
     # Since 2026-10-17 CogVideoX's decoder is cut only by its vendor's own tiles (its declared tiled_decode, whose
     # geometry is the vendor's numbers, not a factor Prism reads): the engine tile's factor no longer applies to it.
-    assert spec is None or spec.get("vendor") == "ramp_crop" or spec["scale_factor"] == 8, spec
+    assert (spec is None or spec.get("vendor") == "ramp_crop" or spec.get("stream")
+            or spec["scale_factor"] == 8), spec
 
 
 def test_a_declared_upscale_that_disagrees_with_the_graph_is_refused(monkeypatch, tmp_path):
@@ -66,7 +67,7 @@ def test_a_declared_upscale_that_disagrees_with_the_graph_is_refused(monkeypatch
     prof["config"] = {**(prof.get("config") or {}), "upscale": 2}
     (comp / "profile.json").write_text(json.dumps(prof))
     monkeypatch.setattr(PrismSolver, "_tile_extent_lattice", staticmethod(lambda: 0))
-    s = PrismSolver.__new__(PrismSolver)
+    s = PrismSolver()
     from neurobrix.core.prism.profiler import InputConfig
     s._input_config = InputConfig(batch_size=1, height=1024, width=1024)
     with pytest.raises(ValueError, match="declares upscale 2 and its graph measures 4"):

@@ -2525,7 +2525,7 @@ class PrismSolver:
             # host included; an engine tile only where a card computes it.
             plan.component_tiling = {
                 cn: spec for cn, spec in _ct.items()
-                if cn in plan.components
+                if cn in plan.components and not (isinstance(spec, dict) and spec.get("stream"))
                 and (not str(plan.components[cn].device).startswith("cpu")
                      or (isinstance(spec, dict) and spec.get("when") == "always"))
             }
@@ -2534,7 +2534,8 @@ class PrismSolver:
         _host_t = (getattr(self, "_host_device_tilings", {}) or {}).get(chosen_strategy) or {}
         if _host_t:
             plan.component_tiling = dict(plan.component_tiling or {})
-            plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components})
+            plan.component_tiling.update({cn: spec for cn, spec in _host_t.items() if cn in plan.components
+                                          and not (isinstance(spec, dict) and spec.get("stream"))})
         plan.tiling_exactness = {cn: dict(v) for cn, v in (getattr(self, "_tiling_exactness", {}) or {}).items()
                                  if cn in plan.components}
         plan.component_stream = {cn: dict(v) for cn, v in (getattr(self, "_component_stream", {}) or {}).items()
@@ -5207,8 +5208,8 @@ class PrismSolver:
                 "source": (vc or {}).get("source") or "derived from the clip graph (Forge temporal_stream)",
                 "activation_bytes": cost(sched), "states": len(decl["states"])}
         if room_bytes is not None and not fits_cost(spec["activation_bytes"]):
-            declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB "
-                                   f"of the {room_bytes / 2**20:,.0f} MB left")
+            declined[comp_name] = (f"its vendor's chunks {sched} need {spec['activation_bytes'] / 2**20:,.0f} MB, "
+                                   f"over what the rung leaves it")
             return None
         declined.pop(comp_name, None)
         return spec
@@ -5399,6 +5400,25 @@ class PrismSolver:
                 f"its trace size is unknown and no tiling decision can be taken "
                 f"for it."
             ) from exc
+
+        # A temporal stream is an exact cut of a component that does not fit whole, wherever a rung asks for one
+        # (the card's placement, the layer-streaming rung, a host rung's card): its chunks, priced like the
+        # component held whole, within the rung. The plan carries it in `component_stream`.
+        streams = self.__dict__.setdefault("_component_stream", {})
+        if comp_name not in streams and self._stream_declaration(container, comp_name) is not None:
+            # the part of the rung one component held whole may occupy (`_usable_mb`'s fraction; the caller
+            # still checks the chunk and the weights against its device's own figure)
+            part = int(int(tile_rung_mb) * 1024 * 1024 * self.whole_component_fraction)
+            weights = int(mem.weight_bytes)
+            stream = self._temporal_stream(container, comp_name,
+                                           lambda c: (c + weights) * (1.0 + self.overhead_factor) <= part)
+            if stream is not None:
+                streams[comp_name] = stream
+                return {"stream": True, "tiled_activation_bytes": int(stream["activation_bytes"]),
+                        "schedule": list(stream["schedule"])}
+        elif comp_name in streams and not self._vendor_tiling_declaration(comp_name):
+            return {"stream": True, "tiled_activation_bytes": int(streams[comp_name]["activation_bytes"]),
+                    "schedule": list(streams[comp_name]["schedule"])}
 
         # A vendor whose reference tiles: its own cut, priced per tile — never a tile Prism sizes.
         if self._vendor_tiling_declaration(comp_name) is not None:
