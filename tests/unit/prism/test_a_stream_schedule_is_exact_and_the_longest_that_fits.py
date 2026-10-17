@@ -77,3 +77,24 @@ def test_a_declaration_derived_from_another_graph_is_refused(tmp_path):
     for name in ("stream_first.json", "stream_next.json"):
         (comp / name).write_text("{}")
     assert ts.load(tmp_path, "vae")["dags"] == {"first": {}, "next": {}}
+
+
+def test_a_vendor_tiling_declaration_that_says_when_is_refused(tmp_path):
+    """A vendor declaration is the vendor's reference cut or does not exist (decision 2026-10-17 20:08): one carrying
+    `when` — the retired 'memory' path, or 'always' — is refused by name until Forge re-derives it. Red if the loader
+    reads it: the plan would take a cut no reference makes."""
+    import hashlib
+    import json
+    import pytest
+    from neurobrix.core.prism import temporal_stream as ts
+    comp = tmp_path / "components" / "vae"
+    comp.mkdir(parents=True)
+    (comp / "graph.json").write_text("{}")
+    decl = {"format": "vendor_tiling", "version": 1, "method": "ramp_crop", "when": "memory",
+            "clip_graph_sha256": hashlib.sha256(b"{}").hexdigest(), "source": ["x"]}
+    (comp / "vendor_tiling.json").write_text(json.dumps(decl))
+    with pytest.raises(ts.StreamDeclarationError, match="carries 'when'"):
+        ts.load_vendor_tiling(tmp_path, "vae")
+    del decl["when"]
+    (comp / "vendor_tiling.json").write_text(json.dumps(decl))
+    assert ts.load_vendor_tiling(tmp_path, "vae")["method"] == "ramp_crop"

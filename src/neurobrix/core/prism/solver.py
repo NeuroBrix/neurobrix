@@ -2248,28 +2248,6 @@ class PrismSolver:
                     "no longer outrank it", ", ".join(sorted(_offloaded)),
                     " and ".join(_demoted))
 
-        # AN EXACT CUT BEATS A VENDOR'S LOW-MEMORY PATH.
-        #
-        # A vendor tiling declared `when: memory` is the vendor's memory path, not its reference: its blends make
-        # another function. Sana 4K's DC-AE `tiled_decode` (64 px cross-fades) drew a visible grid on a 32 GB card
-        # where op-level tiling — the vendor's own 4K path, `patch_conv`, exact — kept the VAE whole (2026-10-17). A
-        # candidate that keeps such a component on an accelerator only by those tiles ranks under the op-level
-        # candidate that keeps it there exactly; the tiles stay the way down when nothing exact fits.
-        if _tiling is not None:
-            _memory_tiles = {cn for cn, spec in (getattr(self, "_component_tiling", {}) or {}).items()
-                             if isinstance(spec, dict) and spec.get("vendor") and spec.get("when") == "memory"}
-            _exact = {n for n, a in (_tiling[2] or {}).items() if n in _memory_tiles and not _on_host(a)}
-            for i, cand in enumerate(candidates):
-                score, name, alloc, devs = cand
-                if name == "op_level_tiling" or score <= _tiling[0]:
-                    continue
-                lossy = sorted(n for n, a in (alloc or {}).items() if n in _exact and not _on_host(a))
-                if lossy:
-                    candidates[i] = (_tiling[0] - 1.0, name, alloc, devs)
-                    logging.getLogger(__name__).info(
-                        "Prism: op-level tiling keeps %s on the accelerator exactly, so %s (its vendor's "
-                        "memory tiles) no longer outranks it", ", ".join(lossy), name)
-
         # Sort candidates by score descending
         ranked = sorted(candidates, key=lambda x: -x[0])
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
@@ -2557,16 +2535,13 @@ class PrismSolver:
 
         _ct = getattr(self, "_component_tiling", {}) or {}
         if _ct:
-            # A vendor tiling the vendor has no other path for is the component's function on any device, the
-            # host included; an engine tile only where a card computes it.
+            # A vendor tiling is the vendor's reference cut: the component's function on any device, the host
+            # included; an engine tile only where a card computes it.
             plan.component_tiling = {
                 cn: spec for cn, spec in _ct.items()
                 if cn in plan.components and not (isinstance(spec, dict) and spec.get("stream"))
                 and (not str(plan.components[cn].device).startswith("cpu")
-                     or (isinstance(spec, dict) and spec.get("when") == "always"))
-                # the op-level rung keeps its components exactly: a vendor's memory tiles are not its plan
-                and not (chosen_strategy == "op_level_tiling" and isinstance(spec, dict)
-                         and spec.get("vendor") and spec.get("when") == "memory")
+                     or (isinstance(spec, dict) and spec.get("vendor")))
             }
         # A host rung under the Triton engine computes its cpu-placed components on the card: the
         # tilings that rung sized there are the plan's (`_size_host_placement_on_device`).
@@ -5076,7 +5051,7 @@ class PrismSolver:
         # Reset component-tiling flags for this placement pass so a rejected
         # attempt never leaves stale entries (the chosen pass repopulates).
         self._component_tiling = {cn: sp for cn, sp in (getattr(self, "_component_tiling", {}) or {}).items()
-                                  if isinstance(sp, dict) and sp.get("when") == "always"}
+                                  if isinstance(sp, dict) and sp.get("vendor")}      # the vendor's reference cut
         self._tiling_exactness = {}
         self._component_stream = {cn: sp for cn, sp in (getattr(self, "_component_stream", {}) or {}).items()
                                   if sp.get("reference") == "vendor"}
@@ -5369,7 +5344,7 @@ class PrismSolver:
         if room_bytes is not None and cost > room_bytes:
             return self._tiling_decline(comp_name, f"its vendor's tiles ({decl['method']}) need {cost / 2**20:,.0f} "
                                                    f"MB of the {room_bytes / 2**20:,.0f} MB the rung leaves")
-        spec = {"vendor": decl["method"], "when": decl["when"], "source": decl["source"],
+        spec = {"vendor": decl["method"], "source": decl["source"],
                 "tiled_activation_bytes": cost, "tile_extent": tile}
         if stream_spec is not None:
             spec["tile_stream"] = stream_spec["schedule"]
@@ -5399,11 +5374,11 @@ class PrismSolver:
         self._container_for_cuts = container
         for name, mem in component_memory.items():
             vt = self._vendor_tiling_declaration(name)
-            if vt is not None and vt.get("when") == "always":
+            if vt is not None:          # a declaration IS the vendor's reference cut (none says "memory")
                 spec = self._vendor_tiling(container, name, None)
                 if spec is None:
                     raise RuntimeError(
-                        f"ZERO FALLBACK: {name}'s vendor has no untiled path and its tiles are not read for this "
+                        f"ZERO FALLBACK: {name}'s vendor reference is tiled and its tiles are not read for this "
                         f"request: {self._tiling_declined.get(name)}")
                 self._component_tiling[name] = spec
                 mem.activation_bytes = int(spec["tiled_activation_bytes"])

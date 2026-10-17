@@ -161,6 +161,13 @@ def load_vendor_tiling(cache_path: Path, comp: str) -> Optional[Dict[str, Any]]:
     if sha != decl.get("clip_graph_sha256"):
         raise StreamDeclarationError(f"{path}: derived from a graph of sha256 {decl.get('clip_graph_sha256')}, the "
                                      f"component's graph.json is {sha}; re-derive it")
+    if "when" in decl:
+        # A vendor declaration says "the reference is cut this way" or does not exist (decision 2026-10-17 20:08): a
+        # vendor's optional low-memory path, shipped off, is no reference — DC-AE's tiled decode drew a grid on Sana
+        # 4K where the vendor's own 4K path is exact. The engine and the vendor files the Mac wrote never read one.
+        raise StreamDeclarationError(f"{path}: carries 'when' ({decl['when']!r}); a vendor tiling declaration is the "
+                                     f"vendor's reference cut or does not exist — re-derive it (Forge "
+                                     f"tools/derive_temporal_stream.py)")
     return decl
 
 

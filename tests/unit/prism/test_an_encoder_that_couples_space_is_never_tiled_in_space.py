@@ -153,7 +153,7 @@ def test_a_vendor_whose_reference_tiles_declares_it_and_keeps_its_tile(tmp_path,
     import hashlib
     _decide_files(tmp_path, "attention")
     comp = tmp_path / "components" / "enc"
-    decl = {"format": "vendor_tiling", "version": 1, "method": "mask_sum", "when": "always",
+    decl = {"format": "vendor_tiling", "version": 1, "method": "mask_sum",
             "clip_graph_sha256": hashlib.sha256((comp / "graph.json").read_bytes()).hexdigest(),
             "tile_in": [8, 128, 128], "stride_in": [4, 96, 96], "tile_out": [2, 16, 16], "stride_out": [1, 12, 12],
             "in_axes": [2, 3, 4], "out_axes": [2, 3, 4], "out_scale": [[1, 4], [1, 8], [1, 8]],
