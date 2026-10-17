@@ -1099,9 +1099,22 @@ def cut_bindings(model: str, comp: str, g: dict, syms: dict, plan: dict) -> list
     spec = tilings.get(comp)
 
     def streamed(b, schedule):
+        # Every chunk length a request at this rung can run, not this request's alone: the schedule's next chunks
+        # are the longest that fit and its last one is the remainder — any length up to that longest — so a request
+        # of other frames (the judging request against the census's) meets every shorter next chunk; its first chunk
+        # is the shortest exact one, the same for every request.
         t = by_name.get("time")
-        out = [(f"{comp}{VARIANT}stream_first", dict(b, **{t: int(schedule[0])}))]
-        out += [(f"{comp}{VARIANT}stream_next", dict(b, **{t: int(n)})) for n in sorted(set(schedule[1:]))]
+        sdecl = _ts.load(CACHE / model, comp)
+        vc = sdecl.get("vendor_chunks")
+        if vc:                                   # the vendor's batches: n, the remainder in the first (n .. 2n-1)
+            n = int(vc["length"])
+            firsts, nexts = list(range(n, 2 * n)), [n]
+        else:
+            longest = max([int(n) for n in schedule[1:]] or [0])
+            firsts = [int(schedule[0])]
+            nexts = [n for n in range(1, longest + 1) if not _ts.broken(sdecl, [int(schedule[0]), n])]
+        out = [(f"{comp}{VARIANT}stream_first", dict(b, **{t: f})) for f in firsts]
+        out += [(f"{comp}{VARIANT}stream_next", dict(b, **{t: n})) for n in nexts]
         return out
 
     if isinstance(spec, dict) and spec.get("vendor"):
