@@ -142,3 +142,31 @@ def test_ramp_crop_is_autoencoderkl_tiled_decode():
         got = ramp_crop(z, decl, run_tile)
     assert got.shape == ref.shape, (got.shape, ref.shape)
     assert float((got - ref).abs().max()) <= 1e-12 * float(ref.abs().max())
+
+
+def test_ramp_crop_is_autoencoderdc_tiled_decode():
+    """Sana's DC-AE: AutoencoderDC's `tiled_decode` blends over min - stride and crops at the stride."""
+    from diffusers import AutoencoderDC
+    torch.manual_seed(0)
+    vae = AutoencoderDC(in_channels=3, latent_channels=4, attention_head_dim=8,
+                        encoder_block_types=("ResBlock", "EfficientViTBlock"), decoder_block_types=("ResBlock", "EfficientViTBlock"),
+                        encoder_block_out_channels=(16, 32), decoder_block_out_channels=(16, 32),
+                        encoder_layers_per_block=(1, 1), decoder_layers_per_block=(1, 1),
+                        encoder_qkv_multiscales=((), (5,)), decoder_qkv_multiscales=((), (5,)),
+                        upsample_block_type="interpolate", downsample_block_type="Conv",
+                        decoder_norm_types="rms_norm", decoder_act_fns="silu").double().eval()
+    r = vae.spatial_compression_ratio
+    vae.enable_tiling(tile_sample_min_height=8 * r, tile_sample_min_width=8 * r,
+                      tile_sample_stride_height=6 * r, tile_sample_stride_width=6 * r)
+    z = torch.randn(1, 4, 13, 19, dtype=torch.float64)
+    with torch.no_grad():
+        ref = vae.tiled_decode(z).sample
+        decl = {"tile": [vae.tile_sample_min_height // r, vae.tile_sample_min_width // r],
+                "stride": [vae.tile_sample_stride_height // r, vae.tile_sample_stride_width // r],
+                "blend": [vae.tile_sample_min_height - vae.tile_sample_stride_height,
+                          vae.tile_sample_min_width - vae.tile_sample_stride_width],
+                "crop": [vae.tile_sample_stride_height, vae.tile_sample_stride_width],
+                "in_axes": [2, 3], "out_axes": [2, 3]}
+        got = ramp_crop(z, decl, lambda tile: vae.decoder(tile))
+    assert got.shape == ref.shape, (got.shape, ref.shape)
+    assert float((got - ref).abs().max()) <= 1e-12 * float(ref.abs().max())
