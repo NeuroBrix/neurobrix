@@ -8561,7 +8561,12 @@ def plan_record(plan: "ExecutionPlan") -> dict:
            # executor wires as interceptors and the widths pass reads (`TilingView`).
            "op_level_tiling_ops": {
                cn: {"fusion_pairs": sorted([str(u), str(c), int(tf)] for u, c, tf in getattr(tp, "fusion_pairs", []) or []),
-                    "tiled_ops": sorted([str(u), int(tf)] for u, _t, tf in getattr(tp, "tiled_ops", []) or [])}
+                    "tiled_ops": sorted([str(u), int(tf)] for u, _t, tf in getattr(tp, "tiled_ops", []) or []),
+                    # a band-streamed residual chain: its ops, the bands' count, the halo rows and the axis's extent —
+                    # the census derives its convs' keys at every band height from them (one geometry function)
+                    "residual_chains": sorted([[str(u) for u in sp.get("chain_uids", [])], int(sp.get("tile_factor", 1)),
+                                               int(sp.get("halo", 0)), int((sp.get("shape") or [0, 0, 0, 0])[int(sp.get("spatial_axis", 2))])]
+                                              for sp in getattr(tp, "residual_chains", []) or [])}
                for cn, tp in (plan.runtime_op_tiling or {}).items()},
            "component_tiling": {k: (v if isinstance(v, (dict, list, str, int, float)) else str(v))
                                 for k, v in (plan.component_tiling or {}).items()},

@@ -979,7 +979,17 @@ def _op_launches(kind, uid, o, ins, shape, dt, LK, contract, cdtype, has_native_
                 xd = wd = comp_d = C_
             else:
                 xd, wd, comp_d = dt(ins[0]), dt(ins[1]), C_
-            if tile_factor is not None and nd == 2 and not transposed:
+            if isinstance(tile_factor, tuple) and tile_factor[0] == "chain" and nd == 2 and not transposed:
+                # A conv of a band-streamed residual chain (`band_streamed_chain_nbx`): conv2d_wrapper on each band,
+                # the band plus its halo rows — one launch set per distinct band input height.
+                from neurobrix.core.module.tiling_sizes import residual_chain_bands
+                _, tf_, halo_ = tile_factor
+                heights = sorted({b[3] - b[2] for b in residual_chain_bands(x_s[2], tf_, halo_)})
+                launches = []
+                for h_in in heights:
+                    launches += LK.conv_launches([x_s[0], x_s[1], h_in, x_s[3]], w_s, stride, padding, dilation,
+                                                 transposed, groups, xd, wd, comp_d, conv_band_bytes)
+            elif tile_factor is not None and nd == 2 and not transposed:
                 # Prism's op-level tiled conv (`tiled_conv2d_spatial`, self-managed: no AMP cast —
                 # its per-band conv2d_wrapper narrows and stores at the compute dtype).
                 launches = LK.tiled_conv2d_launches(
@@ -1247,7 +1257,11 @@ def plan_tiling(plan: dict, comp: str):
                           tiled_ops=frozenset(t[0] for t in til))
     # A fused upsample->conv streams the same band cut over the upsampled extent — the conv's own
     # input in the graph — so its conv derives through the same tiled launches.
-    return view, {**{f[1]: int(f[2]) for f in fus}, **{t[0]: int(t[1]) for t in til}}
+    tiled_tf = {**{f[1]: int(f[2]) for f in fus}, **{t[0]: int(t[1]) for t in til}}
+    # A band-streamed residual chain: each of its convs runs on every band (the band plus its halo rows), so each
+    # derives at every band input height (`tiling_sizes.residual_chain_bands`, the loop's own geometry).
+    tiled_tf.update({u: ("chain", int(tf), int(halo)) for uids, tf, halo, _h in ot.get("residual_chains", []) for u in uids})
+    return view, tiled_tf
 
 
 class _Shape:

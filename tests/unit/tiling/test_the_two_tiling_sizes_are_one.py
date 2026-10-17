@@ -49,6 +49,11 @@ GRID = {
                     for x in _CONV3D_X for w in _CONV3D_W if w[1] == x[1]
                     for s in (1, [1, 2, 2]) for p in (0, 1, [0, 1, 1]) for d in (1,)
                     for ib, ob in ((2, 2), (4, 4), (2, 4))],
+    "conv3d_one_shot_peak": [(x, w, s, p, d, ib, ob)
+                             for x in _CONV3D_X for w in _CONV3D_W if w[1] == x[1]
+                             for s in (1, [1, 2, 2]) for p in (0, 1, [0, 1, 1]) for d in (1,)
+                             for ib, ob in ((2, 2), (4, 4), (2, 4))],
+    "residual_chain_bands": [(h, tf, halo) for h in (10, 352, 1408, 4096) for tf in (1, 2, 4, 7) for halo in (0, 1, 33)],
     "chunk_frames": [(b,) for b in _BYTES],
     "conv2d_band_rows": [(n, c, h, w, ob, band)
                          for n in (1, 2) for c in (3, 64, 512) for h in (1, 64, 1024, 8192)

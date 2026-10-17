@@ -119,6 +119,23 @@ def conv3d_one_shot_peak(x_shape: Sequence[int], w_shape: Sequence[int], stride,
             + int(_value("conv3d", "slack_bytes")))
 
 
+def residual_chain_bands(H: int, tile_factor: int, halo: int):
+    """The bands a band-streamed residual chain runs over its spatial axis: [(h_start, h_end, h_in_start, h_in_end)]
+    — the output rows of each band and the input rows it reads (the band plus `halo` rows each side, cut at the
+    edges). ONE function for the chain that runs them (`kernels/ops/residual_chain.py`) and the census that records
+    the conv keys they form (a 418-row band of Sana 4K's VAE met no certified key, 2026-10-17): the recorded key is
+    the launcher's key."""
+    H, tile_factor, halo = int(H), max(1, int(tile_factor)), int(halo)
+    band_h = (H + tile_factor - 1) // tile_factor
+    bands = []
+    for i in range(tile_factor):
+        h_start, h_end = i * band_h, min((i + 1) * band_h, H)
+        if h_start >= h_end:
+            break
+        bands.append((h_start, h_end, max(0, h_start - halo), min(H, h_end + halo)))
+    return bands
+
+
 def chunk_frames(frame_bytes: int) -> int:
     """Output frames per chunk: each chunk's folded transient under `conv3d_chunk_bytes()`."""
     return max(1, int(conv3d_chunk_bytes() // max(1, frame_bytes)))

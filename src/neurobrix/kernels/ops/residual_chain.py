@@ -262,6 +262,8 @@ def band_streamed_chain_nbx(
     _set_device(t_base)
 
     N, C, H, W = t_base.shape
+    from neurobrix.triton.tiling_sizes import residual_chain_bands      # the one band geometry (the census derives by it)
+    bands = residual_chain_bands(H, tile_factor, halo)
     band_h = (H + tile_factor - 1) // tile_factor
     # P-TRITON-CHAIN-CPU-POINTER C3c 2026-05-14: log halo / tile_factor /
     # band_h / H so we can confirm the band_h+halo math matches what the
@@ -273,14 +275,7 @@ def band_streamed_chain_nbx(
 
     halo_carry = None  # type: Optional[NBXTensor]
 
-    for i in range(tile_factor):
-        h_start = i * band_h
-        h_end = min((i + 1) * band_h, H)
-        if h_start >= h_end:
-            break
-
-        h_in_start = max(0, h_start - halo)
-        h_in_end = min(H, h_end + halo)
+    for i, (h_start, h_end, h_in_start, h_in_end) in enumerate(bands):
 
         # Build the input band.
         # If we have a halo_carry AND the top-halo region [h_in_start,
