@@ -2236,6 +2236,28 @@ class PrismSolver:
                     "no longer outrank it", ", ".join(sorted(_offloaded)),
                     " and ".join(_demoted))
 
+        # AN EXACT CUT BEATS A VENDOR'S LOW-MEMORY PATH.
+        #
+        # A vendor tiling declared `when: memory` is the vendor's memory path, not its reference: its blends make
+        # another function. Sana 4K's DC-AE `tiled_decode` (64 px cross-fades) drew a visible grid on a 32 GB card
+        # where op-level tiling — the vendor's own 4K path, `patch_conv`, exact — kept the VAE whole (2026-10-17). A
+        # candidate that keeps such a component on an accelerator only by those tiles ranks under the op-level
+        # candidate that keeps it there exactly; the tiles stay the way down when nothing exact fits.
+        if _tiling is not None:
+            _memory_tiles = {cn for cn, spec in (getattr(self, "_component_tiling", {}) or {}).items()
+                             if isinstance(spec, dict) and spec.get("vendor") and spec.get("when") == "memory"}
+            _exact = {n for n, a in (_tiling[2] or {}).items() if n in _memory_tiles and not _on_host(a)}
+            for i, cand in enumerate(candidates):
+                score, name, alloc, devs = cand
+                if name == "op_level_tiling" or score <= _tiling[0]:
+                    continue
+                lossy = sorted(n for n, a in (alloc or {}).items() if n in _exact and not _on_host(a))
+                if lossy:
+                    candidates[i] = (_tiling[0] - 1.0, name, alloc, devs)
+                    logging.getLogger(__name__).info(
+                        "Prism: op-level tiling keeps %s on the accelerator exactly, so %s (its vendor's "
+                        "memory tiles) no longer outranks it", ", ".join(lossy), name)
+
         # Sort candidates by score descending
         ranked = sorted(candidates, key=lambda x: -x[0])
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
@@ -2530,6 +2552,9 @@ class PrismSolver:
                 if cn in plan.components and not (isinstance(spec, dict) and spec.get("stream"))
                 and (not str(plan.components[cn].device).startswith("cpu")
                      or (isinstance(spec, dict) and spec.get("when") == "always"))
+                # the op-level rung keeps its components exactly: a vendor's memory tiles are not its plan
+                and not (chosen_strategy == "op_level_tiling" and isinstance(spec, dict)
+                         and spec.get("vendor") and spec.get("when") == "memory")
             }
         # A host rung under the Triton engine computes its cpu-placed components on the card: the
         # tilings that rung sized there are the plan's (`_size_host_placement_on_device`).

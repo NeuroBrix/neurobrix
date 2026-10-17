@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A vendor's low-memory tiling is taken only when no exact cut keeps the component on the accelerator**: Sana 4K's VAE on a 32 GB card was decoded through DC-AE's tiled decode (blended 64 px overlaps), which left a faint grid along the tile overlaps; op-level tiling, exact and the vendor's own 4K path, keeps it whole again.
 - **A causal video VAE run in time chunks fits the card it was planned on** (mochi-1-preview's VAE ran out of memory on a 16 GB card in both engines): a chunk's states and input are handed to the run that reads them and freed at their last use, in every engine; Prism prices them as held until then, prices the chunk at the dtype the component runs at with each state at its producer's width, and prices the operand copies each engine's dtype wrappers make while an op runs (an fp32 conv input cast to fp16, an fp16 matmul operand upcast to fp32). Measured: the chunk's price equals its measured peak to 8 MB; mochi-1-preview decodes on a 16 GB V100.
 - **NBXTensor slicing clamps a bound past an axis's extent, as torch does** (`kernels/nbx_tensor._slice_bounds`): a tile at a latent's edge read past the tensor's storage in the Triton engine.
 
