@@ -1265,6 +1265,18 @@ class PrismSolver:
         memory, budget = found
         return lambda b, h, tq, tk: scratch_bytes(memory, budget, b, h, tq, tk)
 
+    def _conv3d_workspace(self, profile):
+        """() -> the fraction of its input's bytes the compiled engine's conv3d takes as workspace on this profile's
+        smallest device (core/prism/op_workspace.py, the vendor file's figure), read at the first conv3d priced; None
+        under the Triton engine (its own kernels) and with no device."""
+        from neurobrix.core.prism.host_footprint import engine_of
+        if engine_of(getattr(self, "_mode", "compiled")) != "compiled" or profile is None or not profile.devices:
+            return None
+        from neurobrix.core.prism.attention_scratch import vendor_memory
+        from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
+        memory = vendor_memory(min(profile.devices, key=lambda d: d.memory_mb))
+        return lambda: conv3d_workspace_fraction(memory)
+
     def _assign_attention_budgets(self, plan, profile) -> None:
         """The budget every attention was priced at, stated on each component the plan computes on an accelerator
         (`ComponentAllocation.attention_scores_budget_bytes`); None on a host and where the device writes no scores."""
@@ -3531,7 +3543,7 @@ class PrismSolver:
                         # unfloored map.
                         placement_floor=True,
                         in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile),
                     )
                     self.__dict__.setdefault("_output_elements", {})[comp.name] = int(ap.output_elements)
                     # The request's symbols, compute width AND each activation's runtime width, for
@@ -3585,7 +3597,7 @@ class PrismSolver:
                                 # The residual-chain sentinels carry nothing.
                                 source_holding_uids=fusion_uids | f2a_uids,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -3608,7 +3620,7 @@ class PrismSolver:
                                 inplace_adds=inplace_adds,
                                 widths=widths,
                                 in_place_weight_reads=_in_place,
-                        attention_scratch=self._attention_scratch(profile),
+                        attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile),
                             )
                             activation_bytes = ap_tiled.peak_bytes
                             peak_op_uid = ap_tiled.peak_op_uid
@@ -5234,7 +5246,7 @@ class PrismSolver:
                                                  comp_dtype, profile, seams=seams if kind == "next" else None)
                 peaks[(kind, length)] = int(prof.estimate_peak_memory(
                     input_config=cic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(profile), handed_inputs=True).peak_bytes)
+                    attention_scratch=self._attention_scratch(profile), conv3d_workspace=self._conv3d_workspace(profile), handed_inputs=True).peak_bytes)
             return peaks[(kind, length)]
 
         def chunk_out(kind: str, length: int) -> int:
@@ -5349,7 +5361,8 @@ class PrismSolver:
                                                  comp_dtype, getattr(self, "_profile", None))
                 tile_cost = int(tprof.estimate_peak_memory(
                     input_config=tic, dtype_bytes=dtype_bytes, widths=widths,
-                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None))).peak_bytes)
+                    attention_scratch=self._attention_scratch(getattr(self, "_profile", None)),
+                    conv3d_workspace=self._conv3d_workspace(getattr(self, "_profile", None))).peak_bytes)
         finally:
             self._input_config = saved_ic
         cost = tile_cost + out_bytes + in_bytes + kept

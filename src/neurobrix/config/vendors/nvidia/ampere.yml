@@ -122,6 +122,11 @@ memory:
   # memory-efficient kernels, which never write the full scores (PyTorch SDPA tutorial; the Prism estimate prices
   # the memory-efficient workspace, core/prism/memory_estimator.py). Nothing to chunk.
   compiled_sdpa_full_scores: false
+  # THE COMPILED ENGINE'S CONV3D WORKSPACE, beside its input and output, as a fraction of its input's bytes: none to
+  # price. cuDNN takes what the caching allocator can give and no more — on an out-of-memory it halves the workspace
+  # and drops the plans that need more (pytorch aten/src/ATen/native/cudnn/Conv_v8.cpp, generate_and_filter_plans /
+  # try_plans, v2.6.0). Measured 2026-10-17, V100 16 GB: mochi's and Wan's causal-VAE chunks ran beside their price.
+  compiled_conv3d_workspace_input_fraction: 0.0
   # The state engine's pages (docs/design/state-engine.md §4.3, core/state/price.page_tokens): a page of one layer is
   # raised to at least this many bytes. Each layer's pool is one contiguous allocation, so the granule that matters is
   # the global-memory transaction a page row is read in: 128-byte lines (NVIDIA CUDA C++ Best Practices Guide,

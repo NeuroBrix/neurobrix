@@ -102,3 +102,28 @@ def test_a_state_enters_as_the_seam_its_producer_made():
     assert _widths(g, "compiled")["input::s"] == 2                       # traced, no producer known
     assert _widths(g, "compiled", seams={"input::s": "float32"})["input::s"] == 4
     assert _widths(g, "triton", seams={"input::s": "float32"})["input::s"] == 4
+
+
+def test_a_conv3d_is_priced_with_the_workspace_its_vendor_states():
+    """MPS's conv3d takes about its input's size beside input and output (the Mac's measurement, 2026-10-17: VACE's
+    encoder chunk 19.3 GB on Metal against 10.9 GB priced); the vendor file states the fraction
+    (`memory.compiled_conv3d_workspace_input_fraction`), the profile adds it on the input as the conv reads it (at its
+    cast width). Red if the workspace is not added, or added on the wrong tensor or width."""
+    T = {"input::x": _t([1, 4, 3, 8, 8], is_input=True, seam_alias_of="test"), "param::w": _t([4, 4, 1, 1, 1]),
+         "c": _t([1, 4, 3, 8, 8])}
+    g = _dag(T, [_op("conv::0", "aten::convolution", ["input::x", "param::w"], ["c"])], ["input::x"], ["c"])
+    w = _widths(g, "compiled")
+    assert w.casts.get("conv::0") == [("input::x", 2)], w.casts           # the fp32 seam cast to fp16 by its wrapper
+    base = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w)
+    ws = ActivationProfiler(g).estimate_peak_memory(dtype_bytes=2, widths=w, conv3d_workspace=lambda: 1.0)
+    assert ws.peak_bytes - base.peak_bytes == 1 * 4 * 3 * 8 * 8 * 2       # the input's numel at its cast width
+
+
+def test_a_vendor_that_states_no_conv3d_workspace_is_refused_by_name():
+    import pytest
+    from neurobrix.core.prism.attention_scratch import vendor_memory_of
+    from neurobrix.core.prism.op_workspace import conv3d_workspace_fraction
+    assert conv3d_workspace_fraction(vendor_memory_of("nvidia", "volta")) == 0.0
+    assert conv3d_workspace_fraction(vendor_memory_of("apple", "apple_m4_pro")) == 1.0
+    with pytest.raises(KeyError, match="compiled_conv3d_workspace_input_fraction"):
+        conv3d_workspace_fraction({})

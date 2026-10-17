@@ -219,6 +219,12 @@ memory:
   # (core/prism/attention_scratch.py): each chunk's fp32 scores within this fraction of the device's memory, its rows
   # a multiple of this file's sdpa_math_min_chunk_rows.
   compiled_sdpa_full_scores: true
+  # THE COMPILED ENGINE'S CONV3D WORKSPACE, beside its input and output, as a fraction of its input's bytes: MPS's
+  # conv3d takes about its input's size on top (a layout copy). MEASURED 2026-10-17 on an M4 Pro by the Mac
+  # (_agents/archives/mac.conv3d_mps_mem_probe.py, bf16 3x3x3 96->96): input (2,96,26,512,512), in+out 4 782 MB -> 2 514 MB
+  # extra; (2,96,26,256,256) -> 633 MB; (2,96,6,512,512) -> 643 MB. Wan2.1-VACE's encoder chunk ran 19.3 GB against
+  # 10.9 GB priced without it.
+  compiled_conv3d_workspace_input_fraction: 1.0
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
   # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
   # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of
