@@ -3941,6 +3941,10 @@ class GraphExecutor:
         for tid in self._persistent_tensor_ids:
             if tid in store and store[tid] is not None:
                 self._tritonseq_captured[tid] = store[tid]
+        # The weight view held this pass's store (zero3 drives the pass through it): unbound here, or the whole
+        # store — the pass's outputs included — outlived the pass until the next one rebound it (a temporal stream's
+        # states, 3.6 GB, alive through the next chunk beside their copies; Wan2.1-T2V on 16 GB, 2026-10-17).
+        _view[1].bind_store({})
 
         return outputs, num_ops
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The op-by-op Triton engine no longer keeps a whole pass alive until the next one**: its weight view kept the pass's store bound after the pass returned, so a temporal stream's state copies (3.6 GB for Wan2.1's VAE) stayed on the card through the next chunk beside their copies.
 - **A vendor tiling declaration is the vendor's reference cut, or it does not exist**: the `when: memory` declarations (a vendor's optional low-memory path, shipped switched off) are gone — Sana's DC-AE tiled decode drew a grid where the vendor's own 4K path is exact. A declaration that still carries `when` is refused by name; Prism takes a declared cut at every request and otherwise descends its exact ladder (op-level tiling, streaming, the CPU).
 - **A 3-D convolution is priced with the workspace its device takes beside input and output** (`memory.compiled_conv3d_workspace_input_fraction` in the vendor files: 1.0 on Apple, measured on an M4 Pro; 0 on NVIDIA, where cuDNN bounds it by what the allocator can give): Wan2.1-VACE's streamed VAE encoder ran at 19.3 GB on Metal against 10.9 GB priced.
 - **A vendor's low-memory tiling is taken only when no exact cut keeps the component on the accelerator**: Sana 4K's VAE on a 32 GB card was decoded through DC-AE's tiled decode (blended 64 px overlaps), which left a faint grid along the tile overlaps; op-level tiling, exact and the vendor's own 4K path, keeps it whole again.

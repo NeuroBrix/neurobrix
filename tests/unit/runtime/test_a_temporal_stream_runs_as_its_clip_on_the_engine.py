@@ -211,6 +211,14 @@ def test_a_handed_state_is_freed_at_its_last_use(mode, device):
         assert not inputs, f"the run left {sorted(inputs)} in its caller's dict"
         assert kept <= out_bytes, (f"{mode}: the device holds {kept} B after the run, its outputs are {out_bytes} B: "
                                    f"the handed states ({state_bytes} B) were kept")
+        # and once the caller holds its outputs and releases the run, the run holds NOTHING of the pass: the
+        # triton-sequential weight view kept the whole store bound until the next pass (3.6 GB of Wan states)
+        kept_out = {k: v for k, v in result.items()}
+        del result
+        pieces["next"].release_run_tensors()
+        DA.empty_cache_pool()
+        left = DA.memory_allocated() - before - sum(int(v.numel()) * int(v.element_size()) for v in kept_out.values())
+        assert left <= 0, f"{mode}: {left} B of the pass still held after its release, beyond the outputs the caller keeps"
         return
     import weakref
     refs = {k: weakref.ref(v) for k, v in inputs.items()}
