@@ -2968,6 +2968,24 @@ def _broadcast_shapes(*shapes: Tuple[int, ...]) -> Tuple[int, ...]:
 # NBXTensor
 # ============================================================================
 
+def _slice_bounds(k: slice, size: int):
+    """(start, stop) of a Python slice over an axis of `size`, as torch and numpy read it: negative bounds count
+    from the end, and both bounds are CLAMPED to [0, size] — `t[50:80]` over 60 rows is rows 50..59. Unclamped, a
+    stop past the extent narrowed past the tensor's storage (a vendor tile at the latent's edge read 30 rows of
+    which 20 were not the tensor's: CogVideoX's last tiles, 2026-10-17). A step other than 1 is refused by name."""
+    if k.step not in (None, 1):
+        raise RuntimeError(f"ZERO FALLBACK: NBXTensor slicing with step {k.step} is not supported (narrow only)")
+    start = 0 if k.start is None else int(k.start)
+    stop = size if k.stop is None else int(k.stop)
+    if start < 0:
+        start += size
+    if stop < 0:
+        stop += size
+    start = min(max(start, 0), size)
+    stop = min(max(stop, start), size)
+    return start, stop
+
+
 class NBXTensor:
     """Tensor descriptor for --triton mode.
 
@@ -3962,12 +3980,7 @@ class NBXTensor:
         # `halo_carry[:, :, -top_size:, :]` triggered this at the third
         # iteration of the 4096² chains (chains 7-9 of run).
         if isinstance(key, slice):
-            start = key.start if key.start is not None else 0
-            stop = key.stop if key.stop is not None else self._shape[0]
-            if start < 0:
-                start = max(0, self._shape[0] + start)
-            if stop < 0:
-                stop = self._shape[0] + stop
+            start, stop = _slice_bounds(key, self._shape[0])
             return self.narrow(0, start, stop - start)
         if isinstance(key, tuple):
             result = self
@@ -3978,15 +3991,7 @@ class NBXTensor:
                     result = result.select(actual_dim, k)
                     dim_offset += 1  # select reduces ndim
                 elif isinstance(k, slice):
-                    start = k.start if k.start is not None else 0
-                    stop = (
-                        k.stop if k.stop is not None
-                        else result._shape[actual_dim]
-                    )
-                    if start < 0:
-                        start = max(0, result._shape[actual_dim] + start)
-                    if stop < 0:
-                        stop = result._shape[actual_dim] + stop
+                    start, stop = _slice_bounds(k, result._shape[actual_dim])
                     result = result.narrow(
                         actual_dim, start, stop - start)
                 # slice(None) = : → no-op on this dim
