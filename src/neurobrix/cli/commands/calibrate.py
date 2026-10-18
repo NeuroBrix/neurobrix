@@ -15,6 +15,7 @@ media (speech, vision) takes it from the command line, as `run` does.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from pathlib import Path
@@ -25,6 +26,23 @@ _STIMULUS_FIELDS = ("prompt", "audio", "input_image", "input_video", "reference_
                     "reference_image", "steps", "cfg", "height", "width", "seed",
                     "max_tokens", "num_frames", "fps", "mode", "speaker", "temperature")
 _FILE_FIELDS = ("audio", "input_image", "input_video", "reference_audio", "reference_image")
+
+
+@contextlib.contextmanager
+def _arm(flag: str):
+    """`NBX_ACTIVATIONS_FP16_SAFE` set to `flag` for the run inside, the process environment restored after it — on
+    success and on error. The command used to set it and restore nothing on its main path: every later plan of the same
+    process (a daemon, a test suite) read a forced conservative contract (2026-10-18)."""
+    from neurobrix.core.runtime.precision_contract import FLAG_ENV
+    prev = os.environ.get(FLAG_ENV)
+    os.environ[FLAG_ENV] = flag
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop(FLAG_ENV, None)
+        else:
+            os.environ[FLAG_ENV] = prev
 
 
 def _identity_of(model: str):
@@ -84,9 +102,8 @@ def cmd_calibrate(args) -> int:
     stimulus = _apply_family_stimulus(args, family)
     policy = get_precision_calibration_policy()
 
-    # The reference path, whatever record exists today; the run's output is
-    # kept beside the records (R29: an inspectable artefact of the census).
-    os.environ[FLAG_ENV] = "0"
+    # The reference path, whatever record exists today (`_arm("0")` around the run below); the run's
+    # output is kept beside the records (R29: an inspectable artefact of the census).
     out_dir = cal.STORE_ROOT / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
     if getattr(args, "output", None) is None:
@@ -101,10 +118,11 @@ def cmd_calibrate(args) -> int:
     session = cal.begin_calibration()
     try:
         from neurobrix.cli.commands.run import cmd_run
-        try:
-            rc = cmd_run(args)
-        except SystemExit as e:          # the run command ends some families with an exit
-            rc = int(e.code or 0)
+        with _arm("0"):
+            try:
+                rc = cmd_run(args)
+            except SystemExit as e:          # the run command ends some families with an exit
+                rc = int(e.code or 0)
     finally:
         cal.end_calibration()
     if rc:
@@ -164,27 +182,25 @@ def _time_arms(args, model_name: str, family: str, record_paths: list, reps: int
     base_out = Path(args.output)
     results = {}
     for arm, flag in (("conservative", "0"), ("calibrated", "1")):
-        os.environ[FLAG_ENV] = flag
         best, out_path = None, base_out.with_name(f"{base_out.stem}.{arm}{base_out.suffix}")
-        for _ in range(reps):
-            args.output = str(out_path)
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                try:
-                    rc = cmd_run(args)
-                except SystemExit as e:
-                    rc = int(e.code or 0)
-            text = buf.getvalue()
-            m = re.findall(r"\[Timing\] Total execution: ([0-9.]+)s", text)
-            if rc or not m:
-                print(f"[calibrate] --time-arms: the {arm} arm failed ({rc}) — arms not timed")
-                os.environ.pop(FLAG_ENV, None)
-                return
-            t = float(m[-1])
-            best = t if best is None else min(best, t)
+        with _arm(flag):
+            for _ in range(reps):
+                args.output = str(out_path)
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    try:
+                        rc = cmd_run(args)
+                    except SystemExit as e:
+                        rc = int(e.code or 0)
+                text = buf.getvalue()
+                m = re.findall(r"\[Timing\] Total execution: ([0-9.]+)s", text)
+                if rc or not m:
+                    print(f"[calibrate] --time-arms: the {arm} arm failed ({rc}) — arms not timed")
+                    return
+                t = float(m[-1])
+                best = t if best is None else min(best, t)
         results[arm] = {"exec_s": best, "output": out_path}
         print(f"[calibrate] {arm} arm: {best:.3f} s (least of {reps}) → {out_path}")
-    os.environ.pop(FLAG_ENV, None)
     a, b = results["conservative"]["output"], results["calibrated"]["output"]
     identical = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
     cons, calb = results["conservative"]["exec_s"], results["calibrated"]["exec_s"]

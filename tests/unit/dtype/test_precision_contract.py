@@ -388,3 +388,40 @@ def test_grid_sampler_2d_promotes_input_and_grid_under_the_contract():
     fn = eng.compile_op("aten::grid_sampler_2d", spy, {}, op_uid="aten.grid_sampler_2d::0")
     fn(torch.zeros(1, 3, 4, 4, dtype=torch.float16), torch.zeros(1, 4, 4, 2, dtype=torch.float32), 0, 0, False)
     assert seen["dtypes"] == (torch.float32, torch.float32)
+
+
+@pytest.mark.parametrize("before", [None, "1"])
+def test_calibrate_leaves_the_process_environment_as_it_found_it(monkeypatch, tmp_path, before):
+    """The census runs under the reference arm (`NBX_ACTIVATIONS_FP16_SAFE=0`) and `--time-arms` under both; the command
+    used to SET the variable and restore nothing on its main path, so every later plan in the same process read a forced
+    conservative contract — in the unit suite, the plan-time contract test and Allegro's guidance split went red whenever
+    this test file ran before them (2026-10-18). What this test would do if the code were wrong: read "0" after the call
+    (red) — it did on a9a1fa384."""
+    import os
+    import types
+    from neurobrix.cli.commands import calibrate as C
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(C, "_identity_of", lambda m: ("image", m))
+    monkeypatch.setattr(C, "_apply_family_stimulus", lambda a, f: {})
+    from neurobrix.serving import client as SC
+    monkeypatch.setattr(SC.DaemonClient, "is_running", staticmethod(lambda: False))
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path)
+    if before is None:
+        monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    else:
+        monkeypatch.setenv("NBX_ACTIVATIONS_FP16_SAFE", before)
+    seen = {}
+
+    def fake_run(args):
+        seen["flag"] = os.environ.get("NBX_ACTIVATIONS_FP16_SAFE")
+        census = cal.active_census("model")
+        census.bind({"ops": {}}, None)
+        census.observe("aten.mm::0", None)
+        return 0
+    import neurobrix.cli.commands.run as R
+    monkeypatch.setattr(R, "cmd_run", fake_run)
+    args = types.SimpleNamespace(model="M", triton=False, triton_sequential=False,
+                                 output=str(tmp_path / "out.png"), mode=None, time_arms=0)
+    assert C.cmd_calibrate(args) == 0
+    assert seen["flag"] == "0", "the census ran outside the reference arm"
+    assert os.environ.get("NBX_ACTIVATIONS_FP16_SAFE") == before, "the command left the arm in the process environment"
