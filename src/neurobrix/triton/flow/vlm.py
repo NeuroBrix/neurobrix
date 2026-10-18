@@ -557,6 +557,8 @@ class TritonVLMEngine:
                 NBXTensor.from_numpy(
                     np.zeros((0, _h_ds), dtype=np.float32)).to(dtype)
                 for _ in ds_input_names]
+        from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for _step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -565,11 +567,16 @@ class TritonVLMEngine:
                 pos_np = np.concatenate([base_positions_np, gen], axis=2)
             else:
                 pos_np = base_positions_np
+            # A cached step hands the LM the one new token at its absolute position; the prefill
+            # (and the recompute oracle) the whole context — triton/flow/decoder_cache.DecodeSteps.
+            S = int(context_embeds.shape[1])
+            feed_embeds = _steps.feed(context_embeds, context_embeds.narrow(1, S - 1, 1))
+            pos_np = _steps.feed(pos_np, pos_np[..., -1:])
             position_ids = NBXTensor.from_numpy(
                 np.ascontiguousarray(pos_np))
 
-            resolved["global.inputs_embeds"] = context_embeds
-            resolved["inputs_embeds"] = context_embeds
+            resolved["global.inputs_embeds"] = feed_embeds
+            resolved["inputs_embeds"] = feed_embeds
             resolved["global.position_ids"] = position_ids
             resolved["position_ids"] = position_ids
             if has_deepstack:
@@ -578,7 +585,7 @@ class TritonVLMEngine:
                 # span (all-False for audio), generated tokens extend
                 # with False — the per-step full re-forward matches
                 # vendor semantics. numpy build = allowed CPU glue.
-                _s = context_embeds.shape[1]
+                _s = feed_embeds.shape[1]
                 # Mask RANK follows the graph's declared input (R30 mirror
                 # of the compiled flow): expanded [B,S,H] for the omni
                 # masked_scatter contract, flat [B,S] where the text model
@@ -589,16 +596,20 @@ class TritonVLMEngine:
                 _mask_np = (np.zeros((1, _s), dtype=bool) if _mask_rank == 2
                             else np.zeros((1, _s, context_embeds.shape[2]),
                                           dtype=bool))
-                if has_visual:
+                if has_visual and not _steps.one_token:
                     _mask_np[0, img_span_start:img_span_start + n_modal] = True
                 _mask = NBXTensor.from_numpy(_mask_np)
                 resolved["visual_pos_masks"] = _mask
                 resolved["global.visual_pos_masks"] = _mask
                 for _i, _t in enumerate(deepstack_embeds):
+                    if _steps.one_token:   # no visual row lands in a decoded token
+                        _t = NBXTensor.from_numpy(np.zeros((0, _t.shape[-1]), dtype=np.float32)).to(_t.dtype)
                     resolved[f"deepstack_visual_embeds.{_i}"] = _t
                     resolved[f"global.deepstack_visual_embeds.{_i}"] = _t
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
@@ -981,18 +992,25 @@ class TritonVLMEngine:
               f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
+        from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for _step in range(max_tokens):
-            S = context_embeds.shape[1]
-            vis_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
-            aud_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
-            if span_kind == "image":
-                vis_mask_np[0, span_lo:span_hi, :] = True
-            elif span_kind == "audio":
-                aud_mask_np[0, span_lo:span_hi, :] = True
+            S = int(context_embeds.shape[1])
+            # A cached step hands the LM the one new token at its absolute position S - 1, no
+            # modal span in it; the prefill (and the recompute oracle) the whole context.
+            feed_embeds = _steps.feed(context_embeds, context_embeds.narrow(1, S - 1, 1))
+            _s = int(feed_embeds.shape[1])
+            vis_mask_np = np.zeros((1, _s, hidden_size), dtype=bool)
+            aud_mask_np = np.zeros((1, _s, hidden_size), dtype=bool)
+            if not _steps.one_token:
+                if span_kind == "image":
+                    vis_mask_np[0, span_lo:span_hi, :] = True
+                elif span_kind == "audio":
+                    aud_mask_np[0, span_lo:span_hi, :] = True
             position_ids = NBXTensor.from_numpy(
-                np.arange(S, dtype=np.int64).reshape(1, -1))
+                np.arange(S - _s, S, dtype=np.int64).reshape(1, -1))
             for _key, _value in (
-                    ("inputs_embeds", context_embeds),
+                    ("inputs_embeds", feed_embeds),
                     ("position_ids", position_ids),
                     ("visual_pos_masks",
                      NBXTensor.from_numpy(vis_mask_np)),
@@ -1003,7 +1021,9 @@ class TritonVLMEngine:
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
@@ -1500,6 +1520,8 @@ class TritonVLMEngine:
               f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
+        from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for _step in range(max_tokens):
             S = int(context_embeds.shape[1])
             n_gen = len(generated_ids)
@@ -1509,15 +1531,21 @@ class TritonVLMEngine:
                 pos_np = np.concatenate([base_positions_np, gen], axis=2)
             else:
                 pos_np = base_positions_np
+            # A cached step hands the LM the one new token at its absolute position, no modal span
+            # in it; the prefill (and the recompute oracle) the whole context.
+            feed_embeds = _steps.feed(context_embeds, context_embeds.narrow(1, S - 1, 1))
+            pos_np = _steps.feed(pos_np, pos_np[..., -1:])
+            _s = int(feed_embeds.shape[1])
             position_ids = NBXTensor.from_numpy(np.ascontiguousarray(pos_np))
-            img_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
-            aud_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
-            if img_span[1] > img_span[0]:
-                img_mask_np[0, img_span[0]:img_span[1], :] = True
-            if aud_span[1] > aud_span[0]:
-                aud_mask_np[0, aud_span[0]:aud_span[1], :] = True
+            img_mask_np = np.zeros((1, _s, hidden_size), dtype=bool)
+            aud_mask_np = np.zeros((1, _s, hidden_size), dtype=bool)
+            if not _steps.one_token:
+                if img_span[1] > img_span[0]:
+                    img_mask_np[0, img_span[0]:img_span[1], :] = True
+                if aud_span[1] > aud_span[0]:
+                    aud_mask_np[0, aud_span[0]:aud_span[1], :] = True
             for _key, _value in (
-                    ("inputs_embeds", context_embeds),
+                    ("inputs_embeds", feed_embeds),
                     ("position_ids", position_ids),
                     ("image_pos_masks", NBXTensor.from_numpy(img_mask_np)),
                     ("audio_pos_masks", NBXTensor.from_numpy(aud_mask_np)),
@@ -1526,7 +1554,9 @@ class TritonVLMEngine:
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break

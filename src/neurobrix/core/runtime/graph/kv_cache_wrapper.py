@@ -434,6 +434,15 @@ class KVCacheAttentionWrapper:
         cache_len = self._position_offset
         return torch.ops.aten.slice(table, dim, cache_len + start, cache_len + end, step)
 
+    def intercept_position_cumsum(self, x, dim=0, dtype=None):
+        """The positions a decoder counts over its own sequence (`cumsum(ones_like(tokens))`, the
+        dual-AR decoder's rotary index): at decode the count restarts at 1 for the one token handed
+        in, so the cache's length is added — the token's absolute position, the output size kept."""
+        out = torch.ops.aten.cumsum(x, dim, dtype=dtype)
+        if self._is_prefill or self._position_offset <= 0:
+            return out
+        return out + self._position_offset
+
     def get_cache_info(self) -> Dict:
         """Get cache statistics."""
         return {

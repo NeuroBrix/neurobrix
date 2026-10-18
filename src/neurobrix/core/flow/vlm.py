@@ -511,6 +511,8 @@ class VLMEngine(FlowHandler):
                 torch.zeros(0, _h_ds, dtype=context_embeds.dtype,
                             device=device)
                 for _ in ds_input_names]
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -520,13 +522,17 @@ class VLMEngine(FlowHandler):
             else:
                 position_ids = base_positions
 
+            # A cached step hands the LM the one new token at its absolute position; the prefill
+            # (and the recompute oracle) the whole context — core/flow/decoder_cache.DecodeSteps.
+            feed_embeds = _steps.feed(context_embeds, context_embeds[:, -1:])
+            feed_positions = _steps.feed(position_ids, position_ids[..., -1:])
             if _os_vlm.environ.get("NBX_DEBUG") == "1":
-                print(f"[vlm] handing the LM inputs_embeds {tuple(context_embeds.shape)} "
-                      f"position_ids {tuple(position_ids.shape)} (step {step})", flush=True)
-            resolved["global.inputs_embeds"] = context_embeds
-            resolved["inputs_embeds"] = context_embeds
-            resolved["global.position_ids"] = position_ids
-            resolved["position_ids"] = position_ids
+                print(f"[vlm] handing the LM inputs_embeds {tuple(feed_embeds.shape)} "
+                      f"position_ids {tuple(feed_positions.shape)} (step {step})", flush=True)
+            resolved["global.inputs_embeds"] = feed_embeds
+            resolved["inputs_embeds"] = feed_embeds
+            resolved["global.position_ids"] = feed_positions
+            resolved["position_ids"] = feed_positions
             if has_deepstack:
                 # visual_pos_masks travels in the wrapper's expanded
                 # [B, S, H] masked_scatter form (the graph reduces it via
@@ -535,9 +541,9 @@ class VLMEngine(FlowHandler):
                 # with False, so the per-step full re-forward matches
                 # vendor semantics (deepstack adds only at visual
                 # positions).
-                _s = context_embeds.shape[1]
+                _s = feed_embeds.shape[1]
                 _mask2d = torch.zeros(1, _s, dtype=torch.bool, device=device)
-                if has_visual:
+                if has_visual and not _steps.one_token:
                     _mask2d[0, img_span_start:img_span_start + n_modal] = True
                 # Mask RANK follows the graph's declared input: the omni
                 # wrapper takes the expanded [B, S, H] masked_scatter form,
@@ -552,10 +558,13 @@ class VLMEngine(FlowHandler):
                 resolved["visual_pos_masks"] = _mask_in
                 resolved["global.visual_pos_masks"] = _mask_in
                 for _i, _t in enumerate(deepstack_embeds):
+                    _t = _t[:0] if _steps.one_token else _t   # no visual row lands in a decoded token
                     resolved[f"deepstack_visual_embeds.{_i}"] = _t
                     resolved[f"global.deepstack_visual_embeds.{_i}"] = _t
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
@@ -960,20 +969,27 @@ class VLMEngine(FlowHandler):
               f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for step in range(max_tokens):
             S = context_embeds.shape[1]
-            vis_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+            # A cached step hands the LM the one new token at its absolute position S - 1, no
+            # modal span in it; the prefill (and the recompute oracle) the whole context.
+            feed_embeds = _steps.feed(context_embeds, context_embeds[:, -1:])
+            _s = feed_embeds.shape[1]
+            vis_mask = torch.zeros(1, _s, hidden_size, dtype=torch.bool,
                                    device=device)
-            aud_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+            aud_mask = torch.zeros(1, _s, hidden_size, dtype=torch.bool,
                                    device=device)
-            if span_kind == "image":
-                vis_mask[0, span_lo:span_hi, :] = True
-            elif span_kind == "audio":
-                aud_mask[0, span_lo:span_hi, :] = True
+            if not _steps.one_token:
+                if span_kind == "image":
+                    vis_mask[0, span_lo:span_hi, :] = True
+                elif span_kind == "audio":
+                    aud_mask[0, span_lo:span_hi, :] = True
             position_ids = torch.arange(
-                S, dtype=torch.long, device=device).view(1, -1)
+                S - _s, S, dtype=torch.long, device=device).view(1, -1)
             for _key, _value in (
-                    ("inputs_embeds", context_embeds),
+                    ("inputs_embeds", feed_embeds),
                     ("position_ids", position_ids),
                     ("visual_pos_masks", vis_mask),
                     ("audio_pos_masks", aud_mask),
@@ -982,7 +998,9 @@ class VLMEngine(FlowHandler):
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break
@@ -1545,6 +1563,8 @@ class VLMEngine(FlowHandler):
               f"context={context_embeds.shape[1]}, logits={logits_source})...")
         start = time.perf_counter()
         generated_ids: List[int] = []
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for _step in range(max_tokens):
             S = int(context_embeds.shape[1])
             n_gen = len(generated_ids)
@@ -1555,17 +1575,23 @@ class VLMEngine(FlowHandler):
                 position_ids = torch.cat([base_positions, gen_pos], dim=2)
             else:
                 position_ids = base_positions
-            img_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+            # A cached step hands the LM the one new token at its absolute position, no modal span
+            # in it; the prefill (and the recompute oracle) the whole context.
+            feed_embeds = _steps.feed(context_embeds, context_embeds[:, -1:])
+            feed_positions = _steps.feed(position_ids, position_ids[..., -1:])
+            _s = feed_embeds.shape[1]
+            img_mask = torch.zeros(1, _s, hidden_size, dtype=torch.bool,
                                    device=device)
-            aud_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+            aud_mask = torch.zeros(1, _s, hidden_size, dtype=torch.bool,
                                    device=device)
-            if img_span[1] > img_span[0]:
-                img_mask[0, img_span[0]:img_span[1], :] = True
-            if aud_span[1] > aud_span[0]:
-                aud_mask[0, aud_span[0]:aud_span[1], :] = True
+            if not _steps.one_token:
+                if img_span[1] > img_span[0]:
+                    img_mask[0, img_span[0]:img_span[1], :] = True
+                if aud_span[1] > aud_span[0]:
+                    aud_mask[0, aud_span[0]:aud_span[1], :] = True
             for _key, _value in (
-                    ("inputs_embeds", context_embeds),
-                    ("position_ids", position_ids),
+                    ("inputs_embeds", feed_embeds),
+                    ("position_ids", feed_positions),
                     ("image_pos_masks", img_mask),
                     ("audio_pos_masks", aud_mask),
                     ("image_embeds", img_src),
@@ -1573,7 +1599,9 @@ class VLMEngine(FlowHandler):
                 resolved[_key] = _value
                 resolved[f"global.{_key}"] = _value
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
             output = self._get_component_output(lm_name)
             if output is None:
                 break

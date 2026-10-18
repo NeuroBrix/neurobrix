@@ -15,7 +15,7 @@ Interface:
 
 import torch
 from enum import Enum, auto
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, TYPE_CHECKING, Union
 
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.dtype.config import get_torch_dtype
@@ -78,6 +78,27 @@ class CFGMode(Enum):
     SEQUENTIAL = auto()   # Run cond/uncond separately (TP strategy)
 
 
+def guidance_cascade(family: str, topology: Mapping[str, Any], defaults: Mapping[str, Any],
+                     resolved: Optional[Mapping[str, Any]] = None) -> Tuple[Optional[float], float]:
+    """(guidance_scale, cfg_threshold) of the CFG cascade — the ONE reader for the engine and for Prism,
+    which counts the sequences a guided decode keeps in its cache (`lm_facts.decode_sequences`):
+    1. the request's `global.guidance_scale`; 2. `topology.extracted_values._global.guidance_scale`;
+    3. `defaults.guidance_scale`, None when the container declares none (CFG disabled, cond-only).
+    The threshold is the family's `cfg_threshold`, else its diffusion defaults', else 1.0."""
+    from neurobrix.core.config import get_family_defaults, get_family_config
+    family_defaults = get_family_defaults(family)
+    diffusion_defaults = get_family_config(family).get("diffusion", {}).get("defaults", {})
+    scale = (resolved or {}).get("global.guidance_scale")
+    if scale is None:
+        scale = ((topology.get("extracted_values") or {}).get("_global") or {}).get("guidance_scale")
+    if scale is None:
+        scale = defaults.get("guidance_scale")
+    threshold = family_defaults.get("cfg_threshold")
+    if threshold is None:
+        threshold = diffusion_defaults.get("cfg_threshold", 1.0)
+    return (None if scale is None else float(scale)), float(threshold)
+
+
 class CFGEngine:
     """
     Unified Classifier-Free Guidance engine.
@@ -134,28 +155,14 @@ class CFGEngine:
                 "ZERO FALLBACK: 'family' missing in manifest.\n"
                 "Model data incomplete. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
             )
-        family_defaults = get_family_defaults(family)
-        family_config = get_family_config(family)
-        diffusion_defaults = family_config.get("diffusion", {}).get("defaults", {})
-
-        # Resolve guidance_scale from cascade
         try:
-            guidance_scale = ctx.variable_resolver.get("global.guidance_scale")
+            cli = ctx.variable_resolver.get("global.guidance_scale")
         except KeyError:
-            guidance_scale = None
-
+            cli = None
+        guidance_scale, cfg_threshold = guidance_cascade(
+            family, ctx.pkg.topology, ctx.pkg.defaults, {"global.guidance_scale": cli})
         if guidance_scale is None:
-            extracted_values = ctx.pkg.topology.get("extracted_values", {})
-            model_globals = extracted_values.get("_global", {})
-            guidance_scale = model_globals.get("guidance_scale")
-
-        if guidance_scale is None:
-            guidance_scale = ctx.pkg.defaults["guidance_scale"]
-
-        # Get threshold
-        cfg_threshold = family_defaults.get("cfg_threshold")
-        if cfg_threshold is None:
-            cfg_threshold = diffusion_defaults.get("cfg_threshold", 1.0)
+            raise KeyError("guidance_scale")
 
         do_cfg = guidance_scale > cfg_threshold
 

@@ -237,16 +237,24 @@ class AudioLLMEngine(FlowHandler):
         start = time.perf_counter()
         generated_ids: list = []
 
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for step in range(max_tokens):
             seq_len = context_embeds.shape[1]
-            position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
+            # A cached step hands the LM the one new token at its absolute position seq_len - 1;
+            # the prefill (and the recompute oracle) the whole context (core/flow/decoder_cache).
+            feed_embeds = _steps.feed(context_embeds, context_embeds[:, -1:])
+            position_ids = torch.arange(seq_len - feed_embeds.shape[1], seq_len,
+                                        dtype=torch.long, device=device).unsqueeze(0)
 
-            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = context_embeds
-            self.ctx.variable_resolver.resolved["inputs_embeds"] = context_embeds
+            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = feed_embeds
+            self.ctx.variable_resolver.resolved["inputs_embeds"] = feed_embeds
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
 
             output = self._get_component_output(lm_name)
             if output is None:

@@ -261,17 +261,29 @@ class TritonTTSLLMEngine:
         rng = np.random.RandomState(
             int(_os_seed.environ.get("NBX_TTS_LLM_SEED", _TTS_LLM_SEED)))
 
-        def _t3_logits(ctx_np):
-            """One batch=1 backbone forward + speech_head -> [1,1,vocab]."""
+        # The speech LM decodes on its KV cache (triton/flow/decoder_cache): one sequence per
+        # context, the CFG uncond context a second BRANCH of the same cache (Prism prices both,
+        # lm_facts.decode_sequences). NBX_KV_RECOMPUTE=1 keeps the whole-context oracle.
+        from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        _kv = open_decoder_cache(self.ctx, lm_name, max_tokens)
+        _cond_steps = DecodeSteps(_kv, _kv.branch_state() if _kv is not None else None)
+        _uncond_steps = DecodeSteps(_kv, _kv.new_branch() if _kv is not None else None)
+
+        def _t3_logits(ctx_np, steps=_cond_steps):
+            """One batch=1 backbone forward + speech_head -> [1,1,vocab]: the whole context at the
+            prefill, the one new speech token at its absolute position afterwards."""
             seq_len = ctx_np.shape[1]
-            position_ids_np = np.arange(seq_len, dtype=np.int64)[np.newaxis, :]
-            context_nbx = NBXTensor.from_numpy(ctx_np.astype(np.float32))
+            feed_np = steps.feed(ctx_np, ctx_np[:, -1:])
+            position_ids_np = np.arange(seq_len - feed_np.shape[1], seq_len, dtype=np.int64)[np.newaxis, :]
+            context_nbx = NBXTensor.from_numpy(np.ascontiguousarray(feed_np).astype(np.float32))
             position_ids_nbx = NBXTensor.from_numpy(position_ids_np)
             self.ctx.variable_resolver.resolved["global.inputs_embeds"] = context_nbx
             self.ctx.variable_resolver.resolved["inputs_embeds"] = context_nbx
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids_nbx
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids_nbx
+            steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            steps.after_run()
             out = _get_component_output(self.ctx, lm_name)
             if out is None:
                 return None
@@ -311,7 +323,7 @@ class TritonTTSLLMEngine:
             uncond_logits_np = None
             logits_np = cond_logits_np
             if do_cfg:
-                uncond_logits_np = _t3_logits(uncond_context_np)
+                uncond_logits_np = _t3_logits(uncond_context_np, _uncond_steps)
                 if uncond_logits_np is None:
                     break
                 # Pure CFG formula (cond=context, uncond=text-zeroed context).

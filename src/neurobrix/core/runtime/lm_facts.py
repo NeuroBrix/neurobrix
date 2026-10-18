@@ -58,20 +58,27 @@ def decode_lm_component(topology: Mapping[str, Any], component_names: Iterable[s
     decoder conditioned on the encoder's states, `cross_attention_from`)."""
     flow = topology.get("flow") or {}
     kind = flow.get("type")
+    names = set(component_names)
+    stages = flow.get("stages") or (flow.get("audio") or {}).get("stages") or []
     if kind == "autoregressive_generation":
         return session_lm_name(flow.get("generation") or {}, component_names)
     if kind == "encoder_decoder":
-        stages = flow.get("stages") or (flow.get("audio") or {}).get("stages") or []
         for st in stages:
             if st.get("execution") == "autoregressive" and st.get("cross_attention_from"):
                 return st.get("component")
         return None
     if kind == "next_token_diffusion":
-        stages = flow.get("stages") or (flow.get("audio") or {}).get("stages") or []
         for st in stages:
             src = (st.get("diffusion") or {}).get("condition_from")
             if src:
                 return src
+    # A flow that stages its decoder (audio_llm, tts_llm, dual_ar): the stage it runs token by token
+    # is the KV-cached decoder — one rule for every staged flow, read from the stage's `execution`
+    # (state engine step 3, 2026-10-18: these flows re-forwarded their whole context every token and
+    # the plan priced no cache for them).
+    for st in stages:
+        if st.get("execution") in ("autoregressive", "dual_ar") and st.get("component") in names:
+            return st["component"]
     # A flow that names its decoder outright (the VLM flow's `lm_component`: the thinker of an omni
     # model, the language model of a VLM) — the KV-cached decoder is that component. Without it the
     # plan charged Qwen3-Omni-30B's KV cache to no component and the expert store's grant took its
@@ -96,12 +103,21 @@ def image_guidance_weight(resolved: Optional[Mapping[str, Any]], defaults: Mappi
 
 
 def decode_sequences(topology: Mapping[str, Any], defaults: Mapping[str, Any],
-                     resolved: Optional[Mapping[str, Any]] = None) -> int:
+                     resolved: Optional[Mapping[str, Any]] = None, family: Optional[str] = None) -> int:
     """How many sequences the decode cache holds at once: an image-AR generation under guidance
     decodes [cond, uncond] as a batch of 2; a next-token diffusion under guidance keeps a second,
-    negative context beside the prompt's (a second branch of the same cache). One otherwise."""
+    negative context beside the prompt's (a second branch of the same cache); a speech LM under
+    guidance (tts_llm) keeps its text-zeroed context beside the conditioned one, read through the
+    CFG engine's own cascade (`family` names its defaults). One otherwise."""
     flow = topology.get("flow") or {}
     kind = flow.get("type")
+    if kind == "tts_llm":
+        from neurobrix.core.cfg.engine import guidance_cascade
+        if family is None:
+            raise RuntimeError("ZERO FALLBACK: a tts_llm decode counts its sequences through the CFG cascade, "
+                               "which needs the container's family (manifest) — none was given.")
+        scale, threshold = guidance_cascade(family, topology, defaults, resolved)
+        return 2 if scale is not None and scale > threshold else 1
     if kind == "autoregressive_generation" and \
             (flow.get("generation") or {}).get("type") == "autoregressive_image":
         return 2 if image_guidance_weight(resolved, defaults) > 1.0 else 1
@@ -116,24 +132,25 @@ def decode_sequences(topology: Mapping[str, Any], defaults: Mapping[str, Any],
 
 
 def decoder_cache_facts(dag: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
-    """An encoder-decoder decoder's KV cache geometry, read from its graph by the flow's own reader
+    """A decoder's KV cache geometry, read from its graph by the flows' own reader
     (`core.flow.decoder_kv.decoder_self_attention_plan`): {num_layers, num_heads, head_dim}, or None
-    when that flow builds no cache — a graph without self-attention, or one with no positional
-    mechanism (arange or positional-table slice) the cache could offset (it decodes by recompute).
-    One reader for the plan and for both engines' flows: before it, the flows sized the cache from
-    the graph and max_tokens, and the plan priced none (2026-09-29)."""
+    when the flows build no cache — a graph without self-attention, or one whose decoded token nothing
+    can place at its position (no position_ids input, no arange, table slice or count to offset; it
+    decodes by recompute). One reader for the plan and for both engines' flows: before it, the flows
+    sized the cache from the graph and max_tokens, and the plan priced none (2026-09-29)."""
     if not dag:
         return None
-    from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+    from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan, positions_are_offset_by
     plan = decoder_self_attention_plan(dag)
-    if plan is None or (not plan["arange_uids"] and not plan.get("position_slice_uids")):
+    if plan is None or not positions_are_offset_by(plan):
         return None
     return {"num_layers": int(plan["num_layers"]), "num_heads": int(plan["num_heads"]),
             "head_dim": int(plan["head_dim"]), "plan": plan}
 
 
-def encoder_decoder_cache_from_plan(kv_plan, facts: Mapping[str, Any], max_tokens: int, decoder: str):
-    """The plan's cache for an encoder-decoder decoder, checked against the graph's geometry: refused
+def decoder_cache_from_plan(kv_plan, facts: Mapping[str, Any], max_tokens: int, decoder: str):
+    """The plan's cache for a decoder the flow opens (encoder-decoder, audio_llm, tts_llm, dual_ar,
+    vlm), checked against the graph's geometry: refused
     by name when the plan carries none, when its geometry is not the graph's, or when it is shorter
     than the window the flow decodes — never sized in the flow."""
     if kv_plan is None:

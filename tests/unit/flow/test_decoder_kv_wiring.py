@@ -30,7 +30,7 @@ def _handler(executor, with_plan=True, max_cache_len=448):
         cls = next(c for c in vars(ED).values() if isinstance(c, type) and hasattr(c, "_decoder_kv_wrapper"))
         h = cls.__new__(cls)
     # The flow takes the decoder's cache from the PLAN and checks it against the graph (lm_facts.
-    # encoder_decoder_cache_from_plan, 2026-09-29: Prism prices the cache of every decoding flow): the
+    # decoder_cache_from_plan, 2026-09-29: Prism prices the cache of every decoding flow): the
     # stand-in context carries the plan Prism would hand it, its geometry read by the flow's own reader.
     from neurobrix.core.runtime.lm_facts import decoder_cache_facts
     facts = decoder_cache_facts(executor._dag)
