@@ -100,7 +100,8 @@ def test_the_brick_dumps_exact_values_with_torch_blocked(tmp_path):
 
 def test_the_triton_sequential_loop_uses_the_brick_and_no_torch():
     from neurobrix.core.runtime.graph_executor import GraphExecutor
-    src = inspect.getsource(GraphExecutor._run_triton_sequential)
+    # the loop lives in `_run_triton_sequential_ops`, run by `_run_triton_sequential` inside the dispatcher's context
+    src = inspect.getsource(GraphExecutor._run_triton_sequential) + inspect.getsource(GraphExecutor._run_triton_sequential_ops)
     assert "nbx_dump_raw(" in src
     assert "import torch" not in src
     assert ".cpu()" not in src
