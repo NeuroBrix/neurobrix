@@ -318,6 +318,9 @@ class TritonTTSLLMEngine:
         for step in range(_nsteps):
             # Conditional (and, under CFG, unconditional) forward(s) -> logits.
             cond_logits_np = _t3_logits(context_np)
+            if cond_logits_np is not None:
+                from neurobrix.triton.flow.decode_topk import log_topk
+                log_topk(cond_logits_np, step)
             if cond_logits_np is None:
                 break
             uncond_logits_np = None

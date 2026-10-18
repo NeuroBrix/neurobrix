@@ -446,6 +446,8 @@ class TTSLLMEngine(FlowHandler):
             cond_logits = _t3_logits(context_embeds)
             if cond_logits is None:
                 break
+            from .decode_topk import log_topk
+            log_topk(cond_logits, step)
             uncond_logits = None
             logits = cond_logits
             if do_cfg:

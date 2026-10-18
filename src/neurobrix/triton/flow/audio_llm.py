@@ -298,6 +298,8 @@ class TritonAudioLLMEngine:
 
             logits = self._compute_logits(
                 output, embed_weight, logits_source)
+            from neurobrix.triton.flow.decode_topk import log_topk
+            log_topk(logits, _step)
             next_token = _sample_token_nbx(
                 logits, temperature,
                 generated_ids=generated_ids,
