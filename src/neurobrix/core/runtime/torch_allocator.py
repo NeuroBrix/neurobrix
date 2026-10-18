@@ -52,6 +52,13 @@ PROFILE_KEY = "compiled_allocator_settings"
 #: spelling of it (https://github.com/pytorch/pytorch/blob/v2.14.0/aten/src/ATen/mps/MPSAllocator.mm).
 FRACTION_KEY = "compiled_allocator_memory_fraction"
 FRACTION_OPERATOR_ENV = ("PYTORCH_MPS_HIGH_WATERMARK_RATIO",)
+#: The vendor-profile key of the MPS pool's LOW watermark: above it the allocator returns its cached blocks to the system.
+#: torch reads it once, when the MPS allocator is created (PYTORCH_MPS_LOW_WATERMARK_RATIO, MPSAllocator.mm), so it is set
+#: in the environment before the first pool call below. Default 1.4 x the working set on unified memory: the cache can
+#: hold the whole device beside the plan (measured 2026-10-18, the Mac: VACE's encoder stream alone 31.3 GB at the
+#: default, 18.3 GB at 0.5; the encoder completes in the full run at 0.2).
+LOW_WATERMARK_KEY = "compiled_allocator_low_watermark_ratio"
+LOW_WATERMARK_ENV = "PYTORCH_MPS_LOW_WATERMARK_RATIO"
 
 _applied: Optional[str] = None
 
@@ -103,6 +110,11 @@ def configure_memory_fraction(plan: Any):
             "compiled allocator: the vendor profile declares a pool fraction of %s; the operator's %s wins", fraction,
             ", ".join(f"{k}={v!r}" for k, v in operator.items()))
         return None
+    low = {v for v in _declared(plan, LOW_WATERMARK_KEY) if v is not None}
+    if len(low) > 1:
+        raise RuntimeError(f"ZERO FALLBACK: this plan's vendor profiles declare different memory.{LOW_WATERMARK_KEY}: {sorted(low)}")
+    if low and not os.environ.get(LOW_WATERMARK_ENV):
+        os.environ[LOW_WATERMARK_ENV] = str(next(iter(low)))     # before the allocator exists: torch reads it at creation
     import inspect
     import torch
     for dev in devices:

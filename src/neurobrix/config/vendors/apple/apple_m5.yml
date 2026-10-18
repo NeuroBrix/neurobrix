@@ -239,7 +239,7 @@ memory:
   # where the price said 3.2 GB live (the Mac, 2026-10-18 08:10). `null` = declared, not measured: a plan holding the op is
   # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
   compiled_op_workspace:
-    aten::linalg_vector_norm: null
+    aten::linalg_vector_norm: 0.01   # MEASURED 2026-10-18 on the M4 Pro (MPS, torch 2.14): the op alone, fp32 (1,96,T,512,512), dim 1, ceiling bisection: 0.01 x input at T 8 and 16 (a fixed ~650 MB floor at T 4)
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
   # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
   # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of

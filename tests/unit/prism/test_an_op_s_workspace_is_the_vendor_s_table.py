@@ -76,7 +76,7 @@ def test_the_solver_prices_the_compiled_engine_from_the_vendor_table_and_the_tri
     assert S._op_workspace(None) is None
 
 
-@pytest.mark.parametrize("vendor,arch,expect", [("nvidia", "volta", {}), ("apple", "apple_m4_pro", {"aten::linalg_vector_norm": None})])
+@pytest.mark.parametrize("vendor,arch,expect", [("nvidia", "volta", {}), ("apple", "apple_m4_pro", {"aten::linalg_vector_norm": 0.01})])
 def test_every_shipped_vendor_file_states_its_table(vendor, arch, expect):
     from neurobrix.core.prism.attention_scratch import vendor_memory_of
     assert op_workspace_fractions(vendor_memory_of(vendor, arch)) == expect

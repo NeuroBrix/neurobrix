@@ -4357,6 +4357,15 @@ class PrismSolver:
                 _base = ((getattr(profile.cpu, "runtime_base_mb", None) or {}).get(engine_of(self._mode))
                          if profile.cpu and getattr(self, "_mode", None) else None) or 0
                 capacity = min(recommended, max(0.0, float(host.available_mb) - float(_base)))
+                # What the compiled engine's backend holds OUTSIDE torch's allocations on this device (MPS: compiled
+                # graphs, kernel temporaries; "other allocations" in its OOM line), a vendor fact
+                # (memory.compiled_private_reserve_mb): never in a component's price, so it is taken off the room before
+                # any schedule is chosen. Absent = none declared (0).
+                if getattr(self, "_mode", None) and not str(self._mode).startswith("triton"):
+                    from neurobrix.core.config.loader import get_vendor_config
+                    _res = ((get_vendor_config(dev.brand.value, dev.architecture).get("memory") or {})
+                            .get("compiled_private_reserve_mb") or 0)
+                    capacity = max(0.0, capacity - float(_res))
                 # A lower rung imposed by solve() when the plan's host side did not fit the reading.
                 if getattr(self, "_unified_rung_cap_mb", None):
                     capacity = min(capacity, float(self._unified_rung_cap_mb))

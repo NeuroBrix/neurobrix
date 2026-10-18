@@ -231,7 +231,7 @@ memory:
   # where the price said 3.2 GB live (the Mac, 2026-10-18 08:10). `null` = declared, not measured: a plan holding the op is
   # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
   compiled_op_workspace:
-    aten::linalg_vector_norm: null
+    aten::linalg_vector_norm: 0.01   # MEASURED 2026-10-18 on the M4 Pro (MPS, torch 2.14): the op alone, fp32 (1,96,T,512,512), dim 1, ceiling bisection: 0.01 x input at T 8 and 16 (a fixed ~650 MB floor at T 4)
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
   # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
   # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of
@@ -243,6 +243,12 @@ memory:
   # grow past the working set into swap (Allegro 720x1280: 23.7 GB footprint on a 17.8 GB working set, the Mac,
   # 2026-10-15 08:30); bounded, the allocator releases its cached blocks before it grows.
   compiled_allocator_memory_fraction: 1.0           # provenance: the device's own working set, the figure Prism plans in
+  # MPS's pool (2026-10-18, the M4 Pro; torch 2.14): see core/runtime/torch_allocator.LOW_WATERMARK_KEY. 0.2 = VACE's encoder
+  # stream completes in the full run (0.5 still overran, the default 1.4 let the cache reach 31 GB).
+  compiled_allocator_low_watermark_ratio: 0.2
+  # MEASURED 2026-10-18 on the M4 Pro: MPS's "other allocations" (outside torch's) at the OOM of five VACE runs: 3.08-3.77
+  # GiB; the maximum, rounded up: memory a compiled plan never prices, taken off the unified room (core/prism/solver.py).
+  compiled_private_reserve_mb: 3900
 
   # State pages (state engine step 2, core/state/price.paged_cache_params): the granule a page row is placed at.
   # MEASURED 2026-10-16 on the M4 Pro: `MTLDevice.heapBufferSizeAndAlignWithLength:options:` (shared storage) returns
