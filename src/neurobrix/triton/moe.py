@@ -733,6 +733,7 @@ def execute_moe_fused(
     flat_scores = scores.reshape(-1).to(w_dtype)       # [M * top_k]
     _dump("flat_scores", flat_scores)
 
+    _prefetch_routed = None
     if expert_store is not None:
         # The experts this call routes to, read once on the host; the store copies the misses
         # into its slots and returns [E] lists of device tensors (an unrouted entry points at
@@ -742,6 +743,8 @@ def execute_moe_fused(
         def _host_expert(e, _h=_host):
             return (_h[0][e], _h[1][e], _h[2][e])
         routed = sorted({int(e) for e in flat_indices.numpy().ravel().tolist()})
+        expert_store.hosts[expert_layer] = _host_expert    # the next layer's prefetch reads it (step 3)
+        _prefetch_routed = routed
         if len(routed) > expert_store.residency.n_slots:
             output = _expert_store_grouped_pass(
                 hidden_states, flat_indices, flat_scores, expert_store, expert_layer,
@@ -904,6 +907,12 @@ def execute_moe_fused(
         print(f"[Z3_MOE] {cache_key} post-return "
               f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
               flush=True)
+
+    if expert_store is not None and _prefetch_routed is not None:
+        # step 3: this layer's kernels are enqueued — copy ahead the experts the previous token routed
+        # to at the next layer (core/runtime/expert_residency.py); the store's stream runs them behind
+        # the launch and ahead of the next layer's acquire
+        expert_store.prefetch_next(expert_layer, _prefetch_routed)
 
     return output
 

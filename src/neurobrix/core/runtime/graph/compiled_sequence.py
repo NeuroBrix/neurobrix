@@ -2194,6 +2194,7 @@ class CompiledSequence:
 
                 def _host_expert(e):
                     return (arena[_gate_w_slots[e]], arena[_up_w_slots[e]], arena[_down_w_slots[e]])
+                _store.hosts[_layer_key] = _host_expert     # the next layer's prefetch reads it (step 3)
             _on_card, _ready = {}, {}
 
             output = torch.zeros_like(hidden_states)
@@ -2248,6 +2249,10 @@ class CompiledSequence:
 
                 start = end
 
+            if _store is not None:
+                # step 3: the compute of this layer is enqueued — copy ahead, beside it, the experts the
+                # previous token routed to at the next layer (core/runtime/expert_residency.py)
+                _store.prefetch_next(_layer_key, _routed)
             _dnat("result_final", output)
             # Restore original shape if input was 3D
             if len(orig_shape) == 3:

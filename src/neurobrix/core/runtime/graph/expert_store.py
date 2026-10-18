@@ -21,6 +21,7 @@ closure waits only on the events it is given.
 """
 from __future__ import annotations
 
+import os
 from typing import Optional, Callable, Dict, List, Tuple
 
 import torch
@@ -50,6 +51,8 @@ class TorchExpertStore:
         # orders a slot's copy after the work that read its former expert (module docstring).
         self._stream = torch.cuda.Stream(device=self.device) if self.device.type == "cuda" else None
         self.bytes_in = 0
+        self._inflight: Dict[Tuple, torch.cuda.Event] = {}   # (layer, expert) -> its prefetch copy's event
+        self.hosts: Dict = {}                                 # layer -> host expert reader, registered by its call
 
     @property
     def slot_bytes(self) -> int:
@@ -57,9 +60,14 @@ class TorchExpertStore:
 
     def acquire(self, layer, routed, host: Callable[[int], Triple]
                 ) -> Tuple[Dict[int, Triple], Dict[int, "torch.cuda.Event"]]:
-        """({expert: device triple}, {missed expert: its copy's event}) for the experts `routed` names."""
+        """({expert: device triple}, {expert: its copy's event}) for the experts `routed` names — an
+        event for every miss copied now and for every hit a prefetch is still copying."""
         slots, missed = self.residency.assign(layer, routed)
         events: Dict[int, torch.cuda.Event] = {}
+        for e in slots:
+            ev = self._inflight.pop((layer, e), None)
+            if ev is not None and e not in missed:
+                events[e] = ev
         if missed and self._stream is None:
             for e in missed:
                 self._copy(layer, e, self.slots[slots[e]], host(e))
@@ -72,6 +80,40 @@ class TorchExpertStore:
                     ev.record(self._stream)
                     events[e] = ev
         return {e: self.slots[s] for e, s in slots.items()}, events
+
+    # ── step 3: the prefetch of the next layer's predicted experts ─────────────────────────────────
+    def prefetch_next(self, layer, routed) -> int:
+        """Copy ahead, on the side stream, the experts the previous token routed to at the layer that
+        follows `layer` — into slots the call at `layer` (`routed`) does not hold. Called once the
+        call's compute is enqueued, so the copies run beside it. Returns how many were issued;
+        0 when the order or the prediction is unknown, the slots too few, the next layer's host
+        experts unregistered, or NBX_EXPERT_PREFETCH=0 (the demand-fetched oracle)."""
+        if os.environ.get("NBX_EXPERT_PREFETCH") == "0" or self._stream is None:
+            return 0
+        nxt = self.residency.next_layer(layer)
+        if nxt is None or nxt not in self.hosts:
+            return 0
+        protect = {(layer, int(e)) for e in routed}
+        experts = self.residency.plan_prefetch(nxt, protect)
+        if not experts:
+            return 0
+        return self.prefetch(nxt, experts, self.hosts[nxt], protect)
+
+    def prefetch(self, layer, experts, host: Callable[[int], Triple], protect) -> int:
+        slots = self.residency.reserve(layer, experts, protect)
+        if not slots:
+            return 0
+        self._stream.wait_stream(torch.cuda.current_stream(self.device))
+        with torch.cuda.stream(self._stream):
+            for e, s in slots.items():
+                self._copy(layer, e, self.slots[s], host(e))
+                ev = torch.cuda.Event()
+                ev.record(self._stream)
+                self._inflight[(layer, e)] = ev
+        return len(slots)
+
+    def summary(self) -> str:
+        return f"[expert store] {self.residency.summary()} bytes_in={self.bytes_in / 1e9:.2f} GB"
 
     def _copy(self, layer, e: int, dst: Triple, src: Triple) -> None:
         for i, (d, s) in enumerate(zip(dst, src)):
@@ -95,5 +137,8 @@ class TorchExpertStore:
     def release(self) -> None:
         if self._stream is not None:
             torch.cuda.current_stream(self.device).wait_stream(self._stream)
+        if self.residency.hits or self.residency.misses:
+            print(f"   {self.summary()}", flush=True)
         self.slots = []
+        self._inflight.clear()
         self.residency.clear()

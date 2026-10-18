@@ -26,6 +26,7 @@ link, once), not overlap.
 """
 from __future__ import annotations
 
+import os
 from typing import Callable, List, Tuple
 
 from neurobrix.core.runtime.expert_residency import ExpertResidency
@@ -73,6 +74,8 @@ class NBXExpertStore:
             self.slots.append(tuple(views))
         self._stream = DA.create_stream()
         self.bytes_in = 0
+        self._inflight = {}      # (layer, expert) -> the event of its prefetch copy
+        self.hosts = {}          # layer -> host expert reader, registered by its call
 
     @property
     def slot_bytes(self) -> int:
@@ -84,8 +87,14 @@ class NBXExpertStore:
         return self._arena._nbytes if self._arena is not None else 0
 
     def acquire(self, layer, routed, n_experts: int, host: Callable[[int], Tuple]):
-        """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`."""
+        """(gate, up, down) lists over all `n_experts`, device-resident, for a call routing to `routed`;
+        the compute stream waits for the misses copied now and for the hits a prefetch is still copying."""
         slots, missed = self.residency.assign(layer, routed)
+        for e in slots:
+            ev = self._inflight.pop((layer, e), None)
+            if ev is not None:
+                DA.stream_wait_event(0, ev, flags=0)
+                DA.destroy_event(ev)
         if missed:
             DA.set_device(self.device_idx)
             ev = DA.create_event(timing=False)
@@ -113,7 +122,60 @@ class NBXExpertStore:
         triples = [self.slots[slots[e]] if e in slots else filler for e in range(int(n_experts))]
         return ([t[0] for t in triples], [t[1] for t in triples], [t[2] for t in triples])
 
+    # ── step 3: the prefetch of the next layer's predicted experts (mirror of the compiled store) ──
+    def prefetch_next(self, layer, routed) -> int:
+        """Copy ahead, on the store's stream, the experts the previous token routed to at the layer that
+        follows `layer`, into slots the call at `layer` does not hold; 0 when nothing can be planned
+        or NBX_EXPERT_PREFETCH=0 (the demand-fetched oracle). Called once the call's kernels are
+        enqueued: the stream is blocking against the legacy stream, so copies issued after the launch
+        run behind it and ahead of the next layer's."""
+        if os.environ.get("NBX_EXPERT_PREFETCH") == "0":
+            return 0
+        nxt = self.residency.next_layer(layer)
+        if nxt is None or nxt not in self.hosts:
+            return 0
+        protect = {(layer, int(e)) for e in routed}
+        experts = self.residency.plan_prefetch(nxt, protect)
+        if not experts:
+            return 0
+        return self.prefetch(nxt, experts, self.hosts[nxt], protect)
+
+    def prefetch(self, layer, experts, host: Callable[[int], Tuple], protect) -> int:
+        slots = self.residency.reserve(layer, experts, protect)
+        if not slots:
+            return 0
+        DA.set_device(self.device_idx)
+        ev = DA.create_event(timing=False)
+        DA.record_event(ev, stream=0)
+        DA.stream_wait_event(self._stream, ev, flags=0)
+        DA.destroy_event(ev)
+        for e, k in slots.items():
+            dst = self.slots[k]
+            src = host(e)
+            for i, (d, s_) in enumerate(zip(dst, src)):
+                if (not isinstance(s_, NBXTensor) or (tuple(s_.shape), s_._dtype) != self._shape[i]
+                        or not s_.is_contiguous() or s_._device != "cpu"):
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: expert {e} of {layer!r} projection {i} is "
+                        f"{type(s_).__name__} {tuple(getattr(s_, 'shape', ()))} on "
+                        f"{getattr(s_, '_device', '?')}; the store copies contiguous host experts of "
+                        f"{self._shape[i]} — one geometry per component")
+                DA.memcpy_async(d.data_ptr(), s_.data_ptr(), s_._nbytes, kind=1, stream=self._stream)
+                self.bytes_in += s_._nbytes
+            ev = DA.create_event(timing=False)
+            DA.record_event(ev, stream=self._stream)
+            self._inflight[(layer, e)] = ev
+        return len(slots)
+
+    def summary(self) -> str:
+        return f"[expert store] {self.residency.summary()} bytes_in={self.bytes_in / 1e9:.2f} GB"
+
     def release(self) -> None:
+        if self.residency.hits or self.residency.misses:
+            print(f"   {self.summary()}", flush=True)
+        for ev in self._inflight.values():
+            DA.destroy_event(ev)
+        self._inflight.clear()
         DA.set_device(self.device_idx)
         DA.stream_synchronize(self._stream)
         DA.destroy_stream(self._stream)

@@ -14,9 +14,17 @@ call's own misses never evict one another, and a call that routes to more distin
 there are slots is refused by name (`assign`), never served by a partial set.
 
 Prior art: Eliseev & Mazur, "Fast Inference of Mixture-of-Experts Language Models with
-Offloading" (arXiv:2312.17238) — an LRU expert cache per layer on the card; MoE-Infinity
-(arXiv:2401.14361) — an activation-aware cache. Ours is global LRU, demand-fetched; a predictive
-prefetch is a later lever, not this one.
+Offloading" (arXiv:2312.17238) — an LRU expert cache per layer on the card, with a speculative
+prefetch of the next layer's experts; MoE-Infinity (arXiv:2401.14361) — an activation-aware cache.
+Ours is global LRU, demand-fetched, plus the PREFETCH of step 3 (2026-10-18): while layer L's
+experts compute, the experts the PREVIOUS token routed to at layer L+1 are copied ahead (temporal
+locality of MoE routing: the prediction is the last routing seen at that layer, nothing learned
+elsewhere), into slots the current call does not hold (`protect`); the real call at L+1 finds them
+resident and waits only for their copies' events. The layer order is the order the calls arrive in
+(`note`), never a name; a prefetch is planned only when the next layer's predicted set and the
+current call both fit in the slots (`plan_prefetch`), else none, the reason kept for the summary.
+`NBX_EXPERT_PREFETCH=0` keeps the demand-fetched path — the oracle a prefetching run is judged
+against (byte identity: the same bytes land in the slots, the experts compute in the same order).
 """
 from __future__ import annotations
 
@@ -38,6 +46,14 @@ class ExpertResidency:
         self._free: List[int] = list(range(self.n_slots - 1, -1, -1))         # popped from the end: 0 first
         self.hits = 0
         self.misses = 0
+        # step 3: the layer order as the calls arrive, the last routing per layer, the prefetch ledger
+        self.order: List[Hashable] = []
+        self.last_routed: Dict[Hashable, List[int]] = {}
+        self._prefetched: set = set()
+        self.prefetched = 0          # experts copied ahead
+        self.prefetch_used = 0       # ... that the next call found resident
+        self.prefetch_wasted = 0     # ... evicted or unrouted before any call used them
+        self.prefetch_skipped: Dict[str, int] = {}
 
     def __len__(self) -> int:
         return len(self._lru)
@@ -49,42 +65,108 @@ class ExpertResidency:
         """The slot of every expert `routed` names for this call, and the experts that MISSED (their
         slot holds something else until the caller copies them in). `routed` is read in ascending
         order — the order the engines compute the experts in — so the slot each miss receives is
-        deterministic for a given history."""
+        deterministic for a given history. Records the layer order and the call's routing (the
+        prediction for the next token at this layer)."""
         experts = sorted({int(e) for e in routed})
         if len(experts) > self.n_slots:
             raise RuntimeError(
                 f"ZERO FALLBACK: layer {layer!r} routes to {len(experts)} distinct experts in one call and "
                 f"the expert store holds {self.n_slots} slots — the dispatchers acquire a wider call in "
                 f"runs of at most n_slots experts")
+        self.note(layer)
+        self.last_routed[layer] = experts
+        slots, missed = self._place(layer, experts, protect=())
+        for e in experts:
+            if (layer, e) in self._prefetched:
+                self._prefetched.discard((layer, e))
+                if e not in missed:
+                    self.prefetch_used += 1
+        self.hits += len(experts) - len(missed)
+        self.misses += len(missed)
+        return slots, missed
+
+    def _place(self, layer: Hashable, experts: List[int], protect) -> Tuple[Dict[int, int], List[int]]:
+        """Slots for `experts` at `layer`: hits moved to the recent end, misses given a free slot or the
+        least recent slot outside this set and outside `protect` (keys another call still reads)."""
         call = {(layer, e) for e in experts}
+        keep = call | set(protect)
         slots: Dict[int, int] = {}
         missed: List[int] = []
         for e in experts:
-            key = (layer, e)
-            slot = self._lru.get(key)
+            slot = self._lru.get((layer, e))
             if slot is not None:
-                self._lru.move_to_end(key)
+                self._lru.move_to_end((layer, e))
                 slots[e] = slot
-                self.hits += 1
         for e in experts:
             if e in slots:
                 continue
             if self._free:
                 slot = self._free.pop()
             else:
-                victim = next((k for k in self._lru if k not in call), None)
-                if victim is None:      # unreachable: len(experts) <= n_slots and every key of `call` is new or moved
+                victim = next((k for k in self._lru if k not in keep), None)
+                if victim is None:
                     raise RuntimeError(f"ZERO FALLBACK: expert store found no evictable slot for {layer!r}")
+                if victim in self._prefetched:
+                    self._prefetched.discard(victim)
+                    self.prefetch_wasted += 1
                 slot = self._lru.pop(victim)
             self._lru[(layer, e)] = slot
             slots[e] = slot
             missed.append(e)
-            self.misses += 1
         return slots, missed
+
+    # ── step 3: the prefetch ─────────────────────────────────────────────────────────────────────────
+    def note(self, layer: Hashable) -> None:
+        """The layer order is the order the calls arrive in; a layer seen before adds nothing."""
+        if layer not in self.last_routed and layer not in self.order:
+            self.order.append(layer)
+
+    def next_layer(self, layer: Hashable) -> Optional[Hashable]:
+        """The layer the calls visit after `layer` (None at the last one, or before the order is known)."""
+        try:
+            i = self.order.index(layer)
+        except ValueError:
+            return None
+        return self.order[i + 1] if i + 1 < len(self.order) else None
+
+    def predicted(self, layer: Hashable) -> List[int]:
+        """The experts the last call at `layer` routed to — the prediction for the next call there."""
+        return list(self.last_routed.get(layer) or [])
+
+    def plan_prefetch(self, layer: Hashable, protect: Iterable[Tuple[Hashable, int]]) -> List[int]:
+        """The experts to copy ahead for `layer`: the predicted ones not resident, when the prediction
+        and the protected call both fit in the slots; [] otherwise, the reason counted."""
+        protect = set(protect)
+        predicted = self.predicted(layer)
+        if not predicted:
+            self.prefetch_skipped["no prediction yet"] = self.prefetch_skipped.get("no prediction yet", 0) + 1
+            return []
+        if len(predicted) + len(protect) > self.n_slots:
+            self.prefetch_skipped["slots"] = self.prefetch_skipped.get("slots", 0) + 1
+            return []
+        return [e for e in predicted if self._lru.get((layer, e)) is None]
+
+    def reserve(self, layer: Hashable, experts: Iterable[int], protect: Iterable[Tuple[Hashable, int]]
+                ) -> Dict[int, int]:
+        """Slots for a prefetch of `experts` at `layer` (all misses by construction of `plan_prefetch`),
+        never evicting a `protect` key; counted as prefetched, not as misses."""
+        experts = sorted({int(e) for e in experts})
+        slots, missed = self._place(layer, experts, protect=set(protect))
+        for e in missed:
+            self._prefetched.add((layer, e))
+        self.prefetched += len(missed)
+        return {e: slots[e] for e in missed}
+
+    def summary(self) -> str:
+        skipped = ", ".join(f"{k} x{v}" for k, v in sorted(self.prefetch_skipped.items())) or "none"
+        return (f"slots={self.n_slots} layers={len(self.order)} hits={self.hits} misses={self.misses} "
+                f"prefetched={self.prefetched} used={self.prefetch_used} wasted={self.prefetch_wasted} "
+                f"prefetch skipped: {skipped}")
 
     def clear(self) -> None:
         self._lru.clear()
         self._free = list(range(self.n_slots - 1, -1, -1))
+        self._prefetched.clear()
 
 
 def routed_layers(dag: Dict[str, Any]) -> Dict[str, Tuple[List[str], List[str], List[str]]]:
