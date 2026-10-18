@@ -261,6 +261,8 @@ class AudioLLMEngine(FlowHandler):
                 break
 
             logits = self._compute_logits(output, embed_weight, logits_source)
+            from .decode_topk import log_topk
+            log_topk(logits, step)
             from .audio_utils import sample_token
             next_token = sample_token(
                 logits, temperature,

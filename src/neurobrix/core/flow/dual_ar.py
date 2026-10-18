@@ -217,6 +217,8 @@ class DualAREngine(FlowHandler):
                 raise RuntimeError("ZERO FALLBACK: slow model must output logits + hidden_states.")
 
             slow_logits = logits[:, pos, :].clone()
+            from .decode_topk import log_topk
+            log_topk(slow_logits, len(slow_history))
             import os as _osdsl
             _dsl = _osdsl.environ.get("NBX_DUALAR_DUMP_SLOGITS", "")
             if _dsl and len(slow_history) == 0:

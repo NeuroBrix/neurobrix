@@ -184,6 +184,8 @@ class TritonDualAREngine:
                 logits_np = _to_numpy(logits)
                 hidden_np = _to_numpy(hidden)            # [1, clen, dim]
                 slow_logits = logits_np[0, pos, :].astype(np.float64)
+                from neurobrix.triton.flow.decode_topk import log_topk
+                log_topk(slow_logits, len(slow_history))
                 _dsl = _os_dbg.environ.get("NBX_DUALAR_DUMP_SLOGITS", "")
                 if _dsl and len(slow_history) == 0:
                     np.save(_dsl, slow_logits)

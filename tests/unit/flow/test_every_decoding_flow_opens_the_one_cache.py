@@ -187,3 +187,27 @@ def test_the_count_interceptor_adds_the_cache_length_at_decode_only():
     assert w.intercept_position_cumsum(ones, 1).tolist() == [[1, 2, 3]]
     w._is_prefill, w._position_offset = False, 7
     assert w.intercept_position_cumsum(torch.ones(1, 1, dtype=torch.long), 1).tolist() == [[8]]
+
+
+# ── the measuring tool of the identity proof: every judged flow writes the per-step top-k record ─────────────
+def test_every_staged_decode_loop_writes_the_topk_record():
+    from neurobrix.core.flow import audio_llm as CA, dual_ar as CDA, tts_llm as CT
+    from neurobrix.triton.flow import audio_llm as TA, dual_ar as TDA, tts_llm as TT
+    for mod in (CA, TA, CT, TT, CDA, TDA):
+        assert "log_topk(" in inspect.getsource(mod), f"{mod.__name__} writes no NBX_DECODE_TOPK record"
+
+
+def test_the_topk_record_is_one_format_for_both_engines(tmp_path, monkeypatch):
+    import json
+    import numpy as np
+    import torch
+    from neurobrix.core.flow.decode_topk import log_topk as torch_log
+    from neurobrix.triton.flow.decode_topk import log_topk as np_log
+    path = tmp_path / "topk.jsonl"
+    monkeypatch.setenv("NBX_DECODE_TOPK", str(path))
+    logits = [0.5, 3.0, 2.9, -1.0, 7.25, 0.0]
+    torch_log(torch.tensor(logits).view(1, 1, -1), 3)
+    np_log(np.asarray(logits, dtype=np.float32).reshape(1, 1, -1), 3)
+    a, b = [json.loads(l) for l in path.read_text().splitlines()]
+    assert a["ids"] == b["ids"] == [4, 1, 2, 0] and a["margin12"] == b["margin12"] == 4.25
+    assert (a["engine"], b["engine"], a["step"]) == ("torch", "triton", 3)
