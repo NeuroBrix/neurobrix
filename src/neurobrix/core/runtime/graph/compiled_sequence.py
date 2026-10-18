@@ -3313,9 +3313,16 @@ class CompiledSequence:
             if _tn_dir and isinstance(tensor, torch.Tensor) and tensor.dim() in (3, 4) and max(tensor.shape[1:-1]) > 1024:
                 _os_d.makedirs(_tn_dir, exist_ok=True)
                 # [B, T, C] -> mean over C; [B, H, T, D] (attention heads) -> mean over H and D: [B, T] either way
-                _tok = tensor.detach().float().abs().mean(-1)
-                if _tok.dim() == 3:
-                    _tok = _tok.mean(1) if _tok.shape[2] > 1024 else _tok.mean(2)
+                # memory-light: reduce token slices one at a time (a whole fp32 copy of a q/k/v at 79 200 tokens is
+                # 5.4 GiB and OOMs a 16 GB card; the Dell 2026-10-18 02:23)
+                _x = tensor.detach()
+                _tax = 1 if _x.dim() == 3 else (2 if _x.shape[2] > 1024 else 1)
+                _parts = []
+                for _s in range(0, _x.shape[_tax], 2048):
+                    _sl = _x.narrow(_tax, _s, min(2048, _x.shape[_tax] - _s)).float().abs()
+                    _red = [d for d in range(1, _sl.dim()) if d != _tax]
+                    _parts.append(_sl.mean(dim=_red))
+                _tok = torch.cat(_parts, dim=1)
                 torch.save(_tok.cpu(), f"{_tn_dir}/p{state.get('pass', 0)}_{op.op_uid.replace(':', '_')}.pt")
             if not isinstance(tensor, torch.Tensor):
                 # THE RULE: a brick that replaces a call site preserves that
