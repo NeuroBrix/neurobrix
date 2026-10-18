@@ -74,6 +74,8 @@ class _Container:
 
     def get_topology(self):
         return None
+    def get_manifest(self):
+        return {"family": "test"}      # the family the TTS sequence count would read its cascade from
 
 
 def test_prism_prices_the_next_token_diffusion_cache_for_both_contexts(tmp_path):

@@ -3877,7 +3877,9 @@ class PrismSolver:
         """How many sequences the decode cache holds at once (`lm_facts.decode_sequences`): the
         guidance batch of an image-AR generation, the negative context of a next-token diffusion."""
         from neurobrix.core.runtime.lm_facts import decode_sequences
-        return decode_sequences(self._flow_topology(container), self._read_defaults(container) or {})
+        manifest = container.get_manifest() or {}
+        return decode_sequences(self._flow_topology(container), self._read_defaults(container) or {},
+                                family=manifest.get("family"))
 
     def _kv_declared(self, container):
         """(decoder, its declared KV state) — the container's `state` section (core/state/price.py) — or None when the

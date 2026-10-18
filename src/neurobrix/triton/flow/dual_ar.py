@@ -161,14 +161,22 @@ class TritonDualAREngine:
             # 4-mode kernel-oracle method — verify each half against its own oracle).
             print(f"   [{comp_name}] FIXED codes mode — generation skipped (codec isolation).")
         else:
+            # The slow decoder decodes on its KV cache (triton/flow/decoder_cache): the whole code
+            # grid at the prefill, the one new column afterwards, its position counted by the
+            # graph's cumsum and offset by the cache. NBX_KV_RECOMPUTE=1 keeps the whole-grid oracle.
+            from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+            _steps = DecodeSteps(open_decoder_cache(self.ctx, comp_name, max_tokens))
             for _ in range(max_tokens):
                 clen = len(grid_cols)
                 inp = np.zeros((1, n_rows, clen), dtype=np.int64)
                 for ci, col in enumerate(grid_cols):
                     for ri, val in enumerate(col):
                         inp[0, ri, ci] = val
-                pos = clen - 1
-                out = executor.run({"inp": NBXTensor.from_numpy(inp)})
+                feed = _steps.feed(inp, np.ascontiguousarray(inp[:, :, -1:]))
+                pos = feed.shape[2] - 1
+                _steps.before_run()
+                out = executor.run({"inp": NBXTensor.from_numpy(feed)})
+                _steps.after_run()
                 logits = out.get("logits") if isinstance(out, dict) else None
                 hidden = out.get("hidden_states") if isinstance(out, dict) else None
                 if logits is None or hidden is None:

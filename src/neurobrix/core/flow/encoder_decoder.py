@@ -177,65 +177,10 @@ class EncoderDecoderEngine(FlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     def _decoder_kv_wrapper(self, dec_name: str, max_tokens: int):
-        """Build and register the decoder's KV cache for one window, or None
-        (recompute oracle requested, or a graph without self-attention)."""
-        import os as _os
-        if _os.environ.get("NBX_KV_RECOMPUTE") == "1":
-            return None
-        executor = self.ctx.executors.get(dec_name)
-        dag = getattr(executor, "_dag", None) if executor is not None else None
-        if not dag:
-            return None
-        from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
-        plan = decoder_self_attention_plan(dag)
-        if plan is None:
-            return None
-        if not plan["arange_uids"] and not plan.get("position_slice_uids"):
-            # One token per step needs a positional mechanism the cache can
-            # offset; a graph with neither would decode every token at
-            # position 0. Loud, and the recompute path (correct) instead.
-            import sys as _sys
-            print(f"[{dec_name}] KV cache REFUSED: the decoder graph carries no positional "
-                  f"arange and no positional-table slice the cache could offset — "
-                  f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
-            return None
-        from neurobrix.core.runtime.graph.kv_cache_wrapper import (
-            KVCacheAttentionWrapper, KVCacheConfig)
-        wrapper = getattr(executor, "_decoder_kv_wrapper", None)
-        if wrapper is None:
-            dtype = getattr(executor, "dtype", None) or "float16"
-            from neurobrix.core.runtime.lm_facts import decoder_cache_facts, encoder_decoder_cache_from_plan
-            kv = encoder_decoder_cache_from_plan(getattr(self.ctx.plan, "kv_cache_plan", None),
-                                                 decoder_cache_facts(dag), max_tokens, dec_name)
-            from neurobrix.core.module.cache.factory import paged_params
-            page_tokens, async_release = paged_params(
-                kv.num_kv_heads, kv.k_head_dim, kv.v_head_dim, dtype,
-                (getattr(executor, "vendor", None), getattr(executor, "arch", None)),
-                getattr(self.ctx.plan, "kv_cache_plan", None))
-            config = KVCacheConfig(
-                num_layers=kv.num_layers, num_kv_heads=kv.num_kv_heads,
-                k_head_dim=kv.k_head_dim, v_head_dim=kv.v_head_dim,
-                max_cache_len=int(kv.max_cache_len), dtype=str(dtype),
-                page_tokens=page_tokens, async_release=async_release)
-            wrapper = KVCacheAttentionWrapper(config, num_heads=plan["num_heads"])
-            by_type = wrapper.get_interceptors()
-            per_uid = {}
-            for uid in plan["self_attn_uids"]:
-                fn = by_type.get(dag["ops"][uid]["op_type"])
-                if fn is None:
-                    raise RuntimeError(f"ZERO FALLBACK: no KV interceptor for {dag['ops'][uid]['op_type']}")
-                per_uid[uid] = fn
-            for uid in plan["arange_uids"]:
-                per_uid[uid] = wrapper.intercept_arange
-            for uid in plan.get("position_slice_uids") or []:
-                per_uid[uid] = wrapper.intercept_position_slice
-            executor.register_op_uid_interceptors(per_uid)
-            executor._decoder_kv_wrapper = wrapper
-            print(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "
-                  f"{len(plan['cross_attn_uids'])} cross-attentions native, "
-                  f"heads={plan['num_heads']} d={plan['head_dim']} max={max_tokens}")
-        wrapper.reset_for_new_sequence()
-        return wrapper
+        """The decoder's KV cache for one window — the shared opener of every decoding flow
+        (`core/flow/decoder_cache.py`), or None (recompute oracle, or no self-attention)."""
+        from neurobrix.core.flow.decoder_cache import open_decoder_cache
+        return open_decoder_cache(self.ctx, dec_name, max_tokens)
 
     def _decode_one_window(self, decoder_stage, dec_name, defaults,
                            _all_ids, _all_texts, seek_ctx=None, ts_ids=None,

@@ -52,8 +52,14 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
     arange_uids (the positional arange the cache offsets during decode),
     position_slice_uids (the other positional form: a slice of a parameter
     table by [0 : token-length symbol] — whisper-class decoders traced by
-    older vendors; the cache offsets its window during decode). A decoder
-    with neither cannot be offset one token at a time: the caller refuses
+    older vendors; the cache offsets its window during decode),
+    position_cumsum_uids (a third form: positions counted by a cumsum over
+    ones shaped like the tokens, then used to index a rotary table — the
+    dual-AR decoder; the cache adds its length to the count during decode),
+    positions_input (the `input::position_ids` tensor when the decoder takes
+    its positions from its caller — the flow then hands the new token's
+    absolute position and nothing in the graph is offset). A decoder with
+    none of the four cannot be offset one token at a time: the caller refuses
     the cache and keeps the recompute path (D-STT-KV-WHISPER-LARGE).
     """
     ops = dag.get("ops") or {}
@@ -82,13 +88,55 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
         return None
     if num_heads is None:
         raise RuntimeError("ZERO FALLBACK: decoder self-attention has no traced q shape")
-    arange_uids = [uid for uid, op in ops.items() if op.get("op_type") == "aten::arange"]
-    position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != encoder_input})
+    positions_input = next((t for t in inputs if t == "input::position_ids"), None)
+    if positions_input is not None:
+        # the caller positions every token: no arange, slice or count in the graph is offset
+        arange_uids, position_slice_uids, position_cumsum_uids = [], [], []
+    else:
+        arange_uids = [uid for uid, op in ops.items() if op.get("op_type") == "aten::arange"]
+        position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != encoder_input})
+        position_cumsum_uids = _positional_cumsums(dag, from_tokens)
     return {
         "num_layers": len(self_uids), "num_heads": num_heads, "head_dim": head_dim,
         "self_attn_uids": self_uids, "cross_attn_uids": cross_uids,
         "arange_uids": arange_uids, "position_slice_uids": position_slice_uids,
+        "position_cumsum_uids": position_cumsum_uids, "positions_input": positions_input,
     }
+
+
+def positions_are_offset_by(plan: Dict[str, Any]) -> bool:
+    """Whether the cache can place a decoded token at its absolute position: by the caller
+    (positions enter as an input) or by offsetting a positional op of the graph."""
+    return bool(plan.get("positions_input") or plan.get("arange_uids")
+                or plan.get("position_slice_uids") or plan.get("position_cumsum_uids"))
+
+
+_INDEX_TYPES = {"aten::index_select", "aten::embedding", "aten::index", "aten::take", "aten::gather"}
+
+
+def _positional_cumsums(dag: Dict[str, Any], from_tokens: Set[str]) -> List[str]:
+    """`aten::cumsum` over a ones tensor shaped like the tokens whose result reaches an index of a
+    parameter or buffer table: the positions a decoder counts from its own sequence (a dual-AR
+    decoder's `cumsum(ones_like(x)) - 1` into its rotary table). Pure graph data."""
+    ops = dag.get("ops") or {}
+    found: List[str] = []
+    for uid, op in ops.items():
+        if op.get("op_type") != "aten::cumsum":
+            continue
+        ins = op.get("input_tensor_ids") or []
+        if not ins or ins[0] not in from_tokens:
+            continue
+        src = next((o for o in ops.values() if ins[0] in (o.get("output_tensor_ids") or [])), None)
+        if src is None or src.get("op_type") not in ("aten::ones_like", "aten::ones", "aten::new_ones", "aten::full_like"):
+            continue
+        downstream = _derived_from(dag, set(op.get("output_tensor_ids") or []))
+        for o in ops.values():
+            if o.get("op_type") in _INDEX_TYPES:
+                oins = o.get("input_tensor_ids") or []
+                if any(t in downstream for t in oins) and any(t.startswith(("param::", "buffer::")) for t in oins):
+                    found.append(uid)
+                    break
+    return found
 
 
 def _positional_table_slices(dag: Dict[str, Any], token_inputs: Set[str]) -> List[str]:

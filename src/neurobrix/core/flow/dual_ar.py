@@ -189,6 +189,10 @@ class DualAREngine(FlowHandler):
         # stop token (vendor masks non-semantic logits). 4096 semantic ids.
         sem_lo, sem_hi = semantic_begin_id, semantic_begin_id + 4096
 
+        # The slow decoder decodes on its KV cache (core/flow/decoder_cache); NBX_KV_RECOMPUTE=1 keeps
+        # the whole-grid oracle.
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, comp_name, max_tokens))
         for _ in range(max_tokens):
             # Feed the FULL grid (variable length). The slow model's seq dim is
             # symbolic (audio_token_grid convention), so it accepts any length and
@@ -200,8 +204,13 @@ class DualAREngine(FlowHandler):
             for ci, col in enumerate(grid_cols):
                 for ri, val in enumerate(col):
                     inp_t[0, ri, ci] = val
-            pos = clen - 1
-            out = slow_exec.run({"inp": inp_t})
+            # A cached step hands the slow decoder the one new column, its position counted by the
+            # graph's cumsum and offset by the cache; the prefill (and the recompute oracle) the grid.
+            feed_t = _steps.feed(inp_t, inp_t[:, :, -1:])
+            pos = int(feed_t.shape[2]) - 1
+            _steps.before_run()
+            out = slow_exec.run({"inp": feed_t})
+            _steps.after_run()
             logits = out.get("logits") if isinstance(out, dict) else out
             hidden = out.get("hidden_states") if isinstance(out, dict) else None
             if logits is None or hidden is None:

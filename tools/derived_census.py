@@ -1335,10 +1335,9 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             return [("codec.quantizer", {"indices": [1, cb, n]})] + [
                 (c, lambda outs: {"x": next(iter(outs.values()))}) for c in later]
         sites.append(("codec frames", 1, int(mt), chain))
-        # The slow model runs on the whole grid [1, rows, clen] every step: clen from the prompt
-        # column count P (the flows' own `dual_ar_prompt_ids` over `tts_llm_token_ids`) to
-        # P + max_tokens - 1 in a live run (the shadow's pace stops at max_tokens — a walk
-        # bound, named where it differs).
+        # The slow model on its KV cache (core/flow/decoder_cache): the prefill over the prompt grid
+        # [1, rows, P] (P the prompt column count, the flows' own `dual_ar_prompt_ids` over
+        # `tts_llm_token_ids`), then one column per generated position against the cache.
         if "model" in comps:
             from neurobrix.core.flow.audio_utils import (apply_tts_template, dual_ar_prompt_ids,
                                                          tts_llm_token_ids)
@@ -1354,9 +1353,8 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             gm = json.loads((root / "components" / "model" / "graph.json").read_text())
             rows = gm["tensors"]["input::inp"]["shape"][1]
 
-            def grid(n, rows=rows):
-                return [("model", {"inp": [1, rows, n]})]
-            sites.append(("slow model grid columns", P, P + int(mt) - 1, grid))
+            sites.extend(_decoder_sites(model, "model", plan, P, mt,
+                                        lambda n, rows=rows: {"inp": [1, rows, n]}))
     # autoregressive SNAC codec (triton/flow/autoregressive.py `_run_snac_codec_decoder`): the
     # n generated tokens redistributed into three codebooks by the flow's own function.
     if defaults.get("audio_output_type") == "snac_tokens" and "codec.decoder" in comps:
@@ -1444,10 +1442,10 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
             sites.append((f"{lm} negative prefill", 1, 1, prefill))
             lo = 2
         sites.append((f"{lm} decode KV length", lo, P + mt, decode))
-    # tts_llm (triton/flow/tts_llm.py): no KV cache — every step runs the speech LM on the WHOLE
-    # context [cond, text, speech] at batch 1 (CFG runs its uncond context as a second batch-1
-    # forward of the same length): from L0 = cond + text + 1 (the conditioning encoder's output
-    # length, the flow's own `tts_llm_text_ids`, the BOS speech token) to L0 + max_tokens - 1.
+    # tts_llm (triton/flow/tts_llm.py): the speech LM on its KV cache — the prefill over the whole
+    # context [cond, text, bos] (L0 = cond + text + 1: the conditioning encoder's output length, the
+    # flow's own `tts_llm_text_ids`, the BOS speech token), then one position per speech token;
+    # CFG runs its uncond context as a second branch of the same cache, batch 1.
     # Then the vocoder on the n surviving speech tokens, 1 .. max_tokens, its inputs from the
     # flow's own `tts_llm_vocoder_inputs` over the embedded default-voice conditioning.
     if flow.get("type") == "tts_llm" and prompt:
@@ -1502,9 +1500,11 @@ def _tts_llm_sites(model, topo, defaults, plan, prompt, max_tokens_req):
     gl = raw_graph(model, lm)
     dim = gl["tensors"]["input::inputs_embeds"]["shape"][-1]
 
-    def context(n, lm=lm, dim=dim):
-        return [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})]
-    sites = [(f"{lm} context length", L0, L0 + mt - 1, context)]
+    # the speech LM on its KV cache (core/flow/decoder_cache): the prefill over [cond, text, bos],
+    # then one position per speech token; the CFG uncond context is a second branch of the same
+    # cache, the same lengths at batch 1 — the same keys
+    sites = _decoder_sites(model, lm, plan, L0, mt,
+                           lambda n, dim=dim: {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})
     if voc_stage is not None and voc_stage["component"] in comps:
         voc = voc_stage["component"]
         conds_p = root / "runtime" / "default_conditioning.safetensors"
@@ -1646,21 +1646,43 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, 
     mask_rank = len((gl.get("input::visual_pos_masks") or {}).get("shape") or [])
     mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
 
-    def context(n):
-        feed = {"inputs_embeds": [1, n, H], "position_ids": [3, 1, n]}
+    def feed(n):
+        inputs = {"inputs_embeds": [1, n, H], "position_ids": [3, 1, n]}
         if mask_rank:
-            feed["visual_pos_masks"] = [1, n] if mask_rank == 2 else [1, n, H]
+            inputs["visual_pos_masks"] = [1, n] if mask_rank == 2 else [1, n, H]
         for i, name in enumerate(ds):
-            feed[name] = outs[f"output_{i + 1}"]
-        return [(lm, feed)]
+            inputs[name] = outs[f"output_{i + 1}"]
+        return inputs
     return [("vision tower", 1, 1, lambda _n, st=[step]: st),
-            (f"{lm} context", L0, L0 + int(mt) - 1, context)]
+            *_decoder_sites(model, lm, plan, L0, mt, feed)]
 
 
-def _vlm_context_site(lm, L0, mt, feed):
-    """The LM's whole-context site of a re-forward vlm decode (no KV cache: every step runs the
-    LM on the whole context, `L0` the templated prompt, one more position per generated token)."""
-    return (f"{lm} context", L0, L0 + int(mt) - 1, lambda n: [(lm, feed(n))])
+def _decoder_sites(model, lm, plan, L0, mt, feed, batch=1):
+    """The two sites of a decoder on its KV cache (core/flow/decoder_cache, step 3): the PREFILL over the
+    whole context (`L0` positions, the flow's own inputs through `feed`, the attention through the
+    interceptor's prefill — `__kv_prefill__`), then every DECODE step at ONE position against the
+    cache, its length L0 + 1 .. L0 + max_tokens - 1, K/V the cache's (the plan's dtype and KV heads).
+    A plan without the cache is refused by name: the flow's opener refuses it too
+    (`lm_facts.decoder_cache_from_plan`), and a census cannot key a decode the run would not reach."""
+    kv = plan.get("kv_cache")
+    if not kv:
+        raise SystemExit(f"{model}: the plan carries no KV cache for {lm} — the flow refuses it "
+                         f"(lm_facts.decoder_cache_from_plan); the census cannot key its decode")
+    def prefill(n, lm=lm, feed=feed):
+        return [(lm, dict(feed(n), __kv_prefill__=True))]
+    def decode(n, lm=lm, kv=kv, batch=batch):
+        return [(lm, {"__decode__": {"len": n, "dtype": kv.get("dtype"), "batch": batch,
+                                     "heads": kv.get("num_kv_heads")}})]
+    sites = [(f"{lm} prefill", L0, L0, prefill)]
+    if int(mt) > 1:
+        sites.append((f"{lm} decode KV length", L0 + 1, L0 + int(mt) - 1, decode))
+    return sites
+
+
+def _vlm_context_site(model, lm, plan, L0, mt, feed):
+    """The LM's sites of a vlm decode on its KV cache: the prefill over the templated prompt (`L0`
+    positions) and one decode position per generated token (`_decoder_sites`)."""
+    return _decoder_sites(model, lm, plan, L0, mt, feed)
 
 
 def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16=False,
@@ -1716,7 +1738,7 @@ def _vlm_masked_sites(model, topo, defaults, plan, image_path, prompt, max_token
                 "image_pos_masks": [1, n, H], "audio_pos_masks": [1, n, H],
                 "image_embeds": [n_img, int(po[-1])], "audio_embeds": [1, H]}
     return [("vision tower and projection", 1, 1, lambda _n, st=[vstep, pstep]: st),
-            _vlm_context_site(lm, L0, mt, feed)]
+            *_vlm_context_site(model, lm, plan, L0, mt, feed)]
 
 
 def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, has_native_bf16=False,
@@ -1765,7 +1787,7 @@ def _vlm_staged_sites(model, topo, defaults, plan, image_path, prompt, max_token
                 "visual_pos_masks": [1, n, H], "audio_pos_masks": [1, n, H],
                 "vision_hidden_states": [n_modal, int(po[-1])], "audio_hidden_states": [1, H]}
     return [("vision tower and projection", 1, 1, lambda _n, st=[vstep, pstep]: st),
-            _vlm_context_site(lm, L0, mt, feed)]
+            *_vlm_context_site(model, lm, plan, L0, mt, feed)]
 
 
 def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req, has_native_bf16=False,
@@ -1833,8 +1855,10 @@ def _audio_llm_sites(model, topo, defaults, plan, audio_path, max_tokens_req, ha
     L0 = len(defaults.get("stt_prefix_ids", [1])) + A + len(defaults.get("stt_suffix_ids", []))
     mt = decode_bound(max_tokens_req if max_tokens_req is not None else defaults.get("max_tokens"))
     sites.append(("audio forward stages", 1, 1, lambda _n, st=list(fwd_steps): st))
-    sites.append((f"{lm} context", L0, L0 + int(mt) - 1,
-                  lambda n, dim=dim: [(lm, {"inputs_embeds": [1, n, dim], "position_ids": [1, n]})]))
+    # the LM on its KV cache (core/flow/decoder_cache): the prefill over the context, then one
+    # position per generated token
+    sites.extend(_decoder_sites(model, lm, plan, L0, mt,
+                                lambda n, dim=dim: {"inputs_embeds": [1, n, dim], "position_ids": [1, n]}))
     return sites
 
 

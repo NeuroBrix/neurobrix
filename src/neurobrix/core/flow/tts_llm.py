@@ -395,15 +395,28 @@ class TTSLLMEngine(FlowHandler):
                 print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
                       f"from {_force_ids} (decode skipped)")
 
-        def _t3_logits(ctx_embeds):
-            """One batch=1 backbone forward + speech_head → logits [1,1,vocab]."""
+        # The speech LM decodes on its KV cache (core/flow/decoder_cache): one sequence per context,
+        # the CFG uncond context a second BRANCH of the same cache (Prism prices both,
+        # lm_facts.decode_sequences). NBX_KV_RECOMPUTE=1 keeps the whole-context oracle.
+        from .decoder_cache import DecodeSteps, open_decoder_cache
+        _kv = open_decoder_cache(self.ctx, lm_name, max_tokens)
+        _cond_steps = DecodeSteps(_kv, _kv.branch_state() if _kv is not None else None)
+        _uncond_steps = DecodeSteps(_kv, _kv.new_branch() if _kv is not None else None)
+
+        def _t3_logits(ctx_embeds, steps=_cond_steps):
+            """One batch=1 backbone forward + speech_head → logits [1,1,vocab]: the whole context at
+            the prefill, the one new speech token at its absolute position afterwards."""
             seq_len = ctx_embeds.shape[1]
-            position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
-            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = ctx_embeds
-            self.ctx.variable_resolver.resolved["inputs_embeds"] = ctx_embeds
+            feed = steps.feed(ctx_embeds, ctx_embeds[:, -1:])
+            position_ids = torch.arange(seq_len - feed.shape[1], seq_len,
+                                        dtype=torch.long, device=device).unsqueeze(0)
+            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = feed
+            self.ctx.variable_resolver.resolved["inputs_embeds"] = feed
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
+            steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            steps.after_run()
             out = self._get_component_output(lm_name)
             if out is None:
                 return None
@@ -436,7 +449,7 @@ class TTSLLMEngine(FlowHandler):
             uncond_logits = None
             logits = cond_logits
             if do_cfg:
-                uncond_logits = _t3_logits(uncond_context)
+                uncond_logits = _t3_logits(uncond_context, _uncond_steps)
                 if uncond_logits is None:
                     break
                 # Centralized CFG formula (cond=context, uncond=text-zeroed context).

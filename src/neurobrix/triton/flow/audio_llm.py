@@ -272,18 +272,25 @@ class TritonAudioLLMEngine:
         start = time.perf_counter()
         generated_ids: List[int] = []
 
+        from neurobrix.triton.flow.decoder_cache import DecodeSteps, open_decoder_cache
+        _steps = DecodeSteps(open_decoder_cache(self.ctx, lm_name, max_tokens))
         for _step in range(max_tokens):
-            seq_len = context_embeds.shape[1]
+            seq_len = int(context_embeds.shape[1])
+            # A cached step hands the LM the one new token at its absolute position seq_len - 1;
+            # the prefill (and the recompute oracle) the whole context (triton/flow/decoder_cache).
+            feed_embeds = _steps.feed(context_embeds, context_embeds.narrow(1, seq_len - 1, 1))
             position_ids = NBXTensor.from_numpy(
-                np.arange(seq_len, dtype=np.int64).reshape(1, -1))
+                np.arange(seq_len - int(feed_embeds.shape[1]), seq_len, dtype=np.int64).reshape(1, -1))
 
             res = self.ctx.variable_resolver.resolved
-            res["global.inputs_embeds"] = context_embeds
-            res["inputs_embeds"] = context_embeds
+            res["global.inputs_embeds"] = feed_embeds
+            res["inputs_embeds"] = feed_embeds
             res["global.position_ids"] = position_ids
             res["position_ids"] = position_ids
 
+            _steps.before_run()
             self._execute_component(lm_name, "forward", None)
+            _steps.after_run()
 
             output = self._get_component_output(lm_name)
             if output is None:

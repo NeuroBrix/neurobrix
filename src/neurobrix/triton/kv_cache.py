@@ -214,6 +214,16 @@ class TritonAttentionInterceptor:
         cache_len = self._position_offset
         return table.narrow(int(dim), cache_len + int(start), int(end - start))
 
+    def intercept_position_cumsum(self, x, dim=0, dtype=None):
+        """Mirror of core kv_cache_wrapper.intercept_position_cumsum: the positions a decoder counts
+        over its own sequence, the cache's length added at decode. R33-pure: the cumsum and add
+        wrappers of the kernel library."""
+        from neurobrix.kernels import wrappers as W
+        out = W.cumsum_wrapper(x, int(dim), dtype)
+        if self._is_prefill or self._position_offset <= 0:
+            return out
+        return W.add(out, self._position_offset)
+
     def intercept_arange(self, *args, **kwargs):
         """Intercept aten::arange to fix RoPE positions during decode.
 
