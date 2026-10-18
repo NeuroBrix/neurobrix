@@ -2487,10 +2487,22 @@ class PrismSolver:
                     # pre-fallback `target_dtype` sized an fp32 plan's cache at 2 bytes.
                     kv_plan = self._compute_kv_cache_plan(container, target_dtype_str, remaining)
                 except RuntimeError as exc:
-                    # Strategy rejected: KV cache doesn't fit — said in the plan
-                    self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}"))
+                    # The whole-precision cache does not fit this rung: the state engine's policies are scored
+                    # (step 5, core/state/policy.py). An output-changing policy is taken only with a measured cost;
+                    # none is declared yet, so the decision is a refusal that names what was considered.
+                    try:
+                        decision = self._state_policy_for(container, target_dtype_str, remaining)
+                    except RuntimeError as pexc:
+                        self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}; {pexc}"))
+                        continue
+                    self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}; policy "
+                                           f"{decision.name} has no runtime yet ({decision.reason})"))
                     continue
                 kv_cache_plan = kv_plan
+                if kv_plan is not None:
+                    from neurobrix.core.state.policy import PolicyDecision
+                    self._state_policy = PolicyDecision("pages", f"pages: the whole cache fits "
+                                                        f"({kv_plan.memory_bytes / 2**20:,.0f} MB)")
 
             allocations = strat_allocs
             chosen_strategy = strat_name
@@ -4150,6 +4162,20 @@ class PrismSolver:
     def _kv_min_bytes(self, container, dtype_str: str) -> int:
         """`_kv_min_tokens` in bytes, at the per-position cost `_compute_kv_cache_plan` uses."""
         return self._kv_min_tokens(container) * self._kv_token_bytes(container, dtype_str)
+
+    def _state_policy_for(self, container, target_dtype: str, room_bytes: int):
+        """The state engine's policy when the whole cache does not fit (core/state/policy.py): candidates priced from
+        the container's declared KV at the minimum the request needs. `pages` at full precision; `offload` only on a
+        DISCRETE device (on unified memory the host is the same pool); output-changing ones carry the quality cost the
+        vendor file measures for them (memory.state_policy_costs), None when unmeasured, so they are never taken."""
+        from neurobrix.core.state.policy import PolicyCandidate, choose_policy
+        need = self._kv_min_bytes(container, target_dtype)
+        costs = getattr(self, "_state_policy_costs", None) or {}
+        cands = [PolicyCandidate("pages", need, exact=True),
+                 PolicyCandidate("quantize_kv", need // 2, exact=False,
+                                 quality_cost=(costs.get("quantize_kv") or {}).get("cost"),
+                                 cost_source=(costs.get("quantize_kv") or {}).get("source", ""))]
+        return choose_policy(cands, int(room_bytes))
 
     def _compute_kv_cache_plan(
         self, container, target_dtype: str, remaining_vram_bytes: int
