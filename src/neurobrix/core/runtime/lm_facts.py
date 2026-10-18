@@ -161,7 +161,8 @@ def decoder_cache_facts(dag: Optional[Mapping[str, Any]]) -> Optional[Dict[str, 
     if plan is None or not positions_are_offset_by(plan):
         return None
     return {"num_layers": int(plan["num_layers"]), "num_heads": int(plan["num_heads"]),
-            "head_dim": int(plan["head_dim"]), "plan": plan}
+            "head_dim": int(plan["head_dim"]), "kv_heads_at_op": int(plan["kv_heads_at_op"]),
+            "v_head_dim": int(plan["v_head_dim"]), "plan": plan}
 
 
 def decoder_cache_from_plan(kv_plan, facts: Mapping[str, Any], max_tokens: int, decoder: str):
@@ -174,12 +175,19 @@ def decoder_cache_from_plan(kv_plan, facts: Mapping[str, Any], max_tokens: int, 
             f"ZERO FALLBACK: the plan carries no KV cache for the decoder '{decoder}'. Prism prices the "
             f"cache of every decoding flow (core/runtime/lm_facts.decode_lm_component, the encoder-decoder "
             f"stage included); a plan without one did not see this flow — re-plan, never size it here.")
-    got = (int(kv_plan.num_layers), int(kv_plan.num_kv_heads), int(kv_plan.k_head_dim), int(kv_plan.v_head_dim))
-    want = (facts["num_layers"], facts["num_heads"], facts["head_dim"], facts["head_dim"])
-    if got != want:
+    # The plan's cache keeps the KEY-VALUE heads the build declared (unexpanded); the graph may hand the op
+    # its keys grouped (the same count) or already expanded to the query heads (a multiple: the wrappers
+    # un-expand by that ratio) — GLM-4.1V's 2 key-value heads under 32 query heads, 2026-10-18.
+    got = (int(kv_plan.num_layers), int(kv_plan.k_head_dim), int(kv_plan.v_head_dim))
+    want = (facts["num_layers"], facts["head_dim"], facts.get("v_head_dim", facts["head_dim"]))
+    kv_heads, at_op, q_heads = int(kv_plan.num_kv_heads), facts.get("kv_heads_at_op", facts["num_heads"]), facts["num_heads"]
+    heads_fit = kv_heads == at_op or (at_op == q_heads and kv_heads > 0 and q_heads % kv_heads == 0)
+    if got != want or not heads_fit:
         raise RuntimeError(
-            f"ZERO FALLBACK: the plan's KV cache for '{decoder}' is {got} (layers, heads, k, v head dim) "
-            f"and the decoder graph's self-attention is {want} — the plan priced another decoder.")
+            f"ZERO FALLBACK: the plan's KV cache for '{decoder}' is {got[0]} layers, {kv_heads} key-value heads, "
+            f"k/v head dims {got[1]}/{got[2]}, and the decoder graph's self-attention is {want[0]} layers, "
+            f"{at_op} heads at the op ({q_heads} query heads), head dims {want[1]}/{want[2]} — the plan priced "
+            f"another decoder.")
     if int(kv_plan.max_cache_len) < int(max_tokens):
         raise RuntimeError(
             f"ZERO FALLBACK: the plan's KV cache for '{decoder}' holds {kv_plan.max_cache_len} positions "

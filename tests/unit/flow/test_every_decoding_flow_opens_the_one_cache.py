@@ -211,3 +211,35 @@ def test_the_topk_record_is_one_format_for_both_engines(tmp_path, monkeypatch):
     a, b = [json.loads(l) for l in path.read_text().splitlines()]
     assert a["ids"] == b["ids"] == [4, 1, 2, 0] and a["margin12"] == b["margin12"] == 4.25
     assert (a["engine"], b["engine"], a["step"]) == ("torch", "triton", 3)
+
+
+# ── the gate of 2026-10-18 22:56 (12 red of 98): grouped keys ──────────────────────────────────────────────────
+def test_a_plan_with_the_declared_key_value_heads_fits_a_graph_whose_keys_are_expanded_to_the_query_heads():
+    """GLM-4.1V: 2 key-value heads declared, the graph hands the op keys expanded to its 32 query heads; MiniCPM-o,
+    Voxtral, Ming, Qwen3-Omni, openaudio alike. The plan is the declared cache; the check accepts a multiple."""
+    from neurobrix.core.runtime.lm_facts import decoder_cache_facts, decoder_cache_from_plan
+    d = _decoder_dag("input")
+    for uid in (f"{SDPA}::0", f"{SDPA}::1", f"{SDPA}::2"):
+        d["ops"][uid]["input_shapes"] = [[1, 20, 7, 64], [1, 20, 64, 7], [1, 20, 7, 64]]
+        d["ops"][uid]["attributes"] = {"nbx_k_pre_transposed": True}
+    facts = decoder_cache_facts(d)
+    assert (facts["num_heads"], facts["kv_heads_at_op"], facts["head_dim"], facts["v_head_dim"]) == (20, 20, 64, 64)
+    plan = types.SimpleNamespace(num_layers=3, num_kv_heads=4, k_head_dim=64, v_head_dim=64, max_cache_len=448)
+    assert decoder_cache_from_plan(plan, facts, 64, "dec") is plan          # 4 divides 20: expanded keys
+    plan.num_kv_heads = 20
+    assert decoder_cache_from_plan(plan, facts, 64, "dec") is plan          # the op's own count
+    plan.num_kv_heads = 3
+    with pytest.raises(RuntimeError, match="priced another decoder"):
+        decoder_cache_from_plan(plan, facts, 64, "dec")
+    plan.num_kv_heads, plan.v_head_dim = 4, 32
+    with pytest.raises(RuntimeError, match="priced another decoder"):
+        decoder_cache_from_plan(plan, facts, 64, "dec")
+
+
+def test_both_interceptors_accept_the_graphs_enable_gqa_kwarg():
+    """chatterbox's t3 backbone traces its SDPA with enable_gqa=True; the interceptors are called with the op's kwargs."""
+    from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper
+    assert "enable_gqa" in inspect.signature(KVCacheAttentionWrapper.intercept_attention).parameters
+    pytest.importorskip("triton")
+    from neurobrix.triton.kv_cache import TritonAttentionInterceptor
+    assert "enable_gqa" in inspect.signature(TritonAttentionInterceptor.intercept).parameters

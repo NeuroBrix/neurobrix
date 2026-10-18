@@ -71,7 +71,7 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
     from_tokens = _derived_from(dag, {t for t in inputs if t != encoder_input})
     self_uids: List[str] = []
     cross_uids: List[str] = []
-    num_heads = head_dim = None
+    num_heads = head_dim = kv_heads_at_op = v_head_dim = None
     for uid, op in ops.items():
         if op.get("op_type") not in _SDPA_TYPES:
             continue
@@ -84,10 +84,19 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
         shapes = op.get("input_shapes") or []
         if shapes and len(shapes[0]) == 4 and num_heads is None:
             num_heads, head_dim = int(shapes[0][1]), int(shapes[0][3])
+            attrs = op.get("attributes") or {}
+            # the keys and values as the graph hands them to the op: their head axis (grouped keys may
+            # already be expanded to the query heads by the graph) and the value's head dim (a value
+            # handed pre-transposed, [B, H, D, S], carries it on axis 2)
+            if len(shapes) >= 3 and len(shapes[1]) == 4 and len(shapes[2]) == 4:
+                kv_heads_at_op = int(shapes[1][1])
+                v_head_dim = int(shapes[2][2] if attrs.get("nbx_v_pre_transposed") else shapes[2][3])
     if not self_uids:
         return None
     if num_heads is None:
         raise RuntimeError("ZERO FALLBACK: decoder self-attention has no traced q shape")
+    if kv_heads_at_op is None:
+        kv_heads_at_op, v_head_dim = num_heads, head_dim
     positions_input = next((t for t in inputs if t == "input::position_ids"), None)
     if positions_input is not None:
         # the caller positions every token: no arange, slice or count in the graph is offset
@@ -98,6 +107,7 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
         position_cumsum_uids = _positional_cumsums(dag, from_tokens)
     return {
         "num_layers": len(self_uids), "num_heads": num_heads, "head_dim": head_dim,
+        "kv_heads_at_op": kv_heads_at_op, "v_head_dim": v_head_dim,
         "self_attn_uids": self_uids, "cross_attn_uids": cross_uids,
         "arange_uids": arange_uids, "position_slice_uids": position_slice_uids,
         "position_cumsum_uids": position_cumsum_uids, "positions_input": positions_input,
