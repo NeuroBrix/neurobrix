@@ -353,6 +353,11 @@ memory:
   # and drops the plans that need more (pytorch aten/src/ATen/native/cudnn/Conv_v8.cpp, generate_and_filter_plans /
   # try_plans, v2.6.0). Measured 2026-10-17, V100 16 GB: mochi's and Wan's causal-VAE chunks ran beside their price.
   compiled_conv3d_workspace_input_fraction: 0.0
+  # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
+  # fraction of the op's first input's bytes (core/prism/op_workspace.py `op_workspace_fractions`). ATen's CUDA reductions
+  # and norms run in one kernel pass with no full-size intermediate: none observed in the per-op live probes of the Wan
+  # and mochi causal-VAE chunks on V100 (2026-10-17, nbx/tmp/stream_tri_mem.py). An empty table: nothing beyond the price.
+  compiled_op_workspace: {}
   # The state engine's pages (docs/design/state-engine.md §4.3, core/state/price.page_tokens): a page of one layer is
   # raised to at least this many bytes. Each layer's pool is one contiguous allocation, so the granule that matters is
   # the global-memory transaction a page row is read in: 128-byte lines (NVIDIA CUDA C++ Best Practices Guide,

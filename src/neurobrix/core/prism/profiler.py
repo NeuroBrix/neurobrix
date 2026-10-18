@@ -968,6 +968,7 @@ class ActivationProfiler:
         attention_scratch=None,
         handed_inputs: bool = False,
         conv3d_workspace=None,
+        op_workspace=None,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -1257,6 +1258,22 @@ class ActivationProfiler:
                                  else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
                     w_shape = self._resolve_shape(self.tensors.get(op["input_tensor_ids"][1], {}), symbol_map)
                     in_op += int(conv3d_workspace(x_shape, w_shape, op.get("attributes") or {}, x_width, out_width))
+            # what the engine's implementation of this op holds beside its input and output while it runs, as the
+            # vendor file states it per op type (`op_workspace(op_type, x_shape, x_width, out_width) -> bytes`,
+            # core/prism/op_workspace.py `compiled_op_workspace`): MPS's vector norm, its full-size intermediates
+            if (op_workspace is not None and not op_is_zero_alloc and op.get("input_tensor_ids")
+                    and op.get("op_type") != "aten::convolution"):
+                x_tid = op["input_tensor_ids"][0]
+                x_meta = self.tensors.get(x_tid)
+                if x_meta is not None:
+                    x_shape = self._resolve_shape(x_meta, symbol_map)
+                    x_width = next((cw for ct, cw in op_casts.get(op_uid, ()) if ct == x_tid), None)
+                    if x_width is None:
+                        x_width = widths[x_tid] if widths is not None else self._compute_size([1], x_meta, dtype_bytes)
+                    out_tid0 = output_tids[0] if output_tids else None
+                    out_width = ((widths[out_tid0] if widths is not None else self._compute_size([1], self.tensors.get(out_tid0, {}), dtype_bytes))
+                                 if out_tid0 else 0)
+                    in_op += int(op_workspace(op.get("op_type"), x_shape, x_width, out_width))
             # the operand copies the engine's precision wrapper makes while the op runs (`ExecutedWidths.casts`)
             for cast_tid, cast_width in (op_casts.get(op_uid, ()) if not op_is_zero_alloc else ()):
                 n_cast = 1

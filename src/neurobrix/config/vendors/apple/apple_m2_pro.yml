@@ -232,6 +232,13 @@ memory:
   # extra; (2,96,26,256,256) -> 633 MB; (2,96,6,512,512) -> 643 MB. Wan2.1-VACE's encoder chunk ran 19.3 GB against
   # 10.9 GB priced without it.
   compiled_conv3d_workspace_input_fraction: 1.0
+  # What the compiled engine's other ops hold beside input, output and operand copies while they run, per op type, as a
+  # fraction of the op's first input's bytes (core/prism/op_workspace.py). MPS decomposes aten::linalg_vector_norm into
+  # full-size intermediates before the fp32 copy the wrapper makes: VACE's 52-frame encoder chunk held 9.95 GiB at that op
+  # where the price said 3.2 GB live (the Mac, 2026-10-18 08:10). `null` = declared, not measured: a plan holding the op is
+  # refused by name on this device until the Mac's ceiling bisection of the op alone (T = 4, 8, 16) writes the value.
+  compiled_op_workspace:
+    aten::linalg_vector_norm: null
   compiled_sdpa_scores_device_fraction: 0.1     # provenance: chosen 2026-10-15 under the plan's activation headroom; the Mac measures it
   # MPS runs asynchronously: a chunk's freed scores stay unusable until the GPU has run the command that used them, so
   # chunks enqueued without a wait are all alive at once (the Mac, 2026-10-15 08:01: Allegro 720x1280, 672 chunks of
