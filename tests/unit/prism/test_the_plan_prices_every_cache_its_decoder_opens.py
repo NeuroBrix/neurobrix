@@ -46,6 +46,24 @@ def test_the_lm_facts_are_the_packages_else_the_components_extracted_values():
         == (28, 12, 1536, None)
 
 
+def test_a_decoder_without_config_facts_takes_them_from_its_declared_state():
+    """canary-qwen's llm and chatterbox's t3_cfg: no lm_config, extracted values without an architecture; the
+    KV state the build declares (read from the graph) is the record the facts are read from."""
+    topo = {"components": {"perception": {}, "llm": {}},
+            "flow": {"type": "audio_llm", "audio": {"stages": [{"component": "perception", "execution": "forward"},
+                                                               {"component": "llm", "execution": "autoregressive"}]}},
+            "extracted_values": {"llm": {"dtype": "bfloat16"}},
+            "state": {"llm": [{"kind": "kv", "layers": 28, "kv_heads": 16, "k_dim": 128, "v_dim": 128,
+                               "dtype": "bfloat16", "window": 40960}]}}
+    assert F.decode_lm_component(topo, topo["components"]) == "llm"
+    facts = F.lm_config_of({}, topo, "llm")
+    assert (facts["num_layers"], facts["num_kv_heads"], facts["head_dim"], facts["max_position_embeddings"]) == (28, 16, 128, 40960)
+    assert facts["num_heads"] is None and facts["hidden_size"] is None
+    import pytest
+    with pytest.raises(RuntimeError, match="declares no KV state"):
+        F.lm_config_of({}, {**topo, "state": {}}, "llm")
+
+
 def test_the_decoder_is_named_by_the_flow():
     assert F.decode_lm_component(VIBEVOICE_TOPO, VIBEVOICE_TOPO["components"]) == "model.language_model"
     assert F.decode_lm_component(JANUS_TOPO, JANUS_TOPO["components"]) == "language_model"
