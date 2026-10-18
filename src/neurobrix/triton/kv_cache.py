@@ -64,7 +64,9 @@ class TritonAttentionInterceptor:
 
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
                   is_causal=True, scale=None, layer_idx=-1,
-                  k_pre_transposed=None):
+                  k_pre_transposed=None, enable_gqa=None):
+        # `enable_gqa`: the graph's own SDPA kwarg (grouped keys); the interceptor groups keys by its
+        # own ratio (`_gqa_group_size`), so the kwarg is accepted and carries nothing more here.
         """Intercept SDPA: update KV cache for decode, passthrough for prefill.
 
         Self-managed dtype (Phase 1 opt-in cleanup): Flash Attention works

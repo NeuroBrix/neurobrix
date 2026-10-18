@@ -155,9 +155,13 @@ class KVCacheAttentionWrapper:
         layer_idx: int = -1,
         k_pre_transposed: Optional[bool] = None,
         v_pre_transposed: Optional[bool] = None,
+        enable_gqa: bool = False,
     ) -> torch.Tensor:
         """
         Intercept SDPA for KV cache injection.
+        `enable_gqa` is the graph's own SDPA kwarg (a decoder traced with grouped keys, chatterbox's
+        t3 backbone, 2026-10-18): the cache keeps the key-value heads unexpanded and re-expands them
+        for the call, so the final SDPA names it only when its keys still carry fewer heads than q.
 
         DEVICE LOCALITY: Cache is allocated on k.device automatically.
         This ensures FGP/TP compatibility without explicit device management.
@@ -324,7 +328,8 @@ class KVCacheAttentionWrapper:
             attn_mask=attn_mask,
             dropout_p=dropout_p,
             is_causal=use_causal,
-            scale=scale
+            scale=scale,
+            **({"enable_gqa": True} if k_full.shape[1] != q.shape[1] else {}),
         )
 
     def reset_for_new_sequence(self) -> None:
