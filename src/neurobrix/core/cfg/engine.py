@@ -301,9 +301,10 @@ class CFGEngine:
         # Batch timestep
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
+        # The timestep keeps the scheduler's dtype: the DtypeEngine decides its width at the
+        # component's entry (`tensor_resolver.get_input_dtype`); cast here to the state's dtype, a
+        # float64 timestep entered a bf16 component as bf16 (777 → 776, Allegro's halo, 2026-10-18).
         batched_timestep = timestep.expand(2)
-        if batched_timestep.dtype != batched_state.dtype:
-            batched_timestep = batched_timestep.to(batched_state.dtype)
 
         # Set batched inputs
         self._ctx.variable_resolver.set(encoder_key, batched_hidden)

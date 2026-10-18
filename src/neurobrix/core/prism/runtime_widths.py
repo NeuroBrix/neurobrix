@@ -51,6 +51,7 @@ from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
 from neurobrix.triton import dtype as _tdt
 from neurobrix.triton.weight_loader import stored_dtype_in_compute
+from neurobrix.core.dtype import itemsize as _itemsize
 
 
 # ---------------------------------------------------------------------------
@@ -397,10 +398,14 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
         if name not in _FLOAT:
             out[tid] = name
         elif tid in graph_inputs or meta.get("is_input"):
-            # A component input is cast to C (TritonDtypeEngine.cast_runtime_inputs,
-            # triton/dtype.py:427-487; GraphExecutor._prepare_execution on the ATen branch);
-            # a SEAM enters in the dtype its producer gave it (dtype.py:467-476).
-            out[tid] = ((seams or {}).get(tid, name) if is_seam_tensor(meta) else c)
+            # A component input traced at or below C's width is cast to C; one traced wider enters
+            # at its traced width as the branch stores it (TritonDtypeEngine._target_dtype_for_input;
+            # tensor_resolver.get_input_dtype + DtypeEngine.storage_dtype on the ATen branch); a SEAM
+            # enters in the dtype its producer gave it.
+            if is_seam_tensor(meta):
+                out[tid] = (seams or {}).get(tid, name)
+            else:
+                out[tid] = c if _itemsize.itemsize(name) <= _itemsize.itemsize(c) else _itemsize.storage_dtype(name, stores_fp64)
         else:
             out[tid] = rule.weight_dtype(tid, name)
 

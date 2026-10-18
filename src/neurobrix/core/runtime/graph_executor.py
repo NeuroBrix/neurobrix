@@ -4268,8 +4268,11 @@ class GraphExecutor:
                                 _cands.append(_pos)
                         if len(_cands) == 1:
                             val = val.unsqueeze(_cands[0])
-                # Convert to expected dtype from graph
+                # Convert to expected dtype from graph; a traced float64 is held as this device
+                # stores it (`DtypeEngine.storage_dtype`, the one owner of that narrowing)
                 expected_dtype = dtype_resolver.get_input_dtype(input_name)
+                if expected_dtype is not None and self._dtype_engine is not None and expected_dtype.is_floating_point:
+                    expected_dtype = self._dtype_engine.storage_dtype(expected_dtype)
                 if expected_dtype is not None and val.dtype != expected_dtype:
                     val = val.to(expected_dtype)
                 ctx.inputs[input_name] = val.to(self.device)
@@ -4960,19 +4963,21 @@ class GraphExecutor:
                 if not found:
                     value = None
 
-            # Apply Prism dtype + device conversion (same logic as sequential mode)
+            # The entry dtype is ONE rule, the resolver's (`tensor_resolver.get_input_dtype`, as the
+            # op-by-op path applies it in `_prepare_execution`): an input traced at or below the
+            # compute width enters at the compute dtype, one traced wider at its traced width as
+            # the device stores it, a SEAM in the dtype its producer gave it (None: no cast —
+            # narrowed here, an fp32 island became bf16 at every piece entry and the compiled
+            # pieces diverged 1.1 % from the whole component, PixArt T5, 2026-09-24). This site
+            # used to narrow every float value to the compute dtype on its own, after the rule had
+            # already been applied, and undid it (an fp32 timestep read back 2048 for 2049,
+            # 2026-10-18).
             if is_torch_tensor(value):
-                # For floating-point tensors, convert to Prism dtype — except a SEAM tensor (a
-                # streamed piece's input): it arrives in the dtype its producing op gave it, as
-                # inside the whole graph. Narrowed here, an fp32 island became bf16 at every piece
-                # entry and the compiled pieces diverged 1.1 % from the whole component
-                # (PixArt T5, 2026-09-24). Same rule as `get_input_dtype` (sequential) and
-                # TritonDtypeEngine._target_dtype_for_input (both triton modes).
-                torch_dtype = self._placement_torch_dtype()
-                from neurobrix.core.prism.layer_partition import is_seam_tensor
-                _seam = is_seam_tensor(tensors.get(tid))
-                if value.dtype.is_floating_point and value.dtype != torch_dtype and not _seam:
-                    value = value.to(torch_dtype)
+                expected = TensorResolver(self._ctx).get_input_dtype(input_name)
+                if expected is not None and self._dtype_engine is not None and expected.is_floating_point:
+                    expected = self._dtype_engine.storage_dtype(expected)
+                if expected is not None and value.dtype != expected:
+                    value = value.to(expected)
                 # Move input to executor's device (critical for FGP/multi-device)
                 if str(value.device) != str(self.device):
                     value = value.to(self.device)

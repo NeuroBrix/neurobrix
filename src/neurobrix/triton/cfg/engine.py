@@ -372,9 +372,10 @@ class TritonCFGEngine:
         # Batch timestep
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
+        # The timestep keeps the scheduler's dtype: the TritonDtypeEngine decides its width at the
+        # component's entry (`_target_dtype_for_input`); cast here to the state's dtype, a wide
+        # timestep entered a bf16 component as bf16 (777 → 776, Allegro's halo, 2026-10-18).
         batched_timestep = timestep.expand(2)
-        if batched_timestep._dtype != batched_state._dtype:
-            batched_timestep = batched_timestep.to(batched_state._dtype)
 
         # Set batched inputs
         self._ctx.variable_resolver.set(encoder_key, batched_hidden)

@@ -715,9 +715,16 @@ class TritonDtypeEngine:
     def _target_dtype_for_input(self, tid, graph_tensors):
         """Resolve the expected NBXDtype for an input tensor id.
 
-        Floating graph dtype → compute_dtype (Prism).
-        Non-floating graph dtype → preserve graph dtype.
-        Unknown / missing → None (no cast).
+        A floating graph input traced at or below the compute dtype's width → compute_dtype (Prism);
+        one traced WIDER enters at its traced width, as this branch stores it (`storage_dtype`:
+        float64 → float32 where the branch holds no fp64) — its first consumer casts it as that op's
+        class dictates, exactly as for any wide tensor inside the graph. Narrowing every float
+        input to the compute dtype rounded a value the graph needs whole: a timestep traced float64
+        fed to a bf16 component on Metal entered as bf16, which holds integers exactly only to 256
+        (777 → 776; Allegro's halo, 2026-10-18). Non-floating graph dtype → preserved.
+        Unknown / missing → None (no cast). The compiled branch's rule is the same sentence
+        (`core/runtime/graph/tensor_resolver.get_input_dtype`), and Prism prices the seed alike
+        (`core/prism/runtime_widths`).
         """
         meta = graph_tensors.get(tid) or {}
         # A SEAM tensor (a streamed piece's input, `layer_partition.build_segment_graph`) is not a
@@ -741,7 +748,9 @@ class TritonDtypeEngine:
         if graph_dt is None:
             return None
         if graph_dt in _FLOATING:
-            return self.compute_dtype
+            if _itemsize.itemsize(graph_dt) <= _itemsize.itemsize(self.compute_dtype):
+                return self.compute_dtype
+            return self.storage_dtype(graph_dt)
         return graph_dt
 
     def storage_dtype(self, dtype: NBXDtype) -> NBXDtype:

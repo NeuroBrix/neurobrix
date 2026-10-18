@@ -25,7 +25,12 @@ from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_w
 NONE = conservative_contract("test: no contract")
 
 
-def _t(shape, dtype="float32", **kw):
+def _t(shape, dtype=None, **kw):
+    """A traced tensor. A component INPUT is traced at the component's dtype (float16 here) unless the test says
+    otherwise: it enters at the compute dtype (`runtime_widths`: an input traced wider enters at its width, the rule
+    of 2026-10-18); a seam keeps its producer's traced dtype; anything else is traced float32 as these graphs were."""
+    if dtype is None:
+        dtype = "float16" if kw.get("is_input") and not kw.get("seam_alias_of") else "float32"
     return {"shape": list(shape), "dtype": dtype, **kw}
 
 

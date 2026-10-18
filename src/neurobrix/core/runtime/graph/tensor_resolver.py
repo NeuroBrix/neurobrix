@@ -373,13 +373,19 @@ class TensorResolver:
                 if dtype_str:
                     graph_dtype = self.parse_dtype(dtype_str)
                     if graph_dtype is not None:
-                        # For floating-point types, use Prism dtype as source of truth
-                        # Graph may have been traced under autocast with different dtype
+                        # A floating input traced at or below the compute dtype's width enters at the
+                        # compute dtype (Prism's); one traced WIDER enters at its traced width — the
+                        # executor maps float64 through the DtypeEngine's storage rule — and its first
+                        # consumer casts it as that op's class dictates. Narrowing every float input
+                        # rounded what the graph needs whole (a float64 timestep on a bf16 component:
+                        # 777 → 776, Allegro's halo on Metal, 2026-10-18). The Triton rule is the
+                        # same sentence (`triton/dtype.TritonDtypeEngine._target_dtype_for_input`).
                         if graph_dtype.is_floating_point:
-                            return self._ctx.dtype  # Prism dtype
-                        else:
-                            # For non-floating types (int64, bool), use graph dtype
+                            if graph_dtype.itemsize <= self._ctx.dtype.itemsize:
+                                return self._ctx.dtype  # Prism dtype
                             return graph_dtype
+                        # Non-floating (int64, bool): the graph's own
+                        return graph_dtype
         return None
 
     def parse_dtype(self, dtype_str: str) -> Optional[torch.dtype]:

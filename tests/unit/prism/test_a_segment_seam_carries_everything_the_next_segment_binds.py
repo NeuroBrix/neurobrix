@@ -216,9 +216,12 @@ def test_a_seam_tensor_keeps_its_dtype_at_every_engines_entry(seg1):
     eng = TritonDtypeEngine.__new__(TritonDtypeEngine)
     from neurobrix.kernels.nbx_tensor import parse_dtype
     eng.compute_dtype = parse_dtype("bfloat16")
+    eng.stores_fp64 = False
     assert eng._target_dtype_for_input(_alias(seg1), seg1["tensors"]) is None
-    plain = {"x": {"dtype": "float32"}}
-    assert eng._target_dtype_for_input("x", plain) == parse_dtype("bfloat16")
+    # a component input traced at the compute width IS cast to the compute dtype; one traced wider enters at its
+    # width (the entry rule of 2026-10-18) — a seam alone is left as it comes
+    assert eng._target_dtype_for_input("x", {"x": {"dtype": "float16"}}) == parse_dtype("bfloat16")
+    assert eng._target_dtype_for_input("x", {"x": {"dtype": "float32"}}) == parse_dtype("float32")
 
 
 # ───────────── 2026-09-25: a seam inside a LIST argument is aliased too ─────────────
