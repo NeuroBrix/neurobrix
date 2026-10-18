@@ -15,7 +15,11 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 def lm_config_of(defaults: Optional[Mapping[str, Any]], topology: Optional[Mapping[str, Any]],
                  lm_name: Optional[str]) -> Dict[str, Any]:
     """The LM facts a decode cache is sized from: the package's `lm_config`, else the LM
-    component's extracted values (the build records them per component)."""
+    component's extracted values (the build records them per component), else the KV state the
+    build declares for that decoder (topology `state`, read from its graph: layers, key-value heads,
+    head dims, window — the record a staged decoder whose vendor config names no architecture
+    carries; canary-qwen's llm and chatterbox's t3_cfg, 2026-10-18). Query heads and hidden size
+    are then the extracted values' or None: a reader that needs them refuses by name."""
     lm_config = dict((defaults or {}).get("lm_config") or {})
     if lm_config:
         return lm_config
@@ -25,9 +29,21 @@ def lm_config_of(defaults: Optional[Mapping[str, Any]], topology: Optional[Mappi
                                  ("hidden_size", ("hidden_size",)))
                if not any(extracted.get(a) for a in alts)]
     if missing:
-        raise RuntimeError(
-            f"ZERO FALLBACK: the decoder '{lm_name}' has no lm_config and its extracted values lack "
-            f"{', '.join(missing)} — its decode cache cannot be sized; the build must record them.")
+        kv = next((e for e in (((topology or {}).get("state") or {}).get(lm_name) or []) if e.get("kind") == "kv"), None)
+        if kv is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: the decoder '{lm_name}' has no lm_config, its extracted values lack "
+                f"{', '.join(missing)} and the container declares no KV state for it — its decode cache cannot "
+                f"be sized; the build must record them.")
+        return {
+            "num_layers": int(kv["layers"]),
+            "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
+            "hidden_size": extracted.get("hidden_size"),
+            "num_kv_heads": int(kv["kv_heads"]),
+            "head_dim": int(kv["k_dim"]),
+            "max_position_embeddings": kv.get("window") or extracted.get("max_position_embeddings"),
+            "source": "state",
+        }
     return {
         "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
         "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
