@@ -473,6 +473,11 @@ class ExecutionPlan:
     #: engines (core/cfg, triton/cfg) read it from here and run the same prepared batch branch by
     #: branch. Empty for every other plan.
     cfg_split_components: List[str] = field(default_factory=list)
+    #: {component: {"fed": n, "per_pass": k}} — a component the flow feeds a stack of n independent items that its
+    #: vendor's reference runs k items at a time (`FlowBindings.split_batches`, from the container's declaration with
+    #: its source). Every figure of the plan is priced at k; the executor runs the n items in n/k passes and joins the
+    #: outputs on the batch axis (`Executor._execute_component`). Exact: the items share nothing. Empty otherwise.
+    batch_split_components: Dict[str, Dict[str, int]] = field(default_factory=dict)
     # What this plan holds in HOST memory on its engine (host_footprint.py): a host ledger reserves
     # it, a measured peak judges it.
     host_footprint: Dict = field(default_factory=dict)
@@ -2496,6 +2501,10 @@ class PrismSolver:
         # The guidance split the cascade was re-run under (`_split_guidance_batch`): the CFG engines
         # run these components' branches one pass each, the batch every figure above was priced at.
         plan.cfg_split_components = list(self._cfg_split)
+        # The components whose fed items the vendor's reference runs in separate passes: priced per pass above, run
+        # per pass by the executor (the declaration is the container's, read through the request's flow bindings).
+        _flow = getattr(input_config, "flow", None)
+        plan.batch_split_components = (_flow.split_batches(list(plan.components)) if _flow is not None else {})
         if self._cfg_split:
             plan.selection_reason = (
                 f"{plan.selection_reason} — guidance branches of {', '.join(self._cfg_split)} run one "
@@ -8582,6 +8591,8 @@ def plan_record(plan: "ExecutionPlan") -> dict:
                            "v_head_dim": getattr(kv, "v_head_dim", None)}
     if plan.cfg_split_components:
         rec["cfg_split_components"] = list(plan.cfg_split_components)
+    if getattr(plan, "batch_split_components", None):
+        rec["batch_split_components"] = {k: dict(v) for k, v in plan.batch_split_components.items()}
     if getattr(plan, "layer_stream_chunks", None):
         rec["layer_stream_chunks"] = {k: [dict(c) for c in v] for k, v in plan.layer_stream_chunks.items()}
     if plan.host_footprint:
@@ -8636,6 +8647,9 @@ def explain_plan(plan: "ExecutionPlan") -> str:
     if plan.cfg_split_components:
         lines.append(f"guidance        {', '.join(plan.cfg_split_components)}: [uncond, cond] run one pass "
                      f"each (the reason is the plan's why)")
+    for _cn, _bs in sorted((getattr(plan, "batch_split_components", None) or {}).items()):
+        lines.append(f"passes          {_cn}: its {_bs['fed']} independent items run {_bs['per_pass']} per pass, as its "
+                     f"vendor's reference does (the container's declaration); priced at {_bs['per_pass']}")
     for _cn, _chunks in sorted((getattr(plan, "layer_stream_chunks", None) or {}).items()):
         for _c in _chunks:
             lines.append(f"sliced          {_cn} {_c['first_op']}..{_c['last_op']}: {_c['count']} slices of "

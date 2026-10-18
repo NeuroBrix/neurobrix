@@ -1212,7 +1212,57 @@ class RuntimeExecutor:
         comp_inputs = self._input_synthesizer.synthesize_missing_inputs(comp_name, comp_inputs)
         comp_inputs = self._input_synthesizer.apply_shape_transforms(comp_name, comp_inputs)
 
-        # Execute: Check for tiling first, then TP, then normal
+        # A component the flow feeds a stack of independent items that its vendor's reference runs in separate
+        # passes (`ExecutionPlan.batch_split_components`, the container's declaration): run item group by item
+        # group, at the batch every figure of the plan was priced at, and join the outputs on the batch axis.
+        split = (getattr(self.plan, "batch_split_components", None) or {}).get(comp_name)
+        if split:
+            output = self._run_in_item_passes(comp_name, phase, executor, comp_inputs,
+                                              int(split["fed"]), int(split["per_pass"]))
+        else:
+            output = self._run_component_once(comp_name, phase, executor, comp_inputs)
+        # Store outputs
+        self._output_extractor.store_component_outputs(comp_name, output)
+        return output
+
+    def _run_in_item_passes(self, comp_name: str, phase: str, executor, comp_inputs: Dict[str, Any],
+                            fed: int, per_pass: int) -> Any:
+        """`comp_name` run over its `fed` items `per_pass` at a time: every tensor input whose leading extent is
+        `fed` is cut into item groups (the others are handed whole to each pass), each group runs the component's own
+        cascade, and the outputs of leading extent `per_pass` are joined on the batch axis in order — in the run's
+        tensor kind (torch or NBXTensor), as the temporal stream runner joins its chunks. An output no pass batches
+        (a scalar, a table) is the first pass's; a later pass that returns another is refused by name."""
+        from neurobrix.core.module.temporal_stream_runner import _empty_like_shape, _is_nbx
+        if fed <= 0 or per_pass <= 0 or fed % per_pass:
+            raise ValueError(f"ZERO FALLBACK: {comp_name}: {per_pass} items per pass do not cover {fed} items")
+        def leading(t):
+            return int(t.shape[0]) if hasattr(t, "shape") and len(t.shape) > 0 else None
+        joined: Dict[str, Any] = {}
+        single_out = None
+        passes = fed // per_pass
+        for k in range(passes):
+            lo, hi = k * per_pass, (k + 1) * per_pass
+            pass_inputs = {name: (t[lo:hi].contiguous() if leading(t) == fed else t) for name, t in comp_inputs.items()}
+            out = self._run_component_once(comp_name, phase, executor, pass_inputs)
+            del pass_inputs
+            items = out if isinstance(out, dict) else {None: out}
+            for key, y in items.items():
+                if leading(y) == per_pass:
+                    if key not in joined:
+                        shape = list(y.shape); shape[0] = fed
+                        joined[key] = _empty_like_shape(y, shape)
+                    joined[key][lo:hi] = y
+                elif key not in joined:
+                    joined[key] = y
+            del out, items
+        if None in joined:
+            return joined[None]
+        return joined
+
+    def _run_component_once(self, comp_name: str, phase: str, executor, comp_inputs: Dict[str, Any]) -> Any:
+        """One pass of `comp_name` on `comp_inputs`: the vendor's tiling, the temporal stream, the spatial tiling, the
+        strategy's execution or the plain run — whichever the plan says. The cascade `_execute_component` ran inline
+        until 2026-10-18; it runs here so a component split into item passes runs it once per pass."""
         output = None
 
         # VENDOR TILING: the cut the component's vendor's own reference makes (declared with its source), each
@@ -1266,8 +1316,6 @@ class RuntimeExecutor:
             else:
                 output = executor.run(comp_inputs)
 
-        # Store outputs
-        self._output_extractor.store_component_outputs(comp_name, output)
         return output
 
     def _is_tp_component(self, comp_name: str) -> bool:

@@ -270,6 +270,39 @@ class FlowBindings:
                if conn.get("from") == "global.image"}
         return len(VACE_CONTROL_CLIPS) if comp in fed else None
 
+    def pass_batch(self, comp: str) -> Optional[int]:
+        """The batch `comp` runs in ONE PASS when the flow feeds it a stack of independent items: the stack's size,
+        or fewer when the vendor's own reference runs them in separate passes and the container says so
+        (`vace_control_conditioning.items_per_pass`, written by Forge from the registry with its source — diffusers'
+        WanVACEPipeline.prepare_video_latents encodes `inactive` and `reactive` as two calls of one item). None for a
+        component the flow does not feed such a stack. A declared value that is not a positive divisor of the stack is
+        refused by name: the passes would not cover the stack."""
+        fed = self.vace_control_batch(comp)
+        if fed is None:
+            return None
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        loop = (self.flow.get("loop") or {}).get("components") or []
+        decl = next((get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)
+                     for c in loop if get_component_flag(self.container_name, c, "vace_control_conditioning", default=None)), None)
+        per = (decl or {}).get("items_per_pass") if isinstance(decl, dict) else None
+        if per is None:
+            return fed
+        if not isinstance(per, int) or per <= 0 or fed % per:
+            raise ValueError(f"ZERO FALLBACK: {comp}'s control pair declares items_per_pass={per!r}, which does not "
+                             f"divide the {fed} items the flow feeds it")
+        return per
+
+    def split_batches(self, components) -> Dict[str, Dict[str, int]]:
+        """{component: {"fed": the items the flow feeds it, "per_pass": the items one pass takes}} for every component
+        of `components` the vendor's reference runs in more than one pass (`pass_batch` below its fed batch): what
+        `ExecutionPlan.batch_split_components` records and the executor runs item group by item group."""
+        out: Dict[str, Dict[str, int]] = {}
+        for comp in components:
+            fed, per = self.vace_control_batch(comp), self.pass_batch(comp)
+            if fed is not None and per is not None and per < fed:
+                out[comp] = {"fed": int(fed), "per_pass": int(per)}
+        return out
+
     def overrides(self, dag: Dict[str, Any], input_config) -> Dict[str, int]:
         """{symbol id: value} this component's flow imposes on top of the name-driven map."""
         comp = dag.get("component_name")
@@ -286,7 +319,7 @@ class FlowBindings:
         if view:
             out.update({sid: v for sid, v in bind_from_shapes(dag, view).items()
                         if (table.get(sid) or {}).get("name") != "batch"})
-        pair = self.vace_control_batch(comp)
+        pair = self.pass_batch(comp)                 # the items ONE pass takes, the batch every figure is priced at
         if pair:
             for sid, info in table.items():
                 if info.get("name") == "batch":
