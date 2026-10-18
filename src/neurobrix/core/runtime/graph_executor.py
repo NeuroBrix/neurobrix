@@ -3354,6 +3354,13 @@ class GraphExecutor:
             activations_fp16_safe=bool(_seq_safe),
             precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow),
             graph_dtype=self._dag.get("torch_dtype"), stores_fp64=self._triton_stores_fp64())
+        with dispatcher:                    # the wrappers' per-component context, for this run only
+            return self._run_triton_sequential_ops(dispatcher, input_map, device_idx)
+
+    def _run_triton_sequential_ops(self, dispatcher, input_map: dict, device_idx: int):
+        """The op-by-op loop of `_run_triton_sequential`, inside the dispatcher's run."""
+        from neurobrix.triton.symbols import SymbolResolver
+        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})

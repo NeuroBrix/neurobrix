@@ -44,19 +44,31 @@ class TritonSequentialDispatcher:
             # compiled and Triton-compiled engines honour (R30).
             self._dtype_engine.set_precision_contract(*precision_contract)
         self._op_cache: Dict[str, Any] = {}
-        # Phase 2 — propagate per-component dtype context to wrappers
-        # global state, mirroring TritonSequence.run() but without the
-        # try/finally restore (sequential mode doesn't nest within
-        # compiled mode within a single component invocation; if a
-        # later compiled run happens, its own try/finally will
-        # save/restore around its run).
-        # The cast-back wrap in TritonDtypeEngine reads
-        # _w._NBX_ACTIVATIONS_FP16_SAFE at call time; setting it once
-        # here makes Phase 2 uniform cast-back functional in
-        # triton_sequential mode (mirror of compiled mode flag init).
-        _w.set_compute_dtype(compute_dtype)
-        _w.set_activations_fp16_safe(activations_fp16_safe)
+        self._saved_context = None
+
+    # The wrappers' per-component context (`kernels.wrappers`: the compute dtype `conv2d_wrapper` sizes its output
+    # from, the activations-fp16-safe flag the cast-back wrap reads) is process-wide state. `TritonSequence.run`
+    # sets it at entry and restores it at exit; this dispatcher does the same, as a context manager held by the
+    # executor for the run — never in its constructor. A dispatcher that set it at construction left every later
+    # fp32 convolution of the process under an fp16 compute dtype (2026-10-18: 27 conv kernels red in the unit
+    # suite, each green alone; the leak was a test that merely constructed one).
+    def __enter__(self):
+        from neurobrix.kernels import wrappers as _w
+        if self._saved_context is not None:
+            raise RuntimeError("TritonSequentialDispatcher: a run is already open on this dispatcher")
+        self._saved_context = (_w.get_compute_dtype(), _w.get_activations_fp16_safe())
+        _w.set_compute_dtype(self.compute_dtype)
+        _w.set_activations_fp16_safe(self.activations_fp16_safe)
         _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        from neurobrix.kernels import wrappers as _w
+        prev_dt, prev_safe = self._saved_context
+        self._saved_context = None
+        _w.set_compute_dtype(prev_dt)
+        _w.set_activations_fp16_safe(prev_safe)
+        return False
 
     def bind_inputs(self, input_map, graph_tensors):
         """Cast component-entry runtime inputs through the dtype engine.
