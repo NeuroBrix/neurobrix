@@ -3316,9 +3316,13 @@ class CompiledSequence:
             # dumped op whose output is [B, T, C], the per-token mean |x| over C ([B, T] float32) -> <dir>/<op_uid>.pt, so
             # two machines can compare WHERE (which tokens) an op departs, not only head10/l2.
             _tn_dir = _os_d.environ.get("NBX_PROBE_TOKEN_NORMS")
-            if _tn_dir and isinstance(tensor, torch.Tensor) and tensor.dim() == 3 and tensor.shape[1] > 1024:
+            if _tn_dir and isinstance(tensor, torch.Tensor) and tensor.dim() in (3, 4) and max(tensor.shape[1:-1]) > 1024:
                 _os_d.makedirs(_tn_dir, exist_ok=True)
-                torch.save(tensor.detach().float().abs().mean(-1).cpu(), f"{_tn_dir}/p{state.get('pass', 0)}_{op.op_uid.replace(':', '_')}.pt")
+                # [B, T, C] -> mean over C; [B, H, T, D] (attention heads) -> mean over H and D: [B, T] either way
+                _tok = tensor.detach().float().abs().mean(-1)
+                if _tok.dim() == 3:
+                    _tok = _tok.mean(1) if _tok.shape[2] > 1024 else _tok.mean(2)
+                torch.save(_tok.cpu(), f"{_tn_dir}/p{state.get('pass', 0)}_{op.op_uid.replace(':', '_')}.pt")
             if not isinstance(tensor, torch.Tensor):
                 # THE RULE: a brick that replaces a call site preserves that
                 # site's observability. Anything standing in for an op — a
