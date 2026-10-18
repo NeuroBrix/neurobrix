@@ -381,7 +381,10 @@ class TensorResolver:
                         # 777 → 776, Allegro's halo on Metal, 2026-10-18). The Triton rule is the
                         # same sentence (`triton/dtype.TritonDtypeEngine._target_dtype_for_input`).
                         if graph_dtype.is_floating_point:
-                            if graph_dtype.itemsize <= self._ctx.dtype.itemsize:
+                            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model traced
+                            # float32 throughout is at its width, not wider (orpheus-3b, 2026-10-18).
+                            from neurobrix.core.dtype.entry_width import enters_at_traced_width
+                            if not enters_at_traced_width(graph_dtype.itemsize, self._ctx.dtype.itemsize, tensors):
                                 return self._ctx.dtype  # Prism dtype
                             return graph_dtype
                         # Non-floating (int64, bool): the graph's own

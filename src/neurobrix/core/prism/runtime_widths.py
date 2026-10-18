@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 
 from neurobrix.core.dtype.config import compiled_constant_dtype, compiled_weight_dtype
+from neurobrix.core.dtype.entry_width import enters_at_traced_width
 from neurobrix.core.prism.memory_estimator import get_dtype_bytes_per_element
 from neurobrix.core.prism.layer_partition import is_seam_tensor
 from neurobrix.kernels.classification import canonical_aten
@@ -405,7 +406,8 @@ def runtime_dtypes(dag: Dict[str, Any], compute_dtype: str, engine: str, *,
             if is_seam_tensor(meta):
                 out[tid] = (seams or {}).get(tid, name)
             else:
-                out[tid] = c if _itemsize.itemsize(name) <= _itemsize.itemsize(c) else _itemsize.storage_dtype(name, stores_fp64)
+                out[tid] = (_itemsize.storage_dtype(name, stores_fp64)
+                            if enters_at_traced_width(_itemsize.itemsize(name), _itemsize.itemsize(c), tensors) else c)
         else:
             out[tid] = rule.weight_dtype(tid, name)
 

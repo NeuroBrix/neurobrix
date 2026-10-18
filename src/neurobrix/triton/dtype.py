@@ -748,7 +748,11 @@ class TritonDtypeEngine:
         if graph_dt is None:
             return None
         if graph_dt in _FLOATING:
-            if _itemsize.itemsize(graph_dt) <= _itemsize.itemsize(self.compute_dtype):
+            # Wider than the graph's OWN parameters (core/dtype/entry_width): a model traced float32
+            # throughout is at its width, not wider (orpheus-3b, 2026-10-18).
+            from neurobrix.core.dtype.entry_width import enters_at_traced_width
+            if not enters_at_traced_width(_itemsize.itemsize(graph_dt), _itemsize.itemsize(self.compute_dtype),
+                                          graph_tensors):
                 return self.compute_dtype
             return self.storage_dtype(graph_dt)
         return graph_dt

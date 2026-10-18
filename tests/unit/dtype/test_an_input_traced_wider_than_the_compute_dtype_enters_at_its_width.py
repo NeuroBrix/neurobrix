@@ -1,4 +1,7 @@
-"""A graph input traced WIDER than the compute dtype enters at its traced width; one at or below it enters at the compute dtype.
+"""A graph input traced WIDER than the graph's own parameters enters at its traced width; one at their width enters at the compute dtype.
+(The first form of the rule measured against the compute dtype and made orpheus-3b, traced float32 throughout and run at fp16,
+feed a float32 input to its fp16 lm_head: gate red 2026-10-18 15:02. A graph without a floating parameter is measured
+against the compute dtype.)
 
 Both engines cast every runtime input through one sentence of the DtypeEngine
 (`TritonDtypeEngine._target_dtype_for_input`; `tensor_resolver.get_input_dtype` + `DtypeEngine.storage_dtype` on the ATen
@@ -22,8 +25,51 @@ from neurobrix.core.prism.runtime_widths import conservative_contract, runtime_d
 NONE = conservative_contract("test: no contract")
 
 
-def _meta(dtype):
-    return {"input::t": {"dtype": dtype, "shape": [2], "is_input": True, "input_name": "t"}}
+def _meta(dtype, params=None):
+    """The input `t` and, when given, the graph's parameters traced at `params`: the width the input is measured
+    against (core/dtype/entry_width); without parameters the compute dtype is the measure."""
+    meta = {"input::t": {"dtype": dtype, "shape": [2], "is_input": True, "input_name": "t"}}
+    if params:
+        meta["param::w"] = {"dtype": params, "shape": [2, 2], "is_parameter": True}
+    return meta
+
+
+@pytest.mark.parametrize("traced,params,compute,wide", [
+    ("float32", "bfloat16", "bfloat16", True),    # Allegro's timestep: wider than the bf16 weights
+    ("float32", "float32", "float16", False),     # orpheus: traced float32 throughout, run at fp16 — the model's width
+    ("float64", "float32", "float16", True),      # wider than fp32 weights
+    ("float16", "float32", "float16", False),
+])
+def test_wider_means_wider_than_the_graph_s_own_parameters(traced, params, compute, wide):
+    from neurobrix.core.dtype.entry_width import enters_at_traced_width, traced_parameter_width
+    from neurobrix.core.dtype.itemsize import itemsize
+    meta = _meta(traced, params)
+    assert traced_parameter_width(meta) == itemsize(params)
+    assert enters_at_traced_width(itemsize(traced), itemsize(compute), meta) is wide
+    # the compiled resolver hands the traced dtype (the executor stores it through the DtypeEngine); the Triton
+    # engine hands the dtype as its branch stores it (no fp64 here)
+    from neurobrix.core.runtime.graph.execution_context import ExecutionContext
+    from neurobrix.core.runtime.graph.tensor_resolver import TensorResolver
+    ctx = ExecutionContext(dag={"tensors": meta}, device="cpu", dtype=getattr(torch, compute))
+    assert TensorResolver(ctx).get_input_dtype("t") == getattr(torch, traced if wide else compute)
+    pytest.importorskip("triton")
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from neurobrix.triton.dtype import TritonDtypeEngine
+    eng = TritonDtypeEngine(NBXDtype[compute], has_native_bf16=True, graph_dtype=compute, stores_fp64=False)
+    stored = {"float64": "float32"}.get(traced, traced)
+    assert eng._target_dtype_for_input("input::t", meta) == NBXDtype[stored if wide else compute]
+
+
+def test_prism_prices_the_orpheus_input_at_the_compute_dtype():
+    """A model traced float32 throughout and run at fp16: its input seed is fp16, as its weights are."""
+    meta = _meta("float32", "float32")
+    dag = {"tensors": {**meta, "o": {"dtype": "float32", "shape": [2]}},
+           "ops": {"neg::0": {"op_type": "aten::neg", "input_tensor_ids": ["input::t"], "output_tensor_ids": ["o"],
+                              "attributes": {"args": [{"type": "tensor", "tensor_id": "input::t"}]}}},
+           "execution_order": ["neg::0"], "input_tensor_ids": ["input::t"], "output_tensor_ids": ["o"], "torch_dtype": "float32"}
+    got = runtime_dtypes(dag, "float16", "compiled", attention_operands="narrowest", has_native_bf16=False, contract=NONE,
+                         stores_fp64=False)
+    assert got["input::t"] == "float16"
 
 
 @pytest.mark.parametrize("traced,compute,stores_fp64,expected", [
