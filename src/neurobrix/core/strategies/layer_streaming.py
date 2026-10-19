@@ -483,7 +483,16 @@ class LayerStreamingStrategy(ExecutionStrategy):
         capture: Dict[str, Any] = {}
         base._pieces_capture = capture        # rebuilt every run: a decode step reads its own
         values: Dict[str, Any] = dict(inputs or {})
-        for seg_exec, produced in zip(pieces, produced_by):
+        # A value a piece returns lives only until its last reader: the later pieces' inputs and the
+        # component's declared outputs. Kept in `values` past that, every seam tensor of the run stayed
+        # alive to its end — Allegro native on the Mac (720p, 5 pieces) held 1.5, 5.0, 7.1, 7.8 GB after
+        # pieces 0-3 with each piece's weights released, and the 5th met MPS out of memory (2026-10-20).
+        declared_keys = {output_key(tensors.get(tid), tid) for tid in declared} | set(declared)
+        still_read = [set(declared_keys) for _ in pieces]
+        for i in range(len(pieces) - 2, -1, -1):
+            still_read[i] = still_read[i + 1] | set((pieces[i + 1]._dag or {}).get("segment_input_names") or [])
+        returned: set = set()                 # names the pieces returned, still held in `values`
+        for index, (seg_exec, produced) in enumerate(zip(pieces, produced_by)):
             sub = seg_exec._dag
             needed = sub.get("segment_input_names") or []
             feed = {n: _piece_input(values, n) for n in needed}
@@ -525,6 +534,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
                       f"kept={sorted(kept & produced)[:4]}",
                       flush=True)
             values.update(out)
+            returned.update(out)
+            for name in [n for n in returned if n not in still_read[index]]:
+                values.pop(name, None)
+            returned &= still_read[index]
 
         # The component's declared outputs, keyed as a whole run keys them (`output_name`,
         # else the tid) — not the last piece's dict, which holds only what the last piece
