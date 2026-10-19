@@ -2167,19 +2167,51 @@ def _derive_job(args):
     return ("ok", (list(derived), collections.Counter(unhandled)))
 
 
+def _peak_rss_bytes() -> int:
+    """This process's peak resident size (`getrusage`: bytes on darwin, KiB on Linux)."""
+    import resource
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(peak) if sys.platform == "darwin" else int(peak) * 1024
+
+
+def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
+    """How many derivation workers the machine holds at once: the cores (`os.cpu_count()`), and the free host
+    memory read as Prism reads it (`core.host_memory`, rounded DOWN to the memory ladder's rung,
+    `memory_budget.rung_down_mb`) over what one worker measured it takes (`worker_bytes`). A derivation holds a whole
+    graph: on 24 GB of unified memory the cores were no memory bound, and the census started a worker per core until
+    the Mac panicked three times (2026-10-20 00:27, 00:42, 00:54, WindowServer watchdog, 21 swap files). Unread
+    memory runs one derivation at a time."""
+    from neurobrix.core.host_memory import memory_state
+    from neurobrix.core.prism.memory_budget import rung_down_mb
+    cores = os.cpu_count() or 1
+    free = memory_state().available_mb
+    if free is None or worker_bytes <= 0:
+        return 1
+    held = int((rung_down_mb(free) << 20) // worker_bytes)
+    return max(1, min(n_jobs, cores, held))
+
+
 def _derive_jobs(model, hw, jobs, start_method=None):
-    """The results of `jobs` in their order — worker processes, one per job up to the machine's cores
-    (`os.cpu_count()`, a capability read from the machine); a single job runs in this process. The workers start
-    the PLATFORM's way (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C
-    runtime started crashes the child — the Mac, 2026-10-20): `derive_keys` binds the hardware profile itself on
-    every call, so a worker inherits nothing it needs."""
+    """The results of `jobs` in their order. The first runs in this process, and this process's peak resident size
+    after it — the interpreter, the imports and one derivation of this model, what a started worker holds whichever
+    way it starts — is what one worker is priced at; the rest run in workers, as many as the cores AND the free
+    memory hold (`_workers_memory_holds`), one at a time when that is one. The workers start the PLATFORM's way
+    (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C runtime started
+    crashes the child — the Mac, 2026-10-20): `derive_keys` binds the hardware profile itself on every call, so a
+    worker inherits nothing it needs."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
-    workers = min(len(args), os.cpu_count() or 1)
-    if workers <= 1:
-        return [_derive_job(a) for a in args]
+    if not args:
+        return []
+    first = _derive_job(args[0])
+    rest = args[1:]
+    workers = _workers_memory_holds(len(rest), _peak_rss_bytes())
+    print(f"[derive] {model}: {len(args)} derivation(s), {workers} at a time after the first (cores, free memory "
+          f"at its rung, this process's peak {_peak_rss_bytes() >> 20} MB a worker)", flush=True)
+    if workers <= 1 or not rest:
+        return [first] + [_derive_job(a) for a in rest]
     import multiprocessing as _mp
     with _mp.get_context(start_method).Pool(workers) as pool:
-        return pool.map(_derive_job, args, chunksize=1)
+        return [first] + pool.map(_derive_job, rest, chunksize=1)
 
 
 def table(a) -> int:
