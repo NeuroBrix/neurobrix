@@ -390,6 +390,10 @@ class ExecutionPlan:
     candidates: List[Tuple[str, float]] = field(default_factory=list)
     rejected: List[Tuple[str, float, str]] = field(default_factory=list)
     kv_cache_plan: Optional[KVCachePlan] = None
+    # The state engine's policy for the decode cache (core/state/policy.py, step 5): its name and why, recorded with
+    # the plan and printed in the selection reason; None when the flow decodes nothing.
+    state_policy: Optional[str] = None
+    state_policy_reason: str = ""
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
     # Components the lifecycle strategy classified as TRANSIENT (used once per
     # request) rather than persistent (re-entered every step). Empty for every
@@ -2300,6 +2304,7 @@ class PrismSolver:
         ranked = sorted(candidates, key=lambda x: -x[0])
         self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
         self._rejected = []
+        self._state_policy = None
 
         # Strategies ranked by score
 
@@ -2536,6 +2541,10 @@ class PrismSolver:
         # Step 7: Build plan
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
+        _sp = getattr(self, "_state_policy", None) if kv_cache_plan is not None else None
+        if _sp is not None:
+            plan.state_policy, plan.state_policy_reason = _sp.name, _sp.reason
+            plan.selection_reason = f"{plan.selection_reason} — state policy {_sp.reason}"
         self._zero3_resident_budgets(container, plan, devices, profile)
         # The guidance split the cascade was re-run under (`_split_guidance_batch`): the CFG engines
         # run these components' branches one pass each, the batch every figure above was priced at.
