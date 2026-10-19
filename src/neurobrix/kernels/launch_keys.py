@@ -140,6 +140,20 @@ def matrix_unit_takes(a: NBXDtype, b: NBXDtype, M: int) -> bool:
     return matrix_unit_operands(a, b, M) is not None
 
 
+def gemm_row_representative(m_bucket: int, a: NBXDtype, b: NBXDtype) -> Optional[int]:
+    """The largest row count M whose GEMM launch forms the autotune key of M bucket `m_bucket`: its bucket is
+    `m_bucket` (`bucket_of`) and the matrix unit does not take it (`matrix_unit_takes`). A bucket's top is not always
+    one: on Volta the class 57..64 of an fp32 GEMM keys M_BUCKET 64, and at 64 itself the split matrix unit takes the
+    GEMM (no key) — a certification synthesising M=64 never reached the autotuner (2026-10-19, 172 keys). None: no
+    row count forms the key."""
+    m = int(m_bucket)
+    while m > 4 and bucket_of("M", m) == m_bucket:
+        if not matrix_unit_takes(a, b, m):
+            return m
+        m -= 1
+    return None
+
+
 def matrix_unit_native(a: NBXDtype, b: NBXDtype, M: int) -> bool:
     """Both operands are the unit's operand dtype in memory: what the convolution's implicit GEMM
     (ops/conv2d_m8n8k4.py) carries until it takes the split representation too."""

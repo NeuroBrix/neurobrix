@@ -332,6 +332,22 @@ def _refuse_unified(qual: str, tuner, key: tuple, card_bytes) -> None:
 # ---------------------------------------------------------------------------
 # the price of a key: what a certification holds at each of its phases
 # ---------------------------------------------------------------------------
+def _gemm_rows(key: tuple, dts) -> int:
+    """The row count a GEMM key is priced and synthesised at: the largest one whose launch forms the key
+    (`launch_keys.gemm_row_representative`), not the bucket's top — at the top the matrix unit may take the GEMM and
+    the wrapper never reaches the autotuner. A key no row count forms is refused by name: a census defect."""
+    from neurobrix.kernels import launch_keys as LK
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}
+    a = nbx.get(dts[0], NBXDtype.float16) if dts else NBXDtype.float16
+    b = nbx.get(dts[1], a) if len(dts) > 1 else a
+    m = LK.gemm_row_representative(int(key[0]), a, b)
+    if m is None:
+        raise ValueError(f"no row count forms the GEMM key {key}: the matrix unit takes every M of bucket {key[0]} "
+                         f"— a census defect, the key should not exist")
+    return m
+
+
 def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
     """The operands `synthesize` draws for `key` — (shape, dtype) of each input and of the
     output, plus the geometry its oracle is windowed on — read from the same key fields, so the
@@ -341,14 +357,14 @@ def _key_operands(qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
     out_dt = C.output_dtype(tuner, key)
     d = lambda i, default="fp16": (dts[i] if len(dts) > i else default)   # noqa: E731
     if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
         ins = [("a", (M, K), d(0)), ("b", (K, N), d(1))]
         if short == "addmm_kernel":
             ins.append(("bias", (N,), d(2)))
         return {"family": "mm", "inputs": ins, "out": ((M, N), out_dt), "mnk": (M, N, K), "batch": 1,
                 "row_windowed_launch": True}
     if short == "baddbmm_kernel":
-        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
         B = 2
         ins = [("a", (B, M, K), d(0)), ("b", (B, K, N), d(1))]
@@ -727,7 +743,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         _refuse_unified(qual, tuner, key, card_bytes)
         card_bytes = None                       # the phase price is the bound on a unified device
     if short in ("matmul_kernel", "addmm_kernel"):
-        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
         _refuse_oversize(card_bytes, [((M, K), dts[0] if dts else "fp16"),
                                       ((K, N), dts[1] if len(dts) > 1 else "fp16"),
                                       ((N,), dts[2] if len(dts) > 2 and short == "addmm_kernel" else out_dt),
@@ -739,7 +755,7 @@ def synthesize(qual: str, tuner, key: tuple, rng, card_bytes: Optional[int] = No
         bias = arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
         return ((lambda: W.addmm(to(bias), to(a), to(b))), (_matmul_oracle_fn(a, b, bias[None, :]) if values else None), "c_ptr")
     if short == "baddbmm_kernel":
-        M, N, K = int(key[0]), int(key[1]), int(key[2])
+        M, N, K = _gemm_rows(key, dts), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
         B = 2
         _refuse_oversize(card_bytes, [((B, M, K), dts[0] if dts else "fp16"),
