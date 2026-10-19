@@ -161,6 +161,19 @@ def run_entry(args):
         return cmd_run(args)
 
 
+def request_decode_bound(args):
+    """The positions a RUN's cache floor is priced for beyond the package's prompt margin (Prism `InputConfig.max_tokens`):
+    the request's --max-tokens plus its prompt's and system prompt's UTF-8 bytes, a bound on its text tokens (a token is at least one byte;
+    the template's special tokens sit in the margin). None — the package's declared max_tokens — when the request names
+    no --max-tokens, or carries an image, video or audio input: their positions (Ming's apple, 243) are no request
+    fact here. The Mac, 2026-10-19: the bound at --max-tokens alone let Ming plan a 273-position cache for a
+    275-position request."""
+    asked = getattr(args, 'max_tokens', None)
+    if not asked or any(getattr(args, a, None) for a in ('input_image', 'input_video', 'audio', 'reference_audio')):
+        return None
+    return int(asked) + sum(len((getattr(args, a, None) or '').encode('utf-8')) for a in ('prompt', 'system'))
+
+
 def request_input_config(args, manifest: dict, family, cache_path):
     """The InputConfig Prism plans a request with: the request's own facts (--height, --width,
     the input image's size, the prompt as a batch of one, guidance doubling the batch), then the
@@ -329,7 +342,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
         height=height,
         width=width,
         seq_len=seq_len,
-        max_tokens=getattr(args, 'max_tokens', None),
+        max_tokens=request_decode_bound(args),
         flow=_flow,
         guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),

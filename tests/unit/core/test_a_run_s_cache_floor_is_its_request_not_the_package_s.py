@@ -45,7 +45,13 @@ def test_the_solver_floors_a_run_at_the_cli_request_and_a_serve_at_the_package()
     assert _solver(32, True)._request_max_tokens(d) == 32768
 
 
-def test_the_cli_carries_its_max_tokens_into_the_plan_s_input():
+def test_the_cli_bounds_a_text_run_by_its_request_and_prompt_and_leaves_a_media_run_to_the_package():
+    """Ming, 2026-10-19: floored at --max-tokens + margin alone, an image request of 275 positions met a 273-position cache."""
     import inspect
     from neurobrix.cli.commands import run
-    assert "max_tokens=getattr(args, 'max_tokens', None)" in inspect.getsource(run.request_input_config)
+    assert "max_tokens=request_decode_bound(args)" in inspect.getsource(run.request_input_config)
+    a = SimpleNamespace(max_tokens=32, prompt="é" * 100, system="sys")
+    assert run.request_decode_bound(a) == 32 + 200 + 3, "the prompt's bytes bound its tokens"
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", input_image="apple.png")) is None
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", audio="a.wav")) is None
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=None, prompt="x")) is None
