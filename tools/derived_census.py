@@ -2167,15 +2167,18 @@ def _derive_job(args):
     return ("ok", (list(derived), collections.Counter(unhandled)))
 
 
-def _derive_jobs(model, hw, jobs):
-    """The results of `jobs` in their order — forked workers, one per job up to the machine's cores
-    (`os.cpu_count()`, a capability read from the machine); a single job runs in this process."""
+def _derive_jobs(model, hw, jobs, start_method=None):
+    """The results of `jobs` in their order — worker processes, one per job up to the machine's cores
+    (`os.cpu_count()`, a capability read from the machine); a single job runs in this process. The workers start
+    the PLATFORM's way (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C
+    runtime started crashes the child — the Mac, 2026-10-20): `derive_keys` binds the hardware profile itself on
+    every call, so a worker inherits nothing it needs."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
     workers = min(len(args), os.cpu_count() or 1)
     if workers <= 1:
         return [_derive_job(a) for a in args]
     import multiprocessing as _mp
-    with _mp.get_context("fork").Pool(workers) as pool:
+    with _mp.get_context(start_method).Pool(workers) as pool:
         return pool.map(_derive_job, args, chunksize=1)
 
 
@@ -2209,6 +2212,14 @@ def table(a) -> int:
         raise SystemExit(f"--models: not in the cache {CACHE}: {', '.join(absent)}")
     vendor, profile = a.table.split("/", 1)
     path = T.table_path(vendor, profile, cls)
+    # A census without its hardware profile is a setup error, never Prism's verdict on a model: every model would
+    # read as "does not run on this class" and the run would end 0 with no row (the Mac, a fresh worktree, 2026-10-20).
+    try:
+        from neurobrix.core.prism.loader import load_profile
+        load_profile(hw)
+    except Exception as e:
+        raise SystemExit(f"--hardware {hw!r}: the hardware profile cannot be loaded ({e}) — a fresh worktree carries "
+                         f"none (config/hardware/ is machine-generated); nothing derived")
     rev = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"], capture_output=True,
                          text=True).stdout.strip() or "unknown"
     worst = 0
