@@ -2294,6 +2294,9 @@ class CompiledSequence:
                     _w = _host_expert(expert_id)
                     _xi = _hs_host[expert_token_ids.to("cpu")]
                     _eo = ((F.silu(_xi @ _w[0].t()) * (_xi @ _w[1].t())) @ _w[2].t())
+                    if not _store.cpu_experts:
+                        print(f"[ExpertStore] decode: experts outside the slots compute on the host "
+                              f"(at most {_store.cpu_decode_tokens} tokens a call)", flush=True)
                     _store.cpu_experts += 1
                     if _store._release is not None:
                         for _t in _w:
