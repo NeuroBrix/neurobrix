@@ -1389,7 +1389,17 @@ def extent_sites(model: str, topo: dict, defaults: dict, plan: dict, prompt: str
         def decode(n, lm=lm, kv=kv, B=B):
             return [(lm, {"__decode__": {"len": n, "dtype": kv.get("dtype"), "batch": B,
                                          "heads": kv.get("num_kv_heads")}})]
-        sites.append(("decode KV length", P + 1, P + int(mt), decode))
+        reach = _cache_reach(model, lm, plan, P)
+        if not image_ar:
+            # every prompt length the planned cache can hold, the LM's inputs at n (the bisection finds every
+            # key class — the matmul M buckets of the prefill among them); the request derivation keeps the
+            # gate prompt's own binding
+            _feed = _lm_prompt_feed(model, lm)
+            def prefill(n, lm=lm, feed=_feed):
+                return [(lm, dict(feed(n), __kv_prefill__=True))]
+            prefill.row_axis = True
+            sites.append((f"{lm} prefill (prompt lengths)", 1, max(1, reach - 1), prefill))
+        sites.append(("decode KV length", P + 1, max(P + int(mt), reach), decode))
         if image_ar:
             def one(comp, lead):
                 """The component's single input at its trace shape, the leading dim `lead`."""
@@ -1657,26 +1667,62 @@ def _vlm_sites(model, topo, defaults, plan, image_path, prompt, max_tokens_req, 
             *_decoder_sites(model, lm, plan, L0, mt, feed)]
 
 
+def _cache_reach(model, lm, plan, L0):
+    """The longest context the planned cache can hold: `max_cache_len` of the plan's KV cache (Prism sized
+    it for this request and this card class: the prompt's room and the decode's); the census keys every
+    prompt length up to it — a request's prompt is any length, not the gate's (the Mac, 2026-10-19 02:04:
+    TinyLlama at a 31-token prompt missed matmul M_BUCKET=31 under certified-only, the census having derived
+    the gate prompt's bucket alone). Never below the gate request's own context `L0`."""
+    kv = plan.get("kv_cache") or {}
+    reach = int(kv.get("max_cache_len") or 0)
+    if reach <= 0:
+        raise SystemExit(f"{model}: the plan's KV cache for {lm} names no max_cache_len — the census cannot "
+                         f"bound the prompt lengths it keys")
+    return max(int(L0), reach)
+
+
 def _decoder_sites(model, lm, plan, L0, mt, feed, batch=1):
     """The two sites of a decoder on its KV cache (core/flow/decoder_cache, step 3): the PREFILL over the
-    whole context (`L0` positions, the flow's own inputs through `feed`, the attention through the
-    interceptor's prefill — `__kv_prefill__`), then every DECODE step at ONE position against the
-    cache, its length L0 + 1 .. L0 + max_tokens - 1, K/V the cache's (the plan's dtype and KV heads).
-    A plan without the cache is refused by name: the flow's opener refuses it too
-    (`lm_facts.decoder_cache_from_plan`), and a census cannot key a decode the run would not reach."""
+    context — every length from the gate request's own `L0` up to what the planned cache holds
+    (`_cache_reach`; the flow's own inputs through `feed`, the attention through the interceptor's prefill,
+    `__kv_prefill__`; the bisection finds every key class, the matmul M buckets among them) — then every
+    DECODE step at ONE position against the cache, its length L0 + 1 up to the cache's reach, K/V the
+    cache's (the plan's dtype and KV heads). A plan without the cache is refused by name: the flow's opener
+    refuses it too (`lm_facts.decoder_cache_from_plan`), and a census cannot key a decode the run would not
+    reach."""
     kv = plan.get("kv_cache")
     if not kv:
         raise SystemExit(f"{model}: the plan carries no KV cache for {lm} — the flow refuses it "
                          f"(lm_facts.decoder_cache_from_plan); the census cannot key its decode")
+    reach = _cache_reach(model, lm, plan, L0)
     def prefill(n, lm=lm, feed=feed):
         return [(lm, dict(feed(n), __kv_prefill__=True))]
+    prefill.row_axis = True        # n is a row count of the LM's GEMMs: the launcher's row breakpoints band it
     def decode(n, lm=lm, kv=kv, batch=batch):
         return [(lm, {"__decode__": {"len": n, "dtype": kv.get("dtype"), "batch": batch,
                                      "heads": kv.get("num_kv_heads")}})]
-    sites = [(f"{lm} prefill", L0, L0, prefill)]
-    if int(mt) > 1:
-        sites.append((f"{lm} decode KV length", L0 + 1, L0 + int(mt) - 1, decode))
+    sites = [(f"{lm} prefill (prompt lengths)", L0, max(L0, reach - 1), prefill)]
+    if reach > L0:
+        sites.append((f"{lm} decode KV length", L0 + 1, reach, decode))
     return sites
+
+
+def _lm_prompt_feed(model, lm):
+    """{input name: shape at n prompt tokens} of a text LM: every declared graph input at the request's batch
+    of one — a 2-D input [1, n] (ids, positions), a 3-D one [1, n, hidden]. Read from the graph, no name."""
+    tensors = raw_graph(model, lm).get("tensors") or {}
+    spec = {k[len("input::"):]: list((v or {}).get("shape") or []) for k, v in tensors.items() if k.startswith("input::")}
+    def feed(n):
+        out = {}
+        for name, shape in spec.items():
+            if len(shape) == 2:
+                out[name] = [1, n]
+            elif len(shape) == 3:
+                out[name] = [1, n, int(shape[2])]
+            else:
+                out[name] = shape
+        return out
+    return feed
 
 
 def _vlm_context_site(model, lm, plan, L0, mt, feed):
@@ -1908,7 +1954,17 @@ def derive_extents(model, mode, topo, defaults, plan, has_native_bf16, sdpa, unh
                 found.update(keys)
                 seen[n] = frozenset((q_, k) for _u, q_, k in keys)
             return seen[n]
-        _census.bisect_extent(lo, hi, at)
+        # The launcher's own row breakpoints (kernels/launch_keys.row_breakpoints: the GEMV bound, every M bucket, the
+        # matrix unit's take-over) split the extent into bands where the key set is a step function; the bisection
+        # runs band by band. Over the whole extent alone it took the empty set at both ends for one class and missed
+        # the keyed prompt lengths in between (TinyLlama, 2026-10-19).
+        from neurobrix.kernels import launch_keys as _LK
+        bps = _LK.row_breakpoints(lo, hi) if getattr(chain, "row_axis", False) else []
+        points = sorted({int(lo), int(hi)} | {p for p in bps if lo < p < hi} | {p - 1 for p in bps if lo < p - 1 < hi})
+        for a_, b_ in zip(points, points[1:]):
+            _census.bisect_extent(a_, b_, at)
+        if len(points) == 1:
+            at(points[0])
         print(f"[derived] extent {name} {lo}..{hi}: {len(set(seen.values()))} key class(es) "
               f"in {len(seen)} derivation(s)")
     return found

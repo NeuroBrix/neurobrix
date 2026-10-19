@@ -208,6 +208,30 @@ def bmm_out(M: int, a: NBXDtype, b: NBXDtype, native_bf16: bool, force_accum: bo
     return matmul_out_dtype(a, M, True, native_bf16, force_accum)
 
 
+def row_breakpoints(lo: int, hi: int) -> List[int]:
+    """The row counts M in (lo, hi] at which a GEMM's launch CLASS changes on the bound profile: the GEMV bound
+    (M <= 4 launches no autotuned kernel), the M bucket (`bucket_of("M", M)`: exact below the matrix unit's smallest
+    tile, bucketed above), and the matrix unit's take-over for the native and the split operand representations
+    (no key from there on). A census that walks a token axis (a prompt's length) derives at every breakpoint and
+    bisects between two: the key set at M is a step function of M only between breakpoints — below and above the
+    keyed band it is empty at both ends, which a bisection alone takes for one class (TinyLlama, 2026-10-19:
+    a 31-token prompt's matmul key missed under certified-only). One source: the launcher's own functions."""
+    lo, hi = int(lo), int(hi)
+    if hi <= lo:
+        return []
+    half, single = NBXDtype.float16, NBXDtype.float32
+    def klass(m: int):
+        return (m <= 4, bucket_of("M", m), matrix_unit_takes(half, half, m), matrix_unit_takes(single, half, m))
+    out: List[int] = []
+    prev = klass(max(lo, 1))
+    for m in range(max(lo, 1) + 1, hi + 1):
+        k = klass(m)
+        if k != prev:
+            out.append(m)
+            prev = k
+    return out
+
+
 def matmul_route(a_rank: int, b_rank: int) -> str:
     """`matmul_wrapper`'s route by operand ranks (torch.matmul semantics): "mm" (2-D x 2-D), "bmm"
     (3-D x 3-D), "mv" (2-D x 1-D, the SIMT GEMV — no autotuned kernel), "batched" (N-D x 2-D:
