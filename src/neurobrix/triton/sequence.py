@@ -363,9 +363,12 @@ def _nbx_address(t: NBXTensor) -> int:
 
 
 def _nbx_root(t: NBXTensor) -> NBXTensor:
-    while t._base is not None:
-        t = t._base
-    return t
+    """The allocation a view reads: every NBXTensor view stores its chain's ROOT as `_base` (view, reshape, slices,
+    copies: `base=x._base if x._base is not None else x`), so the root is one step away — no walk. A base that is not
+    an NBXTensor (the numpy array `from_numpy` keeps alive) is no allocation of the device: the tensor is its own root.
+    (A walk to `_base is None` never ended on the gate scope's opaque arguments: two step-4 gates hung on it.)"""
+    b = t._base
+    return b if isinstance(b, NBXTensor) else t
 
 
 def _nbx_shares_storage(a: NBXTensor, b: NBXTensor) -> bool:
