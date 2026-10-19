@@ -602,6 +602,10 @@ class LayerPartitioner:
         before = curve[plan.first - 1] if plan.first > 0 else 0
         outs = sum(self._bytes_at(t, sm) for t in plan.outputs if t not in plan.contractions)
         acc = sum(self._accumulator_bytes(t, sm) for t in plan.contractions)
+        # a stretch with a halo runs each slice widened by its margin on both sides (`RegionPlan.margin`, clipped at
+        # the axis' ends): what a slice of c holds is what c + 2 * margin holds
+        total = sm.get(plan.symbol)
+        c = c + 2 * plan.margin if total is None else min(int(total), c + 2 * plan.margin)
         sliced = dict(sm)
         sliced[plan.symbol] = c
         worst = 0
