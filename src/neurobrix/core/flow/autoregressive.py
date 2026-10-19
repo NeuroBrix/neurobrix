@@ -681,10 +681,13 @@ class AutoregressiveHandler(FlowHandler):
                         # triton/flow/autoregressive.py uses "triton".
                         # Historical value "native" was renamed for vocabulary
                         # consistency — see CLAUDE.md "Execution Modes".
+                        # the whole first-token logits too: the identity proof of a prefill class (a row count
+                        # keyed by its bucket vs exactly) compares them bit for bit (2026-10-19)
                         _json_dl.dump({"engine": "compiled",
                                        "vocab_size": len(flat),
                                        "top10": top10,
-                                       "argmax": idx_sorted[0]}, _f)
+                                       "argmax": idx_sorted[0],
+                                       "logits": flat}, _f)
                     print(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
                           f"to {_dump_path}", flush=True)
                 # `flow.first_token` is stamped inside the step, at the per-token
