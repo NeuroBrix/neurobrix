@@ -14,11 +14,11 @@ from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 @pytest.fixture
 def bound_profile(monkeypatch):
-    """The Volta vendor file in force (`_configs.vendor_profile_for_arch`): the ladders and the matrix unit are DATA on it."""
+    """The Volta vendor file in force (`_configs.vendor_profile_for_arch("7.0")`, the compute capability): the ladders and the matrix unit are DATA on it."""
     from neurobrix.kernels import wrappers as W
     from neurobrix.kernels.ops import _configs as CF
     W.set_hardware_profile(profile(V100_16GB))
-    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("volta"))
+    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("7.0"))
     yield CF.active_vendor_profile()
 
 
