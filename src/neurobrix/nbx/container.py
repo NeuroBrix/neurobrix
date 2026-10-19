@@ -517,6 +517,16 @@ class NBXContainer:
         # Load components from cache
         container._load_components_from_cache(cache_path)
 
+        # The inputs each repeated component reads unchanged (topology.json `state`, kind `invariant`) stamped on its
+        # graph: what Prism prices as the state kept through a run (state engine step 4).
+        if topology_path.exists():
+            from neurobrix.core.optim.passes.invariant import stamp_dag
+            with open(topology_path) as f:
+                _topo_state = json.load(f)
+            for _name, _comp in container._components.items():
+                if _comp.graph is not None:
+                    stamp_dag(_comp.graph, _topo_state, _name)
+
         return container
 
     def _load_components(self, zf: zipfile.ZipFile) -> None:

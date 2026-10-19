@@ -329,6 +329,46 @@ def _sync_deferred_all_devices(deferred) -> None:
         DeviceAllocator.set_device(prev)
 
 
+_BITS_OF_ITEMSIZE = {1: NBXDtype.uint8, 2: NBXDtype.int16, 4: NBXDtype.int32, 8: NBXDtype.int64}
+
+
+def _nbx_bits(t: NBXTensor) -> NBXTensor:
+    """The same bytes read as the unsigned/signed integer of the element's width (no copy of a contiguous tensor)."""
+    t = t.contiguous()
+    if t._dtype == NBXDtype.bool_:
+        return t
+    return NBXTensor(t._data_ptr, tuple(t.shape), tuple(t.stride()), _BITS_OF_ITEMSIZE[t.element_size()], t._device,
+                     t._offset, device_idx=t._device_idx, base=t._base if t._base is not None else t)
+
+
+def _nbx_same_bits(a: NBXTensor, b: NBXTensor) -> bool:
+    """Bitwise equality (shape, dtype, device and every bit) — the invariant state's reuse test, R30 mirror of
+    compiled_sequence._torch_same_bits, on this engine's own comparison and reduction kernels."""
+    if tuple(a.shape) != tuple(b.shape) or a._dtype != b._dtype or a._device_idx != b._device_idx:
+        return False
+    if a.numel() == 0:
+        return True
+    if a._dtype != NBXDtype.bool_ and a.element_size() not in _BITS_OF_ITEMSIZE:
+        return False                    # no integer of that width: never reused, always evaluated (exact)
+    from neurobrix.kernels import wrappers as _wr
+    return bool(_wr.all_wrapper(_wr.eq(_nbx_bits(a), _nbx_bits(b))).item())
+
+
+def _nbx_keep(t: NBXTensor) -> NBXTensor:
+    return t.clone()
+
+
+def _nbx_root(t: NBXTensor) -> NBXTensor:
+    while t._base is not None:
+        t = t._base
+    return t
+
+
+def _nbx_shares_storage(a: NBXTensor, b: NBXTensor) -> bool:
+    """Whether a and b view one allocation: the roots of their view chains (a view keeps its parent as `_base`)."""
+    return a._data_ptr == b._data_ptr or _nbx_root(a)._data_ptr == _nbx_root(b)._data_ptr
+
+
 @dataclass
 class CompiledOp:
     """Pre-compiled operation with closure-based argument resolution."""
@@ -658,6 +698,9 @@ class TritonSequence:
         self._seq_constant_originals = {}
         self._identify_seq_dependent_constants(tensors)
 
+        # Phase 7: state engine step 4 — the ops of the declared invariant inputs run once per request
+        self._plan_invariant_state()
+
         self._compiled = True
 
     # ========================================================================
@@ -844,6 +887,34 @@ class TritonSequence:
         if removed:
             print(f"[Optim] alias lowering (triton): {removed} ops left "
                   f"the hot sequence")
+
+    def _plan_invariant_state(self) -> None:
+        """R30 mirror of CompiledSequence._plan_invariant_state: the invariant partition of this sequence
+        (core/optim/passes/invariant.plan_for_sequence, the one planner of both engines) and the state that keeps its
+        frontier between runs (core/state/invariant.InvariantState), with this engine's own tensor primitives."""
+        self._invariant = None
+        self._inv_skip = None
+        if os.environ.get("NBX_DISABLE_STATE_INVARIANT") == "1":
+            return
+        from neurobrix.core.optim.passes.invariant import plan_for_sequence
+        from neurobrix.core.state.invariant import InvariantState
+        excluded_uids = set(self._op_uid_interceptors) | {
+            op.op_uid for op in self._ops if op.op_type in self._op_interceptors}
+        plan = plan_for_sequence(self.dag, self._ops, self._tid_to_slot, self._num_weights,
+                                 [c[0] for c in self._seq_dependent_constants], excluded_uids)
+        if not plan:
+            return
+        frontier = set(plan["frontier_slots"])
+        for op in self._ops:
+            if any(k in frontier for k in op.kill_slots):
+                op.kill_slots = tuple(k for k in op.kill_slots if k not in frontier)
+        self._invariant = InvariantState(plan, _nbx_same_bits, _nbx_keep, _nbx_shares_storage)
+        self._inv_skip = self._invariant.skip_flags(len(self._ops))
+
+    def release_invariant_state(self) -> None:
+        """Drop the kept invariant state (the end of a request)."""
+        if getattr(self, "_invariant", None) is not None:
+            self._invariant.release()
 
     def _extract_const_fold_partition(
         self,
@@ -3080,8 +3151,16 @@ class TritonSequence:
             # normal paths untouched. Contract + design: scoping doc
             # "Phase 4a".
             _parked = self.__dict__.pop("_deferred_weight_bind", None)
-            if _replay.ENABLED and (not self._is_multi_device
-                                    or _replay.MULTIDEV_PROOF):
+            _inv = getattr(self, "_invariant", None)
+            if _replay.ENABLED and _inv is not None:
+                # A recorded plan replays raw pointers; the kept invariant state is refilled from new tensors at every
+                # request, which a frozen plan cannot see. Declined by name, once — the normal path runs.
+                if not getattr(self, "_inv_replay_noted", False):
+                    self._inv_replay_noted = True
+                    print(f"[Replay] declined for {self.dag.get('component_name')}: it keeps an invariant state "
+                          f"(state engine step 4), which a frozen launch plan cannot refill", flush=True)
+            elif _replay.ENABLED and (not self._is_multi_device
+                                      or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
                     return
             if _parked is not None:
@@ -3095,11 +3174,24 @@ class TritonSequence:
                     print("[LazyBind] late-bind fired (replay declined "
                           "after would_replay said yes)", flush=True)
                 self.bind_weights(_parked)
+            # The invariant state (state engine step 4): bit-identical invariant inputs skip their ops; any other run
+            # evaluates them and keeps the frontier. A calibration observes every op, so it evaluates.
+            from neurobrix.core.dtype import calibration as _cal_inv
+            if _inv is not None and _cal_inv.active_census(self.dag.get("component_name")) is not None:
+                _inv.release()
+                _inv = None
+            self._run_skip = self._inv_skip if _inv is not None and _inv.begin(self._arena) else None
             try:
                 if self._is_multi_device:
                     self._run_multi_device(skip_kills, pre_op_callback)
                 else:
                     self._run_single_device(skip_kills, pre_op_callback)
+                if _inv is not None and self._run_skip is None:
+                    _inv.end(self._arena)
+            except BaseException:
+                if _inv is not None:
+                    _inv.release()
+                raise
             finally:
                 # the loops name each op for the keys it forms (census `set_op`); once the sequence
                 # returns, a key a flow forms between components is charged to no op
@@ -3563,7 +3655,10 @@ class TritonSequence:
         _vdump = int(_os_vd.environ.get("NBX_VALUE_DUMP_EVERY", "0") or "0")
         from neurobrix.kernels import census as _key_census
         _key_ops = _key_census.recording()
+        _skip = getattr(self, "_run_skip", None)
         for op_idx, op in enumerate(self._ops):
+            if _skip is not None and _skip[op_idx]:
+                continue                    # an invariant op: its outputs are the kept state's
             if _key_ops:
                 _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
             _in_fp = ""          # set when NBX_VALUE_DUMP_EVERY >= 2
@@ -4307,6 +4402,7 @@ class TritonSequence:
 
         from neurobrix.kernels import census as _key_census
         _key_ops = _key_census.recording()
+        _skip = getattr(self, "_run_skip", None)
         for op_idx, op in enumerate(self._ops):
             if _key_ops:
                 _key_census.set_op(op.op_uid)     # every key this op forms is recorded with it
@@ -4320,6 +4416,8 @@ class TritonSequence:
                 _watch_ref = _new
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
+            if _skip is not None and _skip[op_idx]:
+                continue                    # an invariant op: its outputs are the kept state's
             if _wm_path and _wm_every > 0 and op_idx % _wm_every == 0:
                 _watermark_sample(_wm_path, op_idx, op, arena, _deferred_bytes)
             args = op.args_resolver(arena)

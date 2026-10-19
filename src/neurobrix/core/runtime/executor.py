@@ -437,6 +437,11 @@ class RuntimeExecutor:
         try:
             return handler.execute()
         finally:
+            # The invariant state each repeated component kept for this request (state engine step 4) ends with it.
+            for _ex in (self.executors or {}).values():
+                _rel = getattr(_ex, "release_invariant_state", None)
+                if _rel is not None:
+                    _rel()
             if self.mode not in ("triton", "triton_sequential"):
                 from neurobrix.core.runtime.graph import run_generator
                 run_generator.arm(None)

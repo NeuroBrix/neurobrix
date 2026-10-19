@@ -419,6 +419,13 @@ The state engine is a replacement, not an addition. These go:
    - Proof: tokens equal to the full re-forward; the speed measured.
 4. **`cross_kv` / `invariant`.**
    - Proof: diffusion outputs bit-identical, by exactness; Whisper transcripts equal.
+   - As built (2026-10-19): the build declares the invariant INPUTS of each repeated component (an input fed by the
+     output of a component that is not downstream of it), never the ops — each engine runs fusions of its own after
+     the build (the Triton SwiGLU, RoPE and epilogue fusions; the shared CSE and MoE passes), so an op list written by
+     the build would name ops no engine runs. One planner (`core/optim/passes/invariant.py`) derives the ops from the
+     declared inputs on the op list each engine actually runs; `cross_kv` is its attention case (a key or value
+     projection of the condition), not a separate declaration. One entry per sequence, reused only on bit-identical
+     inputs; Prism prices it as live from a run's first op.
 5. **Policies.**
    - Proof: quality measured against the vendor at the same request, reported in the plan's terms.
 6. **Nodes and links in Prism.** A single machine is the one-node case; no cluster profile exists yet.

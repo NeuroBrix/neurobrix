@@ -1304,6 +1304,10 @@ class GraphExecutor:
                       f"-> {len(_cf_plan['frontier_tids'])} bind-time "
                       f"constants ({self._component_name})")
 
+        # State engine step 4: the inputs the container declares invariant for this component (topology.json `state`,
+        # kind `invariant`), stamped on the dag for both engines' sequences to plan from at compile.
+        self._stamp_invariant_inputs()
+
         # fusion_vertical (Phase 3): OPT-IN (NBX_OPTIM_FUSION_VERTICAL=1)
         # until its full-zoo byte gate passes. Planner only annotates
         # (dag["_optim_fusion_vertical"]); the triton engine lowers at
@@ -1408,6 +1412,28 @@ class GraphExecutor:
         # Interceptors (KV cache) and persistent tensors (hidden states) are registered
         # after __init__. Compiling here wastes time — it gets recompiled on interceptor
         # registration. Instead, _execute_compiled_graph() handles: _compiled_seq is None → compile.
+
+    def _stamp_invariant_inputs(self) -> None:
+        """dag[_state_invariant_inputs] = the input tensor ids the container declares invariant for this component
+        (core/optim/passes/invariant.invariant_input_names over topology.json). Nothing when the executor knows no
+        container (a synthetic graph) or the container declares none."""
+        cache_path = getattr(self, "_cache_path", None)
+        if not cache_path:
+            return
+        from pathlib import Path as _P
+        from neurobrix.core.optim.passes.invariant import stamp_dag
+        tp = _P(cache_path) / "topology.json"
+        if not tp.is_file():
+            return
+        with open(tp) as f:
+            topo = json.load(f)
+        stamp_dag(self._dag, topo, self._dag.get("component_name") or self._component_name)
+
+    def release_invariant_state(self) -> None:
+        """Drop the invariant state this component's sequence kept (the end of a request)."""
+        for seq in (getattr(self, "_compiled_seq", None), getattr(self, "_triton_seq", None)):
+            if seq is not None and hasattr(seq, "release_invariant_state"):
+                seq.release_invariant_state()
 
     def _registry_model_name(self):
         """Registry key of this executor's model — see precision_contract."""

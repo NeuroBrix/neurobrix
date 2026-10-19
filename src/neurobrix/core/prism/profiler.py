@@ -667,6 +667,12 @@ class ActivationProfiler:
 
         # Build liveness analysis
         self.last_uses = self._compute_last_uses()
+        # The invariant state this graph's component keeps through a run (state engine step 4): (frontier tids, the
+        # input tids it keeps a copy of), or None — derived once, by the engines' own rule (plan_for_dag).
+        from neurobrix.core.optim.passes.invariant import DAG_KEY, plan_for_dag
+        _plan = plan_for_dag(dag) if dag.get(DAG_KEY) else None
+        self.invariant_held = ((tuple(_plan["frontier_slots"]), tuple(_plan["input_slots"]))
+                               if _plan else None)
 
     @classmethod
     def from_path(cls, graph_path: Union[str, Path]) -> "ActivationProfiler":
@@ -1198,6 +1204,32 @@ class ActivationProfiler:
                 current_bytes += size
             peak_bytes = current_bytes
 
+        # The invariant state (state engine step 4, core/state/invariant.py): a run that reuses it holds the whole
+        # frontier from its first op, and the state keeps a copy of its invariant inputs — both live through the run,
+        # never freed by it; a run that evaluates it holds no more. Priced at the run's own extents.
+        held_tids: set = set()
+        if self.invariant_held is not None:
+            _frontier, _copies = self.invariant_held
+
+            def _held_size(tid):
+                meta = self.tensors.get(tid, {})
+                shape = self._resolve_shape(meta, symbol_map)
+                if widths is not None and tid in widths:
+                    n = 1
+                    for d in shape:
+                        n *= d
+                    return n * widths[tid]
+                return self._compute_size(shape, meta, dtype_bytes)
+
+            for tid in _frontier:
+                size = _held_size(tid)
+                live_tensors[tid] = size
+                current_bytes += size
+                held_tids.add(tid)
+            for tid in _copies:
+                current_bytes += _held_size(tid)
+            peak_bytes = max(peak_bytes, current_bytes)
+
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
             op = self.ops.get(op_uid, {})
@@ -1219,6 +1251,8 @@ class ActivationProfiler:
             op_is_zero_alloc = (op_uid in zero_set or
                                 op.get("op_type") in ZERO_ALLOC_OP_TYPES)
             for out_tid in output_tids:
+                if out_tid in held_tids:
+                    continue                # the invariant state's: counted from the first op
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
                 if widths is not None:
@@ -1293,7 +1327,7 @@ class ActivationProfiler:
             # handles aliased tids whose extended last-use points to an op
             # that doesn't list the tid in its `input_tensor_ids`.
             for tid in frees_at.get(op_uid, ()):
-                if tid in graph_outputs:
+                if tid in graph_outputs or tid in held_tids:
                     continue
                 if tid in live_tensors:
                     current_bytes -= live_tensors[tid]

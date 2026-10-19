@@ -77,6 +77,30 @@ _ACCUMULATOR_OPS = frozenset({
 _BLOCK_RE = re.compile(r'(?:blocks?|layers|model\.layers|encoder\.layers|decoder\.layers)\.(\d+)\.')
 
 
+_BITS_OF_ITEMSIZE = {1: torch.uint8, 2: torch.int16, 4: torch.int32, 8: torch.int64}
+
+
+def _torch_same_bits(a, b) -> bool:
+    """Bitwise equality (shape, dtype, device and every bit: -0.0 is not 0.0, a NaN equals its own bits) — the
+    invariant state's reuse test (core/state/invariant.py)."""
+    if a.shape != b.shape or a.dtype != b.dtype or a.device != b.device:
+        return False
+    if a.is_complex():
+        a, b = torch.view_as_real(a), torch.view_as_real(b)
+    if a.dtype != torch.bool:
+        bits = _BITS_OF_ITEMSIZE[a.element_size()]
+        a, b = a.contiguous().view(bits), b.contiguous().view(bits)
+    return bool(torch.equal(a, b))
+
+
+def _torch_keep(t):
+    return t.clone()
+
+
+def _torch_shares_storage(a, b) -> bool:
+    return a.untyped_storage().data_ptr() == b.untyped_storage().data_ptr()
+
+
 def _has_none_arg(args: tuple) -> bool:
     """Check if any arg is None, including inside list/tuple args.
 
@@ -363,6 +387,8 @@ class CompiledSequence:
         '_const_fold_sig',  # identity signature of the partition's external inputs at last fold
         '_loader_consumers',  # container weights an op reads -> first reader, checked at every bind
         '_expert_store',  # TorchExpertStore under the `expert_store` strategy (set by the zero3 ratchet), else None
+        '_invariant',     # core/state/invariant.InvariantState of the declared invariant inputs (state engine step 4), else None
+        '_inv_skip',      # its per-op skip flags, else None
     )
 
     def __init__(
@@ -469,6 +495,8 @@ class CompiledSequence:
         # what an earlier version of this did, at compile time, on every
         # model whose sequence holds an SDPA op.
         self._sdpa_kv_layout: Dict[str, tuple] = {}
+        self._invariant = None          # set at compile (_plan_invariant_state)
+        self._inv_skip = None
 
         # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
         self._pretranspose_weights: set = set()
@@ -657,8 +685,41 @@ class CompiledSequence:
         total_slots = self._num_weights + self._num_inputs + self._num_intermediates
         self._arena = TensorArena(total_slots, self._num_weights, self._num_inputs)
 
+        # State engine step 4: the ops of the declared invariant inputs run once per request
+        self._plan_invariant_state()
+
         self._compiled = True
         self._dump_planned_ops()
+
+    def _plan_invariant_state(self) -> None:
+        """The invariant partition of this sequence (core/optim/passes/invariant.plan_for_sequence) and the state
+        that keeps its frontier between runs (core/state/invariant.InvariantState, docs/design/state-engine.md §4.1).
+        An intercepted op keeps per-run state of its own and a per-run constant (a rotary table sliced to the run's
+        length) is not a weight here: both are excluded. The frontier slots leave every kill list — the state holds
+        them between runs. NBX_DISABLE_STATE_INVARIANT=1 is the diagnostic gate (the swiglu/rope convention)."""
+        self._invariant = None
+        self._inv_skip = None
+        if os.environ.get("NBX_DISABLE_STATE_INVARIANT") == "1":
+            return
+        from neurobrix.core.optim.passes.invariant import plan_for_sequence
+        from neurobrix.core.state.invariant import InvariantState
+        excluded_uids = set(self._op_uid_interceptors) | {
+            op.op_uid for op in self._ops if op.op_type in self._op_interceptors}
+        plan = plan_for_sequence(self.dag, self._ops, self._tensor_id_to_slot, self._num_weights,
+                                 [c[0] for c in self._seq_dependent_constants], excluded_uids)
+        if not plan:
+            return
+        frontier = set(plan["frontier_slots"])
+        for op in self._ops:
+            if any(k in frontier for k in op.kill_slots):
+                op.kill_slots = tuple(k for k in op.kill_slots if k not in frontier)
+        self._invariant = InvariantState(plan, _torch_same_bits, _torch_keep, _torch_shares_storage)
+        self._inv_skip = self._invariant.skip_flags(len(self._ops))
+
+    def release_invariant_state(self) -> None:
+        """Drop the kept invariant state (the end of a request)."""
+        if getattr(self, "_invariant", None) is not None:
+            self._invariant.release()
 
     def _eliminate_detach_ops(
         self,
@@ -3226,7 +3287,22 @@ class CompiledSequence:
             # calibration — one lookup per run, nothing per op.
             from neurobrix.core.dtype import calibration as _cal
             census = _cal.active_census(self.dag.get("component_name"))
-            self._run_inner(arena, debug, pre_op_callback, census)
+            # The invariant state (state engine step 4): a run whose invariant inputs are bit-identical to the kept
+            # ones skips their ops; any other run evaluates them and keeps the frontier. A calibration observes every
+            # op, so it evaluates.
+            inv = getattr(self, "_invariant", None)
+            if inv is not None and census is not None:
+                inv.release()
+                inv = None
+            skip = self._inv_skip if inv is not None and inv.begin(arena) else None
+            try:
+                self._run_inner(arena, debug, pre_op_callback, census, skip)
+            except BaseException:
+                if inv is not None:
+                    inv.release()
+                raise
+            if inv is not None and skip is None:
+                inv.end(arena)
             if census is not None:
                 census.pass_done()
 
@@ -3403,6 +3479,7 @@ class CompiledSequence:
         debug: bool = False,
         pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
         census=None,
+        skip=None,
     ) -> None:
         """Inner loop extracted for inference_mode wrapping. ``census`` is the
         precision-calibration observer (core/dtype/calibration.RangeCensus)
@@ -3418,13 +3495,15 @@ class CompiledSequence:
         trace_zeros = _TRACE_ZEROS
         # Set CUDA device to match component placement
         if self._is_multi_device:
-            self._run_inner_multi_device(arena, debug, pre_op_callback, census)
+            self._run_inner_multi_device(arena, debug, pre_op_callback, census, skip)
             return
 
         # NaN-guard counters for summary (only if verbose)
         nan_guard_triggers = [] if nan_guard_verbose else None
 
         for op_idx, op in enumerate(self._ops):
+            if skip is not None and skip[op_idx]:
+                continue                    # an invariant op: its outputs are the kept state's
             # Resolve args via pre-compiled closures (no isinstance!)
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
@@ -3783,6 +3862,7 @@ class CompiledSequence:
         _debug: bool = False,  # noqa: ARG002
         pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
         census=None,
+        skip=None,
     ) -> None:
         """
         FGP multi-device hot loop with cross-device activation transfer.
@@ -3814,6 +3894,8 @@ class CompiledSequence:
         for op_idx, op in enumerate(self._ops):
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
+            if skip is not None and skip[op_idx]:
+                continue                    # an invariant op: its outputs are the kept state's
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
