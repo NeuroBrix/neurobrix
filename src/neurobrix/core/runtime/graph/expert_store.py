@@ -86,9 +86,11 @@ class TorchExpertStore:
         """Copy ahead, on the side stream, the experts the previous token routed to at the layer that
         follows `layer` — into slots the call at `layer` (`routed`) does not hold. Called once the
         call's compute is enqueued, so the copies run beside it. Returns how many were issued;
-        0 when the order or the prediction is unknown, the slots too few, the next layer's host
-        experts unregistered, or NBX_EXPERT_PREFETCH=0 (the demand-fetched oracle)."""
-        if os.environ.get("NBX_EXPERT_PREFETCH") == "0" or self._stream is None:
+        0 unless NBX_EXPERT_PREFETCH=1 asks for it — OPT-IN since 2026-10-19: at token-by-token decode the
+        prediction (the last routing seen at the layer) was right 21 % of the time on Ming and the copies it wasted
+        cost 23 % on the Triton engine (78 GB moved for 48) — or when the order or the prediction is unknown, the
+        slots too few, the next layer's host experts unregistered."""
+        if os.environ.get("NBX_EXPERT_PREFETCH") != "1" or self._stream is None:
             return 0
         nxt = self.residency.next_layer(layer)
         if nxt is None or nxt not in self.hosts:

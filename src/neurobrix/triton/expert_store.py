@@ -126,10 +126,11 @@ class NBXExpertStore:
     def prefetch_next(self, layer, routed) -> int:
         """Copy ahead, on the store's stream, the experts the previous token routed to at the layer that
         follows `layer`, into slots the call at `layer` does not hold; 0 when nothing can be planned
-        or NBX_EXPERT_PREFETCH=0 (the demand-fetched oracle). Called once the call's kernels are
+        or unless NBX_EXPERT_PREFETCH=1 asks for it (opt-in since 2026-10-19: 21 % right at decode on Ming,
+        +23 % time on the Triton engine). Called once the call's kernels are
         enqueued: the stream is blocking against the legacy stream, so copies issued after the launch
         run behind it and ahead of the next layer's."""
-        if os.environ.get("NBX_EXPERT_PREFETCH") == "0":
+        if os.environ.get("NBX_EXPERT_PREFETCH") != "1":
             return 0
         nxt = self.residency.next_layer(layer)
         if nxt is None or nxt not in self.hosts:

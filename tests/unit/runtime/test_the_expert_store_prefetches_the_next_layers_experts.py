@@ -5,7 +5,7 @@ The policy (`core/runtime/expert_residency.py`, no card): the layer order is the
 prediction is the last routing seen at a layer; a prefetch never evicts the protected call, is planned only when both
 fit the slots, and is counted (prefetched / used / wasted). The stores (card required): a prefetched expert is served
 with the host's bytes after the compiled store waits its event; the Triton fused MoE with a two-layer prefetch is
-byte for byte the resident computation. `NBX_EXPERT_PREFETCH=0` keeps the demand path — the oracle.
+byte for byte the resident computation. The prefetch is OPT-IN (`NBX_EXPERT_PREFETCH=1`) since 2026-10-19; the default is the demand path.
 
 What these tests would do if the code were wrong: a prefetch that evicts the current call's expert hands out wrong
 bytes (red at the byte check); a plan beyond the slots raises in `_place` (red); an order learned from names instead
@@ -83,7 +83,7 @@ def test_the_compiled_store_serves_a_prefetched_expert_with_the_hosts_bytes(monk
     torch = pytest.importorskip("torch")
     if not torch.cuda.is_available():
         pytest.skip("no card")
-    monkeypatch.delenv("NBX_EXPERT_PREFETCH", raising=False)
+    monkeypatch.setenv("NBX_EXPERT_PREFETCH", "1")
     from neurobrix.core.runtime.graph.expert_store import TorchExpertStore
     gen = torch.Generator().manual_seed(7)
     host = {L: {e: tuple(torch.randn(s, generator=gen).half().pin_memory() for s in ((F, H), (F, H), (H, F)))
@@ -106,7 +106,7 @@ def test_the_compiled_store_serves_a_prefetched_expert_with_the_hosts_bytes(monk
                 torch.cuda.current_stream().wait_event(events[e])
             for dev_t, host_t in zip(trip, host["L1"][e]):
                 assert torch.equal(dev_t.cpu(), host_t), f"L1 expert {e}: wrong bytes"
-        monkeypatch.setenv("NBX_EXPERT_PREFETCH", "0")
+        monkeypatch.delenv("NBX_EXPERT_PREFETCH", raising=False)          # the default: no prefetch (opt-in)
         before = store.residency.prefetched
         assert store.prefetch_next("L0", [0, 1]) == 0 and store.residency.prefetched == before
     finally:
@@ -115,7 +115,7 @@ def test_the_compiled_store_serves_a_prefetched_expert_with_the_hosts_bytes(monk
 
 def test_the_triton_store_with_a_two_layer_prefetch_is_byte_for_byte_the_resident_moe(monkeypatch):
     _card()
-    monkeypatch.delenv("NBX_EXPERT_PREFETCH", raising=False)
+    monkeypatch.setenv("NBX_EXPERT_PREFETCH", "1")
     from tests.unit.runtime.test_the_expert_store_serves_routed_experts import _host, _problem, TOP_K
     from tests.unit.runtime.test_the_expert_store_serves_routed_experts import E as TE, F as TF, H as TH
     from neurobrix.kernels.nbx_tensor import NBXTensor
@@ -151,7 +151,7 @@ def test_the_triton_store_serves_a_prefetched_expert_with_the_hosts_bytes(monkey
     call at L1 finds them resident with the host's bytes. `NBX_EXPERT_PREFETCH=0` copies nothing ahead."""
     import gc
     _card()
-    monkeypatch.delenv("NBX_EXPERT_PREFETCH", raising=False)
+    monkeypatch.setenv("NBX_EXPERT_PREFETCH", "1")
     from tests.unit.runtime.test_the_expert_store_serves_routed_experts import _host, F as TF, H as TH
     from neurobrix.triton.expert_store import NBXExpertStore
     rng = np.random.default_rng(3)
