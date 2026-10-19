@@ -329,6 +329,7 @@ def request_input_config(args, manifest: dict, family, cache_path):
         height=height,
         width=width,
         seq_len=seq_len,
+        max_tokens=getattr(args, 'max_tokens', None),
         flow=_flow,
         guidance_passes=guidance_passes,
         mode=resolve_mode(family, args),

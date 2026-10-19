@@ -4123,7 +4123,7 @@ class PrismSolver:
         if declared is None:
             return 0
         defaults = self._read_defaults(container) or {}
-        tokens = kv_estimate_tokens(declared[1], defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128))
+        tokens = kv_estimate_tokens(declared[1], self._request_max_tokens(defaults), defaults.get("prompt_margin", 128))
         return tokens * self._kv_token_bytes(container, target_dtype_str)
 
     def _kv_min_tokens(self, container) -> int:
@@ -4132,7 +4132,20 @@ class PrismSolver:
         segments, or the plan it cuts is refused."""
         from neurobrix.core.state.price import kv_min_tokens
         defaults = self._read_defaults(container) or {}
-        return kv_min_tokens(defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128), bool(self._serve_requested))
+        return kv_min_tokens(self._request_max_tokens(defaults), defaults.get("prompt_margin", 128),
+                             bool(self._serve_requested))
+
+    def _request_max_tokens(self, defaults) -> int:
+        """The tokens the KV floor and estimate are priced for: a run's own request (`InputConfig.max_tokens`, the
+        CLI's --max-tokens) when it names one, else the package's declared max_tokens; serving always the package's.
+        The cache is still sized up to the package's bound when the room affords it (`_compute_kv_cache_plan`). The
+        Mac, 2026-10-19: Qwen3-30B-A3B-Thinking asked 32 tokens was priced at its declared 32 768 (3.2 GB of KV), its
+        expert store refused for it, and it ran layer_streaming at 0.02 tok/s."""
+        ic = getattr(self, "_input_config", None)
+        asked = getattr(ic, "max_tokens", None) if ic is not None else None
+        if asked and not bool(getattr(self, "_serve_requested", False)):
+            return int(asked)
+        return int(defaults.get("max_tokens") or 0)
 
     def _kv_min_bytes(self, container, dtype_str: str) -> int:
         """`_kv_min_tokens` in bytes, at the per-position cost `_compute_kv_cache_plan` uses."""
@@ -4152,7 +4165,8 @@ class PrismSolver:
         defaults = self._read_defaults(container) or {}
         per_token_bytes = self._kv_token_bytes(container, target_dtype)
         size = kv_cache_size(entry, per_token_bytes, defaults.get("max_tokens") or 0, defaults.get("prompt_margin", 128),
-                             bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes)
+                             bool(getattr(self, "_serve_mode", False)), remaining_vram_bytes,
+                             floor_max_tokens=self._request_max_tokens(defaults))
         return KVCachePlan(
             max_cache_len=size["max_cache_len"],
             num_layers=int(entry["layers"]),

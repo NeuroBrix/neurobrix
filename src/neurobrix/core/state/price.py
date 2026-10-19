@@ -67,7 +67,7 @@ def kv_estimate_tokens(entry: Mapping[str, Any], max_tokens: int, prompt_margin:
 
 
 def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, prompt_margin: int, serve: bool,
-                  remaining_bytes: int) -> Dict[str, int]:
+                  remaining_bytes: int, floor_max_tokens: Optional[int] = None) -> Dict[str, int]:
     """{max_cache_len, initial_cache_len, memory_bytes}: as many positions as the remaining bytes afford, bounded by the
     request (run: max_tokens + margin) or the declared window (serve), never beyond the window. Refused by name below
     the minimum."""
@@ -82,7 +82,8 @@ def kv_cache_size(entry: Mapping[str, Any], token_bytes: int, max_tokens: int, p
         upper = min(upper, window)
     affordable = int(remaining_bytes) // int(token_bytes) if token_bytes > 0 else 0
     length = min(affordable, upper)
-    floor = min(kv_min_tokens(max_tokens, prompt_margin, serve), upper)
+    # the floor is the request's when it names fewer tokens than the package (a run's --max-tokens)
+    floor = min(kv_min_tokens(floor_max_tokens if floor_max_tokens else max_tokens, prompt_margin, serve), upper)
     if length < floor:
         raise RuntimeError(
             f"ZERO FALLBACK: KV cache budget too small: {remaining_bytes / 1e6:.0f} MB remain, "
