@@ -2167,6 +2167,12 @@ def _derive_job(args):
     return ("ok", (list(derived), collections.Counter(unhandled)))
 
 
+def _derive_job_priced(args):
+    """`_derive_job` in a fresh worker, with that worker's own peak resident size: what one worker of this model costs
+    (the interpreter, the imports and one derivation), measured where it is spent."""
+    return _derive_job(args), _peak_rss_bytes()
+
+
 def _peak_rss_bytes() -> int:
     """This process's peak resident size (`getrusage`: bytes on darwin, KiB on Linux)."""
     import resource
@@ -2192,25 +2198,26 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
 
 
 def _derive_jobs(model, hw, jobs, start_method=None):
-    """The results of `jobs` in their order. The first runs in this process, and this process's peak resident size
-    after it — the interpreter, the imports and one derivation of this model, what a started worker holds whichever
-    way it starts — is what one worker is priced at; the rest run in workers, as many as the cores AND the free
-    memory hold (`_workers_memory_holds`), one at a time when that is one. The workers start the PLATFORM's way
-    (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C runtime started
-    crashes the child — the Mac, 2026-10-20): `derive_keys` binds the hardware profile itself on every call, so a
-    worker inherits nothing it needs."""
+    """The results of `jobs` in their order. The first runs alone in a fresh worker that reports its own peak resident
+    size — one worker of THIS model, priced where it is spent (a process's lifetime peak would carry the largest model
+    seen so far into every later one); the rest run in workers, as many as the cores AND the free memory hold
+    (`_workers_memory_holds`). The workers start the PLATFORM's way (multiprocessing's default: fork on Linux, spawn
+    on macOS, where a fork after the Objective-C runtime started crashes the child — the Mac, 2026-10-20):
+    `derive_keys` binds the hardware profile itself on every call, so a worker inherits nothing it needs."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
     if not args:
         return []
-    first = _derive_job(args[0])
-    rest = args[1:]
-    workers = _workers_memory_holds(len(rest), _peak_rss_bytes())
-    print(f"[derive] {model}: {len(args)} derivation(s), {workers} at a time after the first (cores, free memory "
-          f"at its rung, this process's peak {_peak_rss_bytes() >> 20} MB a worker)", flush=True)
-    if workers <= 1 or not rest:
-        return [first] + [_derive_job(a) for a in rest]
     import multiprocessing as _mp
-    with _mp.get_context(start_method).Pool(workers) as pool:
+    ctx = _mp.get_context(start_method)
+    with ctx.Pool(1) as pool:
+        first, worker_bytes = pool.apply(_derive_job_priced, (args[0],))
+    rest = args[1:]
+    workers = _workers_memory_holds(len(rest), worker_bytes)
+    print(f"[derive] {model}: {len(args)} derivation(s), {workers} at a time after the first (cores, free memory "
+          f"at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
+    if not rest:
+        return [first]
+    with ctx.Pool(workers) as pool:
         return [first] + pool.map(_derive_job, rest, chunksize=1)
 
 
