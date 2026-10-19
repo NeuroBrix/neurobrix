@@ -48,6 +48,9 @@ class InputConfig:
     height: Optional[int] = None
     width: Optional[int] = None
     seq_len: Optional[int] = None
+    # The tokens the request asks the decoder for (`--max-tokens`): a run's KV floor and pre-sizing estimate are this
+    # request's, not the package's declared ceiling (runtime/defaults.json max_tokens). None: the package's.
+    max_tokens: Optional[int] = None
     dtype: Optional[str] = None
     vae_scale: Optional[int] = None
     # Video (5D) runtime dims — None for image/LLM models. latent_T is
