@@ -49,9 +49,12 @@ def test_the_cli_bounds_a_text_run_by_its_request_and_prompt_and_leaves_a_media_
     """Ming, 2026-10-19: floored at --max-tokens + margin alone, an image request of 275 positions met a 273-position cache."""
     import inspect
     from neurobrix.cli.commands import run
-    assert "max_tokens=request_decode_bound(args)" in inspect.getsource(run.request_input_config)
+    assert "max_tokens=request_decode_bound(args, cached_defaults)" in inspect.getsource(run.request_input_config)
+    text = {"type": "autoregressive_text"}
     a = SimpleNamespace(max_tokens=32, prompt="é" * 100, system="sys")
-    assert run.request_decode_bound(a) == 32 + 200 + 3, "the prompt's bytes bound its tokens"
-    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", input_image="apple.png")) is None
-    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", audio="a.wav")) is None
-    assert run.request_decode_bound(SimpleNamespace(max_tokens=None, prompt="x")) is None
+    assert run.request_decode_bound(a, text) == 32 + 200 + 3, "the prompt's bytes bound its tokens"
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", input_image="apple.png"), text) is None
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=32, prompt="x", audio="a.wav"), text) is None
+    assert run.request_decode_bound(SimpleNamespace(max_tokens=None, prompt="x"), text) is None
+    assert run.request_decode_bound(a, {"type": "autoregressive_image"}) is None, "Janus decodes its 576 image tokens"
+    assert run.request_decode_bound(a, {}) is None
