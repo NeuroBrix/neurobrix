@@ -188,3 +188,30 @@ def test_the_diagnostic_gate_plans_nothing(monkeypatch):
     seq = CompiledSequence(_dag(), torch.device("cpu"), torch.float32)
     seq.compile()
     assert seq._invariant is None
+
+
+def test_the_same_bound_objects_are_reused_without_a_comparison():
+    """The fast path: the very same input objects as the kept ones skip the bitwise test (whisper's decoder binds the
+    same encoder states at every token — the test cost 1.28 ms per token); new objects are compared, then held.
+
+    What this test would do if the code were wrong: a fast path that compared anyway — red at fast_reuses; a fast path
+    keyed on equal bits instead of the object — red at the new-object row (fast_reuses would grow there)."""
+    torch = pytest.importorskip("torch")
+    from neurobrix.core.runtime.graph.compiled_sequence import CompiledSequence
+    seq = CompiledSequence(_dag(), torch.device("cpu"), torch.float32)
+    seq.compile()
+    w = torch.randn(3, 3)
+    seq.bind_weights({"param::w": w})
+    c = torch.ones(4, 3)
+    calls = []
+    orig = seq._invariant._same_bits
+    seq._invariant._same_bits = lambda a, b: calls.append(1) or orig(a, b)
+    for i, (cin, fast, compared) in enumerate(((c, 0, 0), (c, 1, 0), (c, 2, 0), (c.clone(), 2, 1), (None, 3, 1),
+                                               (torch.zeros(4, 3), 3, 2))):
+        x = torch.randn(4, 3)
+        cur = cin if cin is not None else last
+        seq.bind_inputs({"input::x": x, "input::c": cur})
+        seq.run()
+        last = cur
+        assert torch.equal(seq.gather_outputs(["t::y"])["t::y"], x + cur @ w), i
+        assert (seq._invariant.fast_reuses, len(calls)) == (fast, compared), (i, seq._invariant.fast_reuses, len(calls))

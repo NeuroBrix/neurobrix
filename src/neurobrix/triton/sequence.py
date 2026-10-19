@@ -358,6 +358,10 @@ def _nbx_keep(t: NBXTensor) -> NBXTensor:
     return t.clone()
 
 
+def _nbx_address(t: NBXTensor) -> int:
+    return int(t._data_ptr) + int(t._offset) * t.element_size()
+
+
 def _nbx_root(t: NBXTensor) -> NBXTensor:
     while t._base is not None:
         t = t._base
@@ -908,7 +912,7 @@ class TritonSequence:
         for op in self._ops:
             if any(k in frontier for k in op.kill_slots):
                 op.kill_slots = tuple(k for k in op.kill_slots if k not in frontier)
-        self._invariant = InvariantState(plan, _nbx_same_bits, _nbx_keep, _nbx_shares_storage)
+        self._invariant = InvariantState(plan, _nbx_same_bits, _nbx_keep, _nbx_shares_storage, _nbx_address)
         self._inv_skip = self._invariant.skip_flags(len(self._ops))
 
     def release_invariant_state(self) -> None:

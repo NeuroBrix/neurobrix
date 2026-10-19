@@ -97,6 +97,10 @@ def _torch_keep(t):
     return t.clone()
 
 
+def _torch_address(t) -> int:
+    return t.untyped_storage().data_ptr() + t.storage_offset() * t.element_size()
+
+
 def _torch_shares_storage(a, b) -> bool:
     return a.untyped_storage().data_ptr() == b.untyped_storage().data_ptr()
 
@@ -713,7 +717,7 @@ class CompiledSequence:
         for op in self._ops:
             if any(k in frontier for k in op.kill_slots):
                 op.kill_slots = tuple(k for k in op.kill_slots if k not in frontier)
-        self._invariant = InvariantState(plan, _torch_same_bits, _torch_keep, _torch_shares_storage)
+        self._invariant = InvariantState(plan, _torch_same_bits, _torch_keep, _torch_shares_storage, _torch_address)
         self._inv_skip = self._invariant.skip_flags(len(self._ops))
 
     def release_invariant_state(self) -> None:
