@@ -25,13 +25,13 @@ def test_the_breakpoints_are_the_gemv_bound_every_bucket_step_and_the_units_take
     from neurobrix.kernels.nbx_tensor import NBXDtype
     bps = LK.row_breakpoints(1, 200)
     assert 5 in bps                                                   # M <= 4: the per-row GEMV, no key
-    unit = next(m for m in range(1, 201) if LK.matrix_unit_takes(NBXDtype.float16, NBXDtype.float16, m))
-    assert unit in bps                                                # the matrix unit takes over: no key from there on
+    half, single = NBXDtype.float16, NBXDtype.float32
+    def klass(m):      # the launcher's own class of a row count: GEMV bound, M bucket, the unit's take-over per representation
+        return (m <= 4, LK.bucket_of("M", m), LK.matrix_unit_takes(half, half, m), LK.matrix_unit_takes(single, half, m))
+    units = [m for m in range(1, 201) if LK.matrix_unit_takes(half, half, m)]
+    if units:                                                         # a profile with a matrix unit: its take-over is a breakpoint
+        assert units[0] in bps
     assert bps == sorted(set(bps)) and all(1 < p <= 200 for p in bps)
-    for p in bps:                                                     # every breakpoint changes the class, and nothing else does
-        assert LK.bucket_of("M", p) != LK.bucket_of("M", p - 1) or p == 5 or p == unit \
-            or LK.matrix_unit_takes(NBXDtype.float32, NBXDtype.float16, p) != LK.matrix_unit_takes(NBXDtype.float32, NBXDtype.float16, p - 1)
-    for m in range(6, 200):
-        if m not in bps:
-            assert LK.bucket_of("M", m) == LK.bucket_of("M", m - 1)
+    for m in range(2, 201):                                           # every breakpoint changes the class, and nothing else does
+        assert (m in bps) == (klass(m) != klass(m - 1)), m
     assert LK.row_breakpoints(10, 10) == [] and LK.row_breakpoints(5, 3) == []
