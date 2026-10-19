@@ -111,7 +111,12 @@ class DecodeSteps:
             return
         if self.branch is not None:
             self.wrapper.use_branch(self.branch)
-        if self.runs >= 2:
+        if self.runs >= 1:
+            # EVERY decode step, the first included: the offset the positional ops of the graph are shifted by is
+            # the cache's length now. The first form shifted from the second step on and relied on `set_decode_mode`
+            # for the first — the compiled wrapper sets the offset there, the Triton interceptor did not, so
+            # openaudio's first cached token was rotated at position 0 on the Triton engine (4 % off the oracle at
+            # its first step, 2026-10-19 02:46; the compiled step was bit-identical).
             self.wrapper.update_position_offset()
 
     def after_run(self) -> None:

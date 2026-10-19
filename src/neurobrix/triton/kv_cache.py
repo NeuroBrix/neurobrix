@@ -196,8 +196,12 @@ class TritonAttentionInterceptor:
         self._call_count = 0
 
     def set_decode_mode(self):
+        """Mirror of core kv_cache_wrapper.set_decode_mode: the first decode step's positional offset is the
+        cache's length after the prefill (it stayed 0 here: openaudio's first cached token on the Triton engine
+        was rotated at position 0, 2026-10-19)."""
         self._is_prefill = False
         self._call_count = 0
+        self._position_offset = self.get_cache_len()
 
     def update_position_offset(self):
         """Called before each decode step. Resets per-step call counter and

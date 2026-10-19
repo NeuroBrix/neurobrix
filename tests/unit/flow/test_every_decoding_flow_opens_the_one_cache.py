@@ -67,6 +67,8 @@ class _Wrapper:
 
 @pytest.mark.parametrize("engine", ["core", "triton"])
 def test_the_protocol_prefills_once_then_hands_one_token_at_its_offset(engine):
+    """The first decode step is placed at the cache's length like every later one (openaudio Triton, 2026-10-19:
+    the first form moved the offset from the second step on and the first cached token sat at position 0)."""
     mod = __import__(f"neurobrix.{engine}.flow.decoder_cache", fromlist=["DecodeSteps"])
     w = _Wrapper()
     steps = mod.DecodeSteps(w)
@@ -75,12 +77,11 @@ def test_the_protocol_prefills_once_then_hands_one_token_at_its_offset(engine):
     steps.before_run(); steps.after_run()
     assert w.calls[-1][0] == "decode_mode"                 # decode mode right after the prefill
     assert steps.one_token and steps.feed("whole", "last") == "last"
-    steps.before_run(); steps.after_run()                  # first decode step: the offset is the prefill's
-    assert ("offset",) not in w.calls
-    steps.before_run()                                     # later steps: the offset moves first
+    steps.before_run()                                     # EVERY decode step, the first included: the offset moves first
     assert w.calls[-1] == ("offset",)
     steps.after_run()
-    assert [c[0] for c in w.calls] == ["decode_mode", "offset"]
+    steps.before_run(); steps.after_run()
+    assert [c[0] for c in w.calls] == ["decode_mode", "offset", "offset"]
 
 
 @pytest.mark.parametrize("engine", ["core", "triton"])
