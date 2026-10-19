@@ -2198,27 +2198,32 @@ def _workers_memory_holds(n_jobs: int, worker_bytes: int) -> int:
 
 
 def _derive_jobs(model, hw, jobs, start_method=None):
-    """The results of `jobs` in their order. The first runs alone in a fresh worker that reports its own peak resident
-    size — one worker of THIS model, priced where it is spent (a process's lifetime peak would carry the largest model
-    seen so far into every later one); the rest run in workers, as many as the cores AND the free memory hold
-    (`_workers_memory_holds`). The workers start the PLATFORM's way (multiprocessing's default: fork on Linux, spawn
-    on macOS, where a fork after the Objective-C runtime started crashes the child — the Mac, 2026-10-20):
-    `derive_keys` binds the hardware profile itself on every call, so a worker inherits nothing it needs."""
+    """The results of `jobs` in their order. Jobs run ONE at a time, each in a fresh worker that reports its own peak
+    resident size, until one DERIVES (a refusal measures nothing: Qwen3-30B's first job, refused, priced a worker at
+    67 MB, the Mac, 2026-10-20 01:50); the largest peak seen prices one worker of THIS model. The rest run in workers,
+    as many as the cores AND the free memory hold (`_workers_memory_holds`). The workers start the PLATFORM's way
+    (multiprocessing's default: fork on Linux, spawn on macOS, where a fork after the Objective-C runtime started
+    crashes the child): `derive_keys` binds the hardware profile itself on every call."""
     args = [(model, hw, mode, rung, req) for mode, _ri, req, rung in jobs]
-    if not args:
-        return []
     import multiprocessing as _mp
     ctx = _mp.get_context(start_method)
-    with ctx.Pool(1) as pool:
-        first, worker_bytes = pool.apply(_derive_job_priced, (args[0],))
-    rest = args[1:]
-    workers = _workers_memory_holds(len(rest), worker_bytes)
-    print(f"[derive] {model}: {len(args)} derivation(s), {workers} at a time after the first (cores, free memory "
-          f"at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
+    results, worker_bytes, i = [], 0, 0
+    with ctx.Pool(1, maxtasksperchild=1) as pool:          # a fresh process per job: its peak is that job's
+        while i < len(args):
+            res, peak = pool.apply(_derive_job_priced, (args[i],))
+            results.append(res)
+            worker_bytes = max(worker_bytes, peak)
+            i += 1
+            if res[0] == "ok":
+                break
+    rest = args[i:]
     if not rest:
-        return [first]
+        return results
+    workers = _workers_memory_holds(len(rest), worker_bytes)
+    print(f"[derive] {model}: {len(args)} derivation(s), {i} measured alone, then {workers} at a time (cores, free "
+          f"memory at its rung, one worker measured at {worker_bytes >> 20} MB)", flush=True)
     with ctx.Pool(workers) as pool:
-        return [first] + pool.map(_derive_job, rest, chunksize=1)
+        return results + pool.map(_derive_job, rest, chunksize=1)
 
 
 def table(a) -> int:
