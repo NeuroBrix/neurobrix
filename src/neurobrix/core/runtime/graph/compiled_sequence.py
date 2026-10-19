@@ -2253,6 +2253,14 @@ class CompiledSequence:
             if _store is not None:
                 _routed = [e for e in range(_num_experts)
                            if boundaries_cpu[e] != (boundaries_cpu[e - 1] if e else 0)]
+                # ExpertStore 4 (CPU experts in decode, measured first): a call of at most
+                # `cpu_decode_tokens` tokens computes each routed expert NOT in a slot on the host,
+                # from its host weights, instead of copying it in; slotted experts compute on the
+                # device as before, every expert still in ascending order into the same output.
+                _cpu_set = set()
+                if (_store.cpu_decode_tokens and hidden_states.shape[0] <= _store.cpu_decode_tokens):
+                    _cpu_set = {e for e in _routed if _store.residency.slot_of(_layer_key, e) is None}
+                    _routed = [e for e in _routed if e not in _cpu_set]
                 _n_slots = _store.residency.n_slots
                 _runs = {r[0]: r for r in (_routed[i:i + _n_slots]
                                            for i in range(0, len(_routed), _n_slots))}
@@ -2261,6 +2269,7 @@ class CompiledSequence:
                     return (arena[_gate_w_slots[e]], arena[_up_w_slots[e]], arena[_down_w_slots[e]])
                 _store.hosts[_layer_key] = _host_expert     # the next layer's prefetch reads it (step 3)
             _on_card, _ready = {}, {}
+            _hs_host = None
 
             output = torch.zeros_like(hidden_states)
             start = 0
@@ -2279,6 +2288,20 @@ class CompiledSequence:
                     gate_w = _gv[expert_id]
                     up_w = _uv[expert_id]
                     down_w = _dv[expert_id]
+                elif _store is not None and expert_id in _cpu_set:
+                    if _hs_host is None:
+                        _hs_host = hidden_states.to("cpu")
+                    _w = _host_expert(expert_id)
+                    _xi = _hs_host[expert_token_ids.to("cpu")]
+                    _eo = ((F.silu(_xi @ _w[0].t()) * (_xi @ _w[1].t())) @ _w[2].t())
+                    _store.cpu_experts += 1
+                    if _store._release is not None:
+                        for _t in _w:
+                            _store._release(_t)
+                    expert_scores = scores.flatten()[perm[start:end]].unsqueeze(-1).to(w_dtype)
+                    output.index_add_(0, expert_token_ids, _eo.to(_compute_dev) * expert_scores)
+                    start = end
+                    continue
                 elif _store is not None:
                     if expert_id in _runs:
                         _on_card, _ready = _store.acquire(_layer_key, _runs[expert_id], _host_expert)

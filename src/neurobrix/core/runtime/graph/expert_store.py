@@ -51,6 +51,12 @@ class TorchExpertStore:
         # orders a slot's copy after the work that read its former expert (module docstring).
         self._stream = torch.cuda.Stream(device=self.device) if self.device.type == "cuda" else None
         self.bytes_in = 0
+        # ExpertStore 4, measurement switch (NBX_EXPERT_CPU_DECODE_TOKENS, 0 = off): a dispatch of at most this many
+        # tokens computes its unslotted experts on the host (compiled_sequence.moe_fused_dispatch). A vendor key once
+        # measured; counted in `cpu_experts`.
+        import os
+        self.cpu_decode_tokens = int(os.environ.get("NBX_EXPERT_CPU_DECODE_TOKENS", "0"))
+        self.cpu_experts = 0
         self._inflight: Dict[Tuple, torch.cuda.Event] = {}   # (layer, expert) -> its prefetch copy's event
         self.hosts: Dict = {}                                 # layer -> host expert reader, registered by its call
 
@@ -115,7 +121,7 @@ class TorchExpertStore:
         return len(slots)
 
     def summary(self) -> str:
-        return f"[expert store] {self.residency.summary()} bytes_in={self.bytes_in / 1e9:.2f} GB"
+        return f"[expert store] {self.residency.summary()} bytes_in={self.bytes_in / 1e9:.2f} GB cpu_experts={self.cpu_experts}"
 
     def _copy(self, layer, e: int, dst: Triple, src: Triple) -> None:
         for i, (d, s) in enumerate(zip(dst, src)):
