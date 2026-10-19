@@ -14,10 +14,12 @@ from tests.unit.prism._pinned_machine import V100_16GB, profile
 
 @pytest.fixture
 def bound_profile(monkeypatch):
-    from neurobrix.kernels import census as CS, wrappers as W
-    prof = profile(V100_16GB)
-    W.set_hardware_profile(prof)
-    yield prof
+    """The Volta vendor file in force (`_configs.vendor_profile_for_arch`): the ladders and the matrix unit are DATA on it."""
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.ops import _configs as CF
+    W.set_hardware_profile(profile(V100_16GB))
+    monkeypatch.setattr(CF, "_ACTIVE_PROFILE", CF.vendor_profile_for_arch("volta"))
+    yield CF.active_vendor_profile()
 
 
 def test_the_breakpoints_are_the_gemv_bound_every_bucket_step_and_the_units_take_over(bound_profile):
