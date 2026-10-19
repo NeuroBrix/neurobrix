@@ -254,6 +254,7 @@ class DualAREngine(FlowHandler):
                 flogits = fout.get("output") if isinstance(fout, dict) else fout
                 read_pos = len(ctx)  # depth position predicting the next codebook
                 cb_logits = flogits[:, read_pos, :acoustic_cb_size]
+                log_topk(cb_logits, len(slow_history), tag=f"codebook:{read_pos}")
                 sampled = _sample_token_np_core(
                     cb_logits[0].detach().float().cpu().numpy(), temperature,
                     top_p=top_p, rng=sampler_rng)

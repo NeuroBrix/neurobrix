@@ -215,6 +215,8 @@ class TritonDualAREngine:
                     flogits_np = _to_numpy(flogits)
                     read_pos = len(ctx)
                     cb_logits = flogits_np[0, read_pos, :acoustic_cb_size]
+                    from neurobrix.triton.flow.decode_topk import log_topk as _log_topk
+                    _log_topk(cb_logits, len(slow_history), tag=f"codebook:{read_pos}")
                     sampled = _sample_token_np(cb_logits, temperature, top_p=top_p,
                                                rng=sampler_rng)
                     ctx.append(sampled)

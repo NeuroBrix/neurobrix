@@ -12,7 +12,7 @@ import os
 import torch
 
 
-def log_topk(logits: torch.Tensor, step: int) -> None:
+def log_topk(logits: torch.Tensor, step: int, tag: str = "") -> None:
     path = os.environ.get("NBX_DECODE_TOPK")
     if not path:
         return
@@ -20,7 +20,7 @@ def log_topk(logits: torch.Tensor, step: int) -> None:
     top = torch.topk(flat, 4)
     vals = [float(x) for x in top.values]
     rec = {"engine": "torch", "step": int(step), "ids": [int(i) for i in top.indices],
-           "vals": [round(v, 6) for v in vals], "margin12": round(vals[0] - vals[1], 6)}
+           "vals": [round(v, 6) for v in vals], "margin12": round(vals[0] - vals[1], 6), "tag": tag}
     with open(path, "a") as f:
         json.dump(rec, f)
         f.write("\n")

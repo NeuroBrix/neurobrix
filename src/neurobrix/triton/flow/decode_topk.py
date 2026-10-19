@@ -9,7 +9,7 @@ import os
 import numpy as np
 
 
-def log_topk(logits, step: int) -> None:
+def log_topk(logits, step: int, tag: str = "") -> None:
     path = os.environ.get("NBX_DECODE_TOPK")
     if not path:
         return
@@ -18,7 +18,7 @@ def log_topk(logits, step: int) -> None:
     order = idx[np.argsort(-arr[idx])]
     vals = [float(arr[i]) for i in order]
     rec = {"engine": "triton", "step": int(step), "ids": [int(i) for i in order],
-           "vals": [round(v, 6) for v in vals], "margin12": round(vals[0] - vals[1], 6)}
+           "vals": [round(v, 6) for v in vals], "margin12": round(vals[0] - vals[1], 6), "tag": tag}
     with open(path, "a") as f:
         json.dump(rec, f)
         f.write("\n")
